@@ -214,7 +214,14 @@ function normalizeApiAuthorityUrl(value: string): string {
   if (url.protocol === "http:" && !loopback) {
     throw new Error("REMOTE_API_URL_INVALID: plaintext HTTP is allowed only for loopback Dispatch authorities; local fallback is disabled");
   }
-  return pathname === "/" ? `${url.origin}/v1` : endsWithV1 ? `${url.origin}${pathname}` : `${url.origin}${pathname}/v1`;
+  // ONE composition, and it always carries the prefix. The equivalent ternary
+  // spelled `${url.origin}/v1` for the root case, which is correct there but is
+  // also the exact shape the repo guard refuses
+  // (tooling/ci/tests/standard/fleet-conventions.test.ts, hasna/apps#1601):
+  // an origin-plus-`/v1` composition is how the prefix gets dropped everywhere
+  // else, so the derivation is written so it cannot be.
+  const prefix = endsWithV1 ? pathname.slice(0, -"/v1".length) : pathname === "/" ? "" : pathname;
+  return `${url.origin}${prefix}/v1`;
 }
 
 /** True when the failure is a client-side abort/timeout rather than an authority response. */

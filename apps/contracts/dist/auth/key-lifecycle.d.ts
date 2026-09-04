@@ -20,7 +20,15 @@ export interface KeyLifecycleStore {
         tid?: string;
         includeRevoked?: boolean;
     }): Promise<ApiKeyRecord[]>;
-    revoke(kid: string, reason?: string, atMs?: number): Promise<boolean>;
+    /**
+     * `options.app` is passed on every revoke this router performs. A store that
+     * ignores it is still SAFE here — the router establishes ownership itself
+     * before calling (see `ownedByApp`), because this parameter is optional in
+     * the structural type and a three-parameter shim satisfies it silently.
+     */
+    revoke(kid: string, reason?: string, atMs?: number, options?: {
+        app?: string;
+    }): Promise<boolean>;
     findByKid?(kid: string): Promise<ApiKeyRecord | null>;
 }
 export interface KeyLifecycleRouteOptions {

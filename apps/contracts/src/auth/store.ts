@@ -353,14 +353,36 @@ export class ApiKeyStore {
     };
   }
 
-  /** Revoke a key by kid. Returns true if a row was affected. */
-  async revoke(kid: string, reason?: string, atMs = Date.now()): Promise<boolean> {
+  /**
+   * Revoke a key by kid. Returns true if a row was affected.
+   *
+   * `options.app` SCOPES the write to one app's keys. One `api_keys` table
+   * serves every app in a shared database (that is what the `app` column and
+   * {@link list}'s `app` filter are for), and a kid is a bare opaque id with no
+   * app in it — so an unscoped `WHERE kid = $1` lets an operator holding
+   * `<appA>:keys.admin` revoke `appB`'s client key by kid alone. Pass the app
+   * whenever the caller's authority is app-scoped; the clause is applied in the
+   * same statement as the update, so there is no window between the ownership
+   * check and the write.
+   */
+  async revoke(
+    kid: string,
+    reason?: string,
+    atMs = Date.now(),
+    options: { app?: string } = {},
+  ): Promise<boolean> {
+    const params: unknown[] = [kid, new Date(atMs).toISOString(), reason ?? null];
+    let scope = "";
+    if (options.app !== undefined) {
+      params.push(options.app);
+      scope = ` AND app = $${params.length}`;
+    }
     const row = await this.client.get<Row>(
       `UPDATE ${this.table}
           SET revoked_at = COALESCE(revoked_at, $2), revoked_reason = COALESCE(revoked_reason, $3)
-        WHERE kid = $1
+        WHERE kid = $1${scope}
       RETURNING kid`,
-      [kid, new Date(atMs).toISOString(), reason ?? null],
+      params,
     );
     return row !== null;
   }

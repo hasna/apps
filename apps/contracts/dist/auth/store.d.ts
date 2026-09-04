@@ -128,8 +128,21 @@ export declare class ApiKeyStore {
      * carries the reason; this remains for `isRevoked`-shaped call sites.
      */
     statusChecker(): (kid: string) => Promise<boolean>;
-    /** Revoke a key by kid. Returns true if a row was affected. */
-    revoke(kid: string, reason?: string, atMs?: number): Promise<boolean>;
+    /**
+     * Revoke a key by kid. Returns true if a row was affected.
+     *
+     * `options.app` SCOPES the write to one app's keys. One `api_keys` table
+     * serves every app in a shared database (that is what the `app` column and
+     * {@link list}'s `app` filter are for), and a kid is a bare opaque id with no
+     * app in it — so an unscoped `WHERE kid = $1` lets an operator holding
+     * `<appA>:keys.admin` revoke `appB`'s client key by kid alone. Pass the app
+     * whenever the caller's authority is app-scoped; the clause is applied in the
+     * same statement as the update, so there is no window between the ownership
+     * check and the write.
+     */
+    revoke(kid: string, reason?: string, atMs?: number, options?: {
+        app?: string;
+    }): Promise<boolean>;
     /** Record last-used for a kid (best-effort telemetry). */
     touchLastUsed(kid: string, atMs?: number): Promise<void>;
     /**

@@ -94,7 +94,7 @@ describe("canonical client transport", () => {
         return { status: 44, stdout: "" };
       },
     };
-    const resolution = resolveClientTransport("todos", { HASNA_STATION: "station03" }, { keychain: { reader } });
+    const resolution = resolveClientTransport("todos", { HASNA_STATION: "station-fixture-01" }, { keychain: { reader } });
     expect(resolution.baseUrl).toBe("https://api.example.test/todos/v1");
     expect(resolution.apiUrlSource).toBe("keychain:hasna.credentials.todos.api-url");
     expect(resolution.apiKeySource).toBe("keychain:hasna.credentials.todos.api-key");
@@ -104,7 +104,7 @@ describe("canonical client transport", () => {
     // An environment authority still wins over the keychain one.
     const fromEnv = resolveClientTransport(
       "todos",
-      { HASNA_STATION: "station03", HASNA_TODOS_API_URL: "https://todos.example.test" },
+      { HASNA_STATION: "station-fixture-01", HASNA_TODOS_API_URL: "https://todos.example.test" },
       { keychain: { reader } },
     );
     expect(fromEnv.baseUrl).toBe("https://todos.example.test/v1");

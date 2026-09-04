@@ -50,8 +50,12 @@ function memoryStore(): ApiKeyStore {
     },
     async get<T extends Row>(sql: string, params: readonly unknown[] = []) {
       if (/^UPDATE/.test(sql) && /revoked_at = COALESCE/.test(sql)) {
-        const [kid, at, reason] = params as string[];
-        const row = rows.find((candidate) => candidate.kid === kid);
+        const [kid, at, reason, app] = params as string[];
+        // Mirrors the real statement: `AND app = $4` when the caller scoped the
+        // write. Without this the shim would revoke across apps and hide the
+        // very fail-closed clause these tests exist to pin.
+        const scoped = /AND app = \$4/.test(sql);
+        const row = rows.find((candidate) => candidate.kid === kid && (!scoped || candidate.app === app));
         if (!row) return null;
         row.revoked_at = row.revoked_at ?? at;
         row.revoked_reason = row.revoked_reason ?? reason ?? null;
@@ -382,5 +386,158 @@ describe("key lifecycle records", () => {
     const rows = (listed.body as { keys: Array<Record<string, unknown>> }).keys;
     const row = rows.find((entry) => entry.kid === expired.kid) as unknown as ApiKeyRecord & { status: string };
     expect(row.status).toBe("expired");
+  });
+});
+
+// One `api_keys` table serves every app that shares a database — that is what
+// the `app` column and `list({ app })` are for, and the shared-signing-secret
+// deployment ("one process can serve two apps") puts two apps behind one store
+// on purpose. A kid carries no app, so every by-kid route MUST re-derive the
+// app from the record. `GET /<kid>` always did; `DELETE /<kid>` and
+// `POST /<kid>/revoke` did not, and an operator holding `messages:keys.admin`
+// could revoke a `todos` client key by kid alone.
+describe("cross-app isolation on a shared key store", () => {
+  const OTHER_APP = "todos";
+
+  interface TwoApps {
+    router: KeyLifecycleRouter;
+    store: ApiKeyStore;
+    operatorKey: string;
+    foreignKid: string;
+  }
+
+  async function twoApps(): Promise<TwoApps> {
+    const store = memoryStore();
+    await store.ensureSchema();
+    const operator = mintApiKey({ app: APP, scopes: [`${APP}:*`], agent: "bootstrap", signingSecret: SIGNING_SECRET });
+    await store.insertMinted(operator, "test");
+    // A key belonging to the OTHER app, recorded in the same table.
+    const foreign = mintApiKey({
+      app: OTHER_APP,
+      scopes: [`${OTHER_APP}:read`],
+      agent: "fleet",
+      signingSecret: SIGNING_SECRET,
+    });
+    await store.insertMinted(foreign, "test");
+    const router = createKeyLifecycleRoutes({
+      app: APP,
+      signingSecret: SIGNING_SECRET,
+      store,
+      keyStatus: store.keyStatus,
+    });
+    return { router, store, operatorKey: operator.token, foreignKid: foreign.kid };
+  }
+
+  test("DELETE cannot revoke another app's key", async () => {
+    const t = await twoApps();
+    const response = await t.router.handle({
+      method: "DELETE",
+      path: `${KEY_LIFECYCLE_BASE_PATH}/${t.foreignKid}`,
+      headers: headers(t.operatorKey),
+    });
+    expect(response.status).toBe(404);
+    expect((response.body as { reason: string }).reason).toBe("unknown_key");
+    const record = await t.store.findByKid(t.foreignKid);
+    expect(record?.revokedAt).toBeNull();
+    expect(await t.store.status(t.foreignKid)).toBe("active");
+  });
+
+  test("POST /<kid>/revoke cannot revoke another app's key", async () => {
+    const t = await twoApps();
+    const response = await t.router.handle({
+      method: "POST",
+      path: `${KEY_LIFECYCLE_BASE_PATH}/${t.foreignKid}/revoke`,
+      headers: headers(t.operatorKey),
+      body: { reason: "not mine to revoke" },
+    });
+    expect(response.status).toBe(404);
+    expect((response.body as { reason: string }).reason).toBe("unknown_key");
+    expect((await t.store.findByKid(t.foreignKid))?.revokedAt).toBeNull();
+  });
+
+  test("a foreign kid is refused the same way an absent one is (no enumeration oracle)", async () => {
+    const t = await twoApps();
+    const foreign = await t.router.handle({
+      method: "DELETE",
+      path: `${KEY_LIFECYCLE_BASE_PATH}/${t.foreignKid}`,
+      headers: headers(t.operatorKey),
+    });
+    const absent = await t.router.handle({
+      method: "DELETE",
+      path: `${KEY_LIFECYCLE_BASE_PATH}/kid_does_not_exist`,
+      headers: headers(t.operatorKey),
+    });
+    expect(foreign.status).toBe(absent.status);
+    // Identical but for the kid the CALLER supplied: nothing in the response
+    // distinguishes "belongs to another app" from "was never issued".
+    expect((foreign.body as { reason: string }).reason).toBe((absent.body as { reason: string }).reason);
+    expect(String(foreign.body.error).replace(t.foreignKid, "<kid>")).toBe(
+      String(absent.body.error).replace("kid_does_not_exist", "<kid>"),
+    );
+    // ... and the GET-one handler, which always guarded, still agrees.
+    const read = await t.router.handle({
+      method: "GET",
+      path: `${KEY_LIFECYCLE_BASE_PATH}/${t.foreignKid}`,
+      headers: headers(t.operatorKey),
+    });
+    expect(read.status).toBe(404);
+  });
+
+  test("this app's own key still revokes", async () => {
+    const t = await twoApps();
+    const minted = await t.router.handle({
+      method: "POST",
+      path: KEY_LIFECYCLE_BASE_PATH,
+      headers: headers(t.operatorKey),
+      body: { agent: "deploy" },
+    });
+    expect(minted.status).toBe(201);
+    const kid = (minted.body as { kid: string }).kid;
+    const revoked = await t.router.handle({
+      method: "DELETE",
+      path: `${KEY_LIFECYCLE_BASE_PATH}/${kid}`,
+      headers: headers(t.operatorKey),
+    });
+    expect(revoked.status).toBe(200);
+    expect(await t.store.status(kid)).toBe("revoked");
+    // The other app's key is untouched by any of it.
+    expect(await t.store.status(t.foreignKid)).toBe("active");
+  });
+
+  test("the store's own revoke refuses a kid that is not the named app's", async () => {
+    const t = await twoApps();
+    expect(await t.store.revoke(t.foreignKid, "wrong app", Date.now(), { app: APP })).toBe(false);
+    expect((await t.store.findByKid(t.foreignKid))?.revokedAt).toBeNull();
+    expect(await t.store.revoke(t.foreignKid, "right app", Date.now(), { app: OTHER_APP })).toBe(true);
+    expect((await t.store.findByKid(t.foreignKid))?.revokedAt).not.toBeNull();
+  });
+
+  test("a store that cannot confirm ownership refuses to revoke rather than guessing", async () => {
+    // Fail CLOSED and say WHY: a store read that failed is an outage, not
+    // evidence that the key belongs to somebody else, so it must not come back
+    // as a tidy 404 while the key stays live. `revoke` is never reached.
+    const inert = {
+      async insertMinted() {},
+      async list() {
+        throw new Error("store unavailable");
+      },
+      async revoke() {
+        throw new Error("revoke must not be reached");
+      },
+    };
+    const router = createKeyLifecycleRoutes({
+      app: APP,
+      signingSecret: SIGNING_SECRET,
+      store: inert as unknown as Parameters<typeof createKeyLifecycleRoutes>[0]["store"],
+      allowUnregisteredKeys: true,
+    });
+    const operator = mintApiKey({ app: APP, scopes: [`${APP}:*`], agent: "bootstrap", signingSecret: SIGNING_SECRET });
+    const response = await router.handle({
+      method: "DELETE",
+      path: `${KEY_LIFECYCLE_BASE_PATH}/kid_whatever`,
+      headers: headers(operator.token),
+    });
+    expect(response.status).toBe(503);
+    expect((response.body as { reason: string }).reason).toBe("ownership_unresolved");
   });
 });

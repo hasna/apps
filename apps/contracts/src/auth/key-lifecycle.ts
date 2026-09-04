@@ -67,7 +67,13 @@ export const DEFAULT_CLIENT_KEY_TTL_DAYS = 365;
 export interface KeyLifecycleStore {
   insertMinted(minted: MintedApiKey, createdBy?: string): Promise<void>;
   list(options?: { app?: string; tid?: string; includeRevoked?: boolean }): Promise<ApiKeyRecord[]>;
-  revoke(kid: string, reason?: string, atMs?: number): Promise<boolean>;
+  /**
+   * `options.app` is passed on every revoke this router performs. A store that
+   * ignores it is still SAFE here — the router establishes ownership itself
+   * before calling (see `ownedByApp`), because this parameter is optional in
+   * the structural type and a three-parameter shim satisfies it silently.
+   */
+  revoke(kid: string, reason?: string, atMs?: number, options?: { app?: string }): Promise<boolean>;
   findByKid?(kid: string): Promise<ApiKeyRecord | null>;
 }
 
@@ -382,10 +388,55 @@ export function createKeyLifecycleRoutes(options: KeyLifecycleRouteOptions): Key
     return { status: 200, body: { keys: records.map((record) => publicRecord(record, now)) } };
   }
 
+  /**
+   * Is `kid` a key of THIS app?
+   *
+   * A caller here holds `<app>:keys.admin` for ONE app, but a kid is an opaque
+   * id that carries no app, and one `api_keys` table serves every app sharing a
+   * database — the `app` column, the `app` filter on `list`, and the
+   * shared-signing-secret "one process can serve two apps" deployment all say
+   * so. Without this check, `DELETE /v1/admin/keys/<kid>` on an unscoped
+   * `WHERE kid = $1` revoked ANOTHER app's client key: cross-app privilege
+   * escalation from the most valuable route in the service. The GET-one handler
+   * below always guarded `record.app !== app`; revoke now answers 404 in the
+   * same shape, so a foreign kid is indistinguishable from an absent one and
+   * the route is not an enumeration oracle for other apps' key ids either.
+   *
+   * FAIL CLOSED: a store that can neither look a kid up nor list this app's
+   * keys cannot establish ownership, so it does not get to revoke.
+   */
+  async function ownedByApp(kid: string): Promise<boolean | null> {
+    if (options.store.findByKid) {
+      const record = await options.store.findByKid(kid);
+      return record !== null && record.app === app;
+    }
+    if (typeof options.store.list === "function") {
+      const records = await options.store.list({ app, includeRevoked: true });
+      return records.some((record) => record.kid === kid && record.app === app);
+    }
+    return null;
+  }
+
   async function revoke(kid: string, body: Record<string, unknown>): Promise<KeyLifecycleResponse> {
     const rawReason = ownField(body, "reason");
     const reason = typeof rawReason === "string" && rawReason.trim() ? rawReason.trim() : "revoked_by_operator";
-    const revoked = await options.store.revoke(kid, reason, clock());
+    // The router's contract is that it never throws (see `handle`), and a
+    // store read that fails must not be read as "not this app's key" either —
+    // that would revoke nothing and say 404, hiding an outage as a clean answer.
+    let owned: boolean | null;
+    try {
+      owned = await ownedByApp(kid);
+    } catch {
+      return fail(503, "ownership_unresolved", "Could not read the key's record to confirm it belongs to this app. Retry.");
+    }
+    if (owned === null) {
+      return fail(501, "not_implemented", "This key store cannot establish which app a key belongs to.");
+    }
+    if (!owned) return fail(404, "unknown_key", `No key with kid '${kid}' is recorded for '${app}'.`);
+    // Belt and braces: the store ALSO scopes the UPDATE to this app, so a row
+    // that changed hands between the check above and this write is not revoked
+    // by an operator who no longer owns it.
+    const revoked = await options.store.revoke(kid, reason, clock(), { app });
     if (!revoked) return fail(404, "unknown_key", `No key with kid '${kid}' is recorded for '${app}'.`);
     return { status: 200, body: { kid, revoked: true, reason } };
   }
