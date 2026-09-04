@@ -818,13 +818,17 @@ describe("configs session CLI -- global-source coverage gate (O15-00694)", () =>
     const sourcePath = join(home, "sources", "global-fix-lane-regression.md");
     writeFileSync(sourcePath, sourceBody);
     const seeded = runCli(["add", sourcePath, "--name", "global-fix-lane-regression", "--category", "agent", "--agent", "global"], env);
-    expect(seeded.status, `add stdout: ${seeded.stdout} | add stderr: ${seeded.stderr}`).toBe(0);
+    const list = runCli(["list", "--json"], env);
+    expect(
+      seeded.status,
+      `add stdout: ${seeded.stdout} | add stderr: ${seeded.stderr} | list stdout: ${list.stdout} | list stderr: ${list.stderr}`,
+    ).toBe(0);
   }
 
   test("plan exits non-zero and reports the missing slug when a registered global-* source is absent (constructed shortfall)", () => {
     const home = makeTempRoot("open-configs-session-cli-");
     try {
-      const env = { HOME: home, HASNA_CONFIGS_HOME: join(home, ".hasna", "configs") };
+      const env = { HOME: home, HASNA_CONFIGS_HOME: join(home, ".hasna", "configs"), HASNA_INSTRUCTIONS_DB_PATH: join(home, "instructions.db") };
       seedGlobalConfig(home, env);
 
       const result = runCli([
@@ -852,7 +856,7 @@ describe("configs session CLI -- global-source coverage gate (O15-00694)", () =>
   test("plan exits 0 when every registered global-* source is wired into the render", () => {
     const home = makeTempRoot("open-configs-session-cli-");
     try {
-      const env = { HOME: home, HASNA_CONFIGS_HOME: join(home, ".hasna", "configs") };
+      const env = { HOME: home, HASNA_CONFIGS_HOME: join(home, ".hasna", "configs"), HASNA_INSTRUCTIONS_DB_PATH: join(home, "instructions.db") };
       seedGlobalConfig(home, env);
 
       const result = runCli([
@@ -877,7 +881,7 @@ describe("configs session CLI -- global-source coverage gate (O15-00694)", () =>
   test("apply refuses to write (status 1, no render) when coverage is incomplete; applies when complete", () => {
     const home = makeTempRoot("open-configs-session-cli-");
     try {
-      const env = { HOME: home, HASNA_CONFIGS_HOME: join(home, ".hasna", "configs") };
+      const env = { HOME: home, HASNA_CONFIGS_HOME: join(home, ".hasna", "configs"), HASNA_INSTRUCTIONS_DB_PATH: join(home, "instructions.db") };
       seedGlobalConfig(home, env);
       const codexHome = join(home, "codex-home");
 
