@@ -521,9 +521,11 @@ export interface MementosClientConfig {
    */
   apiKey?: string;
   /**
-   * Versioned route prefix. Defaults to the canonical `/v1`. The deployed
-   * service also serves the legacy `/api` prefix; set `prefix: "/api"` to target
-   * it explicitly.
+   * Versioned route prefix. Defaults to the canonical `/v1`, or to whatever
+   * versioned segment `baseUrl` already ends with (`/v1` or the legacy
+   * `/api`), so a configured `https://api.hasna.com/mementos/v1` is not
+   * prefixed twice. The deployed service also serves the legacy `/api`
+   * prefix; set `prefix: "/api"` to target it explicitly.
    */
   prefix?: string;
 }
@@ -643,6 +645,51 @@ export interface SessionMemoryJob {
 // Client
 // ============================================================================
 
+/** Default endpoint for a single-operator on-box server. */
+export const MEMENTOS_DEFAULT_BASE_URL = "http://localhost:19428";
+
+/**
+ * Env keys that configure this client, canonical first. The canonical
+ * `HASNA_MEMENTOS_*` pair is the fleet env contract; the short names are kept
+ * as fallbacks for callers configured before the rename.
+ */
+export const MEMENTOS_API_URL_ENV_KEYS = ["HASNA_MEMENTOS_API_URL", "MEMENTOS_API_URL", "MEMENTOS_URL"] as const;
+export const MEMENTOS_API_KEY_ENV_KEYS = ["HASNA_MEMENTOS_API_KEY", "MEMENTOS_API_KEY"] as const;
+
+/**
+ * Split a configured base URL into the authority-plus-path root and the
+ * versioned route prefix.
+ *
+ * The gateway addresses this app as `https://api.hasna.com/mementos/v1/...`
+ * (hasna/apps#1512), so an operator may configure any of
+ * `https://host`, `https://host/v1`, `https://api.hasna.com/mementos`, or
+ * `https://api.hasna.com/mementos/v1`. The path prefix must survive (using
+ * `URL.origin` here is the hasna/apps#1601 defect: it silently drops
+ * `/mementos` and the client can never reach the gateway), and a base that
+ * already carries `/v1` (or the legacy `/api`) must not be prefixed a second
+ * time into `/mementos/v1/v1/memories`.
+ *
+ * TODO(hasna/apps#1601): replace this with the shared base-URL join helper
+ * from `@hasna/contracts` once that release lands and this package's pin is
+ * bumped; the semantics here are intentionally identical to it.
+ */
+export function resolveMementosApiBase(
+  rawBaseUrl: string | undefined,
+  explicitPrefix?: string,
+): { baseUrl: string; prefix: string } {
+  const trimmed = (rawBaseUrl ?? MEMENTOS_DEFAULT_BASE_URL).trim().replace(/\/+$/, "") || MEMENTOS_DEFAULT_BASE_URL;
+  const prefixMatch = /^(.*)(\/(?:v1|api))$/.exec(trimmed);
+  if (explicitPrefix !== undefined) {
+    const prefix = explicitPrefix.replace(/\/+$/, "");
+    // An explicit prefix wins, so a base that already carries the same
+    // versioned segment is folded back into the root rather than doubled.
+    const baseUrl = prefixMatch && prefixMatch[2] === prefix ? (prefixMatch[1] || trimmed) : trimmed;
+    return { baseUrl, prefix };
+  }
+  if (prefixMatch) return { baseUrl: prefixMatch[1] || trimmed, prefix: prefixMatch[2]! };
+  return { baseUrl: trimmed, prefix: "/v1" };
+}
+
 export class MementosClient {
   private baseUrl: string;
   private _fetch: typeof globalThis.fetch;
@@ -650,17 +697,34 @@ export class MementosClient {
   private prefix: string;
 
   constructor(config: MementosClientConfig = {}) {
-    this.baseUrl = (config.baseUrl ?? "http://localhost:19428").replace(/\/$/, "");
+    const resolved = resolveMementosApiBase(config.baseUrl, config.prefix);
+    this.baseUrl = resolved.baseUrl;
     this._fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
     this.apiKey = config.apiKey;
-    this.prefix = (config.prefix ?? "/v1").replace(/\/$/, "");
+    this.prefix = resolved.prefix;
   }
 
   static fromEnv(overrides: Partial<MementosClientConfig> = {}): MementosClient {
     const env = typeof process !== "undefined" ? process.env : undefined;
-    const baseUrl = env?.["MEMENTOS_API_URL"] ?? env?.["MEMENTOS_URL"] ?? "http://localhost:19428";
-    const apiKey = env?.["MEMENTOS_API_KEY"];
+    const pick = (keys: readonly string[]): string | undefined => {
+      for (const key of keys) {
+        const value = env?.[key]?.trim();
+        if (value) return value;
+      }
+      return undefined;
+    };
+    const baseUrl = pick(MEMENTOS_API_URL_ENV_KEYS) ?? MEMENTOS_DEFAULT_BASE_URL;
+    const apiKey = pick(MEMENTOS_API_KEY_ENV_KEYS);
     return new MementosClient({ baseUrl, apiKey, ...overrides });
+  }
+
+  /**
+   * The resolved `/v1` root this client sends to, e.g.
+   * `https://api.hasna.com/mementos/v1`. Printed by operator-facing surfaces
+   * as the single `API:` line (hasna/apps#1588) — never a bare origin.
+   */
+  get apiUrl(): string {
+    return `${this.baseUrl}${this.prefix}`;
   }
 
   // --------------------------------------------------------------------------

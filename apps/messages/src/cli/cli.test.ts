@@ -33,6 +33,9 @@ function cliEnv(extra: Record<string, string>): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
     if (key.startsWith("HASNA_MESSAGES_") || key.startsWith("MESSAGES_")) continue;
+    // The conversations identity is an accepted --agent default (#1602), so a
+    // shell that exported it must not satisfy the fail-closed tests below.
+    if (key === "CONVERSATIONS_AGENT_ID") continue;
     env[key] = value;
   }
   return { ...env, ...extra };
@@ -63,6 +66,56 @@ describe("messages CLI", () => {
     expect(listed[0]!.id).toBe(sent.message.thread_id);
     expect(listed[0]!.unread_count).toBe(1);
     expect(listed[0]!.last_message_preview).toBe("cli hello");
+  });
+
+  test("identity flags default from the station env (#1602)", async () => {
+    // No --from / --agent anywhere: the station wrapper's identity is enough.
+    const send = runCli(["send", "--to", "flavius", "--content", "env identity"], {
+      HASNA_MESSAGES_AGENT_ID: "envsender",
+    });
+    expect(send.status).toBe(0);
+    const sent = JSON.parse(send.stdout) as { message: { from_agent: string; thread_id: string } };
+    expect(sent.message.from_agent).toBe("envsender");
+
+    const received = runCli(["receive"], { MESSAGES_AGENT_ID: "flavius" });
+    expect(received.status).toBe(0);
+    const messages = JSON.parse(received.stdout) as Array<{ content: string }>;
+    expect(messages.some((m) => m.content === "env identity")).toBe(true);
+
+    // The conversations identity is accepted as the same actor.
+    const whoami = runCli(["whoami"], { CONVERSATIONS_AGENT_ID: "flavius" });
+    expect(whoami.status).toBe(0);
+    expect((JSON.parse(whoami.stdout) as { name: string }).name).toBe("flavius");
+
+    // An explicit flag still outranks the environment.
+    const explicit = runCli(["whoami", "--agent", "explicitus"], { HASNA_MESSAGES_AGENT_ID: "envsender" });
+    expect(explicit.status).toBe(0);
+    expect((JSON.parse(explicit.stdout) as { name: string }).name).toBe("explicitus");
+  });
+
+  test("an unresolvable identity fails closed with an actionable error (#1602)", async () => {
+    const res = runCli(["receive"]);
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toContain("--agent is required");
+    expect(res.stderr).toContain("HASNA_MESSAGES_AGENT_ID");
+    expect(res.stdout).toBe("");
+  });
+
+  test("every data command accepts --json (#1602)", async () => {
+    const send = runCli(["send", "--from", "jsoner", "--to", "flavius", "--content", "json flag", "--json"]);
+    expect(send.status).toBe(0);
+    expect(JSON.parse(send.stdout)).toHaveProperty("message");
+
+    const agents = runCli(["agents", "--json"]);
+    expect(agents.status).toBe(0);
+    const listed = JSON.parse(agents.stdout) as Array<{ name: string }>;
+    expect(listed.some((a) => a.name === "jsoner")).toBe(true);
+
+    for (const args of [["whoami", "--agent", "jsoner", "--json"], ["threads", "--agent", "jsoner", "--json"], ["unread", "--agent", "jsoner", "--json"]]) {
+      const res = runCli(args);
+      expect(res.status).toBe(0);
+      expect(() => JSON.parse(res.stdout)).not.toThrow();
+    }
   });
 
   test("send refuses missing required flags", async () => {
