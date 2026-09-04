@@ -32,6 +32,42 @@ async function runCalendar(args: string[], dbPath: string) {
   return { stdout, stderr, exitCode };
 }
 
+/** Run the CLI without the domain fixture preload, under a caller-supplied env. */
+async function runCalendarRaw(args: string[], env: Record<string, string>) {
+  const proc = Bun.spawn({
+    cmd: ["bun", "run", "src/cli/index.tsx", ...args],
+    cwd: process.cwd(),
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+
+  return { stdout, stderr, exitCode };
+}
+
+function rawCalendarEnv(): Record<string, string> {
+  const env = { ...process.env, BUN_TEST: "", FORCE_COLOR: "0", NO_COLOR: "1" } as Record<string, string>;
+  for (const key of ["HASNA_CALENDAR_API_URL", "HASNA_CALENDAR_API_KEY", "CALENDAR_API_URL", "CALENDAR_API_KEY"]) {
+    delete env[key];
+  }
+  return env;
+}
+
+function failingApiEnv(): Record<string, string> {
+  const env = rawCalendarEnv();
+  // RFC 2606 reserved .invalid TLD: DNS can never resolve it, so requests fail
+  // fast and deterministically on a box that is otherwise fully configured.
+  env.HASNA_CALENDAR_API_URL = "https://calendar.example.invalid";
+  env.HASNA_CALENDAR_API_KEY = "status-fixture-key";
+  return env;
+}
+
 async function seedCalendar(dbPath: string, eventCount = 22) {
   const db = getDatabase(dbPath);
   const org = createOrg({ name: "Output Org" }, db);
@@ -69,6 +105,51 @@ describe("calendar CLI", () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  test("status reports version, transport, and counts as JSON", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "calendar-cli-"));
+    try {
+      const result = await runCalendar(["--json", "status"], join(tempDir, "calendar.db"));
+
+      expect(result.exitCode).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        service: "calendar",
+        version: expect.any(String),
+        counts: { orgs: expect.any(Number), calendars: expect.any(Number) },
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("status reports unconfigured (not a crash) when no API URL/key is set", async () => {
+    const result = await runCalendarRaw(["--json", "status"], rawCalendarEnv());
+
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report).toMatchObject({
+      service: "calendar",
+      version: expect.any(String),
+      transport: "unconfigured",
+    });
+    expect(report.counts).toBeUndefined();
+    expect(report.error).toBeUndefined();
+  });
+
+  test("status reports a transport error, not unconfigured, when a configured API call fails", async () => {
+    const result = await runCalendarRaw(["--json", "status"], failingApiEnv());
+
+    expect(result.exitCode).toBe(0);
+    const report = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(report).toMatchObject({
+      service: "calendar",
+      version: expect.any(String),
+      transport: "error",
+      error: expect.any(String),
+    });
+    expect(report.counts).toBeUndefined();
+    expect(report.transport).not.toBe("unconfigured");
   });
 
   test("global --json emits parseable JSON output", async () => {

@@ -20,6 +20,7 @@
     "monitor": "./bins/monitor.js",
     "monitor-mcp": "./bins/monitor-mcp.js",
     "monitor-daemon": "./bins/monitor-daemon.js",
+    "monitor-serve": "./bins/monitor-server.js",
     "monitor-server": "./bins/monitor-server.js"
   },
   "main": "./src/index.ts",

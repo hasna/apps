@@ -42,7 +42,7 @@ document, and run them. Four surfaces share one set of core modules:
 
 - **CLI** (`skills`) — Commander + an Ink TUI.
 - **MCP server** (`skills-mcp`) — the same capabilities over Model Context Protocol.
-- **HTTP API server** (`skills-server`, `skills-worker`, `skills-migrate`) — a real,
+- **HTTP API server** (`skills-serve` — deprecated alias `skills-server` — plus `skills-worker`, `skills-migrate`) — a real,
   shipped service you can run yourself: a queue, a durable store, and `/api/v1/*`.
 - **Library** (`@hasna/skills`, plus the `@hasna/skills/storage` subpath).
 
@@ -139,7 +139,7 @@ There is no `dashboard/` directory and no `src/server/serve.ts`.
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
 | MCP tools | 37 | `tools/list` against a live `buildServer()` |
 | MCP resources | 4 | `resources/list` + `resources/templates/list` (3 static + 1 template) |
-| Published bins | 5 | `bin` in `package.json` |
+| Published bins | 6 | `bin` in `package.json` |
 | bun build invocations | 6 | the `build` script in `package.json` |
 
 `skills/` holds those 86 catalog directories plus `_common`. The catalog is
@@ -221,7 +221,8 @@ request.
 ### HTTP API server — `src/server/`
 
 This **is** shipped in this repository. `bun run build` produces `bin/server.js`,
-`bin/worker.js`, and `bin/migrate.js`, published as `skills-server`, `skills-worker`,
+`bin/worker.js`, and `bin/migrate.js`, published as `skills-serve` (deprecated
+alias `skills-server`), `skills-worker`,
 and `skills-migrate`. The `Dockerfile` runs `bun bin/server.js` and exposes 8787.
 
 Routing is a hand-written dispatcher in `src/server/app.ts` — `handleApiV1` destructures

@@ -469,7 +469,10 @@ const events = new EventsClient({
 
 ## CLI
 
-The package exposes `events` and `hasna-events`.
+The package exposes `events` and `hasna-events`. `hasna-events` is a
+**deprecated alias** of `events` (same entrypoint, kept for npm parity with
+0.1.15); new usage should call `events` directly, and the alias is scheduled
+for removal in a future major release (hasna/apps#1602).
 
 Global options must come before the command group:
 

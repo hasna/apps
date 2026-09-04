@@ -181,6 +181,13 @@ snapshots service install --apply --yes
 snapshots service status
 ```
 
+The package ships four bins: `snapshots` (main CLI), `snapshots-mcp` (bridge),
+`snapshots-serve` (local HTTP server), and `snapshots-agent` — a daemon-mode
+wrapper that runs `snapshots daemon run` with no arguments (agent/launchd-style
+invocations pass through to `snapshots daemon`). All four are documented
+surfaces; `snapshots-agent` is the entrypoint background agents and launch
+agents call for continuous capture.
+
 All commands emit JSON so agents can consume stable contracts.
 
 Snapshot summaries include per-source status, duration, resource count, diagnostic count, and a `degraded` flag when a source returns warnings or errors. Daemon captures can use `--tmux-tail-lines 0` to skip pane scrollback tails for faster topology snapshots.

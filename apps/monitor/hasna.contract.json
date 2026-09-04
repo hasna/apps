@@ -47,7 +47,7 @@
       "kind": "api",
       "status": "deferred",
       "authMode": "api-key",
-      "deferReason": "monitor-server serves a local REST/SSE surface today, but it declares neither GET /ready nor GET /version and ships no generated SDK, so it is not yet a contract-supported API surface."
+      "deferReason": "monitor-serve (previously monitor-server) serves a local REST/SSE surface today, but it declares neither GET /ready nor GET /version and ships no generated SDK, so it is not yet a contract-supported API surface."
     }
   ],
   "storage": {
@@ -77,19 +77,24 @@
     },
     "contractAlignment": {
       "conformanceBaseline": {
-        "reason": "The pending bin rename below is an owner-blocked breaking change, so `bun run contract-check` still fails one check. This baseline is what `bun run contract-baseline` holds the authority to in CI: exactly these failures pass, anything else — a new failure, a changed detail, or a baseline entry that stops failing — breaks the build. Remove an entry as soon as its cause is resolved.",
+        "reason": "The two bins below fall outside the contract bin allowlist and cannot be declared yet: monitor-serve flips a cli-with-store manifest to service-capable (invalidating the sqlite-only storage waiver until the storage rewrite lands), and monitor-server is its one-release deprecated shim awaiting the next breaking release (monitor-web was dropped by the dashboard-removal wave). The canonical `monitor serve` subcommand exists; the standalone bins are a published-package breaking change. `bun run contract-baseline` holds this entry's exact text as the authority in CI. Remove or narrow an entry as soon as its cause is resolved.",
         "failures": [
           {
             "check": "bins_match_package",
-            "detail": "in package.json but undeclared: monitor-server"
+            "detail": "in package.json but undeclared: monitor-serve, monitor-server"
           }
         ]
       },
       "pendingBinRenames": [
         {
+          "bin": "monitor-serve",
+          "replacement": "monitor serve (canonical subcommand)",
+          "reason": "Canonical server bin shipped by the fleet naming wave (hasna/apps#1602); it falls outside the contract bin allowlist for now because declaring a -serve bin flips a cli-with-store manifest to service-capable and invalidates the sqlite-only storage waiver (storage rewrite + /ready /version surface first)."
+        },
+        {
           "bin": "monitor-server",
-          "replacement": "monitor serve",
-          "reason": "Ships in package.json bin but falls outside the contract bin allowlist, so it cannot be declared above. The allowlisted equivalent already exists as the `monitor serve` subcommand; dropping the standalone bin is a breaking change to a published package and needs an owner decision."
+          "replacement": "monitor-serve",
+          "reason": "Deprecated alias of monitor-serve (same entrypoint, bins/monitor-server.js). Kept installed for one release so published consumers do not break; drop it in the next breaking release."
         }
       ]
     }

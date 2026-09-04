@@ -25,7 +25,7 @@ program
   .description("Open Contacts — contact management for AI coding agents")
   .version(pkg.version);
 
-registerCoreCommands(program);
+registerCoreCommands(program, pkg.version);
 registerCrmCommands(program);
 registerAdvancedCommands(program);
 registerAudienceCommands(program);

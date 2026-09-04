@@ -32,8 +32,16 @@ are rejected in client processes. PostgreSQL URLs belong only to
 ## CLI Usage
 
 ```bash
+contacts status            # CLI version, API endpoint, storage mode, record counts
+contacts status --json
 contacts --help
 ```
+
+`contacts status` answers even on a box without an API key: an unconfigured
+client reports storage `unconfigured` (a failed request on a configured box
+reports storage `error` with the failure message) instead of crashing, so
+agents can observe the configuration drift the command exists to expose.
+
 
 ## Audiences, consent, and suppression
 

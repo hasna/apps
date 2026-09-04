@@ -3,9 +3,13 @@
  * Holds `contracts repo-conformance` — the authority on conformance — to an
  * explicit baseline.
  *
- * `bun run contract-check` exits 1 today, because one published bin
- * (monitor-server) falls outside the contract bin allowlist and dropping it
- * is a breaking change that needs an owner decision. Recording that under
+ * `bun run contract-check` exits 1 today, because two published bins
+ * (monitor-serve and its one-release deprecated alias monitor-server) fall
+ * outside the contract bin allowlist: declaring the canonical `-serve` bin
+ * flips the cli-with-store manifest to service-capable (invalidating the
+ * sqlite-only storage waiver until the storage rewrite lands), and dropping
+ * the deprecated alias is a breaking change that needs an owner decision.
+ * Recording that under
  * metadata.contractAlignment.pendingBinRenames documents the deferral, but
  * the kit ignores repo-invented metadata, so on its own the deferral just
  * means the authoritative command is never run: `contract-gate` checks this

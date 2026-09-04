@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { getStore } from "../../store/index.js";
+import { ContactsClientConfigurationError } from "../../cloud/http-storage.js";
 import { importContacts } from "../../lib/import.js";
 import { exportContacts } from "../../lib/export.js";
 import type { CreateContactInput, Group } from "../../types/index.js";
@@ -8,11 +9,73 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { extname } from "path";
 import { renderTable, formatContact, promptUser as prompt, confirmUser as confirm } from "../utils.js";
 
+// The package version is read in src/cli/index.tsx (../../package.json, same
+// depth as the flat dist/cli bundle) and passed in here: a module-level require
+// from src/cli/commands would resolve ../../../package.json = <pkg>/package.json
+// when run from source but THREE levels above dist/cli/index.js once bundled,
+// crashing every published `contacts` invocation at import time.
+
 function collect(val: string, prev: string[]): string[] {
   return [...prev, val];
 }
 
-export function registerCoreCommands(program: Command): void {
+export function registerCoreCommands(program: Command, version: string): void {
+
+// ─── contacts status ──────────────────────────────────────────────────────────
+
+program
+  .command("status")
+  .description("Show CLI version, API endpoint, storage mode, and record counts")
+  .option("--json", "Output as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    const baseUrl = process.env["HASNA_CONTACTS_API_URL"]?.trim();
+    const apiLine = baseUrl ? baseUrl : "(not configured — set HASNA_CONTACTS_API_URL plus a contacts API key)";
+    let counts: { contacts: number; companies: number } | undefined;
+    let storage: string;
+    let failure: string | undefined;
+    try {
+      const store = getStore();
+      const [contacts, companies] = await Promise.all([
+        store.listContacts({ limit: 1 }),
+        store.listCompanies({ limit: 1 }),
+      ]);
+      counts = { contacts: contacts.total, companies: companies.total };
+      storage = "cloud (/v1)";
+    } catch (err) {
+      if (err instanceof ContactsClientConfigurationError) {
+        // Genuinely unconfigured (CONTACTS_API_NOT_CONFIGURED etc.): a reportable
+        // status, not a crash — `contacts status` must answer on boxes without a
+        // key so agents can observe the drift (hasna/apps#1602).
+        storage = "unconfigured";
+      } else {
+        // A configured box whose request failed (wrong key, network down, 5xx)
+        // must not be relabeled "unconfigured": that conflation hides the very
+        // drift this command exists to expose.
+        storage = "error";
+        failure = err instanceof Error ? err.message : String(err);
+      }
+    }
+    const report = {
+      service: "contacts",
+      version,
+      api: apiLine,
+      storage,
+      ...(failure !== undefined ? { error: failure } : {}),
+      ...(counts ? { counts } : {}),
+    };
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    console.log(chalk.bold(`contacts v${version}`));
+    console.log(`API:      ${apiLine}`);
+    console.log(`Storage:  ${storage}`);
+    if (failure !== undefined) console.log(chalk.red(`Error:    ${failure}`));
+    if (counts) {
+      console.log(`Contacts: ${counts.contacts}`);
+      console.log(`Companies: ${counts.companies}`);
+    }
+  });
 
 // ─── contacts add ─────────────────────────────────────────────────────────────
 

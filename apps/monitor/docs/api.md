@@ -4,12 +4,12 @@ Start the API with either entrypoint:
 
 ```bash
 monitor serve --host 127.0.0.1 --port 3847
-monitor-server --host 127.0.0.1 --port 3847
+monitor-serve --host 127.0.0.1 --port 3847   # monitor-server: deprecated alias
 ```
 
 The default base URL is `http://127.0.0.1:3847`. `monitor serve` reads its
 port from the CLI option (default `3847`) and its host from the CLI/configured
-API defaults. `monitor-server` also accepts `PORT`. Both honor
+API defaults. `monitor-serve` also accepts `PORT`. Both honor
 `HASNA_MONITOR_API_HOST` or `MONITOR_API_HOST` when no host argument is given.
 
 ## Authentication

@@ -179,6 +179,7 @@ program
   .option("--text <query>", "Full-text search")
   .option("--limit <n>", "Max results", "100")
   .option("--format <fmt>", "Output format: table|json|compact", "table")
+  .option("--json", "Output as JSON (alias for --format json)")
   .action(async (opts) => {
     const rows = await getStore().listLogs({
       project_id: await getStore().resolveProjectId(opts.project),
@@ -190,7 +191,7 @@ program
       text: opts.text,
       limit: Number(opts.limit),
     });
-    if (opts.format === "json") {
+    if (opts.json || opts.format === "json") {
       console.log(JSON.stringify(rows, null, 2));
       return;
     }
@@ -276,6 +277,7 @@ program
   .command("get <id>")
   .description("Fetch one log entry by id")
   .option("--format <fmt>", "Output format: json|table", "json")
+  .option("--json", "Output as JSON (alias for --format json)")
   .action(async (id, opts) => {
     const row = await getStore().getLog(id);
     if (!row) {
@@ -283,7 +285,7 @@ program
       process.exitCode = 1;
       return;
     }
-    if (opts.format === "table") {
+    if (opts.format === "table" && !opts.json) {
       console.log(
         colorRow(row.timestamp, row.level, row.service ?? "-", row.message),
       );

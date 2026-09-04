@@ -43,12 +43,13 @@ After a global install, `@hasna/monitor` exposes five npm binaries:
 | `monitor` | Main CLI for machines, metrics, doctor, cron, and integrations |
 | `monitor-mcp` | MCP server for AI agents (stdio or HTTP) |
 | `monitor-daemon` | Background daemon for scheduled monitoring (definition cadence, workers, leases) |
-| `monitor-server` | Standalone REST API server (default port `3847`, SSE at `/api/stream`) |
+| `monitor-serve` | Standalone REST API server (default port `3847`, SSE at `/api/stream`) |
+| `monitor-server` | Deprecated alias of `monitor-serve` (same entrypoint; kept one release for published consumers) |
 
 Start the API standalone:
 
 ```bash
-monitor-server
+monitor-serve
 # REST API: http://localhost:3847
 ```
 

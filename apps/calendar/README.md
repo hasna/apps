@@ -173,7 +173,16 @@ calendar member-add --org <org-id> --agent <agent-id>
 calendar members <org-id>
 calendar member-remove <agent-id> <org-id>
 calendar agent-orgs <agent-id>
+
+calendar status
 ```
+
+`calendar status` prints the CLI version, the resolved store transport, and
+org/calendar record counts (`--json` supported). A box without
+`HASNA_CALENDAR_API_URL` set reports transport `unconfigured` instead of
+crashing, and a failed request on a configured box reports transport `error` —
+the two are kept distinct so the drift the command exists to expose is never
+relabeled.
 
 The CLI also registers `events` and `channels` command groups from
 `@hasna/events` for local event-log and webhook operations:
