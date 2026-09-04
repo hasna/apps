@@ -582,21 +582,6 @@ ${chalk.bold("Available tools (24 total):")}
 `);
   });
 
-// ─── contacts open ────────────────────────────────────────────────────────────
-
-program
-  .command("open [id]")
-  .description("Open the web dashboard in browser")
-  .action(async (id?: string) => {
-    const port = 19428;
-    const url = id ? `http://localhost:${port}/#/contacts/${id}` : `http://localhost:${port}`;
-    const platform = process.platform;
-    const opener = platform === "darwin" ? "open" : platform === "win32" ? "start" : "xdg-open";
-    const proc = Bun.spawn([opener, url], { stdio: ["ignore", "ignore", "ignore"] });
-    await proc.exited;
-    console.log(chalk.green(`Opening ${url}`));
-  });
-
 // ─── contacts recent ──────────────────────────────────────────────────────────
 
 program

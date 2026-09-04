@@ -47,7 +47,6 @@ import { buildV1OpenApiDocument } from "./openapi.js";
 import { isCloudModeEnabled, pingCloud, resolveSigningSecret } from "./cloud.js";
 import { getPackageVersion } from "../lib/package-version.js";
 
-const DASHBOARD_DIST = join(import.meta.dir, "../../dashboard/dist");
 const DEFAULT_REST_HOST = "127.0.0.1";
 
 export interface ContactsRequestHandlerOptions {
@@ -477,13 +476,6 @@ async function handleImages(
   return apiError("Method not allowed", 405);
 }
 
-// ─── Static file serving ──────────────────────────────────────────────────────
-
-function serveStaticFile(filePath: string): Response | null {
-  if (!existsSync(filePath)) return null;
-  return new Response(Bun.file(filePath));
-}
-
 // ─── Main server ──────────────────────────────────────────────────────────────
 
 export function createContactsRequestHandler(options: ContactsRequestHandlerOptions = {}): (req: Request) => Promise<Response> {
@@ -580,16 +572,7 @@ export function createContactsRequestHandler(options: ContactsRequestHandlerOpti
               response = apiError("Not found", 404);
           }
         } else {
-          const principal = requireScope(req, "dashboard:read", options);
-          if (isResponse(principal)) {
-            response = principal;
-          } else {
-          // Serve dashboard static files
-          const filePath = join(DASHBOARD_DIST, url.pathname === "/" ? "index.html" : url.pathname);
-          response = serveStaticFile(filePath) ??
-            serveStaticFile(join(DASHBOARD_DIST, "index.html")) ??
-            new Response("Not Found", { status: 404 });
-          }
+          response = apiError("Not found", 404);
         }
       } catch (err) {
         console.error("Request error:", err);

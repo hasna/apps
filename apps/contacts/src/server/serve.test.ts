@@ -32,7 +32,7 @@ beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "contacts-serve-"));
   process.env["CONTACTS_DB_PATH"] = join(tmpDir, "contacts.db");
   process.env["HASNA_CONTACTS_API_TOKENS"] = [
-    "read=contacts:read stats:read dashboard:read images:read documents:read mcp:access",
+    "read=contacts:read stats:read images:read documents:read mcp:access",
     "export=contacts:export",
     "full=contacts:export contacts:export:full",
     "write=contacts:read contacts:write contacts:import images:write tags:write companies:write",
@@ -51,14 +51,14 @@ afterEach(() => {
 });
 
 describe("contacts serve auth and PII controls", () => {
-  test("rejects shared-host API and dashboard requests without a token", async () => {
+  test("rejects shared-host API requests without a token", async () => {
     const handler = createContactsRequestHandler();
 
     const api = await handler(request("/api/contacts"));
     expect(api.status).toBe(401);
 
-    const dashboard = await handler(request("/"));
-    expect(dashboard.status).toBe(401);
+    const unknown = await handler(request("/"));
+    expect(unknown.status).toBe(404);
   });
 
   test("does not trust spoofed Host localhost for unauthenticated shared requests", async () => {

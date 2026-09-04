@@ -22,7 +22,6 @@
   },
   "files": [
     "dist",
-    "dashboard/dist",
     "migrations",
     "hasna.contract.json",
     "LICENSE",
@@ -31,9 +30,9 @@
     "README.md"
   ],
   "scripts": {
-    "clean": "rm -rf dist dashboard/dist",
+    "clean": "rm -rf dist",
     "clean:core": "rm -rf dist",
-    "build": "bun run clean && cd dashboard && bun run build && cd .. && bun run build:bundles && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun run build:bundles && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "build:core": "bun run clean:core && bun run build:bundles && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "build:bundles": "bun run scripts/build-bundles.ts",
     "build:server": "rm -rf dist/server dist/sdk && bun run scripts/build-bundles.ts --server-only",

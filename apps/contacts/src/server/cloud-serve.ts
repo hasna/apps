@@ -1,7 +1,7 @@
 /**
  * Production-only Contacts HTTP surface.
  *
- * This module is intentionally isolated from the local dashboard/server and
+ * This module is intentionally isolated from the local server and
  * MCP entrypoints. Its import graph is pure remote: probes, OpenAPI, and the
  * authenticated `/v1` Postgres API. Do not import `serve.ts`, `security.ts`,
  * `src/db` local storage, or the MCP SDK here.
