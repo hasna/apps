@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { runMigrations } from "../db/schema.js";
 import { createWorkspace, recordWorkspaceEvent } from "../db/workspaces.js";
 import { PROJECT_REDACTED_VALUE } from "../lib/redaction.js";
+import { PROJECTS_LOCAL_REGISTRY_ENV } from "../store/project-store.js";
 import { HOSTED_API_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
 
 function runMcpCli(args: string[]) {
@@ -35,6 +36,10 @@ function runMcpSession(messages: unknown[], env: Record<string, string>) {
     }
     isolated[key] = value;
   }
+  // With the hosted selectors blanked, store resolution fails closed (no
+  // silent local fallback). These sessions deliberately run the on-box SQLite
+  // registry, so they explicitly opt in to it.
+  if (!(PROJECTS_LOCAL_REGISTRY_ENV in isolated)) isolated[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
   return Bun.spawnSync({
     cmd: ["node", "src/testing/mcp-stdio-client.mjs", JSON.stringify(messages)],
     stdout: "pipe",

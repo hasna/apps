@@ -290,14 +290,16 @@ board:
 }
 ```
 
-Hosted-backend support uses the same connection rule as Storage Sync. By
-default the client reads and writes the local SQLite registry
-(`HASNA_PROJECTS_DB_PATH` or `~/.hasna/projects/projects.db`). When
+Hosted-backend support uses the same connection rule as Storage Sync. When
 `HASNA_PROJECTS_API_URL` and `HASNA_PROJECTS_API_KEY` are both set, all
 registry reads and writes go to the hosted API instead; this does not move
 per-project canvases, data records, loop links, or asset files out of
 `$HASNA_PROJECTS_HOME/data/<workspace_id>/`. Setting only one API variable
-fails closed.
+fails closed, and running with NO API variable fails closed too (owner ruling
+2026-09-04): the client never silently falls back to the local SQLite registry
+and never opens it by default. The on-box registry
+(`HASNA_PROJECTS_DB_PATH` or `~/.hasna/projects/projects.db`) is used only
+after an explicit opt-in — set `HASNA_PROJECTS_LOCAL_REGISTRY=1`.
 See the Storage Sync section and
 `docs/hosted-backend-readiness-contract.md` for the connection contract.
 
@@ -352,12 +354,10 @@ contexts.
 
 ## Storage Sync
 
-Projects reads and writes either the local SQLite registry or the hosted HTTP
-API. The client selects the connection from API URL and API key presence.
-
-Local is the default. The client stores the project registry in SQLite at
-`HASNA_PROJECTS_DB_PATH` (or `~/.hasna/projects/projects.db`) and never touches
-Postgres.
+Projects reads and writes either the hosted HTTP API or the local SQLite
+registry. The client selects the connection from API URL and API key presence
+and FAILS CLOSED when neither is configured (owner ruling 2026-09-04): there
+is no silent local fallback.
 
 Set both variables to route all registry reads and writes to the hosted API:
 
@@ -378,7 +378,16 @@ output.
 
 Configuration is fail-closed. Setting only one of the API URL and API key
 refuses to route, and commands hard-fail instead of silently reading the local
-dataset. Setting neither uses the local SQLite registry.
+dataset. Setting neither also hard-fails: registry commands exit non-zero with
+an error naming `HASNA_PROJECTS_API_URL` / `HASNA_PROJECTS_API_KEY`, and the
+on-box SQLite registry is never opened as a default.
+
+The local registry is available ONLY through an explicit opt-in. Set
+`HASNA_PROJECTS_LOCAL_REGISTRY=1` to deliberately run the client against the
+on-box SQLite registry at `HASNA_PROJECTS_DB_PATH` (or
+`~/.hasna/projects/projects.db`); when the hosted API variables are present
+they take precedence. No other path — no flag, no legacy `*_STORAGE_MODE`
+selector, no blank API URL — opens the local registry.
 
 The HTTP connection moves the global project registry only. Machine-local side
 effects (tmux sessions, git operations, directory creation, rendering) and

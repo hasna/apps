@@ -8,8 +8,10 @@ Terraform, or live data mutation is allowed by this document.
 ## Runtime Selection
 
 The client connection is selected by API URL and API key presence
-(`resolveProjectStore`): HTTP when both are present, local otherwise. A partial
-pair fails closed.
+(`resolveProjectStore`): HTTP when both are present. With neither present,
+registry commands fail closed naming the required env — the local SQLite
+registry opens only under the explicit opt-in
+`HASNA_PROJECTS_LOCAL_REGISTRY=1`. A partial pair fails closed.
 
 | Surface | Local connection | Hosted HTTP connection |
 | --- | --- | --- |
@@ -24,7 +26,13 @@ selector is read.
 
 ## Adapter Rules
 
-- With neither API variable set, the local SQLite registry is used.
+- Running WITHOUT the API variables fails closed (owner ruling 2026-09-04):
+  registry commands exit non-zero with an actionable error naming
+  `HASNA_PROJECTS_API_URL` / `HASNA_PROJECTS_API_KEY`; the local SQLite
+  registry is never opened as a default.
+- The local SQLite registry is reachable only through the explicit opt-in
+  `HASNA_PROJECTS_LOCAL_REGISTRY=1`; the hosted pair, when present, takes
+  precedence.
 - A complete API URL/key pair routes every registry command through the hosted
   API. The client
   carries only the API key (never a database DSN), and the key value is never

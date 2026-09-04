@@ -11,7 +11,7 @@ import {
 } from "../db/workspaces.js";
 import type { JsonObject, Workspace } from "../types/workspace.js";
 import { closeDatabase, getDatabase, PROJECTS_DB_PATH_ENV } from "../db/database.js";
-import { resolveProjectStore, __resetProjectStore, type ProjectStore } from "../store/project-store.js";
+import { resolveProjectStore, PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore, type ProjectStore } from "../store/project-store.js";
 import { PROJECTS_HOME_ENV } from "./project-store-paths.js";
 import {
   buildProjectAgentContext,
@@ -31,6 +31,7 @@ beforeEach(() => {
   process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
   delete process.env["HASNA_PROJECTS_API_URL"];
   delete process.env["HASNA_PROJECTS_API_KEY"];
+  process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
   closeDatabase();
   __resetProjectStore();
 });
@@ -41,7 +42,7 @@ afterEach(() => {
 });
 
 function localStore(): ProjectStore {
-  return resolveProjectStore({});
+  return resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: "1" });
 }
 
 function makeProject(overrides: {

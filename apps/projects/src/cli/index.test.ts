@@ -12,7 +12,7 @@ import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import { PROJECT_REGISTRATION_DEPENDENCY_TASKS } from "../lib/project-registration.js";
 import { registerWorkspaceCommands } from "./commands/workspaces.js";
 import { HOSTED_API_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
-import { __resetProjectStore } from "../store/project-store.js";
+import { PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore } from "../store/project-store.js";
 import type { Root, WorkspaceKind } from "../types/workspace.js";
 
 setDefaultTimeout(15_000);
@@ -109,6 +109,13 @@ async function runWorkspaceCommandInProcess(args: string[], env: Record<string, 
     if (key in env) continue;
     previousEnv.set(key, process.env[key]);
     process.env[key] = "";
+  }
+  // Store resolution fails closed without the hosted API env (no silent local
+  // fallback). These in-process runs exercise the on-box SQLite registry, so
+  // they explicitly opt in to it.
+  if (!(PROJECTS_LOCAL_REGISTRY_ENV in env)) {
+    previousEnv.set(PROJECTS_LOCAL_REGISTRY_ENV, process.env[PROJECTS_LOCAL_REGISTRY_ENV]);
+    process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
   }
   for (const [key, value] of Object.entries(env)) {
     previousEnv.set(key, process.env[key]);
@@ -4602,4 +4609,39 @@ describe("project-first CLI surface", () => {
     }
   }, 30000);
 
+});
+
+describe("projects store resolution fails closed without hosted API env", () => {
+  test("a registry command without the hosted API env exits non-zero, names the required env, and creates no local db", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-fail-closed-"));
+    const dbPath = join(root, "never-created.db");
+    // Explicitly decline the test harness's local-registry opt-in: this run
+    // must NOT fall back to the on-box SQLite registry.
+    const env = {
+      HASNA_PROJECTS_DB_PATH: dbPath,
+      HASNA_PROJECTS_HOME: join(root, "home"),
+      [PROJECTS_LOCAL_REGISTRY_ENV]: "",
+    };
+
+    const result = runProjects(["roots", "list", "--json"], env);
+
+    expect(result.exitCode).not.toBe(0);
+    const stderr = text(result.stderr);
+    expect(stderr).toContain("HASNA_PROJECTS_API_URL");
+    expect(stderr).toContain("HASNA_PROJECTS_API_KEY");
+    expect(stderr).toContain("no silent local fallback");
+    expect(existsSync(dbPath)).toBe(false);
+    expect(existsSync(join(root, "home"))).toBe(false);
+  });
+
+  test("the same registry command works when the local registry is explicitly opted into", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-local-opt-in-"));
+    const dbPath = join(root, "opted.db");
+    const env = { HASNA_PROJECTS_DB_PATH: dbPath, [PROJECTS_LOCAL_REGISTRY_ENV]: "1" };
+
+    const result = runProjects(["roots", "list", "--json"], env);
+
+    expect(result.exitCode).toBe(0);
+    expect(existsSync(dbPath)).toBe(true);
+  });
 });

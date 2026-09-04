@@ -8,7 +8,7 @@ import { buildServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
 import { closeDatabase } from "../db/database.js";
 import { createWorkspace } from "../db/workspaces.js";
-import { __resetProjectStore } from "../store/project-store.js";
+import { PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore } from "../store/project-store.js";
 import { HOSTED_API_ENV_KEYS } from "../testing/spawn-env.js";
 
 describe("projects MCP HTTP transport", () => {
@@ -16,6 +16,7 @@ describe("projects MCP HTTP transport", () => {
   let port: number;
   let root: string;
   let previousDbPath: string | undefined;
+  let previousLocalOptIn: string | undefined;
   let previousApiEnv: Partial<Record<(typeof HOSTED_API_ENV_KEYS)[number], string | undefined>>;
 
 
@@ -31,6 +32,11 @@ describe("projects MCP HTTP transport", () => {
       // escape hatch that beats any disk pointer.
       process.env[key] = "";
     }
+    // Store resolution fails closed with the hosted selectors blanked (no
+    // silent local fallback); this fixture runs the on-box SQLite registry
+    // and explicitly opts in to it.
+    previousLocalOptIn = process.env[PROJECTS_LOCAL_REGISTRY_ENV];
+    process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
     __resetProjectStore();
     closeDatabase();
@@ -65,6 +71,11 @@ describe("projects MCP HTTP transport", () => {
       const value = previousApiEnv[key];
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
+    }
+    if (previousLocalOptIn === undefined) {
+      delete process.env[PROJECTS_LOCAL_REGISTRY_ENV];
+    } else {
+      process.env[PROJECTS_LOCAL_REGISTRY_ENV] = previousLocalOptIn;
     }
 
     __resetProjectStore();
