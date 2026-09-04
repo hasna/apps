@@ -8,7 +8,6 @@
 FROM --platform=linux/arm64 oven/bun:1 AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
-COPY dashboard/package.json ./dashboard/package.json
 RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM --platform=linux/arm64 oven/bun:1 AS build

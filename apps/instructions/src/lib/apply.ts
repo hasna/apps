@@ -442,8 +442,8 @@ async function applyPreparedConfig(
     result = await writeConfigResult(config, config.target_path, config.content, opts);
     result.outputs = outputResults;
     // `primary_changed` is already this target's own verdict from
-    // writeConfigResult and must survive the aggregation below — the CLI and the
-    // dashboard label this line with `result.path`, so OR-ing the outputs into
+    // writeConfigResult and must survive the aggregation below — the CLI
+    // labels this line with `result.path`, so OR-ing the outputs into
     // the flag they read reported a byte-identical file as "changed".
     result.changed = result.primary_changed || outputResults.some((output) => output.changed);
     result.unresolved_template_vars = [...new Set([
