@@ -1,7 +1,7 @@
 {
   "name": "@hasna/notes",
-  "version": "0.4.2",
-  "description": "Local-first personal notes CLI, MCP server, SDK, and self-hosted notes server (SQLite or PostgreSQL).",
+  "version": "0.5.0",
+  "description": "Authenticated HTTPS notes CLI, MCP server, SDK, and PostgreSQL-backed notes server.",
   "type": "module",
   "bin": {
     "notes": "bin/notes.mjs",
@@ -9,14 +9,16 @@
     "notes-serve": "bin/notes-serve.mjs"
   },
   "exports": {
-    ".": "./tools/notes-lib.mjs",
+    ".": "./sdk/index.mjs",
     "./sdk": "./sdk/index.mjs",
+    "./compat/markdown-format": "./compat/markdown-format.mjs",
     "./events": "./tools/notes-events.mjs"
   },
   "files": [
     "bin",
     "cli/notes.mjs",
     "client",
+    "compat",
     "sdk/index.mjs",
     "scripts/apply-postgres-migrations.mjs",
     "scripts/pg-test-gate.mjs",
@@ -26,17 +28,19 @@
     "server/app.mjs",
     "server/auth.mjs",
     "server/paths.mjs",
-    "server/db.mjs",
+    "server/sql.mjs",
     "server/http.mjs",
     "server/notes.mjs",
     "server/env.mjs",
     "server/pg-adapter.mjs",
     "server/pg-migrations.ts",
     "server/storage.mjs",
-    "tools/notes-agent.mjs",
     "tools/notes-env.mjs",
     "tools/notes-events.mjs",
     "tools/notes-lib.mjs",
+    "tools/data-migration.mjs",
+    "tools/migration-fs.mjs",
+    "docs",
     "README.md",
     "LICENSE"
   ],
@@ -51,7 +55,7 @@
     "notes",
     "mcp",
     "cli",
-    "local-first"
+    "https"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
@@ -76,7 +80,7 @@
     "pg": "^8.16.3"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.4",
+    "@electric-sql/pglite": "0.5.4",
     "@types/bun": "1.2.4",
     "@types/pg": "^8.15.6"
   },

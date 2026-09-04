@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { resolveStore } from "../../core/store";
-import { withTodosAuth } from "../../core/todos";
+import { withTodosAuth, serviceConfig } from "../../core/todos";
 
 export interface ResolveEvidenceOptions {
   todosUrl?: string;
@@ -32,7 +32,7 @@ export async function resolveEvidence(
   },
   fetchFn: typeof fetch = fetch
 ): Promise<ResolvedAttachment[]> {
-  const todosUrl = options.todosUrl ?? "http://localhost:3000";
+  const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
   const url = `${todosUrl}/api/tasks/${taskId}`;
 
   let response: Response;
@@ -108,7 +108,7 @@ export function registerResolveEvidence(program: Command): void {
     .option(
       "--todos-url <url>",
       "Todos REST server base URL",
-      "http://localhost:3000"
+      undefined
     )
     .option(
       "--format <format>",
@@ -116,7 +116,7 @@ export function registerResolveEvidence(program: Command): void {
       "compact"
     )
     .action(async (taskId: string, options: ResolveEvidenceOptions) => {
-      const todosUrl = options.todosUrl ?? "http://localhost:3000";
+      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
       const format = options.format ?? "compact";
 
       try {

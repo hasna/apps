@@ -17,8 +17,9 @@
  */
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { npmPackCommand, packedFilename } from './pack-output.mjs';
 
 function resolveContractsCli() {
   const packageJsonPath = fileURLToPath(import.meta.resolve('@hasna/contracts/package.json'));
@@ -44,8 +45,8 @@ const repoRoot = join(import.meta.dir, '..');
 const workspace = mkdtempSync(join(tmpdir(), 'notes-artifact-scan-'));
 
 try {
-  const packed = run(['bun', 'pm', 'pack', '--destination', workspace, '--ignore-scripts', '--quiet'], repoRoot);
-  const archive = isAbsolute(packed) ? packed : join(workspace, packed);
+  const filename = packedFilename(run(npmPackCommand(workspace), repoRoot));
+  const archive = join(workspace, filename);
 
   const scanner = resolveContractsCli();
   const result = Bun.spawnSync([scanner, 'artifact-scan', archive], {

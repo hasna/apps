@@ -19,7 +19,7 @@ const LOOPBACK = { ip: '127.0.0.1' };
 async function makeApp(overrides = {}) {
   const db = openDb(':memory:');
   const config = { ...resolveConfig({}, []), devMode: true, log: () => {}, ...overrides };
-  return { db, app: await createApp({ db, config }) };
+  return { db, app: await createApp({ db, config, testOnlySqlite: true }) };
 }
 
 function call(app, method, path, { token, body, env = LOOPBACK } = {}) {

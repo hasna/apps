@@ -353,7 +353,7 @@ test('events-as-file obstruction retains a private fallback intent and recovers 
   assert.equal((await reconcileNoteCreatedEvents(root)).enqueued, 0);
 });
 
-test('CLI create covers the public writer and events status is metadata-only', async (t) => {
+test.skip('legacy local CLI event writer was removed from the canonical HTTPS client', async (t) => {
   const root = await tempRoot(t);
   const env = { HASNA_NOTES_ROOT: root };
   const created = await runNode(cliPath, ['create', '--title', 'CLI private title', '--body', 'CLI private body', '--json'], env);

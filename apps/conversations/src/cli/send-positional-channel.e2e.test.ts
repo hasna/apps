@@ -90,13 +90,14 @@ describe("send positional channel form (documented in charter and .claude/rules)
     expect(message.content).toBe("flag form body");
   });
 
-  test("`send \"<message>\" --to <agent> --from A` is unchanged", () => {
+  test("agent-addressed DM flag form `send \"<message>\" --to <agent>` is refused", () => {
+    // Agent-addressed DMs were removed from conversations (staged behind the
+    // messages-app v1 release gate); the --to agent-addressing flag is gone.
     const sent = runCli(
       ["send", "direct message body", "--to", "bob", "--from", "alice", "--json"],
       "alice",
     );
-    expect(sent.exitCode, sent.stderr).toBe(0);
-    const message = JSON.parse(sent.stdout) as { content: string };
-    expect(message.content).toBe("direct message body");
+    expect(sent.exitCode).not.toBe(0);
+    expect(sent.stderr).toContain("unknown option");
   });
 });

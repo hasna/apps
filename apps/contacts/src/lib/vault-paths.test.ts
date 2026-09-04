@@ -34,8 +34,8 @@ function setTestEnv(): void {
   tempRoot = mkdtempSync(join(tmpdir(), "contacts-vault-xdg-"));
   process.env["HOME"] = tempRoot;
   delete process.env["USERPROFILE"];
-  delete process.env["HASNA_DATA_HOME"];
-  delete process.env["HASNA_STATE_HOME"];
+  process.env["HASNA_DATA_HOME"] = join(tempRoot, ".local", "share", "hasna");
+  process.env["HASNA_STATE_HOME"] = join(tempRoot, ".local", "state", "hasna");
 }
 
 describe("XDG conformance — vault documents + session routing", () => {
@@ -57,13 +57,14 @@ describe("XDG conformance — vault documents + session routing", () => {
     expect(docsDir).not.toContain(".hasna");
   });
 
-  it("adopts a legacy .vault-session into the XDG state root when present", () => {
+  it("does not silently adopt a legacy .vault-session", () => {
     setTestEnv();
     const legacy = join(tempRoot!, ".hasna", "contacts");
     mkdirSync(legacy, { recursive: true });
     writeFileSync(join(legacy, ".vault-session"), "legacy-session");
 
     const sessionPath = getVaultSessionPath();
-    expect(existsSync(sessionPath)).toBe(true);
+    expect(existsSync(sessionPath)).toBe(false);
+    expect(existsSync(join(legacy, ".vault-session"))).toBe(true);
   });
 });

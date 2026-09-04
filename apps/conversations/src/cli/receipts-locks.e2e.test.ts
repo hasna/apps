@@ -128,7 +128,9 @@ describe("receipts + locks CLI (e2e)", () => {
     const conflictResult = JSON.parse(conflict.stdout);
     expect(conflictResult.acquired).toBe(false);
     expect(conflictResult.held_by).toBe("alice");
-    const dm = runCli(["read", "--to", "alice", "--unread", "--json"], "alice");
+    // The lock-conflict DM is read via the unread surface — the recipient
+    // --to verb was removed (staged behind the messages-app v1 release gate).
+    const dm = runCli(["read", "--unread", "--json"], "alice");
     expect(dm.stdout).toContain("Lock conflict");
 
     const exclusiveConflict = runCli(["locks", "acquire", key, "--exclusive", "--ttl", "60", "--from", "bob", "--json", "--no-dm"], "bob");

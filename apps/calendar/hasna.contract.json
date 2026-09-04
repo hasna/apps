@@ -4,7 +4,7 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.14.2",
-  "description": "Universal calendar management for AI coding agents. CLI + MCP + HTTP API (calendar-serve) + generated SDK. The server's data backend is selected by configuration: HASNA_CALENDAR_DATABASE_URL present selects postgresql, otherwise sqlite. On postgresql the serve process reads/writes that database directly with API-key auth via @hasna/contracts. The client connects to its local SQLite file or to the /v1 authority over HTTP (HASNA_CALENDAR_API_URL + HASNA_CALENDAR_API_KEY), and never opens Postgres directly.",
+  "description": "Partial Calendar domain migration: authenticated explicit HTTPS clients and PostgreSQL-only server. Embedded Events/channel/replay and explicit legacy db-migrate remain unresolved local integrations; not whole-package remote-only.",
   "bins": [
     "calendar",
     "calendar-mcp",
@@ -62,14 +62,12 @@
     }
   ],
   "storage": {
-    "backend": "sqlite",
+    "backend": "postgresql",
     "engines": [
-      "sqlite",
       "postgresql"
     ],
     "envPrefix": "HASNA_CALENDAR_",
     "aliasEnvPrefix": "CALENDAR_",
-    "sqlitePath": "~/.hasna/calendar/calendar.db",
     "pgTestGate": {
       "envVar": "CALENDAR_TEST_DATABASE_URL",
       "command": "bun test"
@@ -86,8 +84,16 @@
       "auth": "api-key"
     },
     "client": {
-      "apiUrlEnv": "CALENDAR_API_URL",
-      "apiKeyEnv": "CALENDAR_API_KEY"
+      "apiUrlEnv": "HASNA_CALENDAR_API_URL",
+      "apiKeyEnv": "HASNA_CALENDAR_API_KEY"
+    },
+    "migration": {
+      "status": "partial",
+      "unresolved": [
+        "embedded Events/channel/replay",
+        "explicit db-migrate"
+      ],
+      "sharedCanonicalContracts": "unpublished"
     }
   }
 }

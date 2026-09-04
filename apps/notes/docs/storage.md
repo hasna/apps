@@ -1,95 +1,76 @@
-# Hasna Notes — two-backend storage
+# Hasna Notes storage boundaries
 
-The notes package follows the fleet two-backend contract: one wire dialect,
-two storage surfaces per side.
+## Clients: one authenticated HTTPS connection
 
-## Client: exactly two connections
+The CLI, MCP server, and SDK resolve exactly one client connection in
+`client/transport.mjs`: the `personalnotes/v1` API selected by
+`HASNA_NOTES_API_URL` and authenticated with `HASNA_NOTES_API_KEY`.
 
-A notes client (CLI, MCP server, macOS app) has exactly two connections:
+- Both values are mandatory and partial configuration fails closed.
+- The URL must be absolute HTTPS without credentials, query, or fragment.
+- Missing configuration never selects SQLite, Markdown files, or localhost.
+- `HASNA_NOTES_DATABASE_URL` is rejected in a client environment.
+- Retired mode selectors fail loud even when blank.
+- Authenticated API and title-sidecar requests use `redirect: error`; 301, 302,
+  303, 307, and 308 are never followed, even to the same HTTPS origin.
 
-- **local** — the on-box SQLite + markdown store (the app's data contract,
-  `tools/notes-lib.mjs`), selected when `HASNA_NOTES_API_URL` is unset;
-- **http** — the server HTTP API over the personalnotes/v1 dialect
-  (`/api/v1/*`, Bearer api-key), selected when `HASNA_NOTES_API_URL` **and**
-  `HASNA_NOTES_API_KEY` are set.
+The package root is the remote SDK. Pure formatting helpers are available only
+at `@hasna/notes/compat/markdown-format`, without local CRUD.
 
-Selection lives in ONE resolver: `client/transport.mjs`
-(`resolveNotesClientTransport`). An API URL without its key **fails closed** —
-there is no anonymous fallback and no default localhost server. Client
-note-reading and note-writing paths never read `HASNA_NOTES_DATABASE_URL` and
-never open PostgreSQL. The one exception is the `notes storage migrate
---dry-run` planning verb, which reads the DSN and opens a short-lived PG pool
-to compute the migration plan (fail-closed: no DSN, no plan).
+## Server: PostgreSQL only
 
-Retired selectors (`PERSONALNOTES_MODE`, `HASNA_NOTES_STORAGE_MODE`,
-`HASNA_NOTES_MODE`, `NOTES_STORAGE_MODE`, `NOTES_MODE`) fail loud even when
-blank. The old sync-era default (API URL absent -> `http://127.0.0.1:8788`)
-is gone: absent means local.
+Only `notes-serve` and server migration tooling consume database credentials.
+A valid server-only `HASNA_NOTES_DATABASE_URL` is mandatory. Missing/invalid
+configuration fails before listening. No SQLite default, `--db` flag or
+`HASNA_NOTES_SERVER_DB` selector remains. SQLite is an unshipped test fixture;
+production imports do not load it. A DSN is never logged or returned.
 
-### macOS app: moved out of this package
+PostgreSQL schema changes use the checksum ledger:
 
-The macOS desktop app was removed from `@hasna/notes` (owner directive
-2026-08-22) and is owned by `hasna-products/personalnotes`. Its cloud-only
-transport behaviour is documented there. The `personalnotes/v1` dialect described
-below is the shared contract between that app and this package, and it is
-unchanged.
-
-
-## Server: the data backend is the only switch
-
-`HASNA_NOTES_DATABASE_URL` present selects the **PostgreSQL** backend;
-absent selects **SQLite** (canonical default at
-`~/.hasna/notes/server.db`). No mode enums. The DSN is never
-logged, printed, or echoed in errors.
-
-The PostgreSQL schema (`server/pg-migrations.ts`) is the SQLite schema
-translated, with two deliberate differences:
-
-- `sync_batches` is **dropped** — multi-machine sync is being removed
-  fleet-wide. `note_events` is kept.
-- `api_keys` comes from `@hasna/contracts/auth` (ApiKeyStore): keys are
-  minted and verified with the signing secret `HASNA_NOTES_API_SIGNING_KEY`
-  (fallbacks `API_KEY_SIGNING_SECRET`, `HASNA_API_SIGNING_KEY`) as
-  `hasna_notes_` tokens. The SQLite backend keeps the dialect's `pn_` keys.
-
-Migrations apply through the vendored storage kit's `MigrationLedger`
-(sha256 checksums, drift/downgrade guards, append-only ledger):
-
-```bash
+```sh
 HASNA_NOTES_DATABASE_URL_OWNER=<owner-dsn> \
-  bun scripts/apply-postgres-migrations.mjs --dry-run --json   # plan only
+  bun scripts/apply-postgres-migrations.mjs --dry-run --json
 HASNA_NOTES_DATABASE_URL_OWNER=<owner-dsn> \
-  bun scripts/apply-postgres-migrations.mjs                    # apply
+  bun scripts/apply-postgres-migrations.mjs
 ```
 
-The owner-scoped DSN (`HASNA_NOTES_DATABASE_URL_OWNER`) is preferred because
-migrations run DDL; it falls back to the app DSN for local runs. Inject DSNs
-through the runtime's credential consumer — never as literal shell values.
+The live PostgreSQL gate fails closed when its disposable test DSN is absent:
 
-Live-PostgreSQL proof gate (storage.pgTestGate in hasna.contract.json),
-**fail-closed**: exits 2 when `NOTES_TEST_DATABASE_URL` is unset.
-
-```bash
+```sh
 NOTES_TEST_DATABASE_URL=<throwaway-dsn> bun run test:pg
 ```
 
-## The wire dialect is documented, not renamed
+## XDG-native paths and migration
 
-The server speaks the `personalnotes/v1` dialect on both backends — same
-paths, same JSON shapes, same error envelope. The future hosted wrapper
-speaks this same dialect, so it is documented (`/openapi.json` served by
-notes-serve, and this file) rather than renamed. One backend difference is
-visible on the wire: api keys issued by the PostgreSQL backend carry the
-`hasna_notes_` contracts format instead of `pn_`. Clients receive the key
-from the server at login and never parse its format.
+Maintenance writes use the in-package XDG resolver. Exact overrides retain
+their established precedence: `HASNA_NOTES_HOME`, `HASNA_NOTES_ROOT`, then
+`NOTES_HOME`. Legacy `~/.hasna/notes` and `~/.hasna/apps/notes` roots are
+migration sources only and are never selected or copied on startup.
 
-## Storage verbs
-
-```bash
-notes storage status [--json]        # client transport + server backend selection
-notes storage migrate --dry-run [--json]  # postgres migration plan (no mutation)
+```sh
+notes storage migrate-legacy-path --source legacy --dry-run --json
+notes storage migrate-legacy-path --source legacy --yes --plan-fingerprint <reviewed-hash> --json
+notes storage migrate-legacy-path --source nested --dry-run --json
+notes storage migrate-legacy-path --source server-nested --dry-run --json
 ```
 
-`notes storage status` reports selection only — never credentials. `notes
-storage migrate` requires `--dry-run`; the real apply path is the migration
-runner script above.
+The `server-nested` source is `~/.hasna/apps/notes-server`. Stop all legacy writers
+before copying archived SQLite/Markdown data; transient SQLite `-shm` files are skipped.
+
+The explicit migration is copy-only, not a PostgreSQL import or a local-store
+selector. Planning hashes source bytes and binds file metadata plus directory
+identities. Apply requires the dry-run fingerprint, stages at most 256 MiB of
+reviewed bytes, and uses descriptor-relative no-follow directory/file operations
+on macOS/Linux with Bun. Every component must be a canonical, non-symlink path.
+Root/parent replacement cannot redirect writes. Source changes fail closed;
+stop writers before planning. Conflicts are rejected, files/receipts are created
+exclusively with owner-only modes, and sources are never changed. Existing
+receipts must match the source snapshot and cannot be overwritten. Re-run a
+fresh dry-run for idempotence. Failure may leave verified copies for manual
+inspection, never automatic deletion; remove nothing until independently reviewed.
+
+## Wire compatibility
+
+The PostgreSQL server retains the `personalnotes/v1` paths and JSON shapes. That
+wire name is shared with the separate `hasna-products/personalnotes` product and
+must not be renamed.

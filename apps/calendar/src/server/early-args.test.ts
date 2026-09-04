@@ -108,8 +108,8 @@ describe("calendar-serve early arguments (binds-before-help class, BUG dd27cac0)
       expect(result.timedOut).toBe(false);
       expect(result.code).toBe(1);
       expect(result.stdout).toContain("Starting calendar server on port");
-      expect(result.stderr).toContain("calendar-serve: refusing to start");
-      expect(result.stderr).toContain("no serve credential is configured");
+      expect(result.stderr).toContain("HASNA_CALENDAR_DATABASE_URL is required");
+      expect(result.stderr).toContain("before serving Calendar traffic");
     },
     15_000,
   );

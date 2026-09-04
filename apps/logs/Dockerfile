@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
-# @hasna/logs — ARM64 Bun image for the cloud (PURE REMOTE, Amendment A1) serve.
-# The container runs logs-serve in cloud mode: a stateless API in front of the
-# shared cloud Postgres with API-key auth. The same image runs the one-shot
+# @hasna/logs — ARM64 Bun image for the PostgreSQL-backed serve.
+# The container runs logs-serve against PostgreSQL: a stateless API in front of
+# the shared Postgres with API-key auth. The same image runs the one-shot
 # migration task (command override: ["logs","db","migrate"]).
 
 FROM --platform=linux/arm64 oven/bun:1.3.13-slim AS build

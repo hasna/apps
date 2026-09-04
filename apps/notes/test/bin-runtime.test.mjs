@@ -64,13 +64,16 @@ describe('bin runtime contract', () => {
     expect(pkg.engines).toEqual({ bun: '>=1.0' });
   });
 
-  test('bin/notes.mjs storage status runs through the shebang (the measured failure)', () => {
-    const { rc, stdout, stderr } = directExec('bin/notes.mjs', ['storage', 'status', '--json']);
+  test('bin/notes.mjs authenticated HTTPS status runs through the shebang', () => {
+    const { rc, stdout, stderr } = directExec('bin/notes.mjs', ['storage', 'status', '--json'], {
+      HASNA_NOTES_API_URL: 'https://notes.example.test',
+      HASNA_NOTES_API_KEY: 'secret',
+    });
     expect(stderr).toBe('');
     expect(rc).toBe(0);
     const report = JSON.parse(stdout);
-    expect(report.client.transport).toBe('local');
-    expect(report.server.backend).toBe('sqlite');
+    expect(report.client.transport).toBe('http');
+    expect(report.localFallback).toBe(false);
   });
 
   test('bin/notes.mjs help runs through the shebang', () => {
@@ -79,9 +82,10 @@ describe('bin runtime contract', () => {
     expect(stdout).toContain('Usage:');
   });
 
-  test('bin/notes.mjs local store command runs through the shebang', () => {
+  test('bin/notes.mjs fails closed rather than opening a local store', () => {
     const { rc, stdout, stderr } = directExec('bin/notes.mjs', ['list', '--limit', '1']);
-    expect(rc, stderr).toBe(0);
+    expect(rc).toBe(1);
     expect(stdout).toBe('');
+    expect(stderr).toContain('HASNA_NOTES_API_URL');
   });
 });

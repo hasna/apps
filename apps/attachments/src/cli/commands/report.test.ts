@@ -24,6 +24,12 @@ mock.module("../../core/db", () => ({
 afterAll(() => mock.restore());
 
 // Import under test AFTER mock registration
+// Command behavior uses an explicit test-only Store seam, never production fallback.
+const { MockedStoreFixture } = await import("../../testing/mocked-store-fixture");
+const actualStore = await import("../../core/store");
+const productionResolveStore = actualStore.resolveStore;
+mock.module("../../core/store", () => ({ ...actualStore, resolveStore: (env = process.env) => env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY ? productionResolveStore(env) : new MockedStoreFixture() }));
+
 const { computeReport, formatCompact, formatMarkdown, formatJson, registerReport } =
   await import("./report");
 

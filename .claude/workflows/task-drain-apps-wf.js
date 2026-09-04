@@ -1,6 +1,6 @@
 export const meta = {
   name: 'task-drain-apps',
-  description: `Standing hasna/apps task drain, drain-to-zero: census unowned pending rows in project the hasna/apps todos project (args.project, default 3bbc22e0) — the BUG class executed via the fix-lane discipline (idempotency gate, worktree, PR-first, one independent reviewer-agent review on the default model, merge) and the live-gate class (RELEASE/SHIP/DEPLOY UNVERIFIED rows filed by the publish/deploy/ship lanes on gate NO_GO, and RELEASE CONFIRM MISSING rows filed by the publish lane when both gates returned GO but the [PUBLISH-CONFIRM] agent failed — O15-04231) driven through gate-remediation (two independent live gates re-verify the artifact; BOTH GO -> post the missing confirm + complete; ANY NO_GO -> record the verdict + route the defect to ONE deduped BUG row) — re-census each pass and loop while rows remain (hard bound MAX_PASSES), record at the end`,
+  description: `Standing hasna/apps task drain, drain-to-zero: census unowned pending rows in project the hasna/apps todos project (args.project, default 3bbc22e0) — the BUG class executed via the fix-lane discipline (idempotency gate, worktree, PR-first, one independent reviewer-agent review on the default model, merge) and the live-gate class (RELEASE/SHIP/DEPLOY UNVERIFIED rows filed by the publish/deploy/ship lanes on gate NO_GO, and RELEASE CONFIRM MISSING rows filed by the publish lane when both gates returned GO but the [PUBLISH-CONFIRM] agent failed — O15-04231) driven through gate-remediation (two independent live gates re-verify the artifact; BOTH GO -> post the missing confirm + complete; ANY NO_GO -> record the verdict + route the defect to ONE deduped BUG row) — re-census each pass and loop while rows remain (hard bound MAX_PASSES), record at the end. SEAT POOL (owner 2026-08-30): 8 concurrent fixer seats (args.seats), each refilled with the next queue row the instant its agent finishes — never an empty seat while work remains.`,
   phases: [
     { title: 'Census' },
     { title: 'Execute' },
@@ -15,22 +15,30 @@ export const meta = {
 const APPS = (args && args.project) || '3bbc22e0-205f-4e3d-8c5a-d8ce8e99afd8'
 
 
-// Parallelism (owner 2026-08-25): MULTIPLE fix agents per pass, each working a
-// DIFFERENT row in its OWN task worktree via hasna/repos (repos CLI worktree
-// verb; ~/.hasna/repos/worktrees/apps/<row.id>). Bounded by MAX_ROWS rows per
-// pass and MAX_CONCURRENT agents per wave (default 3 each; args override).
-// Safe parallel execution requires (a) rows-per-pass bounded, (b) a claim
-// comment on each row at execution start (the census excludes active claims),
-// and (c) each agent works ONLY in its own worktree — never the shared checkout.
-const MAX_ROWS = (args && args.maxRows) || 3
-const MAX_CONCURRENT = (args && args.maxConcurrent) || 3
-// Pass bound (fleet ground truth 2026-08-26): the standing 'infinite' lane runs a
-// BOUNDED pass loop — MAX_PASSES hard cap per run (~8 agents per pass at the
-// default widths, so 40 passes is well inside the runtime's 1,000-agent run cap,
-// which stays the outer guard). Standing continuity between runs comes from the
-// COORDINATOR re-launching this workflow, never an unbounded in-script loop.
-// args.maxPasses overrides.
-const MAX_PASSES = Math.min(500, Math.max(1, Number(args && args.maxPasses) || 40))
+// SEAT-POOL PARALLELISM (owner 2026-08-30, reworking the 2026-08-25 wave model):
+// the Execute phase runs SEATS concurrent fixer seats (default 8, args.seats).
+// Each seat is a worker loop: it pulls the NEXT row from the census queue the
+// moment its previous agent finishes, so a seat is NEVER empty while queued work
+// remains — if one agent finishes, that seat is refilled immediately. This
+// replaces the wave model (a wave waited for ALL its agents before refilling,
+// leaving seats empty whenever agents finished unevenly).
+// Safe parallel execution requires (a) rows-per-pass bounded by MAX_ROWS, (b) a
+// claim comment on each row at execution start (the census excludes active
+// claims), and (c) each agent works ONLY in its own worktree — never the shared
+// checkout. Each fixer agent works a DIFFERENT row in its OWN task worktree via
+// hasna/repos (repos CLI worktree verb; ~/.hasna/repos/worktrees/apps/<row.id>).
+const SEATS = Math.max(1, Math.min(16, Number(args && args.seats) || 8))
+// MAX_ROWS bounds the rows a pass may execute across all seats (the run bound;
+// default 6x seats, args.maxRows overrides). The census returns up to MAX_ROWS
+// candidates so every seat always has a full queue to pull from.
+const MAX_ROWS = Math.max(SEATS, Number(args && args.maxRows) || SEATS * 6)
+// Pass bound (fleet ground truth 2026-08-26, budgeted 2026-08-30 for the seat
+// pool): the standing 'infinite' lane runs a BOUNDED pass loop — MAX_PASSES hard
+// cap per run, budgeted so the worst case (every pass at full MAX_ROWS) stays
+// inside the runtime's 1,000-agent run cap, which remains the outer guard.
+// Standing continuity between runs comes from the COORDINATOR re-launching this
+// workflow, never an unbounded in-script loop. args.maxPasses overrides.
+const MAX_PASSES = Math.max(2, Math.min(40, Number(args && args.maxPasses) || Math.floor(900 / MAX_ROWS)))
 // BOUNDED SESSION-SCOPED LOOP (owner 2026-08-25; bounded per fleet ground truth
 // 2026-08-26): census -> execute -> wait the idle window when idle -> re-census,
 // capped at MAX_PASSES per run. The idle wait lives INSIDE the census agent (bash
@@ -160,7 +168,7 @@ PRIORITY YIELD CHECK FIRST: if any UNOWNED row's title starts with "HOTFIX:", th
 6. Return the ordered candidates. Include rows already covered by a fix-lane in flight ONLY if their fix-lane is provably dead (transcript older than 60 min); otherwise exclude them (a live lane is a live fixer — never duplicate).
 
 IF THE QUEUE IS EMPTY (no unowned BUG rows AND no unowned gate rows — UNVERIFIED OR RELEASE CONFIRM MISSING): sleep ${IDLE_SLEEP} (bash — the args-driven idle window, ${IDLE_MINUTES} min default), re-run the census steps once, and return the RE-CHECK result — the lane waits the idle window between passes while idle. NEVER return an empty result without the sleep+re-check having run.
-Return candidates (max ${MAX_ROWS + 2}), queueSize (unowned BUG + gate rows remaining), blocked (excluded rows with reasons), yielded (bool), hotfixCount (int).`), { label: 'census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA })
+Return candidates (max ${MAX_ROWS} — the pass's seat-pool row budget; enough headroom that all ${SEATS} seats stay full), queueSize (unowned BUG + gate rows remaining), blocked (excluded rows with reasons), yielded (bool), hotfixCount (int).`), { label: 'census:' + pass, phase: 'Census', schema: CENSUS_SCHEMA })
 
 const candidates = (census && census.candidates) || []
 if (census && census.yielded) {
@@ -173,19 +181,17 @@ if (candidates.length === 0) {
 }
 
 phase('Execute')
-// Up to MAX_ROWS rows per pass, executed in CONCURRENT waves of MAX_CONCURRENT
-// (owner 2026-08-25): each agent works a DIFFERENT row in its OWN task worktree
-// via hasna/repos. Each row is claimed with a comment before execution so
-// concurrent instances never double-pick it.
-const rowsToRun = candidates.slice(0, MAX_ROWS)
-const execs = []
-for (let w = 0; w < rowsToRun.length; w += MAX_CONCURRENT) {
-  const wave = rowsToRun.slice(w, w + MAX_CONCURRENT)
-  const results = await parallel(wave.map((row) => () => {
-    const isGateRow = row.kind === 'unverified' || row.kind === 'confirm-missing' || /UNVERIFIED|CONFIRM MISSING/.test(row.title || '')
-    if (isGateRow) {
-      return safeAgent(`${RECORDING}
-GATE-REMEDIATION — this row is a live-gate row (title class "RELEASE/SHIP/DEPLOY UNVERIFIED" — filed by the publish/deploy/ship lanes when the 2-agent live gates NO_GO'd — OR "RELEASE CONFIRM MISSING" — filed by the publish lane when both gates returned GO but the [PUBLISH-CONFIRM] agent failed twice, O15-04231), NOT a code bug: NO worktree, NO code changes, NO publish, NO deploy. Drive the artifact through re-verification and record the terminal verdict. Row: ${JSON.stringify(row)}. You are ONE OF ${Math.min(MAX_CONCURRENT, wave.length)} CONCURRENT agents — each works its OWN row; never touch another agent's worktree, never the shared checkout.
+// SEAT POOL (owner 2026-08-30): SEATS concurrent seats; each seat loops — pull
+// the next row from the queue, run its fixer/gate agent, then IMMEDIATELY pull
+// the next row. A seat refills the instant its agent finishes, so no seat is
+// ever empty while queued work remains. Rows are claimed with a comment before
+// execution so concurrent instances never double-pick them. Results are
+// collected in completion order across seats.
+const execOne = (row, seatNum) => {
+  const isGateRow = row.kind === 'unverified' || row.kind === 'confirm-missing' || /UNVERIFIED|CONFIRM MISSING/.test(row.title || '')
+  if (isGateRow) {
+    return safeAgent(`${RECORDING}
+GATE-REMEDIATION — this row is a live-gate row (title class "RELEASE/SHIP/DEPLOY UNVERIFIED" — filed by the publish/deploy/ship lanes when the 2-agent live gates NO_GO'd — OR "RELEASE CONFIRM MISSING" — filed by the publish lane when both gates returned GO but the [PUBLISH-CONFIRM] agent failed twice, O15-04231), NOT a code bug: NO worktree, NO code changes, NO publish, NO deploy. Drive the artifact through re-verification and record the terminal verdict. Row: ${JSON.stringify(row)}. You are ONE OF ${SEATS} CONCURRENT agents (seat ${seatNum}) — each works its OWN row; never touch another agent's worktree, never the shared checkout.
 
 CLAIM FIRST: comment the row now — \`todos comment <row.id> "${CLAIM_TAG} — executing <shortId> $(date -u +%Y-%m-%dT%H:%MZ)"\` (a concurrent task-drain instance's census excludes rows with a claim younger than 90 min; your claim prevents double-picking).
 
@@ -201,7 +207,7 @@ CLAIM FIRST: comment the row now — \`todos comment <row.id> "${CLAIM_TAG} — 
 Return the schema.`, { label: 'exec-gate:' + row.shortId, phase: 'Execute', schema: EXEC_SCHEMA })
     }
     return safeAgent(`${RECORDING}
-Execute ONE hasna/apps BUG row via the fix-lane discipline. Row: ${JSON.stringify(row)}. You are ONE OF ${Math.min(MAX_CONCURRENT, wave.length)} CONCURRENT fix agents — each works its OWN row in its OWN worktree; never touch another agent's worktree, never the shared checkout.
+Execute ONE hasna/apps BUG row via the fix-lane discipline. Row: ${JSON.stringify(row)}. You are ONE OF ${SEATS} CONCURRENT fix agents (seat ${seatNum}) — each works its OWN row in its OWN worktree; never touch another agent's worktree, never the shared checkout.
 
 CLAIM FIRST: comment the row now — \`todos comment <row.id> "${CLAIM_TAG} — executing <shortId> $(date -u +%Y-%m-%dT%H:%MZ)"\` (a concurrent task-drain instance's census excludes rows with a claim younger than 90 min; your claim prevents double-picking).
 
@@ -222,12 +228,22 @@ MERGE: on [REVIEW] GO — verify the base-movement gate first: TREE=$(git merge-
 RECORD: comment the todos row with root cause, PR number, merge sha, acceptance line. Save a memento. Return the schema.
 
 NEVER publish to npm (publish-all owns publishing).`, { label: 'exec-row:' + row.shortId, phase: 'Execute', schema: EXEC_SCHEMA })
-  }))
-  results.forEach((exec, i) => { if (exec) execs.push({ row: wave[i], exec }) })
-  log('task-drain-apps: pass ' + pass + ' wave ' + (w / MAX_CONCURRENT + 1) + ' done — ' + results.filter(Boolean).length + '/' + wave.length + ' rows completed')
 }
+// Seat-pool runner: SEATS concurrent seats; each seat pulls the next row the
+// moment its agent finishes, so no seat is idle while queued work remains.
+const queue = candidates.slice(0, MAX_ROWS)
+const execs = []
+const seatRun = async (seatNum) => {
+  while (queue.length > 0) {
+    const row = queue.shift()
+    const exec = await execOne(row, seatNum)
+    execs.push({ row, exec })
+    log('task-drain-apps: pass ' + pass + ' seat ' + seatNum + ' refilled — ' + row.shortId + ' ' + (exec ? exec.outcome : 'failed') + '; ' + queue.length + ' row(s) remain in this pass queue')
+  }
+}
+await Promise.all(Array.from({ length: SEATS }, (_, i) => seatRun(i + 1)))
   passes.push({ pass, census, execs })
-  log('task-drain-apps: pass ' + pass + ' done — ' + execs.length + ' rows executed, ' + (census ? census.queueSize : 0) + ' unowned BUG/UNVERIFIED rows remain — next pass re-censuses (bounded loop)')
+  log('task-drain-apps: pass ' + pass + ' done — ' + execs.length + ' rows executed across ' + SEATS + ' seats, ' + (census ? census.queueSize : 0) + ' unowned BUG/UNVERIFIED rows remain — next pass re-censuses (bounded loop)')
 }
 if (pass > MAX_PASSES) log('task-drain-apps: MAX_PASSES reached (' + MAX_PASSES + ') — bounded run ends; the coordinator re-launches this workflow for standing continuity')
 

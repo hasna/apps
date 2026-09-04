@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { installDomainFixture } from "../test/domain-fixture.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createCalendar } from "../db/calendars.js";
@@ -11,7 +12,10 @@ import { buildServer } from "./index.js";
 import { healthPayload, startMcpHttpServer } from "./http.js";
 
 describe("calendar MCP HTTP transport", () => {
+  let restore: () => void;
+  beforeEach(() => { restore = installDomainFixture(); });
   afterEach(() => {
+    restore();
     resetDatabase(":memory:");
     closeDatabase();
   });

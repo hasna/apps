@@ -1,13 +1,11 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { getStore } from "../../store/index.js";
-import { getDbPath, getDataDir } from "../../db/paths.js";
 import { importContacts } from "../../lib/import.js";
 import { exportContacts } from "../../lib/export.js";
-import { readConfig } from "../../lib/config.js";
 import type { CreateContactInput, Group } from "../../types/index.js";
-import { readFileSync, writeFileSync, existsSync, copyFileSync, statSync, mkdirSync, readdirSync, chmodSync } from "fs";
-import { extname, join } from "path";
+import { readFileSync, writeFileSync, existsSync } from "fs";
+import { extname } from "path";
 import { renderTable, formatContact, promptUser as prompt, confirmUser as confirm } from "../utils.js";
 
 function collect(val: string, prev: string[]): string[] {
@@ -52,8 +50,8 @@ program
       const displayName = opts.display ?? (`${firstName} ${lastName}`.trim() || "Unnamed Contact");
 
       // Resolve tag names to ids up-front so contact creation is a single
-      // Store call (works identically in local + self_hosted; no post-hoc
-      // inline SQL and no per-command mode branching).
+      // Resolve tags through the same canonical HTTPS Store call; no post-hoc
+      // inline SQL and no per-command transport branching.
       let tagIds: string[] | undefined;
       if (opts.tag.length > 0) {
         const allTags = (await store.listTags()) as Array<{ id: string; name: string }>;
@@ -545,19 +543,6 @@ program
     }
   });
 
-// ─── contacts serve ───────────────────────────────────────────────────────────
-
-program
-  .command("serve")
-  .description("Start the HTTP server")
-  .option("--port <n>", "Port to listen on", "19428")
-  .action(async (opts: { port: string }) => {
-    const { startServer } = await import("../../server/serve.js");
-    const port = parseInt(opts.port, 10);
-    console.log(chalk.blue(`\nStarting contacts server on port ${port}...\n`));
-    startServer(port);
-  });
-
 // ─── contacts mcp ─────────────────────────────────────────────────────────────
 
 program
@@ -880,96 +865,6 @@ projectsCmd
     const store = getStore();
     await store.unlinkContactFromProject(contactId, projectId);
     console.log(chalk.green(`\n✓ Detached ${contactId} from project ${projectId}\n`));
-  });
-
-// ─── contacts init ────────────────────────────────────────────────────────────
-
-program
-  .command("init")
-  .description("Show setup info, stats, and configuration")
-  .action(async () => {
-    const store = getStore();
-    const dbPath = getDbPath();
-    const config = readConfig();
-
-    console.log(chalk.bold.blue("\n━━━ Open Contacts Setup ━━━\n"));
-    console.log(chalk.gray("  DB path:    ") + (config.db_path ?? dbPath));
-    console.log();
-
-    try {
-      const s = await store.stats();
-      console.log(chalk.bold("  Stats:"));
-      console.log(`    ${chalk.cyan(String(s.contacts))} contacts`);
-      console.log(`    ${chalk.cyan(String(s.companies))} companies`);
-      console.log(`    ${chalk.cyan(String(s.tags))} tags`);
-    } catch {
-      console.log(chalk.gray("  (Database not yet initialized)"));
-    }
-
-    console.log();
-    console.log(chalk.bold("  MCP Setup (Claude Code):"));
-    console.log("    " + chalk.cyan("claude mcp add --transport stdio --scope user contacts -- contacts-mcp"));
-    console.log();
-    console.log(chalk.bold("  Shell Completion (zsh):"));
-    console.log("    " + chalk.cyan("contacts completion zsh > ~/.zsh/completions/_contacts"));
-    console.log("    " + chalk.cyan("contacts completion bash >> ~/.bashrc"));
-    console.log("    " + chalk.cyan("contacts completion fish > ~/.config/fish/completions/contacts.fish"));
-    console.log();
-  });
-
-// ─── contacts backup ──────────────────────────────────────────────────────────
-
-program
-  .command("backup")
-  .description("Backup the contacts database (local mode only)")
-  .option("--output <path>", "Output path")
-  .option("--list", "List existing backups")
-  .action(async (opts: { output?: string; list?: boolean }) => {
-    const store = getStore();
-    const backupDir = join(getDataDir(), "backups");
-
-    if (opts.list) {
-      if (!existsSync(backupDir)) {
-        console.log(chalk.gray("\nNo backups found.\n"));
-        return;
-      }
-      const files = readdirSync(backupDir)
-        .filter((f) => f.endsWith(".db"))
-        .sort()
-        .reverse();
-      if (files.length === 0) {
-        console.log(chalk.gray("\nNo backups found.\n"));
-        return;
-      }
-      console.log(chalk.bold.blue("\nExisting Backups:\n"));
-      for (const f of files) {
-        const filePath = join(backupDir, f);
-        const size = statSync(filePath).size;
-        const mtime = statSync(filePath).mtime.toISOString().slice(0, 19).replace("T", " ");
-        console.log(`  ${chalk.cyan(f)}  ${chalk.gray(`${(size / 1024).toFixed(1)} KB  ${mtime}`)}`);
-      }
-      console.log();
-      return;
-    }
-
-    const src = getDbPath();
-    if (!existsSync(src)) {
-      console.error(chalk.red(`\nDatabase not found: ${src}\n`));
-      process.exit(1);
-    }
-
-    mkdirSync(backupDir, { recursive: true, mode: 0o700 });
-    chmodSync(backupDir, 0o700);
-    // Checkpoint + release the SQLite handle through the Store (local transport
-    // only; in self_hosted mode this throws — the cloud DB is backed up server-side).
-    await store.flushForBackup();
-
-    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-    const dest = opts.output || join(backupDir, `contacts-${ts}.db`);
-    copyFileSync(src, dest);
-    chmodSync(dest, 0o600);
-    const size = statSync(dest).size;
-    console.log(chalk.green(`\n✓ Backed up to ${dest} (${(size / 1024).toFixed(1)} KB)\n`));
   });
 
 } // end registerCoreCommands

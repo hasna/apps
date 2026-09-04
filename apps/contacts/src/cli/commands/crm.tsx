@@ -24,7 +24,7 @@ program
     const commands = [
       "add", "list", "show", "edit", "delete", "search", "recent", "dupe",
       "log", "open", "import", "export", "companies", "tags", "groups",
-      "serve", "mcp", "init", "backup", "completion",
+      "mcp", "connection", "legacy", "completion",
     ];
     if (shell === "zsh") {
       console.log(`#compdef contacts\n_contacts() {\n  local commands=(${commands.map(c => `'${c}'`).join(" ")})\n  _describe 'command' commands\n}\n_contacts "$@"`);
@@ -712,10 +712,8 @@ program
   .option('-j, --json', 'Output JSON')
   .action(async (opts: { json?: boolean }) => {
     const store = getStore();
-    // The full dashboard aggregates cold/tasks/deals/applications, which only the
-    // on-box (local) store computes. In self_hosted/cloud mode the /v1 API exposes
-    // basic counts only, so degrade to a network-size summary from store.stats()
-    // (real cloud counts) rather than crashing or reading local — never split-brain.
+    // Some aggregate routes are not exposed by /v1 yet. Degrade to the real
+    // remote basic counts rather than reading local data.
     let s: Awaited<ReturnType<typeof store.getNetworkStats>>;
     try {
       s = await store.getNetworkStats();
@@ -723,13 +721,13 @@ program
       if (!(err instanceof Error && err.name === 'ApiUnavailableError')) throw err;
       const basic = await store.stats();
       if (opts.json) {
-        console.log(JSON.stringify({ total_contacts: basic.contacts, total_companies: basic.companies, total_tags: basic.tags, total_groups: basic.groups, extended_metrics: 'unavailable_in_self_hosted_mode' }, null, 2));
+        console.log(JSON.stringify({ total_contacts: basic.contacts, total_companies: basic.companies, total_tags: basic.tags, total_groups: basic.groups, extended_metrics: 'unavailable_via_v1' }, null, 2));
         return;
       }
       console.log(chalk.bold.blue('\n━━━ Network Health Dashboard ━━━\n'));
       console.log(chalk.bold('  Network Size:'));
       console.log(`    ${chalk.cyan(String(basic.contacts))} contacts   ${chalk.cyan(String(basic.companies))} companies   ${chalk.cyan(String(basic.tags))} tags   ${chalk.cyan(String(basic.groups))} groups`);
-      console.log(chalk.gray('\n  (Cold/tasks/deals/pipeline metrics are computed on-box and are not\n   available in self_hosted mode — run in local mode for the full dashboard.)\n'));
+      console.log(chalk.gray('\n  (Cold/tasks/deals/pipeline metrics are not exposed by the current /v1 API.)\n'));
       return;
     }
     if (opts.json) {

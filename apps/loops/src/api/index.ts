@@ -791,6 +791,18 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
     const name = requiredString(body.name, "name");
     return ok({ loop: publicLoop(await storage.renameLoop(id, name)) });
   }
+  if (segments.length === 2 && segments[1] === "run-now" && ctx.request.method === "POST") {
+    // Hosted run-now: schedule the loop due at the control-plane's current time
+    // so a bound loops-runner claims and executes it on its next poll (the same
+    // schedule-mode semantics the local MCP run-now uses for daemon pickup).
+    // The client never executes the loop target while connected to the API, so
+    // there is nothing to run inline here — only the schedule mutation.
+    const loop = await storage.requireUniqueLoop(id);
+    if (loop.archivedAt) throw new LoopArchivedError(loop.name || id);
+    const scheduledFor = ctx.now().toISOString();
+    const updated = await storage.updateLoop(loop.id, { status: "active", nextRunAt: scheduledFor });
+    return ok({ loop: publicLoop(updated), scheduledFor });
+  }
   if (segments.length === 2 && segments[1] === "mutations" && ctx.request.method === "POST") {
     const body = await readJsonBody<LoopMutationEnvelope>(ctx.request, ctx.bodyLimitBytes);
     if (body.targetId !== id) throw apiError("loop_mutation_target_mismatch", 422);

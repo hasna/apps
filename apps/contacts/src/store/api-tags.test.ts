@@ -32,8 +32,7 @@ describe("ApiStore contact tag operations", () => {
     }) as typeof fetch;
 
     const store = getStore({
-      HASNA_CONTACTS_STORAGE_MODE: "self_hosted",
-      HASNA_CONTACTS_API_URL: "https://contacts.hasna.xyz",
+      HASNA_CONTACTS_API_URL: "https://contacts.example.invalid",
       HASNA_CONTACTS_API_KEY: "test-api-key",
     });
 
@@ -48,17 +47,17 @@ describe("ApiStore contact tag operations", () => {
     expect(calls).toEqual([
       {
         method: "GET",
-        url: "https://contacts.hasna.xyz/v1/tags?name=monthly+accounting",
+        url: "https://contacts.example.invalid/v1/tags?name=monthly+accounting",
         apiKey: "test-api-key",
       },
       {
         method: "PUT",
-        url: "https://contacts.hasna.xyz/v1/contacts/contact-1/tags/tag-1",
+        url: "https://contacts.example.invalid/v1/contacts/contact-1/tags/tag-1",
         apiKey: "test-api-key",
       },
       {
         method: "DELETE",
-        url: "https://contacts.hasna.xyz/v1/contacts/contact-1/tags/tag-1",
+        url: "https://contacts.example.invalid/v1/contacts/contact-1/tags/tag-1",
         apiKey: "test-api-key",
       },
     ]);
@@ -74,8 +73,7 @@ describe("ApiStore contact tag operations", () => {
     }), { status: 200 })) as typeof fetch;
 
     const store = getStore({
-      HASNA_CONTACTS_STORAGE_MODE: "self_hosted",
-      HASNA_CONTACTS_API_URL: "https://contacts.hasna.xyz",
+      HASNA_CONTACTS_API_URL: "https://contacts.example.invalid",
       HASNA_CONTACTS_API_KEY: "test-api-key",
     });
 

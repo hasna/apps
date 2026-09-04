@@ -35,6 +35,11 @@ import {
   resolveMemoryId,
   type GlobalOpts,
 } from "../helpers.js";
+import {
+  redactCredentialKey,
+  redactMemoryForOutput,
+  redactMemoryWriteInput,
+} from "../../lib/redact.js";
 
 export function registerCrudCommands(program: Command): void {
   const handleError = makeHandleError(program);
@@ -359,7 +364,7 @@ export function registerCrudCommands(program: Command): void {
           }
         }
 
-        const input: CreateMemoryInput = {
+        let input: CreateMemoryInput = {
           key,
           value,
           category:
@@ -399,6 +404,16 @@ export function registerCrudCommands(program: Command): void {
           }
           input.project_id = project.id;
         }
+
+        // Write-path redaction (todos e12c7659, CRITICAL): redact the free-text
+        // input fields BEFORE the fork-guard below, so the guard keys on the
+        // same redacted value the db layer will store (a re-save of a
+        // credential-shaped key upserts the existing [REDACTED] row instead of
+        // forking), and refusal/error messages never echo the raw value.
+        // createMemory/updateMemory re-apply the same redaction idempotently,
+        // so every write path stays covered even when this CLI layer is not the
+        // caller.
+        input = redactMemoryWriteInput(input);
 
         // HC-00149's other half. `update` already refuses a no-op and points at
         // the shadowed short flag; `save` never did, so `save k v -s shared`
@@ -452,7 +467,9 @@ export function registerCrudCommands(program: Command): void {
         const forkRequested = dedupe === "create" || dedupe === "version-fork";
         let willUpdateExisting = false;
         if (!forkRequested) {
-          const sameKey = getMemoriesByKey(key);
+          // `input.key` was already passed through redactMemoryWriteInput above,
+          // so the guard keys on the same value the db layer will store.
+          const sameKey = getMemoriesByKey(input.key);
           const match = sameKey.find((m) => bucket(m) === targetBucket);
           willUpdateExisting = Boolean(match);
           if (!match && sameKey.length > 0) {
@@ -466,7 +483,7 @@ export function registerCrudCommands(program: Command): void {
             // printed identical scope/project/session and the refusal read as
             // self-contradictory. Name every column that is actually compared.
             throw new Error(
-              `Refusing to fork key "${key}": ${sameKey.length} active memor${sameKey.length === 1 ? "y" : "ies"} ` +
+              `Refusing to fork key "${input.key}": ${sameKey.length} active memor${sameKey.length === 1 ? "y" : "ies"} ` +
                 `already ${sameKey.length === 1 ? "uses" : "use"} it, ` +
                 `but none matches the scope/project/session/agent this save targets ` +
                 `(scope=${input.scope ?? "private"}, project=${input.project_id ?? "none"}, session=${input.session_id ?? "none"}, agent=${input.agent_id ?? "none"}).\n` +
@@ -485,10 +502,16 @@ export function registerCrudCommands(program: Command): void {
         // "Saved" was identical for a create and for an upsert, so a silent fork
         // was indistinguishable from an update. Say which one happened.
         const outcome = willUpdateExisting ? "Updated" : "Created";
+        // Mutation receipt redaction (todos e12c7659): the save receipt echoed
+        // the raw stored row — key, tags, value, summary, when_to_use — verbatim
+        // in JSON and the raw key in human form. Project the receipt through the
+        // same read-path redaction the read verbs use (belt-and-suspenders over
+        // the write-path redaction, covering API-mode servers that predate it).
+        const safeReceipt = redactMemoryForOutput(memory);
         if (globalOpts.json) {
-          outputJson({ ...memory, outcome: outcome.toLowerCase() });
+          outputJson({ ...safeReceipt, outcome: outcome.toLowerCase() });
         } else {
-          console.log(chalk.green(`${outcome}: ${memory.key} (${memory.id.slice(0, 8)})`));
+          console.log(chalk.green(`${outcome}: ${redactCredentialKey(memory.key)} (${memory.id.slice(0, 8)})`));
         }
       } catch (e) {
         handleError(e);
@@ -598,7 +621,7 @@ export function registerCrudCommands(program: Command): void {
         );
         if (changedFields.length === 0) {
           throw new Error(
-            `Nothing to update: no fields were given for ${existing.key} (${existing.id.slice(0, 8)}). ` +
+            `Nothing to update: no fields were given for ${redactCredentialKey(existing.key)} (${existing.id.slice(0, 8)}). ` +
               `Pass at least one of --value, --scope, --category, --status, --importance, --tags, --summary, --pin/--unpin. ` +
               `Note that -s is the global --session, not --scope.`,
           );
@@ -606,14 +629,18 @@ export function registerCrudCommands(program: Command): void {
 
         const updated = updateMemory(resolvedId, updateInput);
 
+        // Mutation receipt redaction (todos e12c7659): same as `save` — the raw
+        // stored row (key, tags, free-text) must not reach the JSON receipt, and
+        // the echoed key in the human receipt must be projected.
+        const safeReceipt = redactMemoryForOutput(updated);
         if (globalOpts.json) {
-          outputJson({ ...updated, updated_fields: changedFields });
+          outputJson({ ...safeReceipt, updated_fields: changedFields });
         } else {
           // Name the fields that were written. "Updated" alone cannot be told
           // apart from a write that changed nothing.
           const n = changedFields.length;
           console.log(
-            chalk.green(`Updated ${n} field${n === 1 ? "" : "s"}: ${updated.key} (${updated.id.slice(0, 8)})`) +
+            chalk.green(`Updated ${n} field${n === 1 ? "" : "s"}: ${redactCredentialKey(updated.key)} (${updated.id.slice(0, 8)})`) +
               chalk.dim(` [${changedFields.join(", ")}]`),
           );
         }
@@ -700,16 +727,20 @@ export function registerCrudCommands(program: Command): void {
           return;
         }
 
-        // Show disambiguation table
+        // Show disambiguation table. Read-path redaction (todos e12c7659): the
+        // disambiguation rows echo the STORED keys, which can be credential-
+        // shaped for a pre-existing/bypassed population; project them like every
+        // other read surface. The echoed `keyOrId` is the caller's own argument
+        // and is left verbatim.
         if (globalOpts.json) {
           outputJson({
             error: `Ambiguous key "${keyOrId}" — ${matches.length} memories found. Use --all to delete all, or specify an ID.`,
-            matches: matches.map((m) => ({ id: m.id, key: m.key, scope: m.scope, category: m.category, agent_id: m.agent_id })),
+            matches: matches.map((m) => ({ id: m.id, key: redactCredentialKey(m.key), scope: m.scope, category: m.category, agent_id: m.agent_id })),
           });
         } else {
           console.log(chalk.yellow(`Ambiguous key "${keyOrId}" — ${matches.length} memories found:`));
           for (const m of matches) {
-            console.log(`  ${m.id}  scope=${m.scope}  category=${m.category}  agent=${m.agent_id}  ${chalk.dim(m.key)}`);
+            console.log(`  ${m.id}  scope=${m.scope}  category=${m.category}  agent=${m.agent_id}  ${chalk.dim(redactCredentialKey(m.key))}`);
           }
           console.log(chalk.dim("\nUse --all to delete all, or specify an ID."));
         }

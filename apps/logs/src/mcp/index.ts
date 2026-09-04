@@ -31,11 +31,11 @@ exitIfMetadataRequest({
 });
 
 // Best-effort local store for internal self-telemetry (agent lifecycle + tool
-// calls). It is `null` in api mode — MCP tool-call telemetry is deliberately
-// not mirrored into the shared hosted sink (volume), so it is silently skipped
-// there. Telemetry must NEVER change tool behavior. The event catalog itself
-// is a mode-resolved data-plane feature: `event_watch` below works on both
-// tiers through the unified Store.
+// calls). It is `null` when the API transport is live — MCP tool-call telemetry
+// is deliberately not mirrored into the shared hosted sink (volume), so it is
+// silently skipped there. Telemetry must NEVER change tool behavior. The event
+// catalog itself is a transport-resolved data-plane feature: `event_watch`
+// below works on both tiers through the unified Store.
 const telemetryStore = localStoreIfAvailable();
 
 // register_agent / heartbeat / set_focus / list_agents are the canonical,
@@ -131,7 +131,7 @@ export function buildServer(): McpServer {
 
   // The unified data-plane Store: LocalStore (SQLite) or ApiStore (HTTP /v1 +
   // bearer key), resolved from the environment. Every data-plane tool routes
-  // through this — no per-tool `cloud ? : local` branching, no `getDb()` reads
+  // through this — no per-tool transport branching, no `getDb()` reads
   // in handlers. Fully reversible: unset HASNA_LOGS_API_URL/KEY -> local.
   const store = resolveStore();
 

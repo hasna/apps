@@ -128,10 +128,27 @@ export function getLegacyDataRoot(env: NodeJS.ProcessEnv = process.env): string 
 export function adoptResolverDataRoot(
   resolved: string,
   env: NodeJS.ProcessEnv = process.env,
+  legacyRoot?: string,
 ): boolean {
+  // Already physically migrated: the resolver root holds the store — adopt.
+  if (existsSync(join(resolved, "repos.db"))) return true;
   const dataOverride = env.HASNA_DATA_HOME;
-  if (typeof dataOverride === "string" && dataOverride.trim().length > 0) return true;
-  return existsSync(join(resolved, "repos.db"));
+  if (typeof dataOverride === "string" && dataOverride.trim().length > 0) {
+    // Deliberate opt-in to the XDG layout — but never render a live legacy
+    // store invisible: with repos.db still at the legacy root and none at the
+    // resolver root yet, adopting would create an empty resolver database
+    // that hides the real store and makes the switch persist after the
+    // override is unset. The operator physically migrates the store (move or
+    // copy repos.db) for the override to take effect.
+    //
+    // The legacy root is compared against the SAME home the resolver root was
+    // computed from: an explicit-home caller (`getDataRootForHome`) must not
+    // have its live store judged against `env.HOME`'s legacy root, which may
+    // belong to a different machine layout entirely.
+    const legacy = legacyRoot ?? getLegacyDataRoot(env);
+    return !existsSync(join(legacy, "repos.db"));
+  }
+  return false;
 }
 
 /** The exact-app override root, when set: `HASNA_REPOS_HOME`. */
@@ -168,5 +185,6 @@ export function getDataRootForHome(
   const exact = getExactDataRoot(env);
   if (exact) return exact;
   const resolved = dataDir({ app: "repos", home: homeDir, env });
-  return adoptResolverDataRoot(resolved, env) ? resolve(resolved) : join(homeDir, ".hasna", "repos");
+  const legacyRoot = join(homeDir, ".hasna", "repos");
+  return adoptResolverDataRoot(resolved, env, legacyRoot) ? resolve(resolved) : legacyRoot;
 }

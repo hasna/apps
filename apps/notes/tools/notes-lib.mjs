@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -9,72 +9,14 @@ import {
   commitNoteCreatedIntent,
 } from './notes-events.mjs';
 import { hasnaEnv } from './notes-env.mjs';
-import { getDataRoot, getExactDataRoot } from '../server/paths.mjs';
+import { getDataRoot } from '../server/paths.mjs';
 
 export function dataRoot() {
-  // Fleet law: app data lives at ~/.hasna/<app>/ — never a nested
-  // ~/.hasna/apps/<app> segment. Path resolution routes through the
-  // @hasna/paths resolver (XDG / macOS home layout): the resolver data home
-  // (~/.local/share/hasna/notes on Linux) is adopted only when HASNA_DATA_HOME
-  // is set or the store has already been physically migrated there, otherwise
-  // the legacy ~/.hasna/notes root stays effective (an existing store never
-  // becomes invisible on upgrade). An exact-app override
-  // (HASNA_NOTES_HOME / HASNA_NOTES_ROOT / NOTES_HOME) wins unconditionally and
-  // skips the migration. The pre-rename nested root is migrated forward once
-  // (copy-only) unless an explicit override is in use.
-  const explicit = getExactDataRoot();
-  const root = getDataRoot();
-  if (!explicit) migrateLegacyRootOnce(root);
-  return root;
-}
-
-/** The pre-rename nested-apps root this app's data used to live under. */
-export function legacyDataRoot() {
-  return join(process.env.HOME || homedir(), '.hasna', 'apps', 'notes');
-}
-
-const LEGACY_ROOT_MIGRATION_RECEIPT = '.legacy-root-migration.json';
-
-/**
- * One-time copy-forward from the legacy nested-apps root (~/.hasna/apps/notes)
- * into the canonical root (~/.hasna/notes). Copy-only: the source is preserved
- * and never deleted; entries that already exist at the destination are skipped,
- * which makes the copy resumable and idempotent. Writes a receipt marker when
- * the copy completes. A no-op when the legacy root is absent, when the receipt
- * already exists, or when `root` is itself the legacy root.
- */
-export function migrateLegacyRootOnce(root) {
-  const legacy = legacyDataRoot();
-  if (!root || root === legacy || !existsSync(legacy)) return;
-  if (existsSync(join(root, LEGACY_ROOT_MIGRATION_RECEIPT))) return;
-  mkdirSync(root, { recursive: true, mode: 0o700 });
-  for (const entry of readdirSync(legacy)) {
-    copyTreeSync(join(legacy, entry), join(root, entry));
-  }
-  writeFileSync(
-    join(root, LEGACY_ROOT_MIGRATION_RECEIPT),
-    JSON.stringify({ migratedFrom: legacy, migratedAt: new Date().toISOString() }, null, 2),
-    { mode: 0o600 },
-  );
-}
-
-// Merge-copy: directories merge entry-by-entry so a partially-copied
-// destination is completed without touching what already landed; files that
-// already exist at the destination are never overwritten.
-function copyTreeSync(src, dst) {
-  const st = statSync(src);
-  if (st.isDirectory()) {
-    mkdirSync(dst, { recursive: true, mode: 0o700 });
-    for (const entry of readdirSync(src)) copyTreeSync(join(src, entry), join(dst, entry));
-    return;
-  }
-  if (existsSync(dst)) return;
-  try {
-    // COPYFILE_EXCL: never overwrite an entry that raced into existence.
-    copyFileSync(src, dst, fsConstants.COPYFILE_EXCL);
-  } catch (err) {
-    if (err?.code !== 'EEXIST') throw err;
-  }
+  // New local-library data is XDG-native through the in-package resolver.
+  // Exact app overrides remain explicit operator choices. Legacy roots are
+  // never read, copied, or selected as a side effect of an ordinary
+  // client/library call.
+  return getDataRoot();
 }
 
 export function notesDir(root = dataRoot()) {
@@ -970,10 +912,14 @@ export async function generateTitle(text, opts = {}) {
     if (token) {
       headers['X-Hasna-Notes-Token'] = token;
     }
-    const res = await fetch(String(opts.sidecar).replace(/\/$/, '') + '/title', {
+    const fetchImpl = opts.fetchImpl ?? fetch;
+    const res = await fetchImpl(String(opts.sidecar).replace(/\/$/, '') + '/title', {
       method: 'POST',
       headers,
       body: JSON.stringify({ text: readable }),
+      // A sidecar token and note text are both sensitive. Never forward either
+      // through a redirect, including same-origin redirects.
+      redirect: 'error',
     });
     if (res.ok) {
       const data = await res.json();

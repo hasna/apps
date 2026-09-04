@@ -3,20 +3,20 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  *
- * The transport used by BOTH `self_hosted` (our AWS) and `cloud` (SaaS) tiers —
- * identical client code; only the resolved URL/key differ (that distinction is
- * server-side tenancy, never a client branch). Every call goes to the app's
- * configured cloud HTTP API (the resolved HASNA_LOGS_API_URL, e.g.
+ * The transport behind the hosted API: identical client code for every hosted
+ * deployment; only the resolved URL/key differ (that distinction is server-side
+ * tenancy, never a client branch). Every call goes to the app's configured
+ * hosted HTTP API (the resolved HASNA_LOGS_API_URL, e.g.
  * `https://logs.your-deployment.example/v1/...`) with the bearer key managed
  * inside the @hasna/contracts transport.
  *
- * The cloud tier is a first-class shared backend: it persists and serves the
+ * The hosted tier is a first-class shared backend: it persists and serves the
  * full data plane over `/v1` — logs, projects, pages, scan jobs, the events
  * catalog, test reports, performance snapshots, issues, alert rules, feedback,
- * and the diagnose/compare analytics. Every {@link Store} method routes here in
- * self_hosted/cloud mode, giving cloud parity with the local SQLite store. The
- * ONE thing the cloud tier cannot serve is the raw event envelope body, which
- * lives in local append-only segment files (`raw` comes back null in cloud).
+ * and the diagnose/compare analytics. Every {@link Store} method routes here,
+ * giving parity with the local SQLite store. The ONE thing the hosted tier
+ * cannot serve is the raw event envelope body, which lives in local
+ * append-only segment files (`raw` comes back null).
  *
  * SAFETY: never logs, returns, or embeds the API key. The key lives only inside
  * the HTTP transport created by @hasna/contracts.
@@ -84,7 +84,6 @@ import type {
   ImportStructuredLogsResult,
   PushEventOptions,
   Store,
-  StoreMode,
 } from "./types.ts";
 
 /** Cloud resource paths served under `/v1`. */
@@ -166,19 +165,16 @@ export interface ApiStoreOptions {
   runScan?: ApiRunScan;
 }
 
-/** HTTP-backed {@link Store} for `self_hosted` and `cloud` tiers. */
+/** HTTP-backed {@link Store} for the hosted API. */
 export class ApiStore implements Store {
-  readonly mode: StoreMode;
   private readonly client: HasnaStorageClient;
   private readonly scanExecutor: ApiRunScan;
 
   constructor(
     client: HasnaStorageClient,
-    mode: StoreMode = "self_hosted",
     options: ApiStoreOptions = {},
   ) {
     this.client = client;
-    this.mode = mode;
     this.scanExecutor = options.runScan ?? scanPageWithContext;
   }
 
@@ -408,7 +404,7 @@ export class ApiStore implements Store {
     eventId: string,
     _includeRaw: boolean,
   ): Promise<EventCatalogEntry | null> {
-    // Raw event bodies live in local segment files; the cloud tier has none, so
+    // Raw event bodies live in local segment files; the hosted tier has none, so
     // `raw` is always null here regardless of the includeRaw flag.
     const record = await this.client.get<EventCatalogEntry>("events", eventId);
     return record ?? null;

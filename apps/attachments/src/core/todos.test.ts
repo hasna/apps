@@ -1,67 +1,20 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { withTodosAuth } from "./todos";
-
-function clearTodosEnv() {
-  delete process.env.HASNA_TODOS_API_KEY;
-  delete process.env.TODOS_API_KEY;
-  delete process.env.HASNA_TODOS_API_URL;
-  delete process.env.TODOS_API_URL;
-}
-
-beforeEach(clearTodosEnv);
-afterEach(clearTodosEnv);
-
-describe("withTodosAuth", () => {
-  it("returns the original request init when no API key is configured", () => {
-    const init = { method: "POST" };
-
-    expect(withTodosAuth("http://localhost:3000/api/tasks/TASK-001", init)).toBe(init);
-    expect(withTodosAuth()).toBeUndefined();
-  });
-
-  it("uses TODOS_API_KEY as an x-api-key header for the default todos origin", () => {
-    process.env.TODOS_API_KEY = "todos-fallback-key";
-
-    const init = withTodosAuth("http://localhost:3000/api/tasks/TASK-001", {
-      headers: { "Content-Type": "application/json" },
-    });
-    const headers = new Headers(init?.headers);
-
-    expect(headers.get("x-api-key")).toBe("todos-fallback-key");
-    expect(headers.get("content-type")).toBe("application/json");
-  });
-
-  it("prefers a non-empty HASNA_TODOS_API_KEY", () => {
-    process.env.HASNA_TODOS_API_KEY = "hasna-key";
-    process.env.TODOS_API_KEY = "fallback-key";
-
-    const headers = new Headers(withTodosAuth("http://localhost:3000/api/tasks/TASK-001")?.headers);
-
-    expect(headers.get("x-api-key")).toBe("hasna-key");
-  });
-
-  it("falls back when HASNA_TODOS_API_KEY is empty", () => {
-    process.env.HASNA_TODOS_API_KEY = "";
-    process.env.TODOS_API_KEY = "fallback-key";
-
-    const headers = new Headers(withTodosAuth("http://localhost:3000/api/tasks/TASK-001")?.headers);
-
-    expect(headers.get("x-api-key")).toBe("fallback-key");
-  });
-
-  it("does not forward the API key to an arbitrary override origin", () => {
-    process.env.HASNA_TODOS_API_KEY = "hasna-key";
-    const init = { method: "GET" };
-
-    expect(withTodosAuth("https://example.invalid/api/tasks/TASK-001", init)).toBe(init);
-  });
-
-  it("allows a remote origin only when it is explicitly configured", () => {
-    process.env.HASNA_TODOS_API_URL = "https://todos.example.com";
-    process.env.HASNA_TODOS_API_KEY = "hasna-key";
-
-    const headers = new Headers(withTodosAuth("https://todos.example.com/api/tasks/TASK-001")?.headers);
-
-    expect(headers.get("x-api-key")).toBe("hasna-key");
-  });
+const saved = { ...process.env };
+const base = "https://todos.example.test/prefix";
+beforeEach(() => {
+ for (const name of ["HASNA_TODOS_API_KEY", "TODOS_API_KEY", "HASNA_TODOS_API_URL", "TODOS_API_URL"]) delete process.env[name];
+ process.env.HASNA_TODOS_API_URL = base; process.env.HASNA_TODOS_API_KEY = "test-key";
+});
+afterEach(() => { process.env = { ...saved }; });
+describe("Todos integration HTTPS boundary", () => {
+ test("attaches credentials with redirects disabled", () => {
+   const init = withTodosAuth(base + "/api/tasks/id", { method: "POST", headers: { "content-type": "application/json" }, redirect: "follow" });
+   expect(new Headers(init.headers).get("x-api-key")).toBe("test-key"); expect(init.redirect).toBe("error");
+ });
+ for (const url of ["http://localhost:3000", "https://evil.example.test/api", "https://todos.example.test/prefix-other/api", "https://todos.example.test/other"]) test("rejects out-of-bound URL " + url, () => { expect(() => withTodosAuth(url)).toThrow(); });
+ test("missing credential rejects", () => { delete process.env.HASNA_TODOS_API_KEY; expect(() => withTodosAuth(base + "/api/tasks")).toThrow(); });
+ test("blank canonical key never falls back", () => { process.env.HASNA_TODOS_API_KEY = " "; process.env.TODOS_API_KEY = "test-key"; expect(() => withTodosAuth(base + "/api/tasks")).toThrow(); });
+ test("conflicting aliases reject", () => { process.env.TODOS_API_KEY = "other"; expect(() => withTodosAuth(base + "/api/tasks")).toThrow(); });
+ test("matching aliases and same-authority rotation work", () => { process.env.TODOS_API_KEY = "test-key"; expect(new Headers(withTodosAuth(base + "/api/tasks").headers).get("x-api-key")).toBe("test-key"); process.env.TODOS_API_KEY = process.env.HASNA_TODOS_API_KEY = "rotated"; expect(new Headers(withTodosAuth(base + "/api/tasks").headers).get("x-api-key")).toBe("rotated"); });
 });

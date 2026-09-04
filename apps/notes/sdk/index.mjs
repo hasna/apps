@@ -1,16 +1,15 @@
 // @hasna/notes SDK — programmatic client surface (package export ./sdk).
 //
-// One transport resolver, two connections: the local SQLite+markdown store or
-// the server HTTP API selected by HASNA_NOTES_API_URL (+ HASNA_NOTES_API_KEY,
-// fail-closed). This module never reads HASNA_NOTES_DATABASE_URL and never
-// opens PostgreSQL — a client reaches the server only through the HTTP store.
+// One transport resolver, one connection: the authenticated HTTPS API selected
+// by HASNA_NOTES_API_URL + HASNA_NOTES_API_KEY. This module rejects client DSNs
+// and never opens PostgreSQL or a local SQLite/markdown store.
 //
 // The HTTP store speaks the personalnotes/v1 wire dialect (/api/v1/* paths,
 // Bearer api-key auth) — the same dialect the future hosted wrapper speaks;
 // documented, not renamed.
 //
-// The local markdown store remains the on-box backend (the app's data
-// contract) and is re-exported from the package root (`.`) via tools/notes-lib.
+// The package root exports this same remote-only client. Pure, non-authoritative
+// format helpers live only at the explicit ./compat/markdown-format subpath.
 
 import {
   NOTES_APP_SLUG,
@@ -53,15 +52,24 @@ export {
 };
 
 /**
- * Resolve the client transport from the environment. `local` means the
- * on-box SQLite+markdown store, whose functions are the package-root exports
- * (`.` -> tools/notes-lib.mjs) — the app's data contract. `http` returns the
- * HTTP store bound to the canonical URL+key.
+ * Resolve the authenticated HTTPS client from the environment.
  */
 export function resolveNotesClientStore(env = process.env) {
   const report = resolveNotesClientTransport(env);
-  if (report.transport === 'http') {
-    return { transport: 'http', report, httpStore: createNotesHttpStore(env) };
+  return { transport: 'http', report, httpStore: createNotesHttpStore(env) };
+}
+
+/** Stable SDK facade over the canonical authenticated HTTPS store. */
+export class NotesClient {
+  constructor(env = process.env, fetchImpl = fetch) {
+    this.store = createNotesHttpStore(env, fetchImpl);
   }
-  return { transport: 'local', report, httpStore: null };
+
+  health() { return this.store.health(); }
+  list(params) { return this.store.listNotes(params); }
+  get(id) { return this.store.getNote(id); }
+  create(input) { return this.store.createNote(input); }
+  update(id, input) { return this.store.updateNote(id, input); }
+  delete(id) { return this.store.deleteNote(id); }
+  export() { return this.store.exportNotes(); }
 }

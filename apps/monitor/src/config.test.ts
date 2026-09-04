@@ -417,6 +417,34 @@ describe("saveConfig() + loadConfig() round-trip", () => {
     const reloaded = loadConfig();
     expect(reloaded.thresholds).toEqual(config.thresholds);
   });
+
+  it("mementos integration settings (bucket, keyTemplate, required) survive save/load", () => {
+    // Regression (MON-V2-08): the runtime Zod schema previously accepted only
+    // enabled + base_url and silently stripped the new Mementos settings.
+    const config: MonitorConfig = {
+      ...loadConfig(),
+      integrations: {
+        mementos: {
+          enabled: true,
+          base_url: "http://127.0.0.1:19428",
+          bucket: "fleet-health",
+          keyTemplate: "{bucket}/{target}",
+          required: true,
+        },
+      },
+    };
+
+    saveConfig(config);
+    const reloaded = loadConfig();
+
+    expect(reloaded.integrations?.mementos).toEqual({
+      enabled: true,
+      base_url: "http://127.0.0.1:19428",
+      bucket: "fleet-health",
+      keyTemplate: "{bucket}/{target}",
+      required: true,
+    });
+  });
 });
 
 describe("monitor config commands", () => {

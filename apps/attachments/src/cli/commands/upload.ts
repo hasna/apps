@@ -3,7 +3,6 @@ import { execSync } from "child_process";
 import { getConfig } from "../../core/config";
 import { resolveStore } from "../../core/store";
 import { resolveInternalBaseUrl } from "../../core/internal-link";
-import { resolveLocalShareBaseUrl } from "../../core/links";
 import { isValidEmail } from "../../core/security";
 import { formatBytes, formatExpiry, exitError } from "../utils";
 
@@ -49,16 +48,14 @@ export function registerUpload(program: Command): void {
     .option("--brief", "Compact one-line output")
     .option("--stdin", "Read file content from stdin instead of a file path")
     .option("--filename <name>", "Filename to use when uploading from stdin")
-    .option("--client-mode <mode>", "Override client mode for this upload: local or cloud")
+    .option("--client-mode <mode>", "Retired; explicit HTTPS configuration is required")
     .option("--internal", "Generate a local-network/Tailscale server link")
     .action(async (files: string[], options: { expiry?: string; linkType?: "presigned" | "server"; tag?: string; password?: string; encrypt?: boolean; maxDownloads?: string; requireEmail?: boolean; allowedEmail?: string[]; format?: string; copy?: boolean; brief?: boolean; stdin?: boolean; filename?: string; clientMode?: string; internal?: boolean }) => {
       const config = getConfig();
-      if (options.clientMode && options.clientMode !== "local" && options.clientMode !== "cloud") {
-        exitError("--client-mode must be local or cloud");
+      if (options.clientMode !== undefined) {
+        exitError("--client-mode is retired; configure the authenticated HTTPS API.");
       }
-      // Env drives self_hosted/cloud vs local; `--client-mode local` pins on-box.
-      const store = resolveStore(process.env, { forceLocal: options.clientMode === "local" });
-      const cloudMode = store.transport === "cloud-http";
+      const store = resolveStore(process.env);
 
       const maxDownloads = options.maxDownloads ? parseInt(options.maxDownloads, 10) : undefined;
       if (maxDownloads !== undefined && (!Number.isInteger(maxDownloads) || maxDownloads <= 0)) {
@@ -72,20 +69,6 @@ export function registerUpload(program: Command): void {
       if (allowedEmails) {
         const bad = allowedEmails.filter((e) => !isValidEmail(e));
         if (bad.length > 0) exitError(`Invalid --allowed-email value(s): ${bad.join(", ")}`);
-      }
-      // D1(b): an on-box upload whose configured public host is really the remote
-      // API would produce a link that can never resolve. core/upload rewrites the
-      // base URL; tell the operator, because the link they get is NOT the public
-      // one their config advertises.
-      if (!cloudMode && !options.internal) {
-        const resolved = resolveLocalShareBaseUrl(config);
-        if (resolved.rejectedBaseUrl) {
-          process.stderr.write(
-            `! Local upload: ${resolved.rejectedBaseUrl} is the remote attachments API, not this machine.\n` +
-              `  Share links will point at ${resolved.baseUrl} (served by \`attachments serve\`).\n` +
-              `  Drop --client-mode local to upload to ${resolved.rejectedBaseUrl} instead.\n`,
-          );
-        }
       }
       const internalBaseUrl = options.internal ? (await resolveInternalBaseUrl(config)).baseUrl : undefined;
       const uploadOptions = {

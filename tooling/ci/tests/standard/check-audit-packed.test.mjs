@@ -64,16 +64,23 @@ function runFixtureMember(extraDeps) {
   return result;
 }
 
+// The packed probe (pack + tarball install + audit) takes well over bun test's
+// 5s default per-test timeout (measured ~2 min unloaded for the install probe;
+// longer under parallel CI/runtime load), which made these arms fail everywhere
+// regardless of the probe's actual verdict. An explicit per-test budget keeps
+// the two-sided gate intact.
+const PROBE_TEST_TIMEOUT_MS = 600_000;
+
 test("positive arm: clean shipped surface passes the packed audit (rc=0, no vulnerabilities)", () => {
   const result = runFixtureMember(undefined);
   expect(result.status).toBe(0);
   const combined = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   expect(combined).toContain("No vulnerabilities found");
-});
+}, PROBE_TEST_TIMEOUT_MS);
 
 test("negative arm: genuine advisory injected into the shipped surface fails the gate (rc=1, GHSA-3xgq-45jj-v275)", () => {
   const result = runFixtureMember("cross-spawn@5.1.0");
   expect(result.status).toBe(1);
   const combined = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   expect(combined).toContain("GHSA-3xgq-45jj-v275");
-});
+}, PROBE_TEST_TIMEOUT_MS);

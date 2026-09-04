@@ -10,17 +10,15 @@
  *
  * Callers (CLI, MCP, SDK) call {@link resolveStore} once and hold the interface;
  * they never branch on transport and never touch `getDb()` / raw `fetch`
- * directly. The flip is the @hasna/contracts client transport contract
- * (0.11.1): an API URL with a credential selects HTTP. Legacy storage-mode
- * variables are rejected by the client with migration guidance and are never
- * interpreted — no synthesis, no normalization.
+ * directly. The flip is the @hasna/contracts client transport contract: an API
+ * URL with a credential selects HTTP; otherwise the store is local SQLite.
  */
 import { resolveStorageClient } from "@hasna/contracts/client/storage";
 import { ApiStore } from "./api.ts";
 import { LocalStore } from "./local.ts";
-import type { Store, StoreMode } from "./types.ts";
+import type { Store } from "./types.ts";
 
-export type { Store, StoreMode } from "./types.ts";
+export type { Store } from "./types.ts";
 export { LocalStore } from "./local.ts";
 export { ApiStore } from "./api.ts";
 
@@ -30,9 +28,7 @@ export const LOGS_APP_SLUG = "logs";
 /**
  * Resolve the live {@link Store} from the environment. Returns an
  * {@link ApiStore} when the client transport resolves to HTTP (API_URL +
- * credential present), else a {@link LocalStore}. A legacy storage-mode
- * variable in the env makes the @hasna/contracts client throw with migration
- * guidance — deliberate, never a silent fallback to local.
+ * credential present), else a {@link LocalStore}.
  */
 export function resolveStore(env: NodeJS.ProcessEnv = process.env): Store {
   const resolved = resolveStorageClient(LOGS_APP_SLUG, env);

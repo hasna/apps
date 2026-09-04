@@ -14,6 +14,7 @@ import { registerCrmCommands } from "./commands/crm.js";
 import { registerAdvancedCommands } from "./commands/advanced.js";
 import { registerAudienceCommands } from "./commands/audience.js";
 import { registerStorageCommands } from "./storage.js";
+import { registerLegacyCommands } from "./legacy.js";
 import { createRequire } from "node:module";
 
 const _require = createRequire(import.meta.url);
@@ -29,17 +30,18 @@ registerCrmCommands(program);
 registerAdvancedCommands(program);
 registerAudienceCommands(program);
 registerStorageCommands(program);
+registerLegacyCommands(program);
 registerWebhookCommands?.(program, { source: "contacts" });
 registerEventCommands(program, { source: "contacts", eventsCommandName: "hasna-events" });
 
 
-// A command action that throws (e.g. an operation the /v1 API does not expose in
-// self_hosted/cloud mode surfaces ApiUnavailableError) must fail with a clean,
+// A command action that throws (e.g. missing HTTPS configuration or an operation
+// the /v1 API does not expose) must fail with a clean,
 // legible message and a non-zero exit — never a raw JS stacktrace. Route every
-// rejection through one boundary so all three storage modes behave identically.
+// rejection through one boundary so every client command fails closed consistently.
 program.parseAsync(process.argv).catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
-  // ApiUnavailableError is the designed loud-failure for cloud-unsupported ops:
+  // ApiUnavailableError is the designed loud-failure for API-unsupported ops:
   // present it as a warning (expected), other errors as hard failures.
   const isApiUnavailable =
     err instanceof Error && err.name === "ApiUnavailableError";
