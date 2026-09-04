@@ -10,7 +10,7 @@
  * No files are copied. The settings entry points to `hooks run <name>`.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
@@ -679,6 +679,31 @@ function codewithHasHookEntry(name: string, scope: Scope = "global"): boolean {
  * dir, as well as bundled ones (QA-1 BUG-A / QA-4: remove was bundled-only
  * and never cleaned the store/lock/DB).
  */
+
+// Fail-closed recursive store removal. `rmSync(dir, { recursive: true })`
+// deletes entries in filesystem listing order, so a frozen SUBDIRECTORY can
+// leave sibling files (e.g. script.sh) already unlinked when the removal
+// throws — a partially-deleted store that still keeps its trust records.
+// Process directory subtrees first: a frozen subdirectory aborts the removal
+// BEFORE any sibling file is touched, preserving the fail-closed invariant
+// (O15 regression: uninstallHook store-freeze test on ext4-order runners).
+// rmdirSync doubles as the failure probe: a subtree that failed to empty
+// itself makes the parent removal throw, and nothing is reported removed.
+function removeStoreDirFailClosed(dir: string): void {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      removeStoreDirFailClosed(join(dir, entry.name));
+    }
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      unlinkSync(join(dir, entry.name));
+    }
+  }
+  rmdirSync(dir);
+}
+
 export function uninstallHook(
   name: string,
   scope: Scope = "global",
@@ -745,7 +770,7 @@ export function uninstallHook(
   // run would self-trust the residual bytes (security reviewer P1-2).
   if (custom) {
     try {
-      rmSync(customHookDir(shortName), { recursive: true, force: true });
+      removeStoreDirFailClosed(customHookDir(shortName));
     } catch {
       return {
         name: shortName,
