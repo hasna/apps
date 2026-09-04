@@ -1,6 +1,6 @@
 # @hasna/domains
 
-Domain portfolio, registrar, marketplace, and DNS management for AI agents. The package ships a CLI, MCP server, authenticated HTTP API, generated SDK, and library exports. CLI workflows use local SQLite by default and can use the shared HTTP API in cloud mode; `domains-serve` connects directly to cloud Postgres.
+Domain portfolio, registrar, marketplace, and DNS management for AI agents. The package ships a CLI, MCP server, authenticated HTTP API, generated SDK, and library exports. Data commands fail closed when no store is configured: `HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY` select the hosted HTTP API, and local SQLite is reachable only through an explicit path opt-in — never as a silent default; `domains-serve` connects directly to cloud Postgres.
 
 ## Features
 
@@ -232,12 +232,14 @@ Route 53 sync imports registered domains when the selected AWS account permits `
 
 ## Storage
 
-The CLI and library use local SQLite by default. The client selects the hosted HTTP API when both `HASNA_DOMAINS_API_URL` and `HASNA_DOMAINS_API_KEY` are set — a database DSN is never exposed to clients.
+Data commands fail closed when no store is configured: they exit non-zero with an error naming the missing env rather than silently serving a default local database. The client selects the hosted HTTP API when both `HASNA_DOMAINS_API_URL` and `HASNA_DOMAINS_API_KEY` are set — a database DSN is never exposed to clients.
 
 ```bash
 export HASNA_DOMAINS_API_URL=https://domains.example.com
 export HASNA_DOMAINS_API_KEY=dom_...
 ```
+
+Local SQLite is available only as an explicit opt-in: set one of `DOMAINS_DB_PATH`, `HASNA_DOMAINS_DB_PATH`, `DOMAINS_DIR` or `HASNA_DOMAINS_DIR` to name the database you mean. Without the hosted env pair and without such an opt-in, `getStore()` throws and CLI data commands fail — `~/.hasna/domains/domains.db` is never opened implicitly.
 
 The unprefixed `DOMAINS_API_URL` and `DOMAINS_API_KEY` aliases are also accepted. When only one of URL and key is set, the client refuses to start (fail-closed). The standalone `domains-serve` process is the server side: it connects directly to PostgreSQL using `HASNA_DOMAINS_DATABASE_URL` (SQLite when unset) and requires `HASNA_DOMAINS_API_SIGNING_KEY`. Apply owner-role migrations first with `domains db migrate`.
 
@@ -315,12 +317,12 @@ const portfolio = await domains.listDomains({ status: "active" });
 
 | Variable | Description |
 |----------|-------------|
-| `DOMAINS_DB_PATH` | Override database file path |
-| `HASNA_DOMAINS_DB_PATH` | Override database file path |
+| `DOMAINS_DB_PATH` | Explicit local-sqlite opt-in: override database file path |
+| `HASNA_DOMAINS_DB_PATH` | Explicit local-sqlite opt-in: override database file path |
 | `DOMAINS_CONFIG_PATH` | Override config file path |
 | `DOMAINS_CONFIG_DIR` | Override config directory |
-| `HASNA_DOMAINS_DIR` | Override database directory |
-| `DOMAINS_DIR` | Override database directory fallback |
+| `HASNA_DOMAINS_DIR` | Explicit local-sqlite opt-in: override database directory |
+| `DOMAINS_DIR` | Explicit local-sqlite opt-in: override database directory fallback |
 | `DOMAINS_COMMAND_GROUPS` | Comma-separated optional command groups to load, or `all` |
 | `DOMAINS_ENABLE_EXTRAS` | Set to `1` to load all optional command groups |
 | `DOMAINS_MCP_SAFE_MODE` | Set to `1` to expose only read-only MCP tools |

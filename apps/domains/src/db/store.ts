@@ -14,9 +14,14 @@
 //
 // `getStore()` resolves which transport to use from the client env contract:
 // BOTH HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY set -> hosted ApiStore;
-// neither set -> local SQLite; exactly one set -> hard error (fail-closed).
-// Callers NEVER branch on a mode themselves and NEVER touch sqlite or fetch
-// directly — that split-brain bug is exactly what this module eliminates.
+// NEITHER set -> FAIL CLOSED with an error naming the env pair — the default
+// local database (~/.hasna/domains/domains.db) is never opened implicitly.
+// Local SQLite is reachable ONLY on an explicit opt-in: one of the local path
+// variables (DOMAINS_DB_PATH / HASNA_DOMAINS_DB_PATH / DOMAINS_DIR /
+// HASNA_DOMAINS_DIR) naming a concrete database. Exactly one API var set ->
+// hard error (fail-closed). Callers NEVER branch on a mode themselves and
+// NEVER touch sqlite or fetch directly — that split-brain bug is exactly what
+// this module eliminates.
 //
 // SAFETY: the API key never leaves the transport; it is never logged, returned,
 // or embedded in any value produced here. Only the HTTP transport ever holds it.
@@ -742,9 +747,10 @@ export interface ClientFlip {
 /**
  * Resolve the client transport from the env contract:
  * `HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY` (or the unprefixed
- * aliases) BOTH set -> hosted; NEITHER set -> local. Exactly one set is
- * misconfiguration and throws — fail-closed, so a partial flip can never
- * silently read the wrong dataset.
+ * aliases) BOTH set -> hosted; exactly one set is misconfiguration and throws
+ * — fail-closed, so a partial flip can never silently read the wrong dataset.
+ * NEITHER set is not itself a licence to open local sqlite: {@link getStore}
+ * still demands an explicit local opt-in before a {@link LocalStore} resolves.
  */
 export function resolveClientFlip(env: Env): ClientFlip {
   const { apiUrlKeys, apiKeyKeys } = clientTransportEnvKeys("domains");
@@ -754,7 +760,8 @@ export function resolveClientFlip(env: Env): ClientFlip {
     throw new Error(
       `Misconfigured domains client: ${urlKey ?? keyKey} is set without the other. ` +
         `The hosted client needs BOTH HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY. ` +
-        `With neither set the client uses local SQLite.`,
+        `With neither set, resolution fails closed unless local sqlite is explicitly opted into ` +
+        `via one of ${LOCAL_PATH_VARS.join(" / ")}.`,
     );
   }
   return { hosted: urlKey !== null, urlSource: urlKey, keySource: keyKey };
@@ -795,6 +802,39 @@ function enabled(value: string | undefined): boolean {
 /** The first local-path var this env sets, or undefined when none is set. */
 export function explicitLocalPathVar(env: Env): string | undefined {
   return LOCAL_PATH_VARS.find((key) => Boolean(env[key]));
+}
+
+/**
+ * FAIL CLOSED — the store must never silently default to the local database.
+ *
+ * The ONLY way to reach {@link LocalStore} is an explicit local opt-in: one of
+ * the {@link LOCAL_PATH_VARS} naming a concrete sqlite file or directory.
+ * Without the hosted client env pair AND without that opt-in this THROWS with
+ * the action the operator must take. A fleet CLI that runs with no env must
+ * never open the default local database (~/.hasna/domains/domains.db) and
+ * report success against the wrong dataset.
+ *
+ * `hostedConfigured` selects the lead sentence: when the hosted env pair WAS
+ * set but a guard refused it (a test run without
+ * {@link ALLOW_CLOUD_IN_TESTS}), the error must not advise setting the pair
+ * that is already there.
+ */
+function localStoreOrThrow(env: Env, hostedConfigured: boolean): LocalStore {
+  const pathVar = explicitLocalPathVar(env);
+  if (pathVar) return new LocalStore();
+  const names = LOCAL_PATH_VARS.join(" / ");
+  const lead = hostedConfigured
+    ? "domains fails closed: the hosted store was refused for this process (a test run may not " +
+      `reach the production API unless ${ALLOW_CLOUD_IN_TESTS}=1) and local sqlite was not ` +
+      "explicitly opted into"
+    : "domains fails closed: HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY are not set and " +
+      "local sqlite was not explicitly opted into";
+  throw new Error(
+    lead +
+      `. Opt into local sqlite by setting one of ${names} to a concrete database path, or ` +
+      "configure the hosted client env pair. The default local database (~/.hasna/domains/domains.db) " +
+      "is never opened implicitly.",
+  );
 }
 
 /**
@@ -918,15 +958,18 @@ function assertNoStoreConflict(env: Env): void {
 }
 
 /**
- * Resolve the active {@link DomainsStore} for the current environment. Returns an
- * {@link ApiStore} when the client env contract resolves to the hosted HTTP
- * transport (HASNA_DOMAINS_API_URL + HASNA_DOMAINS_API_KEY), else a
- * {@link LocalStore}. Throws when the flip is misconfigured (exactly one of
- * URL/key set) so callers can never silently read the wrong dataset. The
- * retired storage-mode env keys are never read. Inside a test run the hosted
- * transport is refused — see {@link cloudAllowedHere}. Outside one, a local
- * path set alongside the hosted transport is refused — see
- * {@link assertNoStoreConflict}.
+ * Resolve the active {@link DomainsStore} for the current environment.
+ *
+ * FAIL CLOSED: an {@link ApiStore} resolves only when the client env contract
+ * flips hosted (HASNA_DOMAINS_API_URL + HASNA_DOMAINS_API_KEY). A
+ * {@link LocalStore} resolves only on an explicit local opt-in (one of the
+ * {@link LOCAL_PATH_VARS}). With neither, this THROWS — a CLI run without its
+ * fleet env must never silently serve the default local database. Throws too
+ * when the flip is misconfigured (exactly one of URL/key set), so callers can
+ * never silently read the wrong dataset. The retired storage-mode env keys are
+ * never read. Inside a test run the hosted transport is refused — see
+ * {@link cloudAllowedHere}. Outside one, a local path set alongside the hosted
+ * transport is refused — see {@link assertNoStoreConflict}.
  */
 /**
  * Resolve the hosted storage client for an env whose flip already said hosted.
@@ -948,17 +991,28 @@ function requireHostedClient(env: Env, flip: ClientFlip): HasnaStorageClient {
 
 export function getStore(env: Env = process.env): DomainsStore {
   const flip = resolveClientFlip(env);
-  if (!flip.hosted) return new LocalStore();
-  if (!cloudAllowedHere(env)) return new LocalStore();
+  if (!flip.hosted) return localStoreOrThrow(env, false);
+  if (!cloudAllowedHere(env)) return localStoreOrThrow(env, true);
   assertNoStoreConflict(env);
   return new ApiStore(requireHostedClient(env, flip));
 }
 
-/** True when the resolved store is the hosted HTTP transport. */
+/**
+ * True when the resolved store is the hosted HTTP transport. Mirrors
+ * {@link getStore} exactly: an env that would make {@link getStore} throw
+ * (no hosted env pair AND no explicit local opt-in) throws here too — a bare
+ * `false` must never be read as a licence to open the default local database.
+ */
 export function isCloudStore(env: Env = process.env): boolean {
   const flip = resolveClientFlip(env);
-  if (!flip.hosted) return false;
-  if (!cloudAllowedHere(env)) return false;
+  if (!flip.hosted) {
+    localStoreOrThrow(env, false);
+    return false;
+  }
+  if (!cloudAllowedHere(env)) {
+    localStoreOrThrow(env, true);
+    return false;
+  }
   assertNoStoreConflict(env);
   requireHostedClient(env, flip);
   return true;
