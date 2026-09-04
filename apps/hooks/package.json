@@ -27,9 +27,6 @@
     "typecheck": "tsc --noEmit",
     "validate:package": "bun run build && bun scripts/validate-package.ts",
     "prepublishOnly": "bun run validate:package",
-    "dashboard:dev": "cd dashboard && bun run dev",
-    "dashboard:build": "cd dashboard && bun run build",
-    "dashboard:preview": "cd dashboard && bun run preview",
     "postinstall": "node scripts/ensure-profiles-dir.mjs",
     "scan:artifact": "bun scripts/artifact-scan.ts",
     "prepack": "bun run build && bun run scan:artifact"

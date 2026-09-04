@@ -12,10 +12,6 @@ bun run typecheck                  # TypeScript type checking (tsc --noEmit)
 bun test                           # Run all tests (592 tests, 1816+ assertions)
 bun test src/lib/registry.test.ts  # Run a single test file
 bun test --testNamePattern="searchHooks"  # Run tests matching pattern
-
-# Dashboard (separate Vite + React 19 + TailwindCSS 4 app)
-bun run dashboard:dev              # Dev server at localhost:5173
-bun run dashboard:build            # Production build to dashboard/dist/
 ```
 
 ## Architecture
@@ -54,9 +50,6 @@ hooks/              30 hook implementations (each a self-contained package)
   hook-branchprotect/
   hook-checkpoint/
   ... (30 total)
-
-dashboard/          Web dashboard (independent Vite app)
-  src/data.ts         Static copy of hook data — must stay in sync with registry.ts
 ```
 
 ### Two Build Targets
@@ -90,7 +83,7 @@ Agent -> stdin JSON (HookInput) -> hook.ts -> stdout JSON (HookOutput)
 
 ### Registry
 
-`src/lib/registry.ts` is the **single source of truth** for all hook metadata. The `HOOKS` array and `CATEGORIES` constant drive the CLI, MCP server, dashboard, and tests. When adding a hook, this file must be updated first.
+`src/lib/registry.ts` is the **single source of truth** for all hook metadata. The `HOOKS` array and `CATEGORIES` constant drive the CLI, MCP server, and tests. When adding a hook, this file must be updated first.
 
 ### Agent Profiles
 
@@ -225,8 +218,7 @@ Run with: `bun test` (592 tests, 1816+ assertions, ~24s)
 1. Create `hooks/hook-<name>/` with at minimum `src/hook.ts` and `package.json`
 2. Hook must read stdin JSON (`HookInput`), return stdout JSON (`HookOutput`) -- use `hooks/hook-gitguard/src/hook.ts` as reference
 3. Add entry to `HOOKS` array in `src/lib/registry.ts` with all fields: `name`, `displayName`, `description`, `version`, `category`, `event`, `matcher`, `tags`
-4. Update `dashboard/src/data.ts` to match the new registry entry
-5. Run `bun test` to verify registry integrity tests pass
+4. Run `bun test` to verify registry integrity tests pass
 
 ## TypeScript
 

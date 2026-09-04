@@ -32,7 +32,3 @@ temp/
 
 # Screenshots
 *.png
-
-# Dashboard build
-dashboard/dist/
-dashboard/node_modules/
