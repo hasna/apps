@@ -488,6 +488,13 @@ describe("self-hosted container TLS contract", () => {
     expect(ecsCompute).not.toMatch(/^\s*command\s*=\s*\["bun",/m);
   });
 
+  test("gives the ingest worker a progress-based container health check (incident 2026-08-31)", () => {
+    expect(ecsCompute).toContain("EMAILS_WORKER_HEALTH_PORT");
+    expect(ecsCompute).toContain("var.worker_health_port");
+    expect(ecsCompute).toContain('command                = ["src/server/index.ts", "ingest-worker"]');
+    expect(ecsCompute).toMatch(/healthCheck = \{[\s\S]*EMAILS_WORKER_HEALTH_PORT[\s\S]*\}/);
+  });
+
   test("never lets a container command hijack the Bun image entrypoint into a subcommand", () => {
     // With ENTRYPOINT ["/usr/local/bin/bun"], every container command override is
     // *arguments to bun*. If the effective first argument is a Bun subcommand

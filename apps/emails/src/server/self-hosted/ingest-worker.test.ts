@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  INGEST_RECEIVE_DEADLINE_MS,
   attachmentRepairResultSucceeded,
   deriveKeyPathRecipients,
   finalizeInboundProvenanceAudit,
@@ -12,7 +13,10 @@ import {
   redactedInboundProvenanceAuditReport,
   redactedInboundProvenanceFenceReport,
   redactedAttachmentRepairReport,
+  parseIngestHealthPort,
+  parseIngestProgressStaleMs,
   shouldDeleteIngestResult,
+  startIngestProgressHealthServer,
   validateAttachmentRepairCanaryOptions,
   validateInboundProvenanceAuditOptions,
   validateIngestWorkerConfig,
@@ -694,5 +698,97 @@ describe("post-fence inbound provenance audit boundary", () => {
     });
     expect(() => finalizeInboundProvenanceAudit(gap, () => {})).toThrow(/provenance audit found 2 gap/i);
     expect(JSON.stringify(redactedInboundProvenanceAuditReport(gap))).not.toMatch(/tenant-[a-z]|object[_-]?key|message[_-]?id|recipient|subject|content/i);
+  });
+});
+
+// ── Progress-based liveness (incident 2026-08-31) ─────────────────────────────
+
+describe("ingest worker progress liveness", () => {
+  describe("INGEST_RECEIVE_DEADLINE_MS", () => {
+    it("bounds the SQS long poll so a dead connection errors instead of hanging", () => {
+      expect(INGEST_RECEIVE_DEADLINE_MS).toBeGreaterThanOrEqual(30_000);
+      expect(INGEST_RECEIVE_DEADLINE_MS).toBeLessThan(60_000);
+    });
+  });
+
+  describe("parseIngestHealthPort", () => {
+    it("defaults to the documented endpoint port when unset/blank", () => {
+      expect(parseIngestHealthPort(undefined)).toBe(9487);
+      expect(parseIngestHealthPort("")).toBe(9487);
+      expect(parseIngestHealthPort("   ")).toBe(9487);
+    });
+
+    it("accepts an explicit port and 0 disables the endpoint", () => {
+      expect(parseIngestHealthPort("9001")).toBe(9001);
+      expect(parseIngestHealthPort("0")).toBe(0);
+    });
+
+    it("fails closed to disabled for non-numeric or out-of-range values", () => {
+      expect(parseIngestHealthPort("abc")).toBe(0);
+      expect(parseIngestHealthPort("99999")).toBe(0);
+      expect(parseIngestHealthPort("-1")).toBe(0);
+      expect(parseIngestHealthPort("1.5")).toBe(0);
+    });
+  });
+
+  describe("parseIngestProgressStaleMs", () => {
+    it("defaults to five minutes when unset/blank", () => {
+      expect(parseIngestProgressStaleMs(undefined)).toBe(300_000);
+      expect(parseIngestProgressStaleMs("")).toBe(300_000);
+    });
+
+    it("parses an explicit window and rejects nonsense values back to the default", () => {
+      expect(parseIngestProgressStaleMs("60000")).toBe(60_000);
+      expect(parseIngestProgressStaleMs("abc")).toBe(300_000);
+      expect(parseIngestProgressStaleMs("0")).toBe(300_000);
+    });
+  });
+
+  describe("startIngestProgressHealthServer", () => {
+    it("reports 200 while a receive/ack cycle completed within the stale window", async () => {
+      let lastProgressAt = Date.now();
+      const health = startIngestProgressHealthServer({
+        port: 0,
+        staleMs: 60_000,
+        lastProgressAt: () => lastProgressAt,
+      });
+      try {
+        const res = await fetch(`${health.url}/ready`);
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe("ok");
+      } finally {
+        health.stop();
+      }
+    });
+
+    it("reports 503 once the loop stopped completing cycles past the stale window", async () => {
+      let lastProgressAt = Date.now() - 120_000;
+      const health = startIngestProgressHealthServer({
+        port: 0,
+        staleMs: 60_000,
+        lastProgressAt: () => lastProgressAt,
+      });
+      try {
+        const res = await fetch(`${health.url}/ready`);
+        expect(res.status).toBe(503);
+        expect(await res.text()).toBe("stale");
+      } finally {
+        health.stop();
+      }
+    });
+
+    it("answers only the /ready probe and serves nothing else", async () => {
+      const health = startIngestProgressHealthServer({
+        port: 0,
+        staleMs: 60_000,
+        lastProgressAt: () => Date.now(),
+      });
+      try {
+        const res = await fetch(`${health.url}/`);
+        expect(res.status).toBe(404);
+      } finally {
+        health.stop();
+      }
+    });
   });
 });

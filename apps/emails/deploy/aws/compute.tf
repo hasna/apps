@@ -95,6 +95,7 @@ locals {
     [
       { name = "EMAILS_INGEST_QUEUE_URL", value = aws_sqs_queue.inbound.id },
       { name = "EMAILS_INGEST_S3_BUCKET", value = aws_s3_bucket.inbound.id },
+      { name = "EMAILS_WORKER_HEALTH_PORT", value = tostring(var.worker_health_port) },
     ],
     var.enable_ses_inbound && length(local.inbound_prefix_domain_map) > 0 ? [{
       name  = "EMAILS_INGEST_PREFIX_DOMAIN_MAP"
@@ -248,6 +249,18 @@ resource "aws_ecs_task_definition" "worker" {
       containerPath = "/tmp"
       readOnly      = false
     }]
+    healthCheck = {
+      # Progress-based liveness (incident 2026-08-31): the worker exposes a
+      # loop-aliveness endpoint at /ready that 503s once no receive/ack cycle
+      # completed for EMAILS_WORKER_PROGRESS_STALE_MS. A TCP/HTTP port check
+      # alone cannot detect this — the task stayed "healthy" for four days
+      # while the queue drained nothing.
+      command     = ["CMD", "/usr/local/bin/bun", "-e", "const p=Number(process.env.EMAILS_WORKER_HEALTH_PORT||0);if(!p)process.exit(0);const r=await fetch('http://127.0.0.1:'+p+'/ready');process.exit(r.ok?0:1)"]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 60
+    }
     logConfiguration = {
       logDriver = "awslogs"
       options = {
