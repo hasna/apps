@@ -249,7 +249,7 @@ async function listVersions(ctx: BundleRequestContext, loopId: string): Promise<
   const artifacts = artifactsFor(ctx);
   const versions = [];
   for (const revision of page.revisions) {
-    const present = revision.storageKey ? Boolean(await artifacts.readArchive(revision.storageKey)) : true;
+    const present = revision.storageKey ? await artifacts.objectExists(revision.storageKey) : true;
     versions.push(publicRevision(revision, revisionState(revision, present)));
   }
   const head = page.revisions[0] ?? (await storage.latestLoopRevision(loopId));
@@ -282,7 +282,7 @@ async function getVersion(ctx: BundleRequestContext, loopId: string, raw: string
   await requireLoop(storage, loopId);
   const revision = await resolveRevision(storage, loopId, raw);
   const artifacts = artifactsFor(ctx);
-  const present = revision.storageKey ? Boolean(await artifacts.readArchive(revision.storageKey)) : true;
+  const present = revision.storageKey ? await artifacts.objectExists(revision.storageKey) : true;
   return ok({
     loopId,
     revision: publicRevision(revision, revisionState(revision, present)),
@@ -509,7 +509,10 @@ async function rollback(ctx: BundleRequestContext, loopId: string): Promise<Resp
   const target = await storage.getLoopRevision(loopId, version);
   if (!target) throw new LoopVersionNotFoundError(loopId, version);
   if (target.storageKey) {
-    const present = await artifactsFor(ctx).readArchive(target.storageKey);
+    // Presence, not content: a HEAD is enough to refuse a rollback to an
+    // incomplete revision, and the archive itself can be a MAX_ARCHIVE_BYTES
+    // object.
+    const present = await artifactsFor(ctx).objectExists(target.storageKey);
     if (!present) throw bundleError("BUNDLE_OBJECT_MISSING", `revision ${version} is incomplete and cannot be rolled back to`);
   }
   const runningRuns = (await storage.listRuns({ loopId, status: "running", limit: 50 })).length;

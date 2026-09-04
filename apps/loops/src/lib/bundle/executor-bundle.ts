@@ -30,7 +30,9 @@ export type BundleExecutionRefusal =
   /** The tree no longer matches its manifest. */
   | { error: "BUNDLE_DRIFT"; message: string; changedPaths: string[] }
   /** The command resolved outside the bundle root. */
-  | { error: "EXECUTOR_BUNDLE_ESCAPE"; message: string };
+  | { error: "EXECUTOR_BUNDLE_ESCAPE"; message: string }
+  /** The tree could not be read or verified at all. */
+  | { error: "BUNDLE_UNVERIFIABLE"; message: string };
 
 export interface BundleExecutionPlan {
   bundleName: string;
@@ -103,7 +105,29 @@ export function resolveBundleExecution(
     };
   }
 
-  const local = inspectLocalBundle(bundleName, opts.env ?? process.env);
+  // `inspectLocalBundle` does not only diff hashes: it parses and validates
+  // manifest.json and runs `collectBundle`, which enforces the file/size caps
+  // and the write-path secret scan. Any of those THROWS, and on the execution
+  // path a throw is the wrong shape - the run is refused either way (the
+  // scheduler turns it into a failed run), but the operator gets a raw
+  // BUNDLE_CONTAINS_SECRET or a JSON parse error instead of the coded refusal
+  // the README documents, with nothing telling them what to do about it. The
+  // remedy is the same as for drift, so say so.
+  let local: ReturnType<typeof inspectLocalBundle>;
+  try {
+    local = inspectLocalBundle(bundleName, opts.env ?? process.env);
+  } catch (error) {
+    return {
+      ok: false,
+      refusal: {
+        error: "BUNDLE_UNVERIFIABLE",
+        message:
+          `bundle '${bundleName}' could not be verified; refusing to run. ` +
+          `${error instanceof Error ? error.message : String(error)}. ` +
+          `Re-pull with 'loops bundle pull ${bundleName}', or push the corrected tree.`,
+      },
+    };
+  }
   if (local.changedPaths.length > 0 && !opts.allowDirty) {
     return {
       ok: false,

@@ -82,10 +82,18 @@ export class BundleArtifactStorage {
   /**
    * What a revision written through this storage should record as its kind.
    *
-   * Derived from the placement that was actually chosen, never hard-coded: an
-   * install with no bucket writes its objects to a local directory, and a row
-   * claiming `s3` for bytes sitting on one station's disk is a lie told to
+   * Derived from the placement that was actually chosen, never hard-coded: a
+   * row claiming `s3` for bytes sitting on one station's disk is a lie told to
    * exactly the operator the fallback exists to serve.
+   *
+   * Read the result as "`s3`, or not `s3`". `db` is what the no-bucket
+   * fallback records, and those bytes are FILES under the Loops data home, not
+   * rows in Postgres - `loop_revisions.storage_kind` has a
+   * `CHECK (storage_kind IN ('db','s3'))` on both the Postgres and the SQLite
+   * schema, so there is no third value to record until a migration widens both.
+   * Nothing keys behaviour off the kind: completeness keys on the recorded
+   * `storage_key`, which the local fallback populates with the same scheme the
+   * bucket uses.
    */
   get storageKind(): BundlePlacement["storageKind"] {
     return this.usesS3 ? "s3" : "db";
@@ -185,6 +193,18 @@ export class BundleArtifactStorage {
   /** Read an archive back. `undefined` means the row exists but its object does not. */
   async readArchive(storageKey: string): Promise<OwnedBytes | undefined> {
     return this.store.get(storageKey);
+  }
+
+  /**
+   * Is the object behind a recorded storage key actually there?
+   *
+   * A HEAD, not a GET. The version list answers complete/incomplete for every
+   * revision on the page, and doing that with `readArchive` pulled each
+   * archive - up to MAX_ARCHIVE_BYTES apiece - out of the object store only to
+   * throw the bytes away.
+   */
+  async objectExists(storageKey: string): Promise<boolean> {
+    return this.store.exists(storageKey);
   }
 }
 

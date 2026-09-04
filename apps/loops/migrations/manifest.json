@@ -79,12 +79,17 @@
     {
       "id": "0015_run_receipts_loop_cascade",
       "file": "0015_run_receipts_loop_cascade.sql",
-      "checksum": "sha256:ff6fd3f324b819a31e29cb8772895726cb8bfb5cebaff4bc0fda4cf7d239bb51"
+      "checksum": "sha256:ac4ebc03cdf15383a7fd2f6ad12253cee4ddf68011b9d65c22e15d85693d3492"
     },
     {
       "id": "0016_loop_revisions",
       "file": "0016_loop_revisions.sql",
       "checksum": "sha256:c5ef0f1fbc0f61de7736a4af1a558c993f9d916bc0ee7623ba0d5709196d754e"
+    },
+    {
+      "id": "0017_run_receipts_loop_cascade_repair",
+      "file": "0017_run_receipts_loop_cascade_repair.sql",
+      "checksum": "sha256:99be369ecee8da908f97761934887af3d4128ea19041fd6929b6ec5927527a29"
     }
   ]
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createSqliteLoopStorage } from "../lib/storage/sqlite.js";
@@ -259,6 +259,46 @@ describe("bundle reads and prompt scoping", () => {
     expect(body.pinnedVersion).toBeNull();
     expect(body.versions[0]).toMatchObject({ version: 1, state: "complete" });
     expect(body.versions[0]?.fileCount).toBeGreaterThan(0);
+  });
+
+  test("with NO bucket a revision records the local kind and still detects a missing object", async () => {
+    // Every other case in this file builds storage with `bucket: "test-bucket"`,
+    // so `usesS3` is always true and both the recorded storageKind and the
+    // completeness check only ever exercise the s3 branch. This is the
+    // no-bucket install: objects are files under a local root, and the
+    // complete/incomplete answer has to come from the recorded storage key
+    // exactly as it does for a bucket.
+    const root = tempDir("loops-artifacts-nobucket-");
+    const artifacts = new BundleArtifactStorage({ localRoot: root, env: {} });
+    expect(artifacts.usesS3).toBe(false);
+    const { storage, loopId } = await newStorage();
+    const { url } = await createServer(storage, artifacts);
+    const fixture = packed(loopId);
+
+    const published = await fetch(url(`/v1/loops/${loopId}/versions`), {
+      method: "POST",
+      body: uploadForm(serializeBundleManifest(fixture.manifest), fixture.bundle.archive),
+    });
+    expect(published.status).toBe(201);
+
+    // Recorded as the local kind, not as an S3 object.
+    const revisions = await storage.listLoopRevisions(loopId);
+    expect(revisions.revisions[0]).toMatchObject({ version: 1, storageKind: "db" });
+
+    const list = async (): Promise<string> => {
+      const body = (await (await fetch(url(`/v1/loops/${loopId}/versions`))).json()) as {
+        versions: Array<{ version: number; state: string }>;
+      };
+      return body.versions[0]!.state;
+    };
+    expect(await list()).toBe("complete");
+
+    // Delete the local object the revision points at: the row survives, the
+    // bytes do not, and that is exactly what "incomplete" means.
+    const key = artifacts.placement("tenant-test", "demo", 1).storageKey;
+    unlinkSync(join(root, key));
+    expect(await artifacts.objectExists(key)).toBe(false);
+    expect(await list()).toBe("incomplete");
   });
 
   test("a key WITHOUT loops:bundle never receives an agent prompt", async () => {
