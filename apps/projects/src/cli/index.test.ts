@@ -252,9 +252,9 @@ function cloudDoctorFixture() {
     HASNA_PROJECTS_HOME: join(root, "home"),
     HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
     // Deliberate loopback credential via the shared contracts seam's override
-    // tier: a plain HASNA_PROJECTS_API_KEY in the spawned env is read as the
-    // legacy tier, which warns on stderr (DEPRECATED) whenever the disk tier
-    // holds no key — CI has none — breaking every stderr-clean assertion.
+    // tier. (A plain HASNA_PROJECTS_API_KEY in the spawned env is now silent —
+    // the contracts client no longer prints the legacy-env DEPRECATED notice —
+    // but the override keeps the fixture unambiguous.)
     HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
   };
   const runDoctor = async (extraArgs: string[]) => {

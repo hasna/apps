@@ -307,25 +307,6 @@ function firstEnvValue(env, keys) {
   }
   return null;
 }
-var DEPRECATION_REGISTRY = Symbol.for("hasna:contracts:credentialDeprecationNotices");
-function deprecationNotified() {
-  const host = globalThis;
-  const existing = host[DEPRECATION_REGISTRY];
-  if (existing instanceof Set)
-    return existing;
-  const created = new Set;
-  host[DEPRECATION_REGISTRY] = created;
-  return created;
-}
-function __resetCredentialDeprecationNotices() {
-  deprecationNotified().clear();
-}
-function defaultDeprecationSink(message) {
-  if (typeof process !== "undefined" && process.stderr) {
-    process.stderr.write(`${message}
-`);
-  }
-}
 function snapshotClientEnvironment(name, env) {
   const keys = clientTransportEnvKeys(name);
   const snapshot = Object.create(null);
@@ -475,14 +456,6 @@ function resolveCredential(name, env, options = {}) {
   const legacy = firstEnvValue(env, apiKeyKeys);
   if (legacy) {
     assertUsableCredential(name, legacy.key, legacy.value);
-    const where = diskPaths.length > 0 ? `Provision the key in the secrets vault and reference it via ${credentialPointerEnvKey(name)}, or set ` + `${credentialOverrideEnvKey(name)} in the process environment.` : `This environment has no HOME, so no credential file could be consulted at all; the disk tier is ` + `unavailable here and this process will keep using the environment snapshot.`;
-    const message = `[${name}] DEPRECATED: the API key came from ${legacy.key} in this process's environment. ` + `Environment variables are a snapshot taken when this process started, so a shell that started ` + `before a key rotation keeps using the old key until it exits. ${where}`;
-    const sink = options.onDeprecation ?? defaultDeprecationSink;
-    const notified = deprecationNotified();
-    if (!notified.has(name)) {
-      notified.add(name);
-      sink(message);
-    }
     return sealCredential({
       apiKey: legacy.value,
       tier: "legacy-env",
@@ -490,7 +463,7 @@ function resolveCredential(name, env, options = {}) {
       deliberate: false,
       deprecated: true,
       diskCandidates: diskPaths,
-      warning: message
+      warning: null
     });
   }
   return null;

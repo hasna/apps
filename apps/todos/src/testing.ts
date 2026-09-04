@@ -126,13 +126,12 @@ function machineHomeCandidates(): string[] {
 
 /**
  * Deliver an explicitly supplied API key through the primary DISK tier
- * (`$HOME/.hasna/fleet-env/todos.env`) instead of the legacy cloud tier, and
- * return the env unchanged. The contracts client treats `~/.hasna/cloud` as a
- * NOISY deprecated fallback and prints a DEPRECATED notice to stderr whenever
- * the key arrives from there; a CLI subprocess test that asserts empty (or
- * exact) stderr then fails even though authentication succeeded. fleet-env is
- * the primary tier (re-read per call) and is the path the deprecation notice
- * itself recommends.
+ * (`$HOME/.hasna/fleet-env/todos.env`) instead of relying on the environment,
+ * and return the env unchanged. A hosted-transport CLI subprocess fixture must
+ * resolve its key from a hermetic HOME; the contracts client no longer prints a
+ * DEPRECATED notice for env-injected keys (the station wrappers deliver
+ * Keychain credentials that way, hasna/apps#1513), but the file route keeps
+ * the fixture's key off the process env entirely.
  *
  * ## This function writes a real file, so it guards itself
  *

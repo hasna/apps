@@ -10,7 +10,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CredentialResolutionError,
-  __resetCredentialDeprecationNotices,
   credentialDiskSources,
   resolveCredential,
   type ResolvedCredential,
@@ -43,7 +42,6 @@ function writeConfigEnv(home: string, app: string, body: string): string {
 }
 
 afterEach(() => {
-  __resetCredentialDeprecationNotices();
   while (homes.length > 0) rmSync(homes.pop()!, { recursive: true, force: true });
 });
 

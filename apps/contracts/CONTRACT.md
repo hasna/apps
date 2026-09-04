@@ -93,7 +93,7 @@ The credential is resolved by the transport, at call time, through
 | 2 | override | `HASNA_<NAME>_API_KEY_OVERRIDE`, or the `HASNA_PROFILE` pointer | Deliberate. Nothing sets these automatically. |
 | 2.5 | pointer | `HASNA_<NAME>_API_KEY_REF` (a secrets-vault ITEM KEY) | Deliberate. Resolved through the `@hasna/secrets` SDK at request time; a vault that cannot be reached is TERMINAL, never a fall-through. |
 | 3 | **disk** | `$XDG_CONFIG_HOME/hasna/<name>.env` (default `$HOME/.config/hasna/<name>.env`) | Owner-only XDG configuration, re-read on every call. Retired `$HOME/.hasna/**` and `*-cloud.env` locations are never automatic inputs. |
-| 4 | legacy env | `HASNA_<NAME>_API_KEY` / `<NAME>_API_KEY` | Deprecated fallback, used only when the disk yields nothing. Warns once per app. |
+| 4 | env | `HASNA_<NAME>_API_KEY` / `<NAME>_API_KEY` | Fallback, used only when the disk yields nothing. Deliberately silent: env-injected credentials (e.g. a station wrapper delivering a Keychain value to a one-shot child process) are the sanctioned per-call pattern, so no deprecation notice is printed. |
 
 Rules:
 
@@ -114,6 +114,11 @@ Rules:
   may be inspected only by explicit migration tooling. The transport and
   credential resolvers consult the owner-only XDG config file and no retired
   path.
+- **An env-sourced key is silent, not deprecated-noise.** Tier 4 keys are the
+  delivery channel of the station credential wrappers (Keychain → one-shot
+  child-process env), so the resolver prints no DEPRECATED notice and carries
+  no warning for them; nothing in this contract tells an operator to write
+  credential files under `$HOME/.hasna/**`.
 - **Tier 3 is re-read per request**, not cached and not resolved once when the
   client is built — a cache is the same snapshot defect at a smaller timescale.
   This is what makes a rotation heal in any shell, however old.

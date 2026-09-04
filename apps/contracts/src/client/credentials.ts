@@ -107,11 +107,6 @@ export interface CredentialChainOptions {
   apiKey?: string;
   /** Tier 1: an explicit profile name, e.g. from `--profile`. Beats `HASNA_PROFILE`. */
   profile?: string;
-  /**
-   * Sink for the one-line legacy-env deprecation. Defaults to a once-per-app
-   * stderr writer. Injected by tests so they never touch the real stderr.
-   */
-  onDeprecation?: (message: string) => void;
 }
 
 /**
@@ -665,40 +660,6 @@ function firstEnvValue(env: Env, keys: readonly string[]): { key: string; value:
   return null;
 }
 
-// One deprecation line per app per PROCESS. A warning printed on every call is
-// noise that operators filter out, and a filtered warning is not a warning.
-//
-// Anchored on `globalThis` rather than in module scope because the published
-// package inlines this module into several entry bundles
-// (`dist/client/transport.js`, `dist/client/storage.js`, `dist/index.js`), each
-// of which would otherwise carry its OWN Set — so a consumer touching two entry
-// points got two warnings, and the reset seam cleared only one of them. Invisible
-// to tests, which run against a single instance of `src/`.
-// Colon-separated, NOT dotted. `tests/state-layout.test.ts` forbids any source
-// file from containing the dotted legacy package-global home-directory names,
-// and a dotted registry key would have spelled one of them by accident.
-const DEPRECATION_REGISTRY = Symbol.for("hasna:contracts:credentialDeprecationNotices");
-
-function deprecationNotified(): Set<string> {
-  const host = globalThis as Record<symbol, unknown>;
-  const existing = host[DEPRECATION_REGISTRY];
-  if (existing instanceof Set) return existing as Set<string>;
-  const created = new Set<string>();
-  host[DEPRECATION_REGISTRY] = created;
-  return created;
-}
-
-/** Test seam: forget which apps have already emitted their deprecation. */
-export function __resetCredentialDeprecationNotices(): void {
-  deprecationNotified().clear();
-}
-
-function defaultDeprecationSink(message: string): void {
-  if (typeof process !== "undefined" && process.stderr) {
-    process.stderr.write(`${message}\n`);
-  }
-}
-
 /** @internal Snapshot only this client's configuration, without executing getters. */
 export function snapshotClientEnvironment(name: string, env: Env): Env {
   const keys = clientTransportEnvKeys(name);
@@ -952,29 +913,19 @@ export function resolveCredential(
     });
   }
 
-  // ---- Tier 4: the legacy process env, demoted to a deprecated fallback. --
+  // ---- Tier 4: the legacy process env, demoted to a fallback. ------------
+  // Last in the chain: reached only when the disk yields nothing. Unlike the
+  // disk tiers, an env key is a snapshot taken when THIS process started.
+  //
+  // No DEPRECATED notice is printed here (hasna/apps#1513): the fleet station
+  // wrappers deliberately deliver the credential through the environment —
+  // reading the Keychain and injecting `HASNA_<NAME>_API_KEY` into a one-shot
+  // child process on every invocation — so an env-sourced key is the sanctioned
+  // pattern on those stations, and the old notice's advice to write the key to
+  // a disk file contradicted that policy while firing on every call.
   const legacy = firstEnvValue(env, apiKeyKeys);
   if (legacy) {
     assertUsableCredential(name, legacy.key, legacy.value);
-    // Reaching here PROVES the disk had nothing: tier 3 ran first and found no
-    // credential. Any advice given from here must say so, rather than implying
-    // a disk credential is waiting to be picked up.
-    const where =
-      diskPaths.length > 0
-        ? `Provision the key in the secrets vault and reference it via ${credentialPointerEnvKey(name)}, or set ` +
-          `${credentialOverrideEnvKey(name)} in the process environment.`
-        : `This environment has no HOME, so no credential file could be consulted at all; the disk tier is ` +
-          `unavailable here and this process will keep using the environment snapshot.`;
-    const message =
-      `[${name}] DEPRECATED: the API key came from ${legacy.key} in this process's environment. ` +
-      `Environment variables are a snapshot taken when this process started, so a shell that started ` +
-      `before a key rotation keeps using the old key until it exits. ${where}`;
-    const sink = options.onDeprecation ?? defaultDeprecationSink;
-    const notified = deprecationNotified();
-    if (!notified.has(name)) {
-      notified.add(name);
-      sink(message);
-    }
     return sealCredential({
       apiKey: legacy.value,
       tier: "legacy-env",
@@ -982,7 +933,7 @@ export function resolveCredential(
       deliberate: false,
       deprecated: true,
       diskCandidates: diskPaths,
-      warning: message,
+      warning: null,
     });
   }
 

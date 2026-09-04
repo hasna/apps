@@ -124,10 +124,14 @@ describe("canonical credential resolution", () => {
     );
   });
 
-  test("legacy process env remains a deprecated credential input, never a transport selector", () => {
-    const resolved = resolveCredential("todos", { HASNA_TODOS_API_KEY: "legacy-env-key" }, { onDeprecation: () => {} })!;
+  test("legacy process env stays a deprecated credential input, silently (no deprecation notice)", () => {
+    // Env-injected keys are the sanctioned per-call channel on fleet stations
+    // (Keychain wrappers, hasna/apps#1513), so the old DEPRECATED notice is
+    // gone: the resolution carries no advisory at all.
+    const resolved = resolveCredential("todos", { HASNA_TODOS_API_KEY: "legacy-env-key" })!;
     expect(resolved.tier).toBe("legacy-env");
     expect(resolved.deprecated).toBe(true);
+    expect(resolved.warning).toBeNull();
   });
 
   test("non-secret config reads are XDG-only and never expose credential-shaped keys", () => {

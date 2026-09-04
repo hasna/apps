@@ -44,11 +44,6 @@ export interface CredentialChainOptions {
     apiKey?: string;
     /** Tier 1: an explicit profile name, e.g. from `--profile`. Beats `HASNA_PROFILE`. */
     profile?: string;
-    /**
-     * Sink for the one-line legacy-env deprecation. Defaults to a once-per-app
-     * stderr writer. Injected by tests so they never touch the real stderr.
-     */
-    onDeprecation?: (message: string) => void;
 }
 /**
  * A deliberate credential selection could not be honoured, or a credential
@@ -148,8 +143,6 @@ export declare function explicitCredential(appName: string, apiKey: string): Res
  * not untrusted metadata that could be printed by an auth failure.
  */
 export declare function validateAndSealResolvedCredential(appName: string, credential: ResolvedCredential): ResolvedCredential;
-/** Test seam: forget which apps have already emitted their deprecation. */
-export declare function __resetCredentialDeprecationNotices(): void;
 /**
  * Resolve an app's API key through the provider chain, at call time.
  *

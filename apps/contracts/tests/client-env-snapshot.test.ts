@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createClientTransport, resolveClientTransport, resolveCredential } from "../src/client/transport";
 
-const quiet = { onDeprecation() {} };
+const quiet = {};
 const configured = () => ({ HASNA_SNAPSHOT_API_URL: "https://snapshot.example.test", HASNA_SNAPSHOT_API_KEY: "fixture-key-a" });
 
 for (const key of ["HASNA_SNAPSHOT_API_URL", "SNAPSHOT_API_URL", "HASNA_SNAPSHOT_API_KEY", "SNAPSHOT_API_KEY", "HASNA_SNAPSHOT_API_KEY_OVERRIDE", "HASNA_SNAPSHOT_API_KEY_REF", "HASNA_PROFILE", "HOME", "XDG_CONFIG_HOME"]) {
