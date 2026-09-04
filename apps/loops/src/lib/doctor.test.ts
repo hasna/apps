@@ -46,14 +46,20 @@ describe("doctor", () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  test("reports healthy environment checks for an empty store", () => {
+  test("doctor reports machines topology as unavailable after @hasna/machines deletion", () => {
     const store = new Store(":memory:");
     try {
       const report = runDoctor(store);
       expect(check(report, "data-dir")?.status).toBe("ok");
       expect(check(report, "data-dir")?.detail).toBe(dataDir);
       expect(check(report, "bun")?.status).toBe("ok");
-      expect(check(report, "machines")?.status).toBe("ok");
+      // @hasna/machines was deleted (2026-09-03): the check degrades to a warn
+      // carrying the deletion message instead of asserting a topology.
+      expect(check(report, "machines")?.status).toBe("warn");
+      expect(check(report, "machines")?.message).toBe(
+        "OpenMachines topology is not available; machine-assigned loops will fail",
+      );
+      expect(check(report, "machines")?.detail).toContain("deleted");
       expect(check(report, "daemon")?.status).toBe("ok");
       expect(check(report, "daemon")?.message).toBe("daemon is not running");
       expect(check(report, "loop-runs")?.status).toBe("ok");

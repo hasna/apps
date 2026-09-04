@@ -1966,18 +1966,17 @@ describe("loops CLI", () => {
     });
   });
 
-  test("create command stores an OpenMachines assignment", () => {
+  test("create command with --machine fails loud after @hasna/machines deletion", () => {
     const dataDir = freshDataDir("loops-cli-machine-");
     const create = runCli(dataDir, ["--json", "create", "command", "machine-local", "--at", futureAt(), "--cmd", "true", "--machine", "local"]);
-    expect(create.status).toBe(0);
-    const value = JSON.parse(create.stdout);
-    expect(value.machine.id).toBeTruthy();
-    expect(value.machine.local).toBe(true);
+    expect(create.status).not.toBe(0);
+    expect(`${create.stderr}`).toContain(
+      "@hasna/machines has been deleted (2026-09-03); machine-assigned loops are no longer supported",
+    );
 
     const show = runCli(dataDir, ["--json", "show", "machine-local"]);
-    expect(show.status).toBe(0);
-    const shown = JSON.parse(show.stdout);
-    expect(shown.machine.id).toBe(value.machine.id);
+    // Fail loud: no loop is silently stored with an unclaimable machine pin.
+    expect(show.status).not.toBe(0);
   });
 
   test("create agent requires and persists auditable advisory restriction metadata", () => {
