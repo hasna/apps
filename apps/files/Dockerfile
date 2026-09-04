@@ -20,7 +20,7 @@ COPY package.json bun.lock tsconfig.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY src ./src
 COPY scripts ./scripts
-# Service-only build (no dashboard/CLI/MCP): produces dist/server/{index,migrate}.js
+# Service-only build (no CLI/MCP): produces dist/server/{index,migrate}.js
 RUN bun run build:service
 
 FROM --platform=linux/arm64 oven/bun:1 AS runner

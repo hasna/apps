@@ -31,10 +31,6 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install dashboard dependencies
-        run: bun install --frozen-lockfile
-        working-directory: dashboard
-
       - name: Test
         run: bun test
 
