@@ -39,6 +39,7 @@ import { Command } from 'commander';
 import { registerEventsCommands } from '@hasna/events/commander';
 import { basename, dirname, join } from 'node:path';
 import pkg from '../package.json' with { type: 'json' };
+import { resolveCredential as resolveClientCredential } from '@hasna/contracts/client';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 const LOG_LEVELS: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -1477,7 +1478,7 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     if (action === 'login') {
-      const apiKey = flags.apiKey ?? process.env.HASNA_KNOWLEDGE_API_KEY;
+      const apiKey = flags.apiKey ?? resolveClientCredential('knowledge', process.env)?.apiKey;
       if (!apiKey) throw new Error('Usage: knowledge auth login --api-key <key> [--email <email>]');
       const auth = service.saveAuth({
         apiKey,
