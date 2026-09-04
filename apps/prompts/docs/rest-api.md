@@ -18,13 +18,12 @@ requests without the bearer get `401` (or `403` with a wrong token), and when
 no token is configured every `/api` request is refused with `503`.
 
 Browser CORS is restricted, never wildcard: an `OPTIONS` preflight from a
-loopback origin (`http://localhost:*`, `http://127.0.0.1:*` — the bundled
-React dashboard's Vite dev server) or from an exact origin listed in
-`PROMPTS_API_CORS_ORIGIN` (comma-separated) receives CORS headers
-(`Access-Control-Allow-Origin` echoing the origin, `Authorization` allowed)
-without a bearer — preflights carry no data, and browsers cannot attach
-`Authorization` to them. Every actual data request still requires the bearer
-token, and preflights from any other origin get the same `401`/`403`/`503`
+loopback origin (`http://localhost:*`, `http://127.0.0.1:*`) or from an exact
+origin listed in `PROMPTS_API_CORS_ORIGIN` (comma-separated) receives CORS
+headers (`Access-Control-Allow-Origin` echoing the origin, `Authorization`
+allowed) without a bearer — preflights carry no data, and browsers cannot
+attach `Authorization` to them. Every actual data request still requires the
+bearer token, and preflights from any other origin get the same `401`/`403`/`503`
 treatment as unauthenticated data requests.
 
 ## Prompt Routes

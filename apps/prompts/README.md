@@ -1,7 +1,6 @@
 # @hasna/prompts
 
-Local-first prompt library for AI agents, with a Bun CLI, MCP server, REST API,
-and React dashboard.
+Local-first prompt library for AI agents, with a Bun CLI, MCP server, and REST API.
 
 [![npm](https://img.shields.io/npm/v/@hasna/prompts)](https://www.npmjs.com/package/@hasna/prompts)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -144,29 +143,18 @@ PORT=9000 prompts-serve
 `PORT` takes precedence over `PROMPTS_PORT`; `--port` takes precedence over
 both. Every `/api` data request requires `Authorization: Bearer
 <PROMPTS_API_TOKEN>` and fails closed when no token is configured. CORS is
-restricted, never wildcard: `OPTIONS` preflights from a loopback origin (the
-dashboard's Vite dev server) or from an exact origin in
-`PROMPTS_API_CORS_ORIGIN` receive CORS headers without a bearer, while every
-actual data request still requires the token; preflights and data requests
-from any other origin are denied. It exposes JSON routes below `/api`, returns
-`GET /health`, and mounts Streamable HTTP MCP at `/mcp`.
+restricted, never wildcard: `OPTIONS` preflights from a loopback origin or
+from an exact origin in `PROMPTS_API_CORS_ORIGIN` receive CORS headers without
+a bearer, while every actual data request still requires the token; preflights
+and data requests from any other origin are denied. It exposes JSON routes
+below `/api`, returns `GET /health`, and mounts Streamable HTTP MCP at `/mcp`.
 
 List and search endpoints return slim prompt records by default. Add the
 `full` query parameter when a supported endpoint should include prompt bodies.
 
 See the [REST API reference](docs/rest-api.md) for routes and request shapes.
 
-## Dashboard
 
-The React dashboard in `dashboard/` connects to the REST API at
-`http://localhost:19430` by default. For development, start `prompts-serve`
-with `PROMPTS_API_TOKEN` set, then set the same token as `VITE_API_TOKEN` in
-the dashboard environment and run `bun install` and `bun run dev` from
-`dashboard/`. Set `VITE_API_URL` when the REST server uses another origin.
-
-The dashboard supports browsing, searching, creating, editing, deleting,
-rendering, copying, collections, projects, templates, statistics, themes, and
-bulk selection.
 
 ## Storage
 

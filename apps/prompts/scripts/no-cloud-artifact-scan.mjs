@@ -18,25 +18,6 @@ const forbiddenMarkers = [
 
 const artifact = resolvePackArtifact()
 const paths = new Set((artifact.files ?? []).map((entry) => entry.path))
-const missingRequiredPaths = [
-  "dashboard/dist/index.html",
-  "dashboard/dist/favicon.svg",
-  "dashboard/dist/icons.svg",
-].filter((path) => !paths.has(path))
-const hasDashboardScript = [...paths].some((path) =>
-  /^dashboard\/dist\/assets\/index-.+\.js$/.test(path),
-)
-const hasDashboardStyle = [...paths].some((path) =>
-  /^dashboard\/dist\/assets\/index-.+\.css$/.test(path),
-)
-
-if (missingRequiredPaths.length > 0 || !hasDashboardScript || !hasDashboardStyle) {
-  console.error("Packed artifact is missing built dashboard assets:")
-  for (const path of missingRequiredPaths) console.error(`- ${path}`)
-  if (!hasDashboardScript) console.error("- dashboard/dist/assets/index-*.js")
-  if (!hasDashboardStyle) console.error("- dashboard/dist/assets/index-*.css")
-  process.exit(1)
-}
 
 const hits = []
 for (const entry of artifact.files ?? []) {
