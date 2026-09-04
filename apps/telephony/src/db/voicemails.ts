@@ -12,6 +12,8 @@ export function createVoicemail(
     from_number: string;
     to_number: string;
     recording_url?: string;
+    object_key?: string | null;
+    sha256?: string | null;
     local_path?: string;
     transcription?: string;
     duration?: number;
@@ -24,14 +26,16 @@ export function createVoicemail(
   const id = uuid();
 
   d.run(
-    `INSERT INTO voicemails (id, call_id, from_number, to_number, recording_url, local_path, transcription, duration, agent_id, project_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO voicemails (id, call_id, from_number, to_number, recording_url, object_key, sha256, local_path, transcription, duration, agent_id, project_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.call_id || null,
       input.from_number,
       input.to_number,
       input.recording_url || null,
+      input.object_key || null,
+      input.sha256 || null,
       input.local_path || null,
       input.transcription || null,
       input.duration || null,

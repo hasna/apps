@@ -84,6 +84,8 @@ export interface CreateMessageInput {
   to_number: string;
   body?: string;
   media_url?: string;
+  object_key?: string | null;
+  sha256?: string | null;
   status?: MessageStatus;
   agent_id?: string;
   project_id?: string;
@@ -104,6 +106,8 @@ export interface CreateVoicemailInput {
   from_number: string;
   to_number: string;
   recording_url?: string;
+  object_key?: string | null;
+  sha256?: string | null;
   local_path?: string;
   transcription?: string;
   duration?: number;
@@ -236,7 +240,7 @@ export interface TelephonyStore {
   updateCallStatus(
     id: string,
     status: CallStatus,
-    extra?: { duration?: number; recording_url?: string; transcription?: string },
+    extra?: { duration?: number; recording_url?: string; transcription?: string; object_key?: string; sha256?: string },
   ): Promise<void>;
   listCalls(filters?: CallFilters): Promise<Call[]>;
 

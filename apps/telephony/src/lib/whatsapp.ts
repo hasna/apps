@@ -1,5 +1,6 @@
 import { getTwilioClient, getDefaultPhoneNumber } from "./twilio.js";
 import { getStore } from "./store/index.js";
+import { MediaStorage, copyProviderMedia as copyProviderMediaAction, mediaStorageFromConfig } from "./media-storage.js";
 import type { Message } from "../types/index.js";
 
 function whatsappNumber(number: string): string {
@@ -88,13 +89,32 @@ export interface InboundWhatsAppPayload {
   MediaContentType0?: string;
 }
 
-export async function handleInboundWhatsApp(payload: InboundWhatsAppPayload, agentId?: string, projectId?: string): Promise<Message> {
+export async function handleInboundWhatsApp(payload: InboundWhatsAppPayload, agentId?: string, projectId?: string, mediaStorage?: MediaStorage): Promise<Message> {
+  // Copy inbound WhatsApp media into the bucket before the row is created (see
+  // media-storage.ts for the soft-fail contract). Keyed under the provider
+  // message sid, which the row records as twilio_sid.
+  let objectKey: string | undefined;
+  let sha256: string | undefined;
+  if (payload.MediaUrl0) {
+    if (payload.MessageSid) {
+      const copy = await copyProviderMediaAction(payload.MessageSid, payload.MediaUrl0, payload.MediaContentType0, mediaStorage ?? mediaStorageFromConfig());
+      if (copy) {
+        objectKey = copy.objectKey;
+        sha256 = copy.sha256;
+      }
+    } else if ((mediaStorage ?? mediaStorageFromConfig()).usesS3) {
+      console.error(`[telephony] media copy: inbound WhatsApp without a MessageSid; skipping media copy`);
+    }
+  }
+
   return getStore().createMessage({
     type: "whatsapp_inbound",
     from_number: payload.From,
     to_number: payload.To,
     body: payload.Body,
     media_url: payload.MediaUrl0 || undefined,
+    object_key: objectKey ?? null,
+    sha256: sha256 ?? null,
     status: "received",
     agent_id: agentId,
     project_id: projectId,

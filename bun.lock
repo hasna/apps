@@ -1069,13 +1069,14 @@
     },
     "apps/telephony": {
       "name": "@hasna/telephony",
-      "version": "0.2.10",
+      "version": "0.2.11",
       "bin": {
         "telephony": "dist/cli/index.js",
         "telephony-mcp": "dist/mcp/index.js",
         "telephony-serve": "dist/server/cloud-entry.js",
       },
       "dependencies": {
+        "@aws-sdk/client-s3": "^3.1072.0",
         "@hasna/contracts": "0.10.6",
         "@hasna/events": "^0.1.6",
         "@modelcontextprotocol/sdk": "^1.12.1",

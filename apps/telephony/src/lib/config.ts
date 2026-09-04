@@ -37,6 +37,8 @@ export function getConfig(): TelephonyConfig {
     cerebras_api_key: env("CEREBRAS_API_KEY", "HASNA_CEREBRAS_LIVE_API_KEY"),
     webhook_base_url: env("TELEPHONY_WEBHOOK_URL"),
     server_port: parseInt(process.env["TELEPHONY_PORT"] || "19451", 10),
+    s3_bucket: env("HASNA_TELEPHONY_S3_BUCKET", "TELEPHONY_S3_BUCKET"),
+    s3_prefix: env("HASNA_TELEPHONY_S3_PREFIX", "TELEPHONY_S3_PREFIX") || "telephony",
   };
 }
 

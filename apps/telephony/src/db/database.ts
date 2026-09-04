@@ -314,6 +314,22 @@ const MIGRATIONS = [
 
   INSERT INTO messages_fts(messages_fts) VALUES('rebuild');
   `,
+
+  // Migration 4: Media copy columns (object_key + sha256)
+  //
+  // Rows keep the provider media_url as fallback, but the object that
+  // survives is the copy in the telephony media bucket
+  // (media/<call_or_message_id>/<sha256>.<ext>). object_key names that
+  // object; sha256 proves its bytes. Both are NULL for rows created before
+  // this migration and for rows whose copy soft-failed at write time.
+  `
+  ALTER TABLE calls ADD COLUMN object_key TEXT;
+  ALTER TABLE calls ADD COLUMN sha256 TEXT;
+  ALTER TABLE voicemails ADD COLUMN object_key TEXT;
+  ALTER TABLE voicemails ADD COLUMN sha256 TEXT;
+  ALTER TABLE messages ADD COLUMN object_key TEXT;
+  ALTER TABLE messages ADD COLUMN sha256 TEXT;
+  `,
 ];
 
 // ---------------------------------------------------------------------------

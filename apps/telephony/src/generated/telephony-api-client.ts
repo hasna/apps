@@ -2,7 +2,7 @@
 // DO NOT EDIT. Regenerate: bun scripts/generate-sdk.mjs
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Telephony 0.2.10
+// Source: Telephony 0.2.11
 
 export interface Contact { "id": string; "name": string; "phone": string; "email"?: string | null; "agent_id"?: string | null; "project_id"?: string | null; "notes"?: string | null; "tags": Array<string>; "metadata": Record<string, unknown>; "created_at": string; "updated_at": string }
 
@@ -40,15 +40,15 @@ export interface PhoneNumber { "id": string; "number": string; "country"?: strin
 
 export interface PhoneNumberList { "items": Array<PhoneNumber>; "total": number }
 
-export interface Message { "id": string; "type": string; "from_number": string; "to_number": string; "body"?: string | null; "media_url"?: string | null; "status": string; "agent_id"?: string | null; "project_id"?: string | null; "twilio_sid"?: string | null; "error_message"?: string | null; "metadata"?: Record<string, unknown>; "created_at": string; "updated_at": string }
+export interface Message { "id": string; "type": string; "from_number": string; "to_number": string; "body"?: string | null; "media_url"?: string | null; "object_key"?: string | null; "sha256"?: string | null; "status": string; "agent_id"?: string | null; "project_id"?: string | null; "twilio_sid"?: string | null; "error_message"?: string | null; "metadata"?: Record<string, unknown>; "created_at": string; "updated_at": string }
 
 export interface MessageList { "items": Array<Message>; "total": number }
 
-export interface Call { "id": string; "direction": string; "from_number": string; "to_number": string; "status": string; "duration"?: number | null; "recording_url"?: string | null; "transcription"?: string | null; "agent_id"?: string | null; "project_id"?: string | null; "twilio_sid"?: string | null; "metadata"?: Record<string, unknown>; "started_at": string; "ended_at"?: string | null; "created_at": string }
+export interface Call { "id": string; "direction": string; "from_number": string; "to_number": string; "status": string; "duration"?: number | null; "recording_url"?: string | null; "object_key"?: string | null; "sha256"?: string | null; "transcription"?: string | null; "agent_id"?: string | null; "project_id"?: string | null; "twilio_sid"?: string | null; "metadata"?: Record<string, unknown>; "started_at": string; "ended_at"?: string | null; "created_at": string }
 
 export interface CallList { "items": Array<Call>; "total": number }
 
-export interface Voicemail { "id": string; "call_id"?: string | null; "from_number": string; "to_number": string; "recording_url"?: string | null; "local_path"?: string | null; "transcription"?: string | null; "duration"?: number | null; "listened": boolean; "agent_id"?: string | null; "project_id"?: string | null; "created_at": string }
+export interface Voicemail { "id": string; "call_id"?: string | null; "from_number": string; "to_number": string; "recording_url"?: string | null; "object_key"?: string | null; "sha256"?: string | null; "local_path"?: string | null; "transcription"?: string | null; "duration"?: number | null; "listened": boolean; "agent_id"?: string | null; "project_id"?: string | null; "created_at": string }
 
 export interface VoicemailList { "items": Array<Voicemail>; "total": number }
 

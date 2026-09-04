@@ -2,6 +2,8 @@ import { handleInboundSms } from "../lib/sms.js";
 import { handleInboundWhatsApp } from "../lib/whatsapp.js";
 import { handleInboundCall } from "../lib/voice.js";
 import { handleVoicemailRecording } from "../lib/voicemail.js";
+import { copyProviderMedia as copyProviderMediaAction, mediaStorageFromConfig, type MediaStorage } from "../lib/media-storage.js";
+import { getCallByTwilioSid, updateCallStatus } from "../db/calls.js";
 import { dispatchWebhook } from "../lib/webhooks.js";
 
 export function parseFormBody(body: string): Record<string, string> {
@@ -80,8 +82,9 @@ export async function handleVoicemailRecordingWebhook(body: string): Promise<str
   return `<?xml version="1.0" encoding="UTF-8"?><Response><Say>Thank you. Goodbye.</Say></Response>`;
 }
 
-export async function handleStatusWebhook(body: string): Promise<string> {
+export async function handleStatusWebhook(body: string, mediaStorage?: MediaStorage): Promise<string> {
   const params = parseFormBody(body);
+  const storage = mediaStorage ?? mediaStorageFromConfig();
 
   // Message status update
   if (params.MessageSid && params.MessageStatus) {
@@ -97,6 +100,35 @@ export async function handleStatusWebhook(body: string): Promise<string> {
   // Call status update
   if (params.CallSid && params.CallStatus) {
     await dispatchWebhook("call.status", { sid: params.CallSid, status: params.CallStatus });
+  }
+
+  // Call recording at completion: only the recording-completed status
+  // callback (RecordingStatus=completed) carries the final, fully-written
+  // media. Twilio fires intermediate recording status callbacks
+  // (recording-started / recording-in-progress / recording-paused) that also
+  // carry RecordingUrl while the recording is still being written; copying
+  // those would persist partial bytes as authoritative on the call row, and
+  // updateCallStatus can never clear an earlier object_key/sha256 — so gate
+  // the copy on RecordingStatus=completed and ignore the intermediate events.
+  // Soft-fail by design — a failed copy leaves the row with object_key null.
+  if (params.CallSid && params.RecordingUrl && params.RecordingStatus === "completed") {
+    const call = getCallByTwilioSid(params.CallSid);
+    if (call) {
+      let objectKey: string | undefined;
+      let sha256: string | undefined;
+      const copy = await copyProviderMediaAction(params.CallSid, params.RecordingUrl, undefined, storage);
+      if (copy) {
+        objectKey = copy.objectKey;
+        sha256 = copy.sha256;
+      }
+      updateCallStatus(call.id, call.status, {
+        recording_url: params.RecordingUrl,
+        ...(objectKey ? { object_key: objectKey } : {}),
+        ...(sha256 ? { sha256 } : {}),
+      });
+    } else if (storage.usesS3) {
+      console.error(`[telephony] media copy: recording webhook for unknown CallSid ${params.CallSid}; skipping media copy`);
+    }
   }
 
   return `<?xml version="1.0" encoding="UTF-8"?><Response></Response>`;

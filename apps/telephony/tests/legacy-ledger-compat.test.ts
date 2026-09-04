@@ -103,10 +103,11 @@ test('the full prod ledger is recognized; only hasna_auth_0003 is pending', asyn
 
   const pending = result.plan.filter((item) => item.state === 'pending').map((item) => item.migration.id);
   // The rc.1 image shipped contracts 0.4.2 (auth rows 0001..0002); the current
-  // contracts adds hasna_auth_0003_api_keys_tenant, which is the only row not
-  // yet applied on prod — additive and safe to run.
-  expect(pending).toEqual(['hasna_auth_0003_api_keys_tenant']);
-  expect(result.plan.length - pending.length).toBe(migrations.length - 1);
+  // contracts adds hasna_auth_0003_api_keys_tenant, and the media-copy
+  // migration (telephony_pg_media_object_keys_001, #1649) postdates the ledger
+  // — both are additive and safe to run. Nothing else is pending.
+  expect(pending).toEqual(['hasna_auth_0003_api_keys_tenant', 'telephony_pg_media_object_keys_001']);
+  expect(result.plan.length - pending.length).toBe(migrations.length - 2);
 });
 
 test('the downgrade guard still refuses a genuinely unknown ledger row', async () => {
