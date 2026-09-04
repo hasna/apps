@@ -1170,6 +1170,17 @@ which is what makes `push`/`pull`/`rollback` work for an install with no object
 store. No selector variable is introduced: the presence of the bucket name is
 the configuration.
 
+`loop_revisions.storage_kind` records which of the two was used. Read it as
+"`s3`, or not `s3`": the column's CHECK admits only `('db','s3')`, so the local
+directory fallback records `db` even though its bytes are files under the data
+home rather than rows in Postgres. The value is still worth having — it is what
+tells a reader whether a revision's object is somewhere another machine can
+reach — but `db` is a placeholder for "local to this install", not a claim about
+where the bytes live. Widening the enum needs a migration on both the Postgres
+and the SQLite schema, so it is deliberately not done here. Completeness does
+not depend on the kind: it keys on the recorded `storage_key`, so a missing
+object is detected identically on both paths.
+
 ## Health And Hygiene
 
 ```bash
