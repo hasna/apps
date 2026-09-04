@@ -37,7 +37,6 @@ export {
   CredentialResolutionError,
   explicitCredential,
   resolveCredential,
-  __resetCredentialDeprecationNotices,
 } from "./credentials.js";
 export type {
   AppConfigDiskHit,

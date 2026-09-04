@@ -90,6 +90,30 @@ export declare function credentialDiskSourceList(name: string, env: Env, profile
  * the exact path consulted.
  */
 export declare function credentialDiskSources(name: string, env: Env): string[];
+/**
+ * True when a security-relevant file's permission bits are exactly owner-only
+ * 0400 or 0600 across the FULL 07777 mask (setuid/setgid/sticky refused — a
+ * 04600 never passes because masking with 0777 keeps the setuid bit).
+ */
+export declare function configFileModeAllowed(mode: number): boolean;
+/**
+ * True when two fstat snapshots of the same descriptor describe the same
+ * file. A change on any axis (dev/ino/size/mtime/ctime) means the path was
+ * replaced or mutated while it was being read — the read must be refused.
+ */
+export declare function configFileReadsCoherent(before: {
+    dev: number;
+    ino: number;
+    size: number;
+    mtimeMs: number;
+    ctimeMs: number;
+}, after: {
+    dev: number;
+    ino: number;
+    size: number;
+    mtimeMs: number;
+    ctimeMs: number;
+}): boolean;
 /** A non-secret config value read off disk, with the file that supplied it. */
 export interface AppConfigDiskHit {
     /** The key that matched, in the caller's precedence order. */
