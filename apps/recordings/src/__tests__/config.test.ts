@@ -407,7 +407,7 @@ describe("getDataDir", () => {
     expect(dir).toContain("recordings");
   });
 
-  test("merges legacy home directory into an existing ~/.hasna/recordings directory", () => {
+  test("merges legacy home directory into an existing the recordings data root directory", () => {
     const home = join(tempDir, "home");
     const workspace = join(home, "workspace", "repo");
     const legacyDir = join(home, ".recordings");

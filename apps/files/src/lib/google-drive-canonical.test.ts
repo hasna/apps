@@ -4,7 +4,7 @@
  * Fleet law: app data lives at ~/.hasna/<app>/. The Google Drive connector
  * token store (OAuth tokens.json / config.json per profile) used to default to
  * ~/.hasna/connectors/{googledrive,connect-googledrive} — outside the app data
- * root. The default is now ~/.hasna/files/connectors/, with a one-time
+ * root. The default is now the files data root/connectors/, with a one-time
  * copy+verify+receipt migration from the legacy default (dry-run supported).
  *
  * These tests pin: the canonical default dirs, the env overrides still
@@ -42,7 +42,7 @@ function writeJson(path: string, content: string): void {
 }
 
 describe("canonical google drive connector dirs", () => {
-  test("default dirs resolve to ~/.hasna/files/connectors with legacy fallbacks appended", () => {
+  test("default dirs resolve to the files data root/connectors with legacy fallbacks appended", () => {
     const fake = fakeEnv();
     try {
       const dirs = googleDriveConnectorDirs(fake.env);

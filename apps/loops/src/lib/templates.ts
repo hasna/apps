@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type {
   AccountRef,
@@ -352,8 +353,9 @@ function defaultWorktreeRoot(root: string | undefined): string {
     const expanded = root.trim().replace(/^~(?=$|\/)/, homedir());
     return isAbsolute(expanded) ? expanded : resolve(expanded);
   }
-  // Canonical worktree root per global-worktree-placement; never an app data dir.
-  return join(homedir(), ".hasna", "repos", "worktrees");
+  // Canonical worktree root per global-worktree-placement; never an app data
+  // dir. Resolved through the single paths resolver (ruling #1668).
+  return join(resolverDataDir({ app: "repos", home: homedir() }), "worktrees");
 }
 
 function gitRootFor(path: string): string | undefined {

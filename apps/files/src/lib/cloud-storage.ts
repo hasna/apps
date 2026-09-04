@@ -7,7 +7,7 @@
 //     with the bearer key — NOT to the local SQLite store, and NEVER to a raw
 //     database DSN.
 //   - local: neither is set. Reads and writes use the on-box SQLite store at
-//     `~/.hasna/files/files.db`.
+//     the files data root's files.db.
 //
 // A half-configured pair (URL without key, or key without URL) is a
 // misconfiguration and throws (fail-closed): the client never silently falls

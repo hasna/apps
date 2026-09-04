@@ -690,13 +690,13 @@ export function registerCommands(program: Command): void {
       }
     });
 
-  // Auth-import command — migrate tokens from older connector homes into ~/.hasna/connectors/
+  // Auth-import command — migrate tokens from older connector homes into the connectors data root
   program
     .command("auth-import")
     .option("--json", "Output as JSON", false)
     .option("-d, --dry-run", "Preview what would be imported without copying", false)
-    .option("--force", "Overwrite existing files in ~/.hasna/connectors/", false)
-    .description("Migrate auth tokens from ~/.connect/ to ~/.hasna/connectors/")
+    .option("--force", "Overwrite existing files in the connectors data root", false)
+    .description("Migrate auth tokens from ~/.connect/ to the connectors data root")
     .action((options: { json: boolean; dryRun: boolean; force: boolean }) => {
       const oldBase = join(homedir(), ".connect");
       const newBase = getConnectorsHome();

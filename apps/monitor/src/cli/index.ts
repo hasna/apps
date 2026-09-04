@@ -1877,7 +1877,7 @@ addLoopCheckCommonOptions(
   loopCheckCmd
     .command("quarantine-retention")
     .description("Dry-run resource-pressure quarantine retention; --apply is canonical-root only")
-    .option("--root <path>", "Quarantine root to inspect", "/home/hasna/.hasna/loops/quarantine/resource-pressure")
+    .option("--root <path>", "Quarantine root to inspect", [process.env["HOME"] || "/home/hasna", ".hasna", "loops", "quarantine", "resource-pressure"].join("/"))
     .option("--max-gb <n>", "Trigger retention when quarantine exceeds N GiB", parsePositiveInteger, 100)
     .option("--target-gb <n>", "Select eligible payloads until quarantine is near N GiB", parsePositiveInteger, 80)
     .option("--apply", "Delete only eligible generated-cache payloads under the canonical root", false)

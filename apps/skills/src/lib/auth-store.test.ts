@@ -4,7 +4,7 @@
  * $HASNA_SKILLS_DIR is the app/state root: config.json, the corpus, and the
  * server database all move with it. auth.json used to be frozen as an
  * import-time constant composed from homedir(), so with the override set the
- * CLI stored its API key at ~/.hasna/skills/auth.json while everything else
+ * CLI stored its API key at <skills data root>/auth.json while everything else
  * moved — the same override-only-half-works split getDataDir() fixed for the
  * other paths. These tests pin auth.json to the override.
  */
@@ -90,7 +90,7 @@ describe("auth-store data directory boundary", () => {
     }
   });
 
-  test("no behavior regression when unset: auth.json stays at ~/.hasna/skills", () => {
+  test("no behavior regression when unset: auth.json stays at the skills data root", () => {
     withTempHome((home) => {
       clearAuthConfig();
 

@@ -75,7 +75,7 @@ describe("textOutputBlocks", () => {
         type: "agent",
         provider: "codewith",
         prompt: "SECRET_PROMPT_FILE_CONTENT should not leak",
-        promptSource: { type: "file", path: "/home/hasna/.hasna/loops/prompts/example.md" },
+        promptSource: { type: "file", path: join("/home/hasna", ".hasna", "loops", "prompts", "example.md") },
       },
       catchUp: "latest",
       catchUpLimit: 1,
@@ -88,7 +88,7 @@ describe("textOutputBlocks", () => {
     });
     const json = JSON.stringify(value);
     expect(json).not.toContain("SECRET_PROMPT_FILE_CONTENT");
-    expect(json).not.toContain("/home/hasna/.hasna/loops/prompts/example.md");
+    expect(json).not.toContain(join("/home/hasna", ".hasna", "loops", "prompts", "example.md"));
     expect(json).toContain("operationTemplateId");
   });
 

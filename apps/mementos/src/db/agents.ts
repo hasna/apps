@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { SqliteAdapter as Database } from "../storage.js";
@@ -21,7 +22,7 @@ export interface AgentListFilter {
  *
  *   1. `MEMENTOS_AGENT` — this package's existing identity convention (already
  *      consumed by `init` and the sessions connector).
- *   2. `~/.hasna/conversations/agent-id` — the fleet's machine-level identity
+ *   2. the conversations data root's agent-id — the fleet's machine-level identity
  *      surface, written by `conversations agents register`.
  *
  * Returns null when neither source yields a non-empty name. An unreadable or
@@ -33,7 +34,7 @@ export function resolveWritingAgentName(): string | null {
   if (envName) return envName;
 
   try {
-    const path = join(homedir(), ".hasna", "conversations", "agent-id");
+    const path = join(resolverDataDir({ app: "conversations", home: homedir() }), "agent-id");
     if (existsSync(path)) {
       const fileAgent = readFileSync(path, "utf8").trim();
       if (fileAgent) return fileAgent;

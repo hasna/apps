@@ -2577,7 +2577,7 @@ hygiene
 
 hygiene
   .command("scripts")
-  .description("inventory loops still backed by local ~/.hasna/loops/scripts commands")
+  .description("inventory loops still backed by local legacy scripts-dir commands")
   .option("--scripts-dir <path>", "script directory to detect")
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")

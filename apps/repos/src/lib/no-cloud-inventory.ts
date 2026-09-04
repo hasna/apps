@@ -678,7 +678,7 @@ function isCanonicalCheckoutPath(repo: InternalRepoFinding, expectedName: string
   if (path === expectedName) return true;
   const org = repo.repo_key?.split("/")[0] ?? "";
   // Standalone layouts: ~/workspace/repos/<org>/<name> (legacy) and the clones
-  // root (~/.hasna/repos/clones/<org>/<name>, ~/.local/share/hasna/repos/clones/<org>/<name>)
+  // root (repos data root clones/<org>/<name>)
   // accepted in migration-window dual form, scanned from the repos/clones root or
   // from a parent. The retired opensource/open-<name> layout is never canonical.
   if (org && (

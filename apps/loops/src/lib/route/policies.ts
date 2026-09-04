@@ -1,5 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
+import { getLoopsDataDir } from "../app-home.js";
 import { TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID } from "../templates.js";
 import { ValidationError } from "../errors.js";
 import { routeDrainArgs } from "./options.js";
@@ -66,11 +68,14 @@ function homePath(...parts: string[]): string {
 }
 
 function routeReportsPath(...parts: string[]): string {
-  return homePath(".hasna", "loops", "reports", "todos-task-drain", ...parts);
+  return join(getLoopsDataDir(), "reports", "todos-task-drain", ...parts);
 }
 
 function commonAddDirs(): string[] {
-  return [homePath(".hasna", "todos"), homePath(".hasna", "loops")];
+  return [
+    join(resolverDataDir({ app: "todos", home: home() })),
+    join(getLoopsDataDir()),
+  ];
 }
 
 function commonCodewithDrain(): Pick<TodosDrainOptions, "provider" | "addDir" | "permissionMode" | "sandbox"> {
@@ -85,7 +90,7 @@ function commonCodewithDrain(): Pick<TodosDrainOptions, "provider" | "addDir" | 
 function policyDefinitions(): RoutePolicyDefinition[] {
   const loopsProject = defaultLoopsProject();
   const todosProject = defaultTodosProject();
-  const worktreeRoot = homePath(".hasna", "repos", "worktrees");
+  const worktreeRoot = join(resolverDataDir({ app: "repos", home: home() }), "worktrees");
   return [
     {
       id: "repoops-pr-queue",

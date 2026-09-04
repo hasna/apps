@@ -129,7 +129,7 @@ describe("MCP create_task records the filer", () => {
   });
 
   it("does NOT attribute to the identity `todos init` persisted — it names the station, not the caller (todos task 9090972e)", async () => {
-    // This used to assert the opposite. `~/.hasna/todos/identity.json` is
+    // This used to assert the opposite. `the todos data root/identity.json` is
     // keyed on $HOME and shared by every agent session on the station, so
     // "attributing" to it is exactly the misrouting #142 already refused for
     // assigned_to/agent_id. Measured live 2026-08-03/04 on station01's hosted

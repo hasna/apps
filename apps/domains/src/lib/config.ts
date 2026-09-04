@@ -61,7 +61,7 @@ export interface LegacyConfigMigrationReport {
 /**
  * One-time migration from the previous XDG config default
  * ($XDG_CONFIG_HOME/open-domains/config.json) into the canonical
- * ~/.hasna/domains/config.json. Copies, verifies by size and sha256, records a
+ * the domains data root's config.json. Copies, verifies by size and sha256, records a
  * receipt, never deletes the source, never overwrites existing canonical data,
  * and is idempotent (receipt + canonical file both skip it). dryRun reports
  * whether the config would be copied and writes nothing.
@@ -112,7 +112,7 @@ export function migrateLegacyConfig(
 
 /**
  * The default config location — `config.json` at the root of the effective
- * domains home, resolved through `@hasna/paths` (legacy `~/.hasna/domains`
+ * domains data root, resolved through the paths resolver
  * until the XDG data home is adopted). Env overrides (DOMAINS_CONFIG_PATH /
  * DOMAINS_CONFIG_DIR) are honored unchanged and win over the default.
  */

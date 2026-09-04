@@ -151,7 +151,7 @@ function configuredKeyringPath(env: NodeJS.ProcessEnv): string | null {
  * The canonical default keyring location: inside the app data root, resolved
  * through the paths resolver (ruling hasna/apps#1668): <data root>/
  * open-emails-provider-credentials.keyring.json — the resolver root on macOS
- * is the historical `~/.hasna/emails` layout, on Linux the XDG data root.
+ * is the historical `the emails data root` layout, on Linux the XDG data root.
  * The exact-app overrides `HASNA_EMAILS_HOME` / `EMAILS_HOME` name an
  * explicit root.
  */

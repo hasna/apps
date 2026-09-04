@@ -1,7 +1,7 @@
 /**
  * knowledge data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/knowledge` on macOS, XDG data root on Linux)
+ * platform placement (`the knowledge data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the knowledge-specific exact-app override on top.
  */
@@ -15,14 +15,14 @@ export const KNOWLEDGE_DATA_HOME_ENV = 'HASNA_KNOWLEDGE_HOME';
 
 /**
  * The resolver knowledge data root: kind overrides honored,
- * `~/.hasna/knowledge` on macOS, `~/.local/share/hasna/knowledge` on Linux.
+ * `the knowledge data root` on macOS, `~/.local/share/hasna/knowledge` on Linux.
  */
 export function getResolverDataHome(env: NodeJS.ProcessEnv = process.env): string {
   return resolverDataDir({ app: "knowledge", home: getHomeDir(env), env, });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/knowledge`). On macOS this equals the
+ * The pre-ruling legacy root (`the knowledge data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function getLegacyDataHome(env: NodeJS.ProcessEnv = process.env): string {

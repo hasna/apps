@@ -703,7 +703,7 @@ describe("CLI runtime and misc commands", () => {
         expect(stderr).toBe("");
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({ saved: true, category: "bug" });
-        expect(data.path).toContain(".hasna/skills/skills.db");
+        expect(data.path).toContain(join(skillsDataRoot(), "skills.db"));
         expect(existsSync(data.path)).toBe(true);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });

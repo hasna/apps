@@ -146,7 +146,7 @@ export const mockConfig = {
   },
   storage: {
     backend: "s3" as const,
-    localDir: "~/.hasna/attachments/test-objects",
+    localDir: "/tmp/attachments-test-objects",
     maxSizeBytes: 10 * 1024 * 1024 * 1024,
   },
   server: {

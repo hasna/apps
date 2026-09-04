@@ -10,7 +10,7 @@ import { getDataDir, getDataDirReadOnly } from "./config.js";
  * Resolved through getDataDir() so that $HASNA_SKILLS_DIR relocates the
  * credential file along with the rest of the app's state. It used to be an
  * import-time constant composed from homedir(), so with the override set the
- * CLI stored its API key at ~/.hasna/skills/auth.json while config, corpus,
+ * CLI stored its API key at <skills data root>/auth.json while config, corpus,
  * and database all moved — the same override-only-half-works split getDataDir()
  * documents for its own history.
  *

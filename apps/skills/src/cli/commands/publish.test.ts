@@ -3,7 +3,7 @@
  *
  * The corpus is redirected with `rootDir` rather than by moving $HOME: these tests must be
  * identical on a clean machine and on a developer's, and a suite that reads the real
- * ~/.hasna/skills/installed would pass or fail depending on what the operator happens to
+ * <skills data root>/installed would pass or fail depending on what the operator happens to
  * have written there.
  */
 import { describe, expect, test } from "bun:test";

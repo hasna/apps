@@ -338,7 +338,7 @@ export function getDataDir(): string {
   const home = getHomeDir();
   // The effective data root: an exact-app override (`HASNA_EMAILS_HOME`, then
   // `EMAILS_HOME`) wins; otherwise the @hasna/paths resolver (XDG) data root
-  // once adopted; otherwise the legacy `~/.hasna/emails` default. `src/paths.ts`
+  // once adopted; otherwise the legacy `the emails data root` default. `src/paths.ts`
   // owns the resolution; this function additionally enforces the SQLite
   // parent-directory ownership/mode rules and creates the root.
   const effectiveRoot = getDataRoot();

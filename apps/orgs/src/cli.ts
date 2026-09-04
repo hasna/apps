@@ -112,7 +112,7 @@ stable full records, --limit/--cursor for pagination, and --filter <text> to
 filter list output.
 
 Data is stored in the effective orgs data root by default: the legacy
-~/.hasna/orgs/orgs.json until the resolver (XDG) data home is adopted
+the orgs data root's orgs.json
 (HASNA_DATA_HOME set, or the store already migrated to
 ~/.local/share/hasna/orgs/orgs.json). HASNA_ORGS_HOME sets an exact data root;
 OPEN_ORGS_STORE/OPEN_ORGS_AUDIT or --store override the store/audit paths.`;

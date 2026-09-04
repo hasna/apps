@@ -115,14 +115,14 @@ export const getHomeDir = resolveEffectiveHome;
 
 /**
  * The resolver conversations data root: kind overrides honored,
- * `~/.hasna/conversations` on macOS, XDG data root on Linux.
+ * `the conversations data root` on macOS, XDG data root on Linux.
  */
 export function getResolverDataRoot(): string {
   return resolverDataDir({ app: "conversations", home: getHomeDir() });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/conversations`). On macOS this equals
+ * The pre-ruling legacy root (`the conversations data root`). On macOS this equals
  * the resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function getLegacyDataRoot(): string {

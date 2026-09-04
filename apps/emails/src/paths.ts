@@ -1,7 +1,7 @@
 /**
  * Emails data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/emails` on macOS, XDG data root on Linux)
+ * platform placement (`the emails data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the emails-specific exact-app override on top. The old in-package
  * resolver copy and the legacy/adoption dance were deleted with the ruling.
@@ -15,7 +15,7 @@ export const getHomeDir = effectiveHome;
 
 /**
  * The resolver data root for emails: kind overrides honored,
- * `~/.hasna/emails` on macOS, `~/.local/share/hasna/emails` on Linux.
+ * `the emails data root` on macOS, `~/.local/share/hasna/emails` on Linux.
  */
 export function getResolverDataRoot(env: NodeJS.ProcessEnv = process.env): string {
   return dataDir({ app: "emails", home: effectiveHome(env), env });
@@ -33,7 +33,7 @@ export function getExactDataRoot(env: NodeJS.ProcessEnv = process.env): string |
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/emails`). On macOS this equals the
+ * The pre-ruling legacy root (`the emails data root`). On macOS this equals the
  * resolver root (ruling #1668 moved the resolver TO this layout); elsewhere
  * it is kept only for the Windows `.emails` migration path and HOME
  * canonicalization in `db/database.ts` and for migrating historically

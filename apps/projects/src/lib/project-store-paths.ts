@@ -1,7 +1,7 @@
 /**
  * projects data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/projects` on macOS, XDG data root on Linux)
+ * platform placement (`the projects data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the projects-specific exact-app override on top.
  */
@@ -23,14 +23,14 @@ export function assertProjectWorkspaceId(workspaceId: string): string {
 
 /**
  * The resolver projects data root: kind overrides honored,
- * `~/.hasna/projects` on macOS, `~/.local/share/hasna/projects` on Linux.
+ * `the projects data root` on macOS, `~/.local/share/hasna/projects` on Linux.
  */
 export function resolverHome(): string {
   return resolverDataDir({ app: "projects", home: effectiveHome(),  });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/projects`). On macOS this equals the
+ * The pre-ruling legacy root (`the projects data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function legacyHomeDir(): string {

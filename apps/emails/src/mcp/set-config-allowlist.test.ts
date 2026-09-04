@@ -2,7 +2,7 @@
 //
 // The tool took `key: z.string()` with no allowlist, and `saveConfig` re-seeds
 // the in-process cache so a write takes effect immediately. So an agent could
-// rewrite anything in ~/.hasna/emails/config.json — including `emails_mode`,
+// rewrite anything in the emails data root/config.json — including `emails_mode`,
 // which decides whether this process talks to local SQLite or the operator's
 // self-hosted API (mid-session), and every credential-bearing key, which points
 // an integration wherever the agent likes.

@@ -218,7 +218,7 @@ describe("Runner", () => {
       expect(result.success).toBe(true);
       const data = JSON.parse(result.stdout);
       expect(data.profile).toBeDefined();
-      expect(data.configDir).toContain(".hasna/connectors/stripe");
+      expect(data.configDir).toContain(resolverDataDir({ app: "connectors", home: homedir() }));
     });
 
     test("runs imessage internal runtime for message send", async () => {

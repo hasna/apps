@@ -1,7 +1,7 @@
 /**
  * monitor data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/monitor` on macOS, XDG data root on Linux)
+ * platform placement (`the monitor data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the monitor-specific exact-app override on top.
  */
@@ -15,14 +15,14 @@ export const HASNA_MONITOR_HOME_ENV = "HASNA_MONITOR_HOME";
 
 /**
  * The resolver monitor data root: kind overrides honored,
- * `~/.hasna/monitor` on macOS, `~/.local/share/hasna/monitor` on Linux.
+ * `the monitor data root` on macOS, `~/.local/share/hasna/monitor` on Linux.
  */
 export function resolverHome(): string {
   return resolverDataDir({ app: "monitor", home: effectiveHome(),  });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/monitor`). On macOS this equals the
+ * The pre-ruling legacy root (`the monitor data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function legacyHomeDir(): string {

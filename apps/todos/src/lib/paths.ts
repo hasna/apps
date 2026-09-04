@@ -1,7 +1,7 @@
 /**
  * todos data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/todos` on macOS, XDG data root on Linux)
+ * platform placement (`the todos data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the todos-specific exact-app override on top.
  */
@@ -14,14 +14,14 @@ export const effectiveHome = resolveEffectiveHome;
 
 /**
  * The resolver todos data root: kind overrides honored,
- * `~/.hasna/todos` on macOS, `~/.local/share/hasna/todos` on Linux.
+ * `the todos data root` on macOS, `~/.local/share/hasna/todos` on Linux.
  */
 export function resolverHome(env: NodeJS.ProcessEnv = process.env): string {
   return resolverDataDir({ app: "todos", home: effectiveHome(env), env, });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/todos`). On macOS this equals the
+ * The pre-ruling legacy root (`the todos data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function legacyHomeDir(env: NodeJS.ProcessEnv = process.env): string {

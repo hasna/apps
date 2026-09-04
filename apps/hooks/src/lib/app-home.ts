@@ -1,7 +1,7 @@
 /**
  * hooks data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/hooks` on macOS, XDG data root on Linux)
+ * platform placement (`the hooks data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the hooks-specific exact-app override on top.
  */
@@ -14,14 +14,14 @@ export const getHomeDir = resolveEffectiveHome;
 
 /**
  * The resolver hooks data root: kind overrides honored,
- * `~/.hasna/hooks` on macOS, `~/.local/share/hasna/hooks` on Linux.
+ * `the hooks data root` on macOS, `~/.local/share/hasna/hooks` on Linux.
  */
 export function getResolverDataRoot(env: NodeJS.ProcessEnv = process.env): string {
   return resolverDataDir({ app: "hooks", home: getHomeDir(env), env, });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/hooks`). On macOS this equals the
+ * The pre-ruling legacy root (`the hooks data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function getLegacyDataRoot(env: NodeJS.ProcessEnv = process.env): string {

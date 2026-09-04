@@ -1,7 +1,7 @@
 /**
  * secrets data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/secrets` on macOS, XDG data root on Linux)
+ * platform placement (`the secrets data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the secrets-specific exact-app override on top.
  */
@@ -30,14 +30,14 @@ const LEGACY_SERVICE_FILES = [
 
 /**
  * The resolver secrets data root: kind overrides honored,
- * `~/.hasna/secrets` on macOS, `~/.local/share/hasna/secrets` on Linux.
+ * `the secrets data root` on macOS, `~/.local/share/hasna/secrets` on Linux.
  */
 export function resolverOperatorDataDir(env: NodeJS.ProcessEnv = process.env): string {
   return resolverDataDir({ app: "secrets", home: operatorHome(env), env, });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/secrets`). On macOS this equals the
+ * The pre-ruling legacy root (`the secrets data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function legacyOperatorDataDir(env: NodeJS.ProcessEnv = process.env): string {

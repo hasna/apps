@@ -840,7 +840,7 @@ describe("primary relocation v2 reconciliation", () => {
 
   it("accepts an existing canonical checkout outside the worktree store as a target", () => {
     // THE FILED GAP. relocate-primary refused every target outside
-    // ~/.hasna/repos/worktrees with TARGET_OUTSIDE_ROOT, which blocked a
+    // the repos data root/worktrees with TARGET_OUTSIDE_ROOT, which blocked a
     // legitimate path fix: a row whose real checkout lives at a canonical
     // workspace path could not be absorbed. The guard exists to protect the
     // worktree store's Git authority, so it must bound the *authority*, not the

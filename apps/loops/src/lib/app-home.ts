@@ -1,7 +1,7 @@
 /**
  * loops data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/loops` on macOS, XDG data root on Linux)
+ * platform placement (`the loops data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the loops-specific exact-app override on top.
  */
@@ -15,14 +15,14 @@ export const HASNA_LOOPS_DATA_DIR_ENV = "HASNA_LOOPS_DATA_DIR";
 
 /**
  * The resolver loops data root: kind overrides honored,
- * `~/.hasna/loops` on macOS, `~/.local/share/hasna/loops` on Linux.
+ * `the loops data root` on macOS, `~/.local/share/hasna/loops` on Linux.
  */
 export function resolverHome(): string {
   return resolverDataDir({ app: "loops", home: effectiveHome(),  });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/loops`). On macOS this equals the
+ * The pre-ruling legacy root (`the loops data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function legacyHomeDir(): string {

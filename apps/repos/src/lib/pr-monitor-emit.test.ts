@@ -90,7 +90,7 @@ function lease(overrides: Partial<MonitorLeaseInput> = {}): MonitorLeaseInput {
     status: "active",
     taskId: "a0bbaeec",
     ownerMetadata: "{}",
-    worktreePath: "/home/hasna/.hasna/repos/worktrees/apps/pr-monitor",
+    worktreePath: join("/home/hasna", ".hasna", "repos", "worktrees", "apps", "pr-monitor"),
     ...overrides,
   };
 }

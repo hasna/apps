@@ -2,7 +2,7 @@
  * SQLite implementation of SkillsProductStore.
  *
  * This is the zero-config default: a single operator runs `skills-server` with nothing
- * configured and gets a durable database at ~/.hasna/skills/server.db. Point
+ * configured and gets a durable database at <skills data root>/server.db. Point
  * HASNA_SKILLS_DATABASE_URL at a postgres:// URL and the same server becomes the shared
  * multi-worker deployment. The database is an adapter choice, not a product variant -
  * the schema shape, the org scoping, and the run lifecycle are identical either way.

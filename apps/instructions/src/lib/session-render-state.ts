@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { effectiveHome as resolveEffectiveHome, stateDir as resolverStateDir } from "@hasna/contracts/paths";
+import { effectiveHome as resolveEffectiveHome, kindEnv, stateDir as resolverStateDir } from "@hasna/contracts/paths";
 
 /**
  * Session-render snapshot-dir resolution through the single paths resolver in
@@ -32,11 +32,11 @@ export function legacySnapshotDir(targetHome: string): string {
  * resolution rather than failing closed on a path that cannot be created.
  */
 export function resolverSnapshotDir(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.HASNA_STATE_HOME;
+  const override = env[kindEnv("state")];
   if (typeof override === "string" && override.trim().length > 0 && !existsSync(override)) {
     return resolverStateDir({
       app: SESSION_RENDER_STATE_APP,
-      env: { ...env, HASNA_STATE_HOME: undefined },
+      env: { ...env, [kindEnv("state")]: undefined },
       home: homeDir(env),
     });
   }

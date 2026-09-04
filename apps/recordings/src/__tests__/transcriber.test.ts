@@ -359,7 +359,7 @@ describe("describeTranscriptionFailure", () => {
       "************************vosA. You can find your API key at https://platform.openai.com/account/api-keys.";
     const result = describeTranscriptionFailure(raw);
     expect(result).toBe(
-      "OpenAI API key invalid or expired (401). Update it in ~/.hasna/recordings/config.json, the OPENAI_API_KEY env var, or the Recordings app Settings."
+      "OpenAI API key invalid or expired (401). Update it in the recordings data root/config.json, the OPENAI_API_KEY env var, or the Recordings app Settings."
     );
     expect(result).not.toContain("sk-proj");
   });

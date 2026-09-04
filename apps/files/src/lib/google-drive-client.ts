@@ -408,12 +408,12 @@ function listFilesRecursive(dir: string): string[] {
 
 /**
  * One-time migration of the legacy Google Drive connector token store
- * (~/.hasna/connectors/{googledrive,connect-googledrive}) into the canonical
- * app data root (~/.hasna/files/connectors/).
+ * (the connectors data root's {googledrive,connect-googledrive}) into the canonical
+ * app data root (the files data root's connectors dir).
  *
  * Copies every file, chmod 0600 (OAuth credentials), verifies each copy
  * byte-for-byte, and records a receipt
- * (~/.hasna/files/connectors/.googledrive-migrated.receipt.json). The source
+ * (the files data root's connectors/.googledrive-migrated.receipt.json). The source
  * is never deleted; an existing canonical file that differs is a recorded
  * conflict and is never overwritten; the migration is idempotent (receipt
  * skips it, per-file verification resumes a partial copy) and supports
@@ -494,7 +494,7 @@ export function migrateGoogleDriveTokenStore(
 }
 
 /**
- * The canonical default connector-token store: ~/.hasna/files/connectors/.
+ * The canonical default connector-token store: the files data root/connectors/.
  * Env overrides (HASNA_GOOGLE_DRIVE_CONNECTOR_DIR / GOOGLE_DRIVE_CONNECTOR_DIR
  * / HASNA_CONNECTORS_DIR) are honored unchanged and win over the default; a
  * first-run migration moves legacy default data into the canonical root.

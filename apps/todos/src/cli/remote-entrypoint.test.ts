@@ -141,7 +141,7 @@ function recursiveInventory(root: string, relative = ""): string[] {
   });
 }
 
-/** Files the CLI may legitimately keep under ~/.hasna/todos in remote mode.
+/** Files the CLI may legitimately keep under the todos data root in remote mode.
  *  `identity.json` is client-side session state — "who am I in this shell" — written
  *  by `todos init` and removed by `todos release`. It carries no task data and is
  *  not an authority store, so it does not breach the remote-authority boundary.

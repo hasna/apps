@@ -1,14 +1,14 @@
 /**
  * skills data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/skills` on macOS, XDG data root on Linux)
+ * platform placement (`the skills data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the skills-specific exact-app override on top.
  */
 import { resolve } from "node:path";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { dataDir as resolverDataDir, effectiveHome as resolveEffectiveHome } from "@hasna/contracts/paths";
+import { dataDir as resolverDataDir, effectiveHome as resolveEffectiveHome, kindEnv } from "@hasna/contracts/paths";
 
 /** Resolve the user's home directory: $HOME, then $USERPROFILE, then the OS user database. */
 export const effectiveHome = resolveEffectiveHome;
@@ -20,7 +20,7 @@ export const GLOBAL_CONFIG_FILENAME = "config.json";
 
 /**
  * The resolver skills data root: kind overrides honored,
- * `~/.hasna/skills` on macOS, `~/.local/share/hasna/skills` on Linux.
+ * `the skills data root` on macOS, `~/.local/share/hasna/skills` on Linux.
  */
 export function resolverDataRoot(
   home: string = effectiveHome(),
@@ -30,7 +30,7 @@ export function resolverDataRoot(
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/skills`). On macOS this equals the
+ * The pre-ruling legacy root (`the skills data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function legacyDataRoot(): string {
@@ -64,7 +64,7 @@ export function hasExactOverride(env: NodeJS.ProcessEnv = process.env): boolean 
   );
 }
 export function hasOperatorOverride(env: NodeJS.ProcessEnv = process.env): boolean {
-  return hasExactOverride(env) || Boolean(env.HASNA_DATA_HOME?.trim());
+  return hasExactOverride(env) || Boolean(env[kindEnv("data")]?.trim());
 }
 export function skillsDataRootForHome(home: string): string {
   const isOwnHome =

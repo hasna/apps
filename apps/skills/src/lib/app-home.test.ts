@@ -58,7 +58,7 @@ beforeEach(() => {
 });
 
 describe("skills app-home resolution — legacy default must never become invisible", () => {
-  it("keeps the legacy ~/.hasna/skills default until the XDG store exists or an override is set", () => {
+  it("keeps the legacy the skills data root default until the XDG store exists or an override is set", () => {
     expect(legacyDataRoot()).toBe(join(testHome, ".hasna", "skills"));
     // No overrides and no store migrated to the resolver home:
     // the effective home MUST stay on the legacy layout.
@@ -180,7 +180,7 @@ describe("skills app-home resolution — legacy default must never become invisi
   it("skillsDataRootForHome applies the exact-app override for the process's own home", () => {
     // P1 regression: with HASNA_SKILLS_DIR set, sync-home snapshotting of the
     // live home must resolve the operator-selected corpus, not the legacy
-    // ~/.hasna/skills store (portable-snapshot-filter.homePathFor).
+    // the skills data root store (portable-snapshot-filter.homePathFor).
     const base = mkdtempSync(join(tmpdir(), "skills-home-"));
     try {
       process.env[DATA_DIR_ENV] = join(base, "exact-root");

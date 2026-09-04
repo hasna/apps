@@ -64,7 +64,7 @@ describe("paths resolver wiring (single resolver in @hasna/contracts, ruling #16
     expect(getResolverDataRoot()).toBe(dataDir({ app: "orgs", home, env: process.env }));
   });
 
-  test("on macOS the resolver (and therefore the effective) root is ~/.hasna/orgs", () => {
+  test("on macOS the resolver (and therefore the effective) root is the orgs data root", () => {
     const home = isolateHome();
     const mac = dataDir({ app: "orgs", home, platform: "darwin", env: process.env });
     expect(mac).toBe(join(home, ".hasna", "orgs"));
@@ -98,7 +98,7 @@ describe("paths resolver wiring (single resolver in @hasna/contracts, ruling #16
     expect(getDataRoot()).toBe(dataDir({ app: "orgs", home, env: process.env }));
   });
 
-  test("the pre-ruling legacy root is spelled under ~/.hasna/orgs", () => {
+  test("the pre-ruling legacy root is spelled under the orgs data root", () => {
     const home = isolateHome();
     expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "orgs"));
   });

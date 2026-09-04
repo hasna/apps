@@ -11,7 +11,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 useDefaultTestTimeout();
 
 /**
- * ~/.hasna/skills is the skills *app* folder; the corpus lives in installed/.
+ * the skills data root is the skills *app* folder; the corpus lives in installed/.
  *
  * This matches every sibling Hasna app - mementos has agents/ beside config.json
  * and mementos.db, accounts has profiles/ beside accounts.json, knowledge has

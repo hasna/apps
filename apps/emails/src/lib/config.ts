@@ -18,7 +18,7 @@ import { isSensitiveKey } from "./redaction.js";
  *
  * The directory is the effective data root resolved through `src/paths.ts`
  * (single paths resolver in @hasna/contracts, ruling hasna/apps#1668): the
- * resolver root IS the convention on every platform (`~/.hasna/emails` on
+ * resolver root IS the convention on every platform (`the emails data root` on
  * macOS, XDG data root on Linux); the exact-app overrides
  * `HASNA_EMAILS_HOME` / `EMAILS_HOME` name an explicit root.
  */

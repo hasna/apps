@@ -127,7 +127,7 @@ Purpose
 Storage
   Vault database:   <data home>/vault.db — the effective secrets data home,
                     resolved through @hasna/paths (XDG/macOS home layout, e.g.
-                    ~/.local/share/hasna/secrets). The legacy ~/.hasna/secrets
+                    ~/.local/share/hasna/secrets). The legacy the secrets data root
                     default stays effective until the store is migrated there
                     or HASNA_DATA_HOME is set.
   Key material:     <data home>/vault.key or vault.key.enc

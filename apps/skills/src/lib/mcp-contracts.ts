@@ -230,7 +230,7 @@ const toolContracts: McpToolContract[] = [
   {
     name: "scaffold_skill",
     title: "Scaffold Skill",
-    description: "Create a portable skill folder under ~/.hasna/skills/installed/<name> from the standard template.",
+    description: "Create a portable skill folder under <skills data root>/installed/<name> from the standard template.",
     params: ["name", "description?", "overwrite?"],
     category: "scaffolding",
     sideEffects: "filesystem",
@@ -250,7 +250,7 @@ const toolContracts: McpToolContract[] = [
   {
     name: "port_skill",
     title: "Port Skill",
-    description: "Import an existing skill folder into the portable ~/.hasna/skills/installed/<name> standard.",
+    description: "Import an existing skill folder into the portable <skills data root>/installed/<name> standard.",
     params: ["path", "name?", "overwrite?"],
     category: "scaffolding",
     sideEffects: "filesystem",

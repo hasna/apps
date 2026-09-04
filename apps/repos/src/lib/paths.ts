@@ -1,7 +1,7 @@
 /**
  * repos data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/repos` on macOS, XDG data root on Linux)
+ * platform placement (`the repos data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the repos-specific exact-app override on top.
  */
@@ -14,14 +14,14 @@ export const getHomeDir = resolveEffectiveHome;
 
 /**
  * The resolver repos data root: kind overrides honored,
- * `~/.hasna/repos` on macOS, `~/.local/share/hasna/repos` on Linux.
+ * `the repos data root` on macOS, `~/.local/share/hasna/repos` on Linux.
  */
 export function getResolverDataRoot(env: NodeJS.ProcessEnv = process.env): string {
   return resolverDataDir({ app: "repos", home: getHomeDir(env), env, });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/repos`). On macOS this equals the
+ * The pre-ruling legacy root (`the repos data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function getLegacyDataRoot(env: NodeJS.ProcessEnv = process.env): string {

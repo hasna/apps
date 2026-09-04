@@ -33,7 +33,7 @@ let prevHome: string | undefined;
 
 beforeEach(() => {
   process.env["TODOS_DB_PATH"] = ":memory:";
-  // Isolate the persisted-identity file from the real ~/.hasna/todos.
+  // Isolate the persisted-identity file from the real the todos data root.
   homeDir = mkdtempSync(join(tmpdir(), "todos-identity-test-"));
   prevHome = process.env["HOME"];
   process.env["HOME"] = homeDir;

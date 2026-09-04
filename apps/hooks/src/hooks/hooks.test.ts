@@ -739,7 +739,7 @@ describe("observability hooks write to SQLite", () => {
 
 // ====================================================================
 // Fleet comms hooks — behavioral tests (subprocess with isolated HOME)
-// The hooks read/write state under $HOME/.hasna/hooks/state, so each
+// The hooks read/write state under the hooks data root's state dir, so each
 // test uses a temp HOME. conversations/configs CLIs are made
 // unavailable via a restricted PATH so tests are deterministic and
 // exercise the fail-open paths.

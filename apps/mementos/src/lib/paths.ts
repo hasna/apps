@@ -1,7 +1,7 @@
 /**
  * mementos data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/mementos` on macOS, XDG data root on Linux)
+ * platform placement (`the mementos data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the mementos-specific exact-app override on top.
  */
@@ -14,14 +14,14 @@ export const effectiveHome = resolveEffectiveHome;
 
 /**
  * The resolver mementos data root: kind overrides honored,
- * `~/.hasna/mementos` on macOS, `~/.local/share/hasna/mementos` on Linux.
+ * `the mementos data root` on macOS, `~/.local/share/hasna/mementos` on Linux.
  */
 export function resolverDataRoot(): string {
   return resolverDataDir({ app: "mementos", home: effectiveHome(),  });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/mementos`). On macOS this equals the
+ * The pre-ruling legacy root (`the mementos data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function legacyDataRoot(): string {

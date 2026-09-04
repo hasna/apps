@@ -23,7 +23,7 @@
 //     counter. The ratchet counts them tree-wide, this file included.
 //
 // `HOME` IS REDIRECTED IN EVERY CASE, and that is a safety property rather than tidiness. When no
-// database path is configured the database layer resolves `~/.hasna/emails/emails.db` and CREATES
+// database path is configured the database layer resolves `the emails data root/emails.db` and CREATES
 // it, so a case that asserts a refusal must not be able to touch a developer's real mailbox on the
 // way to failing — and one case below deliberately exercises that default path.
 //

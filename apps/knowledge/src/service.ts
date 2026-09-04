@@ -1838,7 +1838,7 @@ export class KnowledgeService {
   /**
    * One-time migration of the previous project-scoped workspace
    * (<cwd>/.hasna/knowledge) into the canonical project home
-   * (~/.hasna/knowledge/projects/<key>). Dry-run by default; requires
+   * (the knowledge data root/projects/<key>). Dry-run by default; requires
    * --approve-write --approved-by to move. Reuses the same backup, verify,
    * move, verify and tombstone machinery as migrate-legacy-path. Refuses when
    * the canonical project home already contains data.

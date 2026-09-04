@@ -42,7 +42,7 @@ export interface LegacyDataDirMigrationReport {
 /**
  * One-time migration from the previous XDG default data directory
  * ($XDG_DATA_HOME/open-domains) into the resolver (ruling #1668) data root —
- * ~/.hasna/domains on macOS, the XDG data root elsewhere.
+ * the domains data root on macOS, the XDG data root elsewhere.
  *
  * Copies (never deletes) the SQLite db plus any WAL/SHM sidecars, verifies the
  * copy by size and sha256, and records a receipt next to the canonical db.
@@ -113,7 +113,7 @@ export function migrateLegacyDataDir(
 
 /**
  * The default data root — the effective domains home, resolved through
- * `@hasna/paths` (legacy `~/.hasna/domains` until the XDG data home is
+ * `@hasna/paths` (legacy `the domains data root` until the XDG data home is
  * adopted). Env overrides (DOMAINS_DB_PATH / HASNA_DOMAINS_DB_PATH) and the
  * exact-app overrides (HASNA_DOMAINS_HOME / DOMAINS_HOME / HASNA_DOMAINS_DIR /
  * DOMAINS_DIR) are honored unchanged and win over the default.

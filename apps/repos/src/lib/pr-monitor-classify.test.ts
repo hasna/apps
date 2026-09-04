@@ -108,7 +108,7 @@ function lease(overrides: Partial<MonitorLeaseInput> = {}): MonitorLeaseInput {
     status: "active",
     taskId: "a0bbaeec",
     ownerMetadata: "{}",
-    worktreePath: "/home/hasna/.hasna/repos/worktrees/apps/pr-monitor",
+    worktreePath: join("/home/hasna", ".hasna", "repos", "worktrees", "apps", "pr-monitor"),
     ...overrides,
   };
 }
@@ -514,7 +514,7 @@ describe("classifyPullRequest — STALE_WORKTREE (merged domain)", () => {
     });
     expect(outcome.cls).toBe("STALE_WORKTREE");
     expect(outcome.detail).toBe(
-      "merged, worktree /home/hasna/.hasna/repos/worktrees/apps/pr-monitor present — remove via repos worktree",
+      "merged, worktree " + join("/home/hasna", ".hasna", "repos", "worktrees", "apps", "pr-monitor") + " present — remove via repos worktree",
     );
     expectEvent(outcome, "STALE_WORKTREE", outcome.detail);
   });

@@ -371,7 +371,7 @@ describe("requireIdentity", () => {
  * fallback with no failure mode, so a session that never declared who it was
  * still got an answer.
  *
- *   - Silent INHERITANCE: $HOME/.hasna/conversations/agent-id is a single
+ *   - Silent INHERITANCE: the conversations data root's agent-id is a single
  *     machine-level file. On 2026-07-30 the CEO seat wrote "agent-ceo" into it
  *     (correct for that seat) and every other seat on the box then posted as
  *     agent-ceo — an entire day of attribution across seven tmux seats was

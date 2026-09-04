@@ -3,7 +3,7 @@
  *
  * Loads configuration from:
  *   1. Project-local: ./skills.config.json (highest priority)
- *   2. Global: ~/.hasna/skills/config.json (JSON format, lowest priority)
+ *   2. Global: <skills data root>/config.json (JSON format, lowest priority)
  *      (backward compat: also checks ~/.skillsrc)
  *
  * Values from the project config override global config.
@@ -113,7 +113,7 @@ export type ConfigScope = "global" | "project";
 /**
  * Subfolder of the data directory holding the installed skill corpus.
  *
- * ~/.hasna/skills is the skills *app* folder, matching every sibling Hasna app:
+ * the skills data root is the skills *app* folder, matching every sibling Hasna app:
  * mementos keeps agents/ beside config.json and mementos.db, accounts keeps
  * profiles/ beside accounts.json, knowledge keeps artifacts/ and cache/ beside
  * auth.json. Each puts app data at the app root and content in a named subfolder.
@@ -129,7 +129,7 @@ export const INSTALLED_SKILLS_DIRNAME = "installed";
 /**
  * Subfolder of the data directory holding the migrated corpus cache — the
  * owner-layout replacement for installed/ after `skills storage migrate`
- * (~/.hasna/skills/{skills,logs,outputs}).
+ * (the skills data root/{skills,logs,outputs}).
  *
  * The marker file inside it (LAYOUT_MIGRATION_RECORD) is the authority: a
  * skills/ directory someone created by hand is not the corpus and never will
@@ -156,7 +156,7 @@ export function isOwnerLayoutMigrated(appDir: string): boolean {
 
 /**
  * Get the data directory for skills global config/data.
- * Default: ~/.hasna/skills/, overridable with $HASNA_SKILLS_DIR.
+ * Default: the skills data root/, overridable with $HASNA_SKILLS_DIR.
  * Auto-migrates from ~/.skills/ and ~/.skillsrc without deleting legacy data.
  */
 export function getDataDir(): string {
@@ -164,7 +164,7 @@ export function getDataDir(): string {
   // resolver (app-home.ts): an exact-app override (HASNA_SKILLS_DIR, then the
   // HASNA_SKILLS_HOME / SKILLS_HOME aliases) wins unconditionally; otherwise the
   // resolver's XDG data root once adopted (server.db / config.json present there,
-  // or HASNA_DATA_HOME set); otherwise the legacy ~/.hasna/skills default.
+  // or HASNA_DATA_HOME set); otherwise the legacy the skills data root default.
   //
   // Every app-root path is routed through here. auth-store.ts resolves auth.json
   // through getDataDir() (its own history is documented in that file),

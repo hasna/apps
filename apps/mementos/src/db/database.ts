@@ -47,7 +47,7 @@ function findGitRoot(startDir: string): string | null {
 function migrateGlobalDir(): void {
   // The legacy ~/.mementos home db is migrated to the EFFECTIVE data root —
   // the same root getDataRoot() returns (exact-app override, adopted XDG root,
-  // or legacy ~/.hasna/mementos default) — so the migration and the store the
+  // or legacy the mementos data root default) — so the migration and the store the
   // runtime actually opens can never diverge.
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
   const newDir = getDataRoot();
@@ -82,7 +82,7 @@ export function getDbPath(): string {
 
   migrateGlobalDir();
   // The store lives at the effective data root's mementos.db. getDataRoot()
-  // returns the legacy ~/.hasna/mementos default until HASNA_DATA_HOME is set
+  // returns the legacy the mementos data root default until HASNA_DATA_HOME is set
   // or the store is physically migrated to the XDG data home, so a live store
   // never becomes invisible on upgrade; once adopted, the SAME root the rest
   // of the package (config.json, profiles, backups, agents sync) uses is the

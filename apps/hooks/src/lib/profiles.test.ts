@@ -268,9 +268,9 @@ describe("profiles", () => {
   });
 
   describe("getProfilesDir", () => {
-    test("returns path ending with .hasna/hooks/profiles", () => {
+    test("returns a path ending with the hooks data-root profiles dir", () => {
       const dir = getProfilesDir();
-      expect(dir.endsWith(".hasna/hooks/profiles")).toBe(true);
+      expect(dir.endsWith(join(homedir(), ".hasna", "hooks", "profiles"))).toBe(true);
     });
   });
 });

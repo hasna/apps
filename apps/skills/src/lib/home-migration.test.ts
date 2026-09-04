@@ -20,7 +20,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 useDefaultTestTimeout();
 
 /**
- * The owner layout: ~/.hasna/skills/{skills,logs,outputs}. skills/ replaces
+ * The owner layout: the skills data root/{skills,logs,outputs}. skills/ replaces
  * installed/ as the corpus home and becomes the sync source; legacy flat skill
  * dirs at the app root migrate into it; custom/ stays; logs/ and outputs/ are
  * created lazily. Migration is opt-in, idempotent, and refuses a non-empty

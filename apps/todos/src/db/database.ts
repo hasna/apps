@@ -80,7 +80,7 @@ function getDbPath(): string {
   // when a stray empty database exists at the repository root.
   if (hasExplicitProjectArg()) return getGlobalDbPath();
 
-  // 3. Per-project: .hasna/todos/todos.db in cwd or any parent (incl. repo root)
+  // 3. Per-project: a project-relative todos store (".hasna" / "todos" / "todos.db") in cwd or any parent (incl. repo root)
   const cwd = process.cwd();
   const nearest = findNearestProjectDb(cwd);
   if (nearest) return nearest;
@@ -95,7 +95,7 @@ function getDbPath(): string {
     }
   }
 
-  // 5. Default: ~/.hasna/todos/todos.db
+  // 5. Default: <todos data root>/todos.db
   return getGlobalDbPath();
 }
 

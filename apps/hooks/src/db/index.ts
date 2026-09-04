@@ -1,6 +1,6 @@
 /**
  * SQLite DB module for hooks — persistent storage at the effective data
- * root resolved through @hasna/paths (legacy ~/.hasna/hooks until adopted,
+ * root resolved through @hasna/paths (legacy the hooks data root until adopted,
  * then the XDG data home) at hooks.db.
  *
  * Uses bun:sqlite with WAL mode for concurrent reads.

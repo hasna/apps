@@ -120,8 +120,8 @@ describe("task route state", () => {
     const updated = setTaskWorkflowPointers(task.id, {
       current_workflow_invocation_id: "inv_123",
       current_run_id: "run_456",
-      latest_manifest_path: "/home/hasna/.hasna/loops/runs/open-codewith/task/run_456/manifest.json",
-      latest_evaluation_path: "/home/hasna/.hasna/loops/runs/open-codewith/task/run_456/evaluation.md",
+      latest_manifest_path: join("/home/hasna", ".hasna", "loops", "runs", "open-codewith", "task", "run_456", "manifest.json"),
+      latest_evaluation_path: join("/home/hasna", ".hasna", "loops", "runs", "open-codewith", "task", "run_456", "evaluation.md"),
       workflow_state: "working",
       actor: "route-test",
     });

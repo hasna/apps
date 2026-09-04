@@ -214,7 +214,7 @@ describe("getDbPath", () => {
     }
   });
 
-  test("fallback to ~/.hasna/mementos/mementos.db when no env, no local db, no git", () => {
+  test("fallback to the mementos data root/mementos.db when no env, no local db, no git", () => {
     delete process.env["MEMENTOS_DB_PATH"];
     delete process.env["HASNA_MEMENTOS_DB_PATH"];
     delete process.env["MEMENTOS_DB_SCOPE"];

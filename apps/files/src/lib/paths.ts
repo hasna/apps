@@ -1,7 +1,7 @@
 /**
  * files data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/files` on macOS, XDG data root on Linux)
+ * platform placement (`the files data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the files-specific exact-app override on top.
  */
@@ -16,14 +16,14 @@ import { dirname } from "node:path";
 
 /**
  * The resolver files data root: kind overrides honored,
- * `~/.hasna/files` on macOS, `~/.local/share/hasna/files` on Linux.
+ * `the files data root` on macOS, `~/.local/share/hasna/files` on Linux.
  */
 export function getResolverDataRoot(env: NodeJS.ProcessEnv = process.env): string {
   return resolverDataDir({ app: "files", home: getHomeDir(env), env, });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/files`). On macOS this equals the
+ * The pre-ruling legacy root (`the files data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function getLegacyDataRoot(env: NodeJS.ProcessEnv = process.env): string {

@@ -127,7 +127,7 @@ export function registerCreateSync(parent: Command) {
 
   // Sync — the last mile: corpus -> each agent's global skills folder.
   // The package ships no bundled corpus, so the corpus is the installed cache
-  // (~/.hasna/skills/installed, what `skills pull` writes), or an explicit canonical
+  // (<skills data root>/installed, what `skills pull` writes), or an explicit canonical
   // source — `--source <path>` or $SKILLS_SOURCE, typically the monorepo checkout.
   parent
     .command("sync")

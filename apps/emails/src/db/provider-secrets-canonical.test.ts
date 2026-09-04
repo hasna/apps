@@ -1,11 +1,11 @@
 /**
  * Canonical provider-secrets keyring root regression tests for @hasna/emails.
  *
- * Convention: app data lives at ~/.hasna/<app>/. The provider-credential
+ * Convention (ruling #1668): app data lives at the resolver data root (~/.hasna/<app>/ on macOS). The provider-credential
  * keyring (the encrypted root-key file) used to default to
- * ${XDG_CONFIG_HOME}/open-emails-secrets/... or ~/.hasna/secrets/... — both
+ * ${XDG_CONFIG_HOME}/open-emails-secrets/... or the secrets data root/... — both
  * outside the app's data root. The default is now
- * ~/.hasna/emails/open-emails-provider-credentials.keyring.json, with a
+ * the emails data root/open-emails-provider-credentials.keyring.json, with a
  * one-time copy+verify+receipt migration from the two old defaults.
  *
  * These tests pin: the canonical default, the env override still winning, the
@@ -58,7 +58,7 @@ function cleanup(fake: { env: NodeJS.ProcessEnv; home: string }): void {
 }
 
 describe("canonical keyring default", () => {
-  test("default path resolves to $HOME/.hasna/emails/open-emails-provider-credentials.keyring.json", () => {
+  test("default path resolves to the resolver data root keyring file", () => {
     const fake = fakeEnv();
     try {
       expect(defaultProviderSecretsKeyringPath(fake.env)).toBe(
@@ -69,7 +69,7 @@ describe("canonical keyring default", () => {
     }
   });
 
-  test("legacy paths are enumerated: XDG first, then ~/.hasna/secrets", () => {
+  test("legacy paths are enumerated: XDG first, then the secrets data root", () => {
     const fake = fakeEnvWithXdg();
     try {
       const legacy = legacyProviderSecretsKeyringPaths(fake.env);
@@ -82,7 +82,7 @@ describe("canonical keyring default", () => {
     }
   });
 
-  test("legacy paths without XDG_CONFIG_HOME fall back to ~/.hasna/secrets only", () => {
+  test("legacy paths without XDG_CONFIG_HOME fall back to the secrets data root only", () => {
     const fake = fakeEnv();
     try {
       expect(legacyProviderSecretsKeyringPaths(fake.env)).toEqual([
@@ -132,7 +132,7 @@ describe("one-time keyring migration", () => {
     }
   });
 
-  test("migrates a legacy ~/.hasna/secrets keyring too", () => {
+  test("migrates a legacy the secrets data root keyring too", () => {
     const fake = fakeEnv();
     try {
       const { raw } = makeKeyring();

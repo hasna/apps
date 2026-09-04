@@ -1,7 +1,7 @@
 /**
  * domains data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/domains` on macOS, XDG data root on Linux)
+ * platform placement (`the domains data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the domains-specific exact-app override on top.
  */
@@ -15,14 +15,14 @@ export const APP = "domains" as const;
 
 /**
  * The resolver domains data root: kind overrides honored,
- * `~/.hasna/domains` on macOS, `~/.local/share/hasna/domains` on Linux.
+ * `the domains data root` on macOS, `~/.local/share/hasna/domains` on Linux.
  */
 export function resolverHome(env: NodeJS.ProcessEnv = process.env): string {
   return resolverDataDir({ app: "domains", home: effectiveHome(env), env, });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/domains`). On macOS this equals the
+ * The pre-ruling legacy root (`the domains data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function legacyHomeDir(env: NodeJS.ProcessEnv = process.env): string {

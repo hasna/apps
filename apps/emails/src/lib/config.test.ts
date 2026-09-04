@@ -27,7 +27,7 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-// Use a temp dir unique per test run to isolate from real ~/.hasna/emails
+// Use a temp dir unique per test run to isolate from real the emails data root
 const TMP_HOME = join("/tmp", `emails-config-test-${process.pid}`);
 
 // These tests keep self-hosted client credentials available while selecting the

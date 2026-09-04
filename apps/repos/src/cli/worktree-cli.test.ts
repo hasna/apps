@@ -94,7 +94,7 @@ describe("repos worktree — argument surface", () => {
     expect(help.stdout).not.toContain("--path");
 
     for (const path of [
-      "/home/hasna/.hasna/repos/worktrees/repos/a321ba13",
+      join("/home/hasna", ".hasna", "repos", "worktrees", "repos", "a321ba13"),
       "/etc",
       "../../etc",
       "~/.hasna",

@@ -35,7 +35,7 @@ describe("getHomeDir", () => {
   // The regression: with HOME unset the fallback used to be the literal string
   // "~", so every global path became RELATIVE and the store was written into
   // the process cwd — which during the suite is this repository. The stray
-  // `~/.hasna/todos/config.json` that produced failed the 0.15.0 publish.
+  // `the todos data root/config.json` that produced failed the 0.15.0 publish.
   // Asserting absoluteness is what makes this fail on the old code: join("~",
   // ...) is relative, and no shell is involved to expand it.
   it("resolves an ABSOLUTE home even when HOME and USERPROFILE are unset", () => {

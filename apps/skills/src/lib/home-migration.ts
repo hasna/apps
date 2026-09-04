@@ -1,10 +1,10 @@
 /**
- * Owner layout migration — ~/.hasna/skills/{skills,logs,outputs}.
+ * Owner layout migration — the skills data root/{skills,logs,outputs}.
  *
  * The skills app folder gains three named subfolders, matching every sibling
  * Hasna app:
  *
- *   ~/.hasna/skills/
+ *   the skills data root/
  *   ├── skills/    canonical corpus cache; becomes the sync source
  *   ├── logs/      run/sync logs, created lazily
  *   ├── outputs/   run outputs, created lazily

@@ -1,7 +1,7 @@
 /**
  * dispatch data-root resolution — thin app wrapper over the single paths
  * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
- * platform placement (`~/.hasna/dispatch` on macOS, XDG data root on Linux)
+ * platform placement (`the dispatch data root` on macOS, XDG data root on Linux)
  * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
  * layers the dispatch-specific exact-app override on top.
  */
@@ -15,14 +15,14 @@ export const DISPATCH_DATA_DIR_ENV = "DISPATCH_DATA_DIR";
 
 /**
  * The resolver dispatch data root: kind overrides honored,
- * `~/.hasna/dispatch` on macOS, `~/.local/share/hasna/dispatch` on Linux.
+ * `the dispatch data root` on macOS, `~/.local/share/hasna/dispatch` on Linux.
  */
 export function getResolverDataDir(): string {
   return resolverDataDir({ app: "dispatch", home: getHomeDir(),  });
 }
 
 /**
- * The pre-ruling legacy root (`~/.hasna/dispatch`). On macOS this equals the
+ * The pre-ruling legacy root (`the dispatch data root`). On macOS this equals the
  * resolver root; elsewhere it is kept only for historical-data migration.
  */
 export function getLegacyDataDir(): string {

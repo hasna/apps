@@ -134,7 +134,7 @@ describe("config", () => {
       // nothing in the project explains the behaviour.
       // Resolved through getConfigPath rather than composed from tmpDir: the test
       // preload relocates the data dir with $HASNA_SKILLS_DIR, so a hand-built
-      // ~/.hasna/skills path would not be the file loadConfig() reads and this
+      // the skills data root path would not be the file loadConfig() reads and this
       // test would pass without ever presenting the retired key.
       const globalPath = getConfigPath("global");
       expect(globalPath).not.toBe(getConfigPath("project"));
@@ -242,7 +242,7 @@ describe("config", () => {
   });
 
   describe("getDataDir", () => {
-    test("returns path inside ~/.hasna/skills/", () => {
+    test("returns path inside the skills data root/", () => {
       const dir = withTempHome(() => getDataDir());
       expect(dir).toContain(join(".hasna", "skills"));
     });
@@ -297,7 +297,7 @@ describe("config", () => {
       }
     });
 
-    test("copies missing legacy ~/.skills files into an existing ~/.hasna/skills without overwriting", () => {
+    test("copies missing legacy ~/.skills files into an existing the skills data root without overwriting", () => {
       const originalHome = process.env.HOME;
       const home = join(tmpdir(), `skills-home-migration-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 

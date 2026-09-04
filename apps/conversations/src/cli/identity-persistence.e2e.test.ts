@@ -7,7 +7,7 @@ import { join } from "path";
  * Regression coverage for the identity-revert bug.
  *
  * Presence rows live in the store (local SQLite or the cloud API), but *this
- * installation's* identity lives in a local file, $HOME/.hasna/conversations/agent-id,
+ * installation's* identity lives in a local file, the conversations data root's agent-id,
  * read by getAutoName(). `agents register` and `agents rename` used to mutate the
  * store without touching that file, so they reported success and the very next
  * process resolved the OLD name again — the identity appeared to revert forever.

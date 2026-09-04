@@ -332,7 +332,7 @@ export function registerCrudCommands(program: Command): void {
         // existed.
         //
         // So: resolve the writing identity when --agent is omitted
-        // (MEMENTOS_AGENT, then the fleet surface ~/.hasna/conversations/
+        // (MEMENTOS_AGENT, then the fleet machine-identity surface
         // agent-id), register it on first use, and refuse an agent-source save
         // that has NO resolvable identity.
         //
@@ -357,7 +357,7 @@ export function registerCrudCommands(program: Command): void {
             throw new Error(
               `No agent identity: an agent-source save needs a writing agent, and none could be resolved.\n` +
                 `Pass --agent <name>, set MEMENTOS_AGENT, or write the fleet identity file ` +
-                `(~/.hasna/conversations/agent-id, produced by "conversations agents register").\n` +
+                `(the fleet machine-identity file, produced by "conversations agents register").\n` +
                 `To write without claiming an agent author, omit --source or pass ` +
                 `--source user|system|auto|imported.`,
             );
@@ -564,7 +564,7 @@ export function registerCrudCommands(program: Command): void {
         };
 
         // Record WHO performed the update when the writing identity is
-        // resolvable (MEMENTOS_AGENT / ~/.hasna/conversations/agent-id). All
+        // resolvable (MEMENTOS_AGENT / the fleet machine-identity file). All
         // 14370 rows measured 2026-08-17 had updated_by_agent NULL; unlike the
         // save path this is best-effort, because an update targets an existing
         // row whose owner is already recorded — the caller is never blocked

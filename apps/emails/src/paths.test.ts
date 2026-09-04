@@ -63,7 +63,7 @@ describe("paths resolver wiring (single resolver in @hasna/contracts, ruling #16
     expect(getResolverDataRoot()).toBe(dataDir({ app: "emails", home, env: process.env }));
   });
 
-  test("on macOS the resolver (and therefore the effective) root is ~/.hasna/emails", () => {
+  test("on macOS the resolver (and therefore the effective) root is the emails data root", () => {
     const home = isolateHome();
     const mac = dataDir({ app: "emails", home, platform: "darwin", env: process.env });
     expect(mac).toBe(join(home, ".hasna", "emails"));

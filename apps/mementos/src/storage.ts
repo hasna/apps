@@ -1091,7 +1091,7 @@ function getConfiguredConnectionString(): string | undefined {
 
 /**
  * Resolve the configured remote storage DSN (env `HASNA_MEMENTOS_DATABASE_URL`
- * first, then `~/.hasna/mementos/storage/config.json`) with full validation,
+ * first, then the mementos data root's storage/config.json) with full validation,
  * WITHOUT the client-context guard. Callers decide whether the guard applies:
  * {@link getStorageConnectionString} applies it to every client data path;
  * {@link getStorageConnectionStringForOperator} is the explicitly-invoked

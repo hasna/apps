@@ -38,7 +38,7 @@ type LoopGoalRunRow = {
 /**
  * The default OpenLoops store path, resolved through the single paths resolver
  * in @hasna/contracts (ruling #1668): the resolver data root for `loops`
- * (`~/.hasna/loops` on macOS, XDG data root on Linux). The exact-app override
+ * (`the loops data root` on macOS, XDG data root on Linux). The exact-app override
  * `HASNA_ECONOMY_LOOPS_DB_PATH` still wins unconditionally.
  */
 export function defaultLoopsDbPath(): string {

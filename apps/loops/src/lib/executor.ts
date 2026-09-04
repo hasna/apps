@@ -613,7 +613,7 @@ function agentToolForSpec(spec: CommandSpec): string | undefined {
  * agent CLI but which carries no explicit account. Regression row
  * e84f3956-1083-4b4a-bb73-59f901b054b7 (measured 2026-07-30, runner-origin):
  * the runner's own process.env lacks CLAUDE_CONFIG_DIR under systemd/launchd
- * launchers, and neither ~/.hasna/cloud/*.env nor an explicit account supplies
+ * launchers, and neither the legacy cloud env files nor an explicit account supplies
  * it, so headless claude resolved to the DEFAULT account profile — a silent
  * identity switch (429 on the exhausted default, exit 1, zero cost, ~3s) while
  * the configured profile sat idle. `accounts env --tool <tool>` with no name

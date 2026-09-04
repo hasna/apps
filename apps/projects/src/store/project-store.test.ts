@@ -656,7 +656,7 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
     // Isolation is asserted, not assumed: every test drives a fresh temp
     // PROJECTS_HOME and the finally-block removes it, so no production store
-    // under ~/.hasna/projects is opened, migrated, or written by this suite.
+    // under the projects data root is opened, migrated, or written by this suite.
     // Awaits `fn` before restoring the env and removing the temp root. Declared
     // synchronous previously, while every call site passes an async callback, so
     // the finally block ran when the promise was RETURNED rather than when it
