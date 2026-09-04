@@ -11,10 +11,16 @@ Agent-first file management — index local folders and S3 buckets, sync Google 
 bun install -g @hasna/files
 ```
 
-The published executables use Bun. A local index is created on first use; no
-PostgreSQL or S3 configuration is required for local folders.
+The published executables use Bun. The client talks to the hosted files
+service when `HASNA_FILES_API_URL` + `HASNA_FILES_API_KEY` are set (aliases
+`FILES_API_URL` / `FILES_API_KEY` are accepted). Without those it **fails
+closed** — it never silently falls back to the on-box SQLite store. Local
+SQLite mode is an explicit opt-in: set `HASNA_FILES_LOCAL_MODE=1` (alias
+`FILES_LOCAL_MODE=1`), and no PostgreSQL or S3 configuration is required for
+local folders.
 
 ```bash
+export HASNA_FILES_LOCAL_MODE=1   # explicit opt-in for the local SQLite store
 files sources add ~/Documents --name documents
 files index
 files search "quarterly plan"
@@ -36,9 +42,12 @@ files sources --help
 files knowledge manifest --help
 ```
 
-The CLI supports local SQLite mode and an HTTP API client mode. Commands that
-need on-box bytes or ingestion state fail explicitly in API mode; the complete
-command and availability matrix is in the [CLI reference](docs/cli-reference.md).
+The CLI supports local SQLite mode (explicit opt-in: `HASNA_FILES_LOCAL_MODE=1`
+/ `FILES_LOCAL_MODE=1`) and an HTTP API client mode. With neither the hosted
+API env nor the local opt-in set, commands fail closed with an error naming
+the required env — never a silent local session. Commands that need on-box
+bytes or ingestion state fail explicitly in API mode; the complete command and
+availability matrix is in the [CLI reference](docs/cli-reference.md).
 
 Build bounded agent context packs with citations instead of dumping full files:
 

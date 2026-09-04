@@ -16,6 +16,7 @@ import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
 import { store } from "../store/index.js";
+import { resolveFilesCloudStorage } from "../lib/cloud-storage.js";
 import { ApiStore } from "../store/api-store.js";
 import type { LogActivityInput } from "../store/types.js";
 import { registerEvidenceTools } from "./evidence-tools.js";
@@ -1891,6 +1892,17 @@ async function main(): Promise<void> {
   if (process.argv.includes("-h") || process.argv.includes("--help")) {
     printHelp();
     return;
+  }
+
+  // Transport gate (fail closed): refuse to serve without the hosted API pair
+  // (HASNA_FILES_API_URL + HASNA_FILES_API_KEY, FILES_* aliases accepted) or an
+  // explicit local opt-in (HASNA_FILES_LOCAL_MODE=1 / FILES_LOCAL_MODE=1). The
+  // MCP server never silently serves the on-box SQLite store as a default.
+  try {
+    resolveFilesCloudStorage();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   }
 
   const { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } = await import("./http.js");

@@ -39,9 +39,20 @@ function fakeTransport(): { transport: HasnaHttpTransport; calls: Call[] } {
 }
 
 describe("resolveStore", () => {
-  it("returns a LocalStore with no cloud env", () => {
-    expect(resolveStore({}).transport).toBe("local");
-    expect(resolveStore({}) instanceof LocalStore).toBe(true);
+  it("fails closed (throws, never LocalStore) when no env and no local opt-in", () => {
+    expect(() => resolveStore({})).toThrow(/HASNA_FILES_API_URL/);
+    expect(() => resolveStore({})).toThrow(/HASNA_FILES_API_KEY/);
+    expect(() => resolveStore({})).toThrow(/HASNA_FILES_LOCAL_MODE/);
+  });
+
+  it("returns a LocalStore only under the explicit local opt-in", () => {
+    const s = resolveStore({ HASNA_FILES_LOCAL_MODE: "1" });
+    expect(s.transport).toBe("local");
+    expect(s instanceof LocalStore).toBe(true);
+  });
+
+  it("honours the unprefixed local opt-in alias", () => {
+    expect(resolveStore({ FILES_LOCAL_MODE: "1" }).transport).toBe("local");
   });
 
   it("returns an ApiStore when API url + key are present", () => {
