@@ -15,18 +15,32 @@ The `Runner` abstraction is the only thing that changes between local and remote
 - **Local** (`--machine` omitted, `local`, `localhost`, or this hostname) → `LocalRunner`
   runs tmux via `spawnSync`.
 - **Remote** → `RemoteRunner` quotes the tmux argv into a single shell command and resolves
-  how to reach the host through the optional [`@hasna/machines`](https://github.com/hasna/machines)
-  consumer SDK:
+  how to reach the host through a `MachineCommandResolver`. The built-in resolver is plain,
+  non-interactive `ssh <machine> '<cmd>'`, with the host resolved by your SSH config / DNS
+  (a Tailscale MagicDNS `Host` entry works well here):
 
   ```ts
-  import { resolveMachineCommand } from "@hasna/machines/consumer";
-  resolveMachineCommand("spark01", "tmux send-keys ...");
-  // → { source: "tailscale", shellCommand: "ssh spark01.<tailnet>.ts.net 'tmux send-keys ...'" }
+  import { sshMachineCommandResolver } from "@hasna/dispatch";
+  sshMachineCommandResolver("spark01", "tmux send-keys ...");
+  // → { source: "ssh", shellCommand: "ssh -o BatchMode=yes ... 'spark01' 'tmux send-keys ...'" }
   ```
 
-  It picks the best live route (LAN address or Tailscale MagicDNS name), so it keeps
-  working even when DHCP rotates an IP. If `@hasna/machines` isn't installed, `dispatch`
-  falls back to plain `ssh <machine> '<cmd>'` (resolved by your SSH config / DNS).
+  Route resolution is pluggable: pass your own resolver to `createRunner(machine, resolve)`
+  to route over LAN addresses, Tailscale MagicDNS, or any other transport.
+
+  ```ts
+  import { createRunner, type MachineCommandResolver } from "@hasna/dispatch";
+
+  const viaTailscale: MachineCommandResolver = (id, command) => ({
+    source: "tailscale",
+    shellCommand: `ssh ${id}.<tailnet>.ts.net ${JSON.stringify(command)}`,
+  });
+  const runner = await createRunner("spark01", viaTailscale);
+  ```
+
+  > `@hasna/machines` used to provide this resolution and was deleted from the registry
+  > (2026-09-03, issue #1603). `@hasna/dispatch` no longer depends on it: the topology
+  > types are vendored in `src/lib/runner.ts` and remote routing defaults to plain SSH.
 
 Because tmux text payloads travel as a properly-quoted single argument and large prompts
 are piped via stdin (`load-buffer -`), long and multi-line prompts cross the SSH boundary
@@ -41,8 +55,9 @@ bulk runs against machines that may be down.
 
 - Passwordless SSH to the target host (key/agent), reachable over LAN or Tailscale.
 - `tmux` installed on the target host.
-- For Tailscale/LAN route resolution: `@hasna/machines` available (optional dependency).
-  Without it, name resolution falls to your SSH config.
+- For Tailscale/LAN routes: an SSH `Host` entry (or MagicDNS name) for the machine, or a
+  custom `MachineCommandResolver` passed to `createRunner`. `dispatch` has no optional
+  topology dependency; name resolution falls to your SSH config by default.
 
 ## Scheduling + cross-machine
 

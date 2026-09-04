@@ -10,6 +10,40 @@ export interface RunResult {
 }
 
 /**
+ * Route resolution for a remote machine — the shape `@hasna/machines`'
+ * `resolveMachineCommand` used to return.
+ *
+ * `@hasna/machines` was deleted from the public registry and from hasna/apps
+ * (owner directive, 2026-09-03; issue #1603), so dispatch no longer imports it
+ * and no longer declares it as a dependency: an empty-cache
+ * `bun add @hasna/dispatch` must resolve every dependency anonymously. The
+ * topology types it contributed are vendored here instead, and remote
+ * dispatch resolves routes with plain, non-interactive `ssh` (see
+ * {@link sshMachineCommandResolver}).
+ *
+ * TODO(#1603): once the shared machine-topology helper lands in
+ * `@hasna/contracts` and that release is pinned fleet-wide, re-export these
+ * types from the contracts kit instead of vendoring them here. Contracts was
+ * not released in this run, so the pin is deliberately left untouched.
+ */
+export type MachineRouteSource = RunResult["source"];
+
+/** A resolved remote command: how to reach the machine, and what to run. */
+export interface MachineCommandPlan {
+  /** The route the command travels over. */
+  source: MachineRouteSource;
+  /** A single shell command string, ready for `bash -c`. */
+  shellCommand: string;
+}
+
+/**
+ * Resolves a machine id plus a shell command into an executable plan.
+ * Injectable so a future topology provider can supply LAN/Tailscale routes
+ * without dispatch taking a dependency on it.
+ */
+export type MachineCommandResolver = (machineId: string, command: string) => MachineCommandPlan;
+
+/**
  * A Runner executes a command (given as an argv array) and returns its result.
  * Optional `input` is piped to the command's stdin (used for `tmux load-buffer -`).
  *
@@ -76,16 +110,17 @@ export function fallbackSshCommand(id: string, command: string): string {
 }
 
 /**
- * Runs commands on a remote machine via @hasna/machines (`resolveMachineCommand`),
- * falling back to a plain `ssh <machine>` when the package or a route is absent.
+ * Runs commands on a remote machine through an injected
+ * {@link MachineCommandResolver}.
  *
- * Construct via {@link createRemoteRunner} so the optional dependency can be
- * dynamically imported.
+ * Construct via {@link createRunner}, which supplies the built-in
+ * {@link sshMachineCommandResolver}; pass a custom resolver to route over a
+ * different transport.
  */
 export class RemoteRunner implements Runner {
   constructor(
     readonly machine: string,
-    private readonly resolve: (machineId: string, command: string) => { source: RunResult["source"]; shellCommand: string },
+    private readonly resolve: MachineCommandResolver,
     private readonly timeoutMs: number = remoteTimeoutMs(),
   ) {}
 
@@ -126,26 +161,25 @@ export function isLocalMachine(machine: string | undefined): boolean {
 }
 
 /**
- * Build a Runner for the given machine. Local machines get a {@link LocalRunner};
- * remote machines load `@hasna/machines/consumer` dynamically for route
- * resolution and fall back to plain `ssh <machine> <cmd>` if unavailable.
+ * The built-in route resolver: plain, non-interactive `ssh <machine> <cmd>`,
+ * bounded by {@link fallbackSshCommand}'s connect/keepalive options.
  */
-export async function createRunner(machine?: string): Promise<Runner> {
+export const sshMachineCommandResolver: MachineCommandResolver = (machineId, command) => ({
+  source: "ssh",
+  shellCommand: fallbackSshCommand(machineId, command),
+});
+
+/**
+ * Build a Runner for the given machine. Local machines get a {@link LocalRunner};
+ * remote machines get a {@link RemoteRunner} routed over plain `ssh` unless a
+ * custom {@link MachineCommandResolver} is supplied.
+ *
+ * Stays `async` so existing callers (`await createRunner(...)`) keep working.
+ */
+export async function createRunner(
+  machine?: string,
+  resolve: MachineCommandResolver = sshMachineCommandResolver,
+): Promise<Runner> {
   if (isLocalMachine(machine)) return new LocalRunner();
-  const machineId = machine as string;
-  try {
-    // Non-literal specifier: keeps this optional peer out of compile-time module
-    // resolution while still loading it at runtime when installed.
-    const specifier = "@hasna/machines/consumer";
-    const mod = (await import(specifier)) as {
-      resolveMachineCommand: (id: string, command: string) => { source: RunResult["source"]; shellCommand: string };
-    };
-    return new RemoteRunner(machineId, mod.resolveMachineCommand);
-  } catch {
-    // Fallback: plain ssh, no route resolution.
-    return new RemoteRunner(machineId, (id, command) => ({
-      source: "ssh",
-      shellCommand: fallbackSshCommand(id, command),
-    }));
-  }
+  return new RemoteRunner(machine as string, resolve);
 }

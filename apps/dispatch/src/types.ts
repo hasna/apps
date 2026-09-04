@@ -82,7 +82,7 @@ export interface ExecOptions {
   target: string;
   /** Single-line shell command to submit. */
   command: string;
-  /** Optional machine id (local when omitted). Resolved via @hasna/machines. */
+  /** Optional machine id (local when omitted). Routed via a MachineCommandResolver (ssh by default). */
   machine?: string;
   /** Validate and record the exact delivery plan without typing anything. */
   dryRun?: boolean;
@@ -149,7 +149,7 @@ export interface DispatchOptions {
    * `/goal`. Useful for making Codewith create a durable goal from the prompt.
    */
   goal?: boolean;
-  /** Optional machine id (local when omitted). Resolved via @hasna/machines. */
+  /** Optional machine id (local when omitted). Routed via a MachineCommandResolver (ssh by default). */
   machine?: string;
   /** Submit key for prompt sends. Enter starts idle work or steers active Codewith; Tab is only for proven queue support. */
   submitKey?: SubmitKey;
@@ -230,7 +230,7 @@ export interface KeyOptions {
   target: string;
   /** Named key to send, e.g. Enter or Tab. Must be in the built-in allowlist. */
   key: string;
-  /** Optional machine id (local when omitted). Resolved via @hasna/machines. */
+  /** Optional machine id (local when omitted). Routed via a MachineCommandResolver (ssh by default). */
   machine?: string;
 }
 

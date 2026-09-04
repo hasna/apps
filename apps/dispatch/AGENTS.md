@@ -14,7 +14,7 @@ src/
   types.ts            core types (DispatchOptions/Record, ScheduledDispatch, ConfirmResult)
   index.ts            root exports
   lib/
-    runner.ts         Runner abstraction — LocalRunner (spawnSync) / RemoteRunner (@hasna/machines)
+    runner.ts         Runner abstraction — LocalRunner (spawnSync) / RemoteRunner (ssh, pluggable resolver)
     tmux.ts           tmux wrapper (send-keys, capture-pane, list-panes, load/paste-buffer)
     delay.ts          computeSubmitDelay — auto pre-Enter delay from word/char count
     submit.ts         submit() — wait + Enter + retry-until-confirmed
@@ -36,12 +36,14 @@ src/
 Everything tmux goes through a `Runner` that executes an **argv array**:
 
 - `LocalRunner` → `spawnSync`.
-- `RemoteRunner` → wraps the argv into one shell command and runs it via
-  `@hasna/machines`' `resolveMachineCommand` (Tailscale/LAN/SSH), with a plain-`ssh`
-  fallback when the optional dep is absent.
+- `RemoteRunner` → wraps the argv into one shell command and runs it through an injected
+  `MachineCommandResolver`. The built-in `sshMachineCommandResolver` uses plain,
+  non-interactive `ssh`; pass a custom resolver to `createRunner(machine, resolve)` for
+  LAN/Tailscale routes.
 
 So the **same** tmux code targets any machine; cross-machine is just a different runner.
-`@hasna/machines` is an **optional** dependency, dynamically imported.
+`@hasna/machines` was deleted from the registry (2026-09-03, issue #1603); dispatch has
+**no** dependency on it and vendors the topology types in `lib/runner.ts`.
 
 ## Conventions
 

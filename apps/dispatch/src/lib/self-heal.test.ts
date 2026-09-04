@@ -65,7 +65,10 @@ describe("dispatch self-heal diagnosis", () => {
     });
 
     expect(diagnosis.category).toBe("machine");
-    expect(diagnosis.repairRoute).toMatch(/@hasna\/machines/);
+    // #1603: @hasna/machines was deleted; machine reachability routes to the
+    // fleet host setup (ssh config / DNS), never to a package that no longer exists.
+    expect(diagnosis.repairRoute).toMatch(/machine reachability/);
+    expect(diagnosis.repairRoute).not.toMatch(/@hasna\/machines/);
     expect(diagnosis.nextActions.join("\n")).toMatch(/spark01, spark02, and apple03/);
   });
 

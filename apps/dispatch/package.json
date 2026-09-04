@@ -72,7 +72,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external @hasna/machines && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @hasna/machines && bun build src/daemon/index.ts --outdir dist/daemon --target bun --external @hasna/machines && bun build src/sdk/index.ts --outdir dist/sdk --target bun --external @hasna/machines && bun build src/index.ts --outdir dist --target bun --external @hasna/machines && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/daemon/index.ts --outdir dist/daemon --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "check:contracts": "bun scripts/contracts-cli.mjs repo-conformance .",

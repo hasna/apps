@@ -12,8 +12,8 @@ import { getMeta, setMeta } from './sql.mjs';
 import { serverEnv } from './env.mjs';
 import {
   approveDeviceAuth, autoApproveDeviceAuth, exchangeDeviceAuth, getTenant, getUser, insertApiKey,
-  listApiKeys, pollDeviceAuth, resolveSigningSecret, revokeSession, startDeviceAuth, startOtpLogin,
-  validateApiKey, validateSession, verifyOtp,
+  listApiKeys, normalizeEmail, pollDeviceAuth, resolveSigningSecret, revokeSession, startDeviceAuth,
+  startOtpLogin, validateApiKey, validateSession, verifyOtp,
 } from './auth.mjs';
 import { createNote, deleteNote, exportNotes, getNote, listNotes, updateNote } from './notes.mjs';
 
@@ -152,10 +152,14 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     ),
   );
 
-  const rateLimit = (c, name, max, windowMs = 60 * 60 * 1000) => {
-    const ip = c.env?.ip || 'unknown';
-    const key = `${name}:${ip}`;
+  // Count one hit against `key`, rejecting with 429 past `max` per window.
+  // Expired buckets are pruned opportunistically so an enumeration attempt
+  // cannot grow the map without bound.
+  const countAgainst = (key, max, windowMs) => {
     const now = Date.now();
+    if (rateBuckets.size > 10000) {
+      for (const [k, v] of rateBuckets) if (v.resetAt < now) rateBuckets.delete(k);
+    }
     const current = rateBuckets.get(key);
     if (!current || current.resetAt < now) {
       rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
@@ -165,17 +169,37 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     if (current.count > max) throw new ApiError('rate_limited', 'too many requests; try again later', 429);
   };
 
+  const rateLimit = (c, name, max, windowMs = 60 * 60 * 1000) => {
+    const ip = c.env?.ip || 'unknown';
+    countAgainst(`${name}:${ip}`, max, windowMs);
+  };
+
+  // Issue #1542: a per-IP limit alone still lets a distributed caller request
+  // unlimited login codes for ONE victim address (each code is a live login
+  // credential for that account). Passwordless login is therefore limited per
+  // target email as well as per source IP.
+  const rateLimitEmail = (name, email, max, windowMs = 60 * 60 * 1000) => {
+    const normalized = normalizeEmail(email);
+    if (!normalized) return;
+    countAgainst(`${name}:email:${normalized}`, max, windowMs);
+  };
+
   const jsonBody = (c) => c.req.json().catch(() => ({}));
 
   // Auth routes are mirrored unversioned under /api/auth/* (dialect §1).
   for (const prefix of ['/api/auth', '/api/v1/auth']) {
     app.post(`${prefix}/login`, async (c) => {
       rateLimit(c, 'otp', 5);
-      return c.json(await startOtpLogin(db, cfg, await jsonBody(c)));
+      const body = await jsonBody(c);
+      rateLimitEmail('otp', body?.email, 5);
+      return c.json(await startOtpLogin(db, cfg, body));
     });
     app.post(`${prefix}/verify`, async (c) => {
       rateLimit(c, 'otp_verify', 20);
-      return c.json(await verifyOtp(db, cfg, await jsonBody(c)));
+      const body = await jsonBody(c);
+      // Bound guessing of a live 6-digit code for one address across IPs.
+      rateLimitEmail('otp_verify', body?.email, 20);
+      return c.json(await verifyOtp(db, cfg, body));
     });
     app.post(`${prefix}/device/start`, async (c) => {
       rateLimit(c, 'device_start', 20);

@@ -30,7 +30,7 @@ dispatch send --to work:agent --prompt "Refactor the parser and add tests"
 | Need to know what a pane actually is | **Native agent detection** — Codewith, Codex, Claude Code/Claude, and OpenCode panes are classified from command, process tree, cwd, and live UI proof |
 | Need a token-bounded fleet snapshot | **Fleet summary** — `dispatch fleet summary` filters targets first, captures bounded redacted excerpts, classifies panes, and can fail fast on missing AI provider config |
 | "Did it actually go through?" | **Smart delivery confirmation** — diffs the pane before/after and detects the agent's working/`esc to interrupt` state and the composer clearing |
-| Doesn't work across machines | **Cross-machine** routing through [`@hasna/machines`](https://github.com/hasna/machines) (Tailscale / LAN / SSH) |
+| Doesn't work across machines | **Cross-machine** routing over plain SSH, with a pluggable `MachineCommandResolver` for LAN / Tailscale routes |
 | Fire-and-forget / later | **Scheduled dispatches and loops** (`--at` / `--in` / `--cron` / `--every`) owned by a **persistent daemon** that survives restarts |
 
 See [docs/reliability.md](docs/reliability.md) for the full mechanism.
