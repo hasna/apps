@@ -148,6 +148,33 @@ describe("storage adapter contracts", () => {
     expect(report.conditions.every((condition) => condition.verified)).toBe(true);
   });
 
+  test("derives bare unprefixed project task-list slugs on BOTH storage engines", async () => {
+    // Fleet convention (binding 2026-09-04): a project's task-list slug is the
+    // bare sanitized repo name (`apps`, `internal-apps`), never an auto
+    // `todos-` prefixed variant (`todos-apps`). Explicit user-supplied
+    // `todos-*` slugs stay verbatim, and legacy prefixed ids keep resolving.
+    for (const [engine, adapter] of [
+      ["sqlite", createLocalSqliteTodosStorageAdapter({ db })],
+      ["postgres", createPostgresTodosStorageAdapter({ client: createMemoryPostgresClient().client })],
+    ] as const) {
+      const derived = await adapter.projects.create({ name: "Open Emails", path: `/tmp/${engine}-no-prefix-open-emails` });
+      expect(derived.task_list_id, `${engine}: name-derived project slug must not carry a todos- prefix`).toBe("open-emails");
+
+      const explicit = await adapter.projects.create({
+        name: "Legacy Explicit",
+        path: `/tmp/${engine}-no-prefix-legacy-explicit`,
+        task_list_id: "todos-legacy-explicit",
+      });
+      expect(explicit.task_list_id, `${engine}: explicit todos- slug must stay verbatim`).toBe("todos-legacy-explicit");
+
+      const list = await adapter.taskLists.create({ name: "Legacy List", slug: "todos-legacy-explicit", project_id: explicit.id });
+      expect(
+        await adapter.taskLists.getBySlug("todos-legacy-explicit", explicit.id),
+        `${engine}: legacy prefixed task-list slug must still resolve`,
+      ).toMatchObject({ id: list.id });
+    }
+  });
+
   test("REGRESSION: postgres sync changed-since compares the cursor as an INSTANT, not raw text", async () => {
     // Release-review P1 (0.15.44 review): getChangedSince filtered
     // `task.updated_at > since` as raw text. Space (0x20) sorts before 'T'
