@@ -22,6 +22,9 @@ beforeAll(() => {
   process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_HOME, ".hasna", "hooks", "hooks.lock");
   process.env.HASNA_HOOKS_CONFIG_PATH = join(TEST_HOME, ".hasna", "hooks", "config.json");
   process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH = join(TEST_HOME, ".claude", "settings.json");
+  // Explicit local-mode opt-in (fleet fail-closed doctrine): these CLI
+  // subprocess tests exercise the bundled registry + local store on purpose.
+  process.env.HASNA_HOOKS_LOCAL = "1";
   process.env.NO_COLOR = "1";
 });
 
@@ -31,6 +34,7 @@ afterAll(() => {
   delete process.env.HASNA_HOOKS_LOCK_PATH;
   delete process.env.HASNA_HOOKS_CONFIG_PATH;
   delete process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH;
+  delete process.env.HASNA_HOOKS_LOCAL;
   delete process.env.HASNA_HOOKS_API_URL;
   delete process.env.NO_COLOR;
   rmSync(TEST_HOME, { recursive: true, force: true });

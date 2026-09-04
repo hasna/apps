@@ -14,6 +14,10 @@ function cliEnv(): Record<string, string | undefined> {
     ...process.env,
     HOME: TEST_HOME,
     HASNA_HOOKS_CLAUDE_SETTINGS_PATH: SETTINGS_PATH,
+    // Explicit local-mode opt-in (fleet fail-closed doctrine): subprocess CLI
+    // tests exercise the bundled registry + local store on purpose, so they
+    // declare it instead of relying on a silent local default.
+    HASNA_HOOKS_LOCAL: "1",
     NO_COLOR: "1",
   };
 }

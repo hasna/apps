@@ -28,6 +28,7 @@ const originalCodewith = process.env.HASNA_HOOKS_CODEWITH_CONFIG_PATH;
 const originalDataDir = process.env.HASNA_HOOKS_DATA_DIR;
 const originalDbPath = process.env.HASNA_HOOKS_DB_PATH;
 const originalHome = process.env.HOME;
+const originalLocal = process.env.HASNA_HOOKS_LOCAL;
 
 beforeAll(() => {
   process.env.HOME = TEST_HOME;
@@ -36,6 +37,9 @@ beforeAll(() => {
   process.env.HASNA_HOOKS_CODEWITH_CONFIG_PATH = CODEWITH_CONFIG;
   process.env.HASNA_HOOKS_DATA_DIR = join(TEST_HOME, "data");
   process.env.HASNA_HOOKS_DB_PATH = join(TEST_HOME, "data", "hooks.db");
+  // Explicit local-mode opt-in (fleet fail-closed doctrine): CLI subprocess
+  // tests exercise the bundled registry + local store on purpose.
+  process.env.HASNA_HOOKS_LOCAL = "1";
 });
 
 afterAll(() => {
@@ -49,6 +53,7 @@ afterAll(() => {
   restore("HASNA_HOOKS_CODEWITH_CONFIG_PATH", originalCodewith);
   restore("HASNA_HOOKS_DATA_DIR", originalDataDir);
   restore("HASNA_HOOKS_DB_PATH", originalDbPath);
+  restore("HASNA_HOOKS_LOCAL", originalLocal);
   closeDb();
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
