@@ -11,8 +11,12 @@
 // never parse its format.
 //
 // Sessions: HS256 JWT {sub, tid, sid, email, iat, exp}, 7-day TTL, revocable
-// via the sessions row. OTP login codes are printed to the server console
-// (the dialect allows console delivery instead of email for self-hosting).
+// via the sessions row. OTP login codes are NEVER written to the server log:
+// anyone with log access could complete a login as any user (issue #1542).
+// Console delivery for self-hosting remains available as an explicit opt-in
+// (HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1); without it the server logs only
+// a non-secret reference and the code reaches the user out of band or via
+// devCode in dev mode.
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { ApiError } from './http.mjs';
@@ -280,9 +284,15 @@ export async function startOtpLogin(db, config, input) {
   await db.query('INSERT INTO otp_login_requests (id, email, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)').run(
     randomUUID(), email, sha256(`${email}:${code}`), expiresAt, nowIso(),
   );
-  // Self-hosted delivery: print to the server console (dialect §8 allows
-  // console-printed codes instead of email).
-  config.log(`[notes-server] login code for ${email}: ${code} (expires in 10 minutes)`);
+  // The one-time code must never reach the log (issue #1542): anyone with log
+  // access could request a code for any email and complete the login. Log a
+  // non-secret reference by default; print the code only when the self-hosting
+  // console-delivery opt-in (HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1) is set —
+  // the hosted/prod task definition must never set it.
+  config.log(`[notes-server] login code requested for ${email} (expires in 10 minutes)`);
+  if (config.consoleCodes) {
+    config.log(`[notes-server] login code for ${email}: ${code} (expires in 10 minutes)`);
+  }
   return { sent: true, email, expiresAt, ...(config.devMode ? { devCode: code } : {}) };
 }
 

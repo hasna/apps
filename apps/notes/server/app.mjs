@@ -50,6 +50,10 @@ export function resolveConfig(env = process.env, argv = []) {
     autoApprove: flag('--auto-approve') || serverEnv(env, 'AUTO_APPROVE') === '1',
     // Dev mode: include devCode in OTP login responses (platform authDevMode parity).
     devMode: flag('--dev') || serverEnv(env, 'DEV') === '1',
+    // Console delivery of OTP login codes (self-hosting). Explicit opt-in;
+    // never set in hosted/prod deploys — codes written to the log would let
+    // anyone with log access log in as any user (issue #1542).
+    consoleCodes: serverEnv(env, 'AUTH_CONSOLE_CODES') === '1',
     jwtSecret: serverEnv(env, 'JWT_SECRET'), // default: generated + persisted in the DB meta table
     env,
     log: console.log,
@@ -142,7 +146,7 @@ export async function createApp({ db, config }) {
   app.get('/favicon.ico', (c) => c.body(null, 204));
   app.get('/device', (c) =>
     c.html(
-      `<!doctype html><html><head><meta charset="utf-8"><title>Hasna Notes Device Login</title></head><body><main><h1>Hasna Notes Device Login</h1><p>Sign in with <code>POST /api/v1/auth/login</code> + <code>/verify</code> (the code is printed on the server console), then approve your device code with <code>POST /api/v1/auth/device/approve {"userCode":"XXXX-XXXX"}</code> using the session token. Self-hosted tip: start the server with <code>--auto-approve</code> and device logins from this machine complete automatically.</p></main></body></html>`,
+      `<!doctype html><html><head><meta charset="utf-8"><title>Hasna Notes Device Login</title></head><body><main><h1>Hasna Notes Device Login</h1><p>Sign in with <code>POST /api/v1/auth/login</code> + <code>/verify</code> (one-time login codes are never written to the server log), then approve your device code with <code>POST /api/v1/auth/device/approve {"userCode":"XXXX-XXXX"}</code> using the session token. Self-hosted tip: start the server with <code>--auto-approve</code> and device logins from this machine complete automatically. Self-hosters that need login codes on the server console must opt in explicitly: <code>HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1</code>.</p></main></body></html>`,
     ),
   );
 
@@ -174,11 +178,13 @@ export async function createApp({ db, config }) {
     app.post(`${prefix}/device/start`, async (c) => {
       rateLimit(c, 'device_start', 20);
       const { id, result } = await startDeviceAuth(db, cfg);
+      // One-time pairing codes never go to the log (issue #1542) — the user
+      // sees them via the API response the client displays.
       if (cfg.autoApprove && isLoopback(c.env?.ip)) {
         const user = await autoApproveDeviceAuth(db, id);
-        cfg.log(`[${SERVICE}] auto-approved device login ${result.userCode} for ${user.email} (loopback + --auto-approve)`);
+        cfg.log(`[${SERVICE}] auto-approved device login for ${user.email} (loopback + --auto-approve)`);
       } else {
-        cfg.log(`[${SERVICE}] device login requested: code ${result.userCode} — approve at ${result.verificationUri} or POST /api/v1/auth/device/approve with a signed-in session`);
+        cfg.log(`[${SERVICE}] device login requested — approve at ${result.verificationUri} or POST /api/v1/auth/device/approve with a signed-in session`);
       }
       return c.json(result, 201);
     });

@@ -33,11 +33,14 @@ approved automatically and the CLI receives its `pn_...` API key on the first
 poll — no browser, no email. Auto-approve attaches devices to the server's
 first account (creating a placeholder owner on a fresh database); if you want
 the account named after your email, do the OTP login below once before
-relying on auto-approve. Without the flag, the server prints the user code on
-its console and you approve it with a signed-in session:
+relying on auto-approve. Without the flag, approve the device code your
+client shows you with a signed-in session:
 
 ```sh
-# 1. sign in: the 6-digit code is printed on the SERVER console (no email needed)
+# 1. sign in: one-time login codes are NEVER written to the server log.
+#    Get the code from the OTP response in dev mode (--dev / HASNA_NOTES_SERVER_DEV=1
+#    adds devCode) or opt into console delivery for self-hosting with
+#    HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1.
 curl -X POST http://127.0.0.1:8788/api/v1/auth/login  -d '{"email":"you@example.com"}'
 curl -X POST http://127.0.0.1:8788/api/v1/auth/verify -d '{"email":"you@example.com","code":"123456"}'
 # → { token, user, tenant, apiKey }   (apiKey is returned exactly once)
@@ -56,6 +59,7 @@ curl -X POST http://127.0.0.1:8788/api/v1/auth/device/approve \
 | `--db <path>` | `HASNA_NOTES_SERVER_DB` | `~/.hasna/notes/server.db` | SQLite file (resolved via `@hasna/paths`; `HASNA_DATA_HOME` or a migrated store adopts the XDG data home) |
 | `--auto-approve` | `HASNA_NOTES_SERVER_AUTO_APPROVE=1` | off | auto-approve loopback device logins |
 | `--dev` | `HASNA_NOTES_SERVER_DEV=1` | off | include `devCode` in OTP responses (tests/dev) |
+| | `HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1` | off | print OTP login codes to the server console — explicit opt-in for self-hosting; never set in hosted/prod deploys (codes in logs = account takeover for anyone with log access) |
 | | `HASNA_NOTES_SERVER_URL` | `http://<host>:<port>` | public URL used in `verificationUri` |
 | | `HASNA_NOTES_SERVER_JWT_SECRET` | generated, persisted in DB | session-JWT secret |
 

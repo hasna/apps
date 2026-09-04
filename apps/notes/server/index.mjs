@@ -15,6 +15,8 @@
 // Env:   HASNA_NOTES_SERVER_PORT|PORT, HASNA_NOTES_SERVER_HOST,
 //        HASNA_NOTES_SERVER_DB, HASNA_NOTES_SERVER_URL,
 //        HASNA_NOTES_SERVER_AUTO_APPROVE=1, HASNA_NOTES_SERVER_DEV=1,
+//        HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1 (print OTP login codes to
+//        the console — explicit opt-in; hosted/prod deploys must never set it),
 //        HASNA_NOTES_SERVER_JWT_SECRET,
 //        HASNA_NOTES_DATABASE_URL (selects the postgresql backend),
 //        HASNA_NOTES_API_SIGNING_KEY (postgresql backend api-key auth;
@@ -43,7 +45,9 @@ Usage: notes-serve [--port <n>] [--host [addr]] [--db <path>] [--auto-approve] [
                    store is migrated there;
                    PostgreSQL is selected by HASNA_NOTES_DATABASE_URL instead)
   --auto-approve   auto-approve device logins from loopback (single-user convenience)
-  --dev            include devCode in OTP login responses (for tests/dev)
+  --dev            include devCode in OTP login responses (for tests/dev);
+                   OTP login codes are never logged — set
+                   HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1 to print them
   -V, --version    output the version number
   -h, --help       display help for command`);
 

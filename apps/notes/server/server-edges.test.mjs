@@ -138,6 +138,40 @@ describe('OTP login edges', () => {
     const otherIp = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'rl@example.com' }, env: { ip: '127.0.0.2' } });
     expect(otherIp.status).toBe(200);
   });
+
+  test('the OTP code never reaches the server log by default (regression for #1542)', async () => {
+    const lines = [];
+    const { app } = await makeApp({ log: (line) => lines.push(String(line)) });
+    const email = 'noleak@example.com';
+    const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
+    expect(started.devCode).toMatch(/^\d{6}$/);
+    const output = lines.join('\n');
+    // A non-secret reference is still logged (observability), but never the code.
+    expect(output).toContain(email);
+    expect(output).toContain('login code requested');
+    expect(output).not.toContain(started.devCode);
+    expect(output).not.toMatch(/\b\d{6}\b/);
+  });
+
+  test('console delivery of login codes requires the explicit HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES opt-in', async () => {
+    expect(resolveConfig({ HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES: '1' }, []).consoleCodes).toBe(true);
+    expect(resolveConfig({}, []).consoleCodes).toBe(false);
+    const lines = [];
+    const { app } = await makeApp({ consoleCodes: true, log: (line) => lines.push(String(line)) });
+    const email = 'optin@example.com';
+    const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
+    expect(lines.join('\n')).toContain(started.devCode);
+  });
+
+  test('device login pairing codes are never written to the server log', async () => {
+    const lines = [];
+    const { app } = await makeApp({ log: (line) => lines.push(String(line)) });
+    const started = await (await call(app, 'POST', '/api/v1/auth/device/start', { body: {} })).json();
+    expect(started.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+    const output = lines.join('\n');
+    expect(output).not.toContain(started.userCode);
+    expect(output).not.toMatch(/\b[A-Z0-9]{4}-[A-Z0-9]{4}\b/);
+  });
 });
 
 describe('api key scopes', () => {
