@@ -2,23 +2,23 @@
 // src/storage.ts
 import { chmod, mkdir, readFile, rename, writeFile } from "fs/promises";
 import { Buffer } from "buffer";
-import { existsSync } from "fs";
+import { existsSync as existsSync2 } from "fs";
 import { join as join2 } from "path";
 
 // src/app-home.ts
-import { resolve } from "path";
-
-// ../contracts/dist/paths.js
+import { existsSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
-var PATH_KIND_ENV = {
+import { join, resolve } from "path";
+import { homedir as pathsResolverHomedir } from "os";
+import { join as pathsResolverJoin } from "path";
+var PATHS_RESOLVER_KIND_ENV = {
   config: "HASNA_CONFIG_HOME",
   data: "HASNA_DATA_HOME",
   state: "HASNA_STATE_HOME",
   cache: "HASNA_CACHE_HOME"
 };
 var PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-function assertApp(app) {
+function pathsResolverAssertApp(app) {
   if (typeof app !== "string" || app.length === 0) {
     throw new TypeError("paths: app must be a non-empty string");
   }
@@ -26,56 +26,66 @@ function assertApp(app) {
     throw new TypeError(`paths: invalid app slug "${app}" \u2014 expected lowercase kebab-case ([a-z0-9]+(-[a-z0-9]+)*)`);
   }
 }
-function assertKind(kind) {
-  if (!Object.keys(PATH_KIND_ENV).includes(kind)) {
-    throw new TypeError(`paths: invalid path kind "${kind}" \u2014 expected one of ${Object.keys(PATH_KIND_ENV).join(", ")}`);
+function pathsResolverAssertKind(kind) {
+  if (!Object.keys(PATHS_RESOLVER_KIND_ENV).includes(kind)) {
+    throw new TypeError(`paths: invalid path kind "${kind}" \u2014 expected one of ${Object.keys(PATHS_RESOLVER_KIND_ENV).join(", ")}`);
   }
 }
-function effectiveHome(env = process.env) {
-  const home = env.HOME || env.USERPROFILE || homedir();
-  if (!home) {
-    throw new Error("Unable to resolve the user's home directory");
-  }
-  return home;
-}
-function baseDir(kind, options) {
-  assertKind(kind);
+function pathsResolverBaseDir(kind, options) {
+  pathsResolverAssertKind(kind);
   const env = options.env ?? process.env;
-  const override = env[PATH_KIND_ENV[kind]];
+  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
   if (typeof override === "string" && override.length > 0)
     return override;
-  const home = options.home ?? effectiveHome(options.env);
+  const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
-    return join(home, ".hasna");
+    switch (kind) {
+      case "config":
+      case "data":
+        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
+      case "cache":
+        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
+      case "state":
+        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
+    }
   }
   switch (kind) {
     case "config":
-      return join(home, ".config", "hasna");
+      return pathsResolverJoin(home, ".config", "hasna");
     case "data":
-      return join(home, ".local", "share", "hasna");
+      return pathsResolverJoin(home, ".local", "share", "hasna");
     case "state":
-      return join(home, ".local", "state", "hasna");
+      return pathsResolverJoin(home, ".local", "state", "hasna");
     case "cache":
-      return join(home, ".cache", "hasna");
+      return pathsResolverJoin(home, ".cache", "hasna");
   }
 }
-function resolveDir(kind, options) {
-  assertKind(kind);
-  assertApp(options.app);
-  const appSegment = options.internal === true ? join("internal", options.app) : options.app;
-  return join(baseDir(kind, options), appSegment);
+function pathsResolverResolve(kind, options) {
+  pathsResolverAssertApp(options.app);
+  const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
+  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
 }
 function dataDir(options) {
-  return resolveDir("data", options);
+  return pathsResolverResolve("data", options);
 }
-
-// src/app-home.ts
-var effectiveHome2 = effectiveHome;
 var HASNA_EVENTS_DIR_ENV = "HASNA_EVENTS_DIR";
 var HASNA_EVENTS_HOME_ENV = "HASNA_EVENTS_HOME";
+var EVENTS_STORE_SENTINEL_FILE = "events.json";
+function effectiveHome() {
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+}
+function legacyHomeDir() {
+  return join(effectiveHome(), ".hasna", "events");
+}
 function resolverHome() {
-  return dataDir({ app: "events", home: effectiveHome2() });
+  return dataDir({ app: "events", home: effectiveHome() || undefined });
+}
+function adoptResolverHome(resolved, env = process.env) {
+  const dataOverride = env.HASNA_DATA_HOME;
+  if (typeof dataOverride === "string" && dataOverride.trim().length > 0)
+    return true;
+  return existsSync(join(resolved, EVENTS_STORE_SENTINEL_FILE));
 }
 function exactEventsHome() {
   const dir = process.env[HASNA_EVENTS_DIR_ENV];
@@ -89,8 +99,9 @@ function exactEventsHome() {
 function getEventsHome() {
   const exact = exactEventsHome();
   if (exact)
-    return exact;
-  return resolve(resolverHome());
+    return resolve(exact);
+  const resolved = resolverHome();
+  return adoptResolverHome(resolved) ? resolve(resolved) : resolve(legacyHomeDir());
 }
 
 // src/storage.ts
@@ -236,7 +247,7 @@ class JsonEventsStore {
     };
   }
   async ensureArrayFile(path) {
-    if (!existsSync(path)) {
+    if (!existsSync2(path)) {
       await writeFile(path, `[]
 `, { encoding: "utf-8", mode: 384 });
     }
@@ -388,7 +399,7 @@ async function getEventsStatus(dataDir2) {
 }
 function statusFile(dataDir2, fileName, records) {
   const path = join2(dataDir2, fileName);
-  return { path, exists: existsSync(path), records };
+  return { path, exists: existsSync2(path), records };
 }
 export {
   normalizeEventPageLimit,

@@ -455,13 +455,15 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
  * describe, so the claim moves only with the manifest rewrite their
  * CONTRACTS_EXCEPTIONS remediation tasks own. */
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
-  // events — dev-time @hasna/contracts pin stays at 0.8.5 (main's pre-wave
-  // value) because bun 1.3.14's `--frozen-lockfile` refuses a root install
-  // when events' devDependencies resolve @hasna/contracts@1.0.0 to the
-  // workspace (measured at the #1749 rebase: the ONLY manifest change that
-  // flips the root frozen install from pass to "lockfile had changes"; ^1.0.0
-  // fails identically, 0.8.5/0.14.x registry resolutions pass). The KIT
-  // mismatch is recorded here so the two-sided contract stays green.
+  // events — kept OUT of the wave's resolver migration (see the
+  // RESOLVER_MARKER_EXCEPTIONS entry in paths-conformance.test.ts): its
+  // @hasna/contracts devDependency stays at main's registry-resolved 0.8.5
+  // because bun 1.3.14's root `--frozen-lockfile` refuses any events edge
+  // that resolves contracts to the workspace (exact, caret and workspace:*
+  // all measured at the #1749 rebase). kitVersion 1.0.0 (shared with main's
+  // own manifest) vs pinned 0.8.5 is the two-sided record this list exists
+  // for; events moves onto the contracts resolver when bun accepts the
+  // workspace edge (and the registry tarball ships ./paths).
   { member: "events", kitVersion: "1.0.0", pinned: "0.8.5" },
 ];
 
