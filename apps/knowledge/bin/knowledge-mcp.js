@@ -4317,7 +4317,7 @@ var package_default = {
     zod: "^4.3.6"
   },
   devDependencies: {
-    "@electric-sql/pglite": "^0.5.4",
+    "@electric-sql/pglite": "0.5.4",
     "@types/bun": "1.3.14",
     "@types/pg": "^8.15.6",
     typescript: "5.9.3"
