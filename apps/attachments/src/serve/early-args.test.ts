@@ -14,8 +14,9 @@ import { describe, expect, test } from "bun:test";
  *
  * The probes are two-sided: --help/--version must answer rc=0 WITHOUT pool
  * creation (positive), and plain serve must STILL create the pool on the real
- * path — under a deliberately broken (local-mode) environment that means the
- * same createCloudPoolFromEnv fatal, never a silent skip (negative).
+ * path — under a deliberately broken environment (the retired storage-mode
+ * variable, which the pool factory rejects) that means the same
+ * createCloudPoolFromEnv fatal, never a silent skip (negative).
  */
 
 const SERVE_ENTRY = new URL("./index.ts", import.meta.url).pathname;
@@ -88,13 +89,17 @@ describe("attachments-serve early arguments (binds-before-help class, BUG 970d7c
     async () => {
       // The real serve path must be unchanged by the early-args fix: with no
       // --help/--version, the entry still creates the pool from env, which in
-      // a deliberately local-mode environment fails with the pool fatal. A
-      // fix that swallowed or skipped pool creation would regress this side.
+      // a deliberately broken environment (the retired storage-mode variable
+      // still set) fails with the pool fatal. A fix that swallowed or skipped
+      // pool creation would regress this side.
       const result = await runServe();
       expect(result.timedOut).toBe(false);
       expect(result.code).toBe(1);
       expect(result.stderr).toContain("[attachments-serve] fatal:");
-      expect(result.stderr).toContain("createCloudPoolFromEnv");
+      // The pool factory rejects the retired storage-mode variable before
+      // building the pool — the fatal names the variable and the replacement.
+      expect(result.stderr).toContain("HASNA_ATTACHMENTS_STORAGE_MODE was removed");
+      expect(result.stderr).toContain("HASNA_ATTACHMENTS_DATABASE_URL");
     },
     15_000,
   );

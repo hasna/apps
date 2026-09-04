@@ -32,10 +32,10 @@ export interface AttachmentsConfig {
     linkType: "presigned" | "server";
   };
   client: {
-    // self_hosted/cloud is env-driven (HASNA_ATTACHMENTS_API_URL + _API_KEY via
-    // @hasna/contracts). We deliberately do NOT persist an API URL/token in
-    // config.json — no secret-at-rest, no DSN on the client. Only local
-    // internal-link (Tailscale) hints live here.
+    // The API transport is env-driven (HASNA_ATTACHMENTS_API_URL + _API_KEY).
+    // We deliberately do NOT persist an API URL/token in config.json — no
+    // secret-at-rest, no DSN on the client. Only local internal-link
+    // (Tailscale) hints live here.
     internalBaseUrl?: string;
     internalMachineId?: string;
     preferInternal: boolean;

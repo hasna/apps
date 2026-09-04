@@ -119,7 +119,6 @@ export async function createLiveSchema(label: string, baseUrl?: string): Promise
     client = createCloudPoolFromEnv(APP_SLUG, {
       env: {
         ...process.env,
-        HASNA_ATTACHMENTS_STORAGE_MODE: "cloud",
         HASNA_ATTACHMENTS_DATABASE_URL: withSearchPath(connectionString, schema),
       },
       max: 4,

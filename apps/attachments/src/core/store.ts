@@ -9,13 +9,14 @@
 //                   differ only by URL/key, which is a server-side tenancy detail,
 //                   not client code.
 //
-// The mode is resolved purely from env by `resolveStore` (delegating to the
-// contracts client-flip): presence of HASNA_ATTACHMENTS_API_URL +
-// HASNA_ATTACHMENTS_API_KEY (and/or HASNA_ATTACHMENTS_STORAGE_MODE) => ApiStore;
-// otherwise LocalStore. This is the ONLY place that decision is made, so every
+// The transport is resolved purely from env by `resolveStore`: presence of
+// HASNA_ATTACHMENTS_API_URL + HASNA_ATTACHMENTS_API_KEY => ApiStore; otherwise
+// LocalStore. This is the ONLY place that decision is made, so every
 // command/tool/method routes through the same interface and no caller ever
 // touches sqlite (`bun:sqlite`) or a raw `fetch` directly. That is the
-// split-brain bug this module exists to eliminate.
+// split-brain bug this module exists to eliminate. Retired storage-mode
+// variables (HASNA_ATTACHMENTS_STORAGE_MODE and friends) are a hard error,
+// never a selector.
 //
 // SAFETY: the bearer key lives only inside the contracts transport (ApiStore).
 // A raw DB DSN is NEVER used on the client. LocalStore never sees a key.
@@ -501,10 +502,10 @@ export interface ResolveStoreOptions {
 
 /**
  * The one call every command/tool/method makes to get its store. Resolves the
- * client-flip env for `attachments`; returns an {@link ApiStore} when
- * self_hosted/cloud is configured, otherwise a {@link LocalStore}. Throws (via the
- * contracts resolver) if cloud was requested but misconfigured, so a client never
- * silently reads the wrong dataset.
+ * client-flip env for `attachments`; returns an {@link ApiStore} when the URL +
+ * key pair is set, otherwise a {@link LocalStore}. Throws (via the contracts
+ * resolver) if the flip is half-applied or a retired mode variable is set, so a
+ * client never silently reads the wrong dataset.
  */
 export function resolveStore(env: NodeJS.ProcessEnv = process.env, options: ResolveStoreOptions = {}): Store {
   if (!options.forceLocal) {
