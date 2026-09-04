@@ -1,8 +1,0 @@
-.env.local
-.env
-content/
-demo/
-tests/
-*.log
-.github/
-.gitignore
