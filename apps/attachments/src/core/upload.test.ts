@@ -17,6 +17,10 @@ function makeMockS3() {
         // Drain the stream so size-counting transforms run like they do with real storage.
       }
     }),
+    head: mock(async (_key: string) => {
+      // By default the object store is EMPTY: HEAD misses so uploads proceed.
+      throw new Error("NotFound");
+    }),
     presign: mock(async (_key: string, _exp: number) => "https://s3.example.com/presigned?sig=test"),
     download: mock(async () => Buffer.from("")),
     delete: mock(async () => {}),
@@ -89,16 +93,36 @@ describe("uploadFile", () => {
     expect(result.createdAt).toBeGreaterThan(0);
   });
 
-  it("formats s3Key as an opaque attachments/YYYY-MM-DD/att_... object key", async () => {
+  it("formats s3Key as a content-addressed attachments/global/<sha256>.pdf key", async () => {
     const filePath = createTempFile("report.pdf", "fake pdf content");
     const result = await uploadFile(filePath, {}, deps);
-    expect(result.s3Key).toMatch(/^attachments\/\d{4}-\d{2}-\d{2}\/att_[A-Za-z0-9_-]{10}\/[A-Za-z0-9_-]+\.pdf$/);
+    expect(result.s3Key).toMatch(new RegExp(`^attachments/global/[a-f0-9]{64}\\.pdf$`));
+    expect(result.contentSha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("s3Key contains the generated attachment id", async () => {
+  it("s3Key is derived from the content digest, not the attachment id", async () => {
     const filePath = createTempFile("image.png", "fake png");
     const result = await uploadFile(filePath, {}, deps);
-    expect(result.s3Key).toContain(result.id);
+    expect(result.s3Key).not.toContain(result.id);
+    expect(result.s3Key).toContain(result.contentSha256!);
+  });
+
+  it("duplicate uploads of identical bytes land on the same object key", async () => {
+    const first = await uploadFile(createTempFile("dup-a.txt", "same bytes"), {}, deps);
+    const second = await uploadFile(createTempFile("dup-b.txt", "same bytes"), {}, deps);
+    expect(second.s3Key).toBe(first.s3Key);
+  });
+
+  it("skips the blob PUT when the content-addressed object already exists (HEAD hit)", async () => {
+    mockS3.head.mockImplementation(async () => ({}));
+    const filePath = createTempFile("dup-skip.txt", "already stored");
+    const result = await uploadFile(filePath, {}, deps);
+    // Only the manifest PUT happens: the duplicate blob is not re-uploaded.
+    expect(mockS3.upload).toHaveBeenCalledTimes(1);
+    const [manifestKey, , manifestType] = mockS3.upload.mock.calls[0] as [string, Buffer, string];
+    expect(manifestKey).toMatch(/^attachments\/global\/manifests\/att_[A-Za-z0-9_-]{10}\.json$/);
+    expect(manifestType).toBe("application/json");
+    expect(result.s3Key).toMatch(/^attachments\/global\/[a-f0-9]{64}\.txt$/);
   });
 
   it("s3Key keeps only the file extension at the end", async () => {
@@ -136,13 +160,19 @@ describe("uploadFile", () => {
     expect(result.expiresAt).toBeNull();
   });
 
-  it("calls S3 upload with the correct key and content type", async () => {
+  it("calls S3 upload with the correct key and content type (blob + manifest)", async () => {
     const filePath = createTempFile("upload-verify.txt", "some content");
     const result = await uploadFile(filePath, {}, deps);
-    expect(mockS3.upload).toHaveBeenCalledTimes(1);
-    const [calledKey, , calledContentType] = mockS3.upload.mock.calls[0] as [string, Buffer, string];
-    expect(calledKey).toBe(result.s3Key);
-    expect(calledContentType).toBe("text/plain");
+    expect(mockS3.upload).toHaveBeenCalledTimes(2);
+    const [blobKey, , blobType] = mockS3.upload.mock.calls[0] as [string, Buffer, string];
+    expect(blobKey).toBe(result.s3Key);
+    expect(blobType).toBe("text/plain");
+    const [manifestKey, manifestBody, manifestType] = mockS3.upload.mock.calls[1] as [string, Buffer, string];
+    expect(manifestKey).toBe(`attachments/global/manifests/${result.id}.json`);
+    expect(manifestType).toBe("application/json");
+    const manifest = JSON.parse(manifestBody.toString("utf-8"));
+    expect(manifest.sha256).toBe(result.contentSha256);
+    expect(manifest.storageKey).toBe(result.s3Key);
   });
 
   it("generates presigned link when linkType is presigned", async () => {
@@ -212,7 +242,8 @@ describe("uploadFromBuffer", () => {
     expect(result.filename).toBe("stdin-file.txt");
     expect(result.contentType).toBe("text/plain");
     expect(result.size).toBe(buffer.length);
-    expect(mockS3.upload).toHaveBeenCalledTimes(1);
+    // blob PUT + manifest PUT
+    expect(mockS3.upload).toHaveBeenCalledTimes(2);
     expect(mockDb.insert).toHaveBeenCalledTimes(1);
   });
 
@@ -284,7 +315,8 @@ describe("uploadFromUrl", () => {
     expect(result.filename).toBe("document.txt");
     expect(result.contentType).toBe("text/plain");
     expect(result.size).toBe(body.length);
-    expect(mockS3.uploadStream).toHaveBeenCalledTimes(1);
+    // The stream is staged, hashed and uploaded as a blob, plus the manifest PUT.
+    expect(mockS3.upload).toHaveBeenCalledTimes(2);
     expect(mockDb.insert).toHaveBeenCalledTimes(1);
   });
 

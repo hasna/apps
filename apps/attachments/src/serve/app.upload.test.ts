@@ -18,6 +18,9 @@ const AWS_LIMIT = 7 * 24 * 60 * 60;
 const uploads: Array<{ key: string; body: Buffer; contentType: string }> = [];
 const presignCalls: number[] = [];
 
+/** Object-store uploads holding file bytes (excludes the per-row artifact manifests). */
+const blobUploads = () => uploads.filter((u) => !u.key.includes("/manifests/"));
+
 class MockS3Client {
   constructor(_config: unknown) {}
   async upload(key: string, body: Buffer, contentType: string) {
@@ -184,13 +187,13 @@ describe("D1(c) — multipart/form-data upload", () => {
     expect(body.filename).toBe("raport.pdf");
     expect(body.content_type).toBe("application/pdf");
     expect(body.size).toBe(Buffer.byteLength(CONTENT));
-    expect(uploads).toHaveLength(1);
-    expect(createHash("sha256").update(uploads[0]!.body).digest("hex")).toBe(SHA);
+    expect(blobUploads()).toHaveLength(1);
+    expect(createHash("sha256").update(blobUploads()[0]!.body).digest("hex")).toBe(SHA);
   });
 
   test("does not store the MIME envelope as the file body", async () => {
     await app.request("/v1/attachments", { method: "POST", headers: { "x-api-key": key() }, body: form() });
-    const stored = uploads[0]!.body.toString();
+    const stored = blobUploads()[0]!.body.toString();
     expect(stored).toBe(CONTENT);
     expect(stored).not.toContain("Content-Disposition");
     expect(stored).not.toContain("WebKitFormBoundary");
@@ -230,7 +233,7 @@ describe("D1(c) — multipart/form-data upload", () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.filename).toBe("plain.txt");
     expect(body.content_type).toBe("text/plain");
-    expect(createHash("sha256").update(uploads[0]!.body).digest("hex")).toBe(SHA);
+    expect(createHash("sha256").update(blobUploads()[0]!.body).digest("hex")).toBe(SHA);
   });
 });
 
@@ -268,9 +271,9 @@ describe("encryption at rest (--encrypt) on the hosted /v1 path", () => {
     expect(String(body.link).startsWith(`${PUBLIC_BASE}/a/`)).toBe(true);
     expect(presignCalls).toEqual([]);
     // The object store receives ciphertext, never the plaintext.
-    expect(uploads).toHaveLength(1);
-    expect(uploads[0]!.body.toString()).not.toContain("hello");
-    expect(createHash("sha256").update(uploads[0]!.body).digest("hex")).not.toBe(
+    expect(blobUploads()).toHaveLength(1);
+    expect(blobUploads()[0]!.body.toString()).not.toContain("hello");
+    expect(createHash("sha256").update(blobUploads()[0]!.body).digest("hex")).not.toBe(
       createHash("sha256").update(Buffer.from("hello")).digest("hex"),
     );
     // Metadata carries the decrypt inputs; size stays the plaintext size.
@@ -295,7 +298,7 @@ describe("encryption at rest (--encrypt) on the hosted /v1 path", () => {
       body: form({ encrypt: "true", password: "Parola-Test-1" }),
     });
     expect(res.status).toBe(201);
-    expect(uploads[0]!.body.toString()).not.toContain("%PDF-1.4");
+    expect(blobUploads()[0]!.body.toString()).not.toContain("%PDF-1.4");
     expect(store.attachments[0]!.encryptionAlgorithm).toBe("aes-256-gcm");
   });
 
@@ -310,7 +313,7 @@ describe("encryption at rest (--encrypt) on the hosted /v1 path", () => {
       body: "hello",
     });
     expect(res.status).toBe(201);
-    expect(uploads[0]!.body.toString()).not.toContain("hello");
+    expect(blobUploads()[0]!.body.toString()).not.toContain("hello");
     expect(store.attachments[0]!.encryptionAlgorithm).toBe("aes-256-gcm");
   });
 

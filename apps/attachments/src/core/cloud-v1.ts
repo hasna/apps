@@ -96,6 +96,7 @@ export interface AttachmentsV1Store {
     filename: string,
     contentType: string | undefined,
     expiryMs: number,
+    sha256?: string,
   ): Promise<{ id: string; uploadUrl: string; contentType: string; filename: string; expiresAt: number }>;
   presignComplete(
     id: string,
@@ -371,7 +372,7 @@ function makeStore(client: HasnaStorageClient, credentials: () => { url: string;
       });
     },
 
-    async presignUpload(filename: string, contentType: string | undefined, expiryMs: number) {
+    async presignUpload(filename: string, contentType: string | undefined, expiryMs: number, sha256?: string) {
       if (expiryMs === null || expiryMs <= 0) {
         throw new Error("Presigned upload expiry cannot be never");
       }
@@ -385,6 +386,7 @@ function makeStore(client: HasnaStorageClient, credentials: () => { url: string;
         filename,
         content_type: resolvedType,
         expiry: expiryMsToString(expiryMs),
+        ...(sha256 ? { sha256 } : {}),
       });
       return {
         id: result.id,

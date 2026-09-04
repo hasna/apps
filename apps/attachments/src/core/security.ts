@@ -1,5 +1,5 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
-import { basename, extname } from "path";
+import { basename } from "path";
 import { nanoid } from "nanoid";
 
 export function generateShareToken(): string {
@@ -16,13 +16,12 @@ export function sanitizeFilename(filename: string): string {
   return safe || "attachment";
 }
 
-export function createObjectKey(attachmentId: string, filename: string, now = new Date()): string {
-  const year = now.getUTCFullYear();
-  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(now.getUTCDate()).padStart(2, "0");
-  const ext = extname(filename).slice(0, 24);
-  return `attachments/${year}-${month}-${day}/${attachmentId}/${nanoid(18)}${ext}`;
-}
+/**
+ * Object keys are now content-addressed via src/core/artifact-keys.ts
+ * (canonicalBlobKey/stagingKey/manifestKey). Key construction moved there so
+ * one module owns the layout; nothing in this app mints a legacy
+ * date/id-partitioned key any more.
+ */
 
 export function buildPasswordHash(password: string): string {
   const salt = randomBytes(16).toString("hex");

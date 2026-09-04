@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 // Capture prior values so the global process.env mutations below are restored
 // in afterAll — otherwise these leak into later CLI tests that spread
@@ -273,6 +273,213 @@ describe("evidence vault", () => {
     expect(listFileAssets({ idempotency_key: input.idempotency_key })).toHaveLength(1);
   });
 });
+
+describe("evidence storage alignment (hasna/apps#1650)", () => {
+  test("new uploads land under the canonical content-addressed layout", async () => {
+    const fixture = join(fixtureRoot(), "canonical-receipt.txt");
+    writeFileSync(fixture, "canonical bytes");
+
+    const result = await uploadEvidenceFile({
+      path: fixture,
+      org_id: "org_hasna",
+      app: "app-accounting",
+      kind: "receipt",
+      original_name: "canonical-receipt.txt",
+    }, { provider: "local", localRoot: evidenceRoot() });
+
+    expect(result.asset.status).toBe("verified");
+    expect(result.asset.object_key).toMatch(
+      new RegExp(`^evidence/org_hasna/[a-f0-9]{64}\\.txt$`),
+    );
+    expect(result.asset.quarantine_key).toMatch(/^quarantine\/evidence\/org_hasna\//);
+    expect(result.asset.object_key).toContain(result.asset.checksum);
+    expect(existsSync(join(evidenceRoot(), result.asset.object_key))).toBe(true);
+  });
+
+  test("duplicate non-idempotent uploads share one final object (dedup by content)", async () => {
+    const fixture = join(fixtureRoot(), "dup.txt");
+    writeFileSync(fixture, "identical evidence bytes");
+
+    const first = await uploadEvidenceFile({
+      path: fixture,
+      org_id: "org_hasna",
+      app: "app-accounting",
+      kind: "receipt",
+    }, { provider: "local", localRoot: evidenceRoot() });
+    const second = await uploadEvidenceFile({
+      path: fixture,
+      org_id: "org_hasna",
+      app: "app-accounting",
+      kind: "receipt",
+    }, { provider: "local", localRoot: evidenceRoot() });
+
+    expect(first.asset.id).not.toBe(second.asset.id); // no idempotency convergence
+    expect(second.asset.object_key).toBe(first.asset.object_key); // content address
+    expect(second.asset.checksum).toBe(first.asset.checksum);
+    expect(listFileAssets({ app: "app-accounting" })).toHaveLength(2);
+  });
+
+  test("legacy orgs/ keys stay readable through verify and sign (shim)", async () => {
+    const { createFileAssetConvergent, updateFileAssetStatus } = await import("../db/evidence.js");
+    const legacyKey = "orgs/org_hasna/companies/_global/app-accounting/2026/09/receipt/asset_legacy1/old-name.txt";
+    const legacy = createFileAssetConvergent({
+      id: "asset_legacy1",
+      org_id: "org_hasna",
+      app: "app-accounting",
+      kind: "receipt",
+      original_name: "old-name.txt",
+      content_type: "text/plain",
+      size: Buffer.byteLength("legacy bytes"),
+      checksum: sha256("legacy bytes"),
+      checksum_algorithm: "sha256",
+      storage_provider: "local",
+      bucket: evidenceRoot(),
+      object_key: legacyKey,
+    }).asset;
+    updateFileAssetStatus({ id: legacy.id, status: "verified", scan_status: "skipped", verified: true });
+
+    // Bytes live at the stored legacy key — reads must resolve it verbatim.
+    const legacyPath = join(evidenceRoot(), legacyKey);
+    mkdirSync(dirname(legacyPath), { recursive: true });
+    writeFileSync(legacyPath, "legacy bytes");
+
+    const verification = await verifyEvidenceAsset(legacy.id, { provider: "local", localRoot: evidenceRoot() });
+    expect(verification.ok).toBe(true);
+    expect(verification.diagnostics).toEqual([]);
+
+    const grant = await signEvidenceDownload(
+      { asset_id: legacy.id, purpose: "legacy_test" },
+      { provider: "local", localRoot: evidenceRoot() },
+    );
+    expect(grant.url).toBe(pathToFileURL(legacyPath).toString());
+  });
+
+  test("S3 complete dedups: a duplicate upload skips the copy and writes only its manifest", async () => {
+    const { setS3ClientFactoryForTests } = await import("./s3.js");
+    const { S3Client } = await import("@aws-sdk/client-s3");
+    // A REAL client is required so getSignedUrl can SignV4-sign the presigned
+    // PUT; its send is overridden below so byte operations land in the fake
+    // bucket instead of the network (getSignedUrl never calls send).
+    const real = new S3Client({
+      region: "us-east-1",
+      credentials: { accessKeyId: "fake", secretAccessKey: "fake" },
+      endpoint: "http://127.0.0.1:9", // never contacted
+      forcePathStyle: true,
+    });
+    const fake = new FakeEvidenceBucket();
+    const client = real as unknown as {
+      send: (cmd: unknown) => Promise<unknown>;
+    };
+    client.send = async (cmd) => fake.send(cmd as never);
+    setS3ClientFactoryForTests(() => real as never);
+    try {
+      const fixture = join(fixtureRoot(), "s3-dup.bin");
+      writeFileSync(fixture, "s3 duplicate bytes");
+
+      const storage = { provider: "s3" as const, bucket: "test-bucket", profile: "test" };
+      const first = await uploadEvidenceFile({
+        path: fixture,
+        org_id: "org_hasna",
+        app: "app-accounting",
+        kind: "receipt",
+      }, storage);
+      const second = await uploadEvidenceFile({
+        path: fixture,
+        org_id: "org_hasna",
+        app: "app-accounting",
+        kind: "receipt",
+      }, storage);
+
+      expect(first.asset.id).not.toBe(second.asset.id);
+      expect(second.asset.object_key).toBe(first.asset.object_key);
+      expect(second.asset.status).toBe("verified");
+
+      expect(fake.copies).toHaveLength(1); // only the first upload copy from quarantine
+      expect(fake.deletes.length).toBe(2); // both quarantine objects removed
+      const blobs = [...fake.objects.keys()].filter((k) => k.includes("/manifests/") === false);
+      expect(blobs).toHaveLength(1); // duplicate upload leaves ONE final object
+      const manifests = [...fake.objects.keys()].filter((k) => k.includes("/manifests/"));
+      expect(manifests).toHaveLength(2); // one immutable manifest per asset
+      for (const key of blobs) {
+        expect(fake.objects.get(key)!.toString("utf-8")).toBe("s3 duplicate bytes");
+      }
+    } finally {
+      setS3ClientFactoryForTests(undefined);
+    }
+  });
+});
+
+class FakeEvidenceBucket {
+  objects = new Map<string, Buffer>();
+  metadata = new Map<string, Record<string, string>>();
+  copies: string[] = [];
+  deletes: string[] = [];
+
+  async send(command: { constructor: { name: string }; input: Record<string, unknown> }): Promise<unknown> {
+    const input = command.input as {
+      Bucket?: string;
+      Key?: string;
+      Body?: Buffer | string | Uint8Array | NodeJS.ReadableStream;
+      Metadata?: Record<string, string>;
+      ChecksumSHA256?: string;
+      ContentType?: string;
+      CopySource?: string;
+      MetadataDirective?: string;
+    };
+    switch (command.constructor.name) {
+      case "PutObjectCommand": {
+        const key = input.Key!;
+        this.objects.set(key, await bodyToBuffer(input.Body));
+        if (input.Metadata) this.metadata.set(key, { ...input.Metadata });
+        return {};
+      }
+      case "HeadObjectCommand": {
+        const key = input.Key!;
+        const body = this.objects.get(key);
+        if (!body) throw Object.assign(new Error("NoSuchKey"), { name: "NoSuchKey" });
+        const meta = this.metadata.get(key) ?? {};
+        return {
+          ContentLength: body.byteLength,
+          ContentType: input.ContentType ?? "application/octet-stream",
+          Metadata: meta,
+          ChecksumSHA256: meta.checksum
+            ? Buffer.from(meta.checksum, "hex").toString("base64")
+            : undefined,
+        };
+      }
+      case "CopyObjectCommand": {
+        const source = String(input.CopySource).split("/").slice(1).join("/");
+        this.copies.push(`${source} -> ${input.Key}`);
+        const body = this.objects.get(source);
+        if (!body) throw Object.assign(new Error("NoSuchKey"), { name: "NoSuchKey" });
+        this.objects.set(input.Key!, Buffer.from(body));
+        if (input.Metadata) this.metadata.set(input.Key!, { ...input.Metadata });
+        return {};
+      }
+      case "DeleteObjectCommand": {
+        this.deletes.push(input.Key!);
+        this.objects.delete(input.Key!);
+        this.metadata.delete(input.Key!);
+        return {};
+      }
+      default:
+        throw new Error(`unexpected command: ${command.constructor.name}`);
+    }
+  }
+}
+
+async function bodyToBuffer(body: unknown): Promise<Buffer> {
+  if (Buffer.isBuffer(body)) return body;
+  if (body instanceof Uint8Array) return Buffer.from(body);
+  if (body && typeof (body as { pipe?: unknown }).pipe === "function") {
+    const chunks: Buffer[] = [];
+    for await (const chunk of body as AsyncIterable<Buffer>) {
+      chunks.push(Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+  return Buffer.from(String(body ?? ""));
+}
 
 function evidenceRoot(): string {
   return process.env.HASNA_FILES_EVIDENCE_LOCAL_ROOT!;

@@ -52,6 +52,8 @@ export interface S3StreamResult {
 export interface S3ObjectInfo {
   contentLength?: number;
   contentType?: string;
+  /** Lowercase hex sha-256 when the object carries an S3 full-object checksum. */
+  checksumSha256?: string;
 }
 
 export interface S3UploadOptions {
@@ -67,6 +69,19 @@ function toNodeReadable(body: unknown): Readable {
     return Readable.from(body as AsyncIterable<Uint8Array>);
   }
   throw new Error("Unsupported S3 response body stream");
+}
+
+/** S3 returns full-object checksums base64-encoded; normalize to lowercase hex. */
+function normalizeSha256ChecksumToHex(checksum: string | undefined): string | undefined {
+  if (!checksum) return undefined;
+  if (/^[a-f0-9]{64}$/i.test(checksum)) return checksum.toLowerCase();
+  try {
+    const decoded = Buffer.from(checksum, "base64");
+    if (decoded.length === 32) return decoded.toString("hex");
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 export class S3Client {
@@ -296,6 +311,7 @@ export class S3Client {
     return {
       contentLength: resp.ContentLength,
       contentType: resp.ContentType,
+      checksumSha256: normalizeSha256ChecksumToHex(resp.ChecksumSHA256),
     };
   }
 
@@ -361,11 +377,17 @@ export class S3Client {
     return getSignedUrl(this.client, command, { expiresIn });
   }
 
-  async presignPut(key: string, contentType: string, expiresIn: number): Promise<string> {
+  async presignPut(key: string, contentType: string, expiresIn: number, checksumSha256?: string): Promise<string> {
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: key,
       ContentType: contentType,
+      ...(checksumSha256
+        ? {
+            ChecksumAlgorithm: "SHA256" as const,
+            ChecksumSHA256: Buffer.from(checksumSha256, "hex").toString("base64"),
+          }
+        : {}),
     });
 
     return getSignedUrl(this.client, command, { expiresIn });

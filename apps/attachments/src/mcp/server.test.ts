@@ -901,7 +901,7 @@ describe("MCP Server — presign_upload", () => {
 
     expect(mockS3ClientInstance.presignPut).toHaveBeenCalledTimes(1);
     const [key, contentType, expiresIn] = mockS3ClientInstance.presignPut.mock.calls[0] as [string, string, number];
-    expect(key).toMatch(/^attachments\/\d{4}-\d{2}-\d{2}\/att_[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\.csv$/);
+    expect(key).toMatch(/^attachments\/global\/uploads\/att_[A-Za-z0-9_-]+$/);
     expect(contentType).toBe("text/csv");
     expect(expiresIn).toBe(3600);
   });

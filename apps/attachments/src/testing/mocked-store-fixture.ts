@@ -21,7 +21,8 @@ import {
   resolveDeliverableLinkType,
   resolveLocalShareBaseUrl,
 } from "../core/links";
-import { createObjectKey, sanitizeFilename } from "../core/security";
+import { sanitizeFilename } from "../core/security";
+import { stagingKey } from "../core/artifact-keys";
 import {
   uploadFile as coreUploadFile,
   uploadFromUrl as coreUploadFromUrl,
@@ -186,7 +187,10 @@ export class MockedStoreFixture implements Store {
     const detected = mimeLookup(filename);
     const contentType = contentTypeInput ?? (detected !== false ? detected : "application/octet-stream");
     const id = `att_${nanoid(11)}`;
-    const s3Key = createObjectKey(id, filename);
+    // Fixture mirrors a legacy client that does not digest its bytes up
+    // front: the server mints a staging key (compatibility namespace) and the
+    // row keeps it verbatim, so reads resolve unchanged.
+    const s3Key = stagingKey(id);
     const uploadUrl = await new S3Client(this.config.s3).presignPut(s3Key, contentType, Math.floor(expiryMs / 1000));
     const now = Date.now();
     this.db().insert({
