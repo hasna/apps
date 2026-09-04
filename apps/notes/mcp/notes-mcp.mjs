@@ -1,58 +1,26 @@
 #!/usr/bin/env bun
 // @bun
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createNotesHttpStore } from '../client/http-store.mjs';
 import {
   MARKDOWN_COMMANDS,
   applyMarkdownCommand,
-  archiveNote,
-  assignLabel,
-  contentFingerprint,
-  dataRoot,
-  deleteLabelEverywhere,
-  deleteNote,
-  generateTitle,
-  getNote,
-  listNotes,
-  loadLabelList,
-  loadNotes,
-  loadSettings,
   markdownPlainText,
-  moveNoteToMachine,
   normalizeLabels,
-  purgeExpiredTrash,
-  renameLabel,
-  restoreNote,
-  saveLabelList,
-  saveNote,
-  saveSettings,
   renderMarkdownSafe,
-  trashNote,
-  unassignLabel,
 } from '../tools/notes-lib.mjs';
-import {
-  CHAT_TOOL_SCHEMAS,
-  executeNotesAgentTool,
-  runNotesAgent,
-  runNotesGoal,
-} from '../tools/notes-agent.mjs';
-import { reconcileNoteCreatedEvents } from '../tools/notes-events.mjs';
 
-// Binds-before-version class (todos row 7e5f8f3d): --version/--help must
-// answer BEFORE any module-scope side effect — including
-// reconcileNoteCreatedEvents(dataRoot()) below, which scans the note store
-// and writes event-spool files. They previously fell into the stdio framing
-// loop and printed nothing (silent-empty family).
+const VERSION = JSON.parse(readFileSync(join(import.meta.dirname, '../package.json'), 'utf8')).version;
 const EARLY_ARGV = process.argv.slice(2);
 if (EARLY_ARGV.includes('--version') || EARLY_ARGV.includes('-V')) {
-  const { readFileSync } = await import('node:fs');
-  const { join } = await import('node:path');
-  const pkg = JSON.parse(readFileSync(join(import.meta.dirname, '../package.json'), 'utf8'));
-  console.log(pkg.version);
+  console.log(VERSION);
   process.exit(0);
 }
 if (EARLY_ARGV.includes('--help') || EARLY_ARGV.includes('-h')) {
   console.log(`Usage: notes-mcp [options]
 
-Hasna Notes MCP server (stdio)
+Hasna Notes MCP server (stdio, authenticated HTTPS client)
 
 Options:
   -V, --version  output the version number
@@ -60,300 +28,103 @@ Options:
   process.exit(0);
 }
 
-await reconcileNoteCreatedEvents(dataRoot()).catch(() => null);
+let http;
+try {
+  http = createNotesHttpStore(process.env);
+} catch (error) {
+  process.stderr.write(`notes-mcp: ${error.message || error}\n`);
+  process.exit(1);
+}
 
 const tools = [
   {
     name: 'notes_list',
-    description: 'List latest Hasna Notes with optional pagination and filters.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', default: 10 },
-        offset: { type: 'number', default: 0 },
-        label: { type: 'string' },
-        machine: { type: 'string' },
-        status: { type: 'string' },
-        includeTrash: { type: 'boolean' },
-        includeArchived: { type: 'boolean' },
-        query: { type: 'string' },
-      },
-    },
+    description: 'List Hasna Notes from the canonical authenticated HTTPS service.',
+    inputSchema: { type: 'object', properties: { limit: { type: 'number', default: 10 }, cursor: { type: 'string' }, includeDeleted: { type: 'boolean' } } },
   },
   {
     name: 'notes_get',
-    description: 'Read one Hasna Notes note by id.',
+    description: 'Read one Hasna Notes note by id from the canonical service.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
   },
   {
     name: 'notes_create',
-    description: 'Create a Hasna Notes note.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        title: { type: 'string' },
-        body: { type: 'string' },
-        labels: { type: 'array', items: { type: 'string' } },
-        actorType: { type: 'string', enum: ['human', 'agent', 'system'] },
-        actorName: { type: 'string' },
-        targetMachine: { type: 'string' },
-        machineFriendlyName: { type: 'string' },
-      },
-    },
+    description: 'Create a Hasna Notes note through the canonical service.',
+    inputSchema: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string' }, labels: { type: 'array', items: { type: 'string' } } } },
+  },
+  {
+    name: 'notes_update',
+    description: 'Update a Hasna Notes note through the canonical service.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' }, body: { type: 'string' }, labels: { type: 'array', items: { type: 'string' } } }, required: ['id'] },
   },
   {
     name: 'notes_delete',
-    description: 'Move a note to Trash by default; permanently delete when permanent is true or the note is already in Trash.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        permanent: { type: 'boolean' },
-        retentionDays: { type: 'number' },
-        confirm: { type: 'boolean' },
-        dryRun: { type: 'boolean' },
-      },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'notes_move_to_machine',
-    description: 'Re-attribute a note to another machine (informational machine + friendly name).',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' }, machine: { type: 'string' }, machineName: { type: 'string' } },
-      required: ['id', 'machine'],
-    },
+    description: 'Soft-delete a note after explicit confirmation.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, confirm: { type: 'boolean' }, dryRun: { type: 'boolean' } }, required: ['id'] },
   },
   {
     name: 'notes_archive',
-    description: 'Archive a note.',
+    description: 'Archive a note through the canonical service.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-  },
-  {
-    name: 'notes_trash',
-    description: 'Move a note to per-machine Trash.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        retentionDays: { type: 'number' },
-        confirm: { type: 'boolean' },
-        dryRun: { type: 'boolean' },
-      },
-      required: ['id'],
-    },
   },
   {
     name: 'notes_restore',
-    description: 'Restore a note from Archive or Trash to active notes.',
+    description: 'Restore or unarchive a note through the canonical service.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
   },
-  {
-    name: 'notes_purge',
-    description: 'Permanently delete a note.',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' }, confirm: { type: 'boolean' }, dryRun: { type: 'boolean' } },
-      required: ['id'],
-    },
-  },
-  {
-    name: 'trash_cleanup',
-    description: 'Purge expired Trash items according to retention metadata.',
-    inputSchema: { type: 'object', properties: { confirm: { type: 'boolean' }, dryRun: { type: 'boolean' } } },
-  },
-  {
-    name: 'settings_get',
-    description: 'Read Hasna Notes settings.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'settings_set_trash_retention',
-    description: 'Set Trash retention in days.',
-    inputSchema: { type: 'object', properties: { days: { type: 'number' } }, required: ['days'] },
-  },
-  {
-    name: 'markdown_commands',
-    description: 'List stable Markdown editor/slash command IDs and labels.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'markdown_render',
-    description: 'Render Markdown to sanitized safe HTML using the Hasna Notes restricted subset.',
-    inputSchema: { type: 'object', properties: { markdown: { type: 'string' }, id: { type: 'string' } } },
-  },
-  {
-    name: 'markdown_plain_text',
-    description: 'Extract readable plain text from Markdown for search/title generation.',
-    inputSchema: { type: 'object', properties: { markdown: { type: 'string' }, id: { type: 'string' } } },
-  },
-  {
-    name: 'markdown_apply_command',
-    description: 'Apply a Markdown editor command to a text selection.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        markdown: { type: 'string' },
-        commandId: { type: 'string' },
-        selectionStart: { type: 'number' },
-        selectionEnd: { type: 'number' },
-        url: { type: 'string' },
-        href: { type: 'string' },
-        language: { type: 'string' },
-      },
-      required: ['markdown', 'commandId'],
-    },
-  },
-  {
-    name: 'labels_list',
-    description: 'List all labels known to Hasna Notes.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'labels_create',
-    description: 'Create a label without assigning it to a note.',
-    inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
-  },
-  {
-    name: 'labels_rename',
-    description: 'Rename a label everywhere.',
-    inputSchema: {
-      type: 'object',
-      properties: { oldName: { type: 'string' }, newName: { type: 'string' } },
-      required: ['oldName', 'newName'],
-    },
-  },
-  {
-    name: 'labels_delete',
-    description: 'Delete a label and remove it from notes.',
-    inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
-  },
+  { name: 'labels_list', description: 'List labels in the canonical Notes corpus.', inputSchema: { type: 'object', properties: {} } },
   {
     name: 'labels_assign',
-    description: 'Assign a label to a note.',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' }, label: { type: 'string' } },
-      required: ['id', 'label'],
-    },
+    description: 'Assign a label through the canonical service.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' } }, required: ['id', 'label'] },
   },
   {
     name: 'labels_unassign',
-    description: 'Unassign a label from a note.',
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: 'string' }, label: { type: 'string' } },
-      required: ['id', 'label'],
-    },
+    description: 'Unassign a label through the canonical service.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' } }, required: ['id', 'label'] },
   },
+  { name: 'markdown_commands', description: 'List stable Markdown command IDs.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'markdown_render', description: 'Render supplied Markdown to sanitized HTML.', inputSchema: { type: 'object', properties: { markdown: { type: 'string' }, id: { type: 'string' } } } },
+  { name: 'markdown_plain_text', description: 'Extract readable text from supplied or remote note Markdown.', inputSchema: { type: 'object', properties: { markdown: { type: 'string' }, id: { type: 'string' } } } },
   {
-    name: 'title_generate',
-    description: 'Generate a concise 3-4 word note title, optionally applying it.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string' },
-        text: { type: 'string' },
-        apply: { type: 'boolean', default: false },
-        force: { type: 'boolean', default: false },
-        sidecar: { type: 'string' },
-      },
-    },
-  },
-  {
-    name: 'agent_tools',
-    description: 'List Hasna Notes chat/agent tool schemas, safety flags, and confirmation requirements.',
-    inputSchema: { type: 'object', properties: {} },
-  },
-  {
-    name: 'agent_run',
-    description: 'Run the Hasna Notes tool-capable agent headlessly over notes. Broad/destructive writes preview unless confirm is true.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        prompt: { type: 'string' },
-        confirm: { type: 'boolean' },
-        dryRun: { type: 'boolean' },
-        actorName: { type: 'string' },
-        limit: { type: 'number' },
-      },
-      required: ['prompt'],
-    },
-  },
-  {
-    name: 'agent_goal',
-    description: 'Run a simple Hasna Notes goal loop until done, user input/approval is needed, blocked, or maxSteps is reached.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        objective: { type: 'string' },
-        confirm: { type: 'boolean' },
-        dryRun: { type: 'boolean' },
-        actorName: { type: 'string' },
-        maxSteps: { type: 'number' },
-      },
-      required: ['objective'],
-    },
-  },
-  {
-    name: 'agent_tool_call',
-    description: 'Execute one Hasna Notes agent tool directly. Confirmation-gated tools return a preview unless confirm is true.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string' },
-        input: { type: 'object' },
-        confirm: { type: 'boolean' },
-        dryRun: { type: 'boolean' },
-        actorName: { type: 'string' },
-      },
-      required: ['name'],
-    },
+    name: 'markdown_apply_command',
+    description: 'Apply a Markdown editor command to supplied text.',
+    inputSchema: { type: 'object', properties: { markdown: { type: 'string' }, commandId: { type: 'string' }, selectionStart: { type: 'number' }, selectionEnd: { type: 'number' }, url: { type: 'string' } }, required: ['markdown', 'commandId'] },
   },
 ];
 
 let buffer = Buffer.alloc(0);
-
-// Stdio framing. The MCP spec's stdio transport is NEWLINE-DELIMITED JSON —
-// that is what standard clients (official SDK, Claude Code, MCP Inspector)
-// speak. Legacy LSP-style `Content-Length` framing is kept for old clients.
-// The first bytes the client sends pick the mode ('{' ⇒ ndjson), and replies
-// use the same framing the client used. Defaults to the spec framing.
 let framing = '';
 
 process.stdin.on('data', (chunk) => {
   buffer = Buffer.concat([buffer, chunk]);
-  readMessages().catch((err) => {
-    send({ jsonrpc: '2.0', id: null, error: { code: -32603, message: err.message || String(err) } });
+  readMessages().catch((error) => {
+    send({ jsonrpc: '2.0', id: null, error: { code: -32603, message: error.message || String(error) } });
   });
 });
 
 async function readMessages() {
   while (true) {
-    // Drop blank leading lines (both framings tolerate them between messages).
     let skip = 0;
     while (skip < buffer.length && (buffer[skip] === 0x0d || buffer[skip] === 0x0a)) skip += 1;
     if (skip) buffer = buffer.subarray(skip);
     if (!buffer.length) return;
-    if (!framing) framing = buffer[0] === 0x7b /* '{' */ ? 'ndjson' : 'headers';
-
+    if (!framing) framing = buffer[0] === 0x7b ? 'ndjson' : 'headers';
     if (framing === 'ndjson') {
-      const nl = buffer.indexOf('\n');
-      if (nl < 0) return;
-      const line = buffer.subarray(0, nl).toString('utf8').trim();
-      buffer = buffer.subarray(nl + 1);
+      const newline = buffer.indexOf('\n');
+      if (newline < 0) return;
+      const line = buffer.subarray(0, newline).toString('utf8').trim();
+      buffer = buffer.subarray(newline + 1);
       if (!line) continue;
-      let msg;
-      try { msg = JSON.parse(line); }
-      catch (err) {
-        send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: err.message || 'parse_error' } });
+      let message;
+      try { message = JSON.parse(line); }
+      catch (error) {
+        send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: error.message || 'parse_error' } });
         continue;
       }
-      await handle(msg);
+      await handle(message);
       continue;
     }
-
     const headerEnd = buffer.indexOf('\r\n\r\n');
     if (headerEnd < 0) return;
     const header = buffer.subarray(0, headerEnd).toString('utf8');
@@ -367,18 +138,13 @@ async function readMessages() {
     if (buffer.length < bodyStart + length) return;
     const body = buffer.subarray(bodyStart, bodyStart + length).toString('utf8');
     buffer = buffer.subarray(bodyStart + length);
-    let msg;
-    try { msg = JSON.parse(body); }
-    catch (err) {
-      send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: err.message || 'parse_error' } });
-      continue;
-    }
-    await handle(msg);
+    try { await handle(JSON.parse(body)); }
+    catch (error) { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: error.message || 'parse_error' } }); }
   }
 }
 
-function send(msg) {
-  const body = Buffer.from(JSON.stringify(msg), 'utf8');
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), 'utf8');
   if (framing !== 'headers') {
     process.stdout.write(body);
     process.stdout.write('\n');
@@ -389,10 +155,7 @@ function send(msg) {
 }
 
 function textResult(value, isError = false) {
-  return {
-    content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }],
-    ...(isError ? { isError: true } : {}),
-  };
+  return { content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }], ...(isError ? { isError: true } : {}) };
 }
 
 function requireArg(args, key) {
@@ -401,222 +164,77 @@ function requireArg(args, key) {
   return value;
 }
 
-function destructivePreview(toolName, args, preview) {
-  return {
-    ok: false,
-    dryRun: true,
-    requiresConfirmation: true,
-    approval: {
-      id: `approval-${toolName}-${Date.now()}`,
-      toolName,
-      input: args,
-      preview,
-    },
-    preview,
-  };
-}
-
-async function expiredTrashNotes() {
-  const now = Date.now();
-  return (await loadNotes()).filter(note => (
-    note.status === 'trash' &&
-    note.trashExpiresAt &&
-    Date.parse(note.trashExpiresAt) <= now
-  ));
+async function collectNotes(maxPages = 100) {
+  const notes = [];
+  let cursor;
+  for (let page = 0; page < maxPages; page += 1) {
+    const result = await http.listNotes({ limit: 200, cursor });
+    notes.push(...(result?.data || []));
+    if (!result?.nextCursor) return notes;
+    cursor = result.nextCursor;
+  }
+  throw new Error('notes: remote pagination exceeded the bounded MCP limit.');
 }
 
 async function markdownFromArgs(args) {
   if (args.markdown != null) return String(args.markdown);
-  const note = await getNote(requireArg(args, 'id'));
-  if (!note) throw new Error('note_not_found');
-  return note.body || '';
+  const note = await http.getNote(requireArg(args, 'id'));
+  return note.bodyMarkdown || '';
 }
 
-async function handle(msg) {
-  const { id, method, params } = msg;
+async function handle(message) {
+  const { id, method, params } = message;
   if (method === 'notifications/initialized') return;
   try {
     if (method === 'initialize') {
-      return send({
-        jsonrpc: '2.0',
-        id,
-        result: {
-          protocolVersion: params?.protocolVersion || '2024-11-05',
-          capabilities: { tools: {} },
-          serverInfo: { name: 'notes', version: '1.0.0' },
-        },
-      });
+      return send({ jsonrpc: '2.0', id, result: { protocolVersion: params?.protocolVersion || '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'notes', version: VERSION } } });
     }
     if (method === 'tools/list') return send({ jsonrpc: '2.0', id, result: { tools } });
-    if (method === 'tools/call') {
-      const result = await callTool(params?.name, params?.arguments || {});
-      return send({ jsonrpc: '2.0', id, result });
-    }
-    send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method_not_found' } });
-  } catch (err) {
-    send({ jsonrpc: '2.0', id, result: textResult({ error: err.message || String(err) }, true) });
+    if (method === 'tools/call') return send({ jsonrpc: '2.0', id, result: await callTool(params?.name, params?.arguments || {}) });
+    return send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method_not_found' } });
+  } catch (error) {
+    return send({ jsonrpc: '2.0', id, result: textResult({ error: error.message || String(error) }, true) });
   }
 }
 
 async function callTool(name, args) {
-  if (name === 'notes_list') return textResult(await listNotes(args));
-  if (name === 'notes_get') {
-    const note = await getNote(requireArg(args, 'id'));
-    if (!note) throw new Error('note_not_found');
-    return textResult(note);
-  }
-  if (name === 'notes_create') {
-    const now = new Date().toISOString();
-    const title = String(args.title || '').trim();
-    const note = await saveNote({
-      title: title || 'Untitled Note',
-      body: String(args.body || ''),
-      labels: normalizeLabels(args.labels || []),
-      machine: args.targetMachine,
-      machineFriendlyName: args.machineFriendlyName || '',
-      createdByActorType: args.actorType || 'agent',
-      createdByName: args.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'agent',
-      titleLocked: !!title,
-      titleSource: title ? 'manual' : 'default',
-      createdAt: now,
-      updatedAt: now,
-    }, dataRoot(), { eventContext: { kind: 'created', writer: 'mcp' } });
-    if (args.labels?.length) await saveLabelList([...(await loadLabelList()), ...args.labels]);
-    return textResult(note);
+  if (name === 'notes_list') return textResult(await http.listNotes({ limit: args.limit || 10, cursor: args.cursor, includeDeleted: !!args.includeDeleted }));
+  if (name === 'notes_get') return textResult(await http.getNote(requireArg(args, 'id')));
+  if (name === 'notes_create') return textResult(await http.createNote({ title: String(args.title || '').trim() || 'Untitled Note', bodyMarkdown: String(args.body || ''), labels: normalizeLabels(args.labels || []) }));
+  if (name === 'notes_update') {
+    const input = {};
+    if (args.title !== undefined) input.title = String(args.title).trim();
+    if (args.body !== undefined) input.bodyMarkdown = String(args.body);
+    if (args.labels !== undefined) input.labels = normalizeLabels(args.labels);
+    if (!Object.keys(input).length) throw new Error('update_input_required');
+    return textResult(await http.updateNote(requireArg(args, 'id'), input));
   }
   if (name === 'notes_delete') {
-    const note = await getNote(requireArg(args, 'id'));
-    if (!note) throw new Error('note_not_found');
-    if (args.permanent || note.status === 'trash') {
-      const preview = { id: note.id, title: note.title, status: note.status, permanent: true };
-      if (args.dryRun || !args.confirm) return textResult(destructivePreview('notes_delete', args, preview));
-      await deleteNote(note.id);
-    } else {
-      const preview = { id: note.id, title: note.title, fromStatus: note.status, toStatus: 'trash', permanent: false };
-      if (args.dryRun || !args.confirm) return textResult(destructivePreview('notes_delete', args, preview));
-      return textResult(await trashNote(note.id, { retentionDays: args.retentionDays }));
-    }
-    return textResult({ ok: true });
+    const id = requireArg(args, 'id');
+    const note = await http.getNote(id);
+    const preview = { id: note.id, title: note.title, permanent: false, operation: 'soft-delete' };
+    if (args.dryRun || !args.confirm) return textResult({ ok: false, dryRun: true, requiresConfirmation: true, preview });
+    return textResult(await http.deleteNote(id));
   }
-  if (name === 'notes_move_to_machine') {
-    return textResult(await moveNoteToMachine(requireArg(args, 'id'), requireArg(args, 'machine'), {
-      machineFriendlyName: args.machineName,
-    }));
+  if (name === 'notes_archive') return textResult(await http.updateNote(requireArg(args, 'id'), { archived: true }));
+  if (name === 'notes_restore') return textResult(await http.updateNote(requireArg(args, 'id'), { archived: false }));
+  if (name === 'labels_list') {
+    const labels = normalizeLabels((await collectNotes()).flatMap((note) => note.labels || [])).sort((a, b) => a.localeCompare(b));
+    return textResult({ labels });
   }
-  if (name === 'notes_archive') return textResult(await archiveNote(requireArg(args, 'id')));
-  if (name === 'notes_trash') {
-    const note = await getNote(requireArg(args, 'id'));
-    if (!note) throw new Error('note_not_found');
-    if (note.status === 'trash') return textResult(note);
-    const preview = { id: note.id, title: note.title, fromStatus: note.status, toStatus: 'trash', permanent: false };
-    if (args.dryRun || !args.confirm) return textResult(destructivePreview('notes_trash', args, preview));
-    return textResult(await trashNote(note.id, {
-      retentionDays: args.retentionDays,
-    }));
+  if (name === 'labels_assign' || name === 'labels_unassign') {
+    const id = requireArg(args, 'id');
+    const label = requireArg(args, 'label');
+    const note = await http.getNote(id);
+    const key = String(label).toLowerCase();
+    const labels = name === 'labels_assign'
+      ? normalizeLabels([...(note.labels || []), label])
+      : (note.labels || []).filter((item) => String(item).toLowerCase() !== key);
+    return textResult(await http.updateNote(id, { labels }));
   }
-  if (name === 'notes_restore') return textResult(await restoreNote(requireArg(args, 'id')));
-  if (name === 'notes_purge') {
-    const note = await getNote(requireArg(args, 'id'));
-    if (!note) throw new Error('note_not_found');
-    const preview = { id: note.id, title: note.title, status: note.status, permanent: true };
-    if (args.dryRun || !args.confirm) return textResult(destructivePreview('notes_purge', args, preview));
-    await deleteNote(note.id);
-    return textResult({ ok: true, permanent: true });
-  }
-  if (name === 'trash_cleanup') {
-    const expired = await expiredTrashNotes();
-    if (expired.length && (args.dryRun || !args.confirm)) {
-      return textResult(destructivePreview('trash_cleanup', args, {
-        permanent: true,
-        count: expired.length,
-        ids: expired.map(note => note.id),
-        titles: expired.map(note => note.title || 'Untitled Note'),
-      }));
-    }
-    return textResult(await purgeExpiredTrash());
-  }
-  if (name === 'settings_get') return textResult(await loadSettings());
-  if (name === 'settings_set_trash_retention') return textResult(await saveSettings({ trashRetentionDays: requireArg(args, 'days') }));
   if (name === 'markdown_commands') return textResult({ commands: MARKDOWN_COMMANDS });
-  if (name === 'markdown_render') {
-    const markdown = await markdownFromArgs(args);
-    return textResult({ html: renderMarkdownSafe(markdown) });
-  }
-  if (name === 'markdown_plain_text') {
-    const markdown = await markdownFromArgs(args);
-    return textResult({ text: markdownPlainText(markdown) });
-  }
-  if (name === 'markdown_apply_command') {
-    return textResult(applyMarkdownCommand(String(args.markdown || ''), args));
-  }
-  if (name === 'labels_list') return textResult({ labels: await loadLabelList() });
-  if (name === 'labels_create') {
-    await saveLabelList([...(await loadLabelList()), requireArg(args, 'name')]);
-    return textResult({ labels: await loadLabelList() });
-  }
-  if (name === 'labels_rename') {
-    await renameLabel(requireArg(args, 'oldName'), requireArg(args, 'newName'));
-    return textResult({ labels: await loadLabelList() });
-  }
-  if (name === 'labels_delete') {
-    await deleteLabelEverywhere(requireArg(args, 'name'));
-    return textResult({ labels: await loadLabelList() });
-  }
-  if (name === 'labels_assign') return textResult(await assignLabel(requireArg(args, 'id'), requireArg(args, 'label')));
-  if (name === 'labels_unassign') return textResult(await unassignLabel(requireArg(args, 'id'), requireArg(args, 'label')));
-  if (name === 'title_generate') {
-    const note = args.id ? await getNote(args.id) : null;
-    if (args.id && !note) throw new Error('note_not_found');
-    const text = String(args.text ?? note?.body ?? '');
-    const result = await generateTitle(text, { sidecar: args.sidecar });
-    const fingerprint = contentFingerprint(markdownPlainText(text));
-    if (args.apply) {
-      if (!note) throw new Error('id_required_for_apply');
-      if (note.titleLocked && !args.force) throw new Error('title_locked');
-      note.title = result.title;
-      note.titleLocked = false;
-      note.titleSource = 'generated';
-      note.titleContentFingerprint = fingerprint;
-      note.updatedAt = new Date().toISOString();
-      await saveNote(note);
-    }
-    return textResult({ ...result, fingerprint, applied: !!args.apply });
-  }
-  if (name === 'agent_tools') return textResult({ tools: CHAT_TOOL_SCHEMAS });
-  if (name === 'agent_run') {
-    const events = [];
-    const result = await runNotesAgent(requireArg(args, 'prompt'), {
-      confirmWrites: !!args.confirm,
-      yes: !!args.confirm,
-      dryRun: !!args.dryRun,
-      actorName: args.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'MCP Agent',
-      actorType: 'agent',
-      limit: args.limit,
-      onEvent: event => events.push(event),
-    });
-    return textResult({ ...result, events });
-  }
-  if (name === 'agent_goal') {
-    const events = [];
-    const result = await runNotesGoal(requireArg(args, 'objective'), {
-      confirmWrites: !!args.confirm,
-      yes: !!args.confirm,
-      dryRun: !!args.dryRun,
-      actorName: args.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'MCP Agent',
-      actorType: 'agent',
-      maxSteps: args.maxSteps,
-      onEvent: event => events.push(event),
-    });
-    return textResult({ ...result, events });
-  }
-  if (name === 'agent_tool_call') {
-    const result = await executeNotesAgentTool(requireArg(args, 'name'), args.input || {}, {
-      confirmWrites: !!args.confirm,
-      dryRun: !!args.dryRun,
-      actorName: args.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'MCP Agent',
-      actorType: 'agent',
-    });
-    return textResult(result);
-  }
+  if (name === 'markdown_render') return textResult({ html: renderMarkdownSafe(await markdownFromArgs(args)) });
+  if (name === 'markdown_plain_text') return textResult({ text: markdownPlainText(await markdownFromArgs(args)) });
+  if (name === 'markdown_apply_command') return textResult(applyMarkdownCommand(String(args.markdown || ''), args));
   throw new Error('unknown_tool');
 }
