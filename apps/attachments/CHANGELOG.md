@@ -110,7 +110,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added (since v0.1.0)
 
-- **Dashboard** — React + Vite UI with dark/light mode for browsing and managing attachments
 - **CLI** — new commands: `health-check`, `watch`, `link-task`, `complete-task`, `snapshot-session`, `task-journal`, `status`, `clean`, `whoami`, `presign-upload`
 - **MCP** — expanded from 8 to 14 tools total; `ATTACHMENTS_PROFILE` env var for token optimization (`minimal`=3, `standard`=7, `full`=14)
 - **Economy integration** — set `ATTACHMENTS_TRACK_COSTS=1` to log cost data via the economy service
