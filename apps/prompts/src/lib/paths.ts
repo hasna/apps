@@ -45,7 +45,7 @@ export function runbookPromptDir(): string {
   if (exact) return join(exact, "runbook");
   // Runbooks physically live under the loops app's data home (ruling #1668:
   // one resolver — the loops root owns them).
-  return join(resolveDataDir({ app: "loops", home: effectiveHome() }), "prompts");
+  return join(resolverDataDir({ app: "loops", home: effectiveHome() }), "prompts");
 }
 
 /**
