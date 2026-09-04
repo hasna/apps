@@ -19,7 +19,7 @@ function trackedFiles(dir: string): string[] {
     const path = join(dir, entry);
     const stat = statSync(path);
     if (stat.isDirectory()) {
-      if (entry === "dist" || entry === "node_modules" || entry === "dashboard") return [];
+      if (entry === "dist" || entry === "node_modules") return [];
       return trackedFiles(path);
     }
     if (/\.(json|md|ts)$/.test(entry)) return [path];

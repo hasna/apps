@@ -25,8 +25,6 @@ import {
   handleVoicemailRecordingWebhook,
   handleStatusWebhook,
 } from "./webhooks.js";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -66,10 +64,6 @@ async function parseBody(req: Request): Promise<Record<string, unknown>> {
   }
   return {};
 }
-
-// Dashboard static file serving
-const dashboardDir = join(import.meta.dir, "../../dashboard/dist");
-const hasDashboard = existsSync(dashboardDir);
 
 export function createServer(port: number = 19451) {
   // Start scheduler
@@ -255,16 +249,6 @@ export function createServer(port: number = 19451) {
         if (path === "/api/ai/analyze" && req.method === "POST") {
           const body = await parseBody(req);
           return json(await analyzeIncomingMessage(body.message as string));
-        }
-
-        // --- Dashboard ---
-        if (hasDashboard) {
-          const filePath = path === "/" ? "/index.html" : path;
-          const file = Bun.file(join(dashboardDir, filePath));
-          if (await file.exists()) return new Response(file);
-          // SPA fallback
-          const index = Bun.file(join(dashboardDir, "index.html"));
-          if (await index.exists()) return new Response(index);
         }
 
         return json({ error: "Not found" }, 404);
