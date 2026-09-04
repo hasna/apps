@@ -108,13 +108,17 @@ describe("getDatabase() unpinned-test-open guard (todos 57b8b8c5)", () => {
     expect(() => getDatabase(":memory:")).not.toThrow();
   });
 
-  test("ARM D (control) — outside NODE_ENV=test, the guard does not fire", async () => {
-    // Deliberately does NOT let getDatabase() resolve to the real production
-    // store even under this control: chdir into a scratch dir that already
-    // has its own `.mementos/mementos.db` placeholder, so findNearestMementosDb
-    // (database.ts) resolves there instead of walking out to $HOME. This
-    // control proves the guard is silent outside NODE_ENV=test WITHOUT
-    // performing the one open this whole task exists to prevent.
+  test("ARM D — outside NODE_ENV=test the test guard is silent; the fail-closed store gate refuses instead", async () => {
+    // The 2026-09-04 fail-closed ruling removed the production local default:
+    // a client that reaches the DEFAULT local path with no API env and no
+    // explicit DB_PATH is refused by `assertClientStoreConfigured()` (owner
+    // ruling; getDatabase default-path fallthrough), even when a
+    // `.mementos/mementos.db` would be discoverable. This control pins the
+    // SPLIT between the two guards: NODE_ENV=test yields the unpinned-test
+    // message (asserted in the arms above), anything else yields the
+    // fail-closed MementosStoreConfigError naming the required env — and never
+    // an open. A scratch dir with its own `.mementos/mementos.db` placeholder
+    // keeps the resolution target obvious without touching $HOME.
     const { mkdtempSync, mkdirSync, writeFileSync, closeSync, openSync } =
       await import("node:fs");
     const { tmpdir } = await import("node:os");
@@ -138,10 +142,30 @@ describe("getDatabase() unpinned-test-open guard (todos 57b8b8c5)", () => {
 
     try {
       process.chdir(scratch);
-      // Sanity: confirm resolution lands on the scratch file, not $HOME.
-      expect(getDbPath()).toBe(join(scratch, ".mementos", "mementos.db"));
+      // Sanity: resolution WOULD land on the scratch file, not $HOME.
+      // (realpathSync both sides: macOS /var is a symlink to /private/var, and
+      // process.cwd() after chdir reports the canonical form.)
+      const { realpathSync } = await import("node:fs");
+      expect(realpathSync(getDbPath())).toBe(
+        realpathSync(join(scratch, ".mementos", "mementos.db")),
+      );
 
-      expect(() => getDatabase()).not.toThrow(/REFUSING-UNPINNED-TEST-OPEN/);
+      let message = "";
+      let code = "";
+      try {
+        getDatabase();
+      } catch (e) {
+        message = e instanceof Error ? e.message : String(e);
+        code = (e as { code?: string }).code ?? "";
+      }
+      // The test-scoped guard is silent outside NODE_ENV=test ...
+      expect(message).not.toContain("REFUSING-UNPINNED-TEST-OPEN");
+      // ... but the fail-closed store gate refuses the unconfigured open and
+      // names the required env. The refusal message alone is the actionable
+      // error a fleet CLI must show; the default local file is never opened.
+      expect(code).toBe("MEMENTOS_STORE_CONFIG");
+      expect(message).toContain("HASNA_MEMENTOS_API_URL");
+      expect(message).toContain("HASNA_MEMENTOS_API_KEY");
     } finally {
       closeDatabase();
       process.chdir(originalCwd);
