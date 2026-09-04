@@ -44,8 +44,6 @@
     "prepublishOnly": "bun run verify:release",
     "scan:artifact": "bun scripts/scan-artifact.ts",
     "dev": "bun run src/cli/index.ts",
-    "dashboard": "cd dashboard && bun run dev",
-    "dashboard:build": "cd dashboard && bun run build",
     "build:js": "bun run build"
   },
   "publishConfig": {
