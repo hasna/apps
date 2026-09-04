@@ -238,7 +238,7 @@ Its default store is `~/.hasna/events`.
 ## Standalone executable help
 
 `repos-mcp` and `repos-serve` are documented in [MCP server](mcp.md) and
-[HTTP API and dashboard](http-api.md).
+[HTTP API](http-api.md).
 
 `repos-verify-release` requires:
 

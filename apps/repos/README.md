@@ -1,6 +1,6 @@
 # @hasna/repos
 
-Local repo intelligence platform for AI agents. Track all repos on your machine, search commits, PRs, branches across every repository. CLI + MCP server + Web dashboard.
+Local repo intelligence platform for AI agents. Track all repos on your machine, search commits, PRs, branches across every repository. CLI + MCP server + HTTP API.
 
 ## Install
 
@@ -23,7 +23,7 @@ repos search "authentication"
 # Show stats
 repos stats
 
-# Start the dashboard
+# Start the API server
 repos-serve  # http://localhost:19450
 ```
 
@@ -32,7 +32,7 @@ repos-serve  # http://localhost:19450
 - [Complete CLI and executable reference](docs/cli.md)
 - [Configuration, database selection, and automatic indexing](docs/configuration.md)
 - [MCP transports and all 37 tools](docs/mcp.md)
-- [HTTP API and dashboard](docs/http-api.md)
+- [HTTP API](docs/http-api.md)
 - [TypeScript SDK](docs/sdk.md)
 
 ## Common CLI Commands
@@ -604,7 +604,7 @@ repos-serve  # Default port: 19450
 | `/api/health` | GET | Dirty, unpushed, behind, and stale checkout report |
 | `/api/scan` | POST | Trigger scan |
 
-Query parameters, defaults, MCP routes, CORS, and dashboard behavior are in the
+Query parameters, defaults, MCP routes, CORS, and HTTP behaviors are in the
 [HTTP API reference](docs/http-api.md).
 
 ## SDK

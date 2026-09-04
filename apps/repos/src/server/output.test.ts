@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { apiJsonResponse } from "./output.js";
 
-describe("dashboard HTTP output", () => {
+describe("HTTP output", () => {
   it("sanitizes remote identities before serializing API responses", async () => {
     const unsafe = `https://${["member", "phrase"].join(":")}@git.example.test/team/tool.git?query=marker`;
     const response = apiJsonResponse([{ id: 1, remote_url: unsafe }]);
