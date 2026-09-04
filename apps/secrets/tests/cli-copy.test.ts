@@ -27,11 +27,10 @@ function cliEnv(): Record<string, string | undefined> {
     HASNA_SECRETS_KEY_DIR: join(vaultDir, "keys"),
     // #681: an unselected/default transport emits a machine-readable
     // `secrets-local-fallback` JSON line on stderr when a local store exists.
-    // The copy suite asserts a strict empty-stderr invariant, so the local
-    // transport must be EXPLICITLY selected here (a chosen store is silent,
-    // a fallback is not). The corrupting-server test below overrides the mode
-    // to `cloud` for its own env, which is unaffected by this default.
-    HASNA_SECRETS_STORAGE_MODE: "local",
+    // Retired storage-mode variables are a hard error now, so there is no
+    // "explicitly selected local" anymore — every local run without a URL+key
+    // pair emits the fallback line, and assertions below tolerate exactly that
+    // one line. The corrupting-server test below routes with URL + key only.
     NO_COLOR: "1",
   };
 }
@@ -122,7 +121,14 @@ describe("CLI copy — value-safety invariant", () => {
   it("copies value-free in --json mode too", async () => {
     const copy = await runCli(["copy", FIXTURE_KEY, FIXTURE_DEST, "--json"]);
     expect(copy.exitCode).toBe(0);
-    expect(copy.stderr).toBe("");
+    // The #681 local-fallback JSON line is expected on stderr for a local run
+    // without a URL+key pair (retired mode vars cannot select local anymore);
+    // nothing else may appear there.
+    const fallbackLines = copy.stderr
+      .split("\n")
+      .filter((line) => line.includes('"event":"secrets-local-fallback"'));
+    expect(fallbackLines.length).toBe(1);
+    expect(copy.stderr.replace(fallbackLines.join("\n"), "").trim()).toBe("");
     expect(copy.stdout).not.toContain(FIXTURE_VALUE);
     const parsed = JSON.parse(copy.stdout);
     expect(parsed.old_key).toBe(FIXTURE_KEY);
@@ -210,7 +216,6 @@ describe("CLI copy --verify against a corrupting server", () => {
 
   it("non-zero exit, redacted message, and no value bytes on any surface", async () => {
     const cloudEnv = {
-      HASNA_SECRETS_STORAGE_MODE: "cloud" as const,
       HASNA_SECRETS_API_URL: `http://localhost:${server.port}` as const,
       HASNA_SECRETS_API_KEY: "test-api-key" as const,
     };

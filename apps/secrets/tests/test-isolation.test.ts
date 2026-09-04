@@ -80,9 +80,10 @@ function spyOnFetch(): { urls: string[]; restore: () => void } {
 describe("test-vault isolation — hosted writes", () => {
   it("refuses a vault write to a non-loopback host and sends no request at all", async () => {
     // The ambient environment is the attacker here: set the client-flip vars on
-    // process.env exactly the way a fleet machine sets them, then ask for a
-    // write the way src/env.ts and src/aws.ts do (bare getStore(), no argument).
-    process.env.HASNA_SECRETS_STORAGE_MODE = "cloud";
+    // process.env exactly the way a fleet machine sets them (URL + key pair —
+    // the storage-mode variable is retired and is itself a hard error now),
+    // then ask for a write the way src/env.ts and src/aws.ts do (bare
+    // getStore(), no argument).
     process.env.HASNA_SECRETS_API_URL = "https://vault.invalid";
     process.env.HASNA_SECRETS_API_KEY = "not-a-real-key-fixture";
 
@@ -102,7 +103,6 @@ describe("test-vault isolation — hosted writes", () => {
   it("refuses to resolve the ambient environment onto the hosted production vault", async () => {
     // Resolution only — no method is called on the result, so this performs no
     // I/O against the real host under any version of the code.
-    process.env.HASNA_SECRETS_STORAGE_MODE = "cloud";
     process.env.HASNA_SECRETS_API_URL = "https://secrets.hasna.xyz";
     process.env.HASNA_SECRETS_API_KEY = "not-a-real-key-fixture";
 
@@ -137,7 +137,6 @@ describe("test-vault isolation — hosted writes", () => {
       },
     });
     try {
-      process.env.HASNA_SECRETS_STORAGE_MODE = "cloud";
       process.env.HASNA_SECRETS_API_URL = `http://127.0.0.1:${server.port}`;
       process.env.HASNA_SECRETS_API_KEY = "not-a-real-key-fixture";
 

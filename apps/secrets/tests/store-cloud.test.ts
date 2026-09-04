@@ -36,9 +36,8 @@ describe("secrets Store resolver (env flip)", () => {
     expect(store.mode).toBe("local");
   });
 
-  it("routes to api with mode=self_hosted + API_URL + API_KEY", () => {
+  it("routes to api with API_URL + API_KEY", () => {
     const env = {
-      HASNA_SECRETS_STORAGE_MODE: "self_hosted",
       HASNA_SECRETS_API_URL: "https://secrets.hasna.xyz",
       HASNA_SECRETS_API_KEY: "hasna_secrets_test_key",
     } as unknown as NodeJS.ProcessEnv;
@@ -46,6 +45,15 @@ describe("secrets Store resolver (env flip)", () => {
     expect(store).toBeInstanceOf(ApiStore);
     expect(store.mode).toBe("api");
     expect(store.describe().location).toBe("https://secrets.hasna.xyz");
+  });
+
+  it("rejects a retired storage-mode variable even with a valid URL + key pair", () => {
+    const env = {
+      HASNA_SECRETS_STORAGE_MODE: "self_hosted",
+      HASNA_SECRETS_API_URL: "https://secrets.hasna.xyz",
+      HASNA_SECRETS_API_KEY: "hasna_secrets_test_key",
+    } as unknown as NodeJS.ProcessEnv;
+    expect(() => getStore(env)).toThrow("HASNA_SECRETS_STORAGE_MODE was removed");
   });
 
   it("infers api from API_URL + API_KEY alone (fleet env-flip)", () => {

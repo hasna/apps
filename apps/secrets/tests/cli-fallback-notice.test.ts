@@ -26,7 +26,7 @@ afterEach(() => {
 
 // Force the local encrypted-SQLite vault: strip every client-flip env key the
 // transport consults, so the resolution lands on the UNSELECTED local fallback
-// (modeSource 'default') — the exact incident shape.
+// (no URL+key pair) — the exact incident shape.
 function env(extra: Record<string, string> = {}): Record<string, string> {
   const base = { ...process.env } as Record<string, string>;
   for (const key of [
@@ -82,7 +82,6 @@ describe("CLI local-fallback notice (incident 715558)", () => {
     const notice = parseNotice(res.stderr);
     expect(notice.event).toBe("secrets-local-fallback");
     expect(notice.transport).toBe("local");
-    expect(notice.modeSource).toBe("default");
     expect(notice.hostedSecretsVisible).toBe(false);
     expect(notice.apiUrlPresent).toBe(false);
     expect(notice.apiKeyPresent).toBe(false);
@@ -104,31 +103,32 @@ describe("CLI local-fallback notice (incident 715558)", () => {
     expect(notice.hostedSecretsVisible).toBe(false);
   });
 
-  it("emits the notice for partial cloud intent (API URL present, key missing)", () => {
-    // Control A of the incident: HASNA_SECRETS_API_URL alone is ALSO silent-local —
-    // the flip signal needs BOTH url and key. The notice must name which half is missing.
+  it("fails closed on partial cloud intent (API URL present, key missing)", () => {
+    // Control A of the incident: HASNA_SECRETS_API_URL alone is a HALF-APPLIED
+    // flip. It must not silently read the local vault and say "Vault is empty"
+    // — the resolver refuses the partial pair and the CLI exits non-zero
+    // naming exactly which half is missing.
     const res = runSecrets(["list"], {
       HASNA_SECRETS_API_URL: "http://127.0.0.1:1",
     });
 
-    expect(res.exitCode).toBe(0);
-    const notice = parseNotice(res.stderr);
-    expect(notice.event).toBe("secrets-local-fallback");
-    expect(notice.transport).toBe("local");
-    expect(notice.modeSource).toBe("default");
-    expect(notice.apiUrlPresent).toBe(true);
-    expect(notice.apiKeyPresent).toBe(false);
-    expect(notice.hostedSecretsVisible).toBe(false);
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr).toContain("HASNA_SECRETS_API_KEY");
+    expect(res.stderr).not.toContain("secrets-local-fallback");
+    expect(res.stdout).not.toContain("Vault is empty.");
   });
 
-  it("stays silent when local was EXPLICITLY selected — that is a chosen store, not a fallback", () => {
+  it("rejects a retired storage-mode variable instead of treating it as a local selector", () => {
+    // Deployment modes no longer exist (owner directive 2026-07-29). The old
+    // "explicitly selected local store" input (HASNA_SECRETS_STORAGE_MODE=local)
+    // is now a hard error that names the variable, never a silent selector.
     const res = runSecrets(["list"], {
       HASNA_SECRETS_STORAGE_MODE: "local",
     });
 
-    expect(res.exitCode).toBe(0);
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr).toContain("HASNA_SECRETS_STORAGE_MODE was removed");
     expect(res.stderr).not.toContain("secrets-local-fallback");
-    expect(res.stdout).toContain("Vault is empty.");
   });
 
   it("emits no fallback notice when cloud is configured — the fail-closed path stays loud", () => {

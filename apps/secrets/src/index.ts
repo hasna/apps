@@ -490,20 +490,20 @@ function store(): Store {
 
 /**
  * When the transport falls back to the LOCAL vault WITHOUT any cloud intent in
- * the environment — no mode var, and no API_URL+API_KEY pair (the flip signal
- * needs BOTH) — the CLI must not report a silent rc=0 empty vault. Incident
- * 715558 (BUG b76e2d56-38bf-468e-a6f9-90ea107e1b0e): an agent in a non-systemd
- * shell misdiagnosed ALL hosted credentials as missing because the CLI read the
+ * the environment — no API_URL+API_KEY pair (the flip signal needs BOTH) — the
+ * CLI must not report a silent rc=0 empty vault. Incident 715558 (BUG
+ * b76e2d56-38bf-468e-a6f9-90ea107e1b0e): an agent in a non-systemd shell
+ * misdiagnosed ALL hosted credentials as missing because the CLI read the
  * unselected local vault and said "Vault is empty."
  *
  * The emission is one machine-readable JSON line on stderr (stdout stays pure
  * for parsers), naming WHERE the read went and WHAT the local vault held:
  * the fallback path, the local secret count, and the fact that hosted secrets
- * are NOT visible. An explicitly selected local store (a mode env set to
- * `local`) is a chosen store, not a fallback, and stays silent.
+ * are NOT visible. A picked store (a mode variable set) is no longer possible —
+ * retired storage-mode variables are a hard error, never a selector.
  */
 function emitLocalFallbackNotice(store: Store, resolution: ClientTransportResolution): void {
-  if (resolution.transport !== "local" || resolution.misconfigured || resolution.modeSource !== "default") {
+  if (resolution.transport !== "local" || resolution.misconfigured) {
     return;
   }
   const keys = clientTransportEnvKeys("secrets");
@@ -512,9 +512,8 @@ function emitLocalFallbackNotice(store: Store, resolution: ClientTransportResolu
   const notice = {
     event: "secrets-local-fallback",
     transport: "local",
-    modeSource: resolution.modeSource,
     checked: {
-      modeKeys: keys.modeKeys,
+      retiredModeKeys: keys.modeKeys,
       apiUrlKeys: keys.apiUrlKeys,
       apiKeyKeys: keys.apiKeyKeys,
     },

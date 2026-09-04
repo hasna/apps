@@ -37,7 +37,6 @@ async function runGet() {
     cwd: rootDir,
     env: {
       ...process.env,
-      HASNA_SECRETS_STORAGE_MODE: "cloud",
       HASNA_SECRETS_API_URL: `http://localhost:${server.port}`,
       HASNA_SECRETS_API_KEY: "test-api-key",
       NO_COLOR: "1",
