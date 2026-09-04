@@ -783,7 +783,10 @@ describe("self-hosted container install contract", () => {
     } finally {
       rmSync(destination, { recursive: true, force: true });
     }
-  });
+    // The assertion above packs the real npm archive (packNpmArtifact), which on
+    // slower machines takes longer than bun's 5000ms default; npm-pack.test.ts
+    // uses the same 30s bound for real-archive work.
+  }, 30_000);
 
   test("rejects external-stage and wrong-stage copy bypasses", () => {
     const safeCopy = "COPY package.json bun.lock ./";
