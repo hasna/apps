@@ -4,6 +4,44 @@ import { join } from "node:path";
 import { CONTRACTS_KIT_VERSION, scanPackedArtifact, scannerCommand } from "../scripts/scan-artifact";
 
 const repoRoot = join(import.meta.dir, "..");
+const monorepoRoot = join(repoRoot, "../..");
+
+interface CiStep {
+  run?: string;
+  if?: unknown;
+  "continue-on-error"?: unknown;
+  "working-directory"?: unknown;
+}
+interface CiJob extends Omit<CiStep, "run"> { steps?: CiStep[] }
+interface RootCi { jobs?: Record<string, CiJob> }
+
+function rootCi(): RootCi {
+  return Bun.YAML.parse(readFileSync(join(monorepoRoot, ".github/workflows/ci.yml"), "utf8")) as RootCi;
+}
+
+/** The nested standalone-era workflow is not a GitHub Actions entry point. */
+function rootCiViolations(workflow: RootCi): string[] {
+  const violations: string[] = [];
+  const stepIndex = (jobName: string, command: string) => {
+    const job = workflow.jobs?.[jobName];
+    const index = job?.steps?.findIndex((step) => step.run?.split("\n").some((line) => line.trim() === command)) ?? -1;
+    const step = job?.steps?.[index];
+    if (!job || !step || [job, step].some((entry) => entry.if !== undefined ||
+      (entry["continue-on-error"] !== undefined && entry["continue-on-error"] !== false) ||
+      entry["working-directory"] !== undefined)) {
+      violations.push(`${jobName}: missing unconditional hard root command ${command}`);
+    }
+    return index;
+  };
+  const build = stepIndex("build-test", "bunx turbo run build --affected --concurrency=1");
+  const test = stepIndex("build-test", "bunx turbo run test --affected --concurrency=1");
+  if (build < 0 || test <= build) violations.push("affected build must precede affected tests");
+  stepIndex("gates", "bun tooling/ci/check-manifests.ts --self-test");
+  stepIndex("gates", "bun tooling/ci/check-manifests.ts");
+  stepIndex("publish-guard", "bun tooling/ci/check-publish-guard.ts --self-test");
+  stepIndex("publish-guard", "bun tooling/ci/check-publish-guard.ts");
+  return violations;
+}
 
 function readText(relativePath: string): string {
   return readFileSync(join(repoRoot, relativePath), "utf8");
@@ -160,13 +198,48 @@ describe("scan:artifact release gate", () => {
     );
   });
 
-  test("enforces conformance, pack and scan in CI, not only on a reviewer's laptop", () => {
-    // With no workflow, `gh pr checks` reports a skip and a change that bricks
-    // publishing merges green — which is how this repo got here.
-    const workflow = readText(".github/workflows/ci.yml");
-    expect(workflow).toContain(`bunx @hasna/contracts@${CONTRACTS_KIT_VERSION} repo-conformance .`);
-    expect(workflow).toContain("bun pm pack --dry-run");
-    expect(workflow).toContain("bun run scan:artifact");
+  test("uses the active root CI build/test, manifest and npm publish-guard lanes", () => {
+    // Package tests below execute the pinned artifact scan and real npm prepack.
+    // Turbo builds this workspace member before running those tests. The root
+    // manifest lane also runs conformance; its reporting policy is not changed.
+    const rootPackage = JSON.parse(readFileSync(join(monorepoRoot, "package.json"), "utf8"));
+    const turbo = JSON.parse(readFileSync(join(monorepoRoot, "turbo.json"), "utf8"));
+    expect(rootPackage.workspaces).toContain("apps/*");
+    expect(readJson("package.json").scripts.test).toBe("bun test");
+    expect(turbo.tasks.test.dependsOn).toContain("build");
+    expect(turbo.tasks.build.outputs).toContain("dist/**");
+    expect(rootCiViolations(rootCi())).toEqual([]);
+  });
+
+  test("root CI coverage checks reject missing, skipped and softened lanes", () => {
+    for (const jobName of ["build-test", "gates", "publish-guard"]) {
+      const missing = rootCi();
+      delete missing.jobs![jobName];
+      expect(rootCiViolations(missing).length).toBeGreaterThan(0);
+      for (const field of ["if", "continue-on-error"] as const) {
+        const softened = rootCi();
+        softened.jobs![jobName]![field] = field === "if" ? false : true;
+        expect(rootCiViolations(softened).length).toBeGreaterThan(0);
+      }
+    }
+    for (const jobName of ["build-test", "gates", "publish-guard"]) {
+      const original = rootCi();
+      const steps = original.jobs![jobName]!.steps!;
+      for (const [index, step] of steps.entries()) {
+        if (!step.run?.match(/turbo run (build|test)|bun tooling\/ci\/check-(manifests|publish-guard)\.ts(?: --self-test)?(?:\n|$)/)) continue;
+        for (const mutation of ["commented", "conditional", "softened"] as const) {
+          const changed = structuredClone(original);
+          const target = changed.jobs![jobName]!.steps![index]!;
+          if (mutation === "commented") target.run = target.run!.split("\n").map((line) => `# ${line}`).join("\n");
+          if (mutation === "conditional") target.if = false;
+          if (mutation === "softened") target["continue-on-error"] = true;
+          expect(rootCiViolations(changed).length).toBeGreaterThan(0);
+        }
+      }
+    }
+    const reordered = rootCi();
+    reordered.jobs!["build-test"]!.steps!.reverse();
+    expect(rootCiViolations(reordered)).toContain("affected build must precede affected tests");
   });
 
   test("packs the artifact and passes the scan with the pinned kit", () => {
@@ -180,8 +253,8 @@ describe("scan:artifact release gate", () => {
   test("leaves the package packable through the real prepack lifecycle", () => {
     // The gate has to run from prepack without breaking the thing it guards.
     // A prepack that exits non-zero makes the package impossible to pack or
-    // publish, and `bun add github:hasna/guardrails` fails on it too.
-    const result = Bun.spawnSync(["bun", "pm", "pack", "--dry-run"], {
+    // publish. The outer dry-run must still scan a real inner npm archive.
+    const result = Bun.spawnSync(["npm", "pack", ".", "--dry-run", "--json", "--workspaces=false"], {
       cwd: repoRoot,
       stdout: "pipe",
       stderr: "pipe",
@@ -190,5 +263,6 @@ describe("scan:artifact release gate", () => {
 
     expect(combined).not.toContain('script "prepack" exited with code');
     expect(result.exitCode, combined).toBe(0);
+    expect(combined).toContain("pass artifact-scan");
   }, 300_000);
 });

@@ -20,6 +20,27 @@ bun run typecheck
 bun test
 ```
 
+## Release artifact gate
+
+Release checks require Bun 1.3.14 and npm >=11.0.0 (tested with npm 11.19.0).
+This is a release-tooling prerequisite, not an npm engine restriction for SDK
+consumers. npm 10 does not reliably suppress `prepare` with `--ignore-scripts`;
+the scanner rejects old or unparseable npm versions before packing.
+
+After `bun run build`, `bun run scan:artifact` packs this package with npm,
+disables lifecycle recursion and workspace expansion, and explicitly overrides
+an inherited dry-run so the inner pack creates a real archive. It requires one
+JSON-reported local regular `.tgz` file and scans it with the pinned
+`@hasna/contracts@0.8.5`, then removes its temporary workspace. `prepack` and
+`prepublishOnly` retain this gate.
+
+In this monorepo, root `.github/workflows/ci.yml` runs the affected Turbo
+build/test graph (tests depend on build), manifest checks, and the npm
+publish guard. The nested workflow in this directory is not an active GitHub
+Actions entry point. The root CI npm 11 toolchain repair in
+[hasna/apps#1499](https://github.com/hasna/apps/pull/1499) is a prerequisite for
+running these checks on runners that otherwise provide npm 10.
+
 ## CLI
 
 ```bash
