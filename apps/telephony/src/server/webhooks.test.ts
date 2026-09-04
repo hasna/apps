@@ -8,7 +8,7 @@ import { closeDatabase } from "../db/database.js";
 import { resetStore } from "../lib/store/index.js";
 import { MediaStorage, type S3ClientLike } from "../lib/media-storage.js";
 import { createCall, getCallByTwilioSid } from "../db/calls.js";
-import { parseFormBody, handleStatusWebhook } from "./webhooks.js";
+import { parseFormBody, handleStatusWebhook, flushBackgroundMediaCopies } from "./webhooks.js";
 
 class InMemoryS3 implements S3ClientLike {
   readonly objects = new Map<string, Buffer>();
@@ -105,6 +105,11 @@ describe("handleStatusWebhook media copy", () => {
       new MediaStorage({ bucket: "test-media-bucket", client: s3 }),
     );
 
+    // The media copy runs in the background after the webhook response (the
+    // row update is awaited; the copy is not) — resolve it before asserting
+    // the copy metadata landed on the row.
+    await flushBackgroundMediaCopies();
+
     const stored = getCallByTwilioSid("CAstatuscall1");
     expect(stored?.recording_url).toBe("https://api.twilio.com/recordings/RE42/recording.mp3");
     expect(stored?.object_key).toBe(`telephony/media/CAstatuscall1/${digest}.mp3`);
@@ -167,6 +172,10 @@ describe("handleStatusWebhook media copy", () => {
       "CallSid=CAstatuscall3&CallStatus=in-progress&RecordingSid=RE45&RecordingStatus=completed&RecordingUrl=https%3A%2F%2Fapi.twilio.com%2Frecordings%2FRE45%2Frecording.mp3",
       new MediaStorage({ bucket: "test-media-bucket", client: s3 }),
     );
+
+    // Same as above: the failed copy settles in the background; await it so
+    // the test never outlives a tracked copy.
+    await flushBackgroundMediaCopies();
 
     const stored = getCallByTwilioSid("CAstatuscall3");
     expect(stored?.object_key).toBeNull();

@@ -42,29 +42,6 @@ export async function handleVoicemailRecording(options: {
   /** Injectable media storage (tests); defaults to the env-config bucket. */
   mediaStorage?: MediaStorage;
 }): Promise<Voicemail> {
-  // Copy the provider media into the bucket BEFORE the row is created, so a
-  // voicemail row born after this change either already points at an object
-  // in the bucket (object_key + sha256) or explains its absence in the logs.
-  // Soft-fail by design: a failed copy leaves the row with the provider URL
-  // and object_key null; media copy is a retention improvement, not a reason
-  // to drop a voicemail.
-  let objectKey: string | undefined;
-  let sha256: string | undefined;
-  const storage = options.mediaStorage ?? mediaStorageFromConfig();
-  if (options.recording_url) {
-    if (options.call_id) {
-      const copy = await copyProviderMediaAction(options.call_id, options.recording_url, undefined, storage);
-      if (copy) {
-        objectKey = copy.objectKey;
-        sha256 = copy.sha256;
-      }
-    } else if (storage.usesS3) {
-      // Bucket configured but the webhook carried no call id — nothing to key
-      // the object under. Logged, not fatal: the row keeps the provider URL.
-      console.error(`[telephony] media copy: voicemail webhook without a call_id; skipping media copy`);
-    }
-  }
-
   // Download recording locally (best effort, as before)
   let localPath: string | undefined;
   try {
@@ -83,17 +60,43 @@ export async function handleVoicemailRecording(options: {
     transcription = result.text;
   } catch {}
 
-  return getStore().createVoicemail({
+  const store = getStore();
+
+  // Create the voicemail row FIRST — the voicemail is the durable fact of
+  // this webhook and its row must never wait on a media copy. The provider
+  // recording URL is on the row from the start; the bucket copy attaches to
+  // the same row afterwards. Soft-fail by design: a failed copy leaves the
+  // row with object_key null and the provider URL as the fallback — media
+  // copy is a retention improvement, not a reason to drop a voicemail, and a
+  // failed insert can never orphan an uploaded object.
+  const voicemail = await store.createVoicemail({
     call_id: options.call_id,
     from_number: options.from_number,
     to_number: options.to_number,
     recording_url: options.recording_url,
-    object_key: objectKey ?? null,
-    sha256: sha256 ?? null,
     local_path: localPath,
     transcription,
     duration: options.duration,
     agent_id: options.agent_id,
     project_id: options.project_id,
   });
+
+  if (!options.recording_url) return voicemail;
+  if (!options.call_id) {
+    // Bucket configured but the webhook carried no call id — nothing to key
+    // the object under. Logged, not fatal: the row keeps the provider URL.
+    if ((options.mediaStorage ?? mediaStorageFromConfig()).usesS3) {
+      console.error(`[telephony] media copy: voicemail webhook without a call_id; skipping media copy`);
+    }
+    return voicemail;
+  }
+  // Copy the provider recording into the bucket and attach the copy metadata
+  // to the just-created row (media-storage.ts soft-fail contract). Keyed
+  // under the call the recording belongs to, mirroring the call row.
+  const copy = await copyProviderMediaAction(options.call_id, options.recording_url, undefined, options.mediaStorage ?? mediaStorageFromConfig());
+  if (copy) {
+    await store.updateVoicemailMedia(voicemail.id, { object_key: copy.objectKey, sha256: copy.sha256 });
+    return { ...voicemail, object_key: copy.objectKey, sha256: copy.sha256 };
+  }
+  return voicemail;
 }

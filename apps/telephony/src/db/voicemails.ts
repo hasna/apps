@@ -67,6 +67,17 @@ export function listVoicemails(filters?: { agent_id?: string; project_id?: strin
   return (d.prepare(`SELECT * FROM voicemails${where} ORDER BY created_at DESC`).all(...params) as VoicemailRow[]).map(rowToVoicemail);
 }
 
+export function updateVoicemailMedia(id: string, extra: { object_key: string; sha256: string }, db?: Database): void {
+  const d = db || getDatabase();
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (extra.object_key) { sets.push("object_key = ?"); params.push(extra.object_key); }
+  if (extra.sha256) { sets.push("sha256 = ?"); params.push(extra.sha256); }
+  if (sets.length === 0) return;
+  params.push(id);
+  d.run(`UPDATE voicemails SET ${sets.join(", ")} WHERE id = ?`, params);
+}
+
 export function markVoicemailListened(id: string, db?: Database): boolean {
   const d = db || getDatabase();
   return d.run("UPDATE voicemails SET listened = 1 WHERE id = ?", [id]).changes > 0;

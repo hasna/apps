@@ -125,3 +125,13 @@ export function updateMessageStatus(id: string, status: MessageStatus, errorMess
     d.run("UPDATE messages SET status = ?, updated_at = ? WHERE id = ?", [status, now(), id]);
   }
 }
+
+export function updateMessageMedia(id: string, extra: { object_key: string; sha256: string }, db?: Database): void {
+  const d = db || getDatabase();
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (extra.object_key) { sets.push("object_key = ?"); params.push(extra.object_key); }
+  if (extra.sha256) { sets.push("sha256 = ?"); params.push(extra.sha256); }
+  if (sets.length === 0) return;
+  d.run(`UPDATE messages SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`, [...params, now(), id]);
+}

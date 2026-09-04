@@ -142,7 +142,7 @@ export class TelephonyApiClient {
     }
 
     /** List calls */
-    async listCalls(query?: { "limit"?: number }, init?: RequestInit): Promise<CallList> {
+    async listCalls(query?: { "limit"?: number; "twilio_sid"?: string }, init?: RequestInit): Promise<CallList> {
       return this.request("GET", `/v1/calls`, {
         body: undefined,
         query,

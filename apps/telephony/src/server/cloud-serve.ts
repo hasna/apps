@@ -670,7 +670,7 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
       > = {
         "/v1/numbers": { table: "phone_numbers", order: "created_at DESC", map: mapNumber, filters: ["agent_id", "project_id", "status", "number"] },
         "/v1/messages": { table: "messages", order: "created_at DESC", map: mapMessage, filters: ["agent_id", "project_id", "type"], search: ["body"], phone: true },
-        "/v1/calls": { table: "calls", order: "started_at DESC", map: mapCall, filters: ["agent_id", "project_id"] },
+        "/v1/calls": { table: "calls", order: "started_at DESC", map: mapCall, filters: ["agent_id", "project_id", "twilio_sid"] },
         "/v1/voicemails": { table: "voicemails", order: "created_at DESC", map: mapVoicemail, filters: ["agent_id", "project_id", "listened"], bools: ["listened"] },
       };
       if (listOnly[path] && method === "GET") {
@@ -1662,7 +1662,10 @@ export function telephonyOpenApi(version: string): Record<string, unknown> {
         get: {
           operationId: "listCalls",
           summary: "List calls",
-          parameters: [{ name: "limit", in: "query", schema: { type: "integer" } }],
+          parameters: [
+            { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "twilio_sid", in: "query", schema: { type: "string" }, description: "Exact Twilio SID filter — finds the call row a provider webhook refers to" },
+          ],
           responses: {
             "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/CallList" } } } },
           },

@@ -1,4 +1,3 @@
-import { PutObjectCommand, S3Client as AwsS3Client } from "@aws-sdk/client-s3";
 import { createHash } from "node:crypto";
 import { getConfig } from "./config.js";
 
@@ -28,9 +27,21 @@ import { getConfig } from "./config.js";
 /** Lowercase hex sha-256. Anything else must never reach a storage key. */
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
+/**
+ * Structural stand-in for an AWS S3 PutObject command: only `input` (the
+ * Bucket/Key/Body payload) crosses this seam, so no @aws-sdk type leaks into
+ * the storage's declarations. @aws-sdk/client-s3 is an OPTIONAL dependency
+ * (see package.json) loaded lazily when a real client is needed; the seam
+ * keeps the emitted d.ts free of an import that a consumer who omitted the
+ * optional dep could not resolve.
+ */
+export interface S3CommandLike {
+  input: object;
+}
+
 /** The slice of the AWS client the storage uses; injectable so tests can stand in an in-memory bucket. */
 export interface S3ClientLike {
-  send(command: PutObjectCommand): Promise<unknown>;
+  send(command: S3CommandLike): Promise<unknown>;
 }
 
 export interface MediaStorageOptions {
@@ -47,15 +58,68 @@ export interface MediaCopyResult {
   size: number;
 }
 
+/**
+ * The @aws-sdk/client-s3 surface this module touches, narrowed to structural
+ * shapes: the lazily-loaded module is retained as this factory pair (client +
+ * command), so no @aws-sdk type reference can ever reach the emitted
+ * declarations — a consumer who omits the optional dependency must still be
+ * able to type-check against this module's published d.ts.
+ */
+type AwsS3Surface = {
+  client: (region: string) => S3ClientLike;
+  command: (input: object) => S3CommandLike;
+};
+
 export class MediaStorage {
   private bucket?: string;
   private prefix: string;
+  private region: string;
+  private readonly clientOverride?: S3ClientLike;
   private s3?: S3ClientLike;
+  /** The loaded @aws-sdk/client-s3 surface; null when loading failed (optional dep omitted). */
+  private aws?: AwsS3Surface | null;
 
   constructor(options: MediaStorageOptions = {}) {
     this.bucket = options.bucket;
     this.prefix = (options.prefix || "telephony").replace(/^\/+|\/+$/g, "");
-    this.s3 = this.bucket ? options.client ?? new AwsS3Client({ region: options.region || process.env.AWS_REGION || "us-east-1" }) : undefined;
+    this.region = options.region || process.env.AWS_REGION || "us-east-1";
+    // The real S3 client is NOT constructed here: @aws-sdk/client-s3 is an
+    // optional dependency loaded lazily on first copy (ensureS3), so merely
+    // configuring a bucket — or merely importing this module — never pays the
+    // AWS credential-provider chain.
+    this.clientOverride = options.client;
+  }
+
+  /**
+   * The S3 client for this storage, or null when no copy can happen (no
+   * bucket, or the optional @aws-sdk/client-s3 dependency could not be
+   * loaded). Loads the real client on first use; never throws.
+   */
+  private async ensureS3(): Promise<S3ClientLike | null> {
+    if (this.s3) return this.s3;
+    if (!this.bucket) return null;
+    if (this.clientOverride) {
+      this.s3 = this.clientOverride;
+      return this.s3;
+    }
+    if (this.aws === null) return null; // a previous load attempt failed
+    try {
+      const mod = await import("@aws-sdk/client-s3");
+      const aws: AwsS3Surface = {
+        client: (region) => new mod.S3Client({ region }) as unknown as S3ClientLike,
+        command: (input) => new mod.PutObjectCommand(input as never) as unknown as S3CommandLike,
+      };
+      this.aws = aws;
+      this.s3 = aws.client(this.region);
+      return this.s3;
+    } catch (error) {
+      this.aws = null;
+      console.error(
+        `[telephony] media copy: @aws-sdk/client-s3 is not available (optional dependency); skipping media copy:`,
+        error instanceof Error ? error.message : error,
+      );
+      return null;
+    }
   }
 
   get usesS3(): boolean {
@@ -91,7 +155,9 @@ export class MediaStorage {
     fetchImpl?: typeof fetch;
   }): Promise<MediaCopyResult | null> {
     const { mediaId, sourceUrl, contentType } = options;
-    if (!this.bucket || !this.s3) return null;
+    const bucket = this.bucket;
+    const s3 = await this.ensureS3();
+    if (!bucket || !s3) return null;
 
     try {
       const fetchImpl = options.fetchImpl ?? fetch;
@@ -116,12 +182,16 @@ export class MediaStorage {
       const extension = extensionForContentType(resolvedType) ?? extensionForUrl(sourceUrl) ?? "bin";
       const objectKey = this.mediaKeyFor(mediaId, sha256, extension);
 
-      await this.s3.send(new PutObjectCommand({
-        Bucket: this.bucket,
-        Key: objectKey,
-        Body: bytes,
-        ContentType: resolvedType,
-      }));
+      // Real-client path: the command is built by the lazily-loaded optional
+      // dependency (see ensureS3). Injected-client path (tests): the
+      // S3ClientLike seam is structural, so the same payload travels as a
+      // plain { input } command object — the fake's send reads command.input.
+      const putInput = { Bucket: bucket, Key: objectKey, Body: bytes, ContentType: resolvedType };
+      if (this.aws) {
+        await s3.send(this.aws.command(putInput));
+      } else {
+        await s3.send({ input: putInput });
+      }
 
       return { objectKey, sha256, size: bytes.length };
     } catch (error) {
