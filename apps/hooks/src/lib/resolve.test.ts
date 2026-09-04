@@ -88,6 +88,10 @@ describe("bundled hook runs from an install prefix other than the build worktree
       const env = {
         ...process.env,
         HASNA_HOOKS_DATA_DIR: join(prefix, "home", ".hasna", "hooks"),
+        // Explicit local-mode opt-in (fleet fail-closed doctrine): this test
+        // syncs the foreign prefix's bundled catalog into its local store on
+        // purpose, with no registry API configured.
+        HASNA_HOOKS_LOCAL: "1",
         NO_COLOR: "1",
       };
 

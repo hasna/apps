@@ -53,7 +53,7 @@ import { resolveHookMeta } from "../lib/resolve.js";
 import { getPinnedHook } from "../lib/store.js";
 import { SEMVER_PATTERN } from "../lib/semver.js";
 import { getReportedDbPath } from "../lib/app-home.js";
-import { getCustomHooksDir } from "../config.js";
+import { getCustomHooksDir, isApiModeConfigured, isLocalModeOptedIn } from "../config.js";
 
 const program = new Command();
 
@@ -1973,4 +1973,89 @@ program
   });
 registerEventsCommands(program, { source: "hooks" });
 
+// ── Fail-closed transport gate (fleet doctrine, 2026-09-04) ─────────────────
+//
+// The `hooks` CLI manages hook state for the hosted hooks registry API. A run
+// WITHOUT a configured registry API must FAIL CLOSED — never silently serve
+// the local SQLite store (~/.hasna/hooks/hooks.db) and exit 0 as a false
+// green. Local mode (bundled registry + local store) remains available, but
+// only as an explicit opt-in: HASNA_HOOKS_LOCAL=1 (alias HOOKS_LOCAL=1).
+//
+// Commands that are local/operator/runtime surfaces BY DESIGN never stand in
+// for the hosted API and may run without it:
+//   - run            execute a pinned local hook script (agents call this)
+//   - serve          serve the LOCAL registry over HTTP (self-hosted server)
+//   - mcp            local MCP server for agent integration
+//   - cf             provision a Cloudflare registry (operator tooling)
+//   - migrate        apply PostgreSQL migrations to the storage database
+//   - init           register a local agent profile / configure the API URL
+//   - profile-export/import   local agent-profile JSON files
+//   - channels, events        @hasna/events surfaces (own env contract)
+// Help/version output is informational and stays available.
+//
+// Everything else fails closed WITHOUT an API URL or opt-in — including
+// UNKNOWN tokens: `interactive` is registered with `isDefault: true`, so
+// commander routes any token that matches no command to the interactive TUI,
+// which browses the local catalog/store. An unknown token is therefore not a
+// commander "unknown command" error here; it would silently open local mode,
+// so it must fail closed like every other local-serving command.
+
+const API_INDEPENDENT_COMMANDS = new Set([
+  "run",
+  "serve",
+  "mcp",
+  "cf",
+  "migrate",
+  "init",
+  "profile-export",
+  "profile-import",
+  "channels",
+  "events",
+]);
+
+function failClosedForMissingApiEnv(): never {
+  console.error(
+    chalk.red(
+      "hooks: no registry API configured and local mode is not explicitly enabled.\n"
+        + "Set HASNA_HOOKS_API_URL and HASNA_HOOKS_API_KEY (or HOOKS_API_URL / HOOKS_API_KEY, or the\n"
+        + "api_url field in config.json) to run against the hosted hooks registry, or set\n"
+        + "HASNA_HOOKS_LOCAL=1 to explicitly opt into local mode (bundled registry + local store).\n"
+        + "Refusing to silently fall back to local storage.",
+    ),
+  );
+  process.exit(1);
+}
+
+/** First non-option argv token: the command being run (or null for the bare CLI). */
+function firstCommandToken(argv: string[]): string | null {
+  for (const arg of argv) {
+    if (arg === "--") continue;
+    if (arg.startsWith("-")) continue;
+    return arg;
+  }
+  return null;
+}
+
+function enforceTransportGate(): void {
+  // Api mode or an explicit local opt-in: proceed.
+  if (isApiModeConfigured() || isLocalModeOptedIn()) return;
+  const argv = process.argv.slice(2);
+  // Help/version output is informational and never a false green. The "help"
+  // token is commander's built-in help subcommand, handled before any default
+  // command matching, so it also just prints help.
+  if (argv.some((arg) => arg === "-h" || arg === "--help" || arg === "-V" || arg === "--version")) return;
+  const token = firstCommandToken(argv);
+  if (token === null) {
+    // Bare `hooks` (or flags only) runs the default interactive command.
+    failClosedForMissingApiEnv();
+  }
+  if (token === "help") return;
+  if (API_INDEPENDENT_COMMANDS.has(token)) return;
+  // Registered registry/local-store commands AND unknown tokens alike: an
+  // unknown token would fall through to the default `interactive` command
+  // (local catalog browsing), so it is just as forbidden without opt-in.
+  failClosedForMissingApiEnv();
+}
+
+enforceTransportGate();
 program.parse();

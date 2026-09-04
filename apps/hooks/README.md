@@ -121,13 +121,22 @@ hooks serve --port 39428            # publish key resolves from HASNA_HOOKS_API_
 # PUT /api/v1/hooks (publish, requires the key), GET /api/v1/lock
 ```
 
-**Cloudflare registry (opt-in).** Presence of an API URL selects the remote registry; absence means local. There is no mode concept.
+**Registry selection (fail closed).** A registry API URL — env `HASNA_HOOKS_API_URL` (legacy aliases `HOOKS_API_URL`, `HASNA_HOOKS_REGISTRY_URL`, `HOOKS_REGISTRY_URL`) or the `api_url` field in `config.json` — selects the remote registry. Without one, the CLI **fails closed**: registry commands refuse to run rather than silently serving the bundled catalog and local SQLite store, and they name the required env in the error. Local mode (bundled registry + local store) is an explicit opt-in:
+
+```bash
+HASNA_HOOKS_LOCAL=1 hooks list      # canonical local opt-in
+HOOKS_LOCAL=1 hooks list            # accepted alias
+```
+
+Surfaces that are local, runtime, or operator-only by design never need either setting: `run`, `serve`, `mcp`, `cf`, `migrate`, `init`, `profile-export`/`profile-import`, `channels`, `events`, and `--help`/`--version`.
 
 ```bash
 hooks init --cloudflare --api-url https://registry.example.com --api-key <vault-key-name>
-hooks sync            # fetch catalog + lock from the API, verify sha256, update the local store
-hooks sync --dry-run  # print the plan without changing anything
+HASNA_HOOKS_LOCAL=1 hooks sync      # local workflow: bundled catalog into the local store
+HASNA_HOOKS_LOCAL=1 hooks sync --dry-run  # print the plan without changing anything
 ```
+
+`hooks init --cloudflare` writes the stored API URL into `config.json`, which satisfies the gate for the registry commands that follow.
 
 `hooks init --cloudflare` stores the API URL and a vault key NAME in `~/.hasna/hooks/config.json` — never the key value. Serve with the key resolved from the vault:
 

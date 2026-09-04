@@ -1,8 +1,11 @@
 /**
  * Runtime configuration for @hasna/hooks.
  *
- * Presence of an API URL selects the remote registry; absence means the local
- * store is authoritative. There is deliberately no mode concept.
+ * Transport policy (fleet fail-closed doctrine, 2026-09-04): an API URL
+ * selects the remote registry; without one the CLI must FAIL CLOSED instead
+ * of silently serving the local store. Local mode (bundled registry + local
+ * SQLite at the effective data root) is an explicit opt-in via
+ * HASNA_HOOKS_LOCAL=1 / HOOKS_LOCAL=1 — never the default for a CLI run.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -52,15 +55,57 @@ export function writeConfig(config: HooksConfig): string {
   return path;
 }
 
-export function resolveApiUrl(): string | undefined {
-  const envUrl =
-    process.env.HASNA_HOOKS_API_URL ??
-    process.env.HOOKS_API_URL ??
-    process.env.HASNA_HOOKS_REGISTRY_URL ??
-    process.env.HOOKS_REGISTRY_URL;
-  if (envUrl) return envUrl.replace(/\/+$/, "");
+/**
+ * Registry API URL env keys, in precedence order. Canonical is
+ * HASNA_HOOKS_API_URL; the HOOKS_* aliases and the registry-URL spellings are
+ * legacy readers kept for compatibility (resolveApiUrl is their only caller).
+ */
+const REGISTRY_API_URL_ENV_KEYS = [
+  "HASNA_HOOKS_API_URL",
+  "HOOKS_API_URL",
+  "HASNA_HOOKS_REGISTRY_URL",
+  "HOOKS_REGISTRY_URL",
+] as const;
+
+/**
+ * Resolve the configured registry API URL (env first, then config.json
+ * api_url), or undefined when none is configured. First-nonblank selection —
+ * a set-but-whitespace override must not suppress a valid fallback (the
+ * `?.trim() ||` semantics app-home settled for the exact data-root override).
+ */
+export function resolveApiUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  for (const key of REGISTRY_API_URL_ENV_KEYS) {
+    const value = env[key]?.trim();
+    if (value) return value.replace(/\/+$/, "");
+  }
   const cfg = readConfig();
-  return cfg.api_url ? cfg.api_url.replace(/\/+$/, "") : undefined;
+  return cfg.api_url ? cfg.api_url.trim().replace(/\/+$/, "") : undefined;
+}
+
+/**
+ * Whether the CLI is running in api mode: a registry API URL is configured via
+ * env (HASNA_HOOKS_API_URL / HOOKS_API_URL / HASNA_HOOKS_REGISTRY_URL /
+ * HOOKS_REGISTRY_URL) or via the api_url field in config.json.
+ *
+ * `hooks init --cloudflare` writes config.json — a deliberate, explicit remote
+ * selection — so it counts exactly like the env form.
+ */
+export function isApiModeConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return resolveApiUrl(env) !== undefined;
+}
+
+/**
+ * Whether the operator has explicitly opted into LOCAL mode (bundled registry
+ * + local SQLite store). Canonical opt-in: HASNA_HOOKS_LOCAL=1; the bare
+ * HOOKS_LOCAL=1 alias is accepted for compatibility with the other HOOKS_*
+ * readers. Local mode is never the default: a CLI run without either this
+ * opt-in or an API URL fails closed.
+ */
+export function isLocalModeOptedIn(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.HASNA_HOOKS_LOCAL ?? env.HOOKS_LOCAL;
+  if (typeof raw !== "string") return false;
+  const value = raw.trim().toLowerCase();
+  return value === "1" || value === "true";
 }
 
 /**
