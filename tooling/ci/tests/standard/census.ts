@@ -469,7 +469,11 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "orgs", kitVersion: "0.10.6", pinned: "0.11.1" },
   { member: "hooks", kitVersion: "0.8.4", pinned: "0.14.0" },
-  { member: "contacts", kitVersion: "0.4.2", pinned: "0.5.1" }, // folded 2026-08-30 from the standalone repo; code imports contracts 0.5.x APIs, kit validates at 0.4.2
+  // 2026-09-04 (canonical HTTPS client migration #1491): the contacts entry
+  // ("kit 0.4.2 pinned 0.5.1", folded 2026-08-30) became STALE — the migrated
+  // member's kit now agrees with its pin (kit 0.5.1 == pinned 0.5.1), so the
+  // recorded exception trips the two-sided stale check on every CI run.
+  // Deleted here; contacts conformance passes at its aligned kit.
   // Version wave 2026-08-24 (c4622d9094) pinned 26 members to contracts
   // 0.14.0 without rewriting their hasna.contract.json kitVersion; each
   // member's conformance passes at its declared kit, so the claim moves only
