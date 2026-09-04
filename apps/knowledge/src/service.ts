@@ -20,8 +20,10 @@ import {
   clearKnowledgeAuth,
   getKnowledgeApiKey,
   knowledgeAuthStatus,
+  probeKnowledgeAuth,
   resolveKnowledgeApiUrl,
   saveKnowledgeAuth,
+  type KnowledgeAuthProbe,
   type KnowledgeAuthStatus,
 } from './auth';
 import { runKnowledgePrompt, runKnowledgePromptOverItems, type KnowledgePromptOptions } from './agent';
@@ -1903,6 +1905,16 @@ export class KnowledgeService {
 
   authStatus(env: Record<string, string | undefined> = process.env): KnowledgeAuthStatus {
     return knowledgeAuthStatus(env);
+  }
+
+  /**
+   * Live authentication probe (one authenticated `/v1/notes?limit=1` request
+   * through the read-path transport). whoami/status overlay this on
+   * {@link authStatus} so a revoked key reports `authenticated: false` instead
+   * of a presence-based claim.
+   */
+  probeAuth(env: Record<string, string | undefined> = process.env): Promise<KnowledgeAuthProbe> {
+    return probeKnowledgeAuth(env);
   }
 
   saveAuth(input: {

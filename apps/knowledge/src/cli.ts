@@ -1490,8 +1490,44 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'auth') {
     const action = positional[1] ?? 'whoami';
     if (action === 'whoami' || action === 'status') {
-      const result = service.authStatus(process.env);
-      output({ ok: true, ...result, message: result.authenticated ? `Authenticated via ${result.source}` : 'Not authenticated' }, flags.json, flags);
+      // whoami/status answer a LIVE question: "can this credential read the
+      // API right now?" The configured snapshot (key present) is overlaid with
+      // a one-request probe through the read-path transport, so a revoked key
+      // — present in env, rejected by every read — reports authenticated:
+      // false with the reason and the failing key's kid instead of the
+      // presence-based true it claimed before (issue #1587).
+      const configured = service.authStatus(process.env);
+      const probe = await service.probeAuth(process.env);
+      const authenticated = probe.probed && probe.verified;
+      let message: string;
+      if (authenticated) {
+        message = `Authenticated via ${configured.source}`;
+      } else if (probe.probed && probe.reason === 'unauthorized') {
+        const kid = probe.principal ? ` (kid ${probe.principal.kid})` : '';
+        message = `API key present (${configured.source}) but the server rejected it (HTTP ${probe.status ?? '?'})`
+          + `; re-issue or rotate the key${kid}.`;
+      } else if (probe.probed && probe.reason === 'not_found') {
+        message = `API key present (${configured.source}) but the server does not expose the probe endpoint (HTTP 404).`;
+      } else if (probe.probed && probe.reason === 'server_error') {
+        message = `API key present (${configured.source}) but the server returned HTTP ${probe.status}; authentication not verified.`;
+      } else if (probe.probed && probe.reason === 'unreachable') {
+        message = `API key present (${configured.source}) but ${configured.api_url} is unreachable; authentication not verified.`;
+      } else if (configured.api_key_present) {
+        message = `API key present (${configured.source}) but no hosted API transport is configured; authentication not verified.`;
+      } else {
+        message = 'Not authenticated';
+      }
+      output({
+        ok: true,
+        ...configured,
+        authenticated,
+        probe: probe.probed ? 'live' : 'none',
+        verified: probe.verified,
+        reason: probe.reason,
+        status: probe.status,
+        principal: probe.principal,
+        message,
+      }, flags.json, flags);
       return;
     }
     if (action === 'login') {

@@ -7845,6 +7845,8 @@ async function ingestAppWikiSourceRef(options) {
 // src/auth.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync3, readFileSync as readFileSync5, unlinkSync, writeFileSync as writeFileSync3 } from "fs";
 import { dirname as dirname3, join as join5 } from "path";
+import { HasnaHttpError } from "@hasna/contracts/client";
+import { ownAgentClaim, ownTenantId, parseApiKey } from "@hasna/contracts/auth";
 var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
 function normalizeKnowledgeApiOrigin(apiUrl) {
   const url = new URL(apiUrl);
@@ -7916,6 +7918,7 @@ function knowledgeAuthStatus(env = process.env) {
   const apiUrl = hasEnvApiUrl ? resolveKnowledgeApiUrl(env) : auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : resolveKnowledgeApiUrl(env);
   return {
     authenticated: Boolean(key.apiKey),
+    configured: Boolean(key.apiKey),
     source: key.source,
     api_url: apiUrl,
     auth_path: knowledgeAuthPath(env),
@@ -7925,6 +7928,46 @@ function knowledgeAuthStatus(env = process.env) {
     user_id: key.source === "file" ? auth?.user_id ?? null : null,
     api_key_present: Boolean(key.apiKey)
   };
+}
+function knowledgeApiKeyPrincipal(apiKey) {
+  const parsed = parseApiKey(apiKey);
+  if (!parsed)
+    return null;
+  return {
+    kid: parsed.claims.kid,
+    app: parsed.claims.app,
+    agent: ownAgentClaim(parsed.claims),
+    tid: ownTenantId(parsed.claims) ?? null
+  };
+}
+async function probeKnowledgeAuth(env = process.env) {
+  const key = getKnowledgeApiKey(env);
+  const principal = key.apiKey ? knowledgeApiKeyPrincipal(key.apiKey) : null;
+  const notProbed = {
+    probed: false,
+    verified: false,
+    status: null,
+    reason: null,
+    principal
+  };
+  if (!key.apiKey)
+    return notProbed;
+  if (resolveKnowledgeClientTransport(env).transport !== "http")
+    return notProbed;
+  const store = resolveKnowledgeHttpStore(env);
+  if (!store)
+    return { ...notProbed, probed: true, reason: "unreachable" };
+  try {
+    await store.list({ limit: 1 });
+    return { probed: true, verified: true, status: 200, reason: null, principal };
+  } catch (error) {
+    if (error instanceof HasnaHttpError) {
+      const { status } = error;
+      const reason = status === 401 || status === 403 ? "unauthorized" : status === 404 ? "not_found" : status >= 500 ? "server_error" : "unknown";
+      return { probed: true, verified: false, status, reason, principal };
+    }
+    return { probed: true, verified: false, status: null, reason: "unreachable", principal };
+  }
 }
 
 // src/agent.ts
@@ -20741,6 +20784,9 @@ class KnowledgeService {
   authStatus(env = process.env) {
     return knowledgeAuthStatus(env);
   }
+  probeAuth(env = process.env) {
+    return probeKnowledgeAuth(env);
+  }
   saveAuth(input, env = process.env) {
     const apiUrl = input.apiUrl ?? resolveKnowledgeApiUrl(env);
     return saveKnowledgeAuth({
@@ -30322,6 +30368,7 @@ export {
   providerCredentialStatus,
   proposeKnowledgeSyncConflictResolutionWithAi,
   projectKnowledgeHome,
+  probeKnowledgeAuth,
   preflightKnowledgeMachine,
   postgresKnowledgeProjectLinksSchemaStatements,
   parseStorageTables,
@@ -30347,6 +30394,7 @@ export {
   knowledgeGuardedContentSha256,
   knowledgeAuthStatus,
   knowledgeAuthPath,
+  knowledgeApiKeyPrincipal,
   isSupportedSourceRef,
   isNetworkGuardActive,
   isLoopbackHostname,
