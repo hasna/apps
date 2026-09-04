@@ -910,6 +910,9 @@
         "@types/react": "^18.3.18",
         "typescript": "^5.7.3",
       },
+      "optionalDependencies": {
+        "@aws-sdk/client-s3": "^3.1079.0",
+      },
     },
     "apps/secrets": {
       "name": "@hasna/secrets",
