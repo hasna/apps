@@ -7,6 +7,7 @@ import { createTmuxProfile, createWorkspace } from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
 import { HOSTED_API_ENV_KEYS } from "../testing/spawn-env.js";
 import { projectTmuxStatus } from "./project-tmux-status.js";
+import { PROJECTS_LOCAL_REGISTRY_ENV } from "../store/project-store.js";
 
 // Isolate the shared @hasna/contracts seam's disk tier, mirroring testSpawnEnv():
 // when the environment is silent the seam reads fleet app-config files on disk
@@ -17,6 +18,12 @@ import { projectTmuxStatus } from "./project-tmux-status.js";
 for (const key of HOSTED_API_ENV_KEYS) {
   process.env[key] = "";
 }
+// Fail closed (owner directive 2026-09-04): with no hosted API env the store
+// layer refuses the local registry unless the operator set the explicit opt-in
+// HASNA_PROJECTS_LOCAL_REGISTRY=1. These in-process tests drive the local
+// registry (blanked above), so pin the opt-in, mirroring testSpawnEnv() and
+// project-store.test.ts.
+process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
 
 function makeDb(): Database {
   const db = new Database(":memory:");
