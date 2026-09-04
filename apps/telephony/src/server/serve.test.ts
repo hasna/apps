@@ -428,7 +428,7 @@ describe("server-backed read routing", () => {
 
   it("serves REST read routes from the Store (server API) — not on-box sqlite — when the API pair is set", async () => {
     // A machine pointed at the server's HTTP API runs `telephony serve` as a
-    // webhook receiver + dashboard. Its read routes MUST come from the SAME
+    // webhook receiver. Its read routes MUST come from the SAME
     // store the inbound handlers write to; reading on-box sqlite here is the
     // split-brain bug.
     clearClientStoreEnv();

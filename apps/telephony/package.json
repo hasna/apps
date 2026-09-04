@@ -20,7 +20,6 @@
     "dist",
     "src",
     "scripts",
-    "dashboard/dist",
     "postinstall.mjs",
     "hasna.contract.json",
     "LICENSE",
@@ -29,7 +28,6 @@
   "scripts": {
     "generate:sdk": "bun scripts/generate-sdk.mjs",
     "build": "bun run generate:sdk && rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external twilio --external pg --external @hasna/contracts && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external twilio --external pg --external @hasna/contracts && bun build src/server/cloud-entry.ts --outdir dist/server --target bun --external twilio --external pg --external @hasna/contracts && bun build src/server/index.ts --outdir dist/server --target bun --external twilio --external pg --external @hasna/contracts && bun build src/index.ts --outdir dist --target bun --external twilio --external pg --external @hasna/contracts && tsc --emitDeclarationOnly --outDir dist",
-    "build:dashboard": "cd dashboard && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
@@ -57,8 +55,7 @@
     "twilio",
     "elevenlabs",
     "openai-realtime",
-    "cli",
-    "dashboard"
+    "cli"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
