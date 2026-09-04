@@ -173,6 +173,17 @@ import * as path from "node:path";
 const UNRESOLVABLE_PINS = new Set<string>([
   "automations",
   "economy",
+  // #1668 paths wave (2026-09-04): every member's @hasna/contracts pin moved
+  // to 1.0.0 in lockstep with the single-paths-resolver change, while the
+  // registry still resolves 0.14.2 — "No version matching '1.0.0' found for
+  // specifier '@hasna/contracts'" in the standalone regen, exactly the
+  // domains-0.14.1 class above. The lockfile regenerates in the change that
+  // follows the 1.0.0 publish; members leave this set there (two-sided).
+  "attachments", "bridge", "calendar", "changelog", "computers", "connectors",
+  "contacts", "conversations", "dispatch", "domains", "emails", "events", "feedback", "files", "hooks", "instructions", "knowledge",
+  "loops", "logs", "mementos", "messages", "monitor", "notes", "orgs", "prompts",
+  "projects", "recordings", "releases", "repos", "secrets", "servers",
+  "shortlinks", "skills", "snapshots", "telephony", "todos", "workflows",
 ]);
 
 /**
