@@ -82,7 +82,7 @@ function buildApiStore(): {
     throw new Error("expected http transport in api-lane tests");
   }
   const client = createHasnaStorageClient("logs", transport.client);
-  return { api: new ApiStore(client, "cloud"), state: f.state, client };
+  return { api: new ApiStore(client), state: f.state, client };
 }
 
 async function ingestWatchEvent(
@@ -385,7 +385,7 @@ describe("ApiStore scan port (hosted scan-run surface)", () => {
     const { state, client } = buildApiStore();
     // Injectable scan executor keeps the test browser-free; it exercises the
     // hosted ingest sink so the full result path is proven.
-    const apiWithExecutor = new ApiStore(client, "cloud", {
+    const apiWithExecutor = new ApiStore(client, {
       runScan: async (ctx, projectId, pageId) => {
         expect(projectId).toBe("proj-1");
         expect(pageId).toBe("page-1");
@@ -426,7 +426,7 @@ describe("ApiStore scan port (hosted scan-run surface)", () => {
 
   test("runScanJob finishes a failed run when the scan throws", async () => {
     const { state, client } = buildApiStore();
-    const apiWithExecutor = new ApiStore(client, "cloud", {
+    const apiWithExecutor = new ApiStore(client, {
       runScan: async () => {
         throw new Error("browser crashed");
       },

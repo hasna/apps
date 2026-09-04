@@ -91,4 +91,21 @@ describe("SDK exports", () => {
     expect(input.model).toEqual({ id: "claude-fable-5[1m]", display_name: "Fable" });
     expect(input.cost).toBeDefined();
   });
+
+  test("resolved @modelcontextprotocol/sdk is outside the advisory range (fixed-in >=1.26.0)", () => {
+    // src/mcp/index.ts imports the SDK from the workspace copy. The advisory
+    // (cross-client data leak GHSA-345p-7cg4-v4c7, no DNS rebinding protection
+    // GHSA-w48q-cv73-mx4w, ReDoS GHSA-8r9q-7v3j) covers >=1.10.0 <=1.25.3.
+    const sdkPkg = join(
+      import.meta.dir,
+      "..",
+      "node_modules",
+      "@modelcontextprotocol",
+      "sdk",
+      "package.json",
+    );
+    const version = JSON.parse(readFileSync(sdkPkg, "utf8")).version as string;
+    const [major, minor] = version.split(".").map((part) => Number.parseInt(part, 10));
+    expect(major > 1 || minor >= 26).toBe(true);
+  });
 });

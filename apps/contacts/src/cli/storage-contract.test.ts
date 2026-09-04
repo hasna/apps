@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-describe("contacts CLI storage contract", () => {
-  it("registers contacts-owned storage commands without shared cloud commands", () => {
+describe("contacts CLI connection contract", () => {
+  it("registers one value-free HTTPS status command without storage selectors", () => {
     const cliSource = readFileSync(join(import.meta.dir, "index.tsx"), "utf8");
     const storageSource = readFileSync(join(import.meta.dir, "storage.ts"), "utf8");
     const forbidden = [
@@ -13,10 +13,10 @@ describe("contacts CLI storage contract", () => {
     ];
 
     expect(cliSource).toContain("registerStorageCommands(program)");
-    expect(storageSource).toContain(".command(\"storage\")");
-    expect(storageSource).toContain(".command(\"status\")");
-    expect(storageSource).toContain(".command(\"cloud\")");
-    expect(storageSource).toContain(".command(\"feedback\")");
+    expect(storageSource).toContain(".command(\"connection\")");
+    expect(storageSource).not.toContain(".command(\"storage\")");
+    expect(storageSource).not.toContain(".command(\"cloud\")");
+    expect(storageSource).not.toContain(".command(\"feedback\")");
 
     // Read-only status + feedback only. The forbidden client-side Postgres-DSN
     // sync commands (push/pull/sync) must NOT exist — clients never hold the raw
@@ -25,11 +25,11 @@ describe("contacts CLI storage contract", () => {
     expect(storageSource).not.toContain(".command(\"pull\")");
     expect(storageSource).not.toContain(".command(\"sync\")");
 
-    // The command layer must route through the single Store — never the db/*
-    // layer or raw SQLite directly (the split-brain bug this rebuild eliminates).
-    expect(storageSource).toContain("getStore");
+    // Status is value-free and must never initialize a store or local database.
+    expect(storageSource).not.toContain("getStore");
     expect(storageSource).not.toContain("../db/");
     expect(storageSource).not.toContain("getDatabase");
+    expect(storageSource).toContain("local_fallback: false");
 
     for (const term of forbidden) {
       expect(cliSource).not.toContain(term);

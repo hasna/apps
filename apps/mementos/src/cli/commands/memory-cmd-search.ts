@@ -18,6 +18,7 @@ import {
   truncateText,
   type GlobalOpts,
 } from "../helpers.js";
+import { redactSearchResultForOutput } from "../../lib/redact.js";
 
 export function registerSearchCommand(program: Command): void {
   const handleError = makeHandleError(program);
@@ -111,11 +112,20 @@ export function registerSearchCommand(program: Command): void {
         };
 
         const fetched = searchMemories(query, filter);
-        const hasMore = !isStructured && fetched.length > limit;
-        const results = hasMore ? fetched.slice(0, limit) : fetched;
+        // Read-path redaction (todos e12c7659): the write path redacts
+        // value/summary but never the KEY, so a credential-shaped key stored
+        // by any write path reaches stdout verbatim across every format — and
+        // highlight SNIPPETS derived from that key leak it too. Project the
+        // full result population once, before any format branch, so JSON,
+        // YAML, CSV and compact all emit value-safe text while coordination
+        // metadata (score, match_type, memory id/scope/category/importance)
+        // survives.
+        const sanitized = fetched.map(redactSearchResultForOutput);
+        const hasMore = !isStructured && sanitized.length > limit;
+        const results = hasMore ? sanitized.slice(0, limit) : sanitized;
 
         if (fmt === "json") {
-          outputJson(fetched);
+          outputJson(sanitized);
           return;
         }
 

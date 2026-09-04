@@ -328,7 +328,6 @@ export const SERVE_EXCEPTIONS: Array<{ member: string; reason: string }> = [
  * here reference it. */
 export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "announce", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "attachments", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "automations", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "billing", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "bridge", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -418,11 +417,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
     member: "instructions",
     cause: "bins_match_package: package.json ships legacy alias bins configs/configs-mcp (fleet-compat, not contract-allowlisted — same class as the recorded economy hasna-events precedent); surface_matrix: missing sdk surface (no ./sdk export; SDK lane c7ce8b75); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required; credential_seam_compliance: src/db/database.ts reads HASNA_INSTRUCTIONS_API_KEY from the process environment. Manifest schema-valid at kit 0.11.1.",
     task: "todos c15cca18 (contracts task — instructions)",
-  },
-  {
-    member: "knowledge",
-    cause: "manifest_valid: service-class manifest declares no service surface (service repos must declare at least one).",
-    task: "todos a8c97621 (contracts task — knowledge)",
   },
   {
     member: "logs",

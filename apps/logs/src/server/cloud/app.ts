@@ -1,10 +1,10 @@
 /**
- * Cloud (PURE REMOTE, Amendment A1) Hono app for @hasna/logs.
+ * PostgreSQL-backed Hono app for @hasna/logs.
  *
  * Serves the standard operational probes (`/health`, `/ready`, `/version`) and
- * the versioned, API-key-authenticated `/v1` surface backed directly by the
- * shared cloud Postgres. Used when the serve runs on the postgresql backend
- * (selected by HASNA_LOGS_DATABASE_URL), i.e. the deployed ECS service.
+ * the versioned, API-key-authenticated `/v1` surface backed directly by
+ * PostgreSQL. Used when the serve runs with HASNA_LOGS_DATABASE_URL set, i.e.
+ * the deployed ECS service.
  */
 
 import { hasScope, honoApiKey, type ApiKeyStatus } from "@hasna/contracts/auth";

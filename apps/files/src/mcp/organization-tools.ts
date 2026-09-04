@@ -30,17 +30,29 @@ function err(error: unknown) {
 }
 
 /**
- * Organization is a review workflow over Google-Drive-imported metadata — an
- * on-box ingestion capability like the `sync_google_drive` tools it depends on.
- * It has no hosted data plane (the imported Drive rows only exist locally), so
- * on the hosted transport the tool refuses rather than silently reading/writing
- * the local SQLite island. This routes the transport decision through the Store
- * seam and is the split-brain guard the refactor requires.
+ * Recorded strong reason for the local-transport guard (local-only-capability-
+ * removal workflow, 2026-08-18; reviewer-ruled — do not remove this gate by
+ * assumption).
+ *
+ * Organization is a review workflow over Google-Drive-imported metadata. Its
+ * data plane (`google_drive_imported_objects`, `file_organization_reviews`,
+ * `file_organization_events`) exists ONLY on-box: the hosted server has no
+ * schema and no routes for these tables (server/migrate.ts, pg-store.ts,
+ * v1.ts), and the producer — `sync_google_drive` — is itself local-only
+ * (machine-bound Drive OAuth tokens in ~/.hasna/files) and refuses in api
+ * mode, as do the downstream FTS refresh and knowledge-outbox consumers.
+ * A server-side port with no hosted producer would be a vacuous data plane
+ * (bootstrap scans an empty table); moving the Drive sync server-side would
+ * require the owner's Drive OAuth credentials in the cloud, which is a
+ * secret-bearing authority boundary, not a port. Commit 5ff9700ef (2026-07-08)
+ * already applied this ruling after adversarial review found the split-brain:
+ * the evidence subsystem was ported to the cloud; organization was guarded.
+ * Behavior lock: src/mcp/organization-tools.test.ts.
  */
 function localOnly(tool: string): { content: Array<{ type: "text"; text: string }>; isError: true } | null {
   if (store().transport !== "local") {
     return {
-      content: [{ type: "text", text: `${tool} runs on-box only and is unavailable on the hosted transport; organization reviews operate on locally-imported Google Drive metadata.` }],
+      content: [{ type: "text", text: `${tool} runs on-box only and is unavailable in cloud (api) mode; organization reviews operate on locally-imported Google Drive metadata.` }],
       isError: true,
     };
   }

@@ -21,9 +21,14 @@ import type {
 } from "../types/index.js";
 import type { CalendarStore, EventWithAttendees, ListEventsFilter, TimeRange } from "./types.js";
 
-function pick<T>(obj: unknown, key: string): T | undefined {
-  if (obj && typeof obj === "object") return (obj as Record<string, unknown>)[key] as T;
-  return undefined;
+function pick<T>(obj: unknown, key: string, collection = ["orgs", "agents", "calendars", "events", "attendees", "conflicts", "members"].includes(key)): T | undefined {
+  if (!obj || typeof obj !== "object" || !Object.hasOwn(obj, key)) throw new Error("Calendar API returned an invalid response envelope.");
+  const value = (obj as Record<string, unknown>)[key];
+  if (collection && !Array.isArray(value)) throw new Error("Calendar API returned an invalid collection.");
+  if (!collection && key !== "deleted" && Array.isArray(value)) throw new Error("Calendar API returned an invalid entity.");
+  if (key === "deleted" && typeof value !== "boolean") throw new Error("Calendar API returned an invalid deletion result.");
+  if (key !== "deleted" && (value === null || typeof value !== "object")) throw new Error("Calendar API returned an invalid domain value.");
+  return value as T;
 }
 
 /** Drop undefined values so we never send `key=undefined` as a query/body field. */
@@ -85,8 +90,13 @@ export class ApiStore implements CalendarStore {
     }
   }
   async updateAgent(id: string, updates: Partial<RegisterAgentInput>): Promise<Agent | null> {
-    const res = await this.client.update<{ agent?: Agent }>("agents", id, clean(updates));
-    return pick<Agent>(res, "agent") ?? (res as Agent) ?? null;
+    try {
+      const res = await this.client.update<{ agent?: Agent }>("agents", id, clean(updates));
+      return pick<Agent>(res, "agent") ?? null;
+    } catch (error) {
+      if (error instanceof HasnaHttpError && error.status === 404) return null;
+      throw error;
+    }
   }
   async deleteAgent(id: string): Promise<boolean> {
     const res = await this.client.delete<{ deleted?: boolean }>("agents", id);
@@ -175,7 +185,7 @@ export class ApiStore implements CalendarStore {
   // ── Availability ──
   async getAvailabilityForAgent(agentId: string, orgId?: string): Promise<Availability[]> {
     const res = await this.http.get<{ availability?: Availability[] }>("/availability", { query: clean({ agent_id: agentId, org_id: orgId }) as QueryParams });
-    return pick<Availability[]>(res, "availability") ?? [];
+    return pick<Availability[]>(res, "availability", true) ?? [];
   }
   async upsertAgentAvailability(agentId: string, orgId: string, dayOfWeek: number, startTime: string, endTime: string): Promise<Availability> {
     const res = await this.http.post<{ availability?: Availability }>("/availability", {

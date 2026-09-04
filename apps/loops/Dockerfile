@@ -6,19 +6,19 @@
 
 ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f
 
-FROM --platform=linux/arm64 ${BUN_IMAGE} AS deps
+FROM --platform=linux/amd64 ${BUN_IMAGE} AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
 # --ignore-scripts: the package `prepare` script builds from src/ (absent here);
 # the build stage runs `bun run build` explicitly after src/ is copied.
 RUN bun install --frozen-lockfile --ignore-scripts
 
-FROM --platform=linux/arm64 ${BUN_IMAGE} AS prod-deps
+FROM --platform=linux/amd64 ${BUN_IMAGE} AS prod-deps
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --production --frozen-lockfile --ignore-scripts
 
-FROM --platform=linux/arm64 ${BUN_IMAGE} AS build
+FROM --platform=linux/amd64 ${BUN_IMAGE} AS build
 WORKDIR /app
 COPY package.json bun.lock tsconfig.json tsconfig.build.json ./
 COPY --from=deps /app/node_modules ./node_modules
@@ -27,7 +27,7 @@ COPY scripts ./scripts
 COPY openapi ./openapi
 RUN bun run build
 
-FROM --platform=linux/arm64 ${BUN_IMAGE} AS runner
+FROM --platform=linux/amd64 ${BUN_IMAGE} AS runner
 WORKDIR /app
 # I38-00535: pin the CVE-fixed Alpine versions (postgresql16 16.15-r0, libpq
 # 17.11-r0) so a vulnerable libpq/postgresql16-client never silently ships

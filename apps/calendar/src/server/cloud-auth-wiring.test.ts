@@ -48,7 +48,7 @@ const DATABASE_URL_ENV_VARS = [
 ] as const;
 
 /** Unreachable-but-well-formed DSN: construction must stay lazy, never connect. */
-const DUMMY_DB_URL = "postgres://calendar_test:unused@127.0.0.1:1/calendar?sslmode=disable";
+const DUMMY_DB_URL = "postgres://calendar_test:unused@127.0.0.1:1/calendar?sslmode=verify-full";
 const TEST_SIGNING_SECRET = "cloud-auth-wiring-test-signing-secret";
 
 function clearCloudEnv(): void {

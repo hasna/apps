@@ -31,6 +31,12 @@ export interface MementosIntegrationConfig {
   enabled: boolean;
   /** Base URL of the mementos HTTP API. Default: http://localhost:3002 */
   base_url?: string;
+  /** Memory bucket (MON-V2-08); default "monitor". */
+  bucket?: string;
+  /** Memory key template; default "health:{target}". */
+  keyTemplate?: string;
+  /** required:true makes a confirmed mementos failure affect the run outcome. */
+  required?: boolean;
 }
 
 export interface EmailsIntegrationConfig {
@@ -90,11 +96,10 @@ export async function runIntegrations(
   }
 
   if (config.mementos?.enabled) {
-    jobs.push(
-      saveHealthMemory(alert.machine_id, report, config.mementos).catch((err) =>
-        console.error("[monitor:integrations:mementos] error:", err)
-      )
-    );
+    // No swallow-catch here: saveHealthMemory rejects ONLY on a confirmed
+    // failure of a required integration, and that failure must reach the run
+    // outcome. Non-blocking outcomes are logged inside the adapter and resolve.
+    jobs.push(saveHealthMemory(alert.machine_id, report, config.mementos));
   }
 
   if (config.emails?.enabled) {
@@ -105,7 +110,16 @@ export async function runIntegrations(
     );
   }
 
-  await Promise.allSettled(jobs);
+  const results = await Promise.allSettled(jobs);
+  // Only a required integration's confirmed failure rejects (all other jobs
+  // resolve after their own catch/log). Propagate it so the run outcome is
+  // affected, per MON-V2-08: required:true makes a confirmed failure blocking.
+  for (const result of results) {
+    if (result.status === "rejected") {
+      console.error("[monitor:integrations] blocking integration failure:", result.reason);
+      throw result.reason;
+    }
+  }
 }
 
 export async function runReportIntegrations(

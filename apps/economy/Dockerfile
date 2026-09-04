@@ -4,13 +4,13 @@
 # process reads/writes RDS Postgres directly with @hasna/contracts API-key auth).
 # The ECS one-shot migration task overrides the command with `... migrate`.
 
-FROM --platform=linux/arm64 oven/bun:1 AS deps
+FROM --platform=linux/amd64 oven/bun:1 AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
 # --ignore-scripts: postinstall only makes a local training dir; not needed here.
 RUN bun install --frozen-lockfile --ignore-scripts
 
-FROM --platform=linux/arm64 oven/bun:1 AS build
+FROM --platform=linux/amd64 oven/bun:1 AS build
 WORKDIR /app
 COPY package.json bun.lock tsconfig.json ./
 COPY --from=deps /app/node_modules ./node_modules
@@ -24,7 +24,7 @@ RUN bun build src/server/index.ts       --outdir dist/server --target bun --pack
  && bun build src/cli/index.ts           --outdir dist/cli    --target bun --packages external \
  && bun build src/index.ts               --outdir dist        --target bun --packages external
 
-FROM --platform=linux/arm64 oven/bun:1 AS runner
+FROM --platform=linux/amd64 oven/bun:1 AS runner
 WORKDIR /app
 # Amazon RDS global CA bundle so verify-full-capable TLS to the shared RDS
 # succeeds (pg-connection-string escalates sslmode=require to verify-full).

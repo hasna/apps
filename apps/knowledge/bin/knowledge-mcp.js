@@ -4272,7 +4272,8 @@ var package_default = {
     "contracts:conformance": "contracts conformance fixtures",
     build: "bun scripts/check-bun-version.mjs && rm -rf dist && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --external @hasna/contracts --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts ./src/sdk.ts --outdir ./dist --external @hasna/contracts --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bun run tsc -p tsconfig.build.json",
     prepublishOnly: "bun run contracts:conformance && contracts no-cloud-scan . && bun run build && node scripts/validate-public-package.mjs",
-    prepack: "bun run build"
+    prepack: "bun run build && bun run scan:artifact",
+    "scan:artifact": 'bun pm pack --ignore-scripts --quiet --filename "$PWD/knowledge-artifact-scan.tgz" && contracts artifact-scan knowledge-artifact-scan.tgz; rc=$?; rm -f "$PWD/knowledge-artifact-scan.tgz"; exit $rc'
   },
   keywords: [
     "knowledge",
@@ -4316,7 +4317,7 @@ var package_default = {
     zod: "^4.3.6"
   },
   devDependencies: {
-    "@electric-sql/pglite": "^0.5.4",
+    "@electric-sql/pglite": "0.5.4",
     "@types/bun": "1.3.14",
     "@types/pg": "^8.15.6",
     typescript: "5.9.3"

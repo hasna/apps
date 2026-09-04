@@ -1,35 +1,26 @@
-const DEFAULT_TODOS_ORIGIN = new URL("http://localhost:3000").origin;
+import { validateClientConfig } from "./client-config";
 
-function parseOrigin(url: string | URL | undefined): string | null {
-  if (!url) return null;
-  try {
-    return new URL(url).origin;
-  } catch {
-    return null;
-  }
+export function serviceConfig(service: "TODOS" | "SESSIONS", env: NodeJS.ProcessEnv = process.env) {
+  const read = (suffix: string) => {
+    const keys = [`HASNA_${service}_${suffix}`, `${service}_${suffix}`];
+    const values = keys.map(k => env[k]).filter((v): v is string => v !== undefined);
+    if (!values.length || values.some(v => !v.trim()) || new Set(values).size !== 1) throw new Error(`Missing, blank, or conflicting ${service} ${suffix} configuration.`);
+    return values[0]!;
+  };
+  return validateClientConfig(read("API_URL"), read("API_KEY"));
 }
 
-function trustedTodosOrigins(): Set<string> {
-  const origins = new Set<string>([DEFAULT_TODOS_ORIGIN]);
-  for (const value of [process.env.HASNA_TODOS_API_URL, process.env.TODOS_API_URL]) {
-    const origin = parseOrigin(value);
-    if (origin) origins.add(origin);
-  }
-  return origins;
-}
-
-export function withTodosAuth(
-  requestUrl?: string | URL,
-  init?: RequestInit
-): RequestInit | undefined {
-  const apiKey = process.env.HASNA_TODOS_API_KEY || process.env.TODOS_API_KEY;
-  if (!apiKey) return init;
-
-  const requestOrigin = parseOrigin(requestUrl);
-  if (!requestOrigin || !trustedTodosOrigins().has(requestOrigin)) return init;
-
+export function withServiceAuth(service: "TODOS" | "SESSIONS", requestUrl?: string | URL, init?: RequestInit): RequestInit {
+  const config = serviceConfig(service);
+  const url = new URL(String(requestUrl));
+  const apiBoundary = url.href.indexOf("/api/");
+  if (apiBoundary < 0 || url.href.slice(0, apiBoundary) !== config.url) throw new Error(`Request is outside the configured ${service} API URL.`);
   const headers = new Headers(init?.headers);
-  headers.set("x-api-key", apiKey);
+  headers.delete("authorization");
+  headers.set("x-api-key", config.key);
+  return { ...init, headers, redirect: "error" };
+}
 
-  return { ...init, headers };
+export function withTodosAuth(requestUrl?: string | URL, init?: RequestInit): RequestInit {
+  return withServiceAuth("TODOS", requestUrl, init);
 }

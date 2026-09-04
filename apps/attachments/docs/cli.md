@@ -1,138 +1,37 @@
-# CLI Reference
+# CLI reference
 
-The `attachments` binary uses Commander. Run `attachments --help` or
-`attachments <command> --help` for the installed version's generated help.
+Inject HASNA_ATTACHMENTS_API_URL and HASNA_ATTACHMENTS_API_KEY through the approved
+environment/secret manager before using remote operations. No default endpoint,
+local database or client DSN is supported. Run attachments <command> --help for
+the exact options.
 
-## Transfer Commands
+## Remote workflows
 
-### `upload [files...]`
+- upload accepts explicit files, HTTPS source URLs, or stdin with --filename.
+  Expiry, link type, tag, password, encryption, download limits and email gates
+  are forwarded to the service. --internal changes share-link metadata, not the
+  authenticated API destination.
+- list, download, delete, link, clean and report use the remote Store adapter.
+  Download writes only the explicitly requested output file.
+- presign and completion workflows request authorization from the remote service;
+  clients do not require S3 credentials.
+- status, doctor and whoami verify authenticated access with a bounded list request.
+  They return BLOCKED on configuration, authentication or transport failure.
+  whoami does not invent an identity from local files.
+- config show redacts credentials. config set accepts only --expiry and --link-type.
+  config test checks authenticated service access.
+- link-task, complete-task, task-journal and watch require explicit authenticated
+  Todos HTTPS configuration. snapshot-session requires the Sessions equivalent.
+  URL overrides must match the configured authority and prefix.
 
-Uploads paths, or one stdin file with `--stdin --filename <name>`.
+Metadata-only agent attribution and user preferences are non-authoritative local
+state. Configuration resolution uses @hasna/paths; no legacy dataset is imported.
 
-| Option | Behavior |
-|--------|----------|
-| `--expiry <time>` | Lifetime such as `24h`, `7d`, or `never` |
-| `--link-type <type>` | `presigned` or `server` |
-| `--tag <tag>` | Stores an organizational tag |
-| `--password <password>` | Protects the public download |
-| `--encrypt` | Encrypts stored bytes; requires `--password` |
-| `--max-downloads <count>` | Limits successful downloads |
-| `--require-email` | Requires one-time email access |
-| `--allowed-email <email...>` | Restricts email-gated access |
-| `--format <fmt>` | `human` (default) or `json` |
-| `--copy`, `--brief` | Copies the link or prints compact output |
-| `--stdin`, `--filename <name>` | Uploads stdin with the supplied filename |
-| `--client-mode <mode>` | Uses `local` or `cloud` for this upload |
-| `--internal` | Mints the server-hosted share link against the internal (Tailscale/LAN) base URL instead of the public one — works in both local and cloud client mode; the server must be reachable at that base URL |
+## Retired surfaces
 
-Invalid modes/formats, non-positive download limits, and `--encrypt` without a
-password fail before upload.
+--client-mode always fails. Client database/storage mode settings, client S3
+configuration, local storage flags and the old attachments serve command are
+retired. Use the separately configured attachments-serve service executable.
+The inherited Events command set is not part of this client.
 
-### `download <id-or-url>`
-
-Accepts an attachment ID, `/d/:id` URL, or local `/a/:token` URL.
-`--output <path>` selects a destination, `--password` unlocks protected content,
-and `--brief` prints compact output.
-
-### `list`
-
-Supports `--format compact|json|table`, `--expired`, `--limit <n>` (default
-`20`), `--tag <tag>`, and `--brief`.
-
-### `delete <id>` and `remove <id>`
-
-`remove` aliases `delete`. Deletion asks for confirmation unless `-y` or
-`--yes` is supplied. `--brief` selects compact output.
-
-### `link <id>`
-
-Shows the current link. `--regenerate` accepts `--expiry`, `--password`, and
-`--max-downloads`. Add `--slug <friendly-slug> --password <password>` to mint a
-password-protected `https://<public-host>/a/<friendly-slug>` alias. Friendly
-slugs use lowercase letters, numbers, and single hyphens. Output supports
-`--format human|json` and `--brief`.
-
-### `slug <slug>`
-
-Checks whether a friendly alias is available without creating a share link.
-`--format human|json` controls output, and `--brief` prints only `available` or
-`unavailable`. An unavailable valid slug exits with code `2`.
-
-## Direct S3 Upload
-
-`presign-upload <filename>` creates a pending attachment and presigned PUT URL.
-It accepts `--expiry` (default `1h`) and `--content-type` and requires local S3
-access. After PUT, `presign-complete <id>` finalizes it with optional
-`--expiry`, `--password`, `--max-downloads`, `--link-type`,
-`--format human|json`, and `--brief`.
-
-## Configuration Commands
-
-- `config show` prints normalized configuration with secrets masked.
-- `config test` validates S3 configuration and checks bucket access.
-- `config set` updates only supplied values.
-
-`config set` accepts S3 (`--bucket`, `--region`, `--access-key`, `--secret-key`,
-`--endpoint`), storage (`--storage-backend`, `--local-dir`, `--max-size`), server
-(`--port`, `--host`, `--base-url`, `--public-path`), link (`--expiry`,
-`--link-type`), and internal-link (`--internal-base-url`, `--internal-machine`,
-`--prefer-internal`) options.
-
-The `domain` namespace has three subcommands:
-
-- `domain configure --hostname <hostname>` stores domain, DNS, provider, and
-  route metadata without mutating DNS.
-- `domain plan --format json|opendomains|cloudflare` emits a credential-free
-  deployment plan.
-- `domain verify [--url] [--timeout] [--format human|json]` probes the public
-  attachment prefix.
-
-## Service and Maintenance
-
-| Command | Behavior |
-|---------|----------|
-| `serve` | Starts the local API; accepts `--port`, `--host`, and `--internal` |
-| `status` | Shows transport, paths, and attachment statistics |
-| `whoami` | Shows package, storage, server, S3, and integration status |
-| `doctor` | Checks configuration, storage, DB, links, MCP, version, and integrations |
-| `clean [--dry-run]` | Deletes expired object bytes and metadata |
-| `health-check [--fix]` | Audits links in `compact` or `json` format |
-| `report` | Reports activity with `--days`, `--tag`/`--project`, and `compact|json|markdown` output |
-
-## Agent and Task Integrations
-
-| Command | Behavior |
-|---------|----------|
-| `mcp` | Installs/uninstalls config for `--claude`, `--codex`, `--gemini`, or `--all` |
-| `init <name>` | Persists local agent attribution |
-| `heartbeat` | Updates the registered agent timestamp |
-| `focus [project]` | Sets or clears the agent project |
-| `link-task <attachment-id> <task-id>` | Adds attachment metadata to a todos task |
-| `complete-task <task-id> --file <path>` | Uploads evidence, persists it, and completes the task |
-| `resolve-evidence <task-id>` | Resolves completed-task evidence as `compact` or `json` |
-| `snapshot-session <session-id>` | Uploads a transcript as Markdown or HTML |
-| `task-journal <task-id>` | Combines todos history and attachments |
-| `watch` | Watches todos SSE and validates attachment links |
-
-Todos commands default to `http://localhost:3000`; sessions commands default to
-`http://localhost:3458`. The commands expose URL overrides. `watch` defaults to
-the `task.completed` event.
-
-The pinned `@hasna/events` Commander integration also contributes the `storage`
-namespace. Use `attachments storage --help` for its version-specific options.
-It is not an attachment synchronization engine.
-
-## Examples
-
-```bash
-attachments complete-task TASK-042 \
-  --file ./report.pdf \
-  --file ./results.json \
-  --notes "Verified locally"
-
-attachments snapshot-session session-id --expiry 7d --tag session:session-id
-attachments report --project attachments --format markdown
-attachments health-check --fix --format json
-attachments slug company-closing-packet --format json
-attachments link att_123 --regenerate --slug company-closing-packet --password "$ATTACHMENT_PASSWORD"
-```
+See [configuration](configuration.md) for aliases, validation and service startup.

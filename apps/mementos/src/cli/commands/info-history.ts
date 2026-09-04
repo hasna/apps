@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { listMemoryHistoryPage } from "../../db/memories.js";
+import { redactMemoryForOutput } from "../../lib/redact.js";
 import {
   DEFAULT_SEARCH_LIMIT,
   outputJson,
@@ -57,22 +58,30 @@ export function registerHistoryCommand(program: Command): void {
             ? collected.slice(0, limit)
             : collected;
 
+        // Read-path redaction (todos e12c7659): `history` is a read verb whose
+        // rows carry the raw stored key/value, so a credential-shaped key
+        // stored by any write path reaches stdout verbatim across both
+        // formats. Project the display copy once before any format branch so
+        // JSON and human both emit value-safe text while coordination metadata
+        // (id, scope, category, importance, timestamps, attribution) survives.
+        const sanitized = memories.map(redactMemoryForOutput);
+
         if (globalOpts.json) {
-          outputJson(memories);
+          outputJson(sanitized);
           return;
         }
 
-        if (memories.length === 0) {
+        if (sanitized.length === 0) {
           console.log(chalk.yellow("No recently accessed memories."));
           return;
         }
 
         console.log(
           chalk.bold(
-            `${memories.length} recently accessed memor${memories.length === 1 ? "y" : "ies"}:`
+            `${sanitized.length} recently accessed memor${sanitized.length === 1 ? "y" : "ies"}:`
           )
         );
-        for (const m of memories) {
+        for (const m of sanitized) {
           const id = chalk.dim(m.id.slice(0, 8));
           const scope = colorScope(m.scope);
           const cat = colorCategory(m.category);
@@ -85,8 +94,8 @@ export function registerHistoryCommand(program: Command): void {
           );
         }
         printPageHint({
-          shown: memories.length,
-          limit: limit ?? memories.length,
+          shown: sanitized.length,
+          limit: limit ?? sanitized.length,
           offset,
           hasMore,
           command: "mementos history",

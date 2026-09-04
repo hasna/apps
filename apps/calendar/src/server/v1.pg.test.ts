@@ -12,7 +12,7 @@
  *
  * Opt in by pointing `CALENDAR_TEST_DATABASE_URL` at a THROWAWAY database:
  *
- *   CALENDAR_TEST_DATABASE_URL=postgres://user@localhost:5432/calendar_test \
+ *   CALENDAR_TEST_DATABASE_URL=postgres://user@localhost:5432/calendar_test?sslmode=verify-full \
  *     bun test src/server/v1.pg.test.ts
  *
  * Skipped when the variable is absent so `bun test` stays runnable with no

@@ -25,8 +25,9 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { createPgPool, createCloudPoolFromEnv } from "../generated/storage-kit/pool.js";
-import { createQueryClient, type PoolQueryClient } from "../generated/storage-kit/query.js";
+import { createPgPool } from "../server-storage/pool.js";
+import { createServerPool } from "../serve/database";
+import { createQueryClient, type PoolQueryClient } from "../server-storage/query.js";
 
 const APP_SLUG = "attachments";
 
@@ -116,16 +117,7 @@ export async function createLiveSchema(label: string, baseUrl?: string): Promise
   let client: PoolQueryClient | null = null;
   try {
     await admin.execute(`CREATE SCHEMA "${schema}"`);
-    client = createCloudPoolFromEnv(APP_SLUG, {
-      env: {
-        ...process.env,
-        HASNA_ATTACHMENTS_STORAGE_MODE: "cloud",
-        HASNA_ATTACHMENTS_DATABASE_URL: withSearchPath(connectionString, schema),
-      },
-      max: 4,
-      connectionTimeoutMillis: 10_000,
-      applicationName: "attachments-pg-gate",
-    }).client;
+    client = createServerPool({ HASNA_ATTACHMENTS_DATABASE_URL: withSearchPath(connectionString, schema) });
   } catch (error) {
     if (client) await client.close().catch(() => {});
     await admin.close().catch(() => {});

@@ -1,7 +1,7 @@
 // Regression guard for the macOS-app drop (owner directive 2026-08-22). The
 // desktop app, its bundled web UI, its AI sidecar, its brand assets, and the
 // tooling and design docs that served only those surfaces now live in
-// hasna-products/personalnotes. @hasna/notes is headless — a local-first notes
+// hasna-products/personalnotes. @hasna/notes is headless — an HTTPS notes
 // CLI, an MCP server, an importable SDK, and a self-hosted HTTP server — so
 // every path below must stay absent, and no shipped code or build config may
 // reference one. A dangling reference is worse than a leftover file: it is an
@@ -105,7 +105,7 @@ describe('macOS app removal', () => {
 
   test('the docs directory documents only the headless package', async () => {
     const docs = (await readdir(join(repoRoot, 'docs'))).sort();
-    expect(docs).toEqual(['storage.md', 'sync.md']);
+    expect(docs).toEqual(['notes-vs-personalnotes.md', 'storage.md', 'sync.md']);
   });
 
   test('no shipped code or build config references a removed app surface', async () => {

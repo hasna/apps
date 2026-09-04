@@ -1,19 +1,73 @@
 {
+  "$schema": "./node_modules/@hasna/contracts/dist/hasna.contract.schema.json",
   "schema": "hasna.service_contract.v1",
   "name": "contacts",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.2",
-  "description": "Contact & company management for AI coding agents. CLI + MCP + HTTP API (contacts-serve) + generated SDK. Cloud mode (HASNA_CONTACTS_STORAGE_MODE=cloud / HASNA_CONTACTS_DATABASE_URL set) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts. PRIVATE repo — synthetic seeds only, never real PII.",
-  "bins": ["contacts", "contacts-mcp", "contacts-serve"],
+  "kitVersion": "0.14.2",
+  "description": "Contact and company management for AI coding agents. Public CLI, MCP, and SDK clients use one explicitly configured authenticated HTTPS /v1 authority and never open SQLite or PostgreSQL. contacts-serve is the server-only PostgreSQL/API-key boundary.",
+  "bins": [
+    "contacts",
+    "contacts-mcp",
+    "contacts-serve"
+  ],
+  "hosting": [
+    "user-hosted",
+    "hasna-saas"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "contacts-serve",
+      "authMode": "api-key",
+      "health": { "method": "GET", "path": "/health", "public": true },
+      "readiness": { "method": "GET", "path": "/ready", "public": true },
+      "version": { "method": "GET", "path": "/version", "public": true },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "typescript-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "clientClassName": "ContactsV1Client",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "contacts-mcp",
+      "authMode": "api-key"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "contacts",
+      "authMode": "api-key"
+    }
+  ],
   "storage": {
-    "mode": "local",
+    "backend": "postgresql",
+    "engines": ["sqlite", "postgresql"],
     "envPrefix": "HASNA_CONTACTS_",
     "aliasEnvPrefix": "CONTACTS_",
-    "databaseUrlSecretRef": "hasna/oss/contacts/database-url",
-    "sqlitePath": "~/.local/share/hasna/contacts/contacts.db"
+    "pgTestGate": {
+      "envVar": "HASNA_CONTACTS_TEST_DATABASE_URL",
+      "command": "HASNA_CONTACTS_TEST_DATABASE_URL=\"${HASNA_CONTACTS_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" CONTACTS_REQUIRE_LIVE_POSTGRES=1 bun test src/server/postgres-live.test.ts"
+    }
   },
   "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
     "service": {
       "port": 19428,
       "healthPath": "/health",
@@ -21,12 +75,11 @@
       "versionPath": "/version",
       "openapiPath": "/openapi.json",
       "apiVersion": "v1",
-      "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/contacts/api-key-signing-secret"
+      "auth": "api-key"
     },
     "client": {
-      "apiUrlEnv": "CONTACTS_API_URL",
-      "apiKeyEnv": "CONTACTS_API_KEY"
+      "apiUrlEnv": "HASNA_CONTACTS_API_URL",
+      "apiKeyEnv": "HASNA_CONTACTS_API_KEY"
     }
   }
 }

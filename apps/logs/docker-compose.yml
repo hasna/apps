@@ -1,8 +1,8 @@
-# @hasna/logs — local development stack for the cloud (PURE REMOTE) serve.
+# @hasna/logs — local development stack for the PostgreSQL-backed serve.
 #
-# Brings up a throwaway Postgres and runs logs-serve against it in cloud mode
-# (Amendment A1: reads AND writes go straight to this Postgres). This mirrors
-# the deployed ECS service without touching the shared RDS.
+# Brings up a throwaway Postgres and runs logs-serve against it (reads AND
+# writes go straight to this Postgres). This mirrors the deployed ECS service
+# without touching the shared RDS.
 #
 #   docker compose up --build
 #   # apply schema (owner path): the migration runs as the compose superuser

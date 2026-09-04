@@ -1,7 +1,7 @@
 {
   "name": "notes-server",
   "version": "0.1.0",
-  "description": "Self-hosted Hasna Notes server \u2014 Hono + SQLite (bun:sqlite) reference implementation of the personalnotes/v1 dialect.",
+  "description": "Hasna Notes PostgreSQL server workspace; published as part of @hasna/notes, not independently.",
   "type": "module",
   "bin": {
     "notes-server": "./index.mjs"
@@ -23,7 +23,7 @@
   "keywords": [
     "notes",
     "self-hosted",
-    "sqlite",
+    "postgresql",
     "hono"
   ],
   "license": "MIT",

@@ -279,11 +279,11 @@ describe("lockfile drift — members without own lockfile resolve inside declare
     ]);
   });
 
-  test("apps/statusline resolves @modelcontextprotocol/sdk@1.12.1 inside its declared range", () => {
+  test("apps/statusline resolves @modelcontextprotocol/sdk@1.30.0 inside its declared range", () => {
     const entries = lock.packages ?? {};
     const resolved = resolvedSpecFor(entries, "@hasna/statusline", "@modelcontextprotocol/sdk");
-    expect(resolved?.spec).toBe("@modelcontextprotocol/sdk@1.12.1");
-    expect(satisfiesRange("1.12.1", versionOf(resolved!.spec)!)).toBe(true);
+    expect(resolved?.spec).toBe("@modelcontextprotocol/sdk@1.30.0");
+    expect(satisfiesRange("^1.26.0", versionOf(resolved!.spec)!)).toBe(true);
   });
 
 test("every member without an own lockfile resolves every declared dep inside its declared range", () => {

@@ -1,16 +1,14 @@
 // Hasna Notes self-hosted server — Hono app (personalnotes/v1 dialect).
-// Reference implementation: one SQLite file OR the PostgreSQL backend
-// (HASNA_NOTES_DATABASE_URL), no billing/credits/multi-tenant admin — those
-// are hosted-platform concerns and out of the dialect (§8). The dialect is
-// the wire contract; the two backends serve it identically.
+// Production server: PostgreSQL through HASNA_NOTES_DATABASE_URL. SQLite may
+// be injected by isolated tests/import tooling, but notes-serve never selects
+// it and it is not an authoritative runtime backend.
 
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { ApiError, errorBody, mapError, bearer, parseLimit } from './http.mjs';
-import { DEFAULT_DB_PATH } from './paths.mjs';
-import { getMeta, setMeta } from './db.mjs';
+import { getMeta, setMeta } from './sql.mjs';
 import { serverEnv } from './env.mjs';
 import {
   approveDeviceAuth, autoApproveDeviceAuth, exchangeDeviceAuth, getTenant, getUser, insertApiKey,
@@ -28,10 +26,9 @@ const MANIFEST = JSON.parse(readFileSync(new URL('../package.json', import.meta.
 export const VERSION = MANIFEST.version;
 export const SERVICE = 'notes-server';
 export const DEFAULT_PORT = 8788;
-export { DEFAULT_DB_PATH };
 const REQUEST_MAX_BYTES = 2 * 1024 * 1024;
 
-/** Config from env + argv. Zero-ops defaults: loopback bind, single SQLite file. */
+/** Non-storage config from env + argv. Storage is resolved only by openStorage. */
 export function resolveConfig(env = process.env, argv = []) {
   const flag = (name) => argv.includes(name);
   const flagValue = (name) => {
@@ -40,10 +37,12 @@ export function resolveConfig(env = process.env, argv = []) {
   };
   const host = flagValue('--host') ?? (flag('--host') ? '0.0.0.0' : undefined) ?? serverEnv(env, 'HOST') ?? '127.0.0.1';
   const port = Number(flagValue('--port') ?? serverEnv(env, 'PORT') ?? env.PORT ?? DEFAULT_PORT);
+  if (argv.some((arg) => arg === '--db' || arg.startsWith('--db=')) || Object.hasOwn(env, 'HASNA_NOTES_SERVER_DB')) {
+    throw new Error('notes-server: --db and HASNA_NOTES_SERVER_DB were removed; configure server PostgreSQL with HASNA_NOTES_DATABASE_URL.');
+  }
   return {
     host,
     port,
-    dbPath: flagValue('--db') ?? serverEnv(env, 'DB') ?? DEFAULT_DB_PATH,
     publicUrl: serverEnv(env, 'URL') ?? `http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`,
     // --auto-approve: single-user convenience — device logins from loopback
     // are approved automatically for the (auto-provisioned) owner account.
@@ -86,7 +85,10 @@ const OPENAPI_DOC = {
   },
 };
 
-export async function createApp({ db, config }) {
+export async function createApp({ db, config, testOnlySqlite = false }) {
+  if (db?.backend !== 'postgresql' && !(testOnlySqlite && db?.backend === 'sqlite')) {
+    throw new Error('notes-server: PostgreSQL is required; SQLite is isolated test-only storage.');
+  }
   const cfg = { ...config };
   if (!cfg.jwtSecret) {
     // Zero-ops: persist a generated secret so sessions survive restarts.

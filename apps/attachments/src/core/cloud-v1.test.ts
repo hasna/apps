@@ -26,16 +26,9 @@ function mockFetch(handler: (call: Call) => { status: number; body: unknown }) {
 const cloudEnv = { HASNA_ATTACHMENTS_API_URL: BASE, HASNA_ATTACHMENTS_API_KEY: KEY } as NodeJS.ProcessEnv;
 
 describe("resolveAttachmentsV1", () => {
-  test("returns local when env unset", () => {
-    const r = resolveAttachmentsV1({} as NodeJS.ProcessEnv);
-    expect(r.transport).toBe("local");
-    expect(r.store).toBeNull();
-  });
+  test("rejects absent configuration", () => { expect(() => resolveAttachmentsV1({})).toThrow(); });
 
-  test("returns local when only URL set (key missing)", () => {
-    const r = resolveAttachmentsV1({ HASNA_ATTACHMENTS_API_URL: BASE } as NodeJS.ProcessEnv);
-    expect(r.transport).toBe("local");
-  });
+  test("rejects partial configuration", () => { expect(() => resolveAttachmentsV1({ HASNA_ATTACHMENTS_API_URL: BASE })).toThrow(); });
 
   test("returns cloud-http when URL+KEY set (mode implied self_hosted)", () => {
     const r = resolveAttachmentsV1(cloudEnv);
@@ -43,10 +36,7 @@ describe("resolveAttachmentsV1", () => {
     if (r.transport === "cloud-http") expect(r.store.baseUrl).toBe(`${BASE}/v1`);
   });
 
-  test("explicit STORAGE_MODE=local forces local even with URL+KEY", () => {
-    const r = resolveAttachmentsV1({ ...cloudEnv, HASNA_ATTACHMENTS_STORAGE_MODE: "local" } as NodeJS.ProcessEnv);
-    expect(r.transport).toBe("local");
-  });
+  test("rejects a surviving local selector", () => { expect(() => resolveAttachmentsV1({ ...cloudEnv, HASNA_ATTACHMENTS_STORAGE_MODE: "local" })).toThrow(); });
 
   test("list routes GET /v1/attachments with bearer key and maps the envelope", async () => {
     const { calls, fetchImpl } = mockFetch(() => ({
@@ -236,7 +226,7 @@ describe("cloud upload failures reach the caller with context", () => {
       .then(() => null)
       .catch((err: Error) => err);
     expect(error).not.toBeNull();
-    expect(error!.message).toContain("POST /v1/attachments");
+    expect(error!.message).toContain("Attachments API request failed");
     expect(error!.message).toContain("HTTP 500");
     expect(error!.message).not.toBe("Internal Server Error");
     expect(error!.message).not.toContain(KEY);

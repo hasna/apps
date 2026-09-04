@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import type { Attachment } from "../../core/db";
 import { resolveStore, type Store } from "../../core/store";
-import { withTodosAuth } from "../../core/todos";
+import { withTodosAuth, serviceConfig } from "../../core/todos";
 
 export interface TaskJournalOptions {
   todosUrl?: string;
@@ -39,9 +39,10 @@ export async function fetchTaskMeta(
   todosUrl: string,
   fetchFn: typeof fetch = fetch
 ): Promise<TaskMeta | null> {
+  const url = `${todosUrl}/api/tasks/${taskId}`;
+  const init = withTodosAuth(url);
   try {
-    const url = `${todosUrl}/api/tasks/${taskId}`;
-    const response = await fetchFn(url, withTodosAuth(url));
+    const response = await fetchFn(url, init);
     if (response.status === 404) return null;
     if (!response.ok) return null;
     const data = await response.json() as Record<string, unknown>;
@@ -67,9 +68,10 @@ export async function fetchTaskHistory(
   todosUrl: string,
   fetchFn: typeof fetch = fetch
 ): Promise<TaskHistoryEntry[]> {
+  const url = `${todosUrl}/api/tasks/${taskId}/history`;
+  const init = withTodosAuth(url);
   try {
-    const url = `${todosUrl}/api/tasks/${taskId}/history`;
-    const response = await fetchFn(url, withTodosAuth(url));
+    const response = await fetchFn(url, init);
     if (!response.ok) return [];
     const data = await response.json() as unknown;
     if (!Array.isArray(data)) return [];
@@ -86,7 +88,7 @@ export async function fetchTaskHistory(
 }
 
 /**
- * Query local DB for attachments associated with a task.
+ * Query the HTTPS service for attachments associated with a task.
  * Checks tag = "task:TASK-ID" format.
  */
 export function findTaskAttachments(
@@ -98,7 +100,7 @@ export function findTaskAttachments(
 }
 
 /**
- * Build the full task journal by aggregating todos history + local attachments.
+ * Build the full task journal by aggregating todos history + remote attachments.
  */
 export async function buildTaskJournal(
   taskId: string,
@@ -109,7 +111,7 @@ export async function buildTaskJournal(
   fetchFn: typeof fetch = fetch,
   storeFactory?: () => Store
 ): Promise<{ journal: TaskJournal; todosReachable: boolean }> {
-  const todosUrl = options.todosUrl ?? "http://localhost:3000";
+  const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
 
   // Fetch from todos (parallel)
   const [meta, history] = await Promise.all([
@@ -241,12 +243,12 @@ export function formatJson(journal: TaskJournal): string {
 export function registerTaskJournal(program: Command): void {
   program
     .command("task-journal")
-    .description("Show full story of a task: history from todos + local attachments")
+    .description("Show full story of a task: history from todos + remote attachments")
     .argument("<task-id>", "Task ID (e.g. TASK-001)")
     .option(
       "--todos-url <url>",
       "Todos REST server base URL",
-      "http://localhost:3000"
+      undefined
     )
     .option(
       "--format <format>",
@@ -254,7 +256,7 @@ export function registerTaskJournal(program: Command): void {
       "markdown"
     )
     .action(async (taskId: string, options: TaskJournalOptions) => {
-      const todosUrl = options.todosUrl ?? "http://localhost:3000";
+      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
       const format = options.format ?? "markdown";
 
       try {

@@ -1,3 +1,11 @@
+import { beforeEach as configureIntegrationFixture } from "bun:test";
+configureIntegrationFixture(() => {
+  process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
+  process.env.TODOS_API_KEY = "remote-key";
+  delete process.env.HASNA_TODOS_API_KEY;
+  process.env.HASNA_SESSIONS_API_URL = "https://sessions.example.test";
+  process.env.HASNA_SESSIONS_API_KEY = "test-session-key";
+});
 import { describe, it, expect, mock, beforeEach, spyOn, afterAll } from "bun:test";
 import { Command } from "commander";
 
@@ -41,6 +49,12 @@ mock.module("../../core/upload", () => ({
 }));
 
 // Import after mocks
+// Command behavior uses an explicit test-only Store seam, never production fallback.
+const { MockedStoreFixture } = await import("../../testing/mocked-store-fixture");
+const actualStore = await import("../../core/store");
+const productionResolveStore = actualStore.resolveStore;
+mock.module("../../core/store", () => ({ ...actualStore, resolveStore: (env = process.env) => env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY ? productionResolveStore(env) : new MockedStoreFixture() }));
+
 const { registerSnapshotSession } = await import("./snapshot-session");
 
 afterAll(() => mock.restore());
@@ -113,22 +127,23 @@ describe("snapshot-session command", () => {
       await program.parseAsync(["snapshot-session", "abc123"], { from: "user" });
       const calledUrl = (mockFetch.mock.calls[0] as [string])[0];
       expect(calledUrl).toContain("abc123");
-      expect(calledUrl).toContain("localhost:3458");
+      expect(calledUrl).toContain("sessions.example.test");
     } finally {
       capture.restore();
     }
   });
 
   it("uses custom --sessions-url when provided", async () => {
+    process.env.HASNA_SESSIONS_API_URL = "https://custom.example.test";
     const capture = captureOutput();
     try {
       const program = buildProgram();
       await program.parseAsync(
-        ["snapshot-session", "sess99", "--sessions-url", "http://localhost:9000"],
+        ["snapshot-session", "sess99", "--sessions-url", "https://custom.example.test"],
         { from: "user" }
       );
       const calledUrl = (mockFetch.mock.calls[0] as [string])[0];
-      expect(calledUrl).toContain("localhost:9000");
+      expect(calledUrl).toContain("custom.example.test");
     } finally {
       capture.restore();
     }
@@ -244,7 +259,7 @@ describe("snapshot-session command", () => {
       await expect(
         program.parseAsync(["snapshot-session", "bad-session"], { from: "user" })
       ).rejects.toThrow("process.exit called");
-      expect(capture.err.join("")).toContain("Failed to fetch session");
+      expect(capture.err.join("")).toContain("Sessions request failed");
     } finally {
       capture.restore();
       exitSpy.mockRestore();
