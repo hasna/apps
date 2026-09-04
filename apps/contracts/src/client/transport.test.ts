@@ -72,6 +72,45 @@ describe("canonical client transport", () => {
     expect(() => resolveClientTransport("todos", { ...validEnv, HASNA_TODOS_API_KEY: " " })).toThrow(/blank|empty/);
   });
 
+  test("a gateway base URL keeps its app prefix through resolution (#1601)", () => {
+    const resolution = resolveClientTransport("todos", {
+      HASNA_TODOS_API_URL: "https://api.example.test/todos",
+      HASNA_TODOS_API_KEY: "test-key",
+    });
+    expect(resolution.baseUrl).toBe("https://api.example.test/todos/v1");
+    expect(resolution.apiBase).toBe("https://api.example.test/todos");
+    expect(resolution.apiKeyTier).toBe("env");
+  });
+
+  test("the keychain supplies BOTH halves when the process has no environment (#1513)", () => {
+    const reader = {
+      platform: "darwin",
+      run(args: readonly string[]) {
+        const service = args[args.indexOf("-s") + 1];
+        if (service === "hasna.credentials.todos.api-url") {
+          return { status: 0, stdout: "https://api.example.test/todos\n" };
+        }
+        if (service === "hasna.credentials.todos.api-key") return { status: 0, stdout: "keychain-key\n" };
+        return { status: 44, stdout: "" };
+      },
+    };
+    const resolution = resolveClientTransport("todos", { HASNA_STATION: "station03" }, { keychain: { reader } });
+    expect(resolution.baseUrl).toBe("https://api.example.test/todos/v1");
+    expect(resolution.apiUrlSource).toBe("keychain:hasna.credentials.todos.api-url");
+    expect(resolution.apiKeySource).toBe("keychain:hasna.credentials.todos.api-key");
+    expect(resolution.apiKeyTier).toBe("keychain");
+    expect(JSON.stringify(resolution)).not.toContain("keychain-key");
+
+    // An environment authority still wins over the keychain one.
+    const fromEnv = resolveClientTransport(
+      "todos",
+      { HASNA_STATION: "station03", HASNA_TODOS_API_URL: "https://todos.example.test" },
+      { keychain: { reader } },
+    );
+    expect(fromEnv.baseUrl).toBe("https://todos.example.test/v1");
+    expect(fromEnv.apiUrlSource).toBe("HASNA_TODOS_API_URL");
+  });
+
   test("conflicting authority aliases fail closed", () => {
     expect(() =>
       resolveClientTransport("todos", {
