@@ -24,8 +24,13 @@ All four executables use Bun.
 The `files` CLI and `files-mcp` resolve one store for the process lifetime:
 
 1. `HASNA_FILES_API_URL` plus `HASNA_FILES_API_KEY` select the hosted HTTP API
-   store.
-2. With neither configured, local SQLite is used.
+   store (the unprefixed `FILES_API_URL` / `FILES_API_KEY` aliases are also
+   accepted).
+2. With neither configured, the CLI **fails closed**: it exits non-zero with an
+   error naming the required env. Local SQLite is used **only** under the
+   explicit opt-in `HASNA_FILES_LOCAL_MODE=1` (alias `FILES_LOCAL_MODE=1`) —
+   local mode is never a default, and an unconfigured run never creates
+   `~/.hasna/files/files.db` or reports a false-green local session.
 3. A URL without a key (or vice versa) is a misconfiguration and fails closed
    instead of falling back to a local database.
 

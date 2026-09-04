@@ -75,6 +75,9 @@ function cliEnv(): NodeJS.ProcessEnv {
     HOME: testDir,
     TMPDIR: testDir,
     NO_COLOR: "1",
+    // The local data plane now requires the explicit local opt-in; this env is
+    // deliberately built from scratch (no inherited selectors), so name it here.
+    HASNA_FILES_LOCAL_MODE: "1",
     HASNA_FILES_DATA_DIR: dataDir,
     HASNA_FILES_DB_PATH: join(testDir, "files.db"),
   };

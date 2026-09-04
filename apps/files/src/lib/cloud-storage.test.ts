@@ -4,18 +4,36 @@ import { resolveFilesCloudStorage } from "./cloud-storage.js";
 const KEY = "hasna_files_testkey_00000000000";
 
 describe("resolveFilesCloudStorage — env-selection contract", () => {
-  it("is inactive (local) when nothing is configured", () => {
-    const r = resolveFilesCloudStorage({});
+  it("fails closed (throws) when nothing is configured — no silent local fallback", () => {
+    expect(() => resolveFilesCloudStorage({})).toThrow(/HASNA_FILES_API_URL/);
+    expect(() => resolveFilesCloudStorage({})).toThrow(/HASNA_FILES_API_KEY/);
+    expect(() => resolveFilesCloudStorage({})).toThrow(/HASNA_FILES_LOCAL_MODE/);
+  });
+
+  it("fails closed (throws) when the API URL and key are blank", () => {
+    expect(() =>
+      resolveFilesCloudStorage({
+        HASNA_FILES_API_URL: "  ",
+        HASNA_FILES_API_KEY: "  ",
+      }),
+    ).toThrow(/HASNA_FILES_API_URL/);
+  });
+
+  it("is inactive (local) only when the explicit local opt-in is set", () => {
+    const r = resolveFilesCloudStorage({ HASNA_FILES_LOCAL_MODE: "1" });
     expect(r.active).toBe(false);
     expect(r.client).toBeNull();
   });
 
-  it("is inactive when the API URL and key are blank", () => {
-    const r = resolveFilesCloudStorage({
-      HASNA_FILES_API_URL: "  ",
-      HASNA_FILES_API_KEY: "  ",
-    });
+  it("honours the unprefixed local opt-in alias", () => {
+    const r = resolveFilesCloudStorage({ FILES_LOCAL_MODE: "true" });
     expect(r.active).toBe(false);
+  });
+
+  it("rejects falsy local opt-in values as no opt-in at all", () => {
+    expect(() =>
+      resolveFilesCloudStorage({ HASNA_FILES_LOCAL_MODE: "0" }),
+    ).toThrow(/HASNA_FILES_API_URL/);
   });
 
   it("is active and targets <origin>/v1 when API_URL + API_KEY are both set", () => {

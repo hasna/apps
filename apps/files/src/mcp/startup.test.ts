@@ -92,3 +92,37 @@ test("MCP initialize responds without creating or opening the files database", a
   const stderr = await new Response(proc.stderr).text();
   throw new Error(`MCP initialize did not respond. stderr: ${stderr}`);
 });
+
+test("MCP refuses to start without hosted env or a local opt-in (fail closed)", async () => {
+  const dataDir = makeDataDir();
+  const env = { ...process.env, HASNA_FILES_DATA_DIR: dataDir };
+  for (const key of [
+    "HASNA_FILES_API_URL",
+    "FILES_API_URL",
+    "HASNA_FILES_API_KEY",
+    "FILES_API_KEY",
+    "HASNA_FILES_LOCAL_MODE",
+    "FILES_LOCAL_MODE",
+  ]) {
+    delete env[key];
+  }
+
+  const proc = Bun.spawn({
+    cmd: ["bun", "run", mcpEntry, "--stdio"],
+    cwd: repoRoot,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+
+  const [stderr, exitCode] = await Promise.all([
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+
+  expect(exitCode).not.toBe(0);
+  expect(stderr).toContain("HASNA_FILES_API_URL");
+  expect(stderr).toContain("HASNA_FILES_API_KEY");
+  expect(stderr).toContain("HASNA_FILES_LOCAL_MODE");
+  await expect(Bun.file(join(dataDir, "files.db")).exists()).resolves.toBe(false);
+});
