@@ -3,22 +3,25 @@
  * messages-serve — the HTTP API surface of @hasna/messages.
  *
  * Routes are thin interface-layer handlers over MessagesService (the single
- * domain implementation). Auth: when HASNA_MESSAGES_API_KEY is set, requests
- * to /v1/* must carry it as the `x-api-key` header; unset means trusted
- * localhost-only mode (the client sends the key when it has one; the server
- * is the authority on whether one is required).
+ * domain implementation). Auth lives in ./auth.ts: /v1/* is gated by the
+ * shared @hasna/contracts key store (scoped, revocable, expiring
+ * `hasna_messages_*` tokens) when a signing secret is configured, with the
+ * legacy single static HASNA_MESSAGES_API_KEY still accepted for one release.
+ * With neither configured the server is in trusted-localhost mode.
  *
- * The server binds 127.0.0.1 by default — the "no key" trust boundary is
- * only valid on loopback. A non-loopback bind (HASNA_MESSAGES_HOST) without
- * HASNA_MESSAGES_API_KEY is refused at startup: exposing /v1/* (DM read and
- * write routes) unauthenticated to network peers is never the default.
+ * The server binds 127.0.0.1 by default — the "no credential" trust boundary
+ * is only valid on loopback. A non-loopback bind (HASNA_MESSAGES_HOST) with no
+ * credential configured at all is refused at startup: exposing /v1/* (DM read
+ * and write routes) unauthenticated to network peers is never the default.
  *
  * Agent identity is first-class: agents are named in request bodies/query,
  * and POST /v1/auth/register creates/returns the agent row. messages owns
  * direct agent-to-agent DMs + DM-threads only — channels/announcements are
  * conversations' domain and this server never reads conversations' store.
  */
+import { createHash } from "node:crypto";
 import { MessagesService } from "../service";
+import { createAuthGate, resolveSigningSecret, resolveStaticKey, type AuthGate } from "./auth";
 import { resolveStore } from "./store";
 import { version } from "../version";
 import { openapi } from "./openapi";
@@ -55,16 +58,27 @@ const PORT = Number(process.env.HASNA_MESSAGES_PORT ?? process.env.MESSAGES_PORT
 // Loopback by default: the unauthenticated "no API key" mode is only a
 // trusted-localhost mode when the socket is actually on loopback.
 const HOST = process.env.HASNA_MESSAGES_HOST ?? "127.0.0.1";
-// Server-side gate: the configured key is compared against the x-api-key
-// header; unset means local-only mode. Read per request so the environment is
-// authoritative at call time (and tests can vary it). Never printed.
-function configuredKey(): string {
-  return process.env.HASNA_MESSAGES_API_KEY ?? "";
+/**
+ * True when SOME credential is configured for /v1/*: a contracts signing
+ * secret, or the legacy static key. This is what the bind gate asks about —
+ * it is a question about the trust boundary, not about which mechanism the
+ * gate ended up using. Read from the live environment so tests can vary it.
+ */
+function credentialConfigured(): boolean {
+  const env = process.env as Record<string, string | undefined>;
+  return Boolean(resolveSigningSecret(env) ?? resolveStaticKey(env));
 }
 
 export interface ServeDeps {
   service: MessagesService;
   backend: "sqlite" | "postgresql";
+  /**
+   * Request gate for /v1/*. Injected by the tests; the server builds exactly
+   * one at startup. Omitted means "derive from the environment", memoized on
+   * the credential-bearing env vars so a test that flips them gets a fresh
+   * gate without paying for one per request.
+   */
+  auth?: AuthGate;
 }
 
 function json(body: unknown, status = 200): Response {
@@ -92,6 +106,35 @@ function str(v: unknown): string {
   return v == null ? "" : String(v);
 }
 
+/**
+ * Env-derived gate, memoized on the credential inputs. Building a gate opens a
+ * pg pool and a verifier, so it must not happen per request; re-deriving the
+ * signature every call means a process whose environment was rotated picks the
+ * change up instead of serving a stale verifier.
+ *
+ * The signature is a DIGEST, not the values: the memo outlives every request,
+ * and a long-lived object holding plaintext secrets is a heap-dump away from
+ * being a leak. A digest distinguishes "changed" from "unchanged" just as well.
+ */
+let memoizedGate: { signature: string; gate: AuthGate } | null = null;
+
+function envAuthGate(): AuthGate {
+  const env = process.env as Record<string, string | undefined>;
+  const signature = createHash("sha256")
+    .update(
+      JSON.stringify([
+        resolveSigningSecret(env) ?? "",
+        resolveStaticKey(env) ?? "",
+        env.HASNA_MESSAGES_DATABASE_URL ?? "",
+      ]),
+    )
+    .digest("hex");
+  if (memoizedGate?.signature === signature) return memoizedGate.gate;
+  const gate = createAuthGate({ env });
+  memoizedGate = { signature, gate };
+  return gate;
+}
+
 export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Response> {
   const { service } = deps;
 
@@ -111,12 +154,13 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
       return json({ name: "@hasna/messages", version, dialect: "messages/v1", open_source: "@hasna/messages" });
     }
 
-    // API key gate for /v1/* (local-only mode when no key configured).
+    // Credential gate for /v1/* — contracts key store, with the legacy static
+    // key still accepted for one release (see ./auth.ts). `/v1` and
+    // `/v1/openapi.json` are answered above and stay public: they are the
+    // service's self-description, not data.
     if (path.startsWith("/v1/")) {
-      const key = configuredKey();
-      if (key && req.headers.get("x-api-key") !== key) {
-        return error(401, "invalid or missing x-api-key");
-      }
+      const denial = await (deps.auth ?? envAuthGate()).check(req, req.method, path);
+      if (denial) return denial;
     }
 
     try {
@@ -236,26 +280,29 @@ export function buildHandler(deps: ServeDeps): (req: Request) => Promise<Respons
   };
 }
 
-/** Fail-closed bind gate: a loopback bind may run without a key; any
- * non-loopback bind requires a configured API key, otherwise /v1/* (DM read
- * and write routes) would be exposed unauthenticated to network peers. */
-export function assertSafeBind(host: string, hasKey: boolean): void {
+/** Fail-closed bind gate: a loopback bind may run without a credential; any
+ * non-loopback bind requires one (a contracts signing secret, or the legacy
+ * static key), otherwise /v1/* (DM read and write routes) would be exposed
+ * unauthenticated to network peers. */
+export function assertSafeBind(host: string, hasCredential: boolean): void {
   const loopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
-  if (!loopback && !hasKey) {
+  if (!loopback && !hasCredential) {
     throw new Error(
-      `refusing to bind ${host} without HASNA_MESSAGES_API_KEY: a non-loopback bind would expose /v1/* unauthenticated`,
+      `refusing to bind ${host} without a configured credential (API_KEY_SIGNING_SECRET or HASNA_MESSAGES_API_KEY): ` +
+        `a non-loopback bind would expose /v1/* unauthenticated`,
     );
   }
 }
 
 export async function serve(): Promise<void> {
-  // Fail fast before any store side effects: a non-loopback bind without a
-  // configured key would expose /v1/* unauthenticated.
-  assertSafeBind(HOST, Boolean(configuredKey()));
+  // Fail fast before any store side effects: a non-loopback bind with no
+  // configured credential would expose /v1/* unauthenticated.
+  assertSafeBind(HOST, credentialConfigured());
 
   const { store, backend, close } = await resolveStore();
   const service = new MessagesService(store);
-  const handler = buildHandler({ service, backend });
+  const auth = createAuthGate();
+  const handler = buildHandler({ service, backend, auth });
 
   const server = Bun.serve({
     hostname: HOST,
@@ -263,7 +310,9 @@ export async function serve(): Promise<void> {
     fetch: (req) => handler(req),
   });
 
-  console.log(`messages-serve v${version} listening on http://${HOST}:${server.port} (backend: ${backend})`);
+  console.log(
+    `messages-serve v${version} listening on http://${HOST}:${server.port} (backend: ${backend}, auth: ${auth.mode})`,
+  );
   // Keep the process alive; close is available for tests.
   await new Promise<void>(() => {
     // no-op: Bun.serve keeps the event loop alive

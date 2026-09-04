@@ -49,9 +49,38 @@ configuration — never by a mode enum:
 
 The client (CLI / MCP / SDK) talks to the server's HTTP API
 (`HASNA_MESSAGES_API_URL` + `HASNA_MESSAGES_API_KEY`) or to a local store —
-it never opens Postgres directly. `messages-serve` supports a trusted
-localhost mode with no key configured; when a key is configured, requests
-must carry it as `x-api-key`.
+it never opens Postgres directly.
+
+## Server authentication
+
+`messages-serve` gates `/v1/*` with the shared `@hasna/contracts` key store —
+the same scoped, revocable, expiring `hasna_messages_*` tokens every other
+hosted Hasna service uses. Configure the signing secret and the gate turns on:
+
+| variable | meaning |
+|----------|---------|
+| `API_KEY_SIGNING_SECRET` | HMAC signing secret (injected by the hasna-app Terraform module; `hasna/oss/messages/api-key-signing-secret`) |
+| `HASNA_MESSAGES_API_SIGNING_KEY` | per-app override, second in resolution order |
+| `HASNA_API_SIGNING_KEY` | shared fallback, third |
+
+Reads (`GET`/`HEAD`) require the `messages:read` scope and every other method
+requires `messages:write`; a revoked, expired or unregistered key is refused.
+Revocation is checked against the `api_keys` table in the app's own Postgres
+(`HASNA_MESSAGES_DATABASE_URL`); without a database the server still verifies
+tokens cryptographically but cannot see revocations.
+
+The client key lives in Secrets Manager at `hasna/oss/messages/api-key` and is
+provisioned by the deploy lane — see `tooling/fleet/hosted-apps.json` and
+`tooling/fleet/fleet-key.ts` (hasna/apps#1595).
+
+**`HASNA_MESSAGES_API_KEY` is deprecated.** The single static string is still
+accepted for one more release so stations can rotate, and the server warns once
+when it authenticates a request. It cannot be scoped, expired or revoked, which
+is why messages could not have a fleet key at all until now.
+
+With neither a signing secret nor the static key configured, `messages-serve`
+runs in trusted-localhost mode with `/v1/*` open; a non-loopback bind in that
+state is refused at startup.
 
 ## Modes (client surfaces)
 

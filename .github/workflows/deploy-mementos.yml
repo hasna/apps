@@ -277,3 +277,30 @@ jobs:
           PREVIOUS_TASK_DEFINITION: ${{ steps.deploy.outputs.previous_task_definition }}
           DEPLOYED_TASK_DEFINITION: ${{ steps.deploy.outputs.deployed_task_definition }}
         run: bash scripts/production-deploy.sh verify
+
+  # Provision-or-verify the CLIENT API key for this app (hasna/apps#1595).
+  #
+  # A deploy that leaves a running, routed service nobody can call is not a
+  # finished deploy -- that is exactly what happened to messages-prod, and
+  # projects/knowledge shipped keys the origin had already revoked while
+  # Secrets Manager still held the dead value. This job reads
+  # hasna/oss/mementos/api-key, proves it still authenticates against the freshly
+  # deployed origin with a two-sided probe, and mints one when it is absent or
+  # refused.
+  #
+  # Deliberately a job AFTER `deploy`, not a step inside it: the rollout is
+  # already complete and healthy when this runs, so a key that cannot be minted
+  # reports as its own failure instead of as a failed deployment, and never
+  # executes while the deploy job is mutating the production service.
+  provision_key:
+    name: provision or verify the fleet client API key
+    needs: [gate, deploy]
+    if: ${{ needs.gate.outputs.proceed == 'true' }}
+    uses: ./.github/workflows/fleet-key-provision.yml
+    with:
+      app: mementos
+      source_sha: ${{ needs.gate.outputs.source_sha }}
+    secrets: inherit
+    permissions:
+      contents: read
+      id-token: write
