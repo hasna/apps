@@ -29,12 +29,17 @@ beforeEach(() => {
   root = join(tmpdir(), `economy-gatherer-test-${Date.now()}-${Math.random().toString(16).slice(2)}`)
   originalDbPath = process.env['HASNA_ECONOMY_DB_PATH']
   originalHome = process.env['HOME']
-  // Storage-mode variables are retired. The contracts 0.11.1 client selects the
-  // http transport from the API URL/KEY pair alone — from the environment and,
-  // when the environment is silent, from the fleet app-config files under HOME —
-  // so a local test clears both tiers (empty HOME kills the disk tier).
+  // Storage-mode variables are retired. The contracts client selects the http
+  // transport from the API URL/KEY pair alone — from the environment and, when
+  // the environment is silent, from the fleet app-config files under HOME — so
+  // a local test clears both tiers (empty HOME kills the disk tier) and sets
+  // HASNA_ECONOMY_LOCAL, the explicit opt-in that makes a no-API-env run a
+  // legal local-mode run (without it the storage seam fails closed — see
+  // src/lib/cloud-storage.ts).
   delete process.env['HASNA_ECONOMY_API_URL']
   delete process.env['HASNA_ECONOMY_API_KEY']
+  process.env['HASNA_ECONOMY_LOCAL'] = '1'
+  process.env['ECONOMY_LOCAL'] = '1'
   process.env['HOME'] = ''
   process.env['HASNA_ECONOMY_DB_PATH'] = join(root, 'economy.db')
   resetEconomyCloudStorageCache()
@@ -43,6 +48,8 @@ beforeEach(() => {
 afterEach(() => {
   restoreEnv('HASNA_ECONOMY_DB_PATH', originalDbPath)
   restoreEnv('HOME', originalHome)
+  delete process.env['HASNA_ECONOMY_LOCAL']
+  delete process.env['ECONOMY_LOCAL']
   resetEconomyCloudStorageCache()
   if (existsSync(root)) rmSync(root, { recursive: true, force: true })
 })

@@ -9,14 +9,18 @@ const roots: string[] = []
 // Storage-mode variables are retired. The fleet shell exports
 // HASNA_ECONOMY_API_URL/KEY and the disk app-config tier derives from HOME, so
 // these tests pin the spawned server to the local backend by clearing both
-// tiers (the contracts 0.11.1 client selects the http transport purely from
-// the API URL/KEY pair; an empty HOME kills the disk tier).
+// tiers (the contracts client selects the http transport purely from the API
+// URL/KEY pair; an empty HOME kills the disk tier). HASNA_ECONOMY_LOCAL is the
+// explicit opt-in that keeps this a legal local-mode run — without it the
+// server fails closed (see src/lib/cloud-storage.ts).
 const localStorageEnv = {
   HOME: '',
   HASNA_ECONOMY_API_URL: '',
   HASNA_ECONOMY_API_KEY: '',
   ECONOMY_API_URL: '',
   ECONOMY_API_KEY: '',
+  HASNA_ECONOMY_LOCAL: '1',
+  ECONOMY_LOCAL: '1',
 } as const
 
 function envWith(overrides: Record<string, string>): Record<string, string> {

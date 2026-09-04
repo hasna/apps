@@ -13,8 +13,10 @@ const tempRoots: string[] = []
 // HASNA_* exports (other apps' API URLs would make their SDKs connect over
 // the network) and it must stay on the local economy store. Start from a
 // minimal env: an empty HOME kills the contracts disk config tier
-// (homeDir(env) requires a non-empty $HOME), and the explicit-blank API
-// URL/KEY pair selects the local store.
+// (homeDir(env) requires a non-empty $HOME), the explicit-blank API
+// URL/KEY pair selects no HTTP transport, and HASNA_ECONOMY_LOCAL is the
+// explicit opt-in that keeps these local-store runs legal (without it the
+// CLI fails closed — see src/lib/cloud-storage.ts).
 const localStorageEnv = {
   HOME: '',
   PATH: process.env['PATH'] ?? '',
@@ -22,6 +24,8 @@ const localStorageEnv = {
   HASNA_ECONOMY_API_KEY: '',
   ECONOMY_API_URL: '',
   ECONOMY_API_KEY: '',
+  HASNA_ECONOMY_LOCAL: '1',
+  ECONOMY_LOCAL: '1',
 } as const
 
 // The quota ingests fetch provider usage endpoints with a 10s timeout each;

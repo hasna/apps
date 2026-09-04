@@ -6,10 +6,16 @@
 // to the local SQLite store, and NEVER to a raw database DSN.
 //
 // This module is the single seam the CLI consults. It returns a ready
-// `HasnaStorageClient` (from @hasna/contracts) when the http transport is active,
-// or `{ active: false }` so the caller falls back to the local store. It throws (via
-// resolveStorageClient) when an API URL is set without a key (misconfigured), so a
-// client can never silently drift back to the wrong dataset. Retired
+// `HasnaStorageClient` (from @hasna/contracts) when the http transport is active.
+// Any other resolution FAILS CLOSED (owner directive 2026-09-04): without the
+// fleet API environment the CLI throws an error naming the required variables
+// instead of silently serving the local SQLite store, so no data path can drift
+// back to an unintended local dataset with a false-green exit. The on-box local
+// store is reachable only through the EXPLICIT local opt-in documented in
+// docs/configuration.md — `HASNA_ECONOMY_LOCAL=1` (alias `ECONOMY_LOCAL=1`) —
+// which returns `{ active: false }` so the caller uses `LocalStore`. A
+// misconfigured resolution (API URL set without a key, or an invalid URL)
+// throws regardless of the opt-in, via resolveStorageClient. Retired
 // `*_STORAGE_MODE` / `*_MODE` variables are a hard error here too (owner
 // directive 2026-07-29): deployment modes no longer exist, the transport is
 // selected by URL + key alone, and a leftover mode variable must not be
@@ -40,8 +46,9 @@ function assertNoRetiredStorageMode(env: NodeJS.ProcessEnv): void {
   if (!legacyKey) return;
   throw new Error(
     `${legacyKey} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
-      `The client uses the local SQLite store, or the HTTP API selected by ` +
-      `HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY.`,
+      `The client routes through the HTTP API selected by HASNA_ECONOMY_API_URL + ` +
+      `HASNA_ECONOMY_API_KEY, or serves the local SQLite store only when ` +
+      `HASNA_ECONOMY_LOCAL=1 is set.`,
   );
 }
 
@@ -57,6 +64,25 @@ export type EconomyCloudStorage =
       readonly client: null;
     };
 
+/**
+ * Explicit local-store opt-in variables. The on-box SQLite store is served
+ * only when one of these is set to a truthy value; without either of them (and
+ * without the fleet API environment) the client fails closed.
+ */
+export const LOCAL_STORAGE_OPT_IN_KEYS = ["HASNA_ECONOMY_LOCAL", "ECONOMY_LOCAL"] as const;
+
+/** Truthy env-flag parse: set, non-blank, and not 0/false/no/off (any case). */
+function envFlagSet(env: NodeJS.ProcessEnv, key: string): boolean {
+  const raw = env[key];
+  if (raw === undefined) return false;
+  const value = raw.trim().toLowerCase();
+  return value !== "" && value !== "0" && value !== "false" && value !== "no" && value !== "off";
+}
+
+function localStorageExplicitlyOptedIn(env: NodeJS.ProcessEnv): boolean {
+  return LOCAL_STORAGE_OPT_IN_KEYS.some((key) => envFlagSet(env, key));
+}
+
 let cache: EconomyCloudStorage | undefined;
 
 /**
@@ -64,8 +90,12 @@ let cache: EconomyCloudStorage | undefined;
  *
  * Returns `{ active: true, client }` only when the contracts seam resolves to
  * the http transport (HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY set).
- * Otherwise `{ active: false }` (local store). Throws when an API URL is set
- * without a key (the seam reports the resolution as misconfigured).
+ * Returns `{ active: false }` (local store) only when the explicit local
+ * opt-in (`HASNA_ECONOMY_LOCAL=1` / `ECONOMY_LOCAL=1`) is set. Throws in every
+ * other unconfigured case — the error names the required API environment so a
+ * missing-env run can never silently serve the local dataset. A resolution the
+ * contracts seam reports as misconfigured (API URL without a key, or an
+ * invalid URL) throws regardless of the opt-in.
  */
 export function resolveEconomyCloudStorage(
   env: NodeJS.ProcessEnv = process.env,
@@ -73,9 +103,21 @@ export function resolveEconomyCloudStorage(
 ): EconomyCloudStorage {
   assertNoRetiredStorageMode(env);
   const resolved = resolveStorageClient(ECONOMY_APP, env, overrides);
-  return resolved.transport === "http"
-    ? { active: true, client: resolved.client }
-    : { active: false, client: null };
+  if (resolved.transport === "http") return { active: true, client: resolved.client };
+  // A clean non-http resolution means the seam found no API environment. That
+  // is a fail-closed event unless local storage was explicitly opted into:
+  // silently serving ~/.hasna/economy/economy.db here is the false-green path
+  // this guard exists to remove.
+  if (localStorageExplicitlyOptedIn(env)) return { active: false, client: null };
+  throw new Error(
+    "No economy API environment is configured and local mode is not enabled. " +
+      "The economy CLI fails closed instead of silently serving the local SQLite store: " +
+      "set HASNA_ECONOMY_API_URL and HASNA_ECONOMY_API_KEY (unprefixed " +
+      "ECONOMY_API_URL / ECONOMY_API_KEY aliases are accepted) to route CLI and MCP " +
+      "data operations through the shared economy API, or set " +
+      "HASNA_ECONOMY_LOCAL=1 (alias ECONOMY_LOCAL=1) to explicitly opt in to the " +
+      "on-box local store.",
+  );
 }
 
 /** Memoized {@link resolveEconomyCloudStorage} for the process lifetime. */
