@@ -11,6 +11,7 @@ import {
   listWorkspaces,
 } from "../db/workspaces.js";
 import { workspaceMarkerPath, writeWorkspaceMarker } from "./workspace-runtime.js";
+import { inspectLegacyProjectLayout, migrateLegacyProjectLayout } from "./project-layout-migration.js";
 import type { Workspace } from "../types/workspace.js";
 
 export type WorkspaceCheckStatus = "ok" | "warn" | "error";
@@ -123,6 +124,20 @@ function tableExists(db: Database, table: string): boolean {
   return Boolean(row);
 }
 
+function checkLegacyLayout(workspace: Workspace): WorkspaceDoctorCheck {
+  const layout = inspectLegacyProjectLayout(workspace);
+  if (!layout.singular_path || !layout.present) {
+    return { code: "WORKSPACE_LAYOUT_OK", name: "layout", status: "ok", message: "no legacy singular layout" };
+  }
+  return {
+    code: "WORKSPACE_LEGACY_LAYOUT_DIR",
+    name: "layout",
+    status: "warn",
+    message: `legacy singular layout found at ${layout.singular_path}; migrate it to ${layout.plural_path}`,
+    fixable: Boolean(workspace.primary_path),
+  };
+}
+
 function checkMigrationMap(workspace: Workspace, db?: Database): WorkspaceDoctorCheck {
   const migratedFrom = workspace.metadata["migrated_from_project_id"];
   if (typeof migratedFrom !== "string" || migratedFrom.length === 0) {
@@ -149,6 +164,7 @@ export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOp
   const checks = [
     checkPath(workspace),
     checkMarker(workspace),
+    checkLegacyLayout(workspace),
     ...checkReferences(workspace, db),
     checkLocations(workspace, transport, db),
     checkAgentRuns(workspace, db),
@@ -174,6 +190,17 @@ export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOp
     if (locationCheck && workspace.primary_path) {
       if (!dryRun) addWorkspaceLocation({ workspace_id: workspace.id, path: workspace.primary_path, label: "main", is_primary: true }, db);
       fixes.push({ code: "FIX_WORKSPACE_LOCATION", message: `${dryRun ? "Would add" : "Added"} primary location ${workspace.primary_path}`, changed: !dryRun, dryRun });
+    }
+    const layoutCheck = checks.find((check) => check.code === "WORKSPACE_LEGACY_LAYOUT_DIR" && check.fixable);
+    if (layoutCheck) {
+      const migration = migrateLegacyProjectLayout(workspace, { dryRun });
+      const noun = migration.moved.length === 1 ? "entry" : "entries";
+      fixes.push({
+        code: "FIX_WORKSPACE_LAYOUT_MIGRATED",
+        message: `${dryRun ? "Would move" : "Moved"} ${migration.moved.length} legacy layout ${noun} to ${migration.plural_path}${migration.skipped.length > 0 ? `, ${migration.skipped.length} skipped` : ""}`,
+        changed: !dryRun,
+        dryRun,
+      });
     }
   }
 

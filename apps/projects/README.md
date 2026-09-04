@@ -302,10 +302,14 @@ See the Storage Sync section and
 `docs/hosted-backend-readiness-contract.md` for the connection contract.
 
 `projects dashboard *` is the Projects-owned viewer surface for agent-managed
-project folders. It standardizes `.hasna/project/` inside the project path,
-collects provider panels from `todos`, `files`, `mailery`, `conversations`,
-`knowledge`, `mementos`, and `reports`, adds a read-only actions panel, validates
-the result as `hasna.project_snapshot.v1`, and renders it as a React Flow Canvas.
+project folders. The only project-layout convention is the canonical
+per-workspace store (`~/.hasna/projects/workspaces/<workspace_id>/`, see
+`src/lib/project-store-paths.ts`). The retired in-project singular layout is
+migrated once into that store by `projects doctor --fix` and is never read
+again. `projects dashboard *` collects provider panels from `todos`, `files`,
+`mailery`, `conversations`, `knowledge`, `mementos`, and `reports`, adds a
+read-only actions panel, validates the result as `hasna.project_snapshot.v1`,
+and renders it as a React Flow Canvas.
 Snapshot, render, and validate are read-only unless `--write` is passed.
 `projects dashboard serve <project>` serves `/dashboard` plus JSON APIs with an
 HTTP-only same-origin cookie; binding to a non-loopback host requires

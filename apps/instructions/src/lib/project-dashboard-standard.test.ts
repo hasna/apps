@@ -30,7 +30,7 @@ describe("project dashboard standard", () => {
     expect(config.category).toBe("workspace");
     expect(config.agent).toBe("global");
     expect(config.tags).toEqual(expect.arrayContaining(["projects-dashboard", "json-render"]));
-    expect(config.content).toContain(".hasna/project/dashboard/render.json");
+    expect(config.content).toContain("~/.hasna/projects/workspaces/<workspace_id>/dashboard/render.json");
     expect(config.content).toContain("projects dashboard serve");
     expect(config.content).toContain("normalized project slug");
     expect(config.content).not.toContain("iproj-<project-slug>");
@@ -55,7 +55,7 @@ describe("project dashboard standard", () => {
     expect(stored.version).toBe(2);
   });
 
-  test("platform profiles include dashboard variables and link the standard config", async () => {
+  test("platform profiles include project variables and link the standard config", async () => {
     const standard = await ensureProjectDashboardStandardConfig(new LocalConfigStore(db));
     const profiles = await ensurePlatformProfiles(new LocalConfigStore(db));
 

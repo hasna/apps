@@ -763,7 +763,7 @@ describe("legacy migration and compatibility", () => {
     });
     const fragmentPath = join(tmpRoot, ...PROJECT_CONTEXT_FRAGMENT_PATH.split("/"));
     const targetPath = join(tmpRoot, ".codewith", "CODEWITH.md");
-    const cachePath = join(tmpRoot, ".hasna", "project-context-cache.json");
+    const cachePath = join(tmpRoot, ".hasna", "projects", "project-context-cache.json");
     const before = [fragmentPath, targetPath, cachePath].map((path) => readFileSync(path, "utf8"));
     const legacyPath = join(tmpRoot, ".codewith", ".hasna", "session-render-manifest.json");
     mkdirSync(join(tmpRoot, ".codewith", ".hasna"), { recursive: true });
@@ -789,7 +789,7 @@ describe("legacy migration and compatibility", () => {
     });
     const fragmentPath = join(tmpRoot, ...PROJECT_CONTEXT_FRAGMENT_PATH.split("/"));
     const targetPath = join(tmpRoot, ".codewith", "CODEWITH.md");
-    const cachePath = join(tmpRoot, ".hasna", "project-context-cache.json");
+    const cachePath = join(tmpRoot, ".hasna", "projects", "project-context-cache.json");
     const before = [fragmentPath, targetPath, cachePath].map((path) => readFileSync(path, "utf8"));
     const sessionManifestPath = join(tmpRoot, ".codewith", ".hasna", "session-render-manifest.json");
     const sessionManifest = JSON.parse(readFileSync(sessionManifestPath, "utf8")) as Record<string, unknown>;
@@ -939,7 +939,7 @@ describe("legacy migration and compatibility", () => {
       managedRules!.path,
       join(root, ...PROJECT_CONTEXT_FRAGMENT_PATH.split("/")),
       join(root, ...PROJECT_CONTEXT_MANIFEST_PATH.split("/")),
-      join(root, ".hasna", "project-context-cache.json"),
+      join(root, ".hasna", "projects", "project-context-cache.json"),
     ];
     const afterFirstPostRender = managedPaths.map((path) => readFileSync(path, "utf8"));
 
@@ -994,7 +994,7 @@ describe("legacy migration and compatibility", () => {
     expectCode(() => applySessionRender(stalePlan), "PROJECT_CONTEXT_SESSION_STALE");
     expect(readFileSync(join(tmpRoot, "AGENTS.md"), "utf8")).toContain("revision=rev-8");
     expect(readFileSync(join(tmpRoot, ...PROJECT_CONTEXT_MANIFEST_PATH.split("/")), "utf8")).toContain('"revision": "rev-8"');
-    expect(existsSync(join(tmpRoot, ".hasna", "project-context.lock"))).toBe(false);
+    expect(existsSync(join(tmpRoot, ".hasna", "projects", "project-context.lock"))).toBe(false);
 
     const freshPlan = planSessionRender({
       tool: "codex",
@@ -1064,7 +1064,7 @@ describe("legacy migration and compatibility", () => {
 
     expect(readFileSync(target, "utf8")).toBe(concurrentEdit);
     expect(readFileSync(sessionManifest, "utf8")).toBe(manifestBefore);
-    expect(existsSync(join(tmpRoot, ".hasna", "project-context.lock"))).toBe(false);
+    expect(existsSync(join(tmpRoot, ".hasna", "projects", "project-context.lock"))).toBe(false);
   });
 
   test("rejects Codewith rerenders when an override shadows the managed target", () => {
@@ -1255,7 +1255,7 @@ describe("cache, revision, crash, and race safety", () => {
 
     const targetPath = join(tmpRoot, "AGENTS.md");
     const fragmentPath = join(tmpRoot, ...PROJECT_CONTEXT_FRAGMENT_PATH.split("/"));
-    const cachePath = join(tmpRoot, ".hasna", "project-context-cache.json");
+    const cachePath = join(tmpRoot, ".hasna", "projects", "project-context-cache.json");
     const manifestPath = join(tmpRoot, ...PROJECT_CONTEXT_MANIFEST_PATH.split("/"));
     const sessionManifestPath = join(tmpRoot, ".hasna", "session-render-manifest.json");
     for (const path of [targetPath, fragmentPath, cachePath]) {
@@ -1416,7 +1416,7 @@ describe("cache, revision, crash, and race safety", () => {
       now: new Date("2026-07-22T10:00:30.000Z"),
     });
 
-    const cachePath = join(tmpRoot, ".hasna", "project-context-cache.json");
+    const cachePath = join(tmpRoot, ".hasna", "projects", "project-context-cache.json");
     const original = readFileSync(cachePath, "utf8");
     const futureCache = JSON.parse(original) as {
       cached_at: string;
@@ -1475,7 +1475,7 @@ describe("cache, revision, crash, and race safety", () => {
     }), "PROJECT_CONTEXT_MANIFEST_INVALID");
 
     rmSync(manifestPath);
-    const cachePath = join(tmpRoot, ".hasna", "project-context-cache.json");
+    const cachePath = join(tmpRoot, ".hasna", "projects", "project-context-cache.json");
     const cache = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, unknown>;
     cache.untrusted = "must not be accepted";
     writeFileSync(cachePath, `${JSON.stringify(cache)}\n`);
@@ -1547,7 +1547,7 @@ describe("cache, revision, crash, and race safety", () => {
     expect(updated.revision).toBe("rev-8");
     expect(updated.hash).toBe(v2.hash);
 
-    const cache = JSON.parse(readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8")) as {
+    const cache = JSON.parse(readFileSync(join(tmpRoot, ".hasna", "projects", "project-context-cache.json"), "utf8")) as {
       hash: string;
       bundle: ProjectContextBundleV1;
     };
@@ -1733,7 +1733,7 @@ describe("cache, revision, crash, and race safety", () => {
     });
     expect(financeMigration.revision).toBe(v1.revision);
     const financeCache = JSON.parse(
-      readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"),
+      readFileSync(join(tmpRoot, ".hasna", "projects", "project-context-cache.json"), "utf8"),
     ) as { bundle: ProjectContextBundleV1 };
     expect(financeCache.bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
     expect(financeCache.bundle.project.finance).toEqual(finance);
@@ -1746,7 +1746,7 @@ describe("cache, revision, crash, and race safety", () => {
       now: repeatNow,
     });
     expect(repeated.hash).toBe(financeMigration.hash);
-    expect(readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"))
+    expect(readFileSync(join(tmpRoot, ".hasna", "projects", "project-context-cache.json"), "utf8"))
       .toBe(`${JSON.stringify(financeCache, null, 2)}\n`);
 
     expectCode(() => applyProjectContext({
@@ -1773,7 +1773,7 @@ describe("cache, revision, crash, and race safety", () => {
     });
     expect(migrated.revision).toBe(v1.revision);
     const migratedCache = JSON.parse(
-      readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"),
+      readFileSync(join(tmpRoot, ".hasna", "projects", "project-context-cache.json"), "utf8"),
     ) as { bundle: ProjectContextBundleV1 };
     expect(migratedCache.bundle.schema).toBe("hasna.projects.project_context_bundle.v2");
     expect(migratedCache.bundle.project.finance).toBeUndefined();
@@ -1820,7 +1820,7 @@ describe("cache, revision, crash, and race safety", () => {
       source_path: join(tmpRoot, "newer-v2.json"),
     }).revision).toBe("rev-8");
     const newerCache = JSON.parse(
-      readFileSync(join(tmpRoot, ".hasna", "project-context-cache.json"), "utf8"),
+      readFileSync(join(tmpRoot, ".hasna", "projects", "project-context-cache.json"), "utf8"),
     ) as { bundle: ProjectContextBundleV1 };
     expect(newerCache.bundle.project.finance).toEqual(finance);
   });
@@ -1876,7 +1876,7 @@ describe("cache, revision, crash, and race safety", () => {
     expect(result.race_retries).toBe(1);
     expect(readFileSync(target, "utf8")).toContain("user text changed concurrently");
 
-    expect(existsSync(join(tmpRoot, ".hasna", "project-context.lock"))).toBe(false);
+    expect(existsSync(join(tmpRoot, ".hasna", "projects", "project-context.lock"))).toBe(false);
   });
 
   test("rechecks target CAS immediately before replacement and before committing the manifest", () => {
@@ -2035,7 +2035,7 @@ describe("cache, revision, crash, and race safety", () => {
 
     expect(readFileSync(target, "utf8")).toBe(original);
     expect(existsSync(join(tmpRoot, ...PROJECT_CONTEXT_MANIFEST_PATH.split("/")))).toBe(false);
-    expect(existsSync(join(tmpRoot, ".hasna", "project-context.lock"))).toBe(false);
+    expect(existsSync(join(tmpRoot, ".hasna", "projects", "project-context.lock"))).toBe(false);
   });
 
   test("keeps first-time rendering available on create-only platforms and fails closed on replacement", () => {
@@ -2088,7 +2088,7 @@ describe("cache, revision, crash, and race safety", () => {
   });
 
   test("removes only its own lock inode when lock initialization fails", () => {
-    const lockPath = join(tmpRoot, ".hasna", "project-context.lock");
+    const lockPath = join(tmpRoot, ".hasna", "projects", "project-context.lock");
     expect(() => applyProjectContext({
       workspace_root: tmpRoot,
       runtime: "claude",
@@ -2110,7 +2110,7 @@ describe("cache, revision, crash, and race safety", () => {
   });
 
   test("recovers a stale malformed lock left by a pre-atomic renderer crash", () => {
-    const lockPath = join(tmpRoot, ".hasna", "project-context.lock");
+    const lockPath = join(tmpRoot, ".hasna", "projects", "project-context.lock");
     mkdirSync(join(lockPath, ".."), { recursive: true });
     writeFileSync(lockPath, "");
     const stale = new Date(Date.now() - (10 * 60 * 1_000));
@@ -2125,7 +2125,7 @@ describe("cache, revision, crash, and race safety", () => {
   });
 
   test("recovers an old lock whose PID has been reused by a live process", () => {
-    const lockPath = join(tmpRoot, ".hasna", "project-context.lock");
+    const lockPath = join(tmpRoot, ".hasna", "projects", "project-context.lock");
     mkdirSync(join(lockPath, ".."), { recursive: true });
     writeFileSync(lockPath, `${JSON.stringify({
       schema: "hasna.instructions.project-context-lock/v1",
@@ -2144,7 +2144,7 @@ describe("cache, revision, crash, and race safety", () => {
   });
 
   test("does not evict a genuine live renderer solely because its lock is old", () => {
-    const lockPath = join(tmpRoot, ".hasna", "project-context.lock");
+    const lockPath = join(tmpRoot, ".hasna", "projects", "project-context.lock");
     let processStartId: string | null = null;
     applyProjectContext({
       workspace_root: tmpRoot,
@@ -2177,7 +2177,7 @@ describe("cache, revision, crash, and race safety", () => {
   });
 
   test("falls back to bounded lock age when process-start inspection is unavailable", () => {
-    const lockPath = join(tmpRoot, ".hasna", "project-context.lock");
+    const lockPath = join(tmpRoot, ".hasna", "projects", "project-context.lock");
     mkdirSync(join(lockPath, ".."), { recursive: true });
     writeFileSync(lockPath, `${JSON.stringify({
       schema: "hasna.instructions.project-context-lock/v1",
@@ -2200,7 +2200,7 @@ describe("cache, revision, crash, and race safety", () => {
   });
 
   test("does not remove a new owner that replaces a stale lock during takeover", () => {
-    const lockPath = join(tmpRoot, ".hasna", "project-context.lock");
+    const lockPath = join(tmpRoot, ".hasna", "projects", "project-context.lock");
     mkdirSync(join(lockPath, ".."), { recursive: true });
     writeFileSync(lockPath, `${JSON.stringify({
       schema: "hasna.instructions.project-context-lock/v1",
@@ -2230,7 +2230,7 @@ describe("cache, revision, crash, and race safety", () => {
   });
 
   test("fails without removing a lock file replaced by another renderer", () => {
-    const lockPath = join(tmpRoot, ".hasna", "project-context.lock");
+    const lockPath = join(tmpRoot, ".hasna", "projects", "project-context.lock");
     const replacement = `${JSON.stringify({
       schema: "hasna.instructions.project-context-lock/v1",
       pid: process.pid,
@@ -2277,7 +2277,7 @@ describe("cache, revision, crash, and race safety", () => {
     expect(first.applied).toBe(true);
     expect(concurrentCode).toBe("PROJECT_CONTEXT_LOCKED");
 
-    const lockPath = join(tmpRoot, ".hasna", "project-context.lock");
+    const lockPath = join(tmpRoot, ".hasna", "projects", "project-context.lock");
     writeFileSync(lockPath, `${JSON.stringify({ schema: "hasna.instructions.project-context-lock/v1", pid: 99_999_999 })}\n`);
     const next = makeBundle({ revision: "rev-8" });
     next.hash = computeProjectContextSourceHash(next);
@@ -2353,7 +2353,7 @@ describe("cache, revision, crash, and race safety", () => {
       managedBy: "@hasna/configs",
     });
 
-    const snapshotsDir = join(tmpRoot, ".hasna", "project-context-snapshots");
+    const snapshotsDir = join(tmpRoot, ".hasna", "projects", "project-context-snapshots");
     if (existsSync(snapshotsDir)) {
       for (const entry of Array.from(new Bun.Glob("*.json").scanSync(snapshotsDir))) {
         expect(readFileSync(join(snapshotsDir, entry), "utf8")).not.toContain("PRIVATE USER PROSE");

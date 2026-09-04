@@ -5,14 +5,14 @@
   "projectId": "swiss-bank-account",
   "name": "Swiss Bank Account Dashboard",
   "version": "0.1.0",
-  "manifestPath": ".hasna/project/dashboard.render.json",
+  "manifestPath": ".hasna/projects/swiss-bank-account/dashboard.render.json",
   "renderer": "react_flow",
   "imports": [
     {
       "id": "theme",
       "kind": "local",
       "specifier": "theme",
-      "path": ".hasna/project/theme.json"
+      "path": ".hasna/projects/swiss-bank-account/theme.json"
     }
   ],
   "views": [
@@ -21,7 +21,7 @@
       "title": "Dashboard",
       "kind": "canvas",
       "default": true,
-      "entry": ".hasna/project/views/dashboard.json",
+      "entry": ".hasna/projects/swiss-bank-account/views/dashboard.json",
       "imports": [
         {
           "id": "snapshot",

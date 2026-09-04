@@ -29,7 +29,7 @@ describe("project permission repair", () => {
     const workspaceScript = join(home, "workspaces", "wks_permrepair", "run.sh");
     const projectPath = join(root, "registered-project");
     const reportFile = join(projectPath, "reports", "2026-07-06", "report.md");
-    const dashboardFile = join(projectPath, ".hasna", "project", "dashboard", "render.json");
+    const dashboardFile = join(home, "workspaces", "wks_permrepair", "dashboard", "render.json");
     const db = makeDb();
 
     try {
@@ -37,8 +37,8 @@ describe("project permission repair", () => {
         home,
         join(home, "data", "wks_permrepair"),
         join(home, "workspaces", "wks_permrepair"),
+        join(home, "workspaces", "wks_permrepair", "dashboard"),
         join(projectPath, "reports", "2026-07-06"),
-        join(projectPath, ".hasna", "project", "dashboard"),
       ]) {
         mkdirSync(dir, { recursive: true, mode: 0o755 });
         chmodSync(dir, 0o755);
@@ -87,7 +87,7 @@ describe("project permission repair", () => {
       expect(mode(reportFile)).toBe(0o600);
       expect(mode(dashboardFile)).toBe(0o600);
       expect(mode(join(projectPath, "reports"))).toBe(0o700);
-      expect(mode(join(projectPath, ".hasna", "project", "dashboard"))).toBe(0o700);
+      expect(mode(join(home, "workspaces", "wks_permrepair", "dashboard"))).toBe(0o700);
     } finally {
       db.close();
       rmSync(root, { recursive: true, force: true });

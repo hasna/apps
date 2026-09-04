@@ -41,9 +41,17 @@ describe("@hasna/contracts state layout", () => {
   });
 
   test("keeps the intentional outputs project-relative", () => {
-    const layout = ProjectLayoutSchema.parse({});
-    expect(layout.schemaRoot).toBe(".hasna/project");
-    expect(layout.dashboardManifest).toBe(".hasna/project/dashboard.render.json");
+    const layout = ProjectLayoutSchema.parse({
+      schemaRoot: ".hasna/projects/swiss-bank-account",
+      dashboardManifest: ".hasna/projects/swiss-bank-account/dashboard.render.json",
+      snapshotsDir: ".hasna/projects/swiss-bank-account/snapshots",
+      documentsDir: "documents",
+      reportsDir: "reports",
+      evidenceDir: ".hasna/projects/swiss-bank-account/evidence",
+      privateDir: ".hasna/projects/swiss-bank-account/private"
+    });
+    expect(layout.schemaRoot).toBe(".hasna/projects/swiss-bank-account");
+    expect(layout.dashboardManifest).toBe(".hasna/projects/swiss-bank-account/dashboard.render.json");
     expect(KIT_TARGET_SUBDIR).toBe("src/generated/storage-kit");
     expect(KIT_MANIFEST_FILE).toBe(".storage-kit-manifest.json");
   });
@@ -61,7 +69,7 @@ describe("@hasna/contracts state layout", () => {
     for (const legacyPath of legacyGlobalPaths) {
       expect(policy).toContain(legacyPath);
     }
-    expect(policy).toContain(".hasna/project");
+    expect(policy).toContain(".hasna/projects");
     expect(policy).toContain("src/generated/storage-kit/.storage-kit-manifest.json");
 
     const readme = readFileSync(join(root, "README.md"), "utf8");

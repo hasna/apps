@@ -1078,13 +1078,13 @@ export type ProjectResourceLinkCollectionV1 = z.infer<typeof ProjectResourceLink
 
 export const ProjectLayoutSchema = z
   .object({
-    schemaRoot: RelativeProjectPathSchema.default(".hasna/project"),
-    dashboardManifest: RelativeProjectPathSchema.default(".hasna/project/dashboard.render.json"),
-    snapshotsDir: RelativeProjectPathSchema.default(".hasna/project/snapshots"),
+    schemaRoot: RelativeProjectPathSchema,
+    dashboardManifest: RelativeProjectPathSchema,
+    snapshotsDir: RelativeProjectPathSchema,
     documentsDir: RelativeProjectPathSchema.default("documents"),
     reportsDir: RelativeProjectPathSchema.default("reports"),
-    evidenceDir: RelativeProjectPathSchema.default(".hasna/project/evidence"),
-    privateDir: RelativeProjectPathSchema.default(".hasna/project/private")
+    evidenceDir: RelativeProjectPathSchema,
+    privateDir: RelativeProjectPathSchema
   })
   .strict();
 export type ProjectLayout = z.infer<typeof ProjectLayoutSchema>;
@@ -1098,7 +1098,7 @@ export const ProjectManifestSchema = contractBaseSchema(SCHEMA_IDS.projectManife
     status: ProjectStatusSchema.default("active"),
     classification: ProjectClassificationSchema.default("private"),
     owner: ActorPointerSchema.optional(),
-    layout: ProjectLayoutSchema.default({}),
+    layout: ProjectLayoutSchema,
     integrations: z.array(IntegrationRefSchema).default([]),
     renderManifests: z.array(ResourcePointerSchema).default([]),
     resourceRefs: z.array(ResourcePointerSchema).default([]),
@@ -1210,7 +1210,7 @@ export const RenderManifestSchema = contractBaseSchema(SCHEMA_IDS.renderManifest
     projectId: ProjectSlugSchema,
     name: z.string().min(1),
     version: z.string().min(1),
-    manifestPath: RelativeProjectPathSchema.default(".hasna/project/dashboard.render.json"),
+    manifestPath: RelativeProjectPathSchema,
     renderer: z.enum(["json_render", "react_flow", "markdown", "html", "custom"]).default("json_render"),
     views: z.array(RenderViewSchema).min(1),
     imports: z.array(RenderImportSchema).default([]),

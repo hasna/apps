@@ -4,9 +4,6 @@ import { resolveConfigStore, type ConfigStore } from "../data/config-store.js";
 export const PROJECT_DASHBOARD_STANDARD_SLUG = "agent-managed-project-dashboard-standard";
 
 export const PROJECT_DASHBOARD_PROFILE_VARIABLES: ProfileVariables = {
-  PROJECT_DASHBOARD_DIR: ".hasna/project",
-  PROJECT_DASHBOARD_RENDER_MANIFEST: ".hasna/project/dashboard/render.json",
-  PROJECT_DASHBOARD_SNAPSHOTS_DIR: ".hasna/project/dashboard/snapshots",
   PROJECT_CHANNEL_PREFIX: "",
 };
 
@@ -18,9 +15,13 @@ evidence, tasks, knowledge, and dashboard output consistent.
 
 ## Canonical Files
 
-- Project manifest root: \`.hasna/project/\`
-- Dashboard render manifest: \`.hasna/project/dashboard/render.json\`
-- Latest snapshot: \`.hasna/project/dashboard/snapshots/latest.snapshot.json\`
+There is exactly one project-layout convention: the canonical per-workspace
+store \`~/.hasna/projects/workspaces/<workspace_id>/\`. Never create a project
+layout directory inside the project folder itself.
+
+- Per-workspace store root: \`~/.hasna/projects/workspaces/<workspace_id>/\`
+- Dashboard render manifest: \`~/.hasna/projects/workspaces/<workspace_id>/dashboard/render.json\`
+- Latest snapshot: \`~/.hasna/projects/workspaces/<workspace_id>/dashboard/snapshots/latest.snapshot.json\`
 - Dashboard schema ids come from \`@hasna/contracts\`.
 - Project folders may contain private documents, but render JSON must contain
   only ids, counts, statuses, resource refs, evidence refs, and redacted

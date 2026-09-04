@@ -4,5 +4,12 @@
   "createdAt": "2026-06-29T08:00:00.000Z",
   "projectId": "swiss-bank-account",
   "slug": "swiss-bank",
-  "name": "Swiss Bank Account"
+  "name": "Swiss Bank Account",
+  "layout": {
+    "schemaRoot": ".hasna/projects/swiss-bank-account",
+    "dashboardManifest": ".hasna/projects/swiss-bank-account/dashboard.render.json",
+    "snapshotsDir": ".hasna/projects/swiss-bank-account/snapshots",
+    "evidenceDir": ".hasna/projects/swiss-bank-account/evidence",
+    "privateDir": ".hasna/projects/swiss-bank-account/private"
+  }
 }

@@ -356,10 +356,17 @@ describe("core schemas", () => {
       slug: "swiss-bank-account",
       name: "Swiss Bank Account",
       classification: "sensitive",
+      layout: {
+        schemaRoot: ".hasna/projects/swiss-bank-account",
+        dashboardManifest: ".hasna/projects/swiss-bank-account/dashboard.render.json",
+        snapshotsDir: ".hasna/projects/swiss-bank-account/snapshots",
+        evidenceDir: ".hasna/projects/swiss-bank-account/evidence",
+        privateDir: ".hasna/projects/swiss-bank-account/private"
+      },
       integrations: [integration]
     });
 
-    expect(manifest.layout.schemaRoot).toBe(".hasna/project");
+    expect(manifest.layout.schemaRoot).toBe(".hasna/projects/swiss-bank-account");
     expect(manifest.integrations[0]?.kind).toBe("todos");
   });
 
@@ -387,6 +394,13 @@ describe("core schemas", () => {
       projectId: "swiss-bank-account",
       slug: "swiss-bank-account",
       name: "Swiss Bank Account",
+      layout: {
+        schemaRoot: ".hasna/projects/swiss-bank-account",
+        dashboardManifest: ".hasna/projects/swiss-bank-account/dashboard.render.json",
+        snapshotsDir: ".hasna/projects/swiss-bank-account/snapshots",
+        evidenceDir: ".hasna/projects/swiss-bank-account/evidence",
+        privateDir: ".hasna/projects/swiss-bank-account/private"
+      },
       integrations: [
         {
           schema: SCHEMA_IDS.integrationRef,
@@ -412,6 +426,13 @@ describe("core schemas", () => {
       projectId: "swiss-bank-account",
       slug: "swiss-bank-account",
       name: "Swiss Bank Account",
+      layout: {
+        schemaRoot: ".hasna/projects/swiss-bank-account",
+        dashboardManifest: ".hasna/projects/swiss-bank-account/dashboard.render.json",
+        snapshotsDir: ".hasna/projects/swiss-bank-account/snapshots",
+        evidenceDir: ".hasna/projects/swiss-bank-account/evidence",
+        privateDir: ".hasna/projects/swiss-bank-account/private"
+      },
       integrations: [
         {
           schema: SCHEMA_IDS.integrationRef,
@@ -516,9 +537,10 @@ describe("core schemas", () => {
       projectId: "swiss-bank-account",
       name: "Dashboard",
       version: "0.1.0",
+      manifestPath: ".hasna/projects/swiss-bank-account/dashboard.render.json",
       views: [{ id: "dashboard", title: "Dashboard", kind: "canvas", default: true }]
     });
-    expect(manifest.manifestPath).toBe(".hasna/project/dashboard.render.json");
+    expect(manifest.manifestPath).toBe(".hasna/projects/swiss-bank-account/dashboard.render.json");
 
     const duplicateDefaults = validateContract(SCHEMA_IDS.renderManifest, {
       ...manifest,
@@ -544,8 +566,8 @@ describe("core schemas", () => {
       ...manifest,
       id: "render_duplicate_ids",
       imports: [
-        { id: "theme", kind: "local", specifier: "theme", path: ".hasna/project/theme.json" },
-        { id: "theme", kind: "local", specifier: "theme-copy", path: ".hasna/project/theme-copy.json" }
+        { id: "theme", kind: "local", specifier: "theme", path: ".hasna/projects/swiss-bank-account/theme.json" },
+        { id: "theme", kind: "local", specifier: "theme-copy", path: ".hasna/projects/swiss-bank-account/theme-copy.json" }
       ],
       views: [
         {
