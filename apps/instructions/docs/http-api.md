@@ -137,7 +137,3 @@ represented in that document; use direct HTTP for those three.
 
 - No `/api/*`: the former local REST API is not mounted.
 - No `/mcp`: run `instructions-mcp` locally for MCP.
-
-If `dashboard/dist/index.html` exists, the server serves it and other dashboard
-assets as a static SPA. The checked-in dashboard still calls `/api/*`, so it is
-not functional against this server until migrated to authenticated `/v1`.
