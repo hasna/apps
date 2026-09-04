@@ -371,7 +371,7 @@ describe("auto-index", () => {
     process.env["HASNA_REPOS_DB_PATH"] = join(TEST_DIR, "repos.db");
     closeDb();
     getDb();
-    process.env["HASNA_REPOS_STORAGE_MODE"] = "remote";
+    process.env["HASNA_REPOS_DATABASE_URL"] = "postgres://repos@example.invalid/repos";
     const remote = new FakeRemoteSyncClient();
     const repoPath = join(TEST_DIR, "remote-repo");
     remote.seedRepo(repoPath, {
@@ -404,7 +404,7 @@ describe("auto-index", () => {
     process.env["HASNA_REPOS_DB_PATH"] = join(TEST_DIR, "repos.db");
     closeDb();
     getDb();
-    process.env["HASNA_REPOS_STORAGE_MODE"] = "remote";
+    process.env["HASNA_REPOS_DATABASE_URL"] = "postgres://repos@example.invalid/repos";
     const remote = new FakeRemoteSyncClient();
     const repoPath = join(TEST_DIR, "remote-cleanup");
     const unsafe = `https://${["member", "phrase"].join(":")}@git.example.test/team/tool.git?query=marker`;

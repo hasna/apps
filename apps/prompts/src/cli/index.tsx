@@ -187,7 +187,6 @@ program
       }
 
       console.log(chalk.bold("Prompt Registry Storage"))
-      console.log(`  Requested mode: ${chalk.cyan(diagnostics.requested_mode)}`)
       console.log(`  Active storage: ${chalk.green(diagnostics.active_storage)} (${diagnostics.local.storage})`)
       console.log(`  Local database: ${chalk.gray(diagnostics.local.db_path)}`)
       console.log(`  Local scope:    ${diagnostics.local.scope}`)

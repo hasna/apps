@@ -170,11 +170,25 @@ function getRepoCount(): number {
   return row.count;
 }
 
-function getReposStorageMode(): "local" | "remote" | "hybrid" {
-  const raw = (process.env["HASNA_REPOS_STORAGE_MODE"] || process.env["REPOS_STORAGE_MODE"] || "local").toLowerCase();
-  if (raw === "remote" || raw === "hybrid") return raw;
-  if (process.env["HASNA_REPOS_DATABASE_URL"] || process.env["REPOS_DATABASE_URL"]) return "hybrid";
-  return "local";
+const RETIRED_REPOS_SELECTOR_KEYS = [
+  "HASNA_REPOS_STORAGE_MODE",
+  "REPOS_STORAGE_MODE",
+  "HASNA_REPOS_MODE",
+  "REPOS_MODE",
+] as const;
+
+/** Retired storage-mode variables are a hard error, never a selector. */
+function assertNoRetiredStorageModeSelectors(): void {
+  const found = RETIRED_REPOS_SELECTOR_KEYS.filter((key) => (process.env[key] ?? "").trim() !== "");
+  if (found.length === 0) return;
+  throw new Error(
+    "HASNA_REPOS_STORAGE_MODE is retired and must be removed (deployment modes no longer exist; repos selects its backend by HASNA_REPOS_DATABASE_URL presence). " +
+      `Retired variable${found.length === 1 ? "" : "s"} still set: ${found.join(", ")}.`,
+  );
+}
+
+function resolveRemoteSyncMode(env: NodeJS.ProcessEnv = process.env): "local" | "hybrid" {
+  return env["HASNA_REPOS_DATABASE_URL"] || env["REPOS_DATABASE_URL"] ? "hybrid" : "local";
 }
 
 function getReposDatabaseUrl(options: SyncRepoCatalogOptions): string | null {
@@ -984,8 +998,9 @@ export async function syncRepoCatalog(
   onProgress?: (msg: string) => void,
   options: SyncRepoCatalogOptions = {},
 ): Promise<RemoteSyncSummary> {
+  assertNoRetiredStorageModeSelectors();
   const databaseUrl = getReposDatabaseUrl(options);
-  const storageMode = options.storageMode ?? (databaseUrl ? "hybrid" : getReposStorageMode());
+  const storageMode = options.storageMode ?? (databaseUrl ? "hybrid" : resolveRemoteSyncMode());
   if (storageMode === "local") {
     return {
       direction,

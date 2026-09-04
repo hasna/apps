@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { getDbPath, getPromptRegistryDiagnostics, resolveStorageMode } from "./database.js"
+import { assertNoRetiredSelectors, getDatabase, getDbPath, getPromptRegistryDiagnostics } from "./database.js"
 
 describe("database path resolution", () => {
   let originalHome: string | undefined
@@ -104,16 +104,17 @@ describe("database path resolution", () => {
     expect(existsSync(join(home, ".hasna", "prompts", "prompts.db"))).toBe(false)
   })
 
-  test("rejects unsupported storage modes", () => {
+  test("rejects retired storage-mode variables with a hard error", () => {
     process.env["HASNA_PROMPTS_STORAGE_MODE"] = "shared"
 
-    expect(() => resolveStorageMode()).toThrow("Unsupported prompts storage mode")
+    expect(() => assertNoRetiredSelectors()).toThrow(/HASNA_PROMPTS_STORAGE_MODE is retired/)
+    expect(() => getDatabase()).toThrow(/HASNA_PROMPTS_STORAGE_MODE is retired/)
+    expect(() => getPromptRegistryDiagnostics()).toThrow(/HASNA_PROMPTS_STORAGE_MODE is retired/)
   })
 
-  test("remote mode reports local fallback diagnostics without exposing configured values", () => {
+  test("remote registry configuration reports local fallback diagnostics without exposing configured values", () => {
     const home = join(tempRoot, "home")
     process.env["HOME"] = home
-    process.env["HASNA_PROMPTS_STORAGE_MODE"] = "remote"
     process.env["PROMPTS_REGISTRY_POSTGRES_URL"] = "configured-postgres-url"
     process.env["PROMPTS_REGISTRY_S3_BUCKET"] = "configured-bucket"
     process.env["PROMPTS_REGISTRY_AWS_REGION"] = "configured-region"
@@ -121,7 +122,6 @@ describe("database path resolution", () => {
     const diagnostics = getPromptRegistryDiagnostics()
     const serialized = JSON.stringify(diagnostics)
 
-    expect(diagnostics.requested_mode).toBe("remote")
     expect(diagnostics.active_storage).toBe("local-sqlite")
     expect(diagnostics.registry_state).toBe("remote-configured-local-fallback")
     expect(diagnostics.local).toEqual({
@@ -147,13 +147,11 @@ describe("database path resolution", () => {
     expect(serialized).not.toContain("configured-region")
   })
 
-  test("auto mode stays local when remote registry configuration is absent", () => {
+  test("no remote registry configuration reports local-only state", () => {
     process.env["HOME"] = join(tempRoot, "home")
-    process.env["HASNA_PROMPTS_STORAGE_MODE"] = "auto"
 
     const diagnostics = getPromptRegistryDiagnostics()
 
-    expect(diagnostics.requested_mode).toBe("auto")
     expect(diagnostics.registry_state).toBe("local-only")
     expect(diagnostics.remote.requested).toBe(false)
     expect(diagnostics.remote.configured).toBe(false)
