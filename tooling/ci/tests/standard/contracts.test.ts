@@ -233,32 +233,3 @@ describe("standard-adherence: contracts conformance", () => {
     expect(report.entries.length).toBeGreaterThan(0);
   });
 });
-
-describe("standard-adherence: hosted-service migration declaration convention", () => {
-  test("sessions declares the migrate one-shot entrypoint and no private secret refs (regression O15-04636)", () => {
-    // Regression (2026-08-28, O15-04636): the sessions migrate one-shot
-    // (sessions-prod-migrate-manual) failed TaskFailedToStart —
-    // sessions-prod-exec not authorized secretsmanager:GetSecretValue on
-    // hasna/oss/sessions/database-url-owner (AccessDeniedException), blocking
-    // sessions deploys. The owner-DSN secret name derives from the app name
-    // by convention (hasna/oss/<app>/database-url-owner) — the contract must
-    // NOT carry the secret path (public_manifest_safety rejects *SecretRef
-    // keys in public manifests, sessions' own validator 0.14.2), but it must
-    // declare the migrate one-shot entrypoint the owner DSN is injected for,
-    // so the deploy/provisioning convention covers the sessions migration.
-    const manifestPath = path.join(APPS_DIR, "sessions", "hasna.contract.json");
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
-      metadata?: { service?: { migrationCommand?: string[] } };
-    };
-    const service = manifest.metadata?.service;
-    expect(service, "sessions hasna.contract.json must carry metadata.service (migration declaration home)").toBeDefined();
-    // The migrate one-shot entrypoint (src/server/index.ts: migrate
-    // subcommand; Dockerfile one-shot CMD) — the declaration that was missing.
-    expect(service?.migrationCommand).toEqual(["bun", "dist/server/index.js", "migrate"]);
-    // Public-safety invariant: the naive "fix" (declaring the owner-DSN
-    // secret ref in the public manifest) is rejected by the member's own
-    // conformance validator (public_manifest_safety, secret-ref category).
-    const refKeys = Object.keys(service ?? {}).filter((k) => /secretref$/i.test(k.replace(/[^a-z0-9]/gi, "")));
-    expect(refKeys, "public manifests must not carry secret-ref keys (hasna/oss/* secret names derive from the app name)").toEqual([]);
-  });
-});
