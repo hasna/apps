@@ -818,7 +818,7 @@ describe("configs session CLI -- global-source coverage gate (O15-00694)", () =>
     const sourcePath = join(home, "sources", "global-fix-lane-regression.md");
     writeFileSync(sourcePath, sourceBody);
     const seeded = runCli(["add", sourcePath, "--name", "global-fix-lane-regression", "--category", "agent", "--agent", "global"], env);
-    expect(seeded.status).toBe(0);
+    expect(seeded.status, `add stdout: ${seeded.stdout} | add stderr: ${seeded.stderr}`).toBe(0);
   }
 
   test("plan exits non-zero and reports the missing slug when a registered global-* source is absent (constructed shortfall)", () => {
@@ -837,13 +837,13 @@ describe("configs session CLI -- global-source coverage gate (O15-00694)", () =>
         "--json",
       ], env);
 
-      expect(result.status).toBe(1);
-      const plan = JSON.parse(result.stdout) as {
+      expect(result.status, `plan stdout: ${result.stdout} | plan stderr: ${result.stderr}`).toBe(1);
+      const planA = JSON.parse(result.stdout) as {
         globalSourceCoverage: { complete: boolean; expectedSlugs: string[]; missingSlugs: string[] };
       };
-      expect(plan.globalSourceCoverage.complete).toBe(false);
-      expect(plan.globalSourceCoverage.expectedSlugs).toContain("global-fix-lane-regression");
-      expect(plan.globalSourceCoverage.missingSlugs).toContain("global-fix-lane-regression");
+      expect(planA.globalSourceCoverage.complete).toBe(false);
+      expect(planA.globalSourceCoverage.expectedSlugs).toContain("global-fix-lane-regression");
+      expect(planA.globalSourceCoverage.missingSlugs).toContain("global-fix-lane-regression");
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -865,10 +865,10 @@ describe("configs session CLI -- global-source coverage gate (O15-00694)", () =>
         "--json",
       ], env);
 
-      expect(result.status).toBe(0);
-      const plan = JSON.parse(result.stdout) as { globalSourceCoverage: { complete: boolean; missingSlugs: string[] } };
-      expect(plan.globalSourceCoverage.complete).toBe(true);
-      expect(plan.globalSourceCoverage.missingSlugs).toEqual([]);
+      expect(result.status, `plan stdout: ${result.stdout} | plan stderr: ${result.stderr}`).toBe(0);
+      const planB = JSON.parse(result.stdout) as { globalSourceCoverage: { complete: boolean; missingSlugs: string[] } };
+      expect(planB.globalSourceCoverage.complete).toBe(true);
+      expect(planB.globalSourceCoverage.missingSlugs).toEqual([]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -891,7 +891,7 @@ describe("configs session CLI -- global-source coverage gate (O15-00694)", () =>
         "--json",
       ], env);
 
-      expect(refused.status).toBe(1);
+      expect(refused.status, `apply stdout: ${refused.stdout} | apply stderr: ${refused.stderr}`).toBe(1);
       expect(existsSync(join(codexHome, ".hasna", "session-render-manifest.json"))).toBe(false);
 
       const applied = runCli([
@@ -904,7 +904,7 @@ describe("configs session CLI -- global-source coverage gate (O15-00694)", () =>
         "--json",
       ], env);
 
-      expect(applied.status).toBe(0);
+      expect(applied.status, `apply stdout: ${applied.stdout} | apply stderr: ${applied.stderr}`).toBe(0);
       expect(existsSync(join(codexHome, ".hasna", "session-render-manifest.json"))).toBe(true);
     } finally {
       rmSync(home, { recursive: true, force: true });
