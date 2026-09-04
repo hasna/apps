@@ -18,6 +18,9 @@
 // value here is real.
 
 import { describe, expect, test } from "bun:test";
+import { existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   assertUnambiguousStoreEnv,
   cloudApiUrl,
@@ -100,23 +103,66 @@ describe("store resolution — explicit, unambiguous local configuration keeps w
     expect(getStore(env).transport).toBe("local");
   });
 
-  // The documented default, asserted explicitly rather than left implicit.
-  test("nothing configured at all => local SQLite store, no error", () => {
-    expect(getStore({}).transport).toBe("local");
-    expect(isCloudStore({})).toBe(false);
-    expect(cloudApiUrl({})).toBeNull();
+  // THE 2026-09-04 FAIL-CLOSED FLIP. Local was previously the "documented
+  // default" for an empty env — a CLI run without its API env (e.g. outside the
+  // station wrapper) answered from ~/.hasna/conversations SQLite with exit 0,
+  // presenting a different, stale dataset as the fleet's. Local is now reachable
+  // ONLY through the explicit store path asserted above.
+  test("nothing configured at all => refuses, naming both required env vars", () => {
+    expect(() => getStore({})).toThrow(ConversationsStoreConfigError);
+    // Actionable: the error names BOTH variables the operator must set...
+    expect(() => getStore({})).toThrow(new RegExp(URL_VAR));
+    expect(() => getStore({})).toThrow(new RegExp(KEY_VAR));
+    // ...and the explicit local opt-in, never a silent default.
+    expect(() => getStore({})).toThrow(new RegExp(DB_VAR));
+
+    // The precise regression: an empty env must not hand back a local store.
+    let transport: string | null = null;
+    try {
+      transport = getStore({}).transport;
+    } catch {
+      /* expected */
+    }
+    expect(transport).not.toBe("local");
+
+    // The reporting helpers refuse too: "false" (local) must not be answerable
+    // from a configuration that merely forgot the API env.
+    expect(() => isCloudStore({})).toThrow(ConversationsStoreConfigError);
+    expect(() => cloudApiUrl({})).toThrow(ConversationsStoreConfigError);
+  });
+
+  test("nothing configured never creates the default local database", () => {
+    // Fail-closed means no side effect either: the refusal happens in the
+    // resolver, before any data root is resolved or mkdir'd, so a sandboxed
+    // HOME must end the call with no ~/.hasna/conversations tree at all.
+    const sandboxHome = join(tmpdir(), `conversations-nothing-configured-${Date.now()}`);
+    try {
+      const env = { HOME: sandboxHome };
+      expect(() => getStore(env)).toThrow(ConversationsStoreConfigError);
+      expect(existsSync(join(sandboxHome, ".hasna", "conversations"))).toBe(false);
+      expect(existsSync(join(sandboxHome, ".hasna", "conversations", "messages.db"))).toBe(false);
+    } finally {
+      rmSync(sandboxHome, { recursive: true, force: true });
+    }
   });
 
   // Blank and whitespace-only API values must count as UNSET, exactly as the
   // transport resolver's own `firstEnv` treats them. A guard that classified these
   // differently from the resolver it guards would become its own source of
-  // wrong-store bugs.
+  // wrong-store bugs. All-blank now means nothing configured, which refuses.
   for (const [label, blank] of [
     ["empty", ""],
     ["whitespace-only", "   "],
   ] as const) {
-    test(`${label} API variables count as unset, not as a partial configuration`, () => {
+    test(`${label} API variables count as unset -> nothing configured refuses`, () => {
       const env = { [URL_VAR]: blank, [KEY_VAR]: blank, [DB_VAR]: blank };
+
+      expect(() => getStore(env)).toThrow(ConversationsStoreConfigError);
+      expect(() => getStore(env)).toThrow(new RegExp(URL_VAR));
+    });
+
+    test(`${label} API variables do not mask an explicit local DB path`, () => {
+      const env = { [URL_VAR]: blank, [KEY_VAR]: blank, [DB_VAR]: "/tmp/conversations-store-resolution.db" };
 
       expect(getStore(env).transport).toBe("local");
     });

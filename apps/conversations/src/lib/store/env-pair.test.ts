@@ -33,8 +33,13 @@ describe("conversationsCloudEnv", () => {
     expect(resolveConversationsCloud(env)).toBeNull();
   });
 
-  test("no-op without url/key", () => {
-    const env = conversationsCloudEnv({});
+  test("no url/key and no store path refuses instead of selecting local (fail closed, 2026-09-04)", () => {
+    expect(() => conversationsCloudEnv({})).toThrow(/HASNA_CONVERSATIONS_API_URL/);
+    expect(() => conversationsCloudEnv({})).toThrow(/HASNA_CONVERSATIONS_API_KEY/);
+  });
+
+  test("an explicit store path is the ONLY no-API route to local", () => {
+    const env = conversationsCloudEnv({ CONVERSATIONS_DB_PATH: "/tmp/conversations-test.db" });
     expect(resolveConversationsCloud(env)).toBeNull();
   });
 });

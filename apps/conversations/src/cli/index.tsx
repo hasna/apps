@@ -5,7 +5,7 @@ import chalk from "chalk";
 import { render } from "ink";
 import React from "react";
 import { resolveIdentity, IdentityError } from "../lib/identity.js";
-import { isCloudStore } from "../lib/store/index.js";
+import { ConversationsStoreConfigError, isCloudStore } from "../lib/store/index.js";
 import { App } from "./components/App.js";
 import { registerMessagingCommands } from "./commands/messaging.js";
 import { registerAttachmentCommands } from "./commands/attachments.js";
@@ -163,6 +163,18 @@ function reportCliError(err: unknown): never {
   if (err instanceof IdentityError) {
     if (wantsJsonOutput()) {
       printJsonLine({ error: err.message, code: err.code, agent: null });
+    } else {
+      printErrorLine(chalk.red(err.message));
+    }
+    process.exit(1);
+  }
+  // A store CONFIGURATION refusal (fail closed: API env missing or half-set,
+  // no explicit local store path) is an operator error, not a data error.
+  // Under --json it must honour the repo's JSON-error contract (parseable JSON
+  // on stdout) exactly like every other error branch.
+  if (err instanceof ConversationsStoreConfigError) {
+    if (wantsJsonOutput()) {
+      printJsonLine({ error: err.message, code: err.code });
     } else {
       printErrorLine(chalk.red(err.message));
     }
