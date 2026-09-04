@@ -16,6 +16,7 @@ function runCli(args: string[], env: Record<string, string | undefined> = {}) {
       ...process.env,
       HASNA_LOGS_API_URL: undefined,
       HASNA_LOGS_API_KEY: undefined,
+      HASNA_LOGS_LOCAL: "1",
       ...env,
     },
   });
