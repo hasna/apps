@@ -4,7 +4,7 @@ import fs, { constants, closeSync, existsSync, fstatSync, lstatSync, readSync, r
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import chalk from "chalk";
-import { dataDir } from "@hasna/paths";
+import { dataDir } from "../db/paths.js";
 
 interface LegacyCandidate {
   path: string;
