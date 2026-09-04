@@ -910,6 +910,8 @@ describe("routeTodosTaskEvent operator-authoritative project-group admission", (
           LOOPS_DATA_DIR: env.dataDir,
           HASNA_LOOPS_API_URL: "",
           HASNA_LOOPS_API_KEY: "",
+          // Local file store requires the explicit opt-in (fail-closed policy).
+          HASNA_LOOPS_CONNECTION: "file",
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
         },
         stdout: "pipe",

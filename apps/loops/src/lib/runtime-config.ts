@@ -109,13 +109,13 @@ export function resolveRuntimeConfig(env: Env = process.env): RuntimeConfig {
   if (apiUrl && !apiKey) {
     throw new Error(
       "HASNA_LOOPS_API_URL is set without HASNA_LOOPS_API_KEY; an API connection requires both " +
-        "(unset both to use the local file)",
+        "(set HASNA_LOOPS_CONNECTION=file for the explicit local file connection)",
     );
   }
   if (apiKey && !apiUrl) {
     throw new Error(
       "HASNA_LOOPS_API_KEY is set without HASNA_LOOPS_API_URL; an API connection requires both " +
-        "(unset both to use the local file)",
+        "(set HASNA_LOOPS_CONNECTION=file for the explicit local file connection)",
     );
   }
   const databaseUrlPresent = Boolean(envValue(env, DATABASE_URL_ENV_KEYS));

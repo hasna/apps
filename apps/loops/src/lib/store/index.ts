@@ -4,16 +4,20 @@
 // that reads or writes loop DATA goes through `LoopStore`. There are exactly two
 // implementations:
 //
-//   • LocalStore — on-box SQLite. Wraps the local `Store` and awaits its
-//     synchronous methods so callers see one async surface.
+//   • LocalStore — on-box SQLite, reachable ONLY through the explicit local
+//     opt-in env (HASNA_LOOPS_CONNECTION=file). Wraps the local `Store` and
+//     awaits its synchronous methods so callers see one async surface.
 //   • ApiStore   — the control-plane HTTP API at `<API_URL>/v1` with a bearer
 //     key. Delegates to the vendored Hasna storage client / transport.
 //
 // `getStore()` resolves which transport to use from the client connection env
-// (HASNA_LOOPS_API_URL + HASNA_LOOPS_API_KEY) via `resolveCloudStorage`.
-// Callers NEVER branch on connection themselves and NEVER touch sqlite or
-// fetch directly — that per-command dual path was the split-brain bug this
-// module eliminates.
+// (HASNA_LOOPS_API_URL + HASNA_LOOPS_API_KEY, or the explicit
+// HASNA_LOOPS_CONNECTION=file local opt-in) via `resolveCloudStorage`.
+// WITHOUT either, resolution FAILS CLOSED with an actionable error naming the
+// required env — the client never silently serves the on-box SQLite file at
+// exit 0. Callers NEVER branch on connection themselves and NEVER touch
+// sqlite or fetch directly — that per-command dual path was the split-brain
+// bug this module eliminates.
 //
 // Both the file connection and the API connection are the SAME client code
 // (ApiStore/LocalStore behind one LoopStore surface); only the URL and key
@@ -113,7 +117,8 @@ export class CloudUnsupportedError extends Error {
   constructor(operation: string) {
     super(
       `operation not supported over the control-plane Loops API: ${operation}. ` +
-        `Run it on a machine using the local file connection, or unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY to use the local file store.`,
+        `Run it on a machine whose client explicitly selects the local file connection ` +
+        `(set HASNA_LOOPS_CONNECTION=file to use the local file store).`,
     );
     this.name = "CloudUnsupportedError";
   }
@@ -908,10 +913,12 @@ export class ApiStore implements LoopStore {
 // ── Resolver ────────────────────────────────────────────────────────────────
 
 /**
- * Resolve the client store for the current environment: an {@link ApiStore} when
- * the connection contract resolves to the HTTP transport (API URL + API key
- * set), else a {@link LocalStore}. Callers hold a {@link LoopStore} and never
- * branch on connection.
+ * Resolve the client store for the current environment: an {@link ApiStore}
+ * when the connection contract resolves to the HTTP transport (API URL + API
+ * key set), or a {@link LocalStore} when the explicit local opt-in
+ * (HASNA_LOOPS_CONNECTION=file) is set. With neither, resolution throws
+ * (fail closed) instead of silently serving the on-box SQLite file. Callers
+ * hold a {@link LoopStore} and never branch on connection.
  */
 export function getStore(env: Env = process.env): LoopStore {
   const resolution = resolveCloudStorage("loops", env as Record<string, string | undefined>);

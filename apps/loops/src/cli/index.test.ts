@@ -60,14 +60,36 @@ function cliSpawnOptions(
   input?: string,
   env: Record<string, string> = {},
 ) {
-  const isolatedEnv = {
+  const isolatedEnv: Record<string, string> = {
     HASNA_LOOPS_API_URL: "",
     HASNA_LOOPS_API_KEY: "",
+    // Blanked so a developer's own connection selection never leaks into a
+    // spawn. Local tests get the explicit file opt-in back below; tests that
+    // exercise the fail-closed path pass HASNA_LOOPS_CONNECTION explicitly
+    // (e.g. "") so the opt-in is not re-added.
+    HASNA_LOOPS_CONNECTION: "",
     LOOPS_MACHINE_ID: "cli-test-machine",
   };
   const autoSourceTaskEnv = maybeAutoSourceTaskEnv(dataDir, args, env);
+  const merged = {
+    ...process.env,
+    ...isolatedEnv,
+    ...env,
+    ...autoSourceTaskEnv,
+    LOOPS_DATA_DIR: dataDir,
+  } as Record<string, string | undefined>;
+  if (
+    !("HASNA_LOOPS_CONNECTION" in env) &&
+    !merged.HASNA_LOOPS_API_URL?.trim() &&
+    !merged.HASNA_LOOPS_API_KEY?.trim()
+  ) {
+    // No API env and no caller-selected connection: this spawn is a local test,
+    // so select the file connection explicitly (fail-closed policy means an
+    // unconfigured spawn must exit non-zero instead of silently going local).
+    merged.HASNA_LOOPS_CONNECTION = "file";
+  }
   return {
-    env: { ...process.env, ...isolatedEnv, ...env, ...autoSourceTaskEnv, LOOPS_DATA_DIR: dataDir },
+    env: merged,
     input,
     encoding: "utf8" as const,
     timeout: CLI_SPAWN_TIMEOUT_MS,
@@ -634,10 +656,39 @@ describe("loops CLI", () => {
     expect(receipts.map((receipt) => receipt.run_id)).toEqual(["run-cli"]);
   });
 
-  test("reports the sqlite file connection by default", () => {
+  test("fails closed for status when no connection is configured", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-status-unconfigured-"));
+    // HASNA_LOOPS_CONNECTION is passed (blank) so the local-test harness does
+    // not re-add the file opt-in: this spawn must fail closed.
+    const status = runCli(dataDir, ["--json", "status"], undefined, {
+      HASNA_LOOPS_API_URL: "",
+      HASNA_LOOPS_API_KEY: "",
+      HASNA_LOOPS_CONNECTION: "",
+      HASNA_LOOPS_DATABASE_URL: "",
+    });
+
+    expect(status.status).not.toBe(0);
+    const output = `${status.stdout}\n${status.stderr}`;
+    expect(output).toContain("no loops client connection is configured");
+    expect(output).toContain("HASNA_LOOPS_API_URL");
+    expect(output).toContain("HASNA_LOOPS_API_KEY");
+    expect(output).toContain("HASNA_LOOPS_CONNECTION=file");
+
+    const human = runCli(dataDir, ["status"], undefined, {
+      HASNA_LOOPS_API_URL: "",
+      HASNA_LOOPS_API_KEY: "",
+      HASNA_LOOPS_CONNECTION: "",
+    });
+    expect(human.status).not.toBe(0);
+    expect(`${human.stdout}\n${human.stderr}`).toContain("no loops client connection is configured");
+  });
+
+  test("reports the sqlite file connection when the file opt-in is explicit", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-status-file-"));
     const status = runCli(dataDir, ["--json", "status"], undefined, {
       HASNA_LOOPS_API_URL: "",
+      HASNA_LOOPS_API_KEY: "",
+      HASNA_LOOPS_CONNECTION: "file",
       HASNA_LOOPS_DATABASE_URL: "",
     });
 
@@ -652,7 +703,11 @@ describe("loops CLI", () => {
     expect(status.stdout).not.toContain("dataDir");
     expect(status.stdout).not.toContain("dbPath");
 
-    const human = runCli(dataDir, ["status"]);
+    const human = runCli(dataDir, ["status"], undefined, {
+      HASNA_LOOPS_API_URL: "",
+      HASNA_LOOPS_API_KEY: "",
+      HASNA_LOOPS_CONNECTION: "file",
+    });
     expect(human.status).toBe(0);
     expect(human.stdout).toContain("storage=sqlite connection=file");
   });

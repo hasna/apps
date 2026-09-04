@@ -279,7 +279,7 @@ async function withLocalStore<T>(operation: string, fn: (store: Store) => T | Pr
   if (isCloudStore()) {
     throw new Error(
       `'${operation}' inspects this machine's local Loops runtime and is not available while flipped to the hosted Loops API. ` +
-        `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY (unset both to use the local file) to run it here.`,
+        `Set HASNA_LOOPS_CONNECTION=file to explicitly select the local file store and run it here.`,
     );
   }
   const store = new Store();

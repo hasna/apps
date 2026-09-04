@@ -89,8 +89,14 @@ describe("runtime config contract", () => {
     expect(() =>
       getStore({ HASNA_LOOPS_STORAGE_MODE: "cloud", HASNA_LOOPS_API_URL: "https://loops.example.test", HASNA_LOOPS_API_KEY: "k" })
     ).toThrow("HASNA_LOOPS_STORAGE_MODE is retired");
-    // A blank value counts as unset and resolves normally.
-    expect(getStore({ HASNA_LOOPS_STORAGE_MODE: "" })).toBeDefined();
+    // A blank value counts as unset, so the fail-closed connection policy
+    // applies: resolution throws instead of silently opening the local store.
+    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "" })).toThrow(
+      /no loops client connection is configured: set HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY/,
+    );
+    expect(isCloudStore({ HASNA_LOOPS_STORAGE_MODE: "", HASNA_LOOPS_API_URL: "https://loops.example.test", HASNA_LOOPS_API_KEY: "k" })).toBe(
+      true,
+    );
   });
 
   test("reports database url presence as server-side postgres storage without switching the connection", () => {
