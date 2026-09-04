@@ -23,7 +23,6 @@ services:
     build: .
     command: ["bun", "dist/server/index.js", "migrate"]
     environment:
-      HASNA_CONTACTS_STORAGE_MODE: cloud
       HASNA_CONTACTS_DATABASE_URL: postgres://contacts:contacts@postgres:5432/contacts?sslmode=disable
       HASNA_CONTACTS_API_SIGNING_KEY: dev-signing-secret-change-me
     depends_on:
@@ -39,7 +38,6 @@ services:
       HOST: 0.0.0.0
       CONTACTS_HOST: 0.0.0.0
       CONTACTS_NO_OPEN: "true"
-      HASNA_CONTACTS_STORAGE_MODE: cloud
       HASNA_CONTACTS_DATABASE_URL: postgres://contacts:contacts@postgres:5432/contacts?sslmode=disable
       HASNA_CONTACTS_API_SIGNING_KEY: dev-signing-secret-change-me
     depends_on:

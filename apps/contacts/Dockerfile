@@ -41,7 +41,6 @@ COPY --from=deps --chown=65532:65532 /runtime-home /home/nonroot
 ENV PATH=/usr/local/bin \
     HOME=/home/nonroot \
     NODE_ENV=production \
-    HASNA_CONTACTS_STORAGE_MODE=cloud \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
     PGSSLROOTCERT=/etc/ssl/certs/rds-global-bundle.pem \
     CONTACTS_NO_OPEN=true \

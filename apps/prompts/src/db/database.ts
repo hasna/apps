@@ -5,7 +5,6 @@ import { effectiveHome, getDataRoot } from "../lib/paths.js"
 
 let _db: Database | null = null
 
-export type PromptsStorageMode = "local" | "auto" | "remote"
 export type PromptsActiveStorage = "local-sqlite"
 export type PromptsRegistryState =
   | "local-only"
@@ -13,7 +12,6 @@ export type PromptsRegistryState =
   | "remote-requested-local-fallback"
 
 export interface PromptRegistryDiagnostics {
-  requested_mode: PromptsStorageMode
   active_storage: PromptsActiveStorage
   registry_state: PromptsRegistryState
   local: {
@@ -53,44 +51,54 @@ export interface DbPathOptions {
   migrateLegacy?: boolean
 }
 
-const supportedStorageModes = new Set<PromptsStorageMode>(["local", "auto", "remote"])
+/**
+ * Retired selector variables (deployment modes were removed per the owner
+ * directive 2026-07-29). Prompts selects its backend by URL/key presence only;
+ * a leftover mode variable is a hard error, never a selector. The registry
+ * configuration keys (PROMPTS_REGISTRY_*) are NOT retired — they feed the
+ * presence-based diagnostics below.
+ */
+const RETIRED_PROMPTS_SELECTOR_KEYS = [
+  "HASNA_PROMPTS_STORAGE_MODE",
+  "PROMPTS_STORAGE_MODE",
+  "HASNA_PROMPTS_MODE",
+  "PROMPTS_MODE",
+  "HASNA_PROMPTS_BACKEND",
+  "PROMPTS_BACKEND",
+  "HASNA_PROMPTS_LOCAL",
+  "PROMPTS_LOCAL",
+  "HASNA_PROMPTS_SELF_HOSTED",
+  "PROMPTS_SELF_HOSTED",
+  "HASNA_PROMPTS_CLOUD",
+  "PROMPTS_CLOUD",
+] as const
 
-export function resolveStorageMode(): PromptsStorageMode {
-  const raw = process.env["HASNA_PROMPTS_STORAGE_MODE"] ?? process.env["PROMPTS_STORAGE_MODE"] ?? "local"
-  const mode = raw.trim().toLowerCase()
-  if (!supportedStorageModes.has(mode as PromptsStorageMode)) {
-    throw new Error(
-      `Unsupported prompts storage mode "${raw}". Supported modes are local, auto, and remote; remote registry settings currently fall back to local SQLite.`
-    )
-  }
-  return mode as PromptsStorageMode
+export function assertNoRetiredSelectors(env: NodeJS.ProcessEnv = process.env): void {
+  const found = RETIRED_PROMPTS_SELECTOR_KEYS.filter((key) => (env[key] ?? "").trim() !== "")
+  if (found.length === 0) return
+  throw new Error(
+    "HASNA_PROMPTS_STORAGE_MODE is retired and must be removed (deployment modes no longer exist; prompts selects its backend by URL/key). " +
+      `Retired variable${found.length === 1 ? "" : "s"} still set: ${found.join(", ")}.`
+  )
 }
 
 export function getPromptRegistryDiagnostics(): PromptRegistryDiagnostics {
-  const requestedMode = resolveStorageMode()
+  assertNoRetiredSelectors()
   const dbPath = getDbPath({ migrateLegacy: false })
   const remotePostgresConfigured = Boolean(process.env["PROMPTS_REGISTRY_POSTGRES_URL"])
   const bucketConfigured = Boolean(process.env["PROMPTS_REGISTRY_S3_BUCKET"])
   const regionConfigured = Boolean(process.env["PROMPTS_REGISTRY_AWS_REGION"])
   const remoteConfigured = remotePostgresConfigured || bucketConfigured || regionConfigured
-  const remoteRequested = requestedMode === "remote" || (requestedMode === "auto" && remoteConfigured)
-
-  const registryState: PromptsRegistryState =
-    !remoteRequested
-      ? "local-only"
-      : remoteConfigured
-        ? "remote-configured-local-fallback"
-        : "remote-requested-local-fallback"
+  const registryState: PromptsRegistryState = remoteConfigured
+    ? "remote-configured-local-fallback"
+    : "local-only"
 
   const reason =
     registryState === "local-only"
-      ? "Local mode is active, so reads and writes use the local SQLite store."
-      : registryState === "remote-configured-local-fallback"
-        ? "Remote registry configuration is present, but this package has not been given a prompts-owned remote runtime, so reads and writes stay local."
-        : "Remote mode was requested without remote registry configuration, so reads and writes stay local."
+      ? "No remote registry configuration is present, so reads and writes use the local SQLite store."
+      : "Remote registry configuration is present, but this package has not been given a prompts-owned remote runtime, so reads and writes stay local."
 
   return {
-    requested_mode: requestedMode,
     active_storage: "local-sqlite",
     registry_state: registryState,
     local: {
@@ -99,7 +107,7 @@ export function getPromptRegistryDiagnostics(): PromptRegistryDiagnostics {
       storage: "SQLite",
     },
     remote: {
-      requested: remoteRequested,
+      requested: false,
       configured: remoteConfigured,
       postgres: {
         configured: remotePostgresConfigured,
@@ -123,7 +131,7 @@ export function getPromptRegistryDiagnostics(): PromptRegistryDiagnostics {
       remote_mutation: false,
       reason,
     },
-    warnings: buildStorageWarnings(requestedMode, remoteConfigured, bucketConfigured, regionConfigured),
+    warnings: buildStorageWarnings(remoteConfigured, bucketConfigured, regionConfigured),
   }
 }
 
@@ -173,15 +181,11 @@ function resolveLocalScope(dbPath: string): PromptRegistryDiagnostics["local"]["
 }
 
 function buildStorageWarnings(
-  requestedMode: PromptsStorageMode,
   remoteConfigured: boolean,
   bucketConfigured: boolean,
   regionConfigured: boolean
 ): string[] {
   const warnings: string[] = []
-  if (requestedMode === "remote" && !remoteConfigured) {
-    warnings.push("Remote mode was requested but no remote registry environment is configured.")
-  }
   if (remoteConfigured) {
     warnings.push("Remote registry configuration is detected but this package will not perform remote reads, writes, migrations, or AWS mutations.")
   }
@@ -206,9 +210,8 @@ function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
 }
 
 export function getDatabase(): Database {
+  assertNoRetiredSelectors()
   if (_db) return _db
-
-  resolveStorageMode()
   const dbPath = getDbPath()
   if (dbPath !== ":memory:") {
     const dir = dbPath.substring(0, dbPath.lastIndexOf("/"))

@@ -87,15 +87,15 @@ database or row revisions as described in the [CLI reference](cli.md).
 
 ## Optional Postgres catalog mirror
 
-SQLite remains the local query and indexing store. A remote or hybrid storage
-mode can pull/push the repository catalog and automation state around bootstrap
-scans using Postgres:
+SQLite remains the local query and indexing store. The repository catalog can
+be mirrored to Postgres: setting `HASNA_REPOS_DATABASE_URL` selects the hybrid
+(remote-sync) backend around bootstrap scans. The retired
+`HASNA_REPOS_STORAGE_MODE` / `REPOS_STORAGE_MODE` variables are rejected with a
+hard error when set — the backend is selected by the database URL alone:
 
 | Variable | Meaning |
 |---|---|
-| `HASNA_REPOS_STORAGE_MODE` | `local` (default), `remote`, or `hybrid` |
-| `REPOS_STORAGE_MODE` | Compatibility alias |
-| `HASNA_REPOS_DATABASE_URL` | Postgres connection string; setting it implies hybrid mode when no mode is set |
+| `HASNA_REPOS_DATABASE_URL` | Postgres connection string; setting it selects the hybrid (remote-sync) backend |
 | `REPOS_DATABASE_URL` | Compatibility alias |
 | `HASNA_REPOS_DATABASE_SCHEMA` | Optional simple Postgres schema name |
 | `REPOS_DATABASE_SCHEMA` | Compatibility alias |
