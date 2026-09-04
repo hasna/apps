@@ -1133,15 +1133,22 @@ For a loop with a bundle (`bundle_name` set), and only for such a loop:
    with no slash still goes through PATH, so `bash`, `bun` and `gh` work. A path
    that escapes the bundle after `realpath` fails the run with
    `EXECUTOR_BUNDLE_ESCAPE` and spawns nothing.
-3. The tree's digest is verified before every run. Drift fails the run with
-   `BUNDLE_DRIFT`, naming the changed paths and nothing else. The only bypass is
+3. The tree's digest is verified before every run — re-read every time, never
+   memoised on file or directory metadata, because metadata is writable by
+   whoever edited the file. Drift fails the run with `BUNDLE_DRIFT`, naming the
+   changed paths and nothing else. The only bypass is
    `loops run-now <loop> --allow-dirty`, which applies to that one run; the
-   daemon and the runner never set it, so scheduled execution always verifies.
+   daemon and the runner never set it, so scheduled execution always verifies,
+   and a `target.allowDirtyBundle` stored on the row means nothing to the
+   executor.
 4. A loop whose bundle directory is missing fails with `BUNDLE_MISSING` and is
    NOT silently resolved through PATH.
 
 Run receipts carry `bundle: { name, version, digest }` for bundled runs, so a
 receipt answers "what code ran here?" long after the local tree has moved on.
+`digest` is recomputed from the tree that ran, not copied out of `manifest.json`,
+so an `--allow-dirty` run attests the modified content rather than the clean
+digest the manifest still declares.
 
 ### Storage configuration
 

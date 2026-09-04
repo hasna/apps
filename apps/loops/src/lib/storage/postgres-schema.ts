@@ -1943,7 +1943,14 @@ ALTER TABLE loops ADD COLUMN IF NOT EXISTS expires_after_runs INTEGER;
 GRANT USAGE, CREATE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
 SET ROLE open_loops_owner;
 
-ALTER TABLE run_receipts DROP CONSTRAINT run_receipts_tenant_id_loop_id_fkey;
+-- IF EXISTS: the constraint being dropped is the UNNAMED foreign key added by
+-- 0010_tenant_enforce, so its name is whatever Postgres auto-assigned. A
+-- database restored (or originally built) with that key under another name -
+-- pg_dump of a hand-repaired schema, a logical restore - would otherwise abort
+-- this migration's whole transaction on a name mismatch. Dropping is
+-- best-effort; the ADD below is what this migration is actually for, and it
+-- fails loudly if a same-named constraint really is still there.
+ALTER TABLE run_receipts DROP CONSTRAINT IF EXISTS run_receipts_tenant_id_loop_id_fkey;
 ALTER TABLE run_receipts ADD CONSTRAINT run_receipts_tenant_id_loop_id_fkey
   FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE CASCADE NOT VALID;
 

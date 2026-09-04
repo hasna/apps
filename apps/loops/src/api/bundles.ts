@@ -173,8 +173,16 @@ function servedManifest(revision: LoopRevision): Record<string, unknown> {
   return { ...revision.manifest, version: revision.version, carriesPrompt: revision.carriesPrompt };
 }
 
+/**
+ * Completeness keys on the KEY, not on the kind.
+ *
+ * Every placement records a storage key - the local-directory fallback uses the
+ * same key scheme as the bucket - so "a key was recorded and the object is not
+ * there" is the whole of incompleteness, and a no-bucket install gets the same
+ * detection a hosted one does.
+ */
 function revisionState(revision: LoopRevision, objectPresent: boolean): "complete" | "incomplete" {
-  return revision.storageKind === "s3" && !objectPresent ? "incomplete" : "complete";
+  return revision.storageKey && !objectPresent ? "incomplete" : "complete";
 }
 
 // ── routes ───────────────────────────────────────────────────────────────────
@@ -408,7 +416,7 @@ async function createVersion(ctx: BundleRequestContext, loopId: string): Promise
       bundleDigest: manifest.bundleDigest,
       archiveSha256: manifest.archiveSha256,
       archiveBytes: archive.byteLength,
-      storageKind: "s3",
+      storageKind: artifacts.storageKind,
       // Recorded BEFORE the object exists, and built from the version the
       // insert actually allocated: a crash between here and the put leaves a
       // diagnosable row, never an unreferenced object, and a racing push can
@@ -500,7 +508,7 @@ async function rollback(ctx: BundleRequestContext, loopId: string): Promise<Resp
   if (!Number.isSafeInteger(version) || version < 1) throw bundleError("BUNDLE_VERSION_INVALID", "rollback requires an integer 'version' >= 1");
   const target = await storage.getLoopRevision(loopId, version);
   if (!target) throw new LoopVersionNotFoundError(loopId, version);
-  if (target.storageKind === "s3" && target.storageKey) {
+  if (target.storageKey) {
     const present = await artifactsFor(ctx).readArchive(target.storageKey);
     if (!present) throw bundleError("BUNDLE_OBJECT_MISSING", `revision ${version} is incomplete and cannot be rolled back to`);
   }

@@ -79,7 +79,7 @@
     {
       "id": "0015_run_receipts_loop_cascade",
       "file": "0015_run_receipts_loop_cascade.sql",
-      "checksum": "sha256:ac4ebc03cdf15383a7fd2f6ad12253cee4ddf68011b9d65c22e15d85693d3492"
+      "checksum": "sha256:ff6fd3f324b819a31e29cb8772895726cb8bfb5cebaff4bc0fda4cf7d239bb51"
     },
     {
       "id": "0016_loop_revisions",

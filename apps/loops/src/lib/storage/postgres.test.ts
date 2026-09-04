@@ -117,7 +117,13 @@ describe("Postgres storage migrations", () => {
       "0013_loop_mutation_contract": "sha256:eb35e8d593628f2d7a2449dddf60b28e6ffc42f87ff694441262aa2794e78913",
       "0014_loops_identity_aliases": "sha256:9e73cf54d084709bf08f4a74dc1d5900a647cd574acb958503e5b50b8122e792",
       "0014_loop_expires_after_runs": "sha256:4c60d6c900c2f3146bd20da3bc3665a0a40e1b7e145433d8944d663da57460d7",
-      "0015_run_receipts_loop_cascade": "sha256:ac4ebc03cdf15383a7fd2f6ad12253cee4ddf68011b9d65c22e15d85693d3492",
+      // Re-pinned BEFORE its first release (published @hasna/loops is 0.6.5,
+      // whose source stops at 0014; the hosted service reports the same
+      // version and no bundle capability, so no ledger anywhere has recorded
+      // 0015 yet) to make the constraint drop `IF EXISTS` — the same
+      // pre-release repin 0008-0010 had above. Once 0015 ships in a release
+      // this line is frozen like the rest.
+      "0015_run_receipts_loop_cascade": "sha256:ff6fd3f324b819a31e29cb8772895726cb8bfb5cebaff4bc0fda4cf7d239bb51",
       "0016_loop_revisions": "sha256:c5ef0f1fbc0f61de7736a4af1a558c993f9d916bc0ee7623ba0d5709196d754e",
     };
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {

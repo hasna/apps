@@ -89,10 +89,10 @@ export interface ExecuteOptions extends PersistGuardOptions {
   /**
    * Run a bundled loop whose tree no longer matches its manifest.
    *
-   * Set by `loops run-now --allow-dirty` and by an acknowledged
-   * `target.allowDirtyBundle`. The daemon and the runner never set it: an
-   * implicit bypass would make the drift refusal advisory, and an advisory
-   * integrity check is not one.
+   * Set by `loops run-now --allow-dirty`, per run, by the operator standing in
+   * front of the station - and by nothing else. The daemon and the runner never
+   * set it: an implicit bypass would make the drift refusal advisory, and an
+   * advisory integrity check is not one.
    */
   allowDirtyBundle?: boolean;
 }
@@ -1697,7 +1697,14 @@ export function applyBundleExecution(
   opts: ExecuteOptions,
 ): { target: ExecutableTarget; opts: ExecuteOptions; bundle?: RunReceiptBundle } | { refusal: BundleExecutionRefusal } {
   const resolution = resolveBundleExecution(loop, {
-    allowDirty: opts.allowDirtyBundle === true || (loop.target as { allowDirtyBundle?: boolean }).allowDirtyBundle === true,
+    // ONLY the per-run flag. A `target.allowDirtyBundle` on the stored row is
+    // deliberately ignored: `target` is an unvalidated passthrough, so honouring
+    // it would let any principal with `loops:write` switch the digest gate off
+    // for a loop permanently, with no CLI flag and no distinct audit event -
+    // exactly the standing bypass the drift refusal exists to prevent. A
+    // durable bypass needs its own scope, its own field and its own audit
+    // event; until that exists, the answer is the flag or nothing.
+    allowDirty: opts.allowDirtyBundle === true,
     env: opts.env,
   });
   if (!resolution) return { target: loop.target as ExecutableTarget, opts };
