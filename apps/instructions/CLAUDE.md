@@ -45,7 +45,6 @@ src/mcp/index.ts      — 22 MCP tools (lean schemas + INSTRUCTIONS_PROFILE)
 src/server/index.ts   — Hono probes + authenticated Postgres /v1 API
 src/index.ts          — library exports
 sdk/                  — generated /v1 client plus legacy /api compatibility client
-dashboard/            — legacy /api React+Vite client (not current-server compatible)
 ```
 
 ## Key Design Decisions

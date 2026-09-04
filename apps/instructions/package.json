@@ -1,7 +1,7 @@
 {
   "name": "@hasna/instructions",
   "version": "0.5.6",
-  "description": "AI coding agent instruction & configuration manager \u2014 store, version, apply, and share all your AI coding configs. CLI + MCP + HTTP API (instructions-serve) + generated SDK + Dashboard.",
+  "description": "AI coding agent instruction & configuration manager \u2014 store, version, apply, and share all your AI coding configs. CLI + MCP + HTTP API (instructions-serve) + generated SDK.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -21,7 +21,6 @@
   "files": [
     "dist",
     "assets/skills/inbox/SKILL.md",
-    "dashboard/dist",
     "LICENSE",
     "README.md"
   ],
@@ -29,7 +28,6 @@
     "clean": "rm -rf dist",
     "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg && tsc --emitDeclarationOnly --outDir dist",
     "build:server": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg",
-    "build:dashboard": "cd dashboard && bun run build",
     "migrate": "bun run src/server/index.ts migrate",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "kit:check": "bunx @hasna/contracts vendor-kit --check",
@@ -55,8 +53,7 @@
     "mcp",
     "ai",
     "coding-agent",
-    "cli",
-    "dashboard"
+    "cli"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
