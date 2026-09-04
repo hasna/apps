@@ -12,8 +12,6 @@ import { getSkill } from "../../lib/registry.js";
 import { getSkillRequirements, getSkillDependencyStatus } from "../../lib/skillinfo.js";
 import { getInstallMeta, getInstalledSkills, getSkillPath, getAgentSkillsDir, AGENT_TARGETS, AGENT_LABELS } from "../../lib/installer.js";
 import { censusHomeDrift } from "../../lib/home-census.js";
-import { resolveApiUrl } from "../../lib/api-url.js";
-import { gatewayApiV1Root } from "../../lib/api-url.js";
 
 export function registerDiagnostic(parent: Command) {
   // Doctor
@@ -196,18 +194,13 @@ function handleWhoami(options: { json: boolean }) {
     agentConfigs.push({ agent, label: AGENT_LABELS[agent], path: agentSkillsPath, exists, skillCount });
   }
   const skillsDir = getSkillPath("image").replace(/[/\\][^/\\]*$/, "");
-  const resolvedApiUrl = resolveApiUrl();
-  const apiUrl = typeof resolvedApiUrl === "string"
-    ? (gatewayApiV1Root(resolvedApiUrl) ?? resolvedApiUrl)
-    : undefined;
   if (options.json) {
-    console.log(JSON.stringify({ version: pkg.version, installedCount: installed.length, installed, agents: agentConfigs, skillsDir, cwd: process.cwd(), ...(apiUrl ? { api_url: apiUrl } : {}) }, null, 2));
+    console.log(JSON.stringify({ version: pkg.version, installedCount: installed.length, installed, agents: agentConfigs, skillsDir, cwd: process.cwd() }, null, 2));
     return;
   }
   console.log(chalk.bold(`\nskills v${pkg.version}\n`));
   console.log(`${chalk.dim("Working directory:")} ${process.cwd()}`);
   console.log(`${chalk.dim("Skills directory:")}  ${skillsDir}`);
-  if (apiUrl) console.log(`${chalk.dim("API:")}  ${apiUrl}`);
   console.log();
   if (!installed.length) console.log(chalk.dim("No pinned skills in current project"));
   else { console.log(chalk.bold(`Pinned skills (${installed.length}):`)); for (const name of installed) console.log(`  ${chalk.cyan(name)}`); }
