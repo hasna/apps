@@ -789,6 +789,32 @@ describe("a missing AWS prerequisite is reported as one, never as a key finding"
     expect((error as Error).message).toContain("infra-live#46");
   });
 
+  test("a manifest the role may not read is a grant problem, not a missing mint target", async () => {
+    // Different humans fix these: "the manifest has no mint_key_task_family"
+    // is an infra manifest edit, "you may not read the manifest" is an IAM
+    // statement. Reporting the second as the first sends the wrong person.
+    const io: Io = {
+      readSecret: async () => null,
+      probe: async () => 404,
+      aws: async (args) => {
+        if (args[0] === "ssm") throw denied();
+        return "";
+      },
+    };
+    const log = console.log;
+    const error = console.error;
+    console.log = () => {};
+    console.error = () => {};
+    let code: number;
+    try {
+      code = await main(["provision", "--app", "messages"], io);
+    } finally {
+      console.log = log;
+      console.error = error;
+    }
+    expect(code).toBe(2);
+  });
+
   test("through the real command path: exit 2, no mint, and the operator is told which grant", async () => {
     const calls: string[][] = [];
     const io: Io = {

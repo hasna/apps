@@ -460,6 +460,16 @@ export function secretReadDeniedMessage(secretId: string): string {
   ].join("\n");
 }
 
+/** The message shown when the lane's role may not read the app's deploy manifest. */
+export function manifestReadDeniedMessage(manifestName: string): string {
+  return [
+    `this role may not read the SSM deploy manifest ${manifestName} (AccessDenied).`,
+    "Nothing was minted and no secret was written.",
+    `Grant ssm:GetParameter on parameter${manifestName} to the role this lane assumes.`,
+    "Tracked in hasna-internal/infra-live#46.",
+  ].join("\n");
+}
+
 /** The message shown when the lane's role may not start the mint task. */
 export function mintDeniedMessage(taskFamily: string, cluster: string): string {
   return [

@@ -36,8 +36,10 @@ import {
   checkApp,
   createIo,
   FleetKeyPrerequisiteError,
+  manifestReadDeniedMessage,
   loadRegistry,
   mintTargetFrom,
+  withPrerequisiteContext,
   missingMintTargetMessage,
   partition,
   planMint,
@@ -196,20 +198,27 @@ async function provision(args: Args, io: Io): Promise<number> {
 
   let manifest: Record<string, unknown>;
   try {
-    const raw = await io.aws([
-      "ssm",
-      "get-parameter",
-      "--region",
-      args.region,
-      "--name",
-      manifestName,
-      "--query",
-      "Parameter.Value",
-      "--output",
-      "text",
-    ]);
+    const raw = await withPrerequisiteContext(
+      () =>
+        io.aws([
+          "ssm",
+          "get-parameter",
+          "--region",
+          args.region,
+          "--name",
+          manifestName,
+          "--query",
+          "Parameter.Value",
+          "--output",
+          "text",
+        ]),
+      { denied: () => manifestReadDeniedMessage(manifestName) },
+    );
     manifest = JSON.parse(raw) as Record<string, unknown>;
   } catch (e) {
+    // A role that may not READ the manifest is a missing grant, not an app
+    // whose manifest lacks a mint target; the two need different humans.
+    if (e instanceof FleetKeyPrerequisiteError) throw e;
     console.error(`[fleet-key] could not read the deploy manifest ${manifestName}: ${(e as Error).message}`);
     console.error(missingMintTargetMessage(target.app, manifestName));
     return 1;
