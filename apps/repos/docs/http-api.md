@@ -1,4 +1,4 @@
-# HTTP API and dashboard
+# HTTP API
 
 Start the combined server with:
 
@@ -8,7 +8,7 @@ REPOS_PORT=20000 repos-serve
 ```
 
 The default port is `19450`. The executable has no `--port` flag; use
-`REPOS_PORT`. It starts the auto-index worker, serves the built dashboard, and
+`REPOS_PORT`. It starts the auto-index worker, answers API routes, and
 mounts both REST and MCP routes.
 
 ## REST endpoints
@@ -48,7 +48,7 @@ The combined server mounts the stateless Streamable HTTP MCP transport at
 
 Workspace checkout health is the separate `GET /api/health` route.
 
-## Bind, CORS, and static dashboard
+## Bind and CORS
 
 The server binds `127.0.0.1` by default (`REPOS_HOST` overrides). API JSON
 responses carry no `Access-Control-Allow-*` headers, so cross-origin browsers
@@ -62,9 +62,5 @@ carrying any other `Host` is rejected with `403`. The `/mcp` endpoint
 additionally enforces the same allowlist inside the SDK transport, and
 `REPOS_MCP_ALLOWED_ORIGINS` optionally restricts `Origin` as well.
 
-When `dashboard/dist` is present, `/` and static asset paths serve the React
-dashboard. Non-API paths fall back to its `index.html`. The dashboard provides
-repo/org listing, repository detail, commit timeline, search, global stats,
-checkout health, and a scan action. Because every unknown non-API path receives
-the SPA fallback, a missing static asset also receives `index.html`. Unknown API
-paths return a JSON 404.
+There is no browser dashboard. Unknown non-API paths — including any static
+asset path — return the JSON 404 below; only API routes answer.

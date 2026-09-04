@@ -23,7 +23,7 @@ accepted explicit markers for the default mode. The standalone HTTP server is
 bound to loopback; there is no CLI option to expose another hostname.
 
 `repos-serve` also mounts `GET /health` and `/mcp` on its port (default 19450),
-alongside the dashboard and REST API.
+alongside the REST API.
 
 The server starts the workspace auto-index worker before accepting calls. Set
 `REPOS_DISABLE_AUTO_INDEX=1` when the MCP process must not scan or install hook

@@ -1,7 +1,5 @@
 #!/usr/bin/env bun
 import { createHash, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import type { ServerWebSocket } from "bun";
 import {
   listRepos,
@@ -31,7 +29,7 @@ function handleCliFlags(argv: string[]): boolean {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log("Usage: repos-serve [options]");
     console.log("");
-    console.log("HTTP API and dashboard server for @hasna/repos");
+    console.log("HTTP API server for @hasna/repos");
     console.log("");
     console.log("Options:");
     console.log("  -h, --help     display help");
@@ -97,8 +95,6 @@ function parseQuery(url: URL): Record<string, string> {
   }
   return params;
 }
-
-const dashboardDir = join(import.meta.dir, "../../dashboard/dist");
 
 const autoIndexWorker = await startAutoIndexWorker(undefined, {
   onProgress: (msg) => console.log(`[auto-index] ${msg}`),
@@ -251,19 +247,6 @@ Bun.serve({
       };
       broadcast("scan:complete", { ...result.scan, hooks: hookSummary });
       return json({ ...result.scan, hooks: hookSummary });
-    }
-
-    // ── Dashboard static files ──
-    if (existsSync(dashboardDir)) {
-      let filePath = join(dashboardDir, path === "/" ? "index.html" : path);
-      if (existsSync(filePath)) {
-        return new Response(Bun.file(filePath));
-      }
-      // SPA fallback
-      const indexPath = join(dashboardDir, "index.html");
-      if (existsSync(indexPath) && !path.startsWith("/api/")) {
-        return new Response(Bun.file(indexPath));
-      }
     }
 
     return json({ error: "Not found" }, 404);
