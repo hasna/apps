@@ -1,40 +1,11 @@
-import type {
-  ExecutableTarget,
-  ExecutorResult,
-  Loop,
-  LoopRun,
-  StoredWorkflowEvent,
-  WorkflowRun,
-  WorkflowRunStatus,
-  WorkflowSpec,
-  WorkflowStep,
-  WorkflowStepRun,
-} from "../types.js";
-import {
-  applyBundleExecution,
-  bundleRefusalResult,
-  executeLoop,
-  executeTarget,
-  preflightTarget,
-  type ExecuteOptions,
-} from "./executor.js";
-import {
-  executionMetadata,
-  goalExecutionContext,
-  withGoalNodeEnv,
-} from "./goal/metadata.js";
+import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, StoredWorkflowEvent, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowStep, WorkflowStepRun } from "../types.js";
+import { applyBundleExecution, bundleRefusalResult, executeLoop, executeTarget, preflightTarget, type ExecuteOptions } from "./executor.js";
+import { executionMetadata, goalExecutionContext, withGoalNodeEnv } from "./goal/metadata.js";
 import { iterationPrompt } from "./goal/prompts.js";
 import { runGoal } from "./goal/runner.js";
 import { nowIso } from "./ids.js";
-import {
-  BLOCKED_STEP_ERROR_PREFIX,
-  isBlockedStepRun,
-  workflowRunEnvelope,
-} from "./run-envelope.js";
-import type {
-  CreateWorkflowRunInput,
-  WorkflowRecoveryContext,
-} from "./store.js";
+import { BLOCKED_STEP_ERROR_PREFIX, isBlockedStepRun, workflowRunEnvelope } from "./run-envelope.js";
+import type { CreateWorkflowRunInput, WorkflowRecoveryContext } from "./store.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
 import type { GoalRunnerStore } from "./goal/runner.js";
 import {
@@ -71,16 +42,9 @@ export interface WorkflowExecutionStore extends GoalRunnerStore {
   getWorkflowRun(id: string): MaybePromise<WorkflowRun | undefined>;
   requireWorkflowRun(id: string): MaybePromise<WorkflowRun>;
   listWorkflowStepRuns(workflowRunId: string): MaybePromise<WorkflowStepRun[]>;
-  getWorkflowStepRun(
-    workflowRunId: string,
-    stepId: string,
-  ): MaybePromise<WorkflowStepRun | undefined>;
+  getWorkflowStepRun(workflowRunId: string, stepId: string): MaybePromise<WorkflowStepRun | undefined>;
   isWorkflowRunTerminal(workflowRunId: string): MaybePromise<boolean>;
-  startWorkflowStepRun(
-    workflowRunId: string,
-    stepId: string,
-    opts?: { daemonLeaseId?: string; now?: Date },
-  ): MaybePromise<WorkflowStepRun>;
+  startWorkflowStepRun(workflowRunId: string, stepId: string, opts?: { daemonLeaseId?: string; now?: Date }): MaybePromise<WorkflowStepRun>;
   recoverWorkflowRun(
     workflowRunId: string,
     reason?: string,
@@ -89,10 +53,7 @@ export interface WorkflowExecutionStore extends GoalRunnerStore {
   finalizeWorkflowStepRun(
     workflowRunId: string,
     stepId: string,
-    patch: Pick<
-      WorkflowStepRun,
-      "status" | "finishedAt" | "durationMs" | "stdout" | "stderr"
-    > &
+    patch: Pick<WorkflowStepRun, "status" | "finishedAt" | "durationMs" | "stdout" | "stderr"> &
       Partial<Pick<WorkflowStepRun, "exitCode" | "error">>,
     opts?: { daemonLeaseId?: string; now?: Date },
   ): MaybePromise<WorkflowStepRun>;
@@ -102,46 +63,18 @@ export interface WorkflowExecutionStore extends GoalRunnerStore {
     patch?: Partial<Pick<WorkflowRun, "finishedAt" | "durationMs" | "error">>,
     opts?: { daemonLeaseId?: string; now?: Date },
   ): MaybePromise<WorkflowRun>;
-  markWorkflowStepPid(
-    workflowRunId: string,
-    stepId: string,
-    pid: number,
-    opts?: { daemonLeaseId?: string; now?: Date },
-  ): MaybePromise<WorkflowStepRun>;
+  markWorkflowStepPid(workflowRunId: string, stepId: string, pid: number, opts?: { daemonLeaseId?: string; now?: Date }): MaybePromise<WorkflowStepRun>;
   recordWorkflowStepProgress(
     workflowRunId: string,
     stepId: string,
-    progress: {
-      stdout?: string;
-      stderr?: string;
-      payload?: Record<string, unknown>;
-    },
+    progress: { stdout?: string; stderr?: string; payload?: Record<string, unknown> },
     opts?: { daemonLeaseId?: string; now?: Date },
   ): MaybePromise<WorkflowStepRun>;
-  appendWorkflowEvent(
-    workflowRunId: string,
-    eventType: string,
-    stepId?: string,
-    payload?: Record<string, unknown>,
-  ): MaybePromise<unknown>;
-  listWorkflowEvents?(
-    workflowRunId: string,
-    limit?: number,
-  ): MaybePromise<StoredWorkflowEvent[]>;
-  getPrivateOperationDescriptor?(
-    workflowRunId: string,
-    stepId: string,
-  ): MaybePromise<PrivateOperationDescriptor>;
-  getPrivateOperationState?(
-    workflowRunId: string,
-    stepId: string,
-  ): MaybePromise<OperationReceiptState>;
-  skipWorkflowStepRun(
-    workflowRunId: string,
-    stepId: string,
-    reason: string,
-    opts?: { daemonLeaseId?: string; now?: Date },
-  ): MaybePromise<WorkflowStepRun>;
+  appendWorkflowEvent(workflowRunId: string, eventType: string, stepId?: string, payload?: Record<string, unknown>): MaybePromise<unknown>;
+  listWorkflowEvents?(workflowRunId: string, limit?: number): MaybePromise<StoredWorkflowEvent[]>;
+  getPrivateOperationDescriptor?(workflowRunId: string, stepId: string): MaybePromise<PrivateOperationDescriptor>;
+  getPrivateOperationState?(workflowRunId: string, stepId: string): MaybePromise<OperationReceiptState>;
+  skipWorkflowStepRun(workflowRunId: string, stepId: string, reason: string, opts?: { daemonLeaseId?: string; now?: Date }): MaybePromise<WorkflowStepRun>;
 }
 
 async function operationDescriptorForStep(
@@ -153,16 +86,9 @@ async function operationDescriptorForStep(
   const descriptor = store.getPrivateOperationDescriptor
     ? await store.getPrivateOperationDescriptor(workflowRunId, step.id)
     : parsePrivateOperationDescriptor(
-        (
-          await store.listWorkflowEvents?.(
-            workflowRunId,
-            DEFAULT_OPERATION_LOOKUP_CAPS.maxRecords + 1,
-          )
-        )?.find(
-          (event) =>
-            event.eventType === "private_operation_descriptor" &&
-            event.stepId === step.id,
-        )?.payload,
+        (await store.listWorkflowEvents?.(workflowRunId, DEFAULT_OPERATION_LOOKUP_CAPS.maxRecords + 1))
+          ?.find((event) => event.eventType === "private_operation_descriptor" && event.stepId === step.id)
+          ?.payload,
       );
   if (
     descriptor.workflowRunId !== workflowRunId ||
@@ -171,9 +97,7 @@ async function operationDescriptorForStep(
     descriptor.entityRevision !== workflow.updatedAt ||
     descriptor.stepId !== step.id
   ) {
-    throw new ValidationError(
-      `private operation descriptor binding mismatch for step ${step.id}`,
-    );
+    throw new ValidationError(`private operation descriptor binding mismatch for step ${step.id}`);
   }
   return descriptor;
 }
@@ -183,10 +107,7 @@ async function operationStateForStep(
   descriptor: PrivateOperationDescriptor,
 ): Promise<ReturnType<typeof lookupOperationReceiptState>> {
   if (store.getPrivateOperationState) {
-    return await store.getPrivateOperationState(
-      descriptor.workflowRunId,
-      descriptor.stepId,
-    );
+    return await store.getPrivateOperationState(descriptor.workflowRunId, descriptor.stepId);
   }
   if (!store.listWorkflowEvents) {
     return { descriptor };
@@ -210,23 +131,11 @@ async function appendImmutableOperationEvent(
   payload: Record<string, unknown>,
 ): Promise<void> {
   try {
-    await store.appendWorkflowEvent(
-      descriptor.workflowRunId,
-      eventType,
-      descriptor.stepId,
-      payload,
-    );
+    await store.appendWorkflowEvent(descriptor.workflowRunId, eventType, descriptor.stepId, payload);
   } catch (error) {
-    if (
-      !(error instanceof DuplicateWorkflowEventError) ||
-      !store.listWorkflowEvents
-    )
-      throw error;
+    if (!(error instanceof DuplicateWorkflowEventError) || !store.listWorkflowEvents) throw error;
     const state = await operationStateForStep(store, descriptor);
-    const existing =
-      eventType === "private_operation_admitted"
-        ? state.admission
-        : state.terminal;
+    const existing = eventType === "private_operation_admitted" ? state.admission : state.terminal;
     if (JSON.stringify(existing) !== JSON.stringify(payload)) throw error;
   }
 }
@@ -246,11 +155,8 @@ type BlockAwareWorkflowStep = WorkflowStep & { blockedExitCodes?: number[] };
 
 function blockedExitCodesForStep(step: WorkflowStep): number[] {
   const explicit = (step as BlockAwareWorkflowStep).blockedExitCodes;
-  if (explicit !== undefined)
-    return explicit.filter((code) => Number.isInteger(code));
-  return GATE_STEP_PATTERN.test(step.name ? `${step.id} ${step.name}` : step.id)
-    ? DEFAULT_BLOCKED_EXIT_CODES
-    : [];
+  if (explicit !== undefined) return explicit.filter((code) => Number.isInteger(code));
+  return GATE_STEP_PATTERN.test(step.name ? `${step.id} ${step.name}` : step.id) ? DEFAULT_BLOCKED_EXIT_CODES : [];
 }
 
 type WorkflowStepResult = Omit<ExecutorResult, "status"> & {
@@ -265,58 +171,40 @@ async function finalizeWorkflowStepResult(
   opts: Pick<ExecuteWorkflowOptions, "daemonLeaseId">,
 ): Promise<WorkflowStepResult["status"]> {
   const blockedExit =
-    result.status === "failed" &&
-    result.exitCode !== undefined &&
-    blockedExitCodesForStep(step).includes(result.exitCode);
+    result.status === "failed" && result.exitCode !== undefined && blockedExitCodesForStep(step).includes(result.exitCode);
   if (blockedExit) {
-    await store.finalizeWorkflowStepRun(
-      workflowRunId,
-      step.id,
-      {
-        status: "skipped",
-        finishedAt: result.finishedAt,
-        durationMs: result.durationMs,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        exitCode: result.exitCode,
-        error: `${BLOCKED_STEP_ERROR_PREFIX} step ${step.id} exited with blocked exit code ${result.exitCode}`,
-      },
-      {
-        daemonLeaseId: opts.daemonLeaseId,
-      },
-    );
-    return "skipped";
-  }
-  await store.finalizeWorkflowStepRun(
-    workflowRunId,
-    step.id,
-    {
-      status: result.status,
+    await store.finalizeWorkflowStepRun(workflowRunId, step.id, {
+      status: "skipped",
       finishedAt: result.finishedAt,
       durationMs: result.durationMs,
       stdout: result.stdout,
       stderr: result.stderr,
       exitCode: result.exitCode,
-      error: result.error,
-    },
-    {
+      error: `${BLOCKED_STEP_ERROR_PREFIX} step ${step.id} exited with blocked exit code ${result.exitCode}`,
+    }, {
       daemonLeaseId: opts.daemonLeaseId,
-    },
-  );
+    });
+    return "skipped";
+  }
+  await store.finalizeWorkflowStepRun(workflowRunId, step.id, {
+    status: result.status,
+    finishedAt: result.finishedAt,
+    durationMs: result.durationMs,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.exitCode,
+    error: result.error,
+  }, {
+    daemonLeaseId: opts.daemonLeaseId,
+  });
   return result.status;
 }
 
-function targetWithStepAccount(
-  step: WorkflowStep,
-  goalNodePrompt?: string,
-): ExecutableTarget {
+function targetWithStepAccount(step: WorkflowStep, goalNodePrompt?: string): ExecutableTarget {
   const account = step.account ?? step.target.account;
-  const timeoutMs =
-    step.timeoutMs !== undefined ? step.timeoutMs : step.target.timeoutMs;
+  const timeoutMs = step.timeoutMs !== undefined ? step.timeoutMs : step.target.timeoutMs;
   const target =
-    !account && timeoutMs === step.target.timeoutMs
-      ? step.target
-      : ({ ...step.target, account, timeoutMs } as ExecutableTarget);
+    !account && timeoutMs === step.target.timeoutMs ? step.target : ({ ...step.target, account, timeoutMs } as ExecutableTarget);
   if (goalNodePrompt && target.type === "agent") {
     return { ...target, prompt: `${target.prompt}\n\n${goalNodePrompt}` };
   }
@@ -332,11 +220,7 @@ function workflowResult(
   error?: string,
 ): ExecutorResult {
   const executorStatus: ExecutorResult["status"] =
-    status === "succeeded"
-      ? "succeeded"
-      : status === "timed_out"
-        ? "timed_out"
-        : "failed";
+    status === "succeeded" ? "succeeded" : status === "timed_out" ? "timed_out" : "failed";
   return {
     status: executorStatus,
     exitCode: executorStatus === "succeeded" ? 0 : 1,
@@ -360,12 +244,7 @@ export async function executeWorkflow(
     return runGoal(store, goalSpec, {
       ...opts,
       model: opts.goalModel,
-      context: goalExecutionContext({
-        loop: opts.loop,
-        loopRun: opts.loopRun,
-        scheduledFor: opts.scheduledFor,
-        workflow,
-      }),
+      context: goalExecutionContext({ loop: opts.loop, loopRun: opts.loopRun, scheduledFor: opts.scheduledFor, workflow }),
       executeNode: async (node) =>
         executeWorkflow(store, workflowWithoutGoal, {
           ...opts,
@@ -384,20 +263,8 @@ export async function executeWorkflow(
     daemonLeaseId: opts.daemonLeaseId,
   });
   const startedAt = run.startedAt ?? nowIso();
-  if (
-    run.status === "succeeded" ||
-    run.status === "failed" ||
-    run.status === "timed_out" ||
-    run.status === "cancelled"
-  ) {
-    return workflowResult(
-      run,
-      run.status,
-      startedAt,
-      run.finishedAt ?? nowIso(),
-      await store.listWorkflowStepRuns(run.id),
-      run.error,
-    );
+  if (run.status === "succeeded" || run.status === "failed" || run.status === "timed_out" || run.status === "cancelled") {
+    return workflowResult(run, run.status, startedAt, run.finishedAt ?? nowIso(), await store.listWorkflowStepRuns(run.id), run.error);
   }
   // A resumed idempotent workflow run (createWorkflowRun matched an existing
   // key — e.g. its loop run's lease was stolen and re-claimed at the same
@@ -414,24 +281,12 @@ export async function executeWorkflow(
   // any recorded pid is still alive, so a live peer is never disturbed. If we
   // skip (no pid, or a live process), startWorkflowStepRun refuses the double
   // claim and the try/catch below finalizes the run instead of stranding it.
-  const resumedRunningSteps = (await store.listWorkflowStepRuns(run.id)).filter(
-    (step) => step.status === "running",
-  );
+  const resumedRunningSteps = (await store.listWorkflowStepRuns(run.id)).filter((step) => step.status === "running");
   const reconciledTerminalResults = new Map<string, WorkflowStepResult>();
   for (const resumedStep of resumedRunningSteps) {
-    const workflowStep = workflow.steps.find(
-      (step) => step.id === resumedStep.stepId,
-    );
-    if (!workflowStep)
-      throw new ValidationError(
-        `workflow step missing during resume: ${resumedStep.stepId}`,
-      );
-    const descriptor = await operationDescriptorForStep(
-      store,
-      workflow,
-      run.id,
-      workflowStep,
-    );
+    const workflowStep = workflow.steps.find((step) => step.id === resumedStep.stepId);
+    if (!workflowStep) throw new ValidationError(`workflow step missing during resume: ${resumedStep.stepId}`);
+    const descriptor = await operationDescriptorForStep(store, workflow, run.id, workflowStep);
     const operation = await operationStateForStep(store, descriptor);
     if (operation.terminal) {
       const finishedAt = nowIso();
@@ -443,70 +298,35 @@ export async function executeWorkflow(
         stdout: "",
         stderr: "",
         exitCode: operation.terminal.exitCode,
-        error:
-          operation.terminal.state === "succeeded"
-            ? undefined
-            : `reconciled from immutable operation receipt ${operation.terminal.receiptId}`,
+        error: operation.terminal.state === "succeeded"
+          ? undefined
+          : `reconciled from immutable operation receipt ${operation.terminal.receiptId}`,
       };
-      const status = await finalizeWorkflowStepResult(
-        store,
-        run.id,
-        workflowStep,
-        terminalResult,
-        opts,
-      );
-      reconciledTerminalResults.set(resumedStep.stepId, {
-        ...terminalResult,
-        status,
-      });
+      const status = await finalizeWorkflowStepResult(store, run.id, workflowStep, terminalResult, opts);
+      reconciledTerminalResults.set(resumedStep.stepId, { ...terminalResult, status });
       continue;
     }
     if (operation.admission) {
       const error = `operation outcome uncertain after admission receipt ${operation.admission.receiptId}; reconciliation required`;
-      await store.finalizeWorkflowStepRun(
-        run.id,
-        resumedStep.stepId,
-        {
-          status: "failed",
-          finishedAt: nowIso(),
-          durationMs: 0,
-          stdout: "",
-          stderr: "",
-          error,
-        },
-        { daemonLeaseId: opts.daemonLeaseId },
-      );
-      const finalRun = await store.finalizeWorkflowRun(
-        run.id,
-        "failed",
-        {
-          finishedAt: nowIso(),
-          error,
-        },
-        { daemonLeaseId: opts.daemonLeaseId },
-      );
-      return workflowResult(
-        finalRun,
-        "failed",
-        startedAt,
-        finalRun.finishedAt ?? nowIso(),
-        await store.listWorkflowStepRuns(run.id),
+      await store.finalizeWorkflowStepRun(run.id, resumedStep.stepId, {
+        status: "failed",
+        finishedAt: nowIso(),
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
         error,
-      );
+      }, { daemonLeaseId: opts.daemonLeaseId });
+      const finalRun = await store.finalizeWorkflowRun(run.id, "failed", {
+        finishedAt: nowIso(),
+        error,
+      }, { daemonLeaseId: opts.daemonLeaseId });
+      return workflowResult(finalRun, "failed", startedAt, finalRun.finishedAt ?? nowIso(), await store.listWorkflowStepRuns(run.id), error);
     }
   }
-  const unreconciledRunningSteps = (
-    await store.listWorkflowStepRuns(run.id)
-  ).filter((step) => step.status === "running");
-  if (
-    unreconciledRunningSteps.length > 0 &&
-    unreconciledRunningSteps.every((step) => step.pid !== undefined)
-  ) {
+  const unreconciledRunningSteps = (await store.listWorkflowStepRuns(run.id)).filter((step) => step.status === "running");
+  if (unreconciledRunningSteps.length > 0 && unreconciledRunningSteps.every((step) => step.pid !== undefined)) {
     try {
-      await store.recoverWorkflowRun(
-        run.id,
-        "workflow run resumed after lease takeover",
-      );
+      await store.recoverWorkflowRun(run.id, "workflow run resumed after lease takeover");
     } catch {
       // A step process is still alive (live peer): leave the steps as-is.
     }
@@ -523,9 +343,7 @@ export async function executeWorkflow(
         blockingError = "workflow run was cancelled";
         break;
       }
-      const pendingTimeout = opts.signal?.aborted
-        ? opts.signalTimeoutMessage?.()
-        : undefined;
+      const pendingTimeout = opts.signal?.aborted ? opts.signalTimeoutMessage?.() : undefined;
       if (pendingTimeout) {
         terminalStatus = "timed_out";
         blockingError = pendingTimeout;
@@ -534,11 +352,7 @@ export async function executeWorkflow(
       const existing = await store.getWorkflowStepRun(run.id, step.id);
       const reconciledTerminal = reconciledTerminalResults.get(step.id);
       if (reconciledTerminal) {
-        if (
-          reconciledTerminal.status === "succeeded" ||
-          reconciledTerminal.status === "skipped"
-        )
-          continue;
+        if (reconciledTerminal.status === "succeeded" || reconciledTerminal.status === "skipped") continue;
         if (reconciledTerminal.status === "cancelled") {
           terminalStatus = "cancelled";
           blockingError = `step ${step.id} cancelled`;
@@ -551,19 +365,11 @@ export async function executeWorkflow(
         }
         continue;
       }
-      if (
-        existing?.status === "succeeded" ||
-        existing?.status === "skipped" ||
-        existing?.status === "cancelled"
-      )
-        continue;
+      if (existing?.status === "succeeded" || existing?.status === "skipped" || existing?.status === "cancelled") continue;
 
       let blockedBy: string | undefined;
       for (const dependencyId of step.dependsOn ?? []) {
-        const dependencyRun = await store.getWorkflowStepRun(
-          run.id,
-          dependencyId,
-        );
+        const dependencyRun = await store.getWorkflowStepRun(run.id, dependencyId);
         const dependencyStep = byId.get(dependencyId);
         if (dependencyRun?.status === "succeeded") continue;
         if (!dependencyStep?.continueOnFailure) {
@@ -573,35 +379,21 @@ export async function executeWorkflow(
       }
       if (blockedBy) {
         opts.beforePersist?.();
-        if (
-          isBlockedStepRun(await store.getWorkflowStepRun(run.id, blockedBy))
-        ) {
+        if (isBlockedStepRun(await store.getWorkflowStepRun(run.id, blockedBy))) {
           // Upstream gate blocked by policy: skip dependents without failing the workflow.
-          await store.skipWorkflowStepRun(
-            run.id,
-            step.id,
-            `${BLOCKED_STEP_ERROR_PREFIX} upstream step ${blockedBy} was blocked`,
-            {
-              daemonLeaseId: opts.daemonLeaseId,
-            },
-          );
+          await store.skipWorkflowStepRun(run.id, step.id, `${BLOCKED_STEP_ERROR_PREFIX} upstream step ${blockedBy} was blocked`, {
+            daemonLeaseId: opts.daemonLeaseId,
+          });
           continue;
         }
-        await store.skipWorkflowStepRun(
-          run.id,
-          step.id,
-          `dependency did not succeed: ${blockedBy}`,
-          { daemonLeaseId: opts.daemonLeaseId },
-        );
+        await store.skipWorkflowStepRun(run.id, step.id, `dependency did not succeed: ${blockedBy}`, { daemonLeaseId: opts.daemonLeaseId });
         blockingError ??= `step ${step.id} blocked by dependency ${blockedBy}`;
         terminalStatus = "failed";
         continue;
       }
 
       opts.beforePersist?.();
-      const startedStep = await store.startWorkflowStepRun(run.id, step.id, {
-        daemonLeaseId: opts.daemonLeaseId,
-      });
+      const startedStep = await store.startWorkflowStepRun(run.id, step.id, { daemonLeaseId: opts.daemonLeaseId });
       if (startedStep.status !== "running") {
         terminalStatus = "failed";
         blockingError = `step ${step.id} could not start because workflow is no longer running`;
@@ -615,20 +407,12 @@ export async function executeWorkflow(
         workflowRunId: run.id,
         workflowStepId: step.id,
       });
-      const operationDescriptor = await operationDescriptorForStep(
-        store,
-        workflow,
-        run.id,
-        step,
-      );
+      const operationDescriptor = await operationDescriptorForStep(store, workflow, run.id, step);
       await appendImmutableOperationEvent(
         store,
         operationDescriptor,
         "private_operation_admitted",
-        operationAdmissionReceipt(operationDescriptor) as unknown as Record<
-          string,
-          unknown
-        >,
+        operationAdmissionReceipt(operationDescriptor) as unknown as Record<string, unknown>,
       );
       let result: ExecutorResult;
       const controller = new AbortController();
@@ -646,13 +430,8 @@ export async function executeWorkflow(
       }, opts.cancelPollMs ?? 500);
       cancelTimer.unref();
       try {
-        if (
-          operationDescriptor.descriptorDigest !==
-          privateOperationDescriptorDigest(step.target)
-        ) {
-          throw new ValidationError(
-            `private operation descriptor target mismatch for step ${step.id}`,
-          );
+        if (operationDescriptor.descriptorDigest !== privateOperationDescriptorDigest(step.target)) {
+          throw new ValidationError(`private operation descriptor target mismatch for step ${step.id}`);
         }
         const executionTarget = targetWithStepAccount(
           step,
@@ -667,46 +446,27 @@ export async function executeWorkflow(
             context: stepContext,
           });
         } else {
-          result = await executeTarget(
-            executionTarget,
-            executionMetadata(stepContext),
-            {
-              ...opts,
-              machine: opts.machine ?? opts.loop?.machine,
-              signal: controller.signal,
-              onAgentProgress: (progress) => {
-                const stdout = JSON.stringify(
-                  { agentProgress: progress },
-                  null,
-                  2,
-                );
-                opts.beforePersist?.();
-                persistLater(
-                  store.recordWorkflowStepProgress(
-                    run.id,
-                    step.id,
-                    {
-                      stdout,
-                      payload: progress as unknown as Record<string, unknown>,
-                    },
-                    {
-                      daemonLeaseId: opts.daemonLeaseId,
-                    },
-                  ),
-                );
-                opts.onAgentProgress?.(progress);
-              },
-              onSpawn: (pid) => {
-                opts.beforePersist?.();
-                persistLater(
-                  store.markWorkflowStepPid(run.id, step.id, pid, {
-                    daemonLeaseId: opts.daemonLeaseId,
-                  }),
-                );
-                opts.onSpawn?.(pid);
-              },
+          result = await executeTarget(executionTarget, executionMetadata(stepContext), {
+            ...opts,
+            machine: opts.machine ?? opts.loop?.machine,
+            signal: controller.signal,
+            onAgentProgress: (progress) => {
+              const stdout = JSON.stringify({ agentProgress: progress }, null, 2);
+              opts.beforePersist?.();
+              persistLater(store.recordWorkflowStepProgress(run.id, step.id, {
+                stdout,
+                payload: progress as unknown as Record<string, unknown>,
+              }, {
+                daemonLeaseId: opts.daemonLeaseId,
+              }));
+              opts.onAgentProgress?.(progress);
             },
-          );
+            onSpawn: (pid) => {
+              opts.beforePersist?.();
+              persistLater(store.markWorkflowStepPid(run.id, step.id, pid, { daemonLeaseId: opts.daemonLeaseId }));
+              opts.onSpawn?.(pid);
+            },
+          });
         }
         await Promise.all(pendingPersists);
       } catch (error) {
@@ -718,17 +478,13 @@ export async function executeWorkflow(
           error: error instanceof Error ? error.message : String(error),
           startedAt: startedStep.startedAt ?? finishedAt,
           finishedAt,
-          durationMs:
-            new Date(finishedAt).getTime() -
-            new Date(startedStep.startedAt ?? finishedAt).getTime(),
+          durationMs: new Date(finishedAt).getTime() - new Date(startedStep.startedAt ?? finishedAt).getTime(),
         };
       } finally {
         clearInterval(cancelTimer);
         opts.signal?.removeEventListener("abort", externalAbort);
       }
-      const timeoutMessage = opts.signal?.aborted
-        ? opts.signalTimeoutMessage?.()
-        : undefined;
+      const timeoutMessage = opts.signal?.aborted ? opts.signalTimeoutMessage?.() : undefined;
       if (timeoutMessage && result.status === "failed") {
         result = { ...result, status: "timed_out", error: timeoutMessage };
       }
@@ -736,10 +492,7 @@ export async function executeWorkflow(
         store,
         operationDescriptor,
         "private_operation_terminal",
-        operationTerminalReceipt(
-          operationDescriptor,
-          result,
-        ) as unknown as Record<string, unknown>,
+        operationTerminalReceipt(operationDescriptor, result) as unknown as Record<string, unknown>,
       );
       if (await store.isWorkflowRunTerminal(run.id)) {
         terminalStatus = (await store.requireWorkflowRun(run.id)).status;
@@ -747,13 +500,7 @@ export async function executeWorkflow(
         break;
       }
       opts.beforePersist?.();
-      const finalizedStatus = await finalizeWorkflowStepResult(
-        store,
-        run.id,
-        step,
-        result,
-        opts,
-      );
+      const finalizedStatus = await finalizeWorkflowStepResult(store, run.id, step, result, opts);
       if (finalizedStatus === "skipped") continue;
       if (finalizedStatus !== "succeeded" && !step.continueOnFailure) {
         terminalStatus = finalizedStatus;
@@ -766,14 +513,9 @@ export async function executeWorkflow(
       for (const step of ordered) {
         const existing = await store.getWorkflowStepRun(run.id, step.id);
         if (existing?.status === "pending" || existing?.status === "running") {
-          await store.skipWorkflowStepRun(
-            run.id,
-            step.id,
-            blockingError ?? "workflow stopped before step could run",
-            {
-              daemonLeaseId: opts.daemonLeaseId,
-            },
-          );
+          await store.skipWorkflowStepRun(run.id, step.id, blockingError ?? "workflow stopped before step could run", {
+            daemonLeaseId: opts.daemonLeaseId,
+          });
         }
       }
     }
@@ -791,27 +533,14 @@ export async function executeWorkflow(
       );
     }
     opts.beforePersist?.();
-    const finalRun = await store.finalizeWorkflowRun(
-      run.id,
-      terminalStatus,
-      {
-        finishedAt,
-        durationMs:
-          new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-        error: blockingError,
-      },
-      {
-        daemonLeaseId: opts.daemonLeaseId,
-      },
-    );
-    return workflowResult(
-      finalRun,
-      terminalStatus,
-      startedAt,
+    const finalRun = await store.finalizeWorkflowRun(run.id, terminalStatus, {
       finishedAt,
-      await store.listWorkflowStepRuns(run.id),
-      blockingError,
-    );
+      durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+      error: blockingError,
+    }, {
+      daemonLeaseId: opts.daemonLeaseId,
+    });
+    return workflowResult(finalRun, terminalStatus, startedAt, finishedAt, await store.listWorkflowStepRuns(run.id), blockingError);
   } catch (error) {
     // Finding (3): any unexpected throw inside the step loop (SQLITE_BUSY past
     // busy_timeout, a non-claimable step left "running" by a lease steal, etc.)
@@ -820,62 +549,36 @@ export async function executeWorkflow(
     // everything else finalizes the workflow run as failed (best-effort — the
     // daemon-lease fence still applies, so a lost lease no-ops and lets the new
     // owner finalize) and returns a failed result.
-    if (
-      opts.daemonLeaseId &&
-      error instanceof Error &&
-      error.message === "daemon lease lost"
-    )
-      throw error;
+    if (opts.daemonLeaseId && error instanceof Error && error.message === "daemon lease lost") throw error;
     // A "not claimable" step means a peer executor owns it (a concurrent
     // idempotent run, or a resume we deliberately declined to recover because a
     // pid was missing/alive). Propagate without finalizing so the owning
     // executor still drives the shared workflow run to completion — finalizing
     // here would sabotage a live peer's run. Match only the step variant, not
     // the "workflow work item is not claimable" error from createWorkflowRun.
-    if (
-      error instanceof Error &&
-      error.message.includes("workflow step is not claimable")
-    )
-      throw error;
+    if (error instanceof Error && error.message.includes("workflow step is not claimable")) throw error;
     const message = error instanceof Error ? error.message : String(error);
     const finishedAt = nowIso();
     try {
       if (!(await store.isWorkflowRunTerminal(run.id))) {
-        await store.finalizeWorkflowRun(
-          run.id,
-          "failed",
-          {
-            finishedAt,
-            durationMs:
-              new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-            error: message,
-          },
-          {
-            daemonLeaseId: opts.daemonLeaseId,
-          },
-        );
+        await store.finalizeWorkflowRun(run.id, "failed", {
+          finishedAt,
+          durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+          error: message,
+        }, {
+          daemonLeaseId: opts.daemonLeaseId,
+        });
       }
     } catch {
       /* best-effort finalize; surface the original failure below regardless */
     }
     const current = (await store.getWorkflowRun(run.id)) ?? run;
-    const resultStatus: WorkflowRunStatus =
-      current.status === "running" ? "failed" : current.status;
-    return workflowResult(
-      current,
-      resultStatus,
-      startedAt,
-      finishedAt,
-      await store.listWorkflowStepRuns(run.id),
-      current.error ?? message,
-    );
+    const resultStatus: WorkflowRunStatus = current.status === "running" ? "failed" : current.status;
+    return workflowResult(current, resultStatus, startedAt, finishedAt, await store.listWorkflowStepRuns(run.id), current.error ?? message);
   }
 }
 
-export function preflightWorkflow(
-  workflow: WorkflowSpec,
-  opts: ExecuteOptions = {},
-): ReturnType<typeof preflightTarget>[] {
+export function preflightWorkflow(workflow: WorkflowSpec, opts: ExecuteOptions = {}): ReturnType<typeof preflightTarget>[] {
   return workflowExecutionOrder(workflow).map((step) => {
     try {
       return {
@@ -897,10 +600,7 @@ export function preflightWorkflow(
   });
 }
 
-function preflightFailureResult(
-  error: unknown,
-  startedAt = nowIso(),
-): ExecutorResult {
+function preflightFailureResult(error: unknown, startedAt = nowIso()): ExecutorResult {
   const finishedAt = nowIso();
   return {
     status: "failed",
@@ -982,19 +682,14 @@ export async function executeLoopTarget(
   if (loop.target.preflight?.beforeRun) {
     const startedAt = nowIso();
     try {
-      preflightWorkflow(workflow, {
-        ...opts,
-        machine: opts.machine ?? loop.machine,
-      });
+      preflightWorkflow(workflow, { ...opts, machine: opts.machine ?? loop.machine });
     } catch (error) {
       return preflightFailureResult(error, startedAt);
     }
   }
   if (loop.goal) {
     const loopGoal = loop.goal;
-    const workflowForLoopGoal: WorkflowSpec = workflow.goal
-      ? { ...workflow, goal: undefined }
-      : workflow;
+    const workflowForLoopGoal: WorkflowSpec = workflow.goal ? { ...workflow, goal: undefined } : workflow;
     return stampBundle(
       await runGoal(store, loopGoal, {
         ...opts,
@@ -1013,17 +708,12 @@ export async function executeLoopTarget(
       }),
     );
   }
-  const workflowTimeoutMs =
-    typeof loop.target.timeoutMs === "number"
-      ? loop.target.timeoutMs
-      : undefined;
-  const controller =
-    workflowTimeoutMs !== undefined ? new AbortController() : undefined;
+  const workflowTimeoutMs = typeof loop.target.timeoutMs === "number" ? loop.target.timeoutMs : undefined;
+  const controller = workflowTimeoutMs !== undefined ? new AbortController() : undefined;
   let workflowTimedOut = false;
   const externalAbort = (): void => controller?.abort();
   if (controller && opts.signal?.aborted) controller.abort();
-  if (controller)
-    opts.signal?.addEventListener("abort", externalAbort, { once: true });
+  if (controller) opts.signal?.addEventListener("abort", externalAbort, { once: true });
   const timer = controller
     ? setTimeout(() => {
         workflowTimedOut = true;
@@ -1037,9 +727,7 @@ export async function executeLoopTarget(
         ...opts,
         signal: controller?.signal ?? opts.signal,
         signalTimeoutMessage: () =>
-          workflowTimedOut && loop.target.type === "workflow"
-            ? `workflow timed out after ${workflowTimeoutMs}ms`
-            : undefined,
+          workflowTimedOut && loop.target.type === "workflow" ? `workflow timed out after ${workflowTimeoutMs}ms` : undefined,
         loop,
         loopRun: run,
         scheduledFor: run.scheduledFor,
