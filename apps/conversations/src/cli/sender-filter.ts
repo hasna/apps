@@ -108,7 +108,7 @@ export function resolveSenderFilter(opts: SenderFilterOptions): ResolvedSenderFi
     emitCliError(
       `--from ${fromValue} and --sender ${senderValue} disagree about which sender to filter on. ` +
         `On this subcommand --from is an alias for --sender (a filter on who SENT the message), ` +
-        `not your caller identity. Pass one of them, and set CONVERSATIONS_AGENT_ID for identity.`,
+        `not your caller identity. Pass one of them, and set HASNA_CONVERSATIONS_AGENT_ID (legacy CONVERSATIONS_AGENT_ID) for identity.`,
       opts,
     );
   }
@@ -139,7 +139,7 @@ export function noteSenderFilterAlias(sender: string): void {
     chalk.yellow(
       `Note: --from was applied as a SENDER filter (from_agent=${sender}), not as your caller identity. ` +
         `On read/search/export --from selects who SENT a message; on every other subcommand it sets who you are. ` +
-        `Use --sender ${sender} to say so unambiguously, and CONVERSATIONS_AGENT_ID to set identity.`,
+        `Use --sender ${sender} to say so unambiguously, and HASNA_CONVERSATIONS_AGENT_ID (legacy CONVERSATIONS_AGENT_ID) to set identity.`,
     ),
   );
 }

@@ -37,6 +37,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveIdentity as resolveInstallationIdentity } from "../lib/identity.js";
+import { env } from "../lib/env.js";
 import { getSessionAgent } from "./channel.js";
 
 /**
@@ -51,7 +52,7 @@ export function identityFor(server: McpServer): (explicit?: string) => string {
     const explicitValue = explicit?.trim();
     if (explicitValue) return explicitValue;
 
-    const envValue = process.env.CONVERSATIONS_AGENT_ID?.trim();
+    const envValue = env.agentId()?.trim();
     if (envValue) return envValue;
 
     const sessionAgent = getSessionAgent(server)?.trim();

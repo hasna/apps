@@ -19,6 +19,7 @@ import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import type { Project, Task, TaskPriority, TaskStatus } from "../types/index.js";
 
 export { getPackageVersion };
+import { env } from "../lib/env.js";
 
 const stdoutRetryBuffer = new SharedArrayBuffer(4);
 const stdoutRetrySignal = new Int32Array(stdoutRetryBuffer);
@@ -363,7 +364,7 @@ export function autoDetectProject(opts: { project?: string }): Project | undefin
   if (opts.project) {
     return resolveExplicitProject(opts.project);
   }
-  if (process.env["TODOS_AUTO_PROJECT"] === "false") return undefined;
+  if (env.autoProject() === "false") return undefined;
   const gitRoot = detectGitRoot();
   if (gitRoot) {
     if (shouldSkipAutoProjectForGitRoot(gitRoot)) return undefined;

@@ -9,6 +9,7 @@ import { registerWorkspaceCommands } from "./commands/workspaces.js";
 import { registerCompletionCommand } from "./commands/completion.js";
 import { registerReportsCommands } from "./commands/reports.js";
 import { runWorkspaceAgentPrompt } from "../lib/workspace-agent.js";
+import { env } from "../lib/env.js";
 
 function getPackageVersion(): string {
   try {
@@ -139,7 +140,7 @@ function preparePromptFlags(): void {
       continue;
     }
     if (arg === "--json" || arg === "-j") {
-      process.env["PROJECTS_JSON"] = process.env["PROJECTS_JSON"] || "1";
+      process.env["PROJECTS_JSON"] = env.json() || "1";
       continue;
     }
     if (promptStartsWithCommand) promptParts.push(arg);
@@ -209,7 +210,7 @@ Prompt mode options:
         },
       });
 
-      if (process.env["PROJECTS_JSON"] || process.env["WORKSPACES_JSON"]) {
+      if (env.json() || process.env["WORKSPACES_JSON"]) {
         console.log(JSON.stringify(result, null, 2));
         return;
       }

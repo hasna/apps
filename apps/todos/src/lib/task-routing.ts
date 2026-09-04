@@ -17,6 +17,7 @@ import {
   type TaskRoutingAutomationMetadata,
   type TaskWorkflowPointers,
 } from "./task-route-contract.js";
+import { env } from "../lib/env.js";
 
 export interface TaskRouteGates {
   route_enabled: boolean;
@@ -144,7 +145,7 @@ export interface SetTaskWorkflowPointersInput {
 }
 
 function machineLocalPath(project: Project, db: Database): string | null {
-  const machineId = process.env["TODOS_MACHINE_ID"];
+  const machineId = env.machineId();
   if (!machineId) return null;
   try {
     const row = db

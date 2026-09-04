@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { env } from "../../lib/env.js";
 import { getStore } from "../../lib/store/index.js";
 import chalk from "chalk";
 import { closeDb } from "../../lib/db.js";
@@ -291,7 +292,7 @@ export function registerAgentCommands(program: Command): void {
 
       // The env var outranks the file, so adopting does not necessarily change
       // what this environment resolves to. Say what is actually true.
-      const envOverride = process.env.CONVERSATIONS_AGENT_ID?.trim() || null;
+      const envOverride = env.agentId()?.trim() || null;
 
       if (opts.json) {
         printJsonLine({

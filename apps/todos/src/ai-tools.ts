@@ -51,6 +51,7 @@ import {
   type TaskFilter,
   type UpdateTaskInput,
 } from "./types/index.js";
+import { env } from "./lib/env.js";
 
 export const TODOS_AI_READ_TOOL_NAMES = [
   "get_task",
@@ -228,8 +229,8 @@ export function createTodosAiToolSource(
 ): TodosAiRuntimeToolSource {
   const adapter = resolveAdapter(options);
   const configuredProfile = options.env
-    ? options.env["TODOS_PROFILE"]
-    : process.env["TODOS_PROFILE"];
+    ? options.env["TODOS_PROFILE"] ?? env.profile()
+    : env.profile();
   const profile = options.accessProfile ??
     resolveAccessProfile(configuredProfile ?? "minimal");
   const permission = resolvePermission(options, profile);

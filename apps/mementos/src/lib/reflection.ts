@@ -5,6 +5,7 @@ import { getDatabase, now, shortUuid } from "../db/database.js";
 import { isApiMode, apiJson } from "../db/api-mode.js";
 import { createMemory, listMemories } from "../db/memories.js";
 import { createMemoryLink } from "../db/memory-links.js";
+import { env } from "../lib/env.js";
 
 type SQLValue = string | number | null | boolean;
 
@@ -460,8 +461,8 @@ export function createAISDKReflectionCritic(options: {
   maxTokens?: number;
 } = {}): ReflectionCritic {
   return async (trajectory) => {
-    const provider = options.provider ?? process.env["MEMENTOS_REFLECT_PROVIDER"] ?? DEFAULT_REFLECTION_PROVIDER;
-    const model = options.model ?? process.env["MEMENTOS_REFLECT_MODEL"] ?? DEFAULT_REFLECTION_MODEL;
+    const provider = options.provider ?? env.reflectProvider() ?? DEFAULT_REFLECTION_PROVIDER;
+    const model = options.model ?? env.reflectModel() ?? DEFAULT_REFLECTION_MODEL;
     const resolvedModel = await resolveAISDKModel(provider, model);
     if (!resolvedModel) return heuristicReflectionCritic(trajectory);
 
@@ -523,8 +524,8 @@ export async function reflectOnTrajectory(options: ReflectionOptions): Promise<R
   }
   const db = options.db || getDatabase();
   const dryRun = options.dryRun ?? false;
-  const provider = options.provider ?? process.env["MEMENTOS_REFLECT_PROVIDER"] ?? DEFAULT_REFLECTION_PROVIDER;
-  const model = options.model ?? process.env["MEMENTOS_REFLECT_MODEL"] ?? DEFAULT_REFLECTION_MODEL;
+  const provider = options.provider ?? env.reflectProvider() ?? DEFAULT_REFLECTION_PROVIDER;
+  const model = options.model ?? env.reflectModel() ?? DEFAULT_REFLECTION_MODEL;
   const trajectory = buildTrajectory(options, db);
   let run = createRun({ ...options, dryRun, provider, model }, trajectory.memories.map((memory) => memory.id), db);
 

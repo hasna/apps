@@ -1,3 +1,4 @@
+import { env } from "../lib/env.js";
 // ============================================================================
 // CORS headers
 // ============================================================================
@@ -183,7 +184,7 @@ export function getCorsHeaders(req?: Request): Record<string, string> {
 }
 
 export function authenticateRequest(req: Request): Response | null {
-  const requiredKey = process.env["MEMENTOS_API_KEY"];
+  const requiredKey = env.apiKey();
   if (!requiredKey) return null; // no key configured, allow all
 
   const authHeader = req.headers.get("authorization");

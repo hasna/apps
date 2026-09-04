@@ -22,6 +22,7 @@ import { handleMcpHttpRoutes } from "../mcp/http.js";
 import { getCliVersion } from "../cli/version.js";
 import { isLoopbackHostname } from "./loopback.js";
 import { apiJsonResponse } from "./output.js";
+import { env } from "../lib/env.js";
 
 const VERSION = getCliVersion();
 
@@ -36,10 +37,10 @@ function handleCliFlags(argv: string[]): boolean {
     console.log("  -V, --version  display version");
     console.log("");
     console.log("Environment:");
-    console.log("  REPOS_PORT     Server port (default: 19450)");
-    console.log("  REPOS_HOST     Hostname to bind (default: 127.0.0.1 — loopback only)");
-    console.log("  REPOS_SERVE_TOKEN  Bearer token required on every route when set;");
-    console.log("                     mandatory when REPOS_HOST is not loopback");
+    console.log("  HASNA_REPOS_PORT     Server port (default: 19450; legacy REPOS_PORT accepted)");
+    console.log("  HASNA_REPOS_HOST     Hostname to bind (default: 127.0.0.1 — loopback only; legacy REPOS_HOST accepted)");
+    console.log("  HASNA_REPOS_SERVE_TOKEN  Bearer token required on every route when set;");
+    console.log("                     mandatory when HASNA_REPOS_HOST is not loopback (legacy REPOS_SERVE_TOKEN/REPOS_HOST accepted)");
     return true;
   }
 
@@ -55,15 +56,15 @@ if (handleCliFlags(process.argv.slice(2))) {
   process.exit(0);
 }
 
-const PORT = parseInt(process.env["REPOS_PORT"] || "19450");
-const HOSTNAME = process.env["REPOS_HOST"] || "127.0.0.1";
+const PORT = parseInt(env.port() || "19450");
+const HOSTNAME = env.host() || "127.0.0.1";
 // The bearer value served from the REPOS_SERVE_TOKEN environment contract.
-const SERVE_BEARER = process.env["REPOS_SERVE_TOKEN"] || "";
+const SERVE_BEARER = env.serveToken() || "";
 
 if (!isLoopbackHostname(HOSTNAME) && !SERVE_BEARER) {
   console.error(
-    `refusing to bind repos-serve to non-loopback host ${HOSTNAME} without REPOS_SERVE_TOKEN; ` +
-      "set REPOS_SERVE_TOKEN to expose the API and MCP endpoint over the network",
+    `refusing to bind repos-serve to non-loopback host ${HOSTNAME} without HASNA_REPOS_SERVE_TOKEN (legacy REPOS_SERVE_TOKEN accepted); ` +
+      "set HASNA_REPOS_SERVE_TOKEN to expose the API and MCP endpoint over the network",
   );
   process.exit(1);
 }

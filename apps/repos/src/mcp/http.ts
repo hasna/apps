@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { buildServer, MCP_NAME } from "./server.js";
+import { env } from "../lib/env.js";
 
 export const DEFAULT_MCP_HTTP_PORT = 8874;
 
@@ -48,7 +49,7 @@ export async function handleMcpHttpRoutes(
     if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(hostname)) {
       allowedHosts.push(`${hostname}:${port}`);
     }
-    const allowedOrigins = (process.env["REPOS_MCP_ALLOWED_ORIGINS"] ?? "")
+    const allowedOrigins = (env.mcpAllowedOrigins() ?? "")
       .split(",")
       .map((origin) => origin.trim())
       .filter(Boolean);

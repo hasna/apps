@@ -40,8 +40,8 @@ export interface TodosMcpManifest {
     name: "todos";
     binary: "todos-mcp";
     transport: "stdio";
-    profileEnvironmentVariable: "TODOS_PROFILE";
-    groupEnvironmentVariable: "TODOS_TOOL_GROUPS";
+    profileEnvironmentVariable: "HASNA_TODOS_PROFILE";
+    groupEnvironmentVariable: "HASNA_TODOS_TOOL_GROUPS";
   };
   groups: Record<string, readonly string[]>;
   profiles: Record<string, readonly string[]>;
@@ -103,8 +103,8 @@ export function createMcpManifest(options: CreateMcpManifestOptions = {}): Todos
       name: "todos",
       binary: "todos-mcp",
       transport: "stdio",
-      profileEnvironmentVariable: "TODOS_PROFILE",
-      groupEnvironmentVariable: "TODOS_TOOL_GROUPS",
+      profileEnvironmentVariable: "HASNA_TODOS_PROFILE",
+      groupEnvironmentVariable: "HASNA_TODOS_TOOL_GROUPS",
     },
     groups: MCP_TOOL_GROUPS,
     profiles: MCP_PROFILE_GROUPS,

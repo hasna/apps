@@ -8,6 +8,7 @@ import type { Pool, PoolClient } from "pg";
 import { resolveServerDataBackend, resolveDatabaseUrl, type ServerDataBackend } from "./generated/storage-kit/backend.js";
 import { assertNoLegacyStorageMode } from "./lib/retired-storage-mode.js";
 import { getDataRoot } from "./lib/paths.js";
+import { env } from "./lib/env.js";
 
 // ============================================================================
 // Server-only DSN boundary (project CLAUDE.md §2, NON-NEGOTIABLE)
@@ -346,7 +347,7 @@ export class PgSyncPool {
    * test in `pg-sync-race.test.ts` relies on this being a live read.
    */
   private static queryTimeoutMs(): number {
-    const raw = process.env["MEMENTOS_PGSYNC_QUERY_TIMEOUT_MS"]?.trim();
+    const raw = env.pgsyncQueryTimeoutMs()?.trim();
     const parsed = raw ? Number(raw) : Number.NaN;
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 60_000;
   }

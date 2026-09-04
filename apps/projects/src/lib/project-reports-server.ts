@@ -15,12 +15,14 @@ import { listWorkspaces } from "../db/workspaces.js";
 import { resolveProjectStore } from "../store/project-store.js";
 import type { Workspace } from "../types/workspace.js";
 import { redactProjectValue } from "./redaction.js";
+import { env } from "../lib/env.js";
 
 const REPORT_EXTENSIONS = new Set([".html", ".htm", ".md", ".markdown"]);
 const DATE_DIR_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_REPORTS_PORT = 3345;
 const REPORTS_COOKIE_NAME = "projects_reports";
-const REPORTS_TOKEN_ENV_VAR = "PROJECTS_REPORTS_TOKEN";
+const REPORTS_TOKEN_ENV_VAR = "HASNA_PROJECTS_REPORTS_TOKEN";
+const REPORTS_TOKEN_ENV_VAR_LEGACY = "PROJECTS_REPORTS_TOKEN";
 
 export interface ProjectReportsServerOptions {
   db?: Database;
@@ -71,12 +73,12 @@ export async function serveProjectReports(
 ): Promise<ProjectReportsServer> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? DEFAULT_REPORTS_PORT;
-  const explicitToken = options.token ?? process.env[REPORTS_TOKEN_ENV_VAR];
+  const explicitToken = options.token ?? process.env[REPORTS_TOKEN_ENV_VAR] ?? process.env[REPORTS_TOKEN_ENV_VAR_LEGACY];
   const loopback = isLoopbackReportsHost(host);
   const trustNetwork = Boolean(options.trustNetwork);
   if (!loopback && !trustNetwork && !explicitToken) {
     throw new Error(
-      "Serving reports on a non-loopback host requires --token, PROJECTS_REPORTS_TOKEN, or --trust-network.",
+      "Serving reports on a non-loopback host requires --token, HASNA_PROJECTS_REPORTS_TOKEN (legacy PROJECTS_REPORTS_TOKEN), or --trust-network.",
     );
   }
   const requiresToken = !loopback && !trustNetwork;

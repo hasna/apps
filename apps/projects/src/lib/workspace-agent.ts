@@ -90,6 +90,7 @@ import {
   unlinkProjectIntegrationFields,
 } from "./project-management.js";
 import { AGENT_KINDS, PROJECT_AGENT_ROLES, WORKSPACE_KINDS, type Agent, type JsonObject, type Workspace, type WorkspaceEvent, type WorkspaceIntegrations, type WorkspaceKind } from "../types/workspace.js";
+import { env } from "../lib/env.js";
 
 export const DEFAULT_WORKSPACE_AGENT_MODEL = "openai/gpt-4o-mini";
 const DEFAULT_SECRET_KEYS = ["hasna/takumi/live/openrouter_api_key", "openrouter/api_key", "OPENROUTER_API_KEY"];
@@ -194,7 +195,7 @@ export interface WorkspaceAgentPromptResult {
 }
 
 function pickModel(model?: string): string {
-  return model ?? process.env["PROJECTS_AGENT_MODEL"] ?? process.env["WORKSPACES_AGENT_MODEL"] ?? process.env["OPENROUTER_MODEL"] ?? DEFAULT_WORKSPACE_AGENT_MODEL;
+  return model ?? env.agentModel() ?? process.env["WORKSPACES_AGENT_MODEL"] ?? process.env["OPENROUTER_MODEL"] ?? DEFAULT_WORKSPACE_AGENT_MODEL;
 }
 
 function getSecretValue(key: string): string | null {
@@ -213,11 +214,11 @@ function getSecretValue(key: string): string | null {
 }
 
 export function resolveOpenRouterApiKey(): string | null {
-  const envKey = process.env["OPENROUTER_API_KEY"] ?? process.env["PROJECTS_OPENROUTER_API_KEY"] ?? process.env["WORKSPACES_OPENROUTER_API_KEY"];
+  const envKey = env.openrouterApiKey() ?? process.env["WORKSPACES_OPENROUTER_API_KEY"];
   if (envKey) return envKey;
-  if ((process.env["PROJECTS_USE_SECRETS"] ?? process.env["WORKSPACES_USE_SECRETS"]) === "false") return null;
+  if ((env.useSecrets() ?? process.env["WORKSPACES_USE_SECRETS"]) === "false") return null;
 
-  const configured = process.env["PROJECTS_OPENROUTER_SECRET_KEY"] ?? process.env["WORKSPACES_OPENROUTER_SECRET_KEY"];
+  const configured = env.openrouterSecretKey() ?? process.env["WORKSPACES_OPENROUTER_SECRET_KEY"];
   const candidates = configured ? [configured] : DEFAULT_SECRET_KEYS;
   for (const key of candidates) {
     const value = getSecretValue(key);
@@ -399,7 +400,7 @@ function compactProject(workspace: Workspace): JsonObject {
 }
 
 function workspaceContextLimit(): number {
-  const raw = process.env["PROJECTS_AGENT_CONTEXT_LIMIT"] ?? process.env["WORKSPACES_AGENT_CONTEXT_LIMIT"];
+  const raw = env.agentContextLimit() ?? process.env["WORKSPACES_AGENT_CONTEXT_LIMIT"];
   if (!raw) return DEFAULT_WORKSPACE_AGENT_CONTEXT_LIMIT;
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed <= 0) return DEFAULT_WORKSPACE_AGENT_CONTEXT_LIMIT;

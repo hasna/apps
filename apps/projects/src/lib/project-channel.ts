@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { getWorkspace, recordWorkspaceEvent } from "../db/workspaces.js";
 import type { EventSource, JsonObject, Workspace, WorkspaceIntegrations, WorkspaceKind } from "../types/workspace.js";
 import { resolveRegisteredProjectTargetOrThrow } from "./project-resolver.js";
+import { env } from "../lib/env.js";
 
 /**
  * Project -> conversations channel linkage.
@@ -320,7 +321,7 @@ export function resolveProjectChannel(
  * PROJECTS_CHANNEL_ENSURE=0 (or force on in tests with PROJECTS_CHANNEL_ENSURE=1).
  */
 export function shouldEnsureProjectChannel(env: Record<string, string | undefined> = process.env): boolean {
-  const flag = (env["PROJECTS_CHANNEL_ENSURE"] ?? env["OPEN_PROJECTS_CHANNEL_ENSURE"])?.trim().toLowerCase();
+  const flag = (env["HASNA_PROJECTS_CHANNEL_ENSURE"] ?? env["PROJECTS_CHANNEL_ENSURE"] ?? env["OPEN_PROJECTS_CHANNEL_ENSURE"])?.trim().toLowerCase();
   if (flag) {
     if (["1", "true", "on", "yes"].includes(flag)) return true;
     if (["0", "false", "off", "no"].includes(flag)) return false;
@@ -348,7 +349,7 @@ export function shouldNotifyProjectAgentOnline(env: Record<string, string | unde
 export const CONVERSATIONS_CLI_TIMEOUT_MS = 15_000;
 
 export function conversationsCliRunner(binary?: string): ConversationsChannelRunner {
-  const executable = binary?.trim() || process.env["PROJECTS_CONVERSATIONS_BIN"]?.trim() || "conversations";
+  const executable = binary?.trim() || env.conversationsBin()?.trim() || "conversations";
   return (args) => {
     try {
       const result = Bun.spawnSync({
