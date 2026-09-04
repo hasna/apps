@@ -1682,10 +1682,12 @@ export class KnowledgeService {
 
   /**
    * The single knowledge-item Store for this scope. One interface, two
-   * transports resolved from the environment: LocalItemStore (on-box db.json)
-   * on-box by default, ApiItemStore (HTTP `/v1` + bearer key) when selected.
-   * EVERY item read/write — CLI, MCP, and SDK — routes through this one
-   * surface, so no path touches sqlite or the raw HTTP client directly.
+   * transports resolved from the environment: ApiItemStore (HTTP `/v1` +
+   * bearer key) when selected, LocalItemStore (on-box db.json) only under the
+   * explicit HASNA_KNOWLEDGE_LOCAL=1 opt-in or an explicit --store override —
+   * never as the no-config default. EVERY item read/write — CLI, MCP, and SDK
+   * — routes through this one surface, so no path touches sqlite or the raw
+   * HTTP client directly.
    */
   itemStore(): ItemStore {
     const workspace = this.ensureWorkspace();

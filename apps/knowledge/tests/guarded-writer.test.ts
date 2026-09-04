@@ -2558,10 +2558,14 @@ describe('FCAME-1 guarded Knowledge writer', () => {
   });
 
   test('guarded writer refuses the local JSON/direct-store path', () => {
+    // The client transport fails closed without hosted API config, so reach
+    // the FCAME-1 guard through the explicit on-box opt-in: even an opted-in
+    // on-box store must never satisfy a guarded (API-only) writer.
     expect(() => createKnowledgeGuardedWriter({
       binding: BINDING,
       env: {
         NODE_ENV: 'test',
+        HASNA_KNOWLEDGE_LOCAL: '1',
       },
     })).toThrow(/local JSON, SQLite, and raw-store fallbacks are refused/);
   });

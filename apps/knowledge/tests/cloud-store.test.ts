@@ -29,8 +29,16 @@ describe('knowledge HTTP store resolver', () => {
     expect(KNOWLEDGE_RESOURCE).toBe('notes');
   });
 
-  test('returns null for the on-box transport when the canonical API URL is absent', () => {
-    expect(resolveKnowledgeHttpStore(CLEAN_ENV)).toBeNull();
+  test('fails closed when neither hosted API config nor the explicit on-box opt-in is present', () => {
+    expect(() => resolveKnowledgeHttpStore(CLEAN_ENV)).toThrow(/no hosted API configuration/);
+    expect(() => resolveKnowledgeHttpStore(CLEAN_ENV)).toThrow(/HASNA_KNOWLEDGE_API_URL/);
+    expect(() => resolveKnowledgeHttpStore(CLEAN_ENV)).toThrow(/HASNA_KNOWLEDGE_LOCAL=1/);
+  });
+
+  test('returns null for the on-box transport under the explicit local opt-in', () => {
+    expect(resolveKnowledgeHttpStore({
+      HASNA_KNOWLEDGE_LOCAL: '1',
+    } as NodeJS.ProcessEnv)).toBeNull();
   });
 
   test('fails closed when the canonical API URL is present without its key', () => {
@@ -50,12 +58,11 @@ describe('knowledge HTTP store resolver', () => {
     expect(store!.baseUrl).toBe('https://knowledge.md/v1');
   });
 
-  test('the unprefixed API URL alias is ignored', () => {
-    const store = resolveKnowledgeHttpStore({
+  test('the unprefixed API URL alias is ignored and the process still fails closed', () => {
+    expect(() => resolveKnowledgeHttpStore({
       KNOWLEDGE_API_URL: 'https://knowledge.md',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-    } as NodeJS.ProcessEnv);
-    expect(store).toBeNull();
+    } as NodeJS.ProcessEnv)).toThrow(/HASNA_KNOWLEDGE_API_URL/);
   });
 
   test('retired selector variables fail loudly and name both replacements', () => {
@@ -64,10 +71,14 @@ describe('knowledge HTTP store resolver', () => {
     } as NodeJS.ProcessEnv)).toThrow(/HASNA_KNOWLEDGE_STORAGE_MODE.*HASNA_KNOWLEDGE_API_URL.*HASNA_KNOWLEDGE_DATABASE_URL/s);
   });
 
-  test('an API key without the canonical URL stays on-box', () => {
+  test('an API key without the canonical URL fails closed, and needs the explicit opt-in to go on-box', () => {
+    expect(() => resolveKnowledgeHttpStore({
+      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+    } as NodeJS.ProcessEnv)).toThrow(/no hosted API configuration/);
     expect(
       resolveKnowledgeHttpStore({
         HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+        HASNA_KNOWLEDGE_LOCAL: '1',
       } as NodeJS.ProcessEnv),
     ).toBeNull();
   });

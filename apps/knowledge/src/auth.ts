@@ -236,9 +236,12 @@ export async function probeKnowledgeAuth(
     principal,
   };
   if (!key.apiKey) return notProbed;
-  // Authenticate only against the transport reads actually use. A key without
-  // HASNA_KNOWLEDGE_API_URL is inert — the client reads the on-box store — so
-  // whoami must not suddenly send it anywhere.
+  // Authenticate only against the transport reads actually use. Under the
+  // explicit HASNA_KNOWLEDGE_LOCAL opt-in the client reads the on-box store,
+  // so whoami must not suddenly send a key anywhere. Without hosted config AND
+  // without the opt-in the transport resolver fails closed (client-transport
+  // resolution throws); that rejection propagates — a key with nowhere
+  // authorized to go is exactly the state whoami must surface as an error.
   if (resolveKnowledgeClientTransport(env).transport !== 'http') return notProbed;
   const store = resolveKnowledgeHttpStore(env);
   if (!store) return { ...notProbed, probed: true, reason: 'unreachable' };

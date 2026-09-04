@@ -276,6 +276,7 @@ var REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 var KNOWLEDGE_API_URL_ENV = "HASNA_KNOWLEDGE_API_URL";
 var KNOWLEDGE_API_KEY_ENV = "HASNA_KNOWLEDGE_API_KEY";
 var KNOWLEDGE_DATABASE_URL_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
+var KNOWLEDGE_LOCAL_ENV = "HASNA_KNOWLEDGE_LOCAL";
 var RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS = [
   "HASNA_KNOWLEDGE_STORAGE_MODE",
   "HASNA_KNOWLEDGE_MODE",
@@ -294,7 +295,7 @@ class RetiredKnowledgeStorageSelectorError extends Error {
   envKey;
   code = "retired_knowledge_storage_selector";
   constructor(envKey) {
-    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients select the HTTP API when ${KNOWLEDGE_API_URL_ENV} and ${KNOWLEDGE_API_KEY_ENV} are set; ` + `without ${KNOWLEDGE_API_URL_ENV} they use local SQLite. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
+    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients select the HTTP API when ${KNOWLEDGE_API_URL_ENV} and ${KNOWLEDGE_API_KEY_ENV} are set, ` + `or the on-box store under the explicit opt-in ${KNOWLEDGE_LOCAL_ENV}=1; ` + `with neither, they fail closed. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
     this.envKey = envKey;
     this.name = "RetiredKnowledgeStorageSelectorError";
   }
