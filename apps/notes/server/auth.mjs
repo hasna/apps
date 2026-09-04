@@ -120,8 +120,13 @@ export function normalizeEmail(email) {
   return String(email ?? '').trim().toLowerCase();
 }
 
-function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+// RFC 5321 caps a forward path at 254 characters, so anything longer is not an
+// address. The cap is enforced here, before any caller records the value:
+// /auth/login keys per-address state on the normalized string, and an
+// unbounded "email" (the only ceiling was the 2 MiB body guard) would end up
+// in that key.
+export function isValidEmail(email) {
+  return String(email ?? '').length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 function slugify(value) {
@@ -300,6 +305,23 @@ export async function startOtpLogin(db, config, input) {
     config.log(`[notes-server] login code for ${email}: ${code} (expires in 10 minutes)`);
   }
   return { sent: true, email, expiresAt, ...(config.devMode ? { devCode: code } : {}) };
+}
+
+/**
+ * Invalidate every live login code for an address.
+ *
+ * Called when too many wrong codes are submitted for that address (app.mjs).
+ * The guess budget belongs to the CODE, not to the account: the outstanding
+ * code dies and the owner simply asks for a new one. Nothing about the
+ * account is disabled, so a stranger who knows an address can cost its owner
+ * one extra round trip and nothing more (issue #1542 review).
+ */
+export async function expireOtpRequests(db, email) {
+  const normalized = normalizeEmail(email);
+  if (!isValidEmail(normalized)) return;
+  await db
+    .query("UPDATE otp_login_requests SET status = 'consumed', consumed_at = ? WHERE email = ? AND status = 'pending'")
+    .run(nowIso(), normalized);
 }
 
 export async function verifyOtp(db, config, input) {

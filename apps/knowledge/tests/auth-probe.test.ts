@@ -238,15 +238,19 @@ describe('knowledge auth whoami --json (CLI, stubbed server)', () => {
     server.stop();
   });
 
-  test('a rejected key is reported authenticated:false with reason and kid — and exit 0 (the report succeeded)', async () => {
+  test('a rejected key exits NON-ZERO with ok:false, reason and kid (#1587 acceptance)', async () => {
     const before = seen.length;
     const result = await runCliAsync(['auth', 'whoami', '--json'], {
       HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
       HASNA_KNOWLEDGE_API_KEY: REVOKED_SHAPE_KEY,
       NODE_ENV: 'test',
     });
-    expect(result.exitCode).toBe(0);
+    // The bullet the issue was filed on: a station script gating on the exit
+    // code — or on `--json | jq -e .ok` — must NOT get a green light from a
+    // key every read rejects.
+    expect(result.exitCode).not.toBe(0);
     const out = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(out.ok).toBe(false);
     expect(out.authenticated).toBe(false);
     expect(out.configured).toBe(true);
     expect(out.api_key_present).toBe(true);
@@ -270,11 +274,14 @@ describe('knowledge auth whoami --json (CLI, stubbed server)', () => {
     expect(seen.slice(before)).toEqual(['GET /v1/notes?limit=1&offset=0']);
   });
 
-  test('keyless local mode: whoami never probes and reports not authenticated', async () => {
+  test('keyless local mode: whoami never probes, reports not authenticated, exits non-zero', async () => {
     const before = seen.length;
     const result = await runCliAsync(['auth', 'whoami', '--json'], { NODE_ENV: 'test' });
-    expect(result.exitCode).toBe(0);
+    // "Not authenticated" is a negative verdict too: same exit contract, so no
+    // caller has to know which flavour of unauthenticated it is looking at.
+    expect(result.exitCode).not.toBe(0);
     const out = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(out.ok).toBe(false);
     expect(out.authenticated).toBe(false);
     expect(out.configured).toBe(false);
     expect(out.probe).toBe('none');
@@ -283,5 +290,41 @@ describe('knowledge auth whoami --json (CLI, stubbed server)', () => {
     expect(String(out.message)).toBe('Not authenticated');
     // A keyless whoami must not have sent any request.
     expect(seen.slice(before)).toEqual([]);
+  });
+});
+describe('knowledge auth whoami --json (CLI, key the server accepts)', () => {
+  let server: { port: number; stop: () => void };
+
+  beforeAll(() => {
+    server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: () =>
+        new Response(JSON.stringify({ items: [], total: 0 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    });
+  });
+
+  afterAll(() => {
+    server.stop();
+  });
+
+  test('an accepted key still exits 0 with ok:true (#1587: valid keys are unchanged)', async () => {
+    const result = await runCliAsync(['auth', 'whoami', '--json'], {
+      HASNA_KNOWLEDGE_API_URL: `http://127.0.0.1:${server.port}`,
+      HASNA_KNOWLEDGE_API_KEY: REVOKED_SHAPE_KEY,
+      NODE_ENV: 'test',
+    });
+    expect(result.exitCode).toBe(0);
+    const out = JSON.parse(result.stdout) as Record<string, unknown>;
+    expect(out.ok).toBe(true);
+    expect(out.authenticated).toBe(true);
+    expect(out.verified).toBe(true);
+    expect(out.probe).toBe('live');
+    expect(out.status).toBe(200);
+    expect(String(out.message)).toStartWith('Authenticated via');
+    expect(result.stdout).not.toContain(REVOKED_SHAPE_KEY);
   });
 });

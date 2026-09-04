@@ -11,9 +11,9 @@ import { ApiError, errorBody, mapError, bearer, parseLimit } from './http.mjs';
 import { getMeta, setMeta } from './sql.mjs';
 import { serverEnv } from './env.mjs';
 import {
-  approveDeviceAuth, autoApproveDeviceAuth, exchangeDeviceAuth, getTenant, getUser, insertApiKey,
-  listApiKeys, normalizeEmail, pollDeviceAuth, resolveSigningSecret, revokeSession, startDeviceAuth,
-  startOtpLogin, validateApiKey, validateSession, verifyOtp,
+  approveDeviceAuth, autoApproveDeviceAuth, exchangeDeviceAuth, expireOtpRequests, getTenant, getUser,
+  insertApiKey, isValidEmail, listApiKeys, normalizeEmail, pollDeviceAuth, resolveSigningSecret,
+  revokeSession, startDeviceAuth, startOtpLogin, validateApiKey, validateSession, verifyOtp,
 } from './auth.mjs';
 import { createNote, deleteNote, exportNotes, getNote, listNotes, updateNote } from './notes.mjs';
 
@@ -153,8 +153,10 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
   );
 
   // Count one hit against `key`, rejecting with 429 past `max` per window.
-  // Expired buckets are pruned opportunistically so an enumeration attempt
-  // cannot grow the map without bound.
+  // Once past 10k entries, buckets whose window has already closed are swept
+  // on the way in, so the map is bounded by the arrival rate inside one window
+  // rather than by total distinct keys ever seen (buckets still inside their
+  // window are live protection and are never dropped).
   const countAgainst = (key, max, windowMs) => {
     const now = Date.now();
     if (rateBuckets.size > 10000) {
@@ -174,14 +176,79 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     countAgainst(`${name}:${ip}`, max, windowMs);
   };
 
-  // Issue #1542: a per-IP limit alone still lets a distributed caller request
-  // unlimited login codes for ONE victim address (each code is a live login
-  // credential for that account). Passwordless login is therefore limited per
-  // target email as well as per source IP.
-  const rateLimitEmail = (name, email, max, windowMs = 60 * 60 * 1000) => {
-    const normalized = normalizeEmail(email);
-    if (!normalized) return;
-    countAgainst(`${name}:email:${normalized}`, max, windowMs);
+  // --- per-target-address controls for passwordless login (issue #1542) -----
+  //
+  // A per-IP limit alone still lets a distributed caller mint unlimited live
+  // login codes for ONE address, and grind its 6-digit code from as many
+  // addresses as it likes. The target address therefore needs a limit of its
+  // own — but NOT an hourly quota.
+  //
+  // A quota counted on a key the CALLER chooses (someone else's email) is an
+  // account-lockout primitive: anyone who knows an address spends its budget
+  // from throwaway IPs and keeps the owner out for the rest of the window,
+  // renewably, for as long as they care to. That trades a code flood for a
+  // sustained denial of login on every account, which is the worse of the two.
+  // Both dimensions below are shaped to bound an attacker's volume without
+  // ever refusing the address owner:
+  //
+  //   /auth/login   a MIN-INTERVAL between minted codes (`otpCooldownMs`).
+  //     Inside the interval the request is answered 200 with the envelope of
+  //     the code that is already outstanding; nothing new is minted, logged or
+  //     delivered. Every code for an address is delivered only to that address,
+  //     so its owner already holds a usable one and the caller learns nothing
+  //     it did not already know. Mint rate: 1 per interval, not unbounded.
+  //
+  //   /auth/verify  consecutive wrong codes are counted per address across all
+  //     source IPs and BURN THE CODE (never the account) at
+  //     OTP_MAX_FAILED_ATTEMPTS. Guessing is bounded at that many tries per
+  //     issued code — far tighter than any per-hour cap — and the owner
+  //     recovers with one more /auth/login: the burn clears the cooldown, so
+  //     the next request mints immediately. A successful verify clears both
+  //     counters.
+  //
+  // Both maps, like every rate bucket above, live in THIS process: behind
+  // several tasks the ceilings are per task. They are keyed only by addresses
+  // that already passed validation (capped at 254 chars) and every entry
+  // expires, so a caller cannot grow them with junk.
+  const OTP_MAX_FAILED_ATTEMPTS = 10;
+  const OTP_FAILURE_WINDOW_MS = 10 * 60 * 1000; // the code's own lifetime
+  const otpCooldownMs = Number.isFinite(cfg.otpCooldownMs) ? cfg.otpCooldownMs : 60 * 1000;
+  const otpOutstanding = new Map(); // email -> { expiresAt, response }
+  const otpFailures = new Map(); // email -> { expiresAt, count }
+
+  const pruneExpired = (map, now) => {
+    if (map.size <= 10000) return;
+    for (const [k, v] of map) if (v.expiresAt <= now) map.delete(k);
+  };
+
+  /** The normalized address of a login request, or null when it is not one. */
+  const loginEmail = (value) => {
+    const normalized = normalizeEmail(value);
+    return isValidEmail(normalized) ? normalized : null;
+  };
+
+  const forgetOtpState = (email) => {
+    if (!email) return;
+    otpOutstanding.delete(email);
+    otpFailures.delete(email);
+  };
+
+  const countFailedOtp = async (email) => {
+    const now = Date.now();
+    const current = otpFailures.get(email);
+    const bucket = current && current.expiresAt > now
+      ? current
+      : { count: 0, expiresAt: now + OTP_FAILURE_WINDOW_MS };
+    bucket.count += 1;
+    if (bucket.count < OTP_MAX_FAILED_ATTEMPTS) {
+      pruneExpired(otpFailures, now);
+      otpFailures.set(email, bucket);
+      return;
+    }
+    // Budget spent: kill the authenticator, not the account, and clear the
+    // cooldown so the owner's very next /auth/login mints a fresh code.
+    forgetOtpState(email);
+    await expireOtpRequests(db, email);
   };
 
   const jsonBody = (c) => c.req.json().catch(() => ({}));
@@ -191,15 +258,40 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     app.post(`${prefix}/login`, async (c) => {
       rateLimit(c, 'otp', 5);
       const body = await jsonBody(c);
-      rateLimitEmail('otp', body?.email, 5);
-      return c.json(await startOtpLogin(db, cfg, body));
+      const email = loginEmail(body?.email);
+      const now = Date.now();
+      const outstanding = email ? otpOutstanding.get(email) : undefined;
+      // Inside the min-interval: hand back the outstanding code's envelope
+      // without minting a second one. The owner is never refused (see above).
+      if (outstanding && outstanding.expiresAt > now) return c.json(outstanding.response);
+      const response = await startOtpLogin(db, cfg, body);
+      if (email) {
+        // A fresh code carries a fresh guess budget.
+        otpFailures.delete(email);
+        if (otpCooldownMs > 0) {
+          pruneExpired(otpOutstanding, now);
+          otpOutstanding.set(email, { expiresAt: now + otpCooldownMs, response });
+        }
+      }
+      return c.json(response);
     });
     app.post(`${prefix}/verify`, async (c) => {
       rateLimit(c, 'otp_verify', 20);
       const body = await jsonBody(c);
-      // Bound guessing of a live 6-digit code for one address across IPs.
-      rateLimitEmail('otp_verify', body?.email, 20);
-      return c.json(await verifyOtp(db, cfg, body));
+      const email = loginEmail(body?.email);
+      try {
+        const result = await verifyOtp(db, cfg, body);
+        // Possession proven: drop the guess counter and the spent code's
+        // cooldown, so neither a burst of wrong guesses nor this login can
+        // delay the owner's next one. Clear this source's verify bucket too.
+        forgetOtpState(email);
+        rateBuckets.delete(`otp_verify:${c.env?.ip || 'unknown'}`);
+        return c.json(result);
+      } catch (error) {
+        // 401 is "no live code, or the wrong one" — a guess against the code.
+        if (email && error instanceof ApiError && error.status === 401) await countFailedOtp(email);
+        throw error;
+      }
     });
     app.post(`${prefix}/device/start`, async (c) => {
       rateLimit(c, 'device_start', 20);
