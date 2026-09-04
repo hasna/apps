@@ -697,7 +697,6 @@
         "monitor-mcp": "./bins/monitor-mcp.js",
         "monitor-daemon": "./bins/monitor-daemon.js",
         "monitor-server": "./bins/monitor-server.js",
-        "monitor-web": "./bins/monitor-web.js",
       },
       "dependencies": {
         "@aws-sdk/client-cloudwatch": "^3.600.0",
@@ -985,7 +984,7 @@
     },
     "apps/skills": {
       "name": "@hasna/skills",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "bin": {
         "skills": "bin/index.js",
         "skills-mcp": "bin/mcp.js",
