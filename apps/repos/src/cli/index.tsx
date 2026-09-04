@@ -101,6 +101,15 @@ import {
   removeWorktree,
 } from "../lib/worktrees.js";
 import {
+  WORKTREE_SYNC_SCHEMA,
+  WorktreeSyncError,
+  listWorktreeVersions,
+  parseSyncRef,
+  pullWorktree,
+  pushWorktree,
+  syncWorktree,
+} from "../lib/worktree-sync.js";
+import {
   REPO_ARCHIVE_SCHEMA,
   REPO_CLONE_SCHEMA,
   REPO_CREATE_SCHEMA,
@@ -1259,6 +1268,150 @@ worktree
       }
     } catch (error) {
       printWorktreeError(error, json, WORKTREE_LEASE_SCHEMA);
+    }
+  });
+
+// ── Worktree sync through the app's S3 artifact remote (hasna/apps#1689) ────
+
+/**
+ * The probe sync surface: push / pull / sync / versions of a worktree's
+ * git-external state through the app's S3 bucket. Commits stay on git's own
+ * remote of record; the bundle carries what git refuses to (uncommitted
+ * changes, untracked files, the stash list) plus the refs, content-addressed
+ * and immutable per version, following the artifact-kit pattern from the
+ * skills bundle work (#1639).
+ *
+ * Every verb fails closed when `REPOS_S3_BUCKET` is unset — there is no
+ * local-only fallback, on purpose (#1613: no silent local storage in hosted
+ * mode later, and no silent divergence from the remote now).
+ */
+function printWorktreeSyncError(error: unknown, json: boolean): void {
+  const code = error instanceof WorktreeSyncError ? error.code : "UNEXPECTED_ERROR";
+  const message = error instanceof Error ? error.message : "unknown worktree sync error";
+  if (json) {
+    const details = error instanceof WorktreeSyncError ? error.details : undefined;
+    printJson({ schema: WORKTREE_SYNC_SCHEMA, ok: false, error: { code, message, details } });
+  } else {
+    console.error(chalk.red(`${code}: ${message}`));
+    if (error instanceof WorktreeSyncError && error.details.hint) {
+      console.error(chalk.dim(`  ${error.details.hint}`));
+    }
+  }
+  process.exitCode = 1;
+}
+
+worktree
+  .command("push <ref>")
+  .description("Publish the worktree's git-external state as an immutable version on the S3 artifact remote")
+  .option("--json", "Output the versioned JSON result")
+  .action(async (ref, opts) => {
+    const json = Boolean(opts.json);
+    try {
+      const parsed = parseSyncRef(ref);
+      const result = await pushWorktree(parsed.repoName, parsed.worktreeName);
+      if (json) {
+        printJson(result);
+        return;
+      }
+      console.log(chalk.green(`✓ pushed ${parsed.repoName}/${parsed.worktreeName} @ ${result.version}`));
+      console.log(chalk.dim(`  bundle ${result.bundle_sha256.slice(0, 16)}…  ${result.byte_size} bytes`));
+      console.log(chalk.dim(
+        `  includes:${result.includes.patch ? " patch" : ""}` +
+        `${result.includes.untracked > 0 ? ` untracked(${result.includes.untracked})` : ""}` +
+        `${result.includes.stash > 0 ? " stash-list" : ""}`,
+      ));
+    } catch (error) {
+      printWorktreeSyncError(error, json);
+    }
+  });
+
+worktree
+  .command("pull <ref>")
+  .description("Fetch a version from the artifact remote and materialise the worktree in the canonical path")
+  .option("--parent-checkout <path>", "Parent checkout to materialise against (fresh machine with no registry row)")
+  .option("--json", "Output the versioned JSON result")
+  .action(async (ref, opts) => {
+    const json = Boolean(opts.json);
+    try {
+      const parsed = parseSyncRef(ref);
+      const result = await pullWorktree(parsed.repoName, parsed.worktreeName, {
+        version: parsed.version,
+        parentCheckout: opts.parentCheckout,
+      });
+      if (json) {
+        printJson(result);
+        return;
+      }
+      console.log(chalk.green(`✓ materialised ${parsed.repoName}/${parsed.worktreeName} @ ${result.version}`));
+      console.log(chalk.dim(`  ${result.path}`));
+      console.log(chalk.dim(
+        `  head ${result.head_sha.slice(0, 12)}  branch ${result.branch ?? "(detached)"}  ` +
+        `patch ${result.patch_applied ? "applied" : "none"}  untracked ${result.untracked_restored}  stash-list ${result.stash_count}`,
+      ));
+    } catch (error) {
+      printWorktreeSyncError(error, json);
+    }
+  });
+
+worktree
+  .command("sync <ref>")
+  .description("Push a new version, then refuse if a newer version appeared on the remote (never silent overwrite)")
+  .option("--json", "Output the versioned JSON result")
+  .action(async (ref, opts) => {
+    const json = Boolean(opts.json);
+    try {
+      const parsed = parseSyncRef(ref);
+      const result = await syncWorktree(parsed.repoName, parsed.worktreeName);
+      if (result.conflict) {
+        // A refused sync is a FAILURE in both output modes. The library carries
+        // the refusal on the result (the push itself succeeded); the CLI raises
+        // it as the typed SYNC_CONFLICT error so --json consumers get the same
+        // ok:false envelope as every other sync failure and the process exits
+        // 1 — a bare result payload with exit 0 would read as a successful
+        // sync to a CI/agent consumer.
+        printWorktreeSyncError(
+          new WorktreeSyncError("SYNC_CONFLICT", result.conflict_detail ?? "sync refused: the remote moved on", {
+            pushed_version: result.pushed_version,
+            remote_latest: result.remote_latest,
+          }),
+          json,
+        );
+        return;
+      }
+      if (json) {
+        printJson(result);
+        return;
+      }
+      console.log(chalk.green(`✓ synced ${parsed.repoName}/${parsed.worktreeName} @ ${result.pushed_version}`));
+      console.log(chalk.dim(`  remote newest: ${result.remote_latest}`));
+    } catch (error) {
+      printWorktreeSyncError(error, json);
+    }
+  });
+
+worktree
+  .command("versions <ref>")
+  .description("List the published versions of a worktree on the artifact remote, newest first")
+  .option("--json", "Output the versioned JSON result")
+  .action(async (ref, opts) => {
+    const json = Boolean(opts.json);
+    try {
+      const parsed = parseSyncRef(ref);
+      const result = await listWorktreeVersions(parsed.repoName, parsed.worktreeName);
+      if (json) {
+        printJson(result);
+        return;
+      }
+      console.log(chalk.bold(`${parsed.repoName}/${parsed.worktreeName} — ${result.versions.length} version(s)`));
+      for (const entry of result.versions.slice(0, 20)) {
+        console.log(
+          `  ${entry.version}  ${chalk.dim(entry.packed_at)}  ${entry.branch ?? "(detached)"} ` +
+          `${chalk.dim(`${entry.head_sha.slice(0, 12)}  ${entry.machine_id}  ${entry.agent}`)}`,
+        );
+      }
+      if (result.versions.length > 20) console.log(chalk.dim(`  … ${result.versions.length - 20} more`));
+    } catch (error) {
+      printWorktreeSyncError(error, json);
     }
   });
 
