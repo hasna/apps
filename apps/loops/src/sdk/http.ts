@@ -125,6 +125,30 @@ export interface CountResponse { "ok": boolean; "count": number }
 
 export interface LoopMachineRef { "id": string; "route"?: string; "local"?: boolean; "confidence"?: "exact" | "high" | "medium" | "low" | "none"; "packageVersion"?: string; "warnings"?: Array<string> }
 
+export interface BundleManifestFile { "path": string; "sha256": string; "mode": 384 | 448; "size": number }
+
+export interface BundleManifest { "schema": string; "version": number; "loopId": string; "name": string; "bundleDigest": string; "archiveSha256"?: string; "createdAt": string; "files": Array<BundleManifestFile>; "source": { "station"?: string; "agent"?: string; "packageVersion"?: string; "reason"?: string }; "carriesPrompt"?: boolean }
+
+export interface LoopRevision { "version": number; "bundleName": string; "bundleDigest": string; "archiveSha256"?: string; "archiveBytes"?: number; "fileCount"?: number; "carriesPrompt"?: boolean; "author"?: string; "source"?: { "station"?: string | null; "agent"?: string | null }; "reason"?: string | null; "rolledBackFrom"?: number | null; "storage"?: "db" | "s3"; "state"?: "complete" | "incomplete"; "createdAt": string }
+
+export interface LoopVersionListResponse { "ok": boolean; "loopId"?: string; "bundleName"?: string | null; "pinnedVersion"?: number | null; "latestVersion"?: number | null; "versions": Array<LoopRevision>; "total"?: number }
+
+export interface LoopVersionResponse { "ok": boolean; "loopId"?: string; "revision": LoopRevision; "manifest"?: BundleManifest; "loop"?: Record<string, unknown> }
+
+export interface LoopVersionCreatedResponse { "ok": boolean; "created"?: boolean; "version": number; "bundleName"?: string; "bundleDigest"?: string; "storageKey"?: string | null; "carriesPrompt"?: boolean }
+
+export interface LoopRollbackInput { "version": number; "reason"?: string; "dryRun"?: boolean }
+
+export interface LoopRollbackResponse { "ok": boolean; "applied"?: boolean; "version"?: number; "rolledBackFrom"?: number; "runningRuns"?: number; "diff"?: Record<string, unknown>; "loop"?: Record<string, unknown> | null }
+
+export interface LoopPinInput { "version"?: number | null }
+
+export interface LoopPinResponse { "ok": boolean; "pinnedVersion"?: number | null }
+
+export interface BundleSummary { "bundleName": string; "loopId": string; "loopName"?: string; "latestVersion"?: number; "pinnedVersion"?: number; "bundleDigest"?: string; "carriesPrompt"?: boolean; "machineId"?: string; "updatedAt"?: string }
+
+export interface BundleListResponse { "ok": boolean; "bundles": Array<BundleSummary>; "total"?: number }
+
 export interface LoopsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -243,6 +267,15 @@ export class LoopsClient {
       return this.request("GET", `/v1`, {
         body: undefined,
         query: undefined,
+        init,
+      });
+    }
+
+    /** Tenant-wide bundle index */
+    async listBundles(query?: { "machine"?: string; "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<BundleListResponse> {
+      return this.request("GET", `/v1/bundles`, {
+        body: undefined,
+        query,
         init,
       });
     }
@@ -436,10 +469,28 @@ export class LoopsClient {
       });
     }
 
+    /** Pin a loop to a bundle version, or unpin it */
+    async pinLoopVersion(id: string, body: LoopPinInput, init?: RequestInit): Promise<LoopPinResponse> {
+      return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/pin`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** loops.rename */
     async loopsRename(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/rename`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Apply an earlier version and append a new revision */
+    async rollbackLoop(id: string, body: LoopRollbackInput, init?: RequestInit): Promise<LoopRollbackResponse> {
+      return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/rollback`, {
+        body,
         query: undefined,
         init,
       });
@@ -457,6 +508,42 @@ export class LoopsClient {
     /** Unarchive a loop by id or name */
     async unarchiveLoop(id: string, init?: RequestInit): Promise<LoopResponse> {
       return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/unarchive`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** List a loop's published bundle versions */
+    async listLoopVersions(id: string, query?: { "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<LoopVersionListResponse> {
+      return this.request("GET", `/v1/loops/${encodeURIComponent(String(id))}/versions`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Publish a bundle as the next immutable version */
+    async createLoopVersion(id: string, query?: { "adopt"?: boolean }, init?: RequestInit): Promise<LoopVersionCreatedResponse> {
+      return this.request("POST", `/v1/loops/${encodeURIComponent(String(id))}/versions`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Read one bundle version's manifest and definition */
+    async getLoopVersion(id: string, version: string, init?: RequestInit): Promise<LoopVersionResponse> {
+      return this.request("GET", `/v1/loops/${encodeURIComponent(String(id))}/versions/${encodeURIComponent(String(version))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Download a version's bundle.tar.zst */
+    async downloadLoopVersionBundle(id: string, version: string, init?: RequestInit): Promise<void> {
+      return this.request("GET", `/v1/loops/${encodeURIComponent(String(id))}/versions/${encodeURIComponent(String(version))}/bundle`, {
         body: undefined,
         query: undefined,
         init,

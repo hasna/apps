@@ -127,6 +127,7 @@ import {
   type TodosTaskRouteOptions,
 } from "../lib/route/index.js";
 import { sanitizeCliErrorContext } from "./safe-error-context.js";
+import { registerBundleCommands } from "./bundle.js";
 
 const program = new Command();
 
@@ -1049,16 +1050,27 @@ program
   .action(controlPlaneMigrationCommand("migrate"));
 
 program
-  .command("push")
-  .description("preview (default) or apply an id-preserving local->control-plane backfill")
+  .command("push [bundle]")
+  .description("bundle push <name>, or (no positional) the id-preserving local->control-plane backfill")
   .option("--api-url <url>", "control-plane API URL")
   .option("--apply", "apply the backfill via the control-plane /v1/import endpoint (default is preview)")
   .option("--replace", "update differing same-id remote rows; safe default may still archive/pause same-id definitions")
   .option("--dry-run", "preview only; equivalent to omitting --apply")
   .option("--no-runs", "omit loop run history")
   .option("--manifest-file <path>", "write a control-plane comparison/import manifest JSON file")
+  .option("--reason <text>", "bundle push: why this version exists")
+  .option("--as <bundle-name>", "bundle push: publish under a different bundle name")
+  .option("--adopt", "bundle push: re-home a bundle whose loop.json names a different loop")
   .option("--json", "print JSON")
-  .action(runAction(async (opts: { apiUrl?: string; apply?: boolean; replace?: boolean; dryRun?: boolean; runs?: boolean; manifestFile?: string; json?: boolean }) => {
+  .action(runAction(async (bundleName: string | undefined, opts: { apiUrl?: string; apply?: boolean; replace?: boolean; dryRun?: boolean; runs?: boolean; manifestFile?: string; json?: boolean; reason?: string; as?: string; adopt?: boolean }) => {
+    // Verb collision, resolved: a POSITIONAL bundle name means the bundle verb;
+    // no positional keeps the shipped control-plane backfill the cutover
+    // runbooks call by name (docs/CUTOVER-RUNBOOK.md).
+    if (bundleName !== undefined) {
+      await bundlePush(bundleName, { reason: opts.reason, as: opts.as, adopt: opts.adopt, dryRun: opts.dryRun });
+      return;
+    }
+    console.error("note: 'loops push' without a bundle name is the control-plane row backfill and moves to 'loops migrate push' in the next minor release.");
     if (!opts.apply || opts.dryRun) {
       const store = new Store();
       try {
@@ -1096,13 +1108,22 @@ program
   }));
 
 program
-  .command("pull")
-  .description("preview control-plane rows that would be pulled locally")
+  .command("pull [bundle]")
+  .description("bundle pull <name>, or (no positional) preview control-plane rows that would be pulled locally")
   .option("--api-url <url>", "control-plane API URL")
   .option("--dry-run", "preview only; pull does not apply local changes yet")
   .option("--no-runs", "omit loop run history from the preview")
+  .option("--version <n>", "bundle pull: version to install, or 'latest'")
+  .option("--allow-dirty", "bundle pull: overwrite a locally modified tree")
   .option("--json", "print JSON")
-  .action(controlPlaneMigrationCommand("pull"));
+  .action(runAction(async (bundleName: string | undefined, opts: { apiUrl?: string; runs?: boolean; json?: boolean; version?: string; allowDirty?: boolean }) => {
+    if (bundleName !== undefined) {
+      await bundlePull(bundleName, { version: opts.version, allowDirty: opts.allowDirty });
+      return;
+    }
+    console.error("note: 'loops pull' without a bundle name is the control-plane row preview and moves to 'loops migrate pull' in the next minor release.");
+    await controlPlaneMigrationCommand("pull")(opts);
+  }));
 
 function formatTemplateVariable(template: LoopTemplateSummary, name: string): string {
   const variable = template.variables.find((entry) => entry.name === name);
@@ -2975,6 +2996,7 @@ program
   .command("run-now <idOrName>")
   .description("claim and execute one loop run immediately")
   .option("--show-output", "show stdout/stderr")
+  .option("--allow-dirty", "run a bundled loop whose tree no longer matches its manifest (this run only)")
   .action(runAction(async (idOrName, opts) => {
     if (isCloudStore()) {
       // Hosted route (hosted run-now): schedule the loop due now on the control
@@ -3002,6 +3024,10 @@ program
         store,
         idOrName: loop.id,
         runnerId: `manual:${process.pid}`,
+        // The ONLY bypass of the bundle drift refusal, and it is per-run: an
+        // operator accepting an unreviewed tree once. The daemon and the runner
+        // never set it.
+        allowDirtyBundle: opts.allowDirty === true,
       });
       const run = result.run;
       const value = { ...publicRun(run, opts.showOutput), runNow: { source: result.source, advancesLoop: result.advancedLoop } };
@@ -3223,5 +3249,7 @@ daemon
     if (isJson()) console.log(JSON.stringify({ path, lines }, null, 2));
     else console.log(lines.join("\n"));
   }));
+
+const { push: bundlePush, pull: bundlePull } = registerBundleCommands(program, { json: isJson });
 
 await program.parseAsync(process.argv);

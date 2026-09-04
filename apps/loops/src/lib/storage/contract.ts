@@ -20,6 +20,15 @@ export type LoopStorageMethodName =
   | "archiveLoop"
   | "unarchiveLoop"
   | "deleteLoop"
+  | "setLoopBundleName"
+  | "setLoopBundlePin"
+  | "findLoopByBundleName"
+  | "createLoopRevision"
+  | "getLoopRevision"
+  | "latestLoopRevision"
+  | "findLoopRevisionByDigest"
+  | "listLoopRevisions"
+  | "listLoopBundles"
   | "upsertMigrationLoop"
   | "upsertMigrationRun"
   | "upsertMigrationWorkflow"
@@ -114,6 +123,15 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   archiveLoop: AsyncStoreMethod<"archiveLoop">;
   unarchiveLoop: AsyncStoreMethod<"unarchiveLoop">;
   deleteLoop: AsyncStoreMethod<"deleteLoop">;
+  setLoopBundleName: AsyncStoreMethod<"setLoopBundleName">;
+  setLoopBundlePin: AsyncStoreMethod<"setLoopBundlePin">;
+  findLoopByBundleName: AsyncStoreMethod<"findLoopByBundleName">;
+  createLoopRevision: AsyncStoreMethod<"createLoopRevision">;
+  getLoopRevision: AsyncStoreMethod<"getLoopRevision">;
+  latestLoopRevision: AsyncStoreMethod<"latestLoopRevision">;
+  findLoopRevisionByDigest: AsyncStoreMethod<"findLoopRevisionByDigest">;
+  listLoopRevisions: AsyncStoreMethod<"listLoopRevisions">;
+  listLoopBundles: AsyncStoreMethod<"listLoopBundles">;
   upsertMigrationLoop: AsyncStoreMethod<"upsertMigrationLoop">;
   upsertMigrationRun: AsyncStoreMethod<"upsertMigrationRun">;
   upsertMigrationWorkflow: AsyncStoreMethod<"upsertMigrationWorkflow">;

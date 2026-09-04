@@ -28,6 +28,8 @@ import {
 } from "./accounts.js";
 import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture, type AgentInvocation } from "./agent-adapter.js";
 import { commandNotFoundMessage, executableExists, hasnaClientEnv, normalizeExecutionPath } from "./env.js";
+import { resolveBundleExecution, type BundleExecutionRefusal } from "./bundle/executor-bundle.js";
+import type { RunReceiptBundle } from "../types.js";
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
 import { processStartTimeMs } from "./process-identity.js";
@@ -84,6 +86,15 @@ export interface ExecuteOptions extends PersistGuardOptions {
   machine?: LoopMachineRef;
   machineResolver?: (machine: LoopMachineRef) => LoopMachineRef;
   machineCommandResolver?: (machineId: string, command: string) => MachineCommandPlan;
+  /**
+   * Run a bundled loop whose tree no longer matches its manifest.
+   *
+   * Set by `loops run-now --allow-dirty` and by an acknowledged
+   * `target.allowDirtyBundle`. The daemon and the runner never set it: an
+   * implicit bypass would make the drift refusal advisory, and an advisory
+   * integrity check is not one.
+   */
+  allowDirtyBundle?: boolean;
 }
 
 export interface ExecutionMetadata {
@@ -1673,15 +1684,54 @@ export async function executeTarget(
   }
 }
 
+/**
+ * The bundle gate: resolve a bundled loop's target against its bundle root, or
+ * refuse the run.
+ *
+ * Exported for the tests that assert NOTHING is spawned on a refusal - the
+ * check has to happen before `executeTarget`, not inside it, because by the
+ * time a spec exists the decision to run has already been made.
+ */
+export function applyBundleExecution(
+  loop: Loop,
+  opts: ExecuteOptions,
+): { target: ExecutableTarget; opts: ExecuteOptions; bundle?: RunReceiptBundle } | { refusal: BundleExecutionRefusal } {
+  const resolution = resolveBundleExecution(loop, {
+    allowDirty: opts.allowDirtyBundle === true || (loop.target as { allowDirtyBundle?: boolean }).allowDirtyBundle === true,
+    env: opts.env,
+  });
+  if (!resolution) return { target: loop.target as ExecutableTarget, opts };
+  if (!resolution.ok) return { refusal: resolution.refusal };
+  const plan = resolution.plan;
+  const bundle: RunReceiptBundle = { name: plan.bundleName, version: plan.bundleVersion, digest: plan.bundleDigest };
+  if (loop.target.type !== "command") return { target: loop.target as ExecutableTarget, opts, bundle };
+  return {
+    // An explicit `cwd` on the stored target still wins: an operator who named
+    // a working directory meant it.
+    target: { ...loop.target, command: plan.command, cwd: loop.target.cwd ?? plan.cwd },
+    opts,
+    bundle,
+  };
+}
+
 export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions = {}): Promise<ExecutorResult> {
   if (loop.target.type === "workflow") {
     throw new Error("workflow loop targets must be executed with executeLoopTarget");
   }
+  const bundled = applyBundleExecution(loop, opts);
+  if ("refusal" in bundled) {
+    // No spec is built and no child is spawned: the run fails with the coded
+    // refusal, which is what an operator greps `loop_runs.error` for.
+    return failureResult(nowIso(), `${bundled.refusal.error}: ${bundled.refusal.message}`);
+  }
+  const target = bundled.target;
+  const stampBundle = (result: ExecutorResult): ExecutorResult =>
+    bundled.bundle ? { ...result, bundle: bundled.bundle } : result;
   if (loop.target.preflight?.beforeRun) {
     const startedAt = nowIso();
     try {
       preflightTarget(
-        loop.target,
+        target,
         {
           loopId: loop.id,
           loopName: loop.name,
@@ -1691,11 +1741,11 @@ export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions
         { ...opts, machine: opts.machine ?? loop.machine },
       );
     } catch (error) {
-      return failureResult(startedAt, `runtime preflight failed: ${error instanceof Error ? error.message : String(error)}`);
+      return stampBundle(failureResult(startedAt, `runtime preflight failed: ${error instanceof Error ? error.message : String(error)}`));
     }
   }
-  return executeTarget(
-    loop.target,
+  return stampBundle(await executeTarget(
+    target,
     {
       loopId: loop.id,
       loopName: loop.name,
@@ -1703,5 +1753,5 @@ export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions
       scheduledFor: run.scheduledFor,
     },
     { ...opts, machine: opts.machine ?? loop.machine },
-  );
+  ));
 }
