@@ -181,5 +181,9 @@ export async function closeCloud(): Promise<void> {
   cachedClient = null;
   cachedStore = null;
   cachedVerifier = null;
+  // The Hono middleware cache captures keyStatus + signing secret at
+  // construction; a stale entry from an earlier test file in the same worker
+  // would keep the pre-patch verifier (cloud-auth.test.ts 401 flake).
+  honoMiddlewareCache.clear();
   schemaEnsured = null;
 }
