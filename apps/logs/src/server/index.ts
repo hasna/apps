@@ -54,9 +54,12 @@ const PORT = Number(
 );
 const serverDir = dirname(fileURLToPath(import.meta.url));
 
-// The postgresql backend makes the serve a stateless API in front of the
-// shared cloud Postgres — no SQLite, no scheduler, API-key auth.
-const cloudMode = resolveServerDataBackend("logs", process.env).backend === "postgresql";
+// The serve selects its backend from the environment: HASNA_LOGS_DATABASE_URL
+// (or LOGS_DATABASE_URL) present -> a stateless API in front of PostgreSQL —
+// no SQLite, no scheduler, API-key auth. Otherwise it serves the local SQLite
+// database.
+const databaseBackend =
+  resolveServerDataBackend("logs", process.env).backend === "postgresql";
 
 function buildLocalServe() {
   const db = getDb();
@@ -101,10 +104,10 @@ function buildLocalServe() {
 
   app.get("/health", (c) => c.json(getHealth(db)));
   app.get("/version", (c) =>
-    c.json({ status: "ok", version: PACKAGE_VERSION, mode: "local" }),
+    c.json({ status: "ok", version: PACKAGE_VERSION }),
   );
   app.get("/ready", (c) =>
-    c.json({ status: "ok", version: PACKAGE_VERSION, mode: "local" }),
+    c.json({ status: "ok", version: PACKAGE_VERSION }),
   );
   app.get("/dashboard", (c) => c.redirect("/dashboard/"));
   app.use(
@@ -145,7 +148,7 @@ function buildLocalServe() {
   return serveExport;
 }
 
-const serveExport = cloudMode ? buildCloudServe(PORT) : buildLocalServe();
+const serveExport = databaseBackend ? buildCloudServe(PORT) : buildLocalServe();
 
 export default serveExport;
 

@@ -80,6 +80,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { APPS_DIR, publishableMembers } from "./census";
+import { mapBounded } from "./bounded-map";
 
 /** The fleet quarantine window: bunfig minimumReleaseAge = 604800. */
 export const QUARANTINE_MS = 7 * 24 * 3600 * 1000;
@@ -288,11 +289,18 @@ describe("standard-adherence: quarantine-window admissions", () => {
     const firstPartyScopedSpecs = scopedSpecs.filter((s) => isFirstParty(s.dependency));
     const admittedByDep = new Map<string, AdmitInfo>();
     let skipped = false;
+    // Each task retains version→time ordering. Reduce results below in the
+    // original dependency order so diagnostics and acceptance remain stable.
+    const probe = async (dep: string, spec: string) => {
+      const admitted = await fetchAdmittedVersions(dep, spec);
+      const times = admitted && admitted.length > 0 ? await fetchPublishTimes(dep) : null;
+      return { dep, admitted, times };
+    };
     const fetchAdmitted = async (list: QuarantineSpec[]): Promise<Map<string, AdmitInfo>> => {
       const map = new Map<string, AdmitInfo>();
       const deps = [...new Set(list.map((s) => s.dependency))].sort();
-      for (const dep of deps) {
-        const admitted = await fetchAdmittedVersions(dep, list.find((s) => s.dependency === dep)!.spec);
+      const results = await mapBounded(deps, 6, dep => probe(dep, list.find(s => s.dependency === dep)!.spec));
+      for (const { dep, admitted, times } of results) {
         if (admitted === null) {
           // A first-party census miss never skips the third-party assertion:
           // the exemption is audited best-effort, the gate is not.
@@ -303,7 +311,6 @@ describe("standard-adherence: quarantine-window admissions", () => {
           continue;
         }
         if (admitted.length === 0) continue; // unresolvable spec; not a quarantine class
-        const times = await fetchPublishTimes(dep);
         if (times === null) {
           if (!isFirstParty(dep)) {
             console.info(`[SKIP quarantine-pins] registry time map unreadable for ${dep}; offline/network route`);
@@ -336,10 +343,9 @@ describe("standard-adherence: quarantine-window admissions", () => {
     // remaining findings stay visible to their fix lanes.
     const allMembersByDep = new Map<string, AdmitInfo>();
     const externalDeps = [...new Set(specs.filter((s) => !FINDING_SCOPE.includes(s.member)).map((s) => s.dependency))].sort();
-    for (const dep of externalDeps) {
-      const admitted = await fetchAdmittedVersions(dep, specs.find((s) => s.dependency === dep)!.spec);
+    const externalResults = await mapBounded(externalDeps, 6, dep => probe(dep, specs.find(s => s.dependency === dep)!.spec));
+    for (const { dep, admitted, times } of externalResults) {
       if (admitted === null || admitted.length === 0) continue;
-      const times = await fetchPublishTimes(dep);
       if (times === null) continue;
       const publishedAt = times[admitted[admitted.length - 1]];
       if (!publishedAt) continue;

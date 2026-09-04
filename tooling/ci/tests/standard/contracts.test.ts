@@ -233,4 +233,3 @@ describe("standard-adherence: contracts conformance", () => {
     expect(report.entries.length).toBeGreaterThan(0);
   });
 });
-

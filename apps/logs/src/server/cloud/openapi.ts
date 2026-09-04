@@ -35,7 +35,7 @@ export function buildOpenApiDocument(version: string): OpenApiDoc {
       {
         url: "https://your-deployment.example",
         description:
-          "Replace with your self-hosted @hasna/logs deployment's base URL.",
+          "Replace with your @hasna/logs deployment's base URL.",
       },
     ],
     components: {
