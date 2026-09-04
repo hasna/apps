@@ -1,19 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildDoctorReport } from "./index.js";
+import { buildDoctorReport, localModeOptedIn } from "./index.js";
 
 describe("feedback CLI diagnostics", () => {
-  test("reports local runtime readiness", async () => {
+  test("reports local runtime readiness when the on-box store is explicitly opted into", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "feedback-cli-"));
     const report = await buildDoctorReport({
       FEEDBACK_DATA_DIR: dataDir,
+      FEEDBACK_LOCAL: "1",
       PATH: "",
     });
 
     expect(report).toMatchObject({
       ok: true,
+      target: "local",
+      blockers: [],
       runtime: {
         mode: "local",
         engine: "sqlite",
@@ -32,11 +35,53 @@ describe("feedback CLI diagnostics", () => {
     const report = await buildDoctorReport({
       FEEDBACK_DATA_DIR: dataDir,
       FEEDBACK_STORE: "jsonl",
+      FEEDBACK_LOCAL: "true",
       PATH: "",
     });
 
-    expect(report).toMatchObject({ ok: true, runtime: { engine: "jsonl", activeStore: "local-jsonl" } });
+    expect(report).toMatchObject({ ok: true, target: "local", runtime: { engine: "jsonl", activeStore: "local-jsonl" } });
     expect(report.dataFile).toBe(join(dataDir, "feedback.jsonl"));
+  });
+
+  test("fails closed when neither a hosted service nor an explicit local opt-in is configured", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "feedback-cli-"));
+    const report = await buildDoctorReport({
+      FEEDBACK_DATA_DIR: dataDir,
+      PATH: "",
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.target).toBe("none");
+    // No store is probed in the fail-closed state: doctor must not create or
+    // touch local storage when the run would not be allowed to use it.
+    expect(report.dataFile).toBeUndefined();
+    expect(report.dataDirWritable).toBeNull();
+    expect(report.dataFileReadable).toBeNull();
+    const blockers = report.blockers.join(" ");
+    expect(blockers).toContain("FEEDBACK_API_URL");
+    expect(blockers).toContain("FEEDBACK_LOCAL");
+    expect(await readdir(dataDir)).toEqual([]);
+  });
+
+  test("a hosted FEEDBACK_API_URL makes doctor remote, whatever the local opt-in says", async () => {
+    const report = await buildDoctorReport({
+      FEEDBACK_API_URL: "https://feedback.example.test/",
+      FEEDBACK_LOCAL: "1",
+      FEEDBACK_TASK_SINK: "none",
+      PATH: "",
+    });
+    expect(report.target).toBe("remote");
+    expect(report.blockers).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  test("localModeOptedIn honours only explicit truthy values", () => {
+    expect(localModeOptedIn({ FEEDBACK_LOCAL: "1" })).toBe(true);
+    expect(localModeOptedIn({ HASNA_FEEDBACK_LOCAL: "1" })).toBe(true);
+    expect(localModeOptedIn({ FEEDBACK_LOCAL: "true" })).toBe(true);
+    expect(localModeOptedIn({ FEEDBACK_LOCAL: "0" })).toBe(false);
+    expect(localModeOptedIn({ FEEDBACK_LOCAL: "" })).toBe(false);
+    expect(localModeOptedIn({})).toBe(false);
   });
 
   test("reports cloud blockers without exposing configured values", async () => {

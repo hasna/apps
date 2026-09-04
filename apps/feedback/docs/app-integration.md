@@ -151,12 +151,20 @@ Authorization: Bearer <token>
 ## CLI Collection
 
 ```bash
-feedback submit "Search results need date filters" --app my-app --kind idea --tag search
+FEEDBACK_LOCAL=1 feedback submit "Search results need date filters" --app my-app --kind idea --tag search
 feedback submit "Export failed" --app my-app --kind bug --route /reports --app-version 1.2.3 --context browser=chrome --meta plan=pro
 feedback list --app my-app --search filters --since 2026-01-01
 feedback export --format jsonl --until 2026-12-31 > feedback.jsonl
 feedback doctor
 ```
+
+The CLI fails closed unless a target is configured: it refuses (exit 1, nothing
+written) when neither `FEEDBACK_API_URL` / `--api-url` (a hosted service) nor
+`FEEDBACK_LOCAL=1` (the on-box store, explicitly) is present. Local collection
+therefore sets `FEEDBACK_LOCAL=1` in the environment or in the wrapper; hosted
+collection sets `FEEDBACK_API_URL` / `FEEDBACK_API_TOKEN` or passes
+`--api-url` / `--token`. `feedback doctor` reports the same verdict as
+`"target": "none"` with a blocker naming the variables.
 
 Terminal slash-command wrappers can delegate directly to the same CLI:
 
