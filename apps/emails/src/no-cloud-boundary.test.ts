@@ -7,7 +7,6 @@ import { normalizeEmailsMode } from "./lib/mode.js";
 import {
   BOUNDARY_SCOPES,
   boundaryPatternTable,
-  extractExactLegacyHostedEnvUnsetBridge,
   isSkippableBinary,
   isSourceAllowed,
   sourceBoundaryFindings,
@@ -63,13 +62,6 @@ const legacyHostedEnvKeys = [
 ];
 
 const exactCompatibilityBridgePath = "scripts/run-hermetic-tests.sh";
-
-function canonicalCompatibilityBridge(): string {
-  const source = readFileSync(join(root, exactCompatibilityBridgePath), "utf8");
-  const bridge = extractExactLegacyHostedEnvUnsetBridge(source, exactCompatibilityBridgePath);
-  expect(bridge).toBeDefined();
-  return bridge!;
-}
 
 function expectedLegacyFindings(key: string): string[] {
   return key.includes("CLOUD")
@@ -180,8 +172,9 @@ describe("no hosted control plane", () => {
     const allowedCount = scanned.filter((path) => allowed.some((entry) => isSourceAllowed(entry, path))).length;
     expect(allowedCount * 2).toBeLessThan(scanned.length);
 
-    const exactBridge = canonicalCompatibilityBridge();
-    expect(sourceBoundaryFindings(exactBridge, exactCompatibilityBridgePath)).toEqual([]);
+    const runner = readFileSync(join(root, exactCompatibilityBridgePath), "utf8");
+    expect(sourceBoundaryFindings(runner, exactCompatibilityBridgePath)).toEqual([]);
+    for (const key of legacyHostedEnvKeys) expect(runner).not.toContain(key);
     expect(sourceBoundaryFindings("echo MAILERY_CLOUD_API_URL", exactCompatibilityBridgePath)).toEqual([
       "legacy hosted environment",
       "hosted implementation vocabulary",
@@ -196,107 +189,22 @@ describe("no hosted control plane", () => {
     ]);
   });
 
-  it("allows only the location- and syntax-exact legacy env-unset bridges", () => {
-    const arbitraryBridge = [
-      "env \\",
-      "  -u MAILERY_API_URL -u MAILERY_API_KEY \\",
-      "  -u HASNA_MAILERY_API_URL -u HASNA_MAILERY_API_KEY \\",
-      "  -u MAILERY_CLOUD_API_URL -u MAILERY_CLOUD_TOKEN \\",
-      "  true",
-    ].join("\n");
-
-    const path = exactCompatibilityBridgePath;
-    const expandedRunnerBridge = canonicalCompatibilityBridge();
-    const runnerContent = readFileSync(join(root, path), "utf8");
-    const runnerBridgeStart = runnerContent.indexOf(expandedRunnerBridge);
-    expect(runnerBridgeStart).toBeGreaterThanOrEqual(0);
-    expect(runnerContent.indexOf(expandedRunnerBridge, runnerBridgeStart + expandedRunnerBridge.length)).toBe(-1);
-    expect(extractExactLegacyHostedEnvUnsetBridge(runnerContent, path)).toBe(expandedRunnerBridge);
-    expect(expandedRunnerBridge).toContain("    -u HASNA_MAILERY_API_SIGNING_KEY -u HASNA_MAILERY_DATABASE_URL \\\n");
-    expect(expandedRunnerBridge).toContain('    PATH="$PATH" \\\n');
-
-    const exactBridge = expandedRunnerBridge;
-    expect(sourceBoundaryFindings(exactBridge, path)).toEqual([]);
-
-    // Reviewer bypass 1: a second unrelated env command on an allowed path.
-    expect(sourceBoundaryFindings(`${exactBridge}\n${arbitraryBridge}`, path)).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
-    expect(sourceBoundaryFindings(`${exactBridge}\n${exactBridge}`, path)).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
-
-    // Reviewer bypass 2: env options appearing after option parsing has ended.
-    expect(sourceBoundaryFindings("env bash -c true -u MAILERY_CLOUD_API_URL ignored", path)).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
-
-    // The same command text is not a bridge at an arbitrary location.
-    expect(sourceBoundaryFindings(arbitraryBridge, path)).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
-
-    // Reordering or injecting even a valid env option invalidates the bridge.
-    const reordered = exactBridge.replace(
-      /(\s+-u HASNA_MAILERY_API_SIGNING_KEY -u HASNA_MAILERY_DATABASE_URL \\\n)(\s+-u MAILERY_CLOUD_API_URL -u MAILERY_CLOUD_TOKEN \\\n)/,
-      "$2$1",
-    );
-    expect(reordered).not.toBe(exactBridge);
-    expect(sourceBoundaryFindings(reordered, path)).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
-    const injected = exactBridge.replace(
-      /(\s+-u MAILERY_CLOUD_API_URL -u MAILERY_CLOUD_TOKEN \\\n)/,
-      "    -u UNRELATED_ENVIRONMENT_VARIABLE \\\n$1",
-    );
-    expect(injected).not.toBe(exactBridge);
-    expect(sourceBoundaryFindings(injected, path)).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
-    const changedUtility = exactBridge.replace('    "$@"\n', "    bash -c true\n");
-    expect(changedUtility).not.toBe(exactBridge);
-    expect(sourceBoundaryFindings(changedUtility, path)).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
-
-    const changedStart = exactBridge.replace("run_scrubbed() {\n", "run_scrubbed () {\n");
-    expect(changedStart).not.toBe(exactBridge);
-    expect(extractExactLegacyHostedEnvUnsetBridge(changedStart, path)).toBeUndefined();
-    expect(sourceBoundaryFindings(changedStart, path)).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
-
-    // A harmless body change still invalidates the pinned digest, proving the
-    // acceptance is byte-exact rather than a partial option-list check.
-    const changedBody = exactBridge.replace("    NO_COLOR=1 \\\n", "    NO_COLOR=0 \\\n");
-    expect(changedBody).not.toBe(exactBridge);
-    expect(extractExactLegacyHostedEnvUnsetBridge(changedBody, path)).toBeUndefined();
-    expect(sourceBoundaryFindings(changedBody, path)).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
-
-    // Every retired key remains banned anywhere outside the one exact bridge.
-    for (const key of legacyHostedEnvKeys) {
-      expect(sourceBoundaryFindings(`${exactBridge}\necho ${key}`, path)).toEqual(expectedLegacyFindings(key));
+  it("rejects retired env-unset bridges even at their former canonical location", () => {
+    for (const path of [exactCompatibilityBridgePath, ".github/workflows/ci.yml", "scripts/arbitrary.sh"]) {
+      for (const key of legacyHostedEnvKeys) {
+        for (const content of [
+          `env -u ${key} true`,
+          `run_scrubbed() {\n  env -u ${key} true\n}\n`,
+          `env bash -c true -u ${key} ignored`,
+          `echo ${key}`,
+          `env ${key}=value true`,
+          `printf '%s' 'env -u ${key}'`,
+        ]) {
+          expect(sourceBoundaryFindings(content, path)).toEqual(expectedLegacyFindings(key));
+          expect(sourceBoundaryFindings(`${content}\n${content}`, path)).toEqual(expectedLegacyFindings(key));
+        }
+      }
     }
-
-    expect(sourceBoundaryFindings(exactBridge, ".github/workflows/ci.yml")).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
-    expect(sourceBoundaryFindings(exactBridge, "scripts/arbitrary.sh")).toEqual([
-      "legacy hosted environment",
-      "hosted implementation vocabulary",
-    ]);
   });
 
   it("allows hosted vocabulary only in the exact historical CHANGELOG retirement note", () => {

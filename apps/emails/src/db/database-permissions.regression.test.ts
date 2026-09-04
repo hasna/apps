@@ -53,13 +53,13 @@ function mode(path: string): number {
   return statSync(path).mode & 0o777;
 }
 
-function runPostinstallWith(rootPath: string, extra: Record<string, string>) {
+function runLegacyProtectionHelperWith(rootPath: string, extra: Record<string, string>) {
   const packageRoot = join(import.meta.dir, "..", "..");
   const packageJson = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
-    scripts: { postinstall: string };
+    scripts: { postinstall?: string };
   };
-  expect(packageJson.scripts.postinstall).toBe("bun ./scripts/ensure-private-data-dir.mjs");
-  // The postinstall resolves the effective data root through @hasna/paths; scrub
+  expect(packageJson.scripts.postinstall).toBeUndefined();
+  // The explicit, unshipped legacy helper resolves the effective data root through @hasna/paths; scrub
   // the resolver overrides so the legacy default is exercised deterministically,
   // then apply `extra` so a case can pass the overrides explicitly.
   const env = { ...process.env, HOME: rootPath, PATH: join(rootPath, "empty-path") };
@@ -73,8 +73,8 @@ function runPostinstallWith(rootPath: string, extra: Record<string, string>) {
   });
 }
 
-function runPostinstall(rootPath: string) {
-  return runPostinstallWith(rootPath, {});
+function runLegacyProtectionHelper(rootPath: string) {
+  return runLegacyProtectionHelperWith(rootPath, {});
 }
 
 function restoreEnv(): void {
@@ -180,8 +180,8 @@ if (process.platform !== "win32") {
       expect(mode(dataDir)).toBe(0o700);
     });
 
-    it("creates private default directories from the Bun package postinstall hook", () => {
-      const result = runPostinstall(root);
+    it("preserves explicit legacy data-root protection without an install hook", () => {
+      const result = runLegacyProtectionHelper(root);
 
       expect(result.exitCode).toBe(0);
       expect([
@@ -190,9 +190,9 @@ if (process.platform !== "win32") {
       ]).toEqual([0o755, 0o700]);
     });
 
-    it("postinstall applies first-nonblank exact-override precedence, matching src/paths.ts (release-review P1)", () => {
+    it("legacy helper applies first-nonblank exact-override precedence, matching src/paths.ts (release-review P1)", () => {
       const custom = join(root, "custom-emails");
-      const result = runPostinstallWith(root, {
+      const result = runLegacyProtectionHelperWith(root, {
         HASNA_EMAILS_HOME: "   ",
         EMAILS_HOME: custom,
       });
@@ -204,39 +204,39 @@ if (process.platform !== "win32") {
       expect(existsSync(join(root, ".hasna", "emails"))).toBe(false);
     });
 
-    it("postinstall preserves a safe shared root and repairs an existing permissive emails directory", () => {
+    it("legacy helper preserves a safe shared root and repairs an existing permissive emails directory", () => {
       const hasnaDir = join(root, ".hasna");
       const dataDir = join(hasnaDir, "emails");
       mkdirSync(dataDir, { recursive: true, mode: 0o755 });
       chmodSync(hasnaDir, 0o755);
       chmodSync(dataDir, 0o755);
 
-      const result = runPostinstall(root);
+      const result = runLegacyProtectionHelper(root);
 
       expect(result.exitCode).toBe(0);
       expect([mode(hasnaDir), mode(dataDir)]).toEqual([0o755, 0o700]);
     });
 
-    it("postinstall canonicalizes a system-style HOME alias and creates only under its target", () => {
+    it("legacy helper canonicalizes a system-style HOME alias and creates only under its target", () => {
       const canonicalHome = join(root, "postinstall-canonical-home");
       const aliasHome = join(root, "postinstall-alias-home");
       mkdirSync(canonicalHome, { mode: 0o700 });
       symlinkSync(canonicalHome, aliasHome, "dir");
 
-      const result = runPostinstall(aliasHome);
+      const result = runLegacyProtectionHelper(aliasHome);
 
       expect(result.exitCode).toBe(0);
       expect(mode(join(canonicalHome, ".hasna"))).toBe(0o755);
       expect(mode(join(canonicalHome, ".hasna", "emails"))).toBe(0o700);
     });
 
-    it("postinstall rejects a symlink target without changing it", () => {
+    it("legacy helper rejects a symlink target without changing it", () => {
       const target = join(root, "postinstall-target");
       mkdirSync(target, { mode: 0o755 });
       chmodSync(target, 0o755);
       symlinkSync(target, join(root, ".hasna"), "dir");
 
-      const result = runPostinstall(root);
+      const result = runLegacyProtectionHelper(root);
 
       expect(result.exitCode).not.toBe(0);
       expect(mode(target)).toBe(0o755);
@@ -422,7 +422,7 @@ if (process.platform !== "win32") {
         expect(existsSync(path)).toBe(false);
       });
 
-      it("postinstall rejects a non-writable HOME ancestor owned by another uid", () => {
+      it("legacy helper rejects a non-writable HOME ancestor owned by another uid", () => {
         const ancestor = join(root, "foreign-postinstall-ancestor");
         const home = join(ancestor, "home");
         mkdirSync(home, { recursive: true, mode: 0o700 });
@@ -430,7 +430,7 @@ if (process.platform !== "win32") {
         chownSync(ancestor, 65534, 65534);
         chmodSync(ancestor, 0o555);
 
-        const result = runPostinstall(home);
+        const result = runLegacyProtectionHelper(home);
 
         expect(result.exitCode).not.toBe(0);
         expect(result.stderr.toString()).toMatch(/ancestor.*owned|foreign uid/i);

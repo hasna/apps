@@ -1,18 +1,22 @@
 // ── The autosync staleness gate ──────────────────────────────────────────────
 //
 // Every read-only CLI verb (today, machines, sessions, summary, ...) runs an
-// auto-sync before answering, so the numbers it prints include provider data
-// ingested moments ago. On a machine whose on-box provider corpus has grown
-// large (e.g. ~/.claude/projects with tens of thousands of session jsonl
-// files), that ingest pass takes minutes, so every read-only invocation
-// appears to HANG before producing any output — in both hosted and local
-// mode, because hosted mode runs the same local ingest first and then pushes.
+// auto-sync before answering in LOCAL mode, so the numbers it prints include
+// provider data ingested moments ago. On a machine whose on-box provider corpus
+// has grown large (e.g. ~/.claude/projects with tens of thousands of session
+// jsonl files), that ingest pass takes minutes, so every read-only invocation
+// appears to HANG before producing any output.
 //
 // The gate bounds that cost: auto-sync runs at most once per interval
 // (default 10 minutes, `HASNA_ECONOMY_AUTOSYNC_INTERVAL` seconds, 0 = always
 // sync, preserving the legacy behavior). Read-only verbs then answer from the
 // store immediately. The full ingest remains available on demand via the
 // explicit `economy sync` verb, which does not pass through this gate.
+//
+// In self_hosted/cloud (API) mode there is NO local store to flush: reads go
+// straight to the shared API's GET routes, and the /v1/ingest push belongs to
+// the explicit `economy sync` verb only. The CLI's autoSync is a no-op there
+// (see cli/index.ts), so this gate is local-mode-only.
 //
 // The marker lives in the same per-machine ingest_state store the ingest
 // modules already use: the local economy.db in local mode, and the

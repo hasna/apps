@@ -1,3 +1,11 @@
+import { beforeEach as configureIntegrationFixture } from "bun:test";
+configureIntegrationFixture(() => {
+  process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
+  process.env.TODOS_API_KEY = "remote-key";
+  delete process.env.HASNA_TODOS_API_KEY;
+  process.env.HASNA_SESSIONS_API_URL = "https://sessions.example.test";
+  process.env.HASNA_SESSIONS_API_KEY = "test-session-key";
+});
 import { describe, it, expect, mock, beforeEach, spyOn } from "bun:test";
 
 // ---------------------------------------------------------------------------
@@ -33,6 +41,12 @@ mock.module("../../core/db", () => ({
 }));
 
 // Import after mocks
+// Command behavior uses an explicit test-only Store seam, never production fallback.
+const { MockedStoreFixture } = await import("../../testing/mocked-store-fixture");
+const actualStore = await import("../../core/store");
+const productionResolveStore = actualStore.resolveStore;
+mock.module("../../core/store", () => ({ ...actualStore, resolveStore: (env = process.env) => env.HASNA_ATTACHMENTS_API_URL && env.HASNA_ATTACHMENTS_API_KEY ? productionResolveStore(env) : new MockedStoreFixture() }));
+
 const { linkAttachmentToTask, registerLinkTask } = await import("./link-task");
 
 // ---------------------------------------------------------------------------
@@ -107,12 +121,12 @@ describe("linkAttachmentToTask", () => {
 
     const fakeFetch = makeFetch(200);
     process.env.TODOS_API_KEY = "k";
-    await linkAttachmentToTask("att_abc123", "TASK-001", "http://localhost:3000", fakeFetch);
+    await linkAttachmentToTask("att_abc123", "TASK-001", "https://todos.example.test", fakeFetch);
     delete process.env.TODOS_API_KEY;
 
     expect(fakeFetch).toHaveBeenCalledTimes(1);
     const [url, opts] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("http://localhost:3000/api/tasks/TASK-001");
+    expect(url).toBe("https://todos.example.test/api/tasks/TASK-001");
     expect(opts.method).toBe("PATCH");
     expect(new Headers(opts.headers).get("x-api-key")).toBe("k");
 
@@ -129,7 +143,7 @@ describe("linkAttachmentToTask", () => {
     const fakeFetch = makeFetch(200);
 
     await expect(
-      linkAttachmentToTask("att_missing", "TASK-001", "http://localhost:3000", fakeFetch)
+      linkAttachmentToTask("att_missing", "TASK-001", "https://todos.example.test", fakeFetch)
     ).rejects.toThrow("Attachment not found: att_missing");
 
     // fetch should not be called if attachment doesn't exist
@@ -142,7 +156,7 @@ describe("linkAttachmentToTask", () => {
 
     const fakeFetch = makeFetch(404, "Task not found");
     await expect(
-      linkAttachmentToTask("att_abc123", "TASK-999", "http://localhost:3000", fakeFetch)
+      linkAttachmentToTask("att_abc123", "TASK-999", "https://todos.example.test", fakeFetch)
     ).rejects.toThrow("Task not found: TASK-999");
   });
 
@@ -152,7 +166,7 @@ describe("linkAttachmentToTask", () => {
 
     const fakeFetch = makeFetch(500, "Internal error");
     await expect(
-      linkAttachmentToTask("att_abc123", "TASK-001", "http://localhost:3000", fakeFetch)
+      linkAttachmentToTask("att_abc123", "TASK-001", "https://todos.example.test", fakeFetch)
     ).rejects.toThrow("HTTP 500");
   });
 
@@ -161,7 +175,7 @@ describe("linkAttachmentToTask", () => {
     mockFindById.mockImplementation(() => att);
 
     const fakeFetch = makeFetch(200);
-    await linkAttachmentToTask("att_abc123", "TASK-001", "http://localhost:3000", fakeFetch);
+    await linkAttachmentToTask("att_abc123", "TASK-001", "https://todos.example.test", fakeFetch);
 
     const [, opts] = (fakeFetch as ReturnType<typeof mock>).mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(opts.body as string);
@@ -173,7 +187,7 @@ describe("linkAttachmentToTask", () => {
     const fakeFetch = makeFetch(200);
 
     await expect(
-      linkAttachmentToTask("att_missing", "TASK-001", "http://localhost:3000", fakeFetch)
+      linkAttachmentToTask("att_missing", "TASK-001", "https://todos.example.test", fakeFetch)
     ).rejects.toThrow();
 
     expect(mockDbClose).toHaveBeenCalled();
@@ -210,6 +224,7 @@ describe("link-task CLI command", () => {
   });
 
   it("uses custom --todos-url when provided", async () => {
+    process.env.HASNA_TODOS_API_URL = "https://custom.example.test";
     const att = makeAttachment();
     mockFindById.mockImplementation(() => att);
 
@@ -223,10 +238,10 @@ describe("link-task CLI command", () => {
     try {
       const program = buildProgram();
       await program.parseAsync(
-        ["link-task", "att_abc123", "TASK-001", "--todos-url", "http://localhost:4000"],
+        ["link-task", "att_abc123", "TASK-001", "--todos-url", "https://custom.example.test"],
         { from: "user" }
       );
-      expect(capturedUrl).toContain("http://localhost:4000");
+      expect(capturedUrl).toContain("https://custom.example.test");
     } finally {
       capture.restore();
     }

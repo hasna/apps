@@ -26,7 +26,7 @@ import { handleV1Request } from "./v1.js";
  * thrown message names `isRevoked`.
  */
 
-const DUMMY_DSN = "postgres://calendar_app@127.0.0.1:1/calendar_test";
+const DUMMY_DSN = "postgres://calendar_app@127.0.0.1:1/calendar_test?sslmode=verify-full";
 const DUMMY_SIGNING_SECRET = "signing-secret-for-tests-only";
 
 const HOSTED_VARS = [

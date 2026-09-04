@@ -6,7 +6,7 @@
 # (XDG) home is adopted, or COMPUTERS_DB when set); the shipped PostgreSQL
 # migrations are proven by scripts/test-postgres-migrations.sh.
 # =============================================================================
-FROM --platform=linux/arm64 oven/bun:1-alpine AS base
+FROM --platform=linux/amd64 oven/bun:1-alpine AS base
 WORKDIR /app
 
 # Install dependencies first (better layer caching). The app-level lockfile is
@@ -17,7 +17,7 @@ COPY package.json ./
 RUN bun install --ignore-scripts
 
 # ---- build ------------------------------------------------------------------
-FROM --platform=linux/arm64 oven/bun:1-alpine AS build
+FROM --platform=linux/amd64 oven/bun:1-alpine AS build
 WORKDIR /app
 COPY --from=base /app/node_modules ./node_modules
 COPY --from=base /app/package.json ./package.json
@@ -29,7 +29,7 @@ COPY migrations ./migrations
 RUN bun run build
 
 # ---- runtime -----------------------------------------------------------------
-FROM --platform=linux/arm64 oven/bun:1-alpine AS runtime
+FROM --platform=linux/amd64 oven/bun:1-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     COMPUTERS_PORT=7788 \

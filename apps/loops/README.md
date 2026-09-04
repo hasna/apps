@@ -1023,6 +1023,8 @@ loops run-now <id-or-name>
 
 Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr are redacted by default in status output. `loops run-now` exits non-zero when the recorded run fails or times out.
 
+`loops run-now` is connection-aware. Against the local store it claims and executes the run inline (`runNow.source` is `manual`/`ad_hoc`, and the recorded run's status sets the exit code). Against the hosted API (`HASNA_LOOPS_API_URL` + `HASNA_LOOPS_API_KEY`) it schedules the loop due now on the control plane (`runNow.source: "hosted"`, exit 0 on a successful schedule) and a bound `loops-runner` claims and executes it on its next poll — the client never runs the loop's target while connected to the hosted API.
+
 ## Health And Hygiene
 
 ```bash

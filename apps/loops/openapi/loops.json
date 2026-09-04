@@ -1650,6 +1650,64 @@
         ]
       }
     },
+    "/v1/loops/{id}/run-now": {
+      "post": {
+        "operationId": "runLoopNow",
+        "summary": "Schedule a loop due now for a bound runner (hosted run-now)",
+        "description": "Hosted equivalent of the local run-now verb: marks the loop active and due at the current control-plane time. A bound loops-runner claims and executes it on its next poll and reports through the runner endpoints; the client never executes the loop target. Refuses archived loops and ambiguous names without mutating.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Exact loop id, or a name that uniquely selects an active unarchived loop.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "loop scheduled due now",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunNowResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "loop not found"
+          },
+          "409": {
+            "description": "ambiguous loop name or archived loop",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AmbiguousNameResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.runNow",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
     "/v1/runs/{id}/heartbeat": {
       "post": {
         "operationId": "runsHeartbeat",
@@ -4718,6 +4776,25 @@
         "required": [
           "ok",
           "run"
+        ]
+      },
+      "RunNowResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "loop": {
+            "$ref": "#/components/schemas/Loop"
+          },
+          "scheduledFor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "loop",
+          "scheduledFor"
         ]
       },
       "RunListResponse": {

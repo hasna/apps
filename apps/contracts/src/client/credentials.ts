@@ -309,6 +309,34 @@ function parseEnvFile(text: string): ParsedConfigFile {
 }
 
 /**
+ * True when a security-relevant file's permission bits are exactly owner-only
+ * 0400 or 0600 across the FULL 07777 mask (setuid/setgid/sticky refused — a
+ * 04600 never passes because masking with 0777 keeps the setuid bit).
+ */
+export function configFileModeAllowed(mode: number): boolean {
+  const permissions = mode & 0o7777;
+  return permissions === 0o400 || permissions === 0o600;
+}
+
+/**
+ * True when two fstat snapshots of the same descriptor describe the same
+ * file. A change on any axis (dev/ino/size/mtime/ctime) means the path was
+ * replaced or mutated while it was being read — the read must be refused.
+ */
+export function configFileReadsCoherent(
+  before: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number },
+  after: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number },
+): boolean {
+  return (
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.size === after.size &&
+    before.mtimeMs === after.mtimeMs &&
+    before.ctimeMs === after.ctimeMs
+  );
+}
+
+/**
  * Read and parse one XDG app-config file. Missing paths are absent; unsafe,
  * unreadable, oversized, and non-regular paths fail closed.
  *
@@ -336,22 +364,15 @@ function readAppConfigFile(path: string): ParsedConfigFile | null {
   try {
     const before = fstatSync(fd);
     if (!before.isFile()) unsafe("the path is not a regular file");
-    const permissions = before.mode & 0o7777;
-    if (permissions !== 0o400 && permissions !== 0o600) {
-      unsafe(`permission mode ${permissions.toString(8).padStart(4, "0")} is not owner-only 0400 or 0600`);
+    if (!configFileModeAllowed(before.mode)) {
+      unsafe(`permission mode ${(before.mode & 0o7777).toString(8).padStart(4, "0")} is not owner-only 0400 or 0600`);
     }
     const uid = process.getuid?.() ?? process.geteuid?.();
     if (uid !== undefined && before.uid !== uid) unsafe("the file is not owned by the current user");
     if (before.size > MAX_CREDENTIAL_FILE_BYTES) unsafe("the file exceeds the size limit");
     const bytes = readFileSync(fd);
     const after = fstatSync(fd);
-    if (
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    ) {
+    if (!configFileReadsCoherent(before, after)) {
       unsafe("the file changed while being read");
     }
     return parseEnvFile(bytes.toString("utf8"));

@@ -12,11 +12,10 @@
  *   attachments-serve --no-migrate  Serve without running migrations on boot.
  */
 
-import { createCloudPoolFromEnv } from "../generated/storage-kit/pool.js";
-import { MigrationLedger } from "../generated/storage-kit/migrations.js";
-import type { TypedQueryClient } from "../generated/storage-kit/query.js";
+import { MigrationLedger } from "../server-storage/migrations.js";
+import type { TypedQueryClient } from "../server-storage/query.js";
 import { ApiKeyStore } from "@hasna/contracts/auth";
-import { resolveStorageMode } from "../generated/storage-kit/mode.js";
+import { createServerPool } from "./database.js";
 import { normalizeConfig, type AttachmentsConfig, type DeepPartial } from "../core/config.js";
 import { ATTACHMENTS_MIGRATIONS } from "../db/migrations.js";
 import { PgAttachmentsStore } from "../db/pg-store.js";
@@ -56,12 +55,10 @@ export async function printVersion(): Promise<void> {
   console.log(version);
 }
 
-function resolveSigningSecret(): string {
-  const secret =
-    process.env.HASNA_ATTACHMENTS_API_SIGNING_KEY?.trim() ||
-    process.env.HASNA_API_SIGNING_KEY?.trim() ||
-    "";
-  if (!secret) {
+export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): string {
+  const values = [env.HASNA_ATTACHMENTS_API_SIGNING_KEY, env.HASNA_API_SIGNING_KEY].filter((v): v is string => v !== undefined);
+  const secret = values[0] ?? "";
+  if (!secret.trim() || values.some(v => v !== v.trim() || !v.trim()) || new Set(values).size > 1) {
     throw new Error(
       "Missing API signing secret. Set HASNA_ATTACHMENTS_API_SIGNING_KEY (or HASNA_API_SIGNING_KEY).",
     );
@@ -71,6 +68,7 @@ function resolveSigningSecret(): string {
 
 function buildConfigFromEnv(): AttachmentsConfig {
   const bucket = process.env.ATTACHMENTS_S3_BUCKET?.trim() || "";
+  if (!bucket) throw new Error("Service object storage requires ATTACHMENTS_S3_BUCKET.");
   const region =
     process.env.ATTACHMENTS_S3_REGION?.trim() || process.env.AWS_REGION?.trim() || "us-east-1";
   const publicBaseUrl =
@@ -89,7 +87,7 @@ function buildConfigFromEnv(): AttachmentsConfig {
       ...(process.env.ATTACHMENTS_S3_ENDPOINT ? { endpoint: process.env.ATTACHMENTS_S3_ENDPOINT } : {}),
     },
     storage: {
-      backend: bucket ? "s3" : "local",
+      backend: "s3",
       maxSizeBytes: process.env.ATTACHMENTS_MAX_SIZE
         ? parseInt(process.env.ATTACHMENTS_MAX_SIZE, 10)
         : 10 * 1024 * 1024 * 1024,
@@ -100,7 +98,7 @@ function buildConfigFromEnv(): AttachmentsConfig {
       baseUrl: publicBaseUrl || `http://0.0.0.0:${process.env.PORT ?? 3459}`,
       publicPath: "/a",
     },
-    defaults: { linkType: bucket ? "presigned" : "server" },
+    defaults: { linkType: "presigned" },
     ...(publicBaseUrl
       ? { domains: [{ hostname: new URL(publicBaseUrl).host, baseUrl: publicBaseUrl, primary: true }] }
       : {}),
@@ -129,10 +127,9 @@ async function main(): Promise<void> {
   const migrateOnly = args.includes("migrate");
   const skipMigrate = args.includes("--no-migrate") || process.env.ATTACHMENTS_SKIP_MIGRATE === "1";
 
-  const modeResolution = resolveStorageMode(APP_SLUG);
-  const { client, connectionSource } = createCloudPoolFromEnv(APP_SLUG, {
-    applicationName: "attachments-serve",
-  });
+  const signingSecret = migrateOnly ? "" : resolveSigningSecret();
+  const config = migrateOnly ? null : buildConfigFromEnv();
+  const client = createServerPool(process.env);
 
   if (migrateOnly) {
     await runMigrations(client);
@@ -144,8 +141,7 @@ async function main(): Promise<void> {
     await runMigrations(client);
   }
 
-  const signingSecret = resolveSigningSecret();
-  const config = buildConfigFromEnv();
+  if (!config) throw new Error("Service configuration unavailable.");
   const store = new PgAttachmentsStore(client);
   const keyStore = new ApiKeyStore(client);
   const version = process.env.ATTACHMENTS_VERSION || (await import("../../package.json")).version;
@@ -155,7 +151,7 @@ async function main(): Promise<void> {
     store,
     config,
     version,
-    mode: modeResolution.mode,
+    mode: "postgresql",
     signingSecret,
     isRevoked: keyStore.isRevoked,
     audit: (e) => console.log("[api_auth]", JSON.stringify(e)),
@@ -165,7 +161,7 @@ async function main(): Promise<void> {
   const hostname = config.server.host;
   Bun.serve({ port, hostname, fetch: app.fetch, idleTimeout: 120 });
   console.log(
-    `attachments-serve listening on http://${hostname}:${port} (mode=${modeResolution.mode}, db_source=${connectionSource})`,
+    `attachments-serve listening on http://${hostname}:${port} (backend=postgresql, db_source=server-config)`,
   );
 
   await new Promise<void>((resolve) => {
@@ -176,7 +172,7 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
-main().catch((err) => {
-  console.error("[attachments-serve] fatal:", err instanceof Error ? err.message : err);
+if (import.meta.main) main().catch((_err) => {
+  console.error("[attachments-serve] fatal: startup failed; verify PostgreSQL, object storage and signing configuration.");
   process.exit(1);
 });

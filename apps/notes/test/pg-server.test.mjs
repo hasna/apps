@@ -9,9 +9,9 @@
 //   - that key authenticates the notes CRUD routes over the wire dialect,
 //   - a legacy pn_ key is rejected on the PostgreSQL backend (401),
 //   - session (JWT) auth still works,
-//   - the sqlite backend keeps issuing pn_ keys (dialect unchanged there).
+//   - isolated legacy SQLite fixtures elsewhere retain their historical dialect.
 
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { PGlite } from '@electric-sql/pglite';
 import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto';
 import { MigrationLedger } from '../src/generated/storage-kit/index.js';
@@ -19,9 +19,15 @@ import { notesPgMigrations } from '../server/pg-migrations.ts';
 import { wrapPgExecutor } from '../server/pg-adapter.mjs';
 import { createApp, resolveConfig, SERVICE } from '../server/app.mjs';
 
+const databases = [];
+afterEach(async () => {
+  for (const db of databases.splice(0)) await db.close();
+});
+
 async function bootPgServer(env = {}) {
   // pgcrypto contrib matches production PostgreSQL (the extension migration).
   const pglite = new PGlite({ extensions: { pgcrypto } });
+  databases.push(pglite);
   const client = {
     async query(sql, params = []) {
       const result = await pglite.query(sql, params);
@@ -49,6 +55,7 @@ async function bootPgServer(env = {}) {
   await ledger.migrate();
   const db = wrapPgExecutor(client, { applicationName: 'notes-test' });
   const config = resolveConfig(env, ['--dev']);
+  config.log = () => {};
   const app = await createApp({ db, config });
   return { app, db, pglite };
 }

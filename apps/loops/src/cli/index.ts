@@ -300,10 +300,11 @@ async function listAllLoops(
 
 /**
  * Guard for the on-box execution/maintenance commands (daemon lifecycle, WAL
- * checkpoint + backup rotation, ad-hoc run/tick, local migrations). These act on
- * this machine's runtime and sqlite file, so they are meaningless — and would
+ * checkpoint + backup rotation, tick, local migrations). These act on this
+ * machine's runtime and sqlite file, so they are meaningless — and would
  * silently hit the local island — when the client is flipped to the hosted API.
- * Fail loudly instead.
+ * Fail loudly instead. (`run-now` is NOT local-only: it routes through the
+ * hosted endpoint and schedules the loop for a bound runner.)
  */
 function assertLocalOnlyCommand(command: string): void {
   if (isCloudStore()) {
@@ -2975,7 +2976,24 @@ program
   .description("claim and execute one loop run immediately")
   .option("--show-output", "show stdout/stderr")
   .action(runAction(async (idOrName, opts) => {
-    assertLocalOnlyCommand("run-now");
+    if (isCloudStore()) {
+      // Hosted route (hosted run-now): schedule the loop due now on the control
+      // plane. A bound loops-runner claims it on its next poll and executes it,
+      // reporting through the runner endpoints. The client NEVER runs the loop
+      // target while connected to the hosted API — there is no local island to
+      // fall back to, so the schedule mutation is the entire operation.
+      return await withStore(async (store) => {
+        const loop = await store.requireUniqueLoop(idOrName);
+        if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' before running it`);
+        const result = await store.runNow(loop.id);
+        const value = {
+          loop: publicLoop(result.loop),
+          scheduledFor: result.scheduledFor,
+          runNow: { source: "hosted", advancesLoop: false },
+        };
+        print(value, `${result.loop.id} scheduled now source=hosted (a bound loops-runner executes it)`);
+      });
+    }
     const store = new Store();
     try {
       const loop = store.requireUniqueLoop(idOrName);

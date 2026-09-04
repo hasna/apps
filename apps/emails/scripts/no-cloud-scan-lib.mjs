@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 const legacyHostedEnvKeys = [
   "MAILERY_API_URL",
   "MAILERY_API_KEY",
@@ -114,8 +112,8 @@ const boundaryPatterns = [
     label: "legacy hosted environment",
     scopes: BOTH,
     pattern: new RegExp(legacyHostedEnvKeys.join("|"), "i"),
-    // `src/lib/mode.ts` (the rejection list) and `.github/workflows/ci.yml` (`env -u`)
-    // are handled by stripExactCompatibilityBridges and need no allowance. What
+    // The named rejection list is handled by stripExactCompatibilityBridges.
+    // The test runner now inherits only execution settings and needs no bridge. What
     // remains is suites that assert the rejection, which must spell the variables
     // out. An EXACT path list was tried first and is wrong: `main` adds such suites
     // continuously, so it went stale within a day and turned CI red for changes the
@@ -193,52 +191,6 @@ export const artifactBoundaryPatterns = boundaryPatternsForScope(ARTIFACT_SCOPE)
 /** Patterns enforced on the committed source tree. */
 export const sourceBoundaryPatterns = boundaryPatternsForScope(SOURCE_SCOPE);
 
-// The retired-name compatibility bridge has one canonical source location. Its
-// body is extracted from that source using unique structural anchors and accepted
-// only when the complete byte range retains this pinned digest. Keeping only the
-// anchors and hash here avoids making the guard another source of deployment-mode
-// configuration while still failing closed on insertion, reordering, utility
-// changes, duplicate anchors, or movement to another path.
-const exactLegacyHostedEnvUnsetBridgeSpec = {
-  path: "scripts/run-hermetic-tests.sh",
-  startAnchor: "run_scrubbed() {\n",
-  endAnchor: '    "$@"\n',
-  sha256: "c43411313ab0e14ec5635973f0023a4ff9cd411aacfa3a9eeb34d3d2273b6623",
-};
-
-function locateExactLegacyHostedEnvUnsetBridge(content, path) {
-  const spec = exactLegacyHostedEnvUnsetBridgeSpec;
-  if (path !== spec.path) return undefined;
-
-  const start = content.indexOf(spec.startAnchor);
-  if (start < 0 || content.indexOf(spec.startAnchor, start + spec.startAnchor.length) >= 0) return undefined;
-
-  const endAnchorStart = content.indexOf(spec.endAnchor, start + spec.startAnchor.length);
-  if (
-    endAnchorStart < 0 ||
-    content.indexOf(spec.endAnchor) !== endAnchorStart ||
-    content.indexOf(spec.endAnchor, endAnchorStart + spec.endAnchor.length) >= 0
-  ) {
-    return undefined;
-  }
-
-  const end = endAnchorStart + spec.endAnchor.length;
-  const bridge = content.slice(start, end);
-  if (createHash("sha256").update(bridge).digest("hex") !== spec.sha256) return undefined;
-
-  for (const key of legacyHostedEnvKeys) {
-    const token = `-u ${key}`;
-    if (bridge.indexOf(token) < 0 || bridge.indexOf(token) !== bridge.lastIndexOf(token)) {
-      return undefined;
-    }
-  }
-  return { content: bridge, start, end };
-}
-
-export function extractExactLegacyHostedEnvUnsetBridge(content, path) {
-  return locateExactLegacyHostedEnvUnsetBridge(content, path)?.content;
-}
-
 const exactHistoricalChangelogBridge = [
   "- rebuild the product as local-first and operator-owned AWS self-hosting, with no Hasna SaaS control plane.",
   "- add durable idempotent self-hosted sends, authenticated attachment retrieval, mailbox mutations, signed replay-safe webhooks, and explicit compatibility for previously issued API keys.",
@@ -310,17 +262,6 @@ for (const [path, { content: bridge, tokens }] of exactHistoricalHostedVocabular
 
 function stripExactCompatibilityBridges(content, path) {
   let scanned = content;
-  // Normalize only the uniquely anchored, byte-for-byte pinned canonical bridge.
-  // Any structural or content mismatch leaves every retired token visible.
-  const exactBridge = locateExactLegacyHostedEnvUnsetBridge(scanned, path);
-  if (exactBridge !== undefined) {
-    let normalizedBridge = exactBridge.content;
-    for (const key of legacyHostedEnvKeys) {
-      normalizedBridge = normalizedBridge.replace(`-u ${key}`, "-u LEGACY_HOSTED_SENTINEL");
-    }
-    scanned = scanned.slice(0, exactBridge.start) + normalizedBridge + scanned.slice(exactBridge.end);
-  }
-
   // The mode resolver must retain these literal names only to reject old
   // environments with actionable migration guidance. Do not exempt its file or
   // bundle chunk wholesale: only erase literals inside the named rejection list.

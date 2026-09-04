@@ -55,6 +55,37 @@ describe("kit server backend resolution", () => {
       "postgres://user@h/db",
     );
   });
+
+  test("a defined blank DATABASE_URL fails closed instead of selecting sqlite", () => {
+    const cases: Array<[string, Record<string, string>, RegExp]> = [
+      ["canonical empty", { HASNA_DEMO_DATABASE_URL: "" }, /blank/i],
+      ["canonical whitespace", { HASNA_DEMO_DATABASE_URL: "   " }, /blank/i],
+      // quoted whitespace is refused by the URL parser — fail-closed either way
+      ["canonical quoted whitespace", { HASNA_DEMO_DATABASE_URL: '"   "' }, /blank|PostgreSQL connection URL/i],
+      ["short alias empty", { DEMO_DATABASE_URL: "" }, /blank/i],
+    ];
+    for (const [label, env, pattern] of cases) {
+      expect(() => resolveServerDataBackend("demo", env), label).toThrow(pattern);
+    }
+  });
+
+  test("conflicting canonical and short DATABASE_URL aliases are rejected, not silently first", () => {
+    expect(() =>
+      resolveServerDataBackend("demo", {
+        HASNA_DEMO_DATABASE_URL: "postgres://a.example/demo",
+        DEMO_DATABASE_URL: "postgres://b.example/demo",
+      }),
+    ).toThrow(/disagree/);
+  });
+
+  test("identical values in both aliases stay accepted", () => {
+    expect(
+      resolveServerDataBackend("demo", {
+        HASNA_DEMO_DATABASE_URL: "postgres://one.example/demo",
+        DEMO_DATABASE_URL: "postgres://one.example/demo",
+      }),
+    ).toMatchObject({ backend: "postgresql" });
+  });
 });
 
 // --- tls.ts --------------------------------------------------------------

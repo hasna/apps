@@ -10,7 +10,7 @@
  */
 
 import { apiKeyMigrations } from "@hasna/contracts/auth";
-import { defineMigration, type Migration } from "../generated/storage-kit/migrations.js";
+import { defineMigration, type Migration } from "../server-storage/migrations.js";
 
 const CORE_MIGRATIONS: Migration[] = [
   defineMigration(

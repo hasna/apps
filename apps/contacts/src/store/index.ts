@@ -2,77 +2,47 @@
  * The ONE storage abstraction for @hasna/contacts.
  *
  * Every CLI command, MCP tool, and SDK method routes reads and writes through a
- * single `Store` interface. There are exactly two transports behind it:
- *
- *   - LocalStore — on-box SQLite (the `src/db/*` relational layer). First-class.
- *   - ApiStore   — HTTPS `/v1` + bearer key against the self_hosted service.
- *
- * The mode is resolved from env by `resolveStorageClient` (see
- * `../cloud/http-storage.ts`): presence of `HASNA_CONTACTS_API_URL` +
- * `HASNA_CONTACTS_API_KEY` (or an explicit `HASNA_CONTACTS_STORAGE_MODE`) selects
- * the ApiStore; otherwise the LocalStore. `self_hosted` and `cloud` BOTH use the
- * ApiStore (identical client code — only the URL/key differ; tenancy is a
- * server-side concern).
+ * single `Store` interface backed by one transport: authenticated HTTPS `/v1`.
+ * The URL is explicit and the API key comes from the shared contracts
+ * credential seam. Missing or invalid configuration is terminal; it never
+ * selects or imports the retired SQLite implementation. Legacy preservation is
+ * an explicit byte-copy workflow outside this store.
  *
  * NO command, tool, or SDK method may import `getDatabase`/`bun:sqlite` or issue
- * a raw `fetch`. Direct SQLite access lives ONLY inside LocalStore (which is the
- * SQLite transport); direct HTTP lives ONLY inside ApiStore. This is what
- * eliminates the split-brain bug where some operations silently wrote local
- * SQLite even while the app was pointed at the cloud.
+ * a raw `fetch`. Direct HTTP lives only inside ApiStore.
  *
- * Operations that the self_hosted `/v1` API does not yet expose throw a clear
+ * Operations that the `/v1` API does not yet expose throw a clear
  * `ApiUnavailableError` in ApiStore rather than silently falling back to local
  * SQLite — a loud failure, never a split brain. Adding the missing `/v1` route
  * to `src/server` (+ an ECS redeploy) is the only way to enable them in the
  * cloud; there is deliberately no per-command local fallback.
  */
-import type { ContactsDatabase } from "../db/database.js";
-import { getDatabase } from "../db/database.js";
-import * as storageDb from "../db/storage.js";
 import type { ContactsStorageStatus } from "../db/storage.js";
-import * as contactsDb from "../db/contacts.js";
-import * as projectMembershipsDb from "../db/project-memberships.js";
-import * as companiesDb from "../db/companies.js";
-import * as tagsDb from "../db/tags.js";
-import * as groupsDb from "../db/groups.js";
-import * as relationshipsDb from "../db/relationships.js";
-import * as notesDb from "../db/notes.js";
-import * as activityDb from "../db/activity.js";
-// Extended domains — each of these db modules holds a SQLite handle internally
-// (via getDatabase() when no db is passed). They are the LocalStore's
-// implementation detail; ONLY LocalStore may call them. ApiStore never touches
-// them — it throws ApiUnavailableError until the /v1 API exposes the operation.
-import * as vendorCommsDb from "../db/vendor-comms.js";
-import * as contactTasksDb from "../db/contact-tasks.js";
-import * as applicationsDb from "../db/applications.js";
-import * as orgMembersDb from "../db/org-members.js";
-import * as dealsDb from "../db/deals.js";
-import * as eventsDb from "../db/events.js";
-import * as fieldHistoryDb from "../db/field-history.js";
-import * as jobHistoryDb from "../db/job-history.js";
-import * as learningsDb from "../db/learnings.js";
-import * as coordinationDb from "../db/coordination.js";
-import * as graphDb from "../db/graph.js";
-import * as identityDb from "../db/identity.js";
-import * as signalsDb from "../db/signals.js";
-import * as freshnessDb from "../db/freshness.js";
-import * as orgChartDb from "../db/org-chart.js";
-import * as documentsDb from "../db/documents.js";
-import * as healthDb from "../db/health.js";
-import * as audiencesDb from "../db/audiences.js";
-import * as briefLib from "../lib/brief.js";
-import * as upcomingLib from "../lib/upcoming.js";
-import * as statsLib from "../lib/stats.js";
-import * as auditLib from "../lib/audit.js";
-import * as timelineLib from "../lib/timeline.js";
-import * as embeddingsLib from "../lib/embeddings.js";
-import * as meetingCaptureLib from "../lib/meeting-capture.js";
-import * as contextLib from "../lib/context.js";
-import * as imagesLib from "../lib/images.js";
-import * as vaultLib from "../lib/vault.js";
-import * as mailerySyncLib from "../lib/mailery-sync.js";
-import { findEmailDuplicates, findNameDuplicates } from "../lib/dedup.js";
-import { resolveStorageClient, type StorageClient, type QueryParams } from "../cloud/http-storage.js";
+import type * as contactsDb from "../db/contacts.js";
+import type * as companiesDb from "../db/companies.js";
+import type * as tagsDb from "../db/tags.js";
+import type * as groupsDb from "../db/groups.js";
+import type * as relationshipsDb from "../db/relationships.js";
+import type * as activityDb from "../db/activity.js";
+import type * as vendorCommsDb from "../db/vendor-comms.js";
+import type * as contactTasksDb from "../db/contact-tasks.js";
+import type * as applicationsDb from "../db/applications.js";
+import type * as orgMembersDb from "../db/org-members.js";
+import type * as dealsDb from "../db/deals.js";
+import type * as eventsDb from "../db/events.js";
+import type * as jobHistoryDb from "../db/job-history.js";
+import type * as learningsDb from "../db/learnings.js";
+import type * as identityDb from "../db/identity.js";
+import type * as freshnessDb from "../db/freshness.js";
+import type * as orgChartDb from "../db/org-chart.js";
+import type * as documentsDb from "../db/documents.js";
+import type * as healthDb from "../db/health.js";
+import type * as audiencesDb from "../db/audiences.js";
+import type * as statsLib from "../lib/stats.js";
+import type * as meetingCaptureLib from "../lib/meeting-capture.js";
+import type * as contextLib from "../lib/context.js";
+import type * as mailerySyncLib from "../lib/mailery-sync.js";
+import { resolveContactsStorageClient, type StorageClient, type QueryParams } from "../cloud/http-storage.js";
 import type {
   ContactProjectMembershipListResult,
   ContactProjectMembershipMutationDirection,
@@ -114,15 +84,14 @@ export interface ContactsStats {
   groups: number;
 }
 
-/** Thrown when an operation is requested in api (self_hosted/cloud) mode but the
+/** Thrown when an operation is requested but the canonical HTTPS API does not
  * `/v1` server does not expose it yet. Never silently falls back to local. */
 export class ApiUnavailableError extends Error {
   constructor(operation: string) {
     super(
-      `contacts: '${operation}' is not available in self_hosted mode yet — the /v1 API ` +
-        `does not expose it. Run in local mode, or add the endpoint to src/server and redeploy. ` +
-        `(No local fallback: silently writing on-box SQLite while pointed at the cloud is the ` +
-        `split-brain bug this abstraction eliminates.)`,
+      `contacts: '${operation}' is not available through the canonical /v1 API. ` +
+        `Add the endpoint to src/server and redeploy. Local fallback is retired; the client ` +
+        `will never read or write on-box SQLite.`,
     );
     this.name = "ApiUnavailableError";
   }
@@ -136,11 +105,10 @@ function unavailable(operation: string): never {
 }
 
 /**
- * The single storage contract. Every method is async so LocalStore (sync SQLite)
- * and ApiStore (async HTTP) share one shape. Callers never branch on transport.
+ * The single authenticated HTTPS storage contract.
  */
 export interface Store {
-  readonly mode: "local" | "api";
+  readonly mode: "api";
 
   // Contacts
   createContact(input: CreateContactInput): Promise<Contact>;
@@ -230,13 +198,13 @@ export interface Store {
   stats(): Promise<ContactsStats>;
   findEmailDuplicates(): Promise<Array<{ email: string; contact_ids: string[] }>>;
   findNameDuplicates(): Promise<Array<{ contact_ids: [string, string]; similarity: number }>>;
-  /** Local-only: checkpoint + release the SQLite handle before a file backup. */
+  /** Retired backup hook; the HTTPS store throws ApiUnavailableError. */
   flushForBackup(): Promise<void>;
 
   // ── Extended domains (CRM / intelligence / audiences) ──────────────────────
   // Every method the crm / advanced / audience CLI commands and MCP tools need.
-  // In api (self_hosted/cloud) mode these throw ApiUnavailableError until the
-  // /v1 API exposes them — never a silent local write.
+  // Unsupported HTTPS operations throw ApiUnavailableError until /v1 exposes
+  // them — never a silent local write.
 
   // Contacts extras
   listColdContacts(days: number): Promise<unknown[]>;
@@ -400,10 +368,7 @@ export interface Store {
   // Feedback
   saveFeedback(message: string, email: string | null, category: string, version: string): Promise<void>;
 
-  // Storage diagnostics — on-box table/row status. LocalStore reports the SQLite
-  // tables; ApiStore returns null (there are NO on-box tables when pointed at the
-  // cloud — transport status conveys that instead). Lets CLI/MCP inspect storage
-  // WITHOUT importing the db layer directly (which would be a split-brain bypass).
+  // There are no on-box client tables. Connection status is exposed separately.
   storageStatus(): Promise<ContactsStorageStatus | null>;
 
   // Webhooks (local delivery registry — reads only; delivery stays in caller)
@@ -411,375 +376,7 @@ export interface Store {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// LocalStore — on-box SQLite transport (delegates to src/db/*).
-// This is the ONLY place in the client that holds a SQLite handle.
-// ─────────────────────────────────────────────────────────────────────────────
-
-class LocalStore implements Store {
-  readonly mode = "local" as const;
-  private get db(): ContactsDatabase {
-    return getDatabase();
-  }
-
-  // Contacts
-  async createContact(input: CreateContactInput) { return contactsDb.createContact(input, this.db); }
-  async getContact(id: string) { return contactsDb.getContact(id, this.db); }
-  async getContactByEmail(email: string) { return contactsDb.getContactByEmail(email, this.db); }
-  async updateContact(id: string, input: UpdateContactInput) { return contactsDb.updateContact(id, input, this.db); }
-  async deleteContact(id: string) { contactsDb.deleteContact(id, this.db); }
-  async listContacts(opts: ContactListOptions = {}) { return contactsDb.listContacts(opts, this.db); }
-  async searchContacts(query: string) { return contactsDb.searchContacts(query, this.db); }
-  async listRecentContacts(limit: number) { return contactsDb.listRecentContacts(limit, this.db); }
-  async mergeContacts(keepId: string, mergeId: string) { return contactsDb.mergeContacts(keepId, mergeId, this.db); }
-  async addEmailToContact(contactId: string, email: CreateEmailInput) { return contactsDb.addEmailToContact(contactId, email, this.db); }
-  async addPhoneToContact(contactId: string, phone: CreatePhoneInput) { return contactsDb.addPhoneToContact(contactId, phone, this.db); }
-  async archiveContact(id: string) { return contactsDb.archiveContact(id, this.db); }
-  async unarchiveContact(id: string) { return contactsDb.unarchiveContact(id, this.db); }
-  async autoLinkContactToCompany(contactId: string) { return contactsDb.autoLinkContactToCompany(contactId, this.db); }
-  async findContactByEmailAddress(address: string, opts: { caseSensitive?: boolean } = {}) {
-    const row = opts.caseSensitive
-      ? (this.db.prepare(`SELECT contact_id FROM emails WHERE address = ? AND contact_id IS NOT NULL LIMIT 1`).get(address) as { contact_id: string } | null)
-      : (this.db.prepare(`SELECT contact_id FROM emails WHERE LOWER(address) = LOWER(?) AND contact_id IS NOT NULL LIMIT 1`).get(address) as { contact_id: string } | null);
-    return row ? contactsDb.getContact(row.contact_id, this.db) : null;
-  }
-
-  // Contact ↔ project links
-  async linkContactToProject(contactId: string, projectId: string) { contactsDb.linkContactToProject(contactId, projectId, this.db); }
-  async unlinkContactFromProject(contactId: string, projectId: string) { contactsDb.unlinkContactFromProject(contactId, projectId, this.db); }
-  async getContactProjectIds(contactId: string) { return contactsDb.getContactProjectIds(contactId, this.db); }
-  async setContactProjects(contactId: string, projectIds: string[]) { contactsDb.setContactProjects(contactId, projectIds, this.db); }
-  async listContactIdsByProject(projectId: string) { return contactsDb.listContactIdsByProject(projectId, this.db); }
-  async readContactProjectMembership(contactId: string, projectId: string) {
-    return projectMembershipsDb.readContactProjectMembership(contactId, projectId, this.db);
-  }
-  async listContactProjectMemberships(projectId: string, maxItems: number) {
-    return projectMembershipsDb.listContactProjectMemberships(projectId, maxItems, this.db);
-  }
-  async mutateContactProjectMembership(
-    direction: ContactProjectMembershipMutationDirection,
-    input: ContactProjectMembershipMutationInput,
-  ) {
-    return projectMembershipsDb.mutateContactProjectMembership(direction, input, this.db);
-  }
-
-  // Companies
-  async createCompany(input: CreateCompanyInput) { return companiesDb.createCompany(input, this.db); }
-  async getCompany(id: string) { return companiesDb.getCompany(id, this.db); }
-  async updateCompany(id: string, input: UpdateCompanyInput) { return companiesDb.updateCompany(id, input, this.db); }
-  async deleteCompany(id: string) { companiesDb.deleteCompany(id, this.db); }
-  async listCompanies(opts: CompanyListOptions = {}) { return companiesDb.listCompanies(opts, this.db); }
-  async searchCompanies(query: string) { return companiesDb.searchCompanies(query, this.db); }
-  async archiveCompany(id: string) { return companiesDb.archiveCompany(id, this.db); }
-  async unarchiveCompany(id: string) { return companiesDb.unarchiveCompany(id, this.db); }
-
-  // Tags
-  async createTag(input: CreateTagInput) { return tagsDb.createTag(input, this.db); }
-  async listTags() { return tagsDb.listTags(this.db); }
-  async getTagByName(name: string) { return tagsDb.getTagByName(name, this.db); }
-  async deleteTag(id: string) { tagsDb.deleteTag(id, this.db); }
-  async addTagToContact(contactId: string, tagId: string) { tagsDb.addTagToContact(contactId, tagId, this.db); }
-  async removeTagFromContact(contactId: string, tagId: string) { tagsDb.removeTagFromContact(contactId, tagId, this.db); }
-  async addTagToCompany(companyId: string, tagId: string) { tagsDb.addTagToCompany(companyId, tagId, this.db); }
-  async removeTagFromCompany(companyId: string, tagId: string) { tagsDb.removeTagFromCompany(companyId, tagId, this.db); }
-
-  // Groups
-  async createGroup(input: CreateGroupInput) { return groupsDb.createGroup(this.db, input); }
-  async getGroup(id: string) { return groupsDb.getGroup(this.db, id); }
-  async listGroups(projectId?: string) { return groupsDb.listGroups(this.db, projectId); }
-  async updateGroup(id: string, input: UpdateGroupInput) { return groupsDb.updateGroup(this.db, id, input); }
-  async deleteGroup(id: string) { groupsDb.deleteGroup(this.db, id); }
-  async addContactToGroup(contactId: string, groupId: string) { return groupsDb.addContactToGroup(this.db, contactId, groupId); }
-  async removeContactFromGroup(contactId: string, groupId: string) { groupsDb.removeContactFromGroup(this.db, contactId, groupId); }
-  async listContactsInGroup(groupId: string) { return groupsDb.listContactsInGroup(this.db, groupId); }
-  async listGroupsForContact(contactId: string) { return groupsDb.listGroupsForContact(this.db, contactId); }
-  async addCompanyToGroup(companyId: string, groupId: string) { return groupsDb.addCompanyToGroup(this.db, companyId, groupId); }
-  async removeCompanyFromGroup(companyId: string, groupId: string) { groupsDb.removeCompanyFromGroup(this.db, companyId, groupId); }
-  async listCompaniesInGroup(groupId: string) { return groupsDb.listCompaniesInGroup(this.db, groupId); }
-  async listGroupsForCompany(companyId: string) { return groupsDb.listGroupsForCompany(this.db, companyId); }
-
-  // Relationships
-  async createRelationship(input: CreateRelationshipInput) { return relationshipsDb.createRelationship(input, this.db); }
-  async listRelationships(opts: ListRelationshipsOptions = {}) { return relationshipsDb.listRelationships(opts, this.db); }
-  async deleteRelationship(id: string) { relationshipsDb.deleteRelationship(id, this.db); }
-  async createCompanyRelationship(input: CreateCompanyRelationshipInput) { return relationshipsDb.createCompanyRelationship(input, this.db); }
-  async listCompanyRelationships(opts: ListCompanyRelationshipsOptions = {}) { return relationshipsDb.listCompanyRelationships(opts, this.db); }
-  async deleteCompanyRelationship(id: string) { relationshipsDb.deleteCompanyRelationship(id, this.db); }
-
-  // Notes
-  async addNote(contactId: string, body: string, createdBy?: string, companyId?: string) { return notesDb.addNote(contactId, body, createdBy, this.db, companyId); }
-  async listNotes(contactId: string) { return notesDb.listNotes(contactId, this.db); }
-  async listNotesForContactAtCompany(contactId: string, companyId: string) { return notesDb.listNotesForContactAtCompany(contactId, companyId, this.db); }
-  async deleteNote(noteId: string) { notesDb.deleteNote(noteId, this.db); }
-
-  // Activity
-  async listActivity(opts: ListActivityOptions = {}) { return activityDb.listActivity(opts, this.db); }
-
-  // Aggregate + maintenance
-  async stats(): Promise<ContactsStats> {
-    const db = this.db;
-    const one = (sql: string) => (db.prepare(sql).get() as { count: number }).count;
-    return {
-      contacts: one("SELECT COUNT(*) as count FROM contacts"),
-      companies: one("SELECT COUNT(*) as count FROM companies"),
-      tags: one("SELECT COUNT(*) as count FROM tags"),
-      groups: one("SELECT COUNT(*) as count FROM groups"),
-    };
-  }
-  async findEmailDuplicates() { return findEmailDuplicates(this.db); }
-  async findNameDuplicates() { return findNameDuplicates(this.db); }
-  async flushForBackup() {
-    this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-    const { resetDatabase } = await import("../db/database.js");
-    resetDatabase();
-  }
-
-  // ── Extended domains ────────────────────────────────────────────────────────
-  // Contacts extras
-  async listColdContacts(days: number) { return contactsDb.listColdContacts(days, this.db); }
-  async findOrCreateContact(input: CreateContactInput) {
-    const res = await contactsDb.findOrCreateContact(input, this.db);
-    return { contact: res.contact as Contact, created: res.created };
-  }
-  async findContactsForContext(topic: string, limit: number) {
-    const db = this.db;
-    const like = `%${topic}%`;
-    const byTitle = db.query(`SELECT c.id, c.display_name, c.job_title, 'job_title' as reason FROM contacts c WHERE c.job_title LIKE ? AND c.archived=0 LIMIT 20`).all(like) as Array<{ id: string; display_name: string; job_title: string | null; reason: string }>;
-    const byNotes = db.query(`SELECT c.id, c.display_name, c.job_title, 'notes' as reason FROM contacts c WHERE c.notes LIKE ? AND c.archived=0 LIMIT 10`).all(like) as Array<{ id: string; display_name: string; job_title: string | null; reason: string }>;
-    const byCompany = db.query(`SELECT c.id, c.display_name, c.job_title, 'company' as reason FROM contacts c JOIN companies co ON c.company_id = co.id WHERE (co.name LIKE ? OR co.industry LIKE ?) AND c.archived=0 LIMIT 10`).all(like, like) as Array<{ id: string; display_name: string; job_title: string | null; reason: string }>;
-    const bySpec = db.query(`SELECT c.id, c.display_name, c.job_title, om.specialization as reason FROM contacts c JOIN org_members om ON c.id = om.contact_id WHERE om.specialization LIKE ? LIMIT 10`).all(like) as Array<{ id: string; display_name: string; job_title: string | null; reason: string }>;
-    const seen = new Set<string>();
-    return [...byTitle, ...bySpec, ...byCompany, ...byNotes].filter((r) => {
-      if (seen.has(r.id)) return false;
-      seen.add(r.id);
-      return true;
-    }).slice(0, limit);
-  }
-  async listContactsNotContactedSince(days: number, limit: number) {
-    return this.db.query(
-      `SELECT id, display_name, last_contacted_at FROM contacts WHERE (last_contacted_at IS NULL OR last_contacted_at < date('now', ?)) AND archived=0 LIMIT ?`,
-    ).all(`-${days} days`, limit) as Array<{ id: string; display_name: string; last_contacted_at: string | null }>;
-  }
-  async listFollowupDueContacts(onOrBefore: string) {
-    return this.db.query(
-      `SELECT id, display_name, follow_up_at FROM contacts WHERE follow_up_at IS NOT NULL AND follow_up_at <= ? AND archived=0`,
-    ).all(onOrBefore) as Array<{ id: string; display_name: string; follow_up_at: string }>;
-  }
-
-  // Vendor communications
-  async logVendorCommunication(input: Parameters<typeof vendorCommsDb.logVendorCommunication>[0]) { return vendorCommsDb.logVendorCommunication(input, this.db); }
-  async listVendorCommunications(companyId: string, opts: Parameters<typeof vendorCommsDb.listVendorCommunications>[1] = {}) { return vendorCommsDb.listVendorCommunications(companyId, opts, this.db); }
-  async listMissingInvoices() { return vendorCommsDb.listMissingInvoices(this.db); }
-  async listPendingFollowUps() { return vendorCommsDb.listPendingFollowUps(this.db); }
-  async markFollowUpDone(id: string) { return vendorCommsDb.markFollowUpDone(id, this.db); }
-
-  // Contact tasks
-  async createContactTask(input: Parameters<typeof contactTasksDb.createContactTask>[0]) { return contactTasksDb.createContactTask(input, this.db); }
-  async listContactTasks(opts: Parameters<typeof contactTasksDb.listContactTasks>[0] = {}) { return contactTasksDb.listContactTasks(opts, this.db); }
-  async updateContactTask(id: string, input: Parameters<typeof contactTasksDb.updateContactTask>[1]) { return contactTasksDb.updateContactTask(id, input, this.db); }
-  async deleteContactTask(id: string) { contactTasksDb.deleteContactTask(id, this.db); }
-  async listOverdueTasks() { return contactTasksDb.listOverdueTasks(this.db); }
-  async checkEscalations() { return contactTasksDb.checkEscalations(this.db); }
-
-  // Applications
-  async createApplication(input: Parameters<typeof applicationsDb.createApplication>[0]) { return applicationsDb.createApplication(input, this.db); }
-  async listApplications(opts: Parameters<typeof applicationsDb.listApplications>[0] = {}) { return applicationsDb.listApplications(opts, this.db); }
-  async updateApplication(id: string, input: Parameters<typeof applicationsDb.updateApplication>[1]) { return applicationsDb.updateApplication(id, input, this.db); }
-  async listFollowUpDueApplications() { return applicationsDb.listFollowUpDue(this.db); }
-
-  // Org members
-  async addOrgMember(input: Parameters<typeof orgMembersDb.addOrgMember>[0]) { return orgMembersDb.addOrgMember(input, this.db); }
-  async listOrgMembers(companyId: string) { return orgMembersDb.listOrgMembers(companyId, this.db); }
-  async updateOrgMember(id: string, input: Parameters<typeof orgMembersDb.updateOrgMember>[1]) { return orgMembersDb.updateOrgMember(id, input, this.db); }
-  async removeOrgMember(id: string) { orgMembersDb.removeOrgMember(id, this.db); }
-  async listOrgMembersForContact(contactId: string) { return orgMembersDb.listOrgMembersForContact(contactId, this.db); }
-
-  // Deals
-  async createDeal(input: Parameters<typeof dealsDb.createDeal>[0]) { return dealsDb.createDeal(input, this.db); }
-  async getDeal(id: string) { return dealsDb.getDeal(id, this.db); }
-  async listDeals(opts: Parameters<typeof dealsDb.listDeals>[0] = {}) { return dealsDb.listDeals(opts, this.db); }
-  async updateDeal(id: string, input: Parameters<typeof dealsDb.updateDeal>[1]) { return dealsDb.updateDeal(id, input, this.db); }
-  async deleteDeal(id: string) { dealsDb.deleteDeal(id, this.db); }
-
-  // Events
-  async logEvent(input: Parameters<typeof eventsDb.logEvent>[0]) { return eventsDb.logEvent(input, this.db); }
-  async listEvents(opts: Parameters<typeof eventsDb.listEvents>[0] = {}) { return eventsDb.listEvents(opts, this.db); }
-  async deleteEvent(id: string) { eventsDb.deleteEvent(id, this.db); }
-
-  // Field history
-  async getFieldHistory(contactId: string, fieldName?: string) { return fieldHistoryDb.getFieldHistory(contactId, fieldName, this.db); }
-  async getContactAt(contactId: string, timestamp: string) { return fieldHistoryDb.getContactAt(contactId, timestamp, this.db); }
-
-  // Job history
-  async addJobEntry(contactId: string, input: Parameters<typeof jobHistoryDb.addJobEntry>[1]) { return jobHistoryDb.addJobEntry(contactId, input, this.db); }
-  async getJobHistory(contactId: string) { return jobHistoryDb.getJobHistory(contactId, this.db); }
-
-  // Learnings
-  async saveLearning(contactId: string, input: Parameters<typeof learningsDb.saveLearning>[1]) { return learningsDb.saveLearning(contactId, input, this.db); }
-  async getLearnings(contactId: string, opts: Parameters<typeof learningsDb.getLearnings>[1] = {}) { return learningsDb.getLearnings(contactId, opts, this.db) as Array<{ confidence: number; type: string; content: string }>; }
-  async searchLearnings(query: string, opts: Parameters<typeof learningsDb.searchLearnings>[1] = {}) { return learningsDb.searchLearnings(query, opts, this.db) as Array<{ contact_id: string; type: string; confidence: number; content: string }>; }
-  async confirmLearning(learningId: string, agentName: string) { learningsDb.confirmLearning(learningId, agentName, this.db); }
-  async getStaleLearnings(daysOld: number, minConfidence: number) {
-    const cutoff = new Date(Date.now() - daysOld * 86400000).toISOString();
-    return this.db.query(
-      `SELECT * FROM contact_learnings WHERE confirmed_count=0 AND created_at<? AND confidence>=? ORDER BY confidence ASC LIMIT 50`,
-    ).all(cutoff, minConfidence) as unknown[];
-  }
-  async runLearningMaintenance() {
-    const decayed = learningsDb.decayLearnings(this.db);
-    const duplicates = this.db.query(
-      `SELECT contact_id, COUNT(*) as cnt FROM contact_learnings GROUP BY contact_id, LOWER(SUBSTR(content,1,30)) HAVING cnt > 1`,
-    ).all() as unknown[];
-    return { decayed_count: decayed, potential_contradictions: duplicates };
-  }
-
-  // Coordination
-  async acquireContactLock(contactId: string, agentName: string, ttlSeconds?: number, reason?: string, sessionId?: string) {
-    return coordinationDb.acquireLock(contactId, agentName, ttlSeconds, reason, sessionId, this.db);
-  }
-  async releaseContactLock(contactId: string, agentName: string) { return coordinationDb.releaseLock(contactId, agentName, this.db); }
-  async checkContactLock(contactId: string) { return coordinationDb.checkLock(contactId, this.db); }
-  async logAgentActivity(contactId: string, agentName: string, action: string, details?: string, sessionId?: string) {
-    coordinationDb.logAgentActivity(contactId, agentName, action, details, sessionId, this.db);
-  }
-  async getAgentActivity(contactId: string, limit: number) { return coordinationDb.getAgentActivity(contactId, limit, this.db); }
-
-  // Graph
-  async computeRelationshipStrength(contactId: string) { return graphDb.computeRelationshipStrength(contactId, this.db); }
-  async findWarmPath(fromContactId: string, toContactId: string) { return graphDb.findWarmPath(fromContactId, toContactId, this.db); }
-  async findConnectionsAtCompany(companyId: string) { return graphDb.findConnectionsAtCompany(companyId, this.db); }
-  async detectCoolingRelationships() { return graphDb.detectCoolingRelationships(this.db) as Array<{ display_name: string; days_since: number }>; }
-
-  // Identity
-  async resolveContactIdentity(partial: Parameters<typeof identityDb.resolveByPartial>[0]) {
-    return identityDb.resolveByPartial(partial, this.db) as Array<{ contact: { display_name: string; job_title?: string }; confidence_score: number; match_reasons: string[] }>;
-  }
-  async addContactIdentity(contactId: string, system: string, externalId: string, externalUrl?: string, confidence: "verified" | "inferred" = "inferred") {
-    return identityDb.addIdentity(contactId, system, externalId, externalUrl, confidence, this.db);
-  }
-  async getContactIdentities(contactId: string) { return identityDb.getIdentities(contactId, this.db); }
-
-  // Embeddings
-  async semanticSearch(query: string, limit: number) { return embeddingsLib.semanticSearch(query, limit, this.db); }
-  async embedContact(contactId: string) { await embeddingsLib.embedContact(contactId, this.db); }
-  async embedAllContacts() { return embeddingsLib.embedAllContacts(this.db); }
-
-  // Signals
-  async getRelationshipSignals(contactId: string) { return signalsDb.getRelationshipSignals(contactId, this.db) as Array<{ signal_type: string; reason: string; days_since_contact: number | null }>; }
-  async getGhostContacts() { return signalsDb.getGhostContacts(this.db) as unknown as Array<{ display_name: string; days_since_contact: number | null }>; }
-  async getWarmingContacts() { return signalsDb.getWarmingContacts(this.db) as unknown as Array<{ display_name: string; days_since_contact: number | null }>; }
-  async recomputeSignals() { return signalsDb.recomputeAllSignals(this.db); }
-
-  // Freshness
-  async getFreshnessScore(contactId: string) { return freshnessDb.getFreshnessScore(contactId, this.db); }
-  async getStaleContacts(threshold: number) { return freshnessDb.getStaleContacts(threshold, this.db); }
-  async markFieldVerified(contactId: string, fieldName: string, source?: string) { freshnessDb.markFieldVerified(contactId, fieldName, source, this.db); }
-
-  // Org chart
-  async addOrgChartEdge(companyId: string, contactAId: string, contactBId: string, edgeType: Parameters<typeof orgChartDb.addOrgChartEdge>[3], inferred = false) {
-    return orgChartDb.addOrgChartEdge(companyId, contactAId, contactBId, edgeType, inferred, this.db);
-  }
-  async listOrgChart(companyId: string) { return orgChartDb.listOrgChart(companyId, this.db); }
-  async setDealContactRole(dealId: string, contactId: string, accountRole: Parameters<typeof orgChartDb.setDealContactRole>[2]) {
-    return orgChartDb.setDealContactRole(dealId, contactId, accountRole, this.db);
-  }
-  async getDealTeam(dealId: string) { return orgChartDb.getDealTeam(dealId, this.db); }
-  async getCoverageGaps(companyId: string) { return orgChartDb.getCoverageGaps(companyId, this.db); }
-
-  // Recent activity events
-  async getRecentContactEvents(since?: string, eventTypes?: string[]) {
-    let sql = `SELECT * FROM activity_log WHERE 1=1`;
-    const params: string[] = [];
-    if (since) { sql += ` AND created_at >= ?`; params.push(since); }
-    if (eventTypes?.length) { sql += ` AND action IN (${eventTypes.map(() => "?").join(",")})`; params.push(...eventTypes); }
-    sql += ` ORDER BY created_at DESC LIMIT 100`;
-    return this.db.query(sql).all(...params) as unknown[];
-  }
-
-  // Documents
-  async addDocument(input: Parameters<typeof documentsDb.addDocument>[0]) { return documentsDb.addDocument(input, this.db); }
-  async getDocument(id: string) { return documentsDb.getDocument(id, this.db); }
-  async listDocuments(contactId: string) { return documentsDb.listDocuments(contactId, this.db); }
-  async deleteDocument(id: string) { documentsDb.deleteDocument(id, this.db); }
-  async getDocumentFilePath(id: string) {
-    const row = this.db.query(`SELECT encrypted_file_path FROM contact_documents WHERE id = ?`).get(id) as { encrypted_file_path: string | null } | null;
-    return row ? row.encrypted_file_path : null;
-  }
-
-  // Health
-  async setHealthData(contactId: string, input: Parameters<typeof healthDb.setHealthData>[1]) { return healthDb.setHealthData(contactId, input, this.db); }
-  async getHealthData(contactId: string) { return healthDb.getHealthData(contactId, this.db); }
-  async deleteHealthData(contactId: string) { healthDb.deleteHealthData(contactId, this.db); }
-
-  // Audiences
-  async createAudience(input: Parameters<typeof audiencesDb.createAudience>[0]) { return audiencesDb.createAudience(input, this.db); }
-  async getAudience(idOrSlug: string) { return audiencesDb.getAudience(idOrSlug, this.db); }
-  async listAudiences() { return audiencesDb.listAudiences(this.db); }
-  async updateAudience(idOrSlug: string, input: Parameters<typeof audiencesDb.updateAudience>[1]) { return audiencesDb.updateAudience(idOrSlug, input, this.db); }
-  async deleteAudience(idOrSlug: string) { audiencesDb.deleteAudience(idOrSlug, this.db); }
-  async resolveAudience(idOrSlug: string, channel: Parameters<typeof audiencesDb.resolveAudience>[1]) { return audiencesDb.resolveAudience(idOrSlug, channel, this.db); }
-  async setContactConsent(contactId: string, channel: Parameters<typeof audiencesDb.setContactConsent>[1], status: Parameters<typeof audiencesDb.setContactConsent>[2], source?: string) {
-    return audiencesDb.setContactConsent(contactId, channel, status, source, this.db);
-  }
-  async listContactConsent(contactId: string) { return audiencesDb.listContactConsent(contactId, this.db); }
-  async suppressAddress(input: Parameters<typeof audiencesDb.suppressAddress>[0]) { return audiencesDb.suppressAddress(input, this.db); }
-  async unsuppressAddress(channel: Parameters<typeof audiencesDb.unsuppressAddress>[0], address: string) { audiencesDb.unsuppressAddress(channel, address, this.db); }
-  async listSuppressions(opts: Parameters<typeof audiencesDb.listSuppressions>[0] = {}) { return audiencesDb.listSuppressions(opts, this.db); }
-  async syncSuppressions(dryRun?: boolean) { return mailerySyncLib.syncSuppressions({ dryRun, db: this.db }); }
-
-  // Context / briefs / stats
-  async generateBrief(contactId: string) { return briefLib.generateBrief(contactId, this.db); }
-  async getContactCard(contactId: string) { return contextLib.getContactCard(contactId, this.db); }
-  async getContactBrief(contactId: string, taskContext?: string) { return contextLib.getContactBrief(contactId, taskContext, this.db); }
-  async assembleContext(contactIds: string[], format: Parameters<typeof contextLib.assembleContext>[1]) { return contextLib.assembleContext(contactIds, format, this.db); }
-  async getUpcomingItems(days: number) { return upcomingLib.getUpcomingItems(days, this.db); }
-  async getNetworkStats() { return statsLib.getNetworkStats(this.db); }
-  async listContactAudit() { return auditLib.listContactAudit(this.db); }
-  async getContactTimeline(contactId: string, limit: number) { return timelineLib.getContactTimeline(contactId, limit, this.db); }
-  async ingestMeetingParticipants(input: Parameters<typeof meetingCaptureLib.ingestMeetingParticipants>[0]) { return meetingCaptureLib.ingestMeetingParticipants(input, this.db); }
-
-  // Images
-  async saveImage(entityId: string, source: string, options?: { format?: string }) { return imagesLib.saveImage(entityId, source, options); }
-  async getImagePath(entityId: string) { return imagesLib.getImagePath(entityId); }
-  async getImageAsBase64(entityId: string) { return imagesLib.getImageAsBase64(entityId); }
-  async deleteImage(entityId: string) { return imagesLib.deleteImage(entityId); }
-  async listImages() { return imagesLib.listImages(); }
-
-  // Vault
-  async initVault(passphrase: string) { vaultLib.initVault(passphrase); }
-  async unlockVault(passphrase: string) { return vaultLib.unlockVault(passphrase); }
-  async lockVault() { vaultLib.lockVault(); }
-  async isVaultInitialized() { return vaultLib.isVaultInitialized(); }
-  async isVaultUnlocked() { return vaultLib.isVaultUnlocked(); }
-  async vaultStatus() {
-    const initialized = vaultLib.isVaultInitialized();
-    const unlocked = vaultLib.isVaultUnlocked();
-    let document_count = 0;
-    try {
-      document_count = (this.db.query("SELECT COUNT(*) as n FROM contact_documents").get() as { n: number }).n;
-    } catch { /* table may not exist yet */ }
-    return { initialized, unlocked, document_count };
-  }
-
-  // Feedback
-  async saveFeedback(message: string, email: string | null, category: string, version: string) {
-    this.db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(message, email, category, version);
-  }
-
-  // Storage diagnostics
-  async storageStatus() { return storageDb.getStorageStatus(this.db); }
-
-  // Webhooks
-  async listActiveWebhooks() {
-    try {
-      return this.db.query(`SELECT id, event_type, url, secret FROM webhooks WHERE active=1`).all() as Array<{ id: string; event_type: string; url: string; secret?: string | null }>;
-    } catch {
-      return [];
-    }
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ApiStore — HTTPS /v1 transport (self_hosted / cloud). Bearer key only.
+// ApiStore — canonical HTTPS /v1 transport. Bearer key only.
 // The ONLY place in the client that performs HTTP. Operations the /v1 API does
 // not expose throw ApiUnavailableError — never a silent local fallback.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1161,15 +758,13 @@ class ApiStore implements Store {
 let cached: Store | undefined;
 
 /**
- * Resolve the single Store for this process. Memoized. Returns an ApiStore when
- * the self_hosted/cloud client-flip env is set (URL + key), else a LocalStore.
- * Throws if cloud was requested but is misconfigured — callers never silently
- * read/write the wrong dataset.
+ * Resolve the single Store for this process. Memoized. A usable explicit HTTPS
+ * URL and credential are mandatory. The legacy LocalStore is never selected.
  */
 export function getStore(env: Record<string, string | undefined> = process.env): Store {
   if (cached !== undefined) return cached;
-  const resolved = resolveStorageClient("contacts", env);
-  cached = resolved.transport === "cloud-http" ? new ApiStore(resolved.client) : new LocalStore();
+  const resolved = resolveContactsStorageClient("contacts", env);
+  cached = new ApiStore(resolved.client);
   return cached;
 }
 

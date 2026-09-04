@@ -162,13 +162,28 @@ describe("sender notification at the process boundary", () => {
 });
 
 describe("end-to-end through the real CLI", () => {
+  // Recipient-addressed DMs were removed (staged behind the messages-app v1
+  // release gate); the e2e seed lives in a channel the reader joins. Seeded
+  // once so the second test does not re-create the channel.
+  beforeAll(() => {
+    const created = runCli(["channel", "create", "e2e-feed"], "e2e-sender");
+    if (created.code !== 0) {
+      // The seed is per-file; a nonzero create is a genuine failure here.
+      throw new Error(`channel create failed: ${created.stderr}`);
+    }
+    const joined = runCli(["channel", "join", "e2e-feed"], "e2e-reader");
+    if (joined.code !== 0) {
+      throw new Error(`channel join failed: ${joined.stderr}`);
+    }
+  });
+
   test("#609657: the presence report sends and reads back intact", () => {
-    const sent = runCli(["send", PRESENCE_REPORT, "--to", "e2e-reader", "--from", "e2e-sender"]);
+    const sent = runCli(["send", PRESENCE_REPORT, "--channel", "e2e-feed", "--from", "e2e-sender"]);
 
     expect(sent.code).toBe(0);
     expect(sent.stderr).not.toContain("WARNING");
 
-    const read = runCli(["read", "--to", "e2e-reader", "--verbose", "-j"], "e2e-reader");
+    const read = runCli(["read", "--channel", "e2e-feed", "--verbose", "-j"], "e2e-reader");
     expect(read.code).toBe(0);
 
     // Every line survives — including the correction that was destroyed.
@@ -179,14 +194,14 @@ describe("end-to-end through the real CLI", () => {
 
   test("positive control: a real credential is still refused and never stored", () => {
     const secret = syntheticDatabaseUrl();
-    const sent = runCli(["send", `the dsn is ${secret} please rotate`, "--to", "e2e-reader", "--from", "e2e-sender"]);
+    const sent = runCli(["send", `the dsn is ${secret} please rotate`, "--channel", "e2e-feed", "--from", "e2e-sender"]);
 
     // Loud refusal, not a silent rewrite.
     expect(sent.code).not.toBe(0);
     expect(`${sent.stdout}${sent.stderr}`).toContain("sensitive content");
 
     // And it must not have landed anywhere readable.
-    const read = runCli(["read", "--to", "e2e-reader", "--verbose", "-j"], "e2e-reader");
+    const read = runCli(["read", "--channel", "e2e-feed", "--verbose", "-j"], "e2e-reader");
     expect(read.stdout).not.toContain("synthetic-password");
     expect(read.stdout).not.toContain(secret);
   });

@@ -77,7 +77,7 @@ const DEFAULT_CONFIG: AttachmentsConfig = {
   },
   storage: {
     backend: "auto",
-    localDir: "~/.hasna/attachments/objects",
+    localDir: "",
     maxSizeBytes: 10 * 1024 * 1024 * 1024,
   },
   server: {

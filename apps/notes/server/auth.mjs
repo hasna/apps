@@ -1,6 +1,6 @@
 // Hasna Notes self-hosted server — auth (personalnotes/v1 dialect §2).
 //
-// Two backends, one wire shape. The SQLite backend keeps the dialect's
+// PostgreSQL production auth; isolated SQLite test fixtures keep the dialect's
 // `pn_` api keys (sha256-hashed at rest, 12-char prefix) and HS256 JWT
 // sessions. The PostgreSQL backend's api_keys table comes from
 // @hasna/contracts/auth (ApiKeyStore): keys are minted and verified with the
@@ -16,7 +16,7 @@
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { ApiError } from './http.mjs';
-import { nowIso } from './db.mjs';
+import { nowIso } from './sql.mjs';
 import { ApiKeyStore, mintApiKey, verifyApiKey } from '@hasna/contracts/auth';
 
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -204,10 +204,16 @@ export async function validateApiKey(db, presented, config = {}) {
     const verifier = verifyApiKey({
       app: 'notes',
       signingSecret: config.signingSecret,
+      requireTenant: true,
       keyStatus: store.keyStatus,
     });
     const outcome = await verifier.authenticate({ authorization: `Bearer ${presented}` });
-    if (!outcome.ok) return null;
+    if (!outcome.ok) {
+      if (outcome.reason === 'tenant_required' || outcome.reason === 'tenant_mismatch') {
+        throw new ApiError('forbidden', outcome.message, 403);
+      }
+      return null;
+    }
     const { principal } = outcome;
     await store.touchLastUsed(principal.kid);
     return {

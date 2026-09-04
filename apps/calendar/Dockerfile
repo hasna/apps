@@ -5,12 +5,12 @@
 # is configured. The ECS one-shot migration task overrides the command with
 # `... migrate`.
 
-FROM --platform=linux/arm64 oven/bun:1 AS deps
+FROM --platform=linux/amd64 oven/bun:1 AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --ignore-scripts
 
-FROM --platform=linux/arm64 oven/bun:1 AS build
+FROM --platform=linux/amd64 oven/bun:1 AS build
 WORKDIR /app
 COPY package.json bun.lock tsconfig.json ./
 COPY --from=deps /app/node_modules ./node_modules
@@ -18,7 +18,7 @@ COPY src ./src
 COPY scripts ./scripts
 RUN bun run build:server
 
-FROM --platform=linux/arm64 oven/bun:1 AS runner
+FROM --platform=linux/amd64 oven/bun:1 AS runner
 WORKDIR /app
 # Amazon RDS global CA bundle so TLS to the shared RDS succeeds under
 # verify-full-capable clients.

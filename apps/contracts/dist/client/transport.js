@@ -127,6 +127,13 @@ function parseEnvFile(text) {
   }
   return { values, unusable };
 }
+function configFileModeAllowed(mode) {
+  const permissions = mode & 4095;
+  return permissions === 256 || permissions === 384;
+}
+function configFileReadsCoherent(before, after) {
+  return before.dev === after.dev && before.ino === after.ino && before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
+}
 function readAppConfigFile(path) {
   const unsafe = (reason) => {
     throw new CredentialFileUnsafeError(path, reason);
@@ -146,9 +153,8 @@ function readAppConfigFile(path) {
     const before = fstatSync(fd);
     if (!before.isFile())
       unsafe("the path is not a regular file");
-    const permissions = before.mode & 4095;
-    if (permissions !== 256 && permissions !== 384) {
-      unsafe(`permission mode ${permissions.toString(8).padStart(4, "0")} is not owner-only 0400 or 0600`);
+    if (!configFileModeAllowed(before.mode)) {
+      unsafe(`permission mode ${(before.mode & 4095).toString(8).padStart(4, "0")} is not owner-only 0400 or 0600`);
     }
     const uid = process.getuid?.() ?? process.geteuid?.();
     if (uid !== undefined && before.uid !== uid)
@@ -157,7 +163,7 @@ function readAppConfigFile(path) {
       unsafe("the file exceeds the size limit");
     const bytes = readFileSync(fd);
     const after = fstatSync(fd);
-    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+    if (!configFileReadsCoherent(before, after)) {
       unsafe("the file changed while being read");
     }
     return parseEnvFile(bytes.toString("utf8"));
@@ -316,9 +322,6 @@ function deprecationNotified() {
   const created = new Set;
   host[DEPRECATION_REGISTRY] = created;
   return created;
-}
-function __resetCredentialDeprecationNotices() {
-  deprecationNotified().clear();
 }
 function defaultDeprecationSink(message) {
   if (typeof process !== "undefined" && process.stderr) {
@@ -1086,7 +1089,6 @@ export {
   clientTransportEnvKeys,
   appendQuery,
   appConfigDiskValue,
-  __resetCredentialDeprecationNotices,
   HasnaHttpError,
   CredentialResolutionError,
   ClientTransportConfigurationError,

@@ -902,8 +902,24 @@ export function addWorktree(request: AddWorktreeRequest): AddWorktreeResult {
         },
       );
     }
-    db.query("UPDATE worktree_leases SET verified_at = ?, updated_at = ? WHERE lease_id = ?")
-      .run(nowIso(), nowIso(), existing.lease_id);
+    if (existing.status === "released") {
+      // The worktree was released with --keep (directory intact, lease row
+      // released). Re-issuing the same claim must fully re-claim the row —
+      // status, machine, task/run ownership and claim time — or the reuse fast
+      // path hands the caller a lease that listWorktrees still reads as
+      // released/foreign/stale, leaving the worktree eligible for takeover or
+      // cleanup.
+      const timestamp = nowIso();
+      db.query(
+        `UPDATE worktree_leases SET
+           machine_id = ?, task_id = ?, run_id = ?, status = 'claimed',
+           claimed_at = ?, verified_at = ?, updated_at = ?, released_at = NULL
+         WHERE lease_id = ?`,
+      ).run(machineId, request.task ?? worktreeName, runId, timestamp, timestamp, timestamp, existing.lease_id);
+    } else {
+      db.query("UPDATE worktree_leases SET verified_at = ?, updated_at = ? WHERE lease_id = ?")
+        .run(nowIso(), nowIso(), existing.lease_id);
+    }
     return {
       schema: WORKTREE_LEASE_SCHEMA,
       path: existing.worktree_path,
@@ -1009,16 +1025,20 @@ function upsertLease(db: Database, lease: WorktreeLease): void {
      ON CONFLICT(lease_id) DO UPDATE SET
        repo_path = excluded.repo_path,
        repo_catalog_id = excluded.repo_catalog_id,
+       machine_id = excluded.machine_id,
        worktree_path = excluded.worktree_path,
        branch = excluded.branch,
        base_ref = excluded.base_ref,
        base_sha = excluded.base_sha,
+       task_id = excluded.task_id,
+       run_id = excluded.run_id,
        mode = excluded.mode,
        owner_metadata = excluded.owner_metadata,
        cleanup_policy = excluded.cleanup_policy,
        status = excluded.status,
        git_common_dir = excluded.git_common_dir,
        updated_at = excluded.updated_at,
+       claimed_at = excluded.claimed_at,
        verified_at = excluded.verified_at,
        released_at = excluded.released_at,
        last_error = excluded.last_error`,

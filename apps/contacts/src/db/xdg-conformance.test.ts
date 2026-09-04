@@ -46,7 +46,7 @@ function setTestEnv(): void {
   delete process.env["USERPROFILE"];
   delete process.env["CONTACTS_DB_PATH"];
   delete process.env["HASNA_CONTACTS_DB_PATH"];
-  delete process.env["HASNA_DATA_HOME"];
+  process.env["HASNA_DATA_HOME"] = join(tempRoot, ".local", "share", "hasna");
   delete process.env["HASNA_STATE_HOME"];
 }
 
@@ -66,7 +66,7 @@ describe("XDG conformance — @hasna/contacts routes through @hasna/paths", () =
     expect(existsSync(join(tempRoot!, ".hasna", "contacts"))).toBe(false);
   });
 
-  it("adopts a populated legacy store into the XDG data root once", () => {
+  it("leaves populated legacy data untouched for explicit preservation", () => {
     setTestEnv();
     const legacy = join(tempRoot!, ".hasna", "contacts");
     mkdirSync(join(legacy, "documents"), { recursive: true });
@@ -77,13 +77,12 @@ describe("XDG conformance — @hasna/contacts routes through @hasna/paths", () =
 
     const dataDir = getDataDir();
     expect(dataDir).toBe(join(tempRoot!, ".local", "share", "hasna", "contacts"));
-    expect(existsSync(join(dataDir, "contacts.db"))).toBe(true);
-    expect(readFileSync(join(dataDir, "contacts.db"), "utf8")).toBe("legacy-db");
-    expect(readFileSync(join(dataDir, "documents", "c1.pdf"), "utf8")).toBe("doc-payload");
-    expect(readFileSync(join(dataDir, "images", "c1.jpg"), "utf8")).toBe("img-payload");
+    expect(existsSync(join(dataDir, "contacts.db"))).toBe(false);
+    expect(readFileSync(join(legacy, "contacts.db"), "utf8")).toBe("legacy-db");
+    expect(readFileSync(join(legacy, "documents", "c1.pdf"), "utf8")).toBe("doc-payload");
+    expect(readFileSync(join(legacy, "images", "c1.jpg"), "utf8")).toBe("img-payload");
     expect(mode(join(tempRoot!, ".local", "share", "hasna"))).toBe(0o700);
     expect(mode(dataDir)).toBe(0o700);
-    expect(mode(join(dataDir, "documents"))).toBe(0o700);
   });
 
   it("does not clobber an existing XDG store with legacy data (gated adoption)", () => {

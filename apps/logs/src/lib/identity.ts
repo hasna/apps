@@ -45,7 +45,7 @@ export function detectRuntimeIdentity(
 /**
  * Pure (db-free) runtime identity: the SAME deterministic machine/repo/app IDs
  * as {@link detectRuntimeIdentity} but WITHOUT writing to the local catalog
- * tables. Used by the ApiStore transport (self_hosted/cloud), where there is no
+ * tables. Used by the ApiStore transport (hosted /v1), where there is no
  * on-box catalog to upsert into — the resolved IDs travel on the event and the
  * shared cloud server indexes/registers them there.
  */

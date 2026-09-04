@@ -1966,18 +1966,17 @@ describe("loops CLI", () => {
     });
   });
 
-  test("create command stores an OpenMachines assignment", () => {
+  test("create command with a machine pin fails loudly (machines deleted)", () => {
+    // @hasna/machines was deleted (owner directive, 2026-09-03); machine-pinned
+    // creates fail loudly and store nothing instead of persisting an
+    // unclaimable NULL pin (same contract as the pinned-name case above).
     const dataDir = freshDataDir("loops-cli-machine-");
     const create = runCli(dataDir, ["--json", "create", "command", "machine-local", "--at", futureAt(), "--cmd", "true", "--machine", "local"]);
-    expect(create.status).toBe(0);
-    const value = JSON.parse(create.stdout);
-    expect(value.machine.id).toBeTruthy();
-    expect(value.machine.local).toBe(true);
+    expect(create.status).not.toBe(0);
+    expect(create.stderr + create.stdout).toContain("@hasna/machines has been deleted");
 
-    const show = runCli(dataDir, ["--json", "show", "machine-local"]);
-    expect(show.status).toBe(0);
-    const shown = JSON.parse(show.stdout);
-    expect(shown.machine.id).toBe(value.machine.id);
+    const listed = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout) as Array<{ name: string }>;
+    expect(listed.map((loop) => loop.name)).not.toContain("machine-local");
   });
 
   test("create agent requires and persists auditable advisory restriction metadata", () => {
@@ -10681,7 +10680,7 @@ describe("local-only guards under a cloud-flipped client", () => {
   } as const;
   const FLIP_MESSAGE = "not available while flipped to the hosted Loops API";
 
-  test("route admission, drain, live UI, run-now, and tick fail loudly when flipped", () => {
+  test("route admission, drain, live UI, and tick fail loudly when flipped", () => {
     const dataDir = freshDataDir("loops-cli-cloud-guard-");
     for (const args of [
       ["routes", "create", "todos-task"],
@@ -10689,7 +10688,6 @@ describe("local-only guards under a cloud-flipped client", () => {
       ["events", "handle", "todos-task"],
       ["events", "drain", "todos-task"],
       ["ui"],
-      ["run-now", "anything"],
       ["tick"],
     ]) {
       const result = runCli(dataDir, args, undefined, CLOUD_ENV);
@@ -10699,6 +10697,19 @@ describe("local-only guards under a cloud-flipped client", () => {
       expect(result.stdout).not.toContain("do-not-print-this-key");
       expect(result.stderr).not.toContain("do-not-print-this-key");
     }
+  });
+
+  test("run-now routes to the hosted API when flipped instead of refusing as local-only (1fb09589)", () => {
+    // run-now is connection-aware: flipped to the hosted API it schedules the
+    // loop through the control plane, never the local sqlite island. Against an
+    // unreachable control plane it fails closed with a hosted-route error — NOT
+    // the local-only refusal — and never leaks the bearer key.
+    const dataDir = freshDataDir("loops-cli-cloud-run-now-");
+    const result = runCli(dataDir, ["--json", "run-now", "anything"], undefined, CLOUD_ENV);
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain(FLIP_MESSAGE);
+    expect(result.stdout).not.toContain("do-not-print-this-key");
+    expect(result.stderr).not.toContain("do-not-print-this-key");
   });
 
   test("route preview (dry-run) is store-free, so it is NOT blocked when flipped", () => {

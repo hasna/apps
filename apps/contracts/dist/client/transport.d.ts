@@ -1,6 +1,6 @@
 import { type Env } from "../env-token.js";
 import { type CredentialChainOptions, type CredentialTier, type ResolvedCredential } from "./credentials.js";
-export { appConfigDiskValue, completePointerCredential, credentialDiskSourceList, credentialDiskSources, CredentialResolutionError, explicitCredential, resolveCredential, __resetCredentialDeprecationNotices, } from "./credentials.js";
+export { appConfigDiskValue, completePointerCredential, credentialDiskSourceList, credentialDiskSources, CredentialResolutionError, explicitCredential, resolveCredential, } from "./credentials.js";
 export type { AppConfigDiskHit, CredentialChainOptions, CredentialTier, DiskCredentialSource, ResolvedCredential, } from "./credentials.js";
 export { clientTransportEnvKeys, credentialOverrideEnvKey, credentialPointerEnvKey, CREDENTIAL_PROFILE_ENV_KEY, } from "./env-keys.js";
 export type { ClientTransportEnvKeys } from "./env-keys.js";

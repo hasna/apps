@@ -7,6 +7,7 @@ import { searchMemories } from "../../lib/search.js";
 import type { MemoryScope } from "../../types/index.js";
 import {
   resolveAgentFilter, outputJson, formatMemoryDetail, makeHandleError, type GlobalOpts } from "../helpers.js";
+import { redactMemoryForOutput, redactSearchResultForOutput } from "../../lib/redact.js";
 import { RECALL_EXIT_FUZZY, RECALL_EXIT_NOT_FOUND } from "./memory-cmd-recall-exit.js";
 
 export function registerRecallCommand(program: Command): void {
@@ -40,10 +41,14 @@ export function registerRecallCommand(program: Command): void {
         // silently reviving the substitution bug on the exact path.
         if (memory && memory.key === key) {
           touchMemory(memory.id);
+          // Read-path redaction (todos e12c7659): the write path redacts
+          // value/summary but never the KEY, so a credential-shaped key stored
+          // by any write path reaches stdout verbatim on this read.
+          const safe = redactMemoryForOutput(memory);
           if (globalOpts.json) {
-            outputJson(memory);
+            outputJson(safe);
           } else {
-            console.log(formatMemoryDetail(memory));
+            console.log(formatMemoryDetail(safe));
           }
           return;
         }
@@ -57,25 +62,27 @@ export function registerRecallCommand(program: Command): void {
           });
 
           if (results.length > 0) {
-            const best = results[0]!;
-            touchMemory(best.memory.id);
+            // Sanitize the nearest match's memory AND its highlight snippets
+            // before it reaches either output format.
+            const safeBest = redactSearchResultForOutput(results[0]!);
+            touchMemory(safeBest.memory.id);
             if (globalOpts.json) {
               outputJson({
                 fuzzy_match: true,
                 requested_key: key,
-                returned_key: best.memory.key,
-                score: best.score,
-                match_type: best.match_type,
-                memory: best.memory,
+                returned_key: safeBest.memory.key,
+                score: safeBest.score,
+                match_type: safeBest.match_type,
+                memory: safeBest.memory,
               });
             } else {
               console.error(
                 chalk.yellow(
-                  `No memory with key "${key}". Showing the nearest match "${best.memory.key}" ` +
-                    `(score: ${best.score.toFixed(2)}, match: ${best.match_type}) — this is a DIFFERENT record.`
+                  `No memory with key "${key}". Showing the nearest match "${safeBest.memory.key}" ` +
+                    `(score: ${safeBest.score.toFixed(2)}, match: ${safeBest.match_type}) — this is a DIFFERENT record.`
                 )
               );
-              console.log(formatMemoryDetail(best.memory));
+              console.log(formatMemoryDetail(safeBest.memory));
             }
             // A substituted record is not the record that was asked for, so the
             // exit status must not say "found".

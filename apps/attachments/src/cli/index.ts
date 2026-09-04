@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import { registerEventsCommands } from "@hasna/events/commander";
 import { registerUpload } from "./commands/upload";
 import { registerDownload } from "./commands/download";
 import { registerServe } from "./commands/serve";
@@ -32,7 +31,7 @@ const pkgVersion: string = (() => { try { return (require("../../package.json") 
 
 const program = new Command()
   .name("attachments")
-  .description("Attachment transfer for agents — local or private S3")
+  .description("Attachment transfer for agents — authenticated HTTPS service")
   .version(pkgVersion);
 
 // Register all subcommands
@@ -63,6 +62,5 @@ program.addCommand(slugCommand());
 program.addCommand(initCommand());
 program.addCommand(heartbeatCommand());
 program.addCommand(focusCommand());
-registerEventsCommands(program, { source: "attachments" });
 
 program.parse(process.argv);

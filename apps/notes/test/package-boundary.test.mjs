@@ -18,6 +18,9 @@ describe('package boundary', () => {
     expect(pkg.name).toBe('@hasna/notes');
     expect(pkg.bin.notes).toBe('bin/notes.mjs');
     expect(pkg.bin['notes-mcp']).toBe('bin/notes-mcp.mjs');
+    expect(pkg.exports['.']).toBe('./sdk/index.mjs');
+    expect(pkg.exports['./sdk']).toBe('./sdk/index.mjs');
+    expect(pkg.exports['./compat/markdown-format']).toBe('./compat/markdown-format.mjs');
     expect(pkg.exports['./events']).toBe('./tools/notes-events.mjs');
     expect(pkg.dependencies['@hasna/events']).toBe('0.1.16');
     // Multi-machine sync modules were removed (0.2.0) — no ./sync or ./cloud
@@ -26,6 +29,29 @@ describe('package boundary', () => {
     expect(pkg.exports['./cloud']).toBeUndefined();
     expect(pkg.files).not.toContain('sync');
     expect(pkg.files).not.toContain('cloud/index.mjs');
+    expect(pkg.files).not.toContain('server/db.mjs');
+    expect(pkg.files).not.toContain('tools/notes-agent.mjs');
+    expect(pkg.files).toContain('server/sql.mjs');
+  });
+
+  test('public root is remote-only and compatibility format export has no CRUD', async () => {
+    const root = await import('@hasna/notes');
+    expect(() => new root.NotesClient({})).toThrow(/HASNA_NOTES_API_URL/);
+    expect(() => new root.NotesClient({ HASNA_NOTES_API_URL: 'https://notes.example.test' })).toThrow(/HASNA_NOTES_API_KEY/);
+    expect(typeof root.NotesClient).toBe('function');
+    expect(root.saveNote).toBeUndefined();
+    expect(root.loadNotes).toBeUndefined();
+    expect(root.getNote).toBeUndefined();
+    expect(root.deleteNote).toBeUndefined();
+
+    const compat = await import('@hasna/notes/compat/markdown-format');
+    expect(typeof compat.parseNote).toBe('function');
+    expect(typeof compat.serializeNote).toBe('function');
+    expect(compat.saveNote).toBeUndefined();
+    expect(compat.loadNotes).toBeUndefined();
+    expect(compat.getNote).toBeUndefined();
+    expect(compat.deleteNote).toBeUndefined();
+    expect(Object.keys(compat).every((key) => !/(save|load|delete|list|get).*note/i.test(key))).toBe(true);
   });
 
   test('public package does not include platform-only secrets or deployment code', async () => {

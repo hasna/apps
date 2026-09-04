@@ -38,14 +38,14 @@ function quoteDigestCommandArg(value: string): string {
   return /^[A-Za-z0-9._:/@=-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+// Agent-addressed DMs were removed from conversations (staged behind the
+// messages-app v1 release gate). The digest continuation command is
+// channel-scoped only; the `session_id`/`to` fields of DigestResult remain in
+// the store contract (shared with the channel path) and are not emitted here.
 export function formatDigestContinuationCommand(result: Pick<DigestResult, "channel" | "session_id" | "to" | "next_cursor" | "max_bytes">): string {
   const parts = ["conversations", "digest"];
   if (result.channel) {
     parts.push(quoteDigestCommandArg(result.channel));
-  } else if (result.session_id) {
-    parts.push("--session", quoteDigestCommandArg(result.session_id));
-  } else if (result.to) {
-    parts.push("--to", quoteDigestCommandArg(result.to));
   }
   parts.push("--cursor", String(result.next_cursor), "--max-bytes", String(result.max_bytes));
   return parts.join(" ");
@@ -96,7 +96,6 @@ export function registerMessagingCommands(program: Command): void {
     .usage("[options] <channel> <message>")
     .argument("<message>", "Message content")
     .argument("[channel]", "Channel name — positional form: `send <channel> \"<message>\"`")
-    .option("--to <agent>", "Recipient agent ID (required unless --channel is used)")
     .option("--from <agent>", "Sender agent ID")
     .option("--session <id>", "Session ID (auto-generated if omitted)")
     .option("--priority <level>", "Priority: low, normal, high, urgent", "normal")
@@ -104,7 +103,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--repository <repo>", "Repository context")
     .option("--branch <branch>", "Branch context")
     .option("--metadata <json>", "JSON metadata string")
-    .option("--channel <name>", "Send to a channel instead of a specific agent")
+    .option("--channel <name>", "Channel to send to (agent-addressed DMs were removed)")
     .option("--attach <file...>", "Attach one or more files")
     .option("--attachment <file...>", "Alias for --attach")
     .option("--reply-to <message-reference>", "Reply to a parent UUID, or numeric ID with --channel/--session")
@@ -204,8 +203,18 @@ export function registerMessagingCommands(program: Command): void {
         replyToUuid = parent.uuid;
       }
 
-      if (!to && !channel) {
-        emitCliError("Recipient is required: use --to <agent> or --channel <name>.", opts);
+      // Agent-addressed DMs were removed from conversations (staged behind the
+      // messages-app v1 release gate). A channel-less send is a DM whether the
+      // recipient came from --to (removed) or from a reply whose parent is a
+      // direct message — refuse both.
+      if (!channel) {
+        if (!to) {
+          emitCliError("Recipient is required: use --channel <name>.", opts);
+        }
+        emitCliError(
+          "Agent-addressed direct messages were removed from conversations. Use the @hasna/messages app for agent-to-agent DMs.",
+          opts,
+        );
       }
       if (!content.trim()) {
         emitCliError("Message content cannot be empty.", opts);
@@ -270,7 +279,6 @@ export function registerMessagingCommands(program: Command): void {
     .option("--session <id>", "Filter by session ID")
     .option("--sender <agent>", SENDER_HELP)
     .option("--from <agent>", FROM_ALIAS_HELP)
-    .option("--to <agent>", "Filter by recipient")
     .option("--channel <name>", "Filter by channel")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
     .option("--since-id <message-id>", "Messages after this numeric ID (oldest unseen first)", parseInt)
@@ -294,7 +302,6 @@ export function registerMessagingCommands(program: Command): void {
       const query = {
         session_id: opts.session,
         from: senderFilter.sender,
-        to: opts.to,
         channel: opts.channel,
         since: opts.since,
         since_id: sinceId,
@@ -305,7 +312,7 @@ export function registerMessagingCommands(program: Command): void {
       if (opts.json) {
         const page = await getStore().readMessagePreviews(query);
         if (opts.markRead) {
-          const reader = resolveIdentity(opts.to);
+          const reader = resolveIdentity(undefined);
           const ids = page.messages.filter((message) => message.unread).map((message) => message.id);
           if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
         }
@@ -313,7 +320,6 @@ export function registerMessagingCommands(program: Command): void {
           discloseEmptyResult({
             channel: opts.channel,
             sender: senderFilter.sender,
-            to: opts.to,
             session: opts.session,
             since: opts.since,
           }, { senderFlag: senderFilter.flag });
@@ -324,7 +330,7 @@ export function registerMessagingCommands(program: Command): void {
         const messages = await getStore().readMessages(query);
         const page = pageFromQuery(messages, window, { newestWindow: resolveReadWindow(query).newestWindow });
         if (opts.markRead) {
-          const reader = resolveIdentity(opts.to);
+          const reader = resolveIdentity(undefined);
           const ids = page.items.filter((message) => !message.read_at).map((message) => message.id);
           if (ids.length > 0) await await getStore().markReadByIds(ids, reader);
         }
@@ -332,7 +338,6 @@ export function registerMessagingCommands(program: Command): void {
           discloseEmptyResult({
             channel: opts.channel,
             sender: senderFilter.sender,
-            to: opts.to,
             session: opts.session,
             since: opts.since,
           }, { senderFlag: senderFilter.flag });
@@ -399,16 +404,16 @@ export function registerMessagingCommands(program: Command): void {
     .option("--cursor <message-id>", "Only include messages after this message ID", parseInt)
     .option("--max-bytes <n>", "Maximum JSON payload size", parseInt)
     .option("--limit <n>", "Max messages to show", parseInt)
-    .option("--session <id>", "Digest a DM/session instead of a channel")
-    .option("--to <agent>", "Filter by recipient (for DMs)")
     .option("--unread", "Only include unread messages")
     .option("--mark-read", "Mark returned messages read after building the digest")
     .option("--from <agent>", "Reader identity for --mark-read")
     .option("-j, --json", "Output as JSON")
     .action(async (channelArg, opts) => {
       const channel = typeof channelArg === "string" && channelArg.trim() ? channelArg.trim() : undefined;
-      if (!channel && !opts.session && !opts.to) {
-        emitCliError("Provide a channel name, --session <id>, or --to <agent>.", opts);
+      // Agent-addressed DMs were removed from conversations (staged behind the
+      // messages-app v1 release gate); the digest is channel-scoped only.
+      if (!channel) {
+        emitCliError("Provide a channel name to digest.", opts);
       }
 
       const reader = opts.markRead ? resolveIdentity(opts.from).trim() : undefined;
@@ -420,12 +425,10 @@ export function registerMessagingCommands(program: Command): void {
       try {
         result = await await getStore().readDigest({
           channel,
-          session_id: opts.session,
           since: opts.since,
           cursor: opts.cursor,
           max_bytes: opts.maxBytes,
           limit: opts.limit,
-          to: opts.to,
           unread_only: opts.unread,
           mark_read: opts.markRead,
           reader,
@@ -469,7 +472,6 @@ export function registerMessagingCommands(program: Command): void {
     .option("--channel <name>", "Filter by channel")
     .option("--sender <agent>", SENDER_HELP)
     .option("--from <agent>", FROM_ALIAS_HELP)
-    .option("--to <agent>", "Filter by recipient")
     .option("--since <timestamp>", "Only messages at or after this absolute ISO-8601 timestamp")
     .option("--limit <n>", "Max results to return (the server caps a single page at 500)", parseInt)
     .option("--cursor <n>", "Skip first N results for pagination", parseInt)
@@ -536,7 +538,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
         query: q,
         channel: opts.channel,
         from: senderFilter.sender,
-        to: opts.to,
         since,
         limit: opts.json ? opts.limit : window.limit,
         offset: opts.json ? opts.cursor : window.offset,
@@ -546,7 +547,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           query: q,
           channel: opts.channel,
           sender: senderFilter.sender,
-          to: opts.to,
         }, { senderFlag: senderFilter.flag });
       }
       const disclosure = {
@@ -562,7 +562,6 @@ used for — auditing a sender or a channel, which is an ABSENCE claim.
           query: q,
           channel: opts.channel,
           from: senderFilter.sender,
-          to: opts.to,
           since,
           cursor: opts.cursor,
         }));

@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { resolveStore, type Store } from "../../core/store";
-import { withTodosAuth } from "../../core/todos";
+import { withTodosAuth, serviceConfig } from "../../core/todos";
 
 export interface CompleteTaskOptions {
   file?: string[];
@@ -48,7 +48,7 @@ export async function completeTaskWithFiles(
   storeFactory: () => Store = () => resolveStore(),
   fetchFn: typeof fetch = fetch
 ): Promise<CompleteTaskResult> {
-  const todosUrl = options.todosUrl ?? "http://localhost:3000";
+  const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
 
   // 1. Upload each file (via the Store) and collect the evidence entries.
   const attachment_ids: string[] = [];
@@ -81,9 +81,9 @@ export async function completeTaskWithFiles(
     if (getResponse.status === 404) {
       throw new Error(`Task not found: ${taskId}`);
     }
-    const responseBody = await getResponse.text().catch(() => "");
+    // Error bodies may contain credentials or private records; report status only.
     throw new Error(
-      `Failed to fetch task ${taskId}: HTTP ${getResponse.status}${responseBody ? ` — ${responseBody}` : ""}`
+      `Failed to fetch task ${taskId}: HTTP ${getResponse.status}`
     );
   }
   const task = (await getResponse.json()) as Record<string, unknown>;
@@ -121,9 +121,9 @@ export async function completeTaskWithFiles(
     body: JSON.stringify(patchBody),
   }));
   if (!patchResponse.ok) {
-    const responseBody = await patchResponse.text().catch(() => "");
+    // Error bodies may contain credentials or private records; report status only.
     throw new Error(
-      `Failed to persist attachment evidence for task ${taskId}: HTTP ${patchResponse.status}${responseBody ? ` — ${responseBody}` : ""}`
+      `Failed to persist attachment evidence for task ${taskId}: HTTP ${patchResponse.status}`
     );
   }
 
@@ -138,9 +138,9 @@ export async function completeTaskWithFiles(
     if (completeResponse.status === 404) {
       throw new Error(`Task not found: ${taskId}`);
     }
-    const responseBody = await completeResponse.text().catch(() => "");
+    // Error bodies may contain credentials or private records; report status only.
     throw new Error(
-      `Failed to complete task ${taskId}: HTTP ${completeResponse.status}${responseBody ? ` — ${responseBody}` : ""}`
+      `Failed to complete task ${taskId}: HTTP ${completeResponse.status}`
     );
   }
 
@@ -156,7 +156,7 @@ export function registerCompleteTask(program: Command): void {
     .option(
       "--todos-url <url>",
       "Todos REST server base URL",
-      "http://localhost:3000"
+      undefined
     )
     .option("--expiry <time>", "Link expiry: e.g. 24h, 7d, never")
     .option("--notes <text>", "Completion notes to attach")
@@ -167,7 +167,7 @@ export function registerCompleteTask(program: Command): void {
         process.exit(1);
       }
 
-      const todosUrl = options.todosUrl ?? "http://localhost:3000";
+      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
 
       try {
         const result = await completeTaskWithFiles(taskId, files, {

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { access, mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 const packageRoot = join(import.meta.dir, "..");
@@ -55,18 +55,17 @@ describe("published package consumer contract", () => {
     const installedRoot = join(consumerRoot, "node_modules/@hasna/contacts");
     for (const bundle of ["dist/cli/index.js", "dist/server/index.js", "dist/mcp/index.js"]) {
       const contents = await readFile(join(installedRoot, bundle), "utf8");
-      expect(contents).toContain("URI authority must not contain a literal backslash.");
       expect(contents).not.toMatch(/(?:require\(|from\s+)["']fast-uri["']/);
+      expect(contents).not.toContain('from "bun:sqlite"');
+      expect(contents).not.toContain("class LocalStore");
+      expect(contents).not.toContain("CREATE TABLE contacts");
     }
-    await expect(access(join(consumerRoot, "node_modules/fast-uri"))).rejects.toThrow();
-
     const version = Bun.spawnSync(
       ["bun", join(installedRoot, "dist/server/index.js"), "--version"],
       {
         cwd: consumerRoot,
         env: {
           ...process.env,
-          HASNA_CONTACTS_STORAGE_MODE: "cloud",
           CONTACTS_NO_OPEN: "true",
         },
         stdout: "pipe",
