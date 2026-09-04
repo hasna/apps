@@ -3,8 +3,11 @@
  * messages — the CLI surface of @hasna/messages.
  *
  * Interface layer over the single domain implementation. Local mode uses a
- * local SQLite store; --url / HASNA_MESSAGES_API_URL targets a running
- * messages-serve instance through the SDK client. Agent identity is
+ * local SQLite store and is an EXPLICIT opt-in (HASNA_MESSAGES_LOCAL=1);
+ * `--url` / HASNA_MESSAGES_API_URL targets a running messages-serve instance
+ * through the SDK client. Without the API env AND without the local opt-in
+ * the CLI fails closed (non-zero exit, actionable error) — it never silently
+ * falls back to the on-box store. Agent identity is
  * first-class: acting verbs take --agent, and `messages register` / `messages
  * agents` manage the identity registry.
  *
@@ -34,7 +37,12 @@ interface CliOpts {
   apiKey?: string;
 }
 
-/** Resolve the client transport from CLI overrides + env. */
+/**
+ * Resolve the client transport from CLI overrides + env. Fails closed when
+ * neither the API env nor the explicit local opt-in (HASNA_MESSAGES_LOCAL=1)
+ * is present: resolveMessagesClientTransport throws and the top-level handler
+ * below exits non-zero with the actionable error.
+ */
 function resolveStore(opts: CliOpts): { transport: "http" | "local"; local?: MessagesService; remote?: ReturnType<typeof createMessagesClient> } {
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -62,7 +70,7 @@ program
   .description("Register (or return) an agent identity")
   .requiredOption("--name <agent>", "agent name")
   .option("--display-name <text>", "human/seat-friendly label")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { name: string; displayName?: string } & CliOpts) => {
     const store = resolveStore(opts);
@@ -76,7 +84,7 @@ program
 program
   .command("agents")
   .description("List registered agent identities")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: CliOpts) => {
     const store = resolveStore(opts);
@@ -88,7 +96,7 @@ program
   .command("whoami")
   .description("Show an agent identity (or register it if absent)")
   .requiredOption("--agent <agent>", "agent name")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { agent: string } & CliOpts) => {
     const store = resolveStore(opts);
@@ -107,7 +115,7 @@ program
   .requiredOption("--to <agent>", "receiving agent")
   .requiredOption("--content <text>", "message body")
   .option("--reply-to <id>", "message id being replied to (threads)")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { from: string; to: string; content: string; replyTo?: string } & CliOpts) => {
     const store = resolveStore(opts);
@@ -121,7 +129,7 @@ program
   .command("receive")
   .description("Drain the agent's inbox: transition stored -> delivered and print the delivered messages")
   .requiredOption("--agent <agent>", "the agent receiving")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { agent: string } & CliOpts) => {
     const store = resolveStore(opts);
@@ -135,7 +143,7 @@ program
   .command("delivery")
   .description("Show per-recipient delivery state for a thread (stored | delivered | read)")
   .requiredOption("--id <threadId>", "thread id")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { id: string } & CliOpts) => {
     const store = resolveStore(opts);
@@ -152,7 +160,7 @@ program
   .description("List threads involving an agent, with unread counts")
   .requiredOption("--agent <agent>", "the agent whose threads to list")
   .option("--all", "include threads the agent has closed")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { agent: string; all?: boolean } & CliOpts) => {
     const store = resolveStore(opts);
@@ -167,7 +175,7 @@ program
   .description("Expand a thread: its messages with your per-message delivery state (does NOT mark read)")
   .requiredOption("--id <threadId>", "thread id")
   .requiredOption("--agent <agent>", "the agent expanding")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { id: string; agent: string } & CliOpts) => {
     const store = resolveStore(opts);
@@ -181,7 +189,7 @@ program
   .command("unread")
   .description("List threads with unread messages for an agent (and the total)")
   .requiredOption("--agent <agent>", "the agent")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { agent: string } & CliOpts) => {
     const store = resolveStore(opts);
@@ -198,7 +206,7 @@ program
   .description("Mark a thread read from an agent's perspective (stored/delivered -> read)")
   .requiredOption("--id <threadId>", "thread id")
   .requiredOption("--agent <agent>", "the agent marking it read")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { id: string; agent: string } & CliOpts) => {
     const store = resolveStore(opts);
@@ -215,7 +223,7 @@ program
   .description("Close a thread from an agent's perspective (excluded from the default list)")
   .requiredOption("--id <threadId>", "thread id")
   .requiredOption("--agent <agent>", "the agent closing it")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { id: string; agent: string } & CliOpts) => {
     const store = resolveStore(opts);
@@ -230,7 +238,7 @@ program
   .description("Reopen a thread from an agent's perspective")
   .requiredOption("--id <threadId>", "thread id")
   .requiredOption("--agent <agent>", "the agent reopening it")
-  .option("--url <url>", "messages-serve base URL (default: local SQLite store)")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
   .option("--api-key <key>", "API key for the remote server")
   .action(async (opts: { id: string; agent: string } & CliOpts) => {
     const store = resolveStore(opts);
@@ -250,4 +258,13 @@ program
     await serve();
   });
 
-await program.parseAsync(process.argv);
+// Fail-closed top-level: a transport misconfiguration (API env AND local
+// opt-in both absent) throws out of the action handler; print the actionable
+// error to stderr and exit non-zero. Never fall back to a local store with
+// exit 0.
+try {
+  await program.parseAsync(process.argv);
+} catch (err) {
+  console.error(`messages: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
+}

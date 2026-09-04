@@ -2,9 +2,11 @@
 /**
  * messages-mcp — the MCP surface of @hasna/messages.
  *
- * Thin interface layer over the single domain implementation: the local
- * SQLite store by default, or the SDK client when HASNA_MESSAGES_API_URL is
- * set. Tools:
+ * Thin interface layer over the single domain implementation: the SDK client
+ * when HASNA_MESSAGES_API_URL is set, or the local SQLite store — an EXPLICIT
+ * opt-in (HASNA_MESSAGES_LOCAL=1) only. Without the API env and without the
+ * opt-in the server fails closed at startup (non-zero exit + actionable
+ * error); it never silently serves the on-box store. Tools:
  *   messages_register, messages_agents, messages_send, messages_threads,
  *   messages_thread, messages_unread, messages_thread_close,
  *   messages_thread_reopen, messages_mark_read, messages_receive,
@@ -34,10 +36,24 @@ if (EARLY_ARGV.includes("--help") || EARLY_ARGV.includes("-h")) {
 
 Hasna Messages MCP server (stdio) — direct agent-to-agent DMs with threads.
 
+Requires HASNA_MESSAGES_API_URL (+ HASNA_MESSAGES_API_KEY) to reach the fleet
+API, or HASNA_MESSAGES_LOCAL=1 to explicitly serve the on-box SQLite store.
+
 Options:
   -V, --version  output the version number
   -h, --help     display help for command`);
   process.exit(0);
+}
+
+// Fail-closed gate (after the binds-before-version early exits, before the
+// stdio connect): a transport misconfiguration is fatal at startup. The
+// resolver throws when neither HASNA_MESSAGES_API_URL nor the explicit local
+// opt-in is present — never open the on-box store silently and exit 0.
+try {
+  resolveMessagesClientTransport(process.env);
+} catch (err) {
+  console.error(`messages-mcp: ${err instanceof Error ? err.message : String(err)}`);
+  process.exit(1);
 }
 
 type Service = MessagesService | MessagesClient;
