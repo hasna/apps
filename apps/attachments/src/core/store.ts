@@ -78,6 +78,7 @@ export interface Store {
     filename: string,
     contentType: string | undefined,
     expiryMs: number,
+    sha256?: string,
   ): Promise<{ id: string; uploadUrl: string; contentType: string; filename: string }>;
 
   /** Finalize a presigned direct upload: verify size, generate the link, mark ready. */
@@ -182,8 +183,8 @@ export class ApiStore implements Store {
     return this.v1.saveFeedback(input);
   }
 
-  presignUpload(filename: string, contentType: string | undefined, expiryMs: number) {
-    return this.v1.presignUpload(filename, contentType, expiryMs);
+  presignUpload(filename: string, contentType: string | undefined, expiryMs: number, sha256?: string) {
+    return this.v1.presignUpload(filename, contentType, expiryMs, sha256);
   }
 
   presignComplete(

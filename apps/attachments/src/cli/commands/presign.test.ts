@@ -193,7 +193,7 @@ describe("presign-upload command", () => {
       await program.parseAsync(["presign-upload", "report.pdf", "--expiry", "2h"], { from: "user" });
       expect(mockPresignPut).toHaveBeenCalledTimes(1);
       const [key, contentType, expiresIn] = mockPresignPut.mock.calls[0] as [string, string, number];
-      expect(key).toMatch(/^attachments\/\d{4}-\d{2}-\d{2}\/att_[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\.pdf$/);
+      expect(key).toMatch(/^attachments\/global\/uploads\/att_[A-Za-z0-9_-]+$/);
       expect(contentType).toBe("application/pdf");
       expect(expiresIn).toBe(7200); // 2h in seconds
     } finally {

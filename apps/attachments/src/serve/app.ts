@@ -35,7 +35,15 @@ import {
   getLinkType,
   resolveDeliverableLinkType,
 } from "../core/links.js";
-import { createObjectKey, sanitizeFilename, contentDispositionAttachment } from "../core/security.js";
+import { sanitizeFilename, contentDispositionAttachment } from "../core/security.js";
+import {
+  buildArtifactManifest,
+  canonicalBlobKey,
+  isSha256Hex,
+  manifestKey,
+  sha256Hex,
+  stagingKey,
+} from "../core/artifact-keys.js";
 import {
   FriendlySlugError,
   parseFriendlySlug,
@@ -495,7 +503,6 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     const resolvedType =
       declaredContentType ?? ((mimeLookup(filename) || "application/octet-stream") as string);
     const id = `att_${nanoid(10)}`;
-    const objectKey = createObjectKey(id, filename);
     const backend = resolveStorageBackend(config);
     const { milliseconds: expiryMs } = parseExpiryOr400(opts.expiry ?? config.defaults.expiry);
     const expiresAt = expiryMs !== null ? Date.now() + expiryMs : null;
@@ -510,6 +517,11 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     // the object store; the salt/iv/tag ride in the metadata row so the
     // download path re-derives the key from the same password.
     const encryption = opts.encrypt && opts.password ? encryptBuffer(opts.password, buffer) : null;
+    const storedBytes = encryption ? encryption.buffer : buffer;
+    // Content-addressed canonical key: the digest of the bytes actually stored
+    // (ciphertext when encrypted). A duplicate upload lands on the same key —
+    // an idempotent overwrite, never a second object.
+    const objectKey = canonicalBlobKey(sha256Hex(storedBytes), filename);
     const linkBaseUrl = parseBaseUrlOr400(opts.baseUrl);
 
     const linkType = resolveDeliverableLinkType({
@@ -522,7 +534,42 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       requireEmail: opts.requireEmail,
     });
 
-    await uploadBufferToStore(config, objectKey, encryption ? encryption.buffer : buffer, resolvedType);
+    const storeHandle = createObjectStore(config);
+    const head = (storeHandle as { head?: (k: string) => Promise<unknown> }).head;
+    let existing = false;
+    if (typeof head === "function") {
+      try {
+        await head.call(storeHandle, objectKey);
+        existing = true;
+      } catch {
+        // missing — upload below
+      }
+    }
+    if (!existing) {
+      await uploadBufferToStore(config, objectKey, storedBytes, resolvedType);
+    }
+    if (backend === "s3") {
+      await uploadBufferToStore(
+        config,
+        manifestKey(id),
+        Buffer.from(
+          JSON.stringify(
+            buildArtifactManifest({
+              id,
+              sha256: sha256Hex(storedBytes),
+              byteSize: storedBytes.byteLength,
+              contentType: resolvedType,
+              filename,
+              createdAt: Date.now(),
+              storageKey: objectKey,
+            }),
+            null,
+            2,
+          ),
+        ),
+        "application/json",
+      );
+    }
 
     let link: string | null = null;
     if (linkType === "presigned") {
@@ -547,6 +594,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       encryptionIv: encryption?.iv ?? null,
       encryptionTag: encryption?.tag ?? null,
       downloads: 0,
+      contentSha256: sha256Hex(storedBytes),
     };
     await store.insert(attachment);
 
@@ -711,7 +759,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
     if (denied) return denied;
     try {
       const body = (await c.req.json().catch(() => null)) as
-        | { filename?: string; content_type?: string; expiry?: string; size?: number }
+        | { filename?: string; content_type?: string; expiry?: string; size?: number; sha256?: string }
         | null;
       if (!body?.filename) {
         return c.json({ error: "filename is required" }, 400);
@@ -729,8 +777,16 @@ export function createServeApp(deps: ServeAppDeps): Hono {
       if (never) throw new BadRequestError("Presigned upload expiry cannot be never");
       const expirySeconds = Math.floor(expiryMs! / 1000);
       const id = `att_${nanoid(10)}`;
-      const objectKey = createObjectKey(id, filename);
-      const uploadUrl = await new S3Client(config.s3).presignPut(objectKey, contentType, expirySeconds);
+      const clientSha256 = typeof body.sha256 === "string" && body.sha256.trim() !== "" ? body.sha256.trim().toLowerCase() : undefined;
+      if (clientSha256 !== undefined && !isSha256Hex(clientSha256)) {
+        throw new BadRequestError("sha256 must be a lowercase hex sha-256 digest");
+      }
+      // Content-addressed canonical key when the client digests its bytes up
+      // front (a duplicate upload lands on the same object); a staging key in
+      // the compatibility namespace otherwise. Rows persist whichever key was
+      // minted, so both are resolvable for the whole migration window.
+      const objectKey = clientSha256 ? canonicalBlobKey(clientSha256, filename) : stagingKey(id);
+      const uploadUrl = await new S3Client(config.s3).presignPut(objectKey, contentType, expirySeconds, clientSha256);
       const now = Date.now();
       await store.insert({
         id,
@@ -750,6 +806,7 @@ export function createServeApp(deps: ServeAppDeps): Hono {
         encryptionIv: null,
         encryptionTag: null,
         downloads: 0,
+        contentSha256: clientSha256 ?? null,
       });
       return c.json(
         {
@@ -792,6 +849,42 @@ export function createServeApp(deps: ServeAppDeps): Hono {
         await store.delete(id);
         return c.json({ error: `File too large. Maximum size is ${config.storage.maxSizeBytes} bytes.` }, 413);
       }
+      // When the creating client supplied a digest, the object must carry it:
+      // a content-addressed key whose bytes disagree with the key would serve
+      // corrupt bytes under another object's address.
+      if (
+        attachment.contentSha256 &&
+        info.checksumSha256 !== undefined &&
+        info.checksumSha256 !== attachment.contentSha256
+      ) {
+        await createObjectStore(config).delete(attachment.s3Key).catch(() => undefined);
+        await store.delete(id);
+        return c.json(
+          { error: `Uploaded object checksum does not match the declared sha256 (${attachment.contentSha256.slice(0, 12)}…)` },
+          400,
+        );
+      }
+      // Publish the per-row artifact manifest (S3 store).
+      await uploadBufferToStore(
+        config,
+        manifestKey(id),
+        Buffer.from(
+          JSON.stringify(
+            buildArtifactManifest({
+              id,
+              sha256: attachment.contentSha256 ?? undefined,
+              byteSize: info.contentLength ?? attachment.size,
+              contentType: info.contentType ?? attachment.contentType,
+              filename: attachment.filename,
+              createdAt: attachment.createdAt,
+              storageKey: attachment.s3Key,
+            }),
+            null,
+            2,
+          ),
+        ),
+        "application/json",
+      );
       const { milliseconds: expiryMs } = parseExpiryOr400(body.expiry ?? config.defaults.expiry);
       const expiresAt = expiryMs !== null ? Date.now() + expiryMs : null;
       const maxDownloads =

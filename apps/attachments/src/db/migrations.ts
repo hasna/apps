@@ -45,6 +45,10 @@ const CORE_MIGRATIONS: Migration[] = [
      CREATE INDEX IF NOT EXISTS idx_attachments_tag ON attachments(tag)`,
   ),
   defineMigration(
+    "attachments_0005_content_sha256",
+    `ALTER TABLE attachments ADD COLUMN IF NOT EXISTS content_sha256 TEXT`,
+  ),
+  defineMigration(
     "attachments_0004_share_links",
     `CREATE TABLE IF NOT EXISTS share_links (
        id TEXT PRIMARY KEY,

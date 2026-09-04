@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { getConfig, parseExpiryStrict } from "../../core/config";
 import { resolveStore } from "../../core/store";
+import { sha256File } from "../../core/artifact-keys";
 import { formatExpiry, exitError } from "../utils";
 
 // Presigned direct-to-S3 upload works on both backends: the store that holds
@@ -27,13 +28,31 @@ export function presignUploadCommand(): Command {
         process.exit(1);
       }
 
+      // Digest the local bytes so the request lands under the canonical
+      // content-addressed key (a duplicate upload of identical bytes reuses
+      // the same object) and the server can presign the PUT with the checksum
+      // baked in — S3 then rejects any PUT whose bytes disagree.
+      let sha256: string | undefined;
+      try {
+        sha256 = await sha256File(filename);
+      } catch {
+        sha256 = undefined;
+      }
+
       const store = resolveStore();
       try {
-        const result = await store.presignUpload(filename, options.contentType as string | undefined, expiryMs);
+        const result = await store.presignUpload(filename, options.contentType as string | undefined, expiryMs, sha256);
         process.stdout.write(`Upload URL: ${result.uploadUrl} (expires in ${options.expiry})\n`);
         process.stdout.write(`ID: ${result.id}\n`);
         process.stdout.write(`Finalize: attachments presign-complete ${result.id}\n`);
-        process.stdout.write(`Usage: curl -X PUT -H "Content-Type: ${result.contentType}" -T ${result.filename} "${result.uploadUrl}"\n`);
+        if (sha256) {
+          const checksumB64 = Buffer.from(sha256, "hex").toString("base64");
+          process.stdout.write(
+            `Usage: curl -X PUT -H "Content-Type: ${result.contentType}" -H "x-amz-checksum-sha256: ${checksumB64}" -T ${result.filename} "${result.uploadUrl}"\n`,
+          );
+        } else {
+          process.stdout.write(`Usage: curl -X PUT -H "Content-Type: ${result.contentType}" -T ${result.filename} "${result.uploadUrl}"\n`);
+        }
       } catch (err) {
         exitError(err instanceof Error ? err.message : String(err));
       } finally {

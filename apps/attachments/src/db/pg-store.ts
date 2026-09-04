@@ -32,6 +32,7 @@ type AttachmentRow = {
   encryption_iv: string | null;
   encryption_tag: string | null;
   downloads: string | number | null;
+  content_sha256: string | null;
 };
 
 type ShareLinkRow = {
@@ -98,6 +99,7 @@ function rowToAttachment(row: AttachmentRow): Attachment {
     encryptionIv: row.encryption_iv ?? null,
     encryptionTag: row.encryption_tag ?? null,
     downloads: num(row.downloads),
+    contentSha256: row.content_sha256 ?? null,
   };
 }
 
@@ -136,8 +138,8 @@ export class PgAttachmentsStore {
     await this.client.execute(
       `INSERT INTO attachments
         (id, filename, s3_key, bucket, size, content_type, link, tag, expires_at, created_at,
-         storage_backend, status, encryption_algorithm, encryption_salt, encryption_iv, encryption_tag, downloads)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+         storage_backend, status, encryption_algorithm, encryption_salt, encryption_iv, encryption_tag, downloads, content_sha256)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
       [
         attachment.id,
         attachment.filename,
@@ -156,6 +158,7 @@ export class PgAttachmentsStore {
         attachment.encryptionIv ?? null,
         attachment.encryptionTag ?? null,
         attachment.downloads ?? 0,
+        attachment.contentSha256 ?? null,
       ],
     );
   }

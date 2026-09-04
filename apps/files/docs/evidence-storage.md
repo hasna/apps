@@ -15,14 +15,40 @@ bucket via `HASNA_FILES_S3_BUCKET` (or `HASNA_FILES_EVIDENCE_BUCKET`); detailed
 migration runbooks and legacy bucket aliases are private operator evidence and
 are not part of the public package.
 
-Current evidence object layout:
+Canonical evidence object layout (content-addressed, hasna/apps#1650):
 
 ```txt
-quarantine/orgs/{org_id}/companies/{company_id|_global}/{app}/{yyyy}/{mm}/{kind}/{asset_id}/{filename}
-orgs/{org_id}/companies/{company_id|_global}/{app}/{yyyy}/{mm}/{kind}/{asset_id}/{filename}
+quarantine/evidence/{org_id}/{sha256}[.{ext}]      staging (new uploads)
+evidence/{org_id}/{sha256}[.{ext}]                 content-addressed object
+evidence/{org_id}/manifests/{asset_id}.json        immutable per-asset manifest
 ```
 
-Files enter the bucket under `quarantine/` and move to the final key only after completion verifies size and checksum metadata.
+- Keys are deterministic in (org, content): a duplicate upload for the same
+  org lands on the same object — completion skips the copy when the canonical
+  object already exists with the same checksum, so a duplicate never leaves a
+  second object.
+- The manifest carries the content address + provenance summary, so a bucket
+  listing is restorable without the database.
+- Legacy keys (`orgs/{org}/companies/...` and `tenants/{tenant}/objects/...`)
+  stay readable for the whole migration window: assets persist their own
+  `object_key` and reads resolve it verbatim. `isLegacyEvidenceKey` classifies
+  stored keys for tooling.
+- Files enter the bucket under `quarantine/` and move to the final key only
+  after completion verifies size and checksum metadata.
+
+## Bucket Configuration (operator infra — applied, never attempted in code)
+
+The package executes object operations only; versioning, lifecycle, tagging
+and IAM are applied as infrastructure change (documented constants in
+`src/lib/bucket-config.ts`):
+
+| Setting | Value |
+| --- | --- |
+| Versioning | Enabled |
+| Lifecycle | Noncurrent versions expire after 90 days |
+| Lifecycle | Incomplete multipart uploads abort after 7 days |
+| Tags | `Class`, `Project`, `Component` on objects |
+| Task-role grant | One inline policy per role, exactly one bucket ARN |
 
 ## Required Lifecycle
 
@@ -55,8 +81,13 @@ HASNA_FILES_S3_ENDPOINT=
 HASNA_FILES_S3_FORCE_PATH_STYLE=0
 ```
 
-The existing `HASNA_FILES_EVIDENCE_*` variables remain compatible for apps that
-already use evidence-specific configuration.
+`HASNA_FILES_EVIDENCE_BUCKET` (the `EVIDENCE_S3_BUCKET` alias) is the legacy
+dedicated-evidence bucket. Either bucket env works — evidence keys are
+identical in both (`evidence/{org_id}/{sha256}` under the optional prefix), so
+the alias keeps deployments that already carved out a separate bucket running,
+and folding evidence into the shared files bucket later is a copy, never a
+rewrite. The existing `HASNA_FILES_EVIDENCE_*` variables remain compatible for
+apps that already use evidence-specific configuration.
 
 ## Cloud Runtime Boundary
 
