@@ -1,0 +1,154 @@
+name: fleet-key-drift
+
+# Daily proof that every hosted app still has a client API key that WORKS
+# (hasna/apps#1595, acceptance item 3).
+#
+# The two failures this catches are both invisible to /health and to uptime
+# monitoring, which is why neither was caught for days:
+#
+#   MISSING   messages-prod ran and routed with no hasna/oss/messages/api-key
+#             at all, so nothing on any station could call it.
+#   REVOKED   projects and knowledge shipped keys that had been revoked at the
+#             origin while the Secrets Manager copy still held the dead value
+#             (kids 80f518b50248fb7f, c27c603d5b428ec4).
+#
+# The check is two-sided per app: it sends an UNAUTHENTICATED request first and
+# requires a 401/403, then the same request with the key and requires anything
+# else. Without the first half a service that had lost its auth middleware would
+# make every key look valid — a key check that cannot fail is worse than none.
+#
+# On failure it posts the report to conversations #incidents. It never posts on
+# success: a daily green message trains people to ignore the channel.
+#
+# ROLE. Reading every hasna/oss/*/api-key is broader than any one app's deploy
+# role, so this lane assumes its own audit role — read-only on that secret
+# prefix, nothing else. Name it with the FLEET_KEY_AUDIT_ROLE repository
+# variable; the default below is the name infra-live provisions.
+
+on:
+  schedule:
+    # 06:17 UTC daily. Offset off the hour so it does not pile onto every other
+    # scheduled job in the account.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: Comma-separated subset of tooling/fleet/hosted-apps.json (default all).
+        required: false
+        type: string
+      strict:
+        description: Treat "could not verify" as a failure too.
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: fleet-key-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  drift:
+    name: fleet client-API-key drift
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.3.14 # in lockstep with the root package.json "packageManager"
+
+      # Two-sided self-check of the checker, BEFORE it is trusted with a verdict
+      # and before any credential is configured: the classification suite proves
+      # the probe can both pass and fail. A drift check whose logic silently
+      # regressed would report an all-green fleet forever.
+      - name: Prove the drift check can fail
+        run: bun test tooling/ci/tests/standard/fleet-key-provisioning.test.ts
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ vars.FLEET_KEY_AUDIT_ROLE || 'fleet-key-audit-gha' }}
+          aws-region: us-east-1
+          role-session-name: gha-fleet-key-drift-${{ github.run_id }}
+
+      - name: Check every hosted app's client key
+        id: check
+        continue-on-error: true
+        env:
+          APPS: ${{ inputs.apps }}
+          STRICT: ${{ inputs.strict }}
+        run: |
+          set -Eeuo pipefail
+          # if-blocks, not `[[ … ]] && …`: under `set -e` a false test as the
+          # last command of a line exits the step with the check unrun.
+          args=(drift)
+          if [[ -n "${APPS}" ]]; then args+=(--apps "${APPS}"); fi
+          if [[ "${STRICT}" == "true" ]]; then args+=(--strict); fi
+          bun tooling/fleet/fleet-key.ts "${args[@]}"
+
+      # The report is carried through GITHUB_OUTPUT (written by the command
+      # above), never through the shell, and it contains app names, HTTP
+      # statuses and verdicts only — no key value can reach it.
+      - name: Post the report to conversations #incidents
+        if: ${{ steps.check.outputs.failures != '0' && steps.check.outputs.failures != '' }}
+        env:
+          REPORT: ${{ steps.check.outputs.report }}
+          CHANNEL: ${{ vars.FLEET_INCIDENTS_CHANNEL || 'incidents' }}
+          FROM: ${{ vars.FLEET_INCIDENTS_AGENT || 'fleet-key-drift' }}
+          CONVERSATIONS_BASE: ${{ vars.CONVERSATIONS_API_URL || 'https://api.hasna.com/conversations' }}
+        run: |
+          set -Eeuo pipefail
+          # The conversations client key moves from Secrets Manager into this
+          # process and straight into a header. It is never echoed or written.
+          key="$(aws secretsmanager get-secret-value \
+            --secret-id hasna/oss/conversations/api-key \
+            --region us-east-1 --query SecretString --output text)"
+          body="$(jq -nc --arg from "${FROM}" --arg channel "${CHANNEL}" --arg content "${REPORT}" \
+            '{from: $from, to: $channel, channel: $channel, content: $content}')"
+          status="$(curl -sS -o /tmp/incident-post.json -w '%{http_code}' \
+            -X POST "${CONVERSATIONS_BASE}/v1/messages" \
+            -H "x-api-key: ${key}" \
+            -H 'content-type: application/json' \
+            --data-binary "${body}")"
+          unset key
+          if [[ "${status}" != 2* ]]; then
+            echo "::error::posting the drift report to #${CHANNEL} failed with HTTP ${status}"
+            jq -r '.error // .' /tmp/incident-post.json 2>/dev/null || true
+            exit 1
+          fi
+
+      - name: Publish summary and fail on findings
+        run: |
+          set -Eeuo pipefail
+          {
+            echo "## Fleet client-API-key drift"
+            echo
+            echo '```'
+            printf '%s\n' "${REPORT:-(the check did not produce a report)}"
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+          # An empty `failures` output means the check itself did not finish —
+          # a broken checker must be as loud as a broken key, never a silent
+          # green.
+          if [[ -z "${FAILURES}" ]]; then
+            echo "::error::the drift check did not complete (outcome: ${CHECK_OUTCOME}); no verdict was produced"
+            exit 1
+          fi
+          if [[ "${FAILURES}" != "0" ]]; then
+            echo "::error::${FAILURES} hosted app(s) have a missing or dead client key — see the report above"
+            exit 1
+          fi
+        env:
+          REPORT: ${{ steps.check.outputs.report }}
+          FAILURES: ${{ steps.check.outputs.failures }}
+          CHECK_OUTCOME: ${{ steps.check.outcome }}

@@ -9,6 +9,8 @@ import { Database } from "bun:sqlite";
 import { MessagesService, newThreadId } from "../service";
 import { SqliteMessagesStore } from "./sqlite-store";
 import { assertSafeBind, buildHandler } from "./serve-entry";
+import { createAuthGate, READ_SCOPE, WRITE_SCOPE } from "./auth";
+import { mintApiKey } from "@hasna/contracts/auth";
 
 function makeHandler(key?: string) {
   const db = new Database(":memory:");
@@ -81,6 +83,49 @@ describe("messages-serve HTTP API", () => {
       expect(authorized.status).toBe(200);
     } finally {
       close();
+    }
+  });
+
+  test("contracts key store gates /v1/* end to end, and the public contract routes stay open (hasna/apps#1595)", async () => {
+    const signingSecret = "serve-test-signing-secret-32-bytes";
+    const db = new Database(":memory:");
+    const store = new SqliteMessagesStore(db);
+    const service = new MessagesService(store);
+    const auth = createAuthGate({
+      env: { API_KEY_SIGNING_SECRET: signingSecret },
+      queryClient: null,
+      warn: () => {},
+    });
+    const handler = buildHandler({ service, backend: "sqlite", auth });
+    try {
+      const readOnly = mintApiKey({ app: "messages", scopes: [READ_SCOPE], signingSecret, ttlSeconds: null });
+      const readWrite = mintApiKey({
+        app: "messages",
+        scopes: [READ_SCOPE, WRITE_SCOPE],
+        signingSecret,
+        ttlSeconds: null,
+      });
+
+      // Self-description stays public — a station discovers the service before
+      // it holds a credential.
+      expect((await req(handler, "GET", "/health")).status).toBe(200);
+      expect((await req(handler, "GET", "/v1/openapi.json")).status).toBe(200);
+
+      // No credential: refused.
+      expect((await req(handler, "GET", "/v1/agents")).status).toBe(401);
+      // Read scope: reads pass, writes are refused with 403 (authenticated,
+      // not authorized) rather than 401.
+      expect((await req(handler, "GET", "/v1/agents", undefined, readOnly.token)).status).toBe(200);
+      expect(
+        (await req(handler, "POST", "/v1/messages", { from: "a", to: "b", content: "hi" }, readOnly.token)).status,
+      ).toBe(403);
+      // Read+write scope: both pass.
+      expect((await req(handler, "GET", "/v1/agents", undefined, readWrite.token)).status).toBe(200);
+      expect(
+        (await req(handler, "POST", "/v1/messages", { from: "a", to: "b", content: "hi" }, readWrite.token)).status,
+      ).toBe(201);
+    } finally {
+      store.close();
     }
   });
 

@@ -1,0 +1,181 @@
+{
+  "$comment": [
+    "Fleet client-API-key inventory (hasna/apps#1595).",
+    "",
+    "Every hosted Hasna service that gates /v1/* with an API key needs exactly one",
+    "CLIENT key in Secrets Manager at hasna/oss/<app>/api-key (AWS account",
+    "hasna-internal, us-east-1). Until this file existed there was no written list,",
+    "so a service could ship, route and answer /health while nothing on any station",
+    "could call it -- which is exactly what happened to messages, and before it to",
+    "hooks, skills, emails and notes.",
+    "",
+    "Defaults, so an entry only records what is exceptional:",
+    "  baseUrl     https://api.hasna.com/<app>       (the Cloudflare gateway)",
+    "  keySecretId hasna/oss/<app>/api-key",
+    "  probePath   /v1/__fleet-key-probe__           (a path no service implements)",
+    "  keyCheck    probe",
+    "",
+    "probePath. The check reads the STATUS of a path no app implements: the",
+    "credential gate runs before routing, so 401/403 unkeyed plus anything else",
+    "keyed proves the key authenticates, without this file having to track another",
+    "app's routes. Services that route BEFORE they authenticate answer 404 either",
+    "way, so the default proves nothing there and those entries name a real gated",
+    "route instead. Every value below was measured against the live origin on",
+    "2026-09-04; a probePath that stops being gated is REPORTED, not silently",
+    "passed.",
+    "",
+    "'source' says where the service is built. 'monorepo' entries are members of",
+    "this repository and are provisioned by their own deploy lane; 'external'",
+    "entries are built elsewhere (hasna-internal/internal-apps) and are covered by",
+    "the daily drift check only -- their keys live in the same Secrets Manager",
+    "namespace and go dead in exactly the same way.",
+    "",
+    "Adding a hosted app: add it here in the same change that routes it through the",
+    "gateway. tooling/ci/tests/standard/fleet-key-provisioning.test.ts refuses an",
+    "entry that names no member and no reason to be external."
+  ],
+  "apps": [
+    {
+      "app": "attachments",
+      "source": "monorepo",
+      "probePath": "/v1/attachments"
+    },
+    {
+      "app": "calendar",
+      "source": "monorepo"
+    },
+    {
+      "app": "contacts",
+      "source": "monorepo"
+    },
+    {
+      "app": "conversations",
+      "source": "monorepo"
+    },
+    {
+      "app": "domains",
+      "source": "monorepo",
+      "probePath": "/v1/domains"
+    },
+    {
+      "app": "economy",
+      "source": "monorepo"
+    },
+    {
+      "app": "emails",
+      "source": "monorepo",
+      "probePath": "/v1/mailboxes"
+    },
+    {
+      "app": "files",
+      "source": "monorepo"
+    },
+    {
+      "app": "hooks",
+      "source": "monorepo",
+      "keyCheck": "none",
+      "notes": "hooks authenticates by request SIGNATURE, not by a presented client key, so it has no API-key-gated route to probe (see hasna-fleet-key-minting). Its key must still exist; only the authentication probe is skipped, and it is listed as EXEMPT in every report."
+    },
+    {
+      "app": "instructions",
+      "source": "monorepo"
+    },
+    {
+      "app": "knowledge",
+      "source": "monorepo",
+      "probePath": "/v1/notes"
+    },
+    {
+      "app": "logs",
+      "source": "monorepo"
+    },
+    {
+      "app": "loops",
+      "source": "monorepo"
+    },
+    {
+      "app": "mementos",
+      "source": "monorepo"
+    },
+    {
+      "app": "messages",
+      "source": "monorepo"
+    },
+    {
+      "app": "notes",
+      "source": "monorepo",
+      "probePath": "/api/v1/notes"
+    },
+    {
+      "app": "projects",
+      "source": "monorepo"
+    },
+    {
+      "app": "recordings",
+      "source": "monorepo"
+    },
+    {
+      "app": "secrets",
+      "source": "monorepo",
+      "probePath": "/v1/secrets"
+    },
+    {
+      "app": "shortlinks",
+      "source": "monorepo",
+      "probePath": "/v1/links"
+    },
+    {
+      "app": "skills",
+      "source": "monorepo",
+      "probePath": "/api/v1/skills"
+    },
+    {
+      "app": "telephony",
+      "source": "monorepo",
+      "probePath": "/v1/calls"
+    },
+    {
+      "app": "todos",
+      "source": "monorepo",
+      "baseUrl": "https://todos.hasna.xyz",
+      "notes": "Stays on the origin hostname until hasna/apps#1512 puts it behind the gateway."
+    },
+    {
+      "app": "identities",
+      "source": "external",
+      "notes": "Built in hasna-internal/internal-apps; routed by the gateway, key in the same namespace."
+    },
+    {
+      "app": "infinity",
+      "source": "external",
+      "notes": "Built in hasna-internal/internal-apps; see hasna-fleet-outages-2026-09."
+    },
+    {
+      "app": "machines",
+      "source": "external",
+      "probePath": "/v1/machines",
+      "notes": "Built in hasna-internal/internal-apps; origin alias for the stations rename."
+    },
+    {
+      "app": "sandboxes",
+      "source": "external",
+      "notes": "Built in hasna-internal/internal-apps."
+    },
+    {
+      "app": "sessions",
+      "source": "external",
+      "notes": "Built in hasna-internal/internal-apps."
+    },
+    {
+      "app": "subscriptions",
+      "source": "external",
+      "probePath": "/v1/subscriptions",
+      "notes": "Built in hasna-internal/internal-apps; the accounts rename (internal-apps#909)."
+    },
+    {
+      "app": "testers",
+      "source": "external",
+      "notes": "Built in hasna-internal/internal-apps."
+    }
+  ]
+}

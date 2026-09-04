@@ -14,7 +14,7 @@ import { describe, expect, test } from "bun:test";
  * follows (notes: HASNA_NOTES_SERVER_HOST=0.0.0.0, workflows:
  * HASNA_WORKFLOWS_HOST=0.0.0.0, economy: ECONOMY_HOST=0.0.0.0, ...). The
  * unauthenticated-trust boundary stays intact: serve-entry's assertSafeBind
- * refuses a non-loopback bind without HASNA_MESSAGES_API_KEY, which the
+ * refuses a non-loopback bind with no credential configured, which the
  * deploy's task-def env supplies at runtime.
  *
  * This test pins the image contract: the Dockerfile must set the bind host to
