@@ -1,10 +1,15 @@
 // @hasna/telephony — embeddable SDK.
 //
 // Every method routes through the single Store abstraction (getStore) and the
-// provider lib actions. This means the SDK works IDENTICALLY on the `sqlite`
-// backend (on-box SQLite) and on the `postgres` backend (the server's /v1 HTTP
-// API with a bearer key) — resolved from the client-flip env — WITHOUT requiring
-// a running local REST server. No SDK method touches sqlite or fetch directly.
+// provider lib actions. This means the SDK works IDENTICALLY against the
+// server's /v1 HTTP API (selected by HASNA_TELEPHONY_API_URL +
+// HASNA_TELEPHONY_API_KEY) and on the `sqlite` backend (on-box SQLite) —
+// resolved from the client-flip env — WITHOUT requiring a running local REST
+// server. Without the API env the SDK FAILS CLOSED at construction
+// (getStore throws an actionable error naming the required env); the on-box
+// SQLite store is reachable only through the explicit opt-in
+// HASNA_TELEPHONY_LOCAL=1 in the client env — it is never the missing-env
+// default. No SDK method touches sqlite or fetch directly.
 
 import { getStore, type TelephonyStore } from "./lib/store/index.js";
 import { sendSms as sendSmsAction } from "./lib/sms.js";

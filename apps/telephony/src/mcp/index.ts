@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import pkg from "../../package.json";
 import { buildServer } from "./server.js";
 import { DEFAULT_MCP_HTTP_PORT, isStdioMode, parseCliPort, startMcpHttpServer } from "./http.js";
+import { getStore } from "../lib/store/index.js";
 
 function printHelp(): void {
   console.log(`Usage: telephony-mcp [options]
@@ -29,6 +30,18 @@ if (args.includes("--version") || args.includes("-V")) {
 }
 
 async function main(): Promise<void> {
+  // Fail-closed gate (owner directive 2026-09-04): every telephony-mcp tool
+  // reads/writes through the Store. Without the fleet API env
+  // (HASNA_TELEPHONY_API_URL + HASNA_TELEPHONY_API_KEY) AND without the
+  // explicit local opt-in (HASNA_TELEPHONY_LOCAL=1) the server refuses to
+  // start with an actionable error — it never silently serves the on-box
+  // SQLite store.
+  try {
+    getStore();
+  } catch (error) {
+    console.error(`telephony-mcp: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
   if (isStdioMode(args)) {
     const server = buildServer();
     const transport = new StdioServerTransport();

@@ -13,10 +13,13 @@
 //
 // `getStore()` resolves which transport to use from the API env pair
 // (HASNA_TELEPHONY_API_URL + HASNA_TELEPHONY_API_KEY both set selects the HTTP
-// API; neither set selects on-box SQLite; a partial pair throws; any retired
-// STORAGE_MODE variable throws). Callers NEVER branch on the backend themselves
-// and NEVER touch sqlite or fetch directly — that was the split-brain bug this
-// module eliminates.
+// API). With neither set the resolver FAILS CLOSED (owner directive 2026-09-04):
+// it throws an actionable error naming the required env instead of silently
+// serving on-box SQLite — the LocalStore is reachable ONLY through the explicit
+// opt-in `HASNA_TELEPHONY_LOCAL=1` (alias `TELEPHONY_LOCAL=1`). A partial pair
+// throws naming the missing variable; any retired STORAGE_MODE variable throws
+// first. Callers NEVER branch on the backend themselves and NEVER touch sqlite
+// or fetch directly — that was the split-brain bug this module eliminates.
 //
 // Who runs the server and what they pay for it is operation, not a storage
 // branch: a user's own server and the hosted SaaS are the SAME client code
@@ -738,6 +741,14 @@ let cached: TelephonyStore | null = null;
 const API_URL_KEYS = ["HASNA_TELEPHONY_API_URL", "TELEPHONY_API_URL"] as const;
 const API_KEY_KEYS = ["HASNA_TELEPHONY_API_KEY", "TELEPHONY_API_KEY"] as const;
 
+/** Canonical fleet API env var naming the telephony HTTP API base URL. */
+export const TELEPHONY_API_URL_ENV = "HASNA_TELEPHONY_API_URL";
+/** Canonical fleet API env var naming the telephony API bearer key. */
+export const TELEPHONY_API_KEY_ENV = "HASNA_TELEPHONY_API_KEY";
+/** Canonical explicit local-mode opt-in env var. */
+export const TELEPHONY_LOCAL_MODE_ENV = "HASNA_TELEPHONY_LOCAL";
+const LOCAL_MODE_OPT_IN_KEYS = [TELEPHONY_LOCAL_MODE_ENV, "TELEPHONY_LOCAL"] as const;
+
 function firstEnvValue(env: NodeJS.ProcessEnv, keys: readonly string[]): { key: string; value: string } | null {
   for (const key of keys) {
     if (Object.hasOwn(env, key)) {
@@ -749,12 +760,47 @@ function firstEnvValue(env: NodeJS.ProcessEnv, keys: readonly string[]): { key: 
 }
 
 /**
+ * True when the explicit local-mode opt-in is set to a truthy value
+ * (`HASNA_TELEPHONY_LOCAL=1` or its `TELEPHONY_LOCAL` alias). `1`/`true`/`yes`
+ * opt in; `0`/`false`/`no`/`off` and blank values all count as absent, so a
+ * wrapper cannot flip local mode on by accident with a stale variable.
+ */
+export function isLocalModeOptIn(env: NodeJS.ProcessEnv = process.env): boolean {
+  return LOCAL_MODE_OPT_IN_KEYS.some((key) => {
+    const raw = env[key];
+    if (raw === undefined) return false;
+    const value = raw.trim().toLowerCase();
+    return value !== "" && value !== "0" && value !== "false" && value !== "no" && value !== "off";
+  });
+}
+
+/**
+ * The fail-closed error raised when a store-backed surface runs without the
+ * fleet API env and without the explicit local opt-in. Actionable: names the
+ * required variables and the opt-in, and never offers a silent local fallback.
+ */
+export function telephonyStoreMisconfiguredError(): Error {
+  return new Error(
+    `No telephony API environment is configured and local mode is not enabled. ` +
+      `The telephony client fails closed instead of silently serving the local SQLite store: ` +
+      `set ${TELEPHONY_API_URL_ENV} and ${TELEPHONY_API_KEY_ENV} (unprefixed ` +
+      `TELEPHONY_API_URL / TELEPHONY_API_KEY aliases are accepted) to route CLI, MCP and SDK ` +
+      `data operations through the telephony HTTP API, or set ${TELEPHONY_LOCAL_MODE_ENV}=1 ` +
+      `(alias TELEPHONY_LOCAL=1) to explicitly opt in to the on-box local store.`,
+  );
+}
+
+/**
  * Resolve (and cache) the telephony Store from the environment. Transport is
  * selected by the API env pair alone: both `HASNA_TELEPHONY_API_URL` and
- * `HASNA_TELEPHONY_API_KEY` set selects the {@link ApiStore} (HTTP), neither
- * set selects the {@link LocalStore} (on-box SQLite), and exactly one set
- * throws naming the missing variable — no silent drift. Any retired
- * storage-mode variable throws first via `assertNoLegacyStorageMode`.
+ * `HASNA_TELEPHONY_API_KEY` set selects the {@link ApiStore} (HTTP). With
+ * neither set the resolver FAILS CLOSED (owner directive 2026-09-04) — it
+ * throws an actionable error naming the required env instead of silently
+ * serving on-box SQLite — unless the explicit local opt-in
+ * (`HASNA_TELEPHONY_LOCAL=1` / `TELEPHONY_LOCAL=1`) selects the
+ * {@link LocalStore}. Exactly one side of the pair throws naming the missing
+ * variable — no silent drift. Any retired storage-mode variable throws first
+ * via `assertNoLegacyStorageMode`.
  */
 export function getStore(env: NodeJS.ProcessEnv = process.env): TelephonyStore {
   // Cache only the default (process.env) resolution — the hot path for CLI/MCP/
@@ -767,17 +813,40 @@ export function getStore(env: NodeJS.ProcessEnv = process.env): TelephonyStore {
   const keyHit = firstEnvValue(env, API_KEY_KEYS);
   let store: TelephonyStore;
   if (!urlHit && !keyHit) {
-    store = new LocalStore();
+    if (isLocalModeOptIn(env)) {
+      // Explicit opt-in only: the caller asked for the on-box SQLite store.
+      // This is the ONLY path that serves local data — never a missing-env
+      // default, never a fallback selected behind the caller's back.
+      store = new LocalStore();
+    } else {
+      throw telephonyStoreMisconfiguredError();
+    }
   } else if (!urlHit || !keyHit) {
+    const present = urlHit ? TELEPHONY_API_URL_ENV : TELEPHONY_API_KEY_ENV;
     throw new Error(
-      `API transport requires BOTH HASNA_TELEPHONY_API_URL and HASNA_TELEPHONY_API_KEY; only ` +
-        `${urlHit ? "HASNA_TELEPHONY_API_URL" : "HASNA_TELEPHONY_API_KEY"} is set. Set both to use the HTTP API, ` +
-        `or unset both to use the local store.`,
+      `API transport requires BOTH ${TELEPHONY_API_URL_ENV} and ${TELEPHONY_API_KEY_ENV}; only ` +
+        `${present} is set. Set the missing variable to reach the telephony HTTP API, or unset ` +
+        `the partial pair and set ${TELEPHONY_LOCAL_MODE_ENV}=1 to explicitly use the on-box ` +
+        `local store.`,
     );
   } else {
-    // Full pair: the client reads AND writes through the server's `/v1` API.
+    // Full pair: the client reads AND writes through the server's /v1 API. The
+    // contracts seam resolves its transport from this same env pair. The
+    // published seam type still admits a `sqlite` member (older contracts); it
+    // must NEVER select the on-box store from the fleet path — both API
+    // variables are set, so a non-http resolution is a seam fault and we fail
+    // closed rather than silently serve the wrong dataset.
     const resolved = resolveStorageClient(TELEPHONY_APP, env);
-    store = resolved.transport === "http" ? new ApiStore(resolved.client) : new LocalStore();
+    if (resolved.transport !== "http") {
+      throw new Error(
+        `Storage resolution did not select the HTTP transport even though ` +
+          `${TELEPHONY_API_URL_ENV} and ${TELEPHONY_API_KEY_ENV} are set (resolved ` +
+          `${resolved.transport}). Telephony never falls back to the on-box store from ` +
+          `the fleet path — upgrade @hasna/contracts or check for a conflicting ` +
+          `storage-mode variable.`,
+      );
+    }
+    store = new ApiStore(resolved.client);
   }
   if (isDefaultEnv) cached = store;
   return store;

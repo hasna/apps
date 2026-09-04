@@ -22,8 +22,10 @@ const clientStoreEnvNames = [
   "HASNA_TELEPHONY_MODE",
   "HASNA_TELEPHONY_API_URL",
   "HASNA_TELEPHONY_API_KEY",
+  "HASNA_TELEPHONY_LOCAL",
   "TELEPHONY_API_URL",
   "TELEPHONY_API_KEY",
+  "TELEPHONY_LOCAL",
 ] as const;
 const originalClientStoreEnv = new Map(clientStoreEnvNames.map((name) => [name, process.env[name]]));
 
@@ -53,6 +55,10 @@ function startIsolatedServer() {
   clearClientStoreEnv();
   tempDir = mkdtempSync(join(tmpdir(), "telephony-server-test-"));
   process.env.HASNA_TELEPHONY_DB_PATH = join(tempDir, "telephony.db");
+  // This legacy local serve surface stores on-box: select that EXPLICITLY.
+  // Without the fleet API env AND without this opt-in the store resolver fails
+  // closed (owner directive 2026-09-04) — local SQLite is never the default.
+  process.env.HASNA_TELEPHONY_LOCAL = "1";
   Object.assign(process.env, { [restCredentialEnvName]: restCredential() });
 }
 

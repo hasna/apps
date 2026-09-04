@@ -1,11 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import pkg from "../../package.json";
-// Storage routed through the single Store abstraction: on-box SQLite by default,
-// or the server's /v1 HTTP API when HASNA_TELEPHONY_API_URL + API_KEY are set.
-// This mirrors the CLI wiring (src/cli/index.ts -> ../lib/store) so the MCP
-// honors the transport selection too instead of always reading/writing the
-// on-box island. No MCP tool touches sqlite or fetch directly.
+// Storage routed through the single Store abstraction: the server's /v1 HTTP
+// API when HASNA_TELEPHONY_API_URL + HASNA_TELEPHONY_API_KEY are set, or the
+// on-box SQLite store under the EXPLICIT local opt-in HASNA_TELEPHONY_LOCAL=1
+// only. Without either the resolver fails closed, so no tool can silently
+// read/write the on-box island. This mirrors the CLI wiring
+// (src/cli/index.ts -> ../lib/store). No MCP tool touches sqlite or fetch
+// directly.
 import { getStore } from "../lib/store/index.js";
 import { sendSms } from "../lib/sms.js";
 import { sendWhatsApp, sendWhatsAppAudio } from "../lib/whatsapp.js";
