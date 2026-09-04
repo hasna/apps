@@ -394,9 +394,9 @@ function recommendedAction(category: DispatchSelfHealCategory): string {
 function repairRoute(category: DispatchSelfHealCategory): string {
   switch (category) {
     case "machine":
-      return "@hasna/machines owns durable machine reachability abstractions; @hasna/dispatch owns delivery failures after a route is resolved";
+      return "machine reachability (SSH config, DNS/Tailscale, host health) is owned by the fleet host setup; @hasna/dispatch owns delivery failures after a route is resolved";
     case "routing":
-      return "@hasna/dispatch owns dispatch route execution; @hasna/todos/@hasna/configs/@hasna/machines own missing source, config, or machine abstractions";
+      return "@hasna/dispatch owns dispatch route execution; @hasna/todos and @hasna/configs own missing source or config abstractions, and host reachability is owned by the fleet host setup";
     case "stale_package":
     case "dispatch_bug":
     case "target":
@@ -428,7 +428,7 @@ function nextActions(category: DispatchSelfHealCategory): string[] {
     case "machine":
       return [
         "check spark01, spark02, and apple03 route health; ignore apple01 if it is nonresponsive",
-        "repair SSH/Tailscale/@hasna/machines routing before retrying",
+        "repair SSH/Tailscale host routing (ssh config, DNS, MagicDNS) before retrying",
         ...common,
       ];
     case "stale_package":

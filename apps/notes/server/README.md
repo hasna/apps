@@ -42,6 +42,13 @@ curl -X POST http://127.0.0.1:8788/api/v1/auth/device/approve \
   -H 'authorization: Bearer <token>' -d '{"userCode":"XXXX-XXXX"}'
 ```
 
+Passwordless login is rate limited on **both** dimensions (issue #1542): 5
+`/auth/login` requests per hour per source IP **and** 5 per hour per target
+email address, plus 20 `/auth/verify` attempts per hour on each. A per-IP limit
+alone would let a distributed caller mint unlimited live login codes for one
+victim address; each code is a login credential for that account. Codes expire
+after 10 minutes.
+
 The listener defaults to loopback HTTP. Terminate TLS before connecting a client:
 all canonical Notes clients require HASNA_NOTES_API_URL with HTTPS and
 HASNA_NOTES_API_KEY. No automatic client login/local fallback is provided.

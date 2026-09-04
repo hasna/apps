@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 /**
  * Real cross-machine dispatch: send a prompt to a tmux window on ANOTHER host
- * via `--machine`, routed through @hasna/machines (Tailscale/LAN/SSH). Skips
+ * via `--machine`, routed over ssh by the built-in resolver. Skips
  * cleanly (with a note) when no second host is reachable.
  */
 

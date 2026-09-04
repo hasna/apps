@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   fallbackSshCommand,
   LocalRunner,
@@ -8,6 +10,7 @@ import {
   quoteArgv,
   remoteTimeoutMs,
   shellQuote,
+  sshMachineCommandResolver,
 } from "./runner.js";
 
 describe("isLocalMachine", () => {
@@ -109,5 +112,51 @@ describe("createRunner", () => {
     const r = await createRunner("some-remote-box");
     expect(r).toBeInstanceOf(RemoteRunner);
     expect(r.machine).toBe("some-remote-box");
+  });
+  test("a custom resolver can supply a different route", async () => {
+    const r = await createRunner("box", (id, command) => ({
+      source: "tailscale",
+      shellCommand: `echo routed-${id}-${command.length}`,
+    }));
+    const res = r.run(["echo", "hi"]);
+    expect(res.source).toBe("tailscale");
+    expect(res.stdout.trim()).toMatch(/^routed-box-\d+$/);
+  });
+});
+
+// Issue #1603: @hasna/machines was deleted from the public registry, so an
+// empty-cache `bun add @hasna/dispatch` must not need it. The topology types
+// are vendored in runner.ts and remote routing falls to plain ssh.
+describe("@hasna/machines is fully dropped (#1603)", () => {
+  test("the built-in resolver routes over plain, non-interactive ssh", () => {
+    const plan = sshMachineCommandResolver("box", "tmux list-sessions");
+    expect(plan.source).toBe("ssh");
+    expect(plan.shellCommand).toBe(fallbackSshCommand("box", "tmux list-sessions"));
+    expect(plan.shellCommand).toContain("BatchMode=yes");
+  });
+
+  test("createRunner defaults a remote machine to the ssh route without loading any optional package", async () => {
+    const r = (await createRunner("box")) as RemoteRunner;
+    // Executing proves the default resolver is wired: no dynamic import of a
+    // deleted package can be involved, because none is referenced any more.
+    const res = r.run(["true"]);
+    expect(res.source).toBe("ssh");
+    expect(r.machine).toBe("box");
+  });
+
+  test("runner.ts references no @hasna/machines specifier", () => {
+    const src = readFileSync(join(import.meta.dir, "runner.ts"), "utf8");
+    expect(src).not.toContain("@hasna/machines/consumer");
+    expect(src).not.toContain('import("@hasna/machines');
+  });
+
+  test("package.json declares no dependency on @hasna/machines and does not extern it", () => {
+    const pkgPath = join(import.meta.dir, "..", "..", "package.json");
+    const raw = readFileSync(pkgPath, "utf8");
+    expect(raw).not.toContain("@hasna/machines");
+    const pkg = JSON.parse(raw) as Record<string, Record<string, string> | undefined>;
+    for (const field of ["dependencies", "optionalDependencies", "peerDependencies", "devDependencies"]) {
+      expect(Object.keys(pkg[field] ?? {})).not.toContain("@hasna/machines");
+    }
   });
 });

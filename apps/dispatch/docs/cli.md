@@ -1,7 +1,7 @@
 # CLI reference
 
-`dispatch` defaults to local SQLite and tmux. Commands with `--machine` use
-`@hasna/machines` when available and plain SSH otherwise. Commands with
+`dispatch` defaults to local SQLite and tmux. Commands with `--machine` route over
+plain SSH (pluggable via a `MachineCommandResolver`). Commands with
 `--backend` accept `tmux` or `mosaic`. Prompt input resolves in order from
 `--prompt`, `--file`, then piped stdin; empty prompts are rejected.
 

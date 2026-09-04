@@ -127,16 +127,80 @@ describe('OTP login edges', () => {
 
   test('OTP login is rate limited per IP after 5 requests; other IPs unaffected', async () => {
     const { app } = await makeApp();
+    // Distinct addresses per request, so this exercises the per-IP dimension
+    // only — the per-email limit (#1542) is covered by its own test below.
     let last = null;
     for (let i = 0; i < 5; i += 1) {
-      last = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'rl@example.com' } });
+      last = await call(app, 'POST', '/api/v1/auth/login', { body: { email: `rl${i}@example.com` } });
       expect(last.status).toBe(200);
     }
-    const sixth = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'rl@example.com' } });
+    const sixth = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'rl5@example.com' } });
     expect(sixth.status).toBe(429);
     expect((await sixth.json()).error.code).toBe('rate_limited');
-    const otherIp = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'rl@example.com' }, env: { ip: '127.0.0.2' } });
+    const otherIp = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'rl6@example.com' }, env: { ip: '127.0.0.2' } });
     expect(otherIp.status).toBe(200);
+  });
+
+  test('OTP login is rate limited per EMAIL across IPs (regression for #1542)', async () => {
+    // A per-IP limit alone lets a distributed caller mint unlimited live login
+    // codes for one victim address. The victim's address must be limited too.
+    const { app } = await makeApp();
+    const victim = 'victim@example.com';
+    for (let i = 0; i < 5; i += 1) {
+      const res = await call(app, 'POST', '/api/v1/auth/login', {
+        body: { email: victim },
+        env: { ip: `10.0.0.${i + 1}` },
+      });
+      expect(res.status).toBe(200);
+    }
+    // A sixth request from a SIXTH, previously unseen IP is still refused.
+    const sixth = await call(app, 'POST', '/api/v1/auth/login', {
+      body: { email: victim },
+      env: { ip: '10.0.0.6' },
+    });
+    expect(sixth.status).toBe(429);
+    expect((await sixth.json()).error.code).toBe('rate_limited');
+    // A different address from that same fresh IP is unaffected.
+    const other = await call(app, 'POST', '/api/v1/auth/login', {
+      body: { email: 'bystander@example.com' },
+      env: { ip: '10.0.0.6' },
+    });
+    expect(other.status).toBe(200);
+  });
+
+  test('the per-email login limit normalizes case and whitespace', async () => {
+    const { app } = await makeApp();
+    for (let i = 0; i < 5; i += 1) {
+      const res = await call(app, 'POST', '/api/v1/auth/login', {
+        body: { email: '  Casey@Example.com ' },
+        env: { ip: `10.1.0.${i + 1}` },
+      });
+      expect(res.status).toBe(200);
+    }
+    const blocked = await call(app, 'POST', '/api/v1/auth/login', {
+      body: { email: 'casey@example.com' },
+      env: { ip: '10.1.0.9' },
+    });
+    expect(blocked.status).toBe(429);
+  });
+
+  test('OTP verify is rate limited per EMAIL so a live code cannot be guessed across IPs', async () => {
+    const { app } = await makeApp();
+    const email = 'guessme@example.com';
+    await call(app, 'POST', '/api/v1/auth/login', { body: { email } });
+    for (let i = 0; i < 20; i += 1) {
+      const res = await call(app, 'POST', '/api/v1/auth/verify', {
+        body: { email, code: '000000' },
+        env: { ip: `10.2.0.${i + 1}` },
+      });
+      // Wrong codes are rejected, but not as rate_limited, until the cap.
+      expect(res.status).not.toBe(429);
+    }
+    const blocked = await call(app, 'POST', '/api/v1/auth/verify', {
+      body: { email, code: '000000' },
+      env: { ip: '10.2.0.99' },
+    });
+    expect(blocked.status).toBe(429);
   });
 
   test('the OTP code never reaches the server log by default (regression for #1542)', async () => {

@@ -16,9 +16,9 @@ machines. `@hasna/dispatch` makes this a first-class, reliable tool.
 - Study sibling apps for structure/conventions (Bun+TS, CLI + MCP + daemon/server + SDK, tests,
   docs, packaging): **`@hasna/todos`** (CLI+MCP+SDK+dashboard layout,
   AGENTS.md/CLAUDE.md, scripts, publishing) and other `@hasna/*` apps in the monorepo.
-- Integrate cross-machine via the **`@hasna/machines` SDK** — read its README/SDK to learn how to
-  enumerate/reach machines (LAN/Tailscale/MagicDNS) so a dispatch can target a tmux window on another
-  host.
+- Integrate cross-machine over **plain SSH** with a pluggable `MachineCommandResolver`, so a
+  dispatch can target a tmux window on another host (LAN/Tailscale/MagicDNS names come from the
+  station's ssh config). This originally used the `@hasna/machines` SDK, deleted 2026-09-03 (#1603).
 - Follow `~/.claude/rules/` (TDD, secrets scan before every commit/push, conventional commits, NO
   Co-Authored-By, patch-version bumps, Bun over npm, **use the `projects` CLI for repo create/publish**).
 
@@ -35,9 +35,13 @@ machines. `@hasna/dispatch` makes this a first-class, reliable tool.
    — capture the target pane before/after, detect that the agent started processing (e.g. the TUI
    footer changed to a "working/esc-to-interrupt" state and the composer cleared), and return a clear
    delivered/not-delivered status (with a reason). Expose `dispatch status <id>`.
-5. **Cross-machine.** Using `@hasna/machines`, dispatch to a tmux window on **another machine**
-   (`dispatch send --machine spark01 --to <session:window> ...`) over SSH/Tailscale; sync machine
-   inventory via the @hasna/machines SDK. Works for the 5 machines (spark01/02, apple01/03/06).
+5. **Cross-machine.** Dispatch to a tmux window on **another machine**
+   (`dispatch send --machine spark01 --to <session:window> ...`) over SSH/Tailscale. Works for the
+   5 machines (spark01/02, apple01/03/06).
+
+   > Historical note: this originally routed through the `@hasna/machines` SDK. That package was
+   > deleted from the registry (2026-09-03, issue #1603); dispatch no longer depends on it and
+   > routes remote commands over plain SSH via a pluggable `MachineCommandResolver`.
 6. **Scheduled dispatches.** `dispatch schedule --at <time>|--cron <expr> --to ... --prompt ...` —
    queue a dispatch to fire later; list/cancel scheduled dispatches.
 7. **Live daemon.** A background daemon that owns the dispatch queue, scheduled dispatches,

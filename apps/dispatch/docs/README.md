@@ -7,7 +7,7 @@ Start with the page that matches the surface you use:
 - [Scheduling and daemon](scheduling.md) — timing, retries, queue ownership, health, and systemd service actions.
 - [Architecture](architecture.md) — layers, backends, runner routing, client authority selection, and state.
 - [Reliable delivery](reliability.md) — delivery, settle, submit retries, and confirmation.
-- [Cross-machine dispatch](cross-machine.md) — `@hasna/machines`, SSH fallback, requirements, and scheduling.
+- [Cross-machine dispatch](cross-machine.md) — SSH routing, pluggable resolvers, requirements, and scheduling.
 - [Self-healing runbook](self-healing.md) — bounded diagnosis and safe repair routing.
 - [`/v1` authority contract](api-v1.md) — endpoints and response schemas for API mode.
 

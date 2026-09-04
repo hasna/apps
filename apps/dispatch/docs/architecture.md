@@ -20,7 +20,7 @@
                                   Runner (argv executor)
                           ┌────────────┴────────────┐
                     LocalRunner                 RemoteRunner
-                    (spawnSync)            (@hasna/machines → ssh)
+                    (spawnSync)            (ssh, pluggable resolver)
                                        |
                     Store (sqlite) or /v1 API  ← dispatches + schedules
 ```
@@ -49,9 +49,9 @@
 
 `Runner.run(argv, input?)` executes a command. Tmux and Mosaic operations are built as
 argv arrays (never shell strings), which keeps prompt text safe from quoting.
-`RemoteRunner` quotes the argv into a single command and routes it through
-`@hasna/machines` to a remote host; that's the *only* thing that changes for
-cross-machine dispatch.
+`RemoteRunner` quotes the argv into a single command and routes it through a
+`MachineCommandResolver` (plain SSH by default) to a remote host; that's the
+*only* thing that changes for cross-machine dispatch.
 
 tmux is the default backend. The optional Mosaic backend is selected through
 `DispatchOptions.backend`, `--backend mosaic`, or `DISPATCH_BACKEND=mosaic`. It calls
