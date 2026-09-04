@@ -13,7 +13,7 @@ bun run typecheck
 bun run build
 ```
 
-Dashboard work lives under `dashboard/` and SDK work lives under `sdk/`. Run package-local commands from those directories when changing those packages.
+SDK work lives under `sdk/`. Run package-local commands from that directory when changing that package.
 
 ## Release And Package Hygiene
 

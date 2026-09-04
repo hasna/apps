@@ -1,6 +1,6 @@
 # @hasna/economy
 
-AI coding cost tracker for Claude Code, Takumi, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes. It ships as a CLI, MCP server, REST API, web dashboard, and native macOS menu bar app.
+AI coding cost tracker for Claude Code, Takumi, Codex, Gemini, OpenCode, Cursor, Pi, and Hermes. It ships as a CLI, MCP server, REST API, and native macOS menu bar app.
 
 [![npm](https://img.shields.io/npm/v/@hasna/economy)](https://www.npmjs.com/package/@hasna/economy)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -14,7 +14,7 @@ AI coding cost tracker for Claude Code, Takumi, Codex, Gemini, OpenCode, Cursor,
 - Seeds editable model pricing with input, output, cache-read, 5-minute cache-write, 1-hour cache-write, and context-cache storage rates.
 - Handles tiered pricing such as Gemini long-prompt rates and OpenAI long-context rates.
 - Reconciles estimates against Anthropic, OpenAI, and Gemini billing sources.
-- Exposes cost data through CLI commands, an MCP server, REST endpoints, and a dashboard.
+- Exposes cost data through CLI commands, an MCP server, and REST endpoints.
 - Syncs project metadata from the `@hasna/projects` registry during full local sync.
 - Sends budget alert webhooks and retries failed deliveries on later syncs.
 
@@ -31,12 +31,6 @@ economy sync --verbose
 economy today
 economy pricing list
 economy serve --port 3456
-```
-
-Open the dashboard with:
-
-```bash
-economy dashboard --port 3456
 ```
 
 ## Documentation
@@ -237,7 +231,7 @@ Start the server:
 economy-serve --port 3456
 ```
 
-The canonical API uses `/v1`; `/api` remains a legacy alias for the dashboard and older clients. For example:
+The canonical API uses `/v1`; `/api` remains a legacy alias for older clients. For example:
 
 - `GET /health`, `/ready`, `/version`, and `/openapi.json`
 - `GET /v1/summary?period=today`
@@ -247,8 +241,6 @@ The canonical API uses `/v1`; `/api` remains a legacy alias for the dashboard an
 - `POST /v1/sync`, `/v1/billing/sync`, and `/v1/ingest`
 
 See the [REST API reference](docs/rest-api.md) for every route, response envelopes, authentication, and legacy aliases. The server publishes the current generated contract at `/openapi.json`.
-
-The server also serves the built dashboard when `dashboard/dist` is present. The dashboard includes account-scoped session filtering, subscription plan create/update/delete controls in Savings, and savings/usage/account tables for subscription-aware cost analysis.
 
 ## Native macOS Menubar
 
@@ -285,7 +277,6 @@ bun test
 bun run typecheck
 bun run build
 bun scripts/sync-openapi.ts
-cd dashboard && bun run lint
 cd menubar && swift build -c release
 ```
 

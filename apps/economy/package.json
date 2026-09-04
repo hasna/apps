@@ -1,7 +1,7 @@
 {
   "name": "@hasna/economy",
   "version": "0.3.28",
-  "description": "AI coding cost tracker \u2014 CLI + MCP server + REST API + web dashboard for Claude Code, Codex, OpenCode, Cursor, Pi, and Hermes, with legacy Gemini CLI session and Gemini API billing ingestion",
+  "description": "AI coding cost tracker \u2014 CLI + MCP server + REST API for Claude Code, Codex, OpenCode, Cursor, Pi, and Hermes, with legacy Gemini CLI session and Gemini API billing ingestion",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hasna/economy.git"
@@ -32,7 +32,6 @@
   "files": [
     "dist",
     "docs",
-    "dashboard/dist",
     "postinstall.js",
     "LICENSE",
     "README.md",
@@ -42,12 +41,11 @@
     "CODE_OF_CONDUCT.md"
   ],
   "scripts": {
-    "build": "cd dashboard && bun install --frozen-lockfile && bun run build && cd .. && bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/db/pg-sync-worker.ts --outdir dist/server --target bun --packages external && bun build src/otel/index.ts --outdir dist/otel --target bun --packages external && bun build src/index.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --packages external && bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external && bun build src/server/index.ts --outdir dist/server --target bun --packages external && bun build src/db/pg-sync-worker.ts --outdir dist/server --target bun --packages external && bun build src/otel/index.ts --outdir dist/otel --target bun --packages external && bun build src/index.ts --outdir dist --target bun --packages external && tsc --emitDeclarationOnly --outDir dist",
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target bun --packages external",
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --target bun --packages external",
     "build:server": "bun build src/server/index.ts --outdir dist/server --target bun --packages external",
     "build:lib": "bun build src/index.ts --outdir dist --target bun --packages external",
-    "build:dashboard": "cd dashboard && bun run build",
     "artifact-scan": "bun scripts/contracts-cli.mjs artifact-scan dist",
     "prepack": "bun run build && bun run artifact-scan",
     "typecheck": "tsc --noEmit",

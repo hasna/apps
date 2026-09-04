@@ -9,7 +9,6 @@ AI coding cost tracker — `@hasna/economy`
 - CLI: Commander.js
 - MCP: @modelcontextprotocol/sdk
 - Server: Bun.serve
-- Dashboard: React + Vite (dashboard/)
 - Menubar: native SwiftUI menu bar app (menubar/)
 - SDK: @hasna/economy-sdk (sdk/)
 

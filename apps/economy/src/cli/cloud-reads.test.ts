@@ -21,7 +21,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { openDatabase, upsertRequest, upsertSession } from '../db/database.js'
-import { createHandler, createServerFetch } from '../server/serve.js'
+import { createHandler } from '../server/serve.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
 import type { EconomyRequest, EconomySession } from '../types/index.js'
 
@@ -108,7 +108,7 @@ interface CloudApi {
  *  symptom that turned read commands into failures). */
 function startCloudApi(db: Database, ingestStatus = 500): CloudApi {
   const recorded: RecordedRequest[] = []
-  const inner = createServerFetch(createHandler(db))
+  const inner = createHandler(db)
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
