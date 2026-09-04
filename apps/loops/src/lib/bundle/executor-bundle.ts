@@ -166,6 +166,13 @@ export function resolveBundleExecution(
       // the value DECLARED in manifest.json. On an --allow-dirty run the two
       // differ, and a receipt carrying the declared one would attest content
       // that did not execute.
+      //
+      // "About to run" is the honest tense: the caller spawns after this
+      // returns and the hashed files are not held open across that gap, so a
+      // writer with concurrent access to the bundle root can still swap a
+      // script in between. This gate catches DRIFT - a stale tree, a hand
+      // edit, a half-finished pull - and directory permissions, not the
+      // digest, are what keep another writer out. See README "The executor".
       bundleDigest: local.digest ?? local.manifest?.bundleDigest ?? "",
       bundleVersion: local.manifest?.version ?? 0,
     },
