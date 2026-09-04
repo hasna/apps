@@ -506,22 +506,33 @@ export async function storePublishedSkill(
   // by a later re-publish. The placement is recorded on the row now; the objects are
   // written only AFTER the row is committed, so a publish the store refuses (a writer that
   // raced the guard above) never touches a version key that belongs to someone else's
-  // successful publish. Same digest again is idempotent: nothing is rewritten.
+  // successful publish.
+  //
+  // A re-publish of the SAME digest re-writes them rather than skipping: the bytes are
+  // identical by construction (the digest is checked above), so the PUT is idempotent, and
+  // it is what heals a row whose first object write failed after the row was committed.
+  // Without this the 502 below would be permanent - the retry would find the version row
+  // and write nothing, leaving a row pointing at a key that does not exist.
+  const writeVersionObjects = versioned && Boolean(parsed.bundleBytes) && Boolean(input.bundle);
   let versionManifest: Record<string, unknown> | undefined;
-  if (versioned && !existingVersion) {
-    versionManifest = {
-      ...(input.versionManifest ?? {}),
-      slug: input.slug,
-      version: input.version,
-      bundleSha256: input.bundle!.sha256,
-      bundleByteSize: input.bundle!.byteSize,
-      publishedAt: new Date().toISOString(),
-    };
-    input = {
-      ...input,
-      versionManifest,
-      versionStorage: artifactStorage.versionPlacement(principal.orgId, input.slug, input.version!),
-    };
+  if (writeVersionObjects) {
+    versionManifest = existingVersion
+      ? { ...(existingVersion.manifest ?? {}), slug: input.slug, version: input.version, bundleSha256: input.bundle!.sha256, bundleByteSize: input.bundle!.byteSize }
+      : {
+          ...(input.versionManifest ?? {}),
+          slug: input.slug,
+          version: input.version,
+          bundleSha256: input.bundle!.sha256,
+          bundleByteSize: input.bundle!.byteSize,
+          publishedAt: new Date().toISOString(),
+        };
+    if (!existingVersion) {
+      input = {
+        ...input,
+        versionManifest,
+        versionStorage: artifactStorage.versionPlacement(principal.orgId, input.slug, input.version!),
+      };
+    }
   }
   let record: ServerSkillRecord;
   try {
@@ -541,16 +552,17 @@ export async function storePublishedSkill(
   if (superseded && superseded !== record.bundleSha256) {
     await discardCollectedObject(store, artifactStorage, principal, superseded);
   }
-  if (versioned && !existingVersion && versionManifest && parsed.bundleBytes && input.bundle) {
+  if (writeVersionObjects && versionManifest && parsed.bundleBytes && input.bundle) {
     try {
       await artifactStorage.putVersionObjects(principal.orgId, input.slug, input.version!, parsed.bundleBytes, versionManifest, input.bundle.contentType);
     } catch (error) {
       // The row is committed and the content-addressed object serves reads; only the
-      // browsable copy is missing. Say so rather than pretend, so the operator can re-put.
+      // browsable copy is missing. Say so rather than pretend - and because an identical
+      // re-publish rewrites the objects, retrying the same push is what repairs it.
       throw new SkillRequestError(
         502,
         "VERSION_OBJECTS_WRITE_FAILED",
-        `'${input.slug}@${input.version}' was recorded but its version-addressed objects could not be written: ${(error as Error).message}`,
+        `'${input.slug}@${input.version}' was recorded but its version-addressed objects could not be written: ${(error as Error).message}. Re-run the same push to write them.`,
       );
     }
   }

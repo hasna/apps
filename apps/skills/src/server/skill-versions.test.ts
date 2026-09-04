@@ -19,6 +19,8 @@ import { RemoteSkillsClient } from "../lib/remote-client.js";
 import { PULL_MARKER_FILE, pullSkills } from "../lib/pull.js";
 import { sha256Hex } from "../lib/skill-bundle.js";
 import { createSkillsFetchHandler } from "./app.js";
+import { publicPrincipal } from "./auth.js";
+import { MemorySkillsStore } from "./store.js";
 import { ArtifactStorage, type S3ClientLike } from "./artifact-storage.js";
 import { resolveStoreBackends } from "./store-fixtures.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -246,3 +248,61 @@ for (const backend of backends) {
     });
   });
 }
+
+describe("a version-object write that fails after the row commit heals on retry", () => {
+  test("the publisher is told, the row does not pretend, and the same push writes the objects", async () => {
+    const store = new MemorySkillsStore();
+    await store.ensureBootstrapApiKey(TOKEN, ORG);
+    // Fails only the version-addressed PUTs, the way a bucket policy or a transient S3
+    // error would: the content-addressed object still lands, so reads keep working and
+    // the missing browsable copy is exactly the state that must not become permanent.
+    class FailingVersionS3 extends FakeS3 {
+      failVersionPuts = true;
+      override async send(command: PutObjectCommand | GetObjectCommand | DeleteObjectCommand): Promise<{ Body?: unknown }> {
+        const key = command.input.Key!;
+        if (this.failVersionPuts && command instanceof PutObjectCommand && key.includes("/skills/")) {
+          throw new Error("AccessDenied: simulated bucket failure");
+        }
+        return super.send(command);
+      }
+    }
+    const s3 = new FailingVersionS3();
+    const fetchHandler = await createSkillsFetchHandler({
+      store,
+      artifactStorage: new ArtifactStorage({ bucket: BUCKET, prefix: PREFIX, client: s3 }),
+      config: { inlineWorker: false, allowEphemeralStore: true },
+    });
+    const server = Bun.serve({ port: 0, fetch: fetchHandler });
+    const root = makeCorpus(SKILL_V1);
+    try {
+      const client = new RemoteSkillsClient(TOKEN, `http://127.0.0.1:${server.port}`);
+      const failed = await pushSkill("release-notes", { rootDir: root, client }).catch((error: Error) => error);
+      expect(failed).toBeInstanceOf(PushSkillError);
+      expect(String((failed as Error).message)).toContain("502");
+      // Nothing pretends the version-addressed copy exists.
+      expect(s3.keys().filter((key) => key.includes("/skills/"))).toEqual([]);
+
+      // The bucket recovers; the identical push is what repairs it.
+      s3.failVersionPuts = false;
+      const healed = await pushSkill("release-notes", { rootDir: root, client });
+      expect(healed.published).toBe(true);
+      expect(healed.version).toBe("2.1.0");
+      const prefix = `${PREFIX}/skills/${ORG.orgId}/release-notes/2.1.0`;
+      expect(s3.keys()).toContain(`${prefix}/bundle.tar.gz`);
+      expect(s3.keys()).toContain(`${prefix}/manifest.json`);
+      expect(sha256Hex(s3.objects.get(`${prefix}/bundle.tar.gz`)!)).toBe(healed.sha256);
+      const manifest = JSON.parse(new TextDecoder().decode(s3.objects.get(`${prefix}/manifest.json`)!)) as Record<string, unknown>;
+      expect(manifest).toMatchObject({ slug: "release-notes", version: "2.1.0", bundleSha256: healed.sha256 });
+      // Still one immutable version, and its recorded storage key is the one that now exists.
+      const versions = await client.listSkillVersions("release-notes");
+      expect(versions).toHaveLength(1);
+      expect(versions[0]).toMatchObject({ version: "2.1.0", bundleSha256: healed.sha256 });
+      const stored = await store.getSkillVersion(publicPrincipal(ORG), "release-notes", "2.1.0");
+      expect(stored?.storageKey).toBe(`${prefix}/bundle.tar.gz`);
+      expect(s3.objects.has(stored!.storageKey!)).toBe(true);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
