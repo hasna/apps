@@ -128,6 +128,10 @@ system account rather than caller-controlled `$HOME`.
 | `repos worktree remove <ref>` | Reference is a lease ID or `<repo>/<worktree>`, never a path; `--discard-changes`, `--allow-unlanded`, `--allow-dead-gitdir` (archive the working tree and tear down a worktree whose gitdir pointer is dead), `--dry-run`, `--json` |
 | `repos worktree adopt [path]` | The only raw-path worktree verb; dry run by default; `--all`, `--apply`, `--json` |
 | `repos worktree release <lease-id>` | Apply the lease cleanup policy; `--keep`, `--json` |
+| `repos worktree push <ref>` | Publish the worktree's git-external state (uncommitted tracked changes, untracked files, stash list) plus its refs as one immutable, content-addressed version on the S3 artifact remote; reference is `<repo>/<worktree>`, never a path; requires `REPOS_S3_BUCKET`; `--json` |
+| `repos worktree pull <ref>` | Fetch a version from the artifact remote (default newest; `<repo>/<worktree>@<version>` pins one), verify the bundle sha256 against the manifest, and materialise the worktree in the canonical path; `--parent-checkout <path>` for a fresh station with no registry row; `--json` |
+| `repos worktree sync <ref>` | Push a new version, then re-read the remote and refuse (exit 1) if a newer version appeared after the push — never a silent overwrite; `--json` |
+| `repos worktree versions <ref>` | List published versions, newest first; `--json` |
 
 See the README’s [Worktrees](../README.md#worktrees) section for containment,
 base-resolution, and evidence-archive guarantees.

@@ -135,6 +135,7 @@ bootstrap can be disabled separately with `HASNA_REPOS_AUTO_BOOTSTRAP=0`.
 | `REPOS_HOST` | `repos-serve` bind hostname; default `127.0.0.1` (loopback only) |
 | `REPOS_SERVE_TOKEN` | Bearer token required on every `repos-serve` route when set; mandatory when `REPOS_HOST` is not loopback |
 | `REPOS_MCP_ALLOWED_ORIGINS` | Comma-separated Origin allowlist for the `/mcp` endpoint's DNS-rebinding protection |
+| `REPOS_S3_BUCKET` | S3 bucket backing the worktree artifact remote (`repos worktree push/pull/sync/versions`, hasna/apps#1689 probe). Versions live under `worktrees/<repo>/<worktree>/<version>/`. Unset, every sync verb fails closed with `REMOTE_NOT_CONFIGURED`; the AWS SDK is loaded lazily only when a bucket is configured. `AWS_REGION` (default `us-east-1`) and the standard AWS credential chain complete the contract |
 | `MCP_HTTP_PORT` | Standalone `repos-mcp` HTTP port; default `8874` |
 | `MCP_STDIO=1` | Select stdio transport for `repos-mcp` |
 | `MCP_HTTP=1` | Explicitly select the already-default HTTP mode |

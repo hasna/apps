@@ -183,6 +183,17 @@ Re-running `add` for the same `(repo, task, base)` **returns the existing lease*
 not destroy and recreate: an occupied path is `WORKTREE_PATH_OCCUPIED` and its contents are
 left exactly as they were.
 
+**Worktrees can move between stations** (hasna/apps#1689). `repos worktree push` packs what
+git's own remote refuses to carry — uncommitted tracked changes, untracked files, the stash
+list — plus the branch/HEAD refs, into a deterministic, content-addressed bundle, and
+publishes it as an immutable version on the app's S3 artifact remote
+(`REPOS_S3_BUCKET`, objects under `worktrees/<repo>/<worktree>/<version>/`). `repos worktree
+pull <repo>/<name>[@version]` fetches a version, verifies the bundle's sha256 against the
+manifest, and materialises the worktree in the canonical path on the new machine; `repos
+worktree sync` pushes then refuses instead of overwriting if a newer version appeared, and
+`repos worktree versions` lists the history. The bucket and its task role are the follow-up
+infra; without `REPOS_S3_BUCKET` every sync verb fails closed.
+
 **The destructive verbs cannot be handed a path.** `remove` and `release` take a lease id or
 a `<repo>/<worktree>` pair; an absolute path, a relative path, a `..` component and a tilde
 are all rejected on argument shape, before resolution:
