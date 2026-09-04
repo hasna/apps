@@ -20,6 +20,11 @@
   reading these artifacts now get a payload a reproducible build can regenerate
   byte for byte.
 
+- Document the future non-credential state root as the canonical Hasna home
+  layout (`~/.hasna/contracts/{config,state,cache}`) instead of
+  `$XDG_*_HOME/hasna/contracts`, per the 2026-09-04 "XDG never" ruling.
+  Documentation only — credential resolution already ignored `XDG_CONFIG_HOME`.
+
 - cfd72cb: Fail-closed blank backend env and secure credential-file reads (todos a71e18ce):
 
   - A DEFINED-but-blank `HASNA_<NAME>_DATABASE_URL` / `<NAME>_DATABASE_URL`
