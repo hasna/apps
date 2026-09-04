@@ -404,6 +404,69 @@ function formatJson(value: unknown, pretty = false): string {
   return JSON.stringify(value, null, pretty ? 2 : 0);
 }
 
+/**
+ * Write a full payload to stdout and await its flush to the fd.
+ *
+ * Bun's `process.stdout` buffers piped output internally in 96 KiB chunks and
+ * schedules the tail asynchronously; when this top-level script finishes, the
+ * runtime exits without draining still-queued chunks, silently truncating a
+ * large single write mid-string. Observed against the hosted store (issue
+ * #1586): `secrets list --json` produced 349,021 bytes of valid JSON (all
+ * 1,481 metadata rows) when captured to a file, but the same command piped to
+ * a consumer (`| cat`, `| jq length`, `| bun -e`) delivered only 98,304 or
+ * 196,608 bytes — the queued chunks lost on exit. (A single `Bun.write` to
+ * `Bun.stdout` is not a safe replacement: its FileSink stalls after the
+ * first pipe-buffer-full write and resumes unreliably.)
+ *
+ * The payload is therefore written through `process.stdout` itself — the same
+ * path the per-line plain output uses, which is empirically lossless — in
+ * chunks that fit the pipe buffer, awaiting each chunk's callback before
+ * starting the next. The awaited callbacks prove every byte reached the fd
+ * before the process can exit, and the chunk loop applies natural
+ * backpressure to a slow consumer instead of truncating. Small
+ * human-oriented messages may keep using `console.log`; every single-shot
+ * machine output (`--json`/`--pretty` payloads, `export`, …) must go through
+ * this helper.
+ */
+const STDOUT_CHUNK_BYTES = 32 * 1024;
+async function writeStdout(text: string): Promise<void> {
+  if (typeof process.stdout.write === "function" && process.stdout.write.length >= 2) {
+    for (let offset = 0; offset < text.length; offset += STDOUT_CHUNK_BYTES) {
+      const chunk = text.slice(offset, offset + STDOUT_CHUNK_BYTES);
+      await new Promise<void>((resolve, reject) => {
+        process.stdout.write(chunk, (error?: Error | null) => (error ? reject(error) : resolve()));
+      });
+    }
+    return;
+  }
+  await Bun.write(Bun.stdout, text);
+}
+
+/**
+ * Drain any `console.log` bytes still buffered in Bun's stdout writer before
+ * the top-level script ends. `get --show` values, export-env messages and the
+ * plain loop prints all write through `process.stdout`, whose JS-side buffer
+ * is dropped on early exit for piped output (see `writeStdout`). Runs only
+ * for non-TTY stdout (pipes): TTY writes flush line-synchronously.
+ */
+async function drainStdoutBeforeExit(): Promise<void> {
+  if (process.stdout.isTTY) return;
+  try {
+    // Push whatever the JS-side writer still holds into the fd.
+    (process.stdout as unknown as { flush?: () => void }).flush?.();
+  } catch {
+    // The consumer already closed the pipe (`secrets list --json | head -1`):
+    // there is nothing left to deliver.
+    return;
+  }
+  // Keep the event loop alive until the writer has handed every byte to the
+  // fd, bounded so a vanished consumer cannot hang the CLI.
+  const deadline = Date.now() + 5_000;
+  while (process.stdout.writableLength > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
+
 function positiveIntegerFlag(flags: Record<string, string>, name: string): number | undefined {
   const value = flags[name];
   if (!value) return undefined;
@@ -638,7 +701,7 @@ switch (command) {
         verified = await verifyCopy(store(), oldKey, newKey);
       }
       if ("json" in flags) {
-        console.log(JSON.stringify({
+        await writeStdout(JSON.stringify({
           old_key: result.oldKey,
           new_key: result.newKey,
           type: result.type,
@@ -647,7 +710,7 @@ switch (command) {
           ...(result.expiresAt ? { expires_at: result.expiresAt } : {}),
           unchanged: result.unchanged,
           ...(verified !== undefined ? { verified: { match: verified.match, length: verified.length } } : {}),
-        }, null, 2));
+        }, null, 2) + "\n");
         if (verified !== undefined && !verified.match) process.exit(1);
         break;
       }
@@ -696,7 +759,7 @@ switch (command) {
       try {
         const check = await store().checkVersion(key, version);
         if ("json" in flags) {
-          console.log(JSON.stringify(check, null, 2));
+          await writeStdout(JSON.stringify(check, null, 2) + "\n");
           break;
         }
         console.log(`key=${key} version=${check.version} length=${check.value_length} sha256=${check.hash}${check.current ? " (current)" : ""}`);
@@ -714,7 +777,7 @@ switch (command) {
     try {
       const versions = await store().listVersions(key, limit);
       if ("json" in flags) {
-        console.log(JSON.stringify(versions, null, 2));
+        await writeStdout(JSON.stringify(versions, null, 2) + "\n");
         break;
       }
       if (versions.length === 0) {
@@ -931,7 +994,7 @@ switch (command) {
     const [namespace] = positional;
     const entries = await store().listSecretMetadata(namespace);
     if ("json" in flags) {
-      console.log(JSON.stringify(entries, null, 2));
+      await writeStdout(JSON.stringify(entries, null, 2) + "\n");
       break;
     }
     if (entries.length === 0) {
@@ -948,7 +1011,7 @@ switch (command) {
     if (!query) { console.error("Usage: secrets search <query>"); process.exit(1); }
     const results = await store().searchSecretMetadata(query);
     if ("json" in flags) {
-      console.log(JSON.stringify(results, null, 2));
+      await writeStdout(JSON.stringify(results, null, 2) + "\n");
       break;
     }
     if (results.length === 0) { console.log(`No results for: ${query}`); }
@@ -965,7 +1028,7 @@ switch (command) {
       console.error("Usage: secrets export [--show|--plaintext] [--pretty]. Do not combine --redact with plaintext flags.");
       process.exit(1);
     }
-    console.log(formatJson(await store().exportSecrets(!showPlaintext), flags.pretty === "true"));
+    await writeStdout(formatJson(await store().exportSecrets(!showPlaintext), flags.pretty === "true") + "\n");
     break;
   }
 
@@ -1016,7 +1079,7 @@ switch (command) {
           maxBytesScanned: positiveIntegerFlag(flags, "max-scan-bytes"),
           timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
         });
-        console.log(formatJson(result, flags.pretty === "true"));
+        await writeStdout(formatJson(result, flags.pretty === "true") + "\n");
         if (result.stats.errors.length > 0) process.exitCode = 2;
         break;
       }
@@ -1026,7 +1089,7 @@ switch (command) {
           maxCommits: positiveIntegerFlag(flags, "max-commits"),
           timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
         });
-        console.log(formatJson(result, flags.pretty === "true"));
+        await writeStdout(formatJson(result, flags.pretty === "true") + "\n");
         if (result.stats.errors.length > 0) process.exitCode = 2;
         break;
       }
@@ -1045,7 +1108,7 @@ switch (command) {
           maxBytesScanned: positiveIntegerFlag(flags, "max-scan-bytes"),
           timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
         });
-        console.log(formatJson(result, flags.pretty === "true" || flags.json === "true"));
+        await writeStdout(formatJson(result, flags.pretty === "true" || flags.json === "true") + "\n");
         process.exitCode = stagedScanExitCode(result);
         break;
       }
@@ -1078,7 +1141,7 @@ switch (command) {
           maxBytes: positiveIntegerFlag(flags, "max-bytes"),
           timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
         });
-        console.log(formatJson(result, flags.pretty === "true" || flags.json === "true"));
+        await writeStdout(formatJson(result, flags.pretty === "true" || flags.json === "true") + "\n");
         process.exitCode = stagedScanExitCode(result);
         break;
       }
@@ -1132,7 +1195,7 @@ switch (command) {
             output = { ...output, loop: { ...loop, report_path: reportPath } };
           }
         }
-        console.log(formatJson(output, pretty));
+        await writeStdout(formatJson(output, pretty) + "\n");
         if (result.summary.findings > 0 && !result.fixed) process.exitCode = 1;
         break;
       }
@@ -1147,7 +1210,7 @@ switch (command) {
           maxCommits: positiveIntegerFlag(flags, "max-commits"),
           timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
         });
-        console.log(formatJson(result, pretty));
+        await writeStdout(formatJson(result, pretty) + "\n");
         if (result.summary.findings > 0 || result.summary.errors > 0) process.exitCode = 1;
         break;
       }
@@ -1157,7 +1220,7 @@ switch (command) {
           maxFiles: positiveIntegerFlag(flags, "max-files"),
           maxFindings: positiveIntegerFlag(flags, "max-findings"),
         });
-        console.log(formatJson(result, pretty));
+        await writeStdout(formatJson(result, pretty) + "\n");
         if (result.summary.findings > 0) process.exitCode = 1;
         break;
       }
@@ -1193,7 +1256,7 @@ switch (command) {
   case "status": {
     const status = await getSecretReferenceStatus();
     if ("json" in flags) {
-      console.log(JSON.stringify(status, null, 2));
+      await writeStdout(JSON.stringify(status, null, 2) + "\n");
     } else {
       console.log(`secrets ${status.package.version}`);
       console.log(`mode: ${status.mode}`);
@@ -1216,7 +1279,7 @@ switch (command) {
     const limit = flags.limit ? parseInt(flags.limit) : 50;
     const entries = await store().getAuditLog(key, limit);
     if ("json" in flags) {
-      console.log(JSON.stringify(entries, null, 2));
+      await writeStdout(JSON.stringify(entries, null, 2) + "\n");
       break;
     }
     if (entries.length === 0) { console.log("No audit entries."); }
@@ -1243,7 +1306,7 @@ switch (command) {
       case "list": {
         const users = await store().listUsers(flags.type as any);
         if ("json" in flags) {
-          console.log(JSON.stringify(users, null, 2));
+          await writeStdout(JSON.stringify(users, null, 2) + "\n");
           break;
         }
         if (users.length === 0) { console.log("No users registered."); }
@@ -1293,7 +1356,7 @@ switch (command) {
         }
         const items = await store().listVaultItemMetadata(kind);
         if ("json" in flags) {
-          console.log(JSON.stringify(items, null, 2));
+          await writeStdout(JSON.stringify(items, null, 2) + "\n");
           break;
         }
         if (items.length === 0) {
@@ -1310,7 +1373,7 @@ switch (command) {
         if (!query) { console.error("Usage: secrets items search <query>"); process.exit(1); }
         const items = await store().searchVaultItemMetadata(query);
         if ("json" in flags) {
-          console.log(JSON.stringify(items, null, 2));
+          await writeStdout(JSON.stringify(items, null, 2) + "\n");
           break;
         }
         if (items.length === 0) {
@@ -1327,10 +1390,10 @@ switch (command) {
         if (!id) { console.error("Usage: secrets items get <id> [--show]"); process.exit(1); }
         const item = await store().getVaultItem(id);
         if (!item) { console.error(`Not found: ${id}`); process.exit(1); }
-        console.log(JSON.stringify({
+        await writeStdout(JSON.stringify({
           ...item,
           data: flags.show === "true" ? item.data : redactVaultPayload(item.data),
-        }, null, 2));
+        }, null, 2) + "\n");
         break;
       }
 
@@ -1447,7 +1510,7 @@ switch (command) {
         const [key] = awsRest;
         if (key) {
           const result = await pushSecret(key, awsOptions);
-          if (result) console.log(JSON.stringify(result, null, 2));
+          if (result) await writeStdout(JSON.stringify(result, null, 2) + "\n");
           else console.log(`✓ Pushed: ${key}`);
         } else {
           const entries = await store().listSecretMetadata();
@@ -1463,7 +1526,7 @@ switch (command) {
             }
           }
           if (dryRunResult) {
-            console.log(JSON.stringify({ ...dryRunResult, actions: dryRunActions }, null, 2));
+            await writeStdout(JSON.stringify({ ...dryRunResult, actions: dryRunActions }, null, 2) + "\n");
           }
         }
         break;
@@ -1473,7 +1536,7 @@ switch (command) {
         const [key] = awsRest;
         if (!key) { console.error("Usage: secrets aws pull <key>"); process.exit(1); }
         const result = await pullSecret(key, awsOptions);
-        if (result) console.log(JSON.stringify(result, null, 2));
+        if (result) await writeStdout(JSON.stringify(result, null, 2) + "\n");
         else console.log(`✓ Pulled: ${key}`);
         break;
       }
@@ -1482,7 +1545,7 @@ switch (command) {
         if (!awsOptions.dryRun) console.log("Syncing with AWS Secrets Manager...");
         const { pushed, pulled, errors, plan } = await syncAll(awsOptions);
         if (plan) {
-          console.log(JSON.stringify(plan, null, 2));
+          await writeStdout(JSON.stringify(plan, null, 2) + "\n");
           break;
         }
         if (pushed.length) console.log(`Pushed (${pushed.length}): ${pushed.join(", ")}`);
@@ -1680,3 +1743,8 @@ switch (command) {
     process.exit(1);
   }
 }
+
+// The switch has run its course and the module is about to end: drain any
+// stdout bytes still buffered in Bun's writer so piped consumers receive the
+// complete output (issue #1586 — large `--json` outputs were truncated).
+await drainStdoutBeforeExit();
