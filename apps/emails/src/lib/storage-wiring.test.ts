@@ -81,10 +81,17 @@ describe("readStorageWiring", () => {
     });
   });
 
-  it("reports the DEFAULT database as a file when nothing names one", () => {
+  it("FAILS CLOSED when nothing names a store, instead of defaulting to a local database file", () => {
+    // Incident 715712 (a dropped API environment served an empty local mailbox at
+    // rc=0) ended the silent local default, and the fail-closed ruling (2026-09-04)
+    // made the all-unset row an error naming the required settings. The DEFAULT
+    // branch is gone: no API env and no explicit database path is `unresolved`,
+    // never a `database_file` under $HOME.
     const wiring = readStorageWiring(configure({}));
-    expect(wiring.kind).toBe("database_file");
-    expect(wiring.kind === "database_file" && wiring.path.startsWith(home)).toBe(true);
+    expect(wiring.kind).toBe("unresolved");
+    const message = wiring.kind === "unresolved" ? wiring.message : "";
+    expect(message).toContain("No Emails API configuration");
+    expect(message).toContain("never served on an absence of configuration");
   });
 
   it("reports API storage, and carries NO path and NO credential", () => {
