@@ -1,22 +1,29 @@
-// Store resolution: all four quadrants of (database path set?) x (API base URL set?),
-// and the proof that the contradiction is a THROWN boot error rather than a value.
+// Store resolution: every row of (database path set?) x (API base URL set?), and the
+// proof that the rows a resolver must not guess at are THROWN boot errors rather than
+// values.
 //
-// WHY THE BOTH-CONFIGURED CASE IS THE POINT OF THIS FILE. A resolver that answered
-// "the API wins" would pass a test that only checked the three unambiguous quadrants,
-// and would then quietly read an operator's mail out of the wrong store forever. So
-// the assertion here is `toThrow`, not "returns the API plan": a returned value —
-// however documented — is a precedence rule, and a precedence rule is the deployment
-// switch this program is deleting, wearing a different hat.
+// WHY THE BOOT-ERROR ROWS ARE THE POINT OF THIS FILE. A resolver that answered "the
+// API wins" for a both-configured environment would pass a test that only checked the
+// unambiguous rows, and would then quietly read an operator's mail out of the wrong
+// store forever. A resolver that answered "local SQLite at the documented default" for
+// the all-unset row would do the same to an operator whose API environment silently
+// dropped (incident 715712) — the fail-closed ruling (2026-09-04) removed that default
+// entirely, so the assertion here is `toThrow` for the unset/unset row just as for
+// SET/SET: a returned value — however documented — is a precedence rule or a silent
+// fallback, the two shapes this program is deleting, wearing different hats.
 //
-// EVERY TEST BUILDS ITS OWN ENVIRONMENT OBJECT and never mutates `process.env`. The
-// hermetic runner sets `EMAILS_DB_PATH=:memory:` for the whole suite, so a test that
-// read the ambient environment could not express the "nothing configured" quadrant at
-// all — and would have silently tested three quadrants while claiming four.
+// EVERY TEST BUILDS ITS OWN ENVIRONMENT OBJECT and never mutates `process.env`, except
+// the construction describe, which must drive the real environment and restores it.
+// The hermetic runner is STORE-NEUTRAL — it passes through only an execution-key
+// allowlist plus isolated HOME/XDG (scripts/prepublish-local-test.mjs) — so a test
+// that read the ambient environment would find nothing configured at all, which is
+// exactly the all-unset boot-error row and not a store choice.
 
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDatabase, defaultDatabasePath, getDatabasePath, resetDatabase } from "./db/database.js";
+import { closeDatabase, getDatabasePath, resetDatabase } from "./db/database.js";
 import { HTTP_STORE_CAPABILITIES } from "./store-http/index.js";
 import { SQLITE_STORE_CAPABILITIES } from "./store-sqlite/index.js";
 import {
@@ -27,7 +34,6 @@ import {
   StoreConfigurationError,
   createConfiguredEmailStore,
   planEmailStore,
-  resetEmailsLocalFallbackNotice,
 } from "./store-resolution.js";
 
 /** An environment with nothing this resolver reads, so a quadrant is exactly stated. */
@@ -38,19 +44,30 @@ function bare(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
 const A_URL = "https://mail.example.test";
 const A_FIXTURE_VALUE = "hasna-test-fixture-value-01";
 
-describe("configured store resolution — the four quadrants", () => {
-  it("defaults to the local SQLite database when nothing is configured", () => {
-    const plan = planEmailStore(bare());
-    expect(plan.store).toBe("sqlite");
-    if (plan.store !== "sqlite") return;
-    // The DOCUMENTED default, named from the database layer rather than re-spelled, so
-    // this asserts the two agree instead of asserting a literal twice.
-    expect(plan.databasePath).toBe(defaultDatabasePath());
-    // ...and it ends where the operator is told it ends.
-    expect(plan.databasePath.endsWith(join(".hasna", "emails", "emails.db"))).toBe(true);
-    // `setting: null` is how a diagnostic tells "defaulted" from "configured", and it
-    // is the reason the field is nullable rather than a string.
-    expect(plan.setting).toBeNull();
+describe("configured store resolution — the quadrants and the boot-error rows", () => {
+  it("FAILS CLOSED when nothing is configured, instead of defaulting to local SQLite", () => {
+    // The all-unset row after the fail-closed ruling (2026-09-04). Incident 715712
+    // dropped the API environment and the CLI served an empty local mailbox at rc=0;
+    // the local database is no longer reachable through an ABSENCE of configuration.
+    let thrown: unknown;
+    try {
+      planEmailStore(bare());
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(StoreConfigurationError);
+    const error = thrown as StoreConfigurationError;
+    // The message names the required API configuration...
+    expect(error.message).toContain(API_BASE_URL_SETTING);
+    for (const setting of API_CREDENTIAL_SETTINGS) expect(error.message).toContain(setting);
+    expect(error.message).toContain(API_SETTINGS_POINTER);
+    // ...and the explicit way back to local, so the refusal is not a dead end.
+    for (const setting of DATABASE_PATH_SETTINGS) expect(error.message).toContain(setting);
+    // The machine-readable half carries exactly the hosted-env keys at fault — never
+    // a value, because a value in this row can be a credential.
+    expect([...error.settings].sort()).toEqual(
+      [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS, API_SETTINGS_POINTER].sort(),
+    );
   });
 
   it("uses the configured database path, and the documented setting wins", () => {
@@ -346,12 +363,13 @@ describe("configured store resolution — configurations it will not guess at", 
     for (const blank of ["", "   ", "\t\n"]) {
       const plan = planEmailStore(bare({ [DATABASE_PATH_SETTINGS[1]]: "/tmp/x.db", [API_BASE_URL_SETTING]: blank }));
       expect(plan.store, `${JSON.stringify(blank)} must not configure an API`).toBe("sqlite");
-      const defaulted = planEmailStore(bare({ [DATABASE_PATH_SETTINGS[1]]: blank }));
-      expect(defaulted.store === "sqlite" && defaulted.setting, `${JSON.stringify(blank)} must not name a path`).toBe(
-        null,
-      );
-      // ...and a blank pointer is not an unloaded pointer.
-      expect(() => planEmailStore(bare({ [API_SETTINGS_POINTER]: blank }))).not.toThrow();
+      // A blank database path names no local store at all — and with the API also
+      // unset that is the ALL-UNSET row, which fails closed rather than serving the
+      // documented default.
+      expect(() => planEmailStore(bare({ [DATABASE_PATH_SETTINGS[1]]: blank }))).toThrow(StoreConfigurationError);
+      // ...and a blank pointer is not an unloaded pointer; it is unset, so with
+      // nothing else present the row is the all-unset boot error.
+      expect(() => planEmailStore(bare({ [API_SETTINGS_POINTER]: blank }))).toThrow(StoreConfigurationError);
     }
   });
 
@@ -364,23 +382,27 @@ describe("configured store resolution — configurations it will not guess at", 
     // here, against the real reader rather than a copy of its rules.
     const inherited = { ...process.env };
     try {
+      // A BLANK value names no path in EITHER layer's terms: the resolution's all-unset
+      // row now fails closed rather than reporting the documented default, so the two
+      // layers still agree — neither would open a file a blank value pointed at.
+      for (const value of ["", "   ", "\t\n"]) {
+        for (const key of DATABASE_PATH_SETTINGS) delete process.env[key];
+        process.env[DATABASE_PATH_SETTINGS[1]] = value;
+        expect(() => planEmailStore(process.env), `${JSON.stringify(value)} must be the all-unset boot row`).toThrow(
+          StoreConfigurationError,
+        );
+      }
       // The padded case uses `:memory:` deliberately: a real path goes through
       // `canonicalizeDatabasePath`, which resolves symlinked ancestors, so comparing raw
       // strings would fail on a platform where the temp root is a symlink and would be
       // testing realpath rather than the trimming rule.
-      for (const [value, expected] of [
-        ["", null],
-        ["   ", null],
-        ["\t\n", null],
-        ["  :memory:  ", ":memory:"],
-        [":memory:", ":memory:"],
-      ] as const) {
+      for (const value of ["  :memory:  ", ":memory:"]) {
         for (const key of DATABASE_PATH_SETTINGS) delete process.env[key];
         process.env[DATABASE_PATH_SETTINGS[1]] = value;
         const plan = planEmailStore(process.env);
         expect(plan.store).toBe("sqlite");
         if (plan.store !== "sqlite") return;
-        expect(plan.setting, `${JSON.stringify(value)} setting`).toBe(expected === null ? null : DATABASE_PATH_SETTINGS[1]);
+        expect(plan.setting, `${JSON.stringify(value)} setting`).toBe(DATABASE_PATH_SETTINGS[1]);
         // The one assertion that matters: the two layers resolve the SAME file.
         expect(plan.databasePath, `${JSON.stringify(value)} must resolve identically in both layers`).toBe(
           getDatabasePath(),
@@ -519,37 +541,36 @@ describe("what the resolver is not allowed to read", () => {
   });
 });
 
-describe("local-fallback notice (incident 715712)", () => {
+describe("fail-closed resolution (incident 715712 → the fail-closed ruling)", () => {
   // Regression: a harness session-env re-provision dropped EMAILS_SELF_HOSTED_URL
   // (+ the pointer) and the CLI silently served the local SQLite store at rc=0 —
-  // the mailbox appeared empty. Before serving local on the all-unset default
-  // row, the resolver must emit one machine-readable stderr notice naming the
-  // mode switch (the same family as the merged secrets fix, PR #681 / incident
-  // 715558).
+  // the mailbox appeared empty. The first fix made that fallback announce itself
+  // on stderr; the fail-closed ruling (2026-09-04) removed the fallback entirely.
+  // The all-unset row is now a THROWN boot error: nothing is served, nothing is
+  // created, and no console output of any kind is produced by the resolution.
 
-  it("emits one stderr notice on the all-unset default before serving local", () => {
-    resetEmailsLocalFallbackNotice();
+  it("throws on the all-unset row and never emits anything to stderr", () => {
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
-      const plan = planEmailStore(bare());
-      expect(plan.store).toBe("sqlite");
-      expect(plan.setting).toBeNull();
-      expect(errSpy).toHaveBeenCalledTimes(1);
-      const notice = JSON.parse(errSpy.mock.calls[0]![0] as string) as Record<string, unknown>;
-      expect(notice.event).toBe("emails-local-fallback");
-      expect(notice.notice).toContain(API_BASE_URL_SETTING);
-      expect(notice.notice).toContain(API_SETTINGS_POINTER);
-      expect(notice.notice).toContain("local SQLite");
-      // Once-only per process: repeated all-unset resolutions stay silent.
-      planEmailStore(bare());
-      expect(errSpy).toHaveBeenCalledTimes(1);
+      let thrown: unknown;
+      try {
+        planEmailStore(bare());
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(StoreConfigurationError);
+      const error = thrown as StoreConfigurationError;
+      // The boot error itself is the notice now — refusing beats announcing a
+      // fallback and exiting 0 — and it names the way back to local.
+      expect(error.message).toContain(API_BASE_URL_SETTING);
+      for (const setting of DATABASE_PATH_SETTINGS) expect(error.message).toContain(setting);
+      expect(errSpy).not.toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
     }
   });
 
   it("an explicitly configured database path stays silent (chosen local store, not a fallback)", () => {
-    resetEmailsLocalFallbackNotice();
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       const plan = planEmailStore(bare({ [DATABASE_PATH_SETTINGS[0]]: "/tmp/explicit.db" }));
@@ -561,21 +582,49 @@ describe("local-fallback notice (incident 715712)", () => {
     }
   });
 
-  it("the API plan and the fail-closed rows emit no notice", () => {
-    resetEmailsLocalFallbackNotice();
+  it("the API plan and the other boot-error rows emit nothing to stderr", () => {
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       const api = planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL, [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE }));
       expect(api.store).toBe("api");
-      // Pointer-without-URL and URL-without-credential remain hard boot errors —
-      // the fail-closed partial-pair behaviour is unchanged.
+      // Pointer-without-URL, URL-without-credential and the all-unset row remain
+      // hard boot errors — the fail-closed rows are unchanged in kind.
       expect(() => planEmailStore(bare({ [API_SETTINGS_POINTER]: "vault://emails/client" })))
         .toThrow(StoreConfigurationError);
       expect(() => planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL })))
         .toThrow(StoreConfigurationError);
+      expect(() => planEmailStore(bare())).toThrow(StoreConfigurationError);
       expect(errSpy).not.toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
+    }
+  });
+
+  it("creates no local database anywhere when construction fails closed on the all-unset row", () => {
+    // The refusal must happen BEFORE any sqlite open or directory creation. Drive a
+    // fresh HOME so the check is about the default data root: getDataDir() is what
+    // would create ~/.hasna/emails, and nothing may call it for the all-unset row.
+    // bun runs every test file in ONE process, so the whole environment is
+    // snapshotted and restored like the construction describe above does.
+    const inherited = { ...process.env };
+    const home = mkdtempSync(join(tmpdir(), "emails-store-resolution-failclosed-"));
+    try {
+      process.env["HOME"] = home;
+      for (const key of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
+        delete process.env[key];
+      }
+      resetDatabase();
+      expect(() => createConfiguredEmailStore()).toThrow(StoreConfigurationError);
+      expect(existsSync(join(home, ".hasna")), "the default data root must never be created").toBe(false);
+    } finally {
+      for (const key of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
+        delete process.env[key];
+      }
+      for (const key of Object.keys(process.env)) {
+        if (!Object.prototype.hasOwnProperty.call(inherited, key)) delete process.env[key];
+      }
+      Object.assign(process.env, inherited);
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });

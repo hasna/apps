@@ -4,14 +4,16 @@
 // deliberately never reads the deployment word), while the families not yet moved are
 // still dispatched by the process-wide deployment word. For ONE common configuration
 // their answers contradict: an API base URL plus a credential, with the deployment
-// word unset, sends the seam families to the HTTP API while the word-routed families
-// default to the local SQLite database — two mailboxes in one process, no diagnostic,
-// and single commands straddle both regimes (the audit that found it caught owner
-// names resolved locally while send keys were minted through the API; the owners
-// family has since collapsed onto the seam, so PROVIDERS is the word-routed exemplar
-// these cases drive now). That is the silent wrong-store read this repo classes as
-// its worst bug. Until the axis deletion collapses the second regime, the defaulting
-// side fails closed on this configuration and names both settings.
+// word unset, sends the seam families to the HTTP API while the word-routed families —
+// with no selector and no explicit database path — refuse every default (fail-closed
+// ruling, 2026-09-04): one process would serve some commands from the API and fail
+// the rest, with no diagnostic saying the two halves disagree (the audit that found
+// the original divergence caught owner names resolved locally while send keys were
+// minted through the API; the owners family has since collapsed onto the seam, so
+// PROVIDERS is the word-routed exemplar these cases drive now). That is the silent
+// wrong-store read this repo classes as its worst bug. Until the axis deletion
+// collapses the second regime, the defaulting side fails closed on this configuration
+// and names both settings.
 //
 // NAMING NOTE: this file sits inside the deployment-axis ratchet's scanned corpus and
 // must contribute nothing to any of its counts. The deployment-word env keys are
@@ -121,19 +123,36 @@ describe("split-brain storage configuration — the word-routed side fails close
   });
 
   it("keys on the configured URL, never on a credential alone", () => {
-    // A credential with no URL configures nothing — the seam resolves local SQLite —
-    // so the word-routed default agrees with the seam and there is nothing to refuse.
+    // A credential with no URL configures nothing; the database path is the explicit
+    // local choice BOTH regimes honour — sqlite on the seam, local on the word side —
+    // so there is nothing to refuse.
     only({ [DATABASE_PATH_SETTINGS[1]]: ":memory:", [API_CREDENTIAL_SETTINGS[2]]: A_KEY });
     expect(planEmailStore(process.env).store).toBe("sqlite");
     expect(() => listProviderSummaries()).not.toThrow();
   });
 
-  it("leaves an incomplete API configuration to the seam's own refusal", () => {
-    // A URL with no credential cannot resolve to a working API store; the seam
-    // refuses it by name (missing credential), so the word-routed side does not add
-    // a second, different refusal about the deployment word on top.
+  it("fails an incomplete API configuration closed, in the seam's own refusal", () => {
+    // A URL with no credential cannot resolve to a working API store, and the
+    // fail-closed ruling removed the local default that used to absorb this row —
+    // serving that default put the LOCAL database in front of an operator who had
+    // configured an API. The word-routed side now surfaces the seam's own refusal
+    // (which names the missing credential) rather than adding a second, different
+    // refusal about the deployment word on top.
     only({ [API_BASE_URL_SETTING]: A_URL });
     expect(() => planEmailStore(process.env)).toThrow(StoreConfigurationError);
-    expect(() => listProviderSummaries()).not.toThrow();
+    let thrown: unknown;
+    try {
+      listProviderSummaries();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(StoreConfigurationError);
+    const error = thrown as StoreConfigurationError;
+    // The seam's dialect, not the guard's: the URL is named, the deployment word is
+    // not, and no credential value is ever quoted — this message can reach a log.
+    expect(error.message).toContain(API_BASE_URL_SETTING);
+    expect(error.message).not.toContain(`${WORD_SETTINGS[0]}=self_hosted`);
+    expect(error.settings).not.toContain(WORD_SETTINGS[0]);
+    expect(error.message).not.toContain(A_KEY);
   });
 });

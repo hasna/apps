@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,6 +37,16 @@ afterEach(() => {
     else process.env[key] = value;
   }
   savedEnv.clear();
+});
+
+beforeEach(() => {
+  // The HTTP server builds the MCP graph LAZILY on the first request that clears the
+  // transport guards, and buildServer() refuses to register against an unresolved
+  // deployment (fail-closed ruling, 2026-09-04). These cases exercise the transport
+  // guards, not storage selection, so the explicit local database is selected the way
+  // the suite's local-mode cases do. Not counted by the mode-axis ratchet (env refs
+  // track the mode selector, and this is its documented explicit opt-in instead).
+  setEnv("EMAILS_DB_PATH", ":memory:");
 });
 
 function track(server: ReturnType<typeof startHttpServer>): ReturnType<typeof startHttpServer> {
@@ -284,7 +294,9 @@ describe("emails-mcp transport selection", () => {
 
   it("defaults to stdio and opens no listening socket", async () => {
     const port = freePort();
-    const { child, cleanup } = await spawnEntrypoint([], { MCP_HTTP_PORT: String(port) });
+    // The child boots the same fail-closed registration path as the in-process boots
+    // above, so its explicit environment names the local database too.
+    const { child, cleanup } = await spawnEntrypoint([], { MCP_HTTP_PORT: String(port), EMAILS_DB_PATH: ":memory:" });
 
     try {
       // A stdio server answers JSON-RPC on stdout and never binds a port.

@@ -153,7 +153,12 @@ describe("labelForEmailsMode / getEmailsMode", () => {
     expect(labelForEmailsMode("self_hosted")).toBe("Server API");
   });
 
-  it("defaults to local without loading self-hosted configuration", () => {
+  it("returns local when an explicit database path opts into local storage", () => {
+    // Local is EXPLICIT only (fail-closed ruling, 2026-09-04): a configured
+    // database path is the local choice both the store seam and the deployment
+    // word honour, so a DB-path-only environment resolves local without any API
+    // environment and without consulting a client credential.
+    process.env["EMAILS_DB_PATH"] = ":memory:";
     expect(getEmailsMode()).toBe("local");
   });
 
@@ -245,15 +250,29 @@ describe("resolveEmailsMode — dual mode", () => {
     });
   });
 
-  it("defaults to local when no endpoint is configured, and says nothing about it", () => {
-    // The counter-control for the shadowing note: with nothing configured there is
-    // nothing being overridden, and a note on every ordinary local invocation would be
-    // noise — which is how a real one gets skipped.
-    expect(resolveEmailsMode()).toMatchObject({
-      mode: "local",
-      source: { kind: "default" },
-      warning: null,
-    });
+  it("fails closed when nothing is configured, naming the required API environment", () => {
+    // Incident 715712's shape, now a hard refusal (fail-closed ruling, 2026-09-04):
+    // with no API configuration and no explicit local choice there is no safe
+    // default, so the resolver throws and names what it needs instead of serving an
+    // empty local database at rc=0. The counter-control for the shadowing note is
+    // gone with the default — there is no ordinary silent-local invocation left.
+    let thrown: unknown;
+    try {
+      resolveEmailsMode();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    const message = String((thrown as Error).message);
+    expect(message).toContain("EMAILS_SELF_HOSTED_URL");
+    // Every credential route, so the operator can act without a second lookup...
+    expect(message).toContain("EMAILS_SESSION_TOKEN");
+    expect(message).toContain("EMAILS_SELF_HOSTED_API_KEY");
+    // ...the vault pointer that delivers them...
+    expect(message).toContain(EMAILS_CLIENT_ENV_SECRET_ENV);
+    // ...and the explicit ways back to local.
+    expect(message).toContain("HASNA_EMAILS_DB_PATH");
+    expect(message).toContain("EMAILS_DB_PATH");
   });
 
   it("fails loud when the mode is set but URL/key are missing", () => {

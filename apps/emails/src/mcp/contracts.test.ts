@@ -306,22 +306,34 @@ describe("MCP CLI equivalents", () => {
     // the deployment word; the family has been collapsed onto the store seam, so the
     // classification path below is the only one there is and this case no longer depends on
     // how the process was configured. `src/db/aliases.test.ts` pins the message itself.
-    const { buildServer } = await import("./server.js");
-    const server = buildServer() as unknown as {
-      _registeredTools: Record<string, { handler: (i: Record<string, unknown>) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>;
-    };
-    const result = await server._registeredTools["add_alias"]!.handler({ alias: "not-an-address", target: "ops@acme.example" });
+    //
+    // The build still needs SOME resolved deployment: buildServer() registers against the
+    // store and refuses when nothing is configured (fail-closed ruling, 2026-09-04), so the
+    // case selects the explicit local database — the classification it exercises is the
+    // same on every row, which is the independence the paragraph above asserts.
+    const savedDbPath = process.env["EMAILS_DB_PATH"];
+    process.env["EMAILS_DB_PATH"] = ":memory:";
+    try {
+      const { buildServer } = await import("./server.js");
+      const server = buildServer() as unknown as {
+        _registeredTools: Record<string, { handler: (i: Record<string, unknown>) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>;
+      };
+      const result = await server._registeredTools["add_alias"]!.handler({ alias: "not-an-address", target: "ops@acme.example" });
 
-    expect(result.isError).toBe(true);
-    const payload = JSON.parse(result.content[0]?.text ?? "{}") as {
-      error: { message: string; code: string; fix_command: string; fix_commands: string[] };
-    };
-    expect(payload.error.message).toContain("Invalid email address");
-    expect(payload.error.code).toBe("invalid_input");
-    // The fix is to re-issue the alias command with a real address, not to inspect domains.
-    expect(payload.error.fix_command).toBe("emails alias add not-an-address ops@acme.example --json");
-    expect(payload.error.fix_commands).not.toContain("emails domain list --json");
-    expect(payload.error.fix_commands).not.toContain("emails domain add --help");
+      expect(result.isError).toBe(true);
+      const payload = JSON.parse(result.content[0]?.text ?? "{}") as {
+        error: { message: string; code: string; fix_command: string; fix_commands: string[] };
+      };
+      expect(payload.error.message).toContain("Invalid email address");
+      expect(payload.error.code).toBe("invalid_input");
+      // The fix is to re-issue the alias command with a real address, not to inspect domains.
+      expect(payload.error.fix_command).toBe("emails alias add not-an-address ops@acme.example --json");
+      expect(payload.error.fix_commands).not.toContain("emails domain list --json");
+      expect(payload.error.fix_commands).not.toContain("emails domain add --help");
+    } finally {
+      if (savedDbPath === undefined) delete process.env["EMAILS_DB_PATH"];
+      else process.env["EMAILS_DB_PATH"] = savedDbPath;
+    }
   });
 
   it("advertises the reply CLI twin that always worked", () => {

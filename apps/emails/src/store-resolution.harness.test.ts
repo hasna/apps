@@ -26,10 +26,13 @@
 //     `run-hermetic-tests.sh` must not itself assign or scrub a database path
 //     (delegation only) — a harness that stopped being neutral fails the guard below
 //     rather than quietly making these tests trivial;
-//   * the FIRST test asserts the ambient configuration on its own resolves to SQLite
-//     at the documented default path. Without that positive control, "the API store
-//     came back" would also be satisfied by a harness that never configured a local
-//     store, and the fix would be unproven;
+//   * the FIRST test asserts the ambient neutrality on its own FAILS CLOSED — a boot
+//     error naming the required API environment, never a store plan (the fail-closed
+//     ruling removed the "resolve to SQLite at the documented default" row) — and
+//     that adding an explicit database path to that same environment resolves to
+//     SQLite at the configured path. Without those controls, "the API store came
+//     back after applyEnv()" would also be satisfied by a harness that never
+//     configured a local store, and the fix would be unproven;
 //   * the consumer test does a real round trip through the returned store to the stub
 //     and asserts the ROWS came from there, because a constructed HTTP store that never
 //     reached the service would satisfy a capabilities check alone.
@@ -55,7 +58,6 @@ import {
   createConfiguredEmailStore,
   planEmailStore,
 } from "./store-resolution.js";
-import { defaultDatabasePath } from "./db/database.js";
 import { startV1Stub, type V1Stub } from "./test-support/v1-stub.js";
 
 /**
@@ -184,20 +186,30 @@ afterEach(() => {
 });
 
 describe("the ambient test environment configures exactly one store", () => {
-  it("resolves to the local database at the default path before a stub points it anywhere else", () => {
+  it("fails closed on the neutral ambient environment, and resolves only an explicit path", () => {
     // POSITIVE CONTROL for every test below. The ambient environment is NEUTRAL —
-    // no database path and no API settings — so "the API store came back after
-    // applyEnv()" is a fact about applyEnv() installing it, and not about it already
-    // being there.
+    // no database path and no API settings — and under the fail-closed ruling that
+    // neutrality REFUSES instead of defaulting: planEmailStore throws, so "the API
+    // store came back after applyEnv()" is a fact about applyEnv() installing it,
+    // and not about it already being there.
     noDatabasePathIsConfigured();
     expect(process.env[API_BASE_URL_SETTING]).toBeUndefined();
-    const plan = planEmailStore(process.env);
+    let thrown: unknown;
+    try {
+      planEmailStore(process.env);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(StoreConfigurationError);
+    expect((thrown as StoreConfigurationError).message).toContain(API_BASE_URL_SETTING);
+    // The refusal is not a dead end: the same neutral environment plus an explicit
+    // database path is a local store, which is the harness's own fixture shape.
+    const explicit = { ...process.env, [HIGHER_PRECEDENCE_SETTING]: HIGHER_PRECEDENCE_VALUE };
+    const plan = planEmailStore(explicit);
     expect(plan.store).toBe("sqlite");
     if (plan.store !== "sqlite") return;
-    // Nothing named a path, so the resolution falls to the documented default —
-    // and the default is what it is by construction, not by this file's say-so.
-    expect(plan.setting).toBeNull();
-    expect(plan.databasePath).toBe(defaultDatabasePath());
+    expect(plan.setting).toBe(HIGHER_PRECEDENCE_SETTING);
+    expect(plan.databasePath).toBe(HIGHER_PRECEDENCE_VALUE);
   });
 
   it("would refuse to boot if a stub added an API while a database path stayed configured", () => {
@@ -307,18 +319,14 @@ describe("the local-store configuration comes back exactly as it was", () => {
     expect(comparableEnv()).toEqual(before);
     // `""` and absent are different environments, and `comparableEnv` digests both to
     // the digest of the empty string — so the difference is asserted on the KEY, which
-    // is the form that catches it. `planEmailStore` treats blank as unset, so an
-    // empty-string restore would ALSO resolve to the default path rather than to the
-    // harness's, which is why the plan is checked as well.
+    // is the form that catches it. Absent, the neutral environment is the all-unset
+    // row, which now FAILS CLOSED (the fail-closed ruling) rather than resolving to
+    // any path — and an empty-string restore is also "blank", also all-unset, so it
+    // would refuse identically: the KEY assertion above, not the plan, is what
+    // discriminates the two. The resolution is still checked, as the refusal that
+    // proves no hidden path leaked back in.
     expect(Object.prototype.hasOwnProperty.call(process.env, HIGHER_PRECEDENCE_SETTING)).toBe(false);
-    const plan = planEmailStore(process.env);
-    expect(plan.store).toBe("sqlite");
-    if (plan.store !== "sqlite") return;
-    // Absent before, absent after: the resolution falls back to the documented
-    // default path, which an empty-string restore would also produce — so the KEY
-    // assertion above, not the plan, is what discriminates the two.
-    expect(plan.setting).toBeNull();
-    expect(plan.databasePath).toBe(defaultDatabasePath());
+    expect(() => planEmailStore(process.env)).toThrow(StoreConfigurationError);
   });
 
   it("does not re-snapshot on a second applyEnv, so clearEnv still restores the original", () => {
@@ -346,6 +354,8 @@ describe("the local-store configuration comes back exactly as it was", () => {
 
     expect(comparableEnv()).toEqual(before);
     noDatabasePathIsConfigured();
-    expect(planEmailStore(process.env).store).toBe("sqlite");
+    // Nothing was configured and nothing leaked back: the neutral environment is the
+    // all-unset row, which fails closed instead of producing a store.
+    expect(() => planEmailStore(process.env)).toThrow(StoreConfigurationError);
   });
 });
