@@ -1,10 +1,10 @@
 /**
  * PostgreSQL-backed store for the @hasna/logs cloud serve `/v1` surface.
  *
- * PURE REMOTE per Amendment A1: every read and write goes straight to the
- * shared cloud Postgres through the vendored storage kit's typed query client.
- * There is no cache, no local mirror, and no sync engine here — the serve is a
- * thin, stateless API in front of RDS.
+ * Every read and write goes straight to the shared cloud Postgres through the
+ * vendored storage kit's typed query client. There is no cache, no local
+ * mirror, and no sync engine here — the serve is a thin, stateless API in
+ * front of RDS.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -918,14 +918,15 @@ export class CloudLogStore {
   // --- events catalog (ingest + read) -------------------------------------
 
   /**
-   * Ingest one universal telemetry event into the shared cloud event catalog.
+   * Ingest one universal telemetry event into the shared hosted event catalog.
    *
    * The input is validated + normalized + redacted by the SAME DB-agnostic pass
    * the local SQLite store uses, so secrets never reach Postgres. Ingest is
    * idempotent on `event_id`: a re-post returns the stored event with
-   * `inserted: false`. The raw envelope body is NOT persisted in the cloud tier
-   * (it lives only in local append-only segments), so the segment coordinates
-   * are cloud placeholders and `getEvent` always returns `raw: null`.
+   * `inserted: false`. The raw envelope body is NOT persisted in the hosted
+   * tier (it lives only in local append-only segments), so the segment
+   * coordinates are empty placeholders and `getEvent` always returns
+   * `raw: null`.
    */
   async createEvent(
     input: UniversalEventInput,
@@ -941,7 +942,7 @@ export class CloudLogStore {
     const pageId = strAttr(attrs, "page_id");
     const artifactId =
       strAttr(attrs, "artifact_id") ?? strAttr(body, "artifact_id");
-    // Stable content hash of the redacted envelope (no raw segment in cloud).
+    // Stable content hash of the redacted envelope (no raw segment hosted).
     const recordHash = createHash("sha256")
       .update(JSON.stringify(envelope))
       .digest("hex");
@@ -982,8 +983,11 @@ export class CloudLogStore {
         envelope.environment ?? null,
         artifactId,
         envelope.privacy ?? null,
-        "cloud",
-        "cloud",
+        // No local segment coordinates exist on the hosted path: the raw
+        // envelope body is not persisted, so the segment columns carry empty
+        // placeholders (segment_path is NOT NULL in the schema).
+        "",
+        "",
         0,
         0,
         recordHash,
@@ -1023,7 +1027,8 @@ export class CloudLogStore {
       "SELECT * FROM event_records WHERE event_id = $1",
       [eventId],
     );
-    // Raw envelope lives in local segment files only; cloud returns raw: null.
+    // Raw envelope lives in local segment files only; the hosted tier has no
+    // segments, so raw is null.
     return row ? rowToEvent(row) : null;
   }
 

@@ -459,9 +459,9 @@ export class LocalRunSink implements RunSink {
 }
 
 /**
- * Cloud sink — ships captured telemetry to the shared `/v1` API (self_hosted or
- * cloud) via the resolved {@link Store}. Writes are queued onto a serial chain
- * so cloud persistence preserves the capture order; `flush()` awaits them and
+ * Cloud sink — ships captured telemetry to the shared `/v1` API (hosted)
+ * via the resolved {@link Store}. Writes are queued onto a serial chain
+ * so hosted persistence preserves the capture order; `flush()` awaits them and
  * surfaces the first failure. The server derives process/run rows and artifact/
  * test-report projections from the universal events, so beginRun/finishRun (a
  * local-catalog convenience) are no-ops here.

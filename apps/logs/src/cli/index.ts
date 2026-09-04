@@ -1147,11 +1147,11 @@ program
   .option("--since <time>", "Start from this time (default: now)")
   .action(async (opts) => {
     // `--server` is an explicit, operator-named out-of-band SSE tail (not the
-    // mode-resolved data plane), so it must be reachable in EVERY mode — resolve
-    // the project id via the mode-resolved store (best-effort; never throws for
-    // being in the "wrong" mode) rather than hard-requiring the local store.
+    // transport-resolved data plane), so it must be reachable on EVERY transport
+    // — resolve the project id via the resolved store (best-effort; never throws
+    // for the live transport) rather than hard-requiring the local store.
     if (opts.server) {
-      // Best-effort name→id resolution via the mode-resolved store; the tail
+      // Best-effort name→id resolution via the resolved store; the tail
       // targets an explicit server, so a resolver failure (e.g. cloud briefly
       // unreachable) must not crash it — fall back to the raw value.
       const serverProjectId = opts.project
@@ -1161,7 +1161,7 @@ program
       return;
     }
 
-    // Resolve project name → ID through the mode-resolved store.
+    // Resolve project name → ID through the resolved store.
     const projectId = opts.project
       ? await store.resolveProjectId(opts.project)
       : undefined;
@@ -1188,7 +1188,7 @@ program
         opts.lastEventId,
     );
     if (useEventCatalog) {
-      // The event-catalog live-tail is a mode-resolved data-plane operation:
+      // The event-catalog live-tail is a transport-resolved data-plane operation:
       // the local tier walks rowid cursors, the hosted tier walks
       // (event_time, event_id) cursors — identical `Store.watchEvents`
       // semantics on both. `watch --server <url>` (SSE) remains available as
@@ -1379,7 +1379,7 @@ program
       total > 0 ? (((errors + fatals) / total) * 100).toFixed(2) : "0.00";
 
     console.log(
-      `\n${C.bold}Log Volume Stats${C.reset}${opts.project ? ` [${opts.project}]` : ""} ${C.dim}(${store.mode})${C.reset}`,
+      `\n${C.bold}Log Volume Stats${C.reset}${opts.project ? ` [${opts.project}]` : ""}`,
     );
     console.log(`  Total:      ${total.toLocaleString()}`);
     console.log(`  Oldest:     ${oldest?.slice(0, 19) ?? "-"}`);
@@ -1792,10 +1792,10 @@ if (!program.commands.some((command) => command.name() === "events")) {
 }
 
 // Must be parseAsync (not parse): several actions are async — they route reads
-// and writes to the cloud HTTP API in self_hosted mode. With the synchronous
-// program.parse() the bundled binary can exit before an awaited cloud call and
-// its console output complete, silently no-opping cloud writes. parseAsync
-// awaits the action to completion for both sync and async commands.
+// and writes to the hosted HTTP API. With the synchronous program.parse() the
+// bundled binary can exit before an awaited hosted call and its console output
+// complete, silently no-opping hosted writes. parseAsync awaits the action to
+// completion for both sync and async commands.
 //
 // A single top-level boundary turns thrown errors (local-only guards, cloud
 // HTTP failures, validation) into a clean one-line message + non-zero exit

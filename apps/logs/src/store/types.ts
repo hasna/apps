@@ -5,7 +5,7 @@
  *
  * ONE storage interface, two transports behind it:
  *   - LocalStore  (on-box SQLite; the sole owner of getDb)
- *   - ApiStore    (HTTP /v1 + bearer key; self_hosted AND cloud both use this)
+ *   - ApiStore    (HTTP /v1 + bearer key — the hosted API)
  *
  * EVERY CLI command, MCP tool, and SDK method that reads or writes log data must
  * route through this interface — never touch `getDb()` / raw `fetch` directly.
@@ -48,9 +48,6 @@ import type {
   Project,
   ScanJob,
 } from "../types/index.ts";
-
-/** Resolved storage tier. `self_hosted` and `cloud` both use {@link ApiStore}. */
-export type StoreMode = "local" | "self_hosted" | "cloud";
 
 export interface CreateProjectInput {
   name: string;
@@ -117,9 +114,6 @@ export interface ImportStructuredLogsResult {
  * so callers hold `Store` and never know (or care) which tier is live.
  */
 export interface Store {
-  /** Resolved tier, for status/telemetry only — never gates behavior. */
-  readonly mode: StoreMode;
-
   // ── logs ────────────────────────────────────────────────
   listLogs(query: LogQuery): Promise<LogRow[]>;
   tailLogs(projectId: string | undefined, n: number): Promise<LogRow[]>;

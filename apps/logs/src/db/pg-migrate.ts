@@ -1,8 +1,8 @@
 /**
  * Cloud (PostgreSQL) migration runner for @hasna/logs.
  *
- * PURE REMOTE per Amendment A1: migrations run directly against the shared
- * cloud Postgres using the vendored storage kit's {@link MigrationLedger}. The
+ * Migrations run directly against the shared cloud Postgres using the vendored
+ * storage kit's {@link MigrationLedger}. The
  * ledger records each migration once, guards against silent SQL drift
  * (checksum mismatch) and against running against a newer schema (downgrade).
  *
