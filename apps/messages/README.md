@@ -100,6 +100,15 @@ database file.
 # wrapper that injects them makes every verb fleet-addressed):
 messages send --from augustus --to silvanus --content "hello"
 
+# Which API am I talking to? `status` prints the RESOLVED /v1 authority --
+# never a bare origin, never the raw configured base (hasna/apps#1588):
+messages status
+#   messages 0.2.2
+#   API: https://api.hasna.com/messages/v1
+#   transport: http
+#   api key: present
+messages status --json   # app, version, transport, api_url, api_base, api_key_present
+
 # Local SQLite mode — explicit opt-in only:
 HASNA_MESSAGES_LOCAL=1 messages register --name augustus --display-name "CEO seat"
 HASNA_MESSAGES_LOCAL=1 messages send --from augustus --to silvanus --content "hello"

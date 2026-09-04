@@ -22,6 +22,10 @@ import {
   createMessagesClient,
   MESSAGES_API_KEY_ENV,
   MESSAGES_API_URL_ENV,
+  MESSAGES_LOCAL_MODE_ENV,
+  isLocalModeOptIn,
+  isPresent,
+  resolveMessagesApiBase,
   resolveMessagesClientTransport,
 } from "../sdk";
 import { MessagesService } from "../service";
@@ -38,6 +42,15 @@ interface CliOpts {
   apiKey?: string;
 }
 
+/** The process env with the per-invocation `--url` / `--api-key` overrides applied. */
+function cliEnv(opts: CliOpts): Record<string, string | undefined> {
+  return {
+    ...process.env,
+    [MESSAGES_API_URL_ENV]: opts.url ?? process.env[MESSAGES_API_URL_ENV],
+    [MESSAGES_API_KEY_ENV]: opts.apiKey ?? process.env[MESSAGES_API_KEY_ENV],
+  };
+}
+
 /**
  * Resolve the client transport from CLI overrides + env. Fails closed when
  * neither the API env nor the explicit local opt-in (HASNA_MESSAGES_LOCAL=1)
@@ -45,16 +58,53 @@ interface CliOpts {
  * below exits non-zero with the actionable error.
  */
 function resolveStore(opts: CliOpts): { transport: "http" | "local"; local?: MessagesService; remote?: ReturnType<typeof createMessagesClient> } {
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    [MESSAGES_API_URL_ENV]: opts.url ?? process.env[MESSAGES_API_URL_ENV],
-    [MESSAGES_API_KEY_ENV]: opts.apiKey ?? process.env[MESSAGES_API_KEY_ENV],
-  };
+  const env = cliEnv(opts);
   const report = resolveMessagesClientTransport(env);
   if (report.transport === "http") {
     return { transport: "http", remote: createMessagesClient(env) };
   }
   return { transport: "local", local: new MessagesService(new SqliteMessagesStore()) };
+}
+
+/**
+ * The uniform API/transport report (hasna/apps#1588). It is a pure read of the
+ * resolved configuration: it constructs no store and opens no database, so it
+ * is safe to print even when the CLI is unconfigured — which it reports as
+ * `unconfigured` rather than by silently implying a local store.
+ */
+interface MessagesApiStatus {
+  app: "messages";
+  version: string;
+  transport: "http" | "local" | "unconfigured";
+  /** The resolved `/v1` authority, e.g. https://api.hasna.com/messages/v1. */
+  api_url: string | null;
+  /** The base URL exactly as configured, before `/v1` resolution. */
+  api_base: string | null;
+  api_key_present: boolean;
+}
+
+function apiStatus(opts: CliOpts): MessagesApiStatus {
+  const env = cliEnv(opts);
+  const rawBase = env[MESSAGES_API_URL_ENV]?.trim() || null;
+  const apiKeyPresent = isPresent(env, MESSAGES_API_KEY_ENV);
+  if (rawBase) {
+    return {
+      app: "messages",
+      version,
+      transport: "http",
+      api_url: resolveMessagesApiBase(rawBase).apiUrl,
+      api_base: rawBase,
+      api_key_present: apiKeyPresent,
+    };
+  }
+  return {
+    app: "messages",
+    version,
+    transport: isLocalModeOptIn(env) ? "local" : "unconfigured",
+    api_url: null,
+    api_base: null,
+    api_key_present: apiKeyPresent,
+  };
 }
 
 /**
@@ -110,7 +160,11 @@ withJsonFlag(program.command("whoami"))
     const agent = store.transport === "http"
       ? (await store.remote!.registerAgent(requireAgent(opts.agent))).agent
       : await store.local!.registerAgent(requireAgent(opts.agent));
-    print(agent);
+    // The identity record is spread at the top level so existing scripts that
+    // read `.name` keep working; `api_url` and `transport` are the uniform
+    // fleet fields required by hasna/apps#1588.
+    const status = apiStatus(opts);
+    print({ ...agent, transport: status.transport, api_url: status.api_url });
   });
 
 // --- messaging -------------------------------------------------------------
@@ -244,6 +298,33 @@ withJsonFlag(program.command("reopen"))
       ? (await store.remote!.reopenThread(opts.id, requireAgent(opts.agent))).thread
       : await store.local!.reopenThread(opts.id, requireAgent(opts.agent));
     print({ ok: true, thread });
+  });
+
+// --- diagnostics -----------------------------------------------------------
+
+withJsonFlag(program.command("status"))
+  .description("Show the resolved API authority, transport and key presence")
+  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
+  .option("--api-key <key>", "API key for the remote server")
+  .action((opts: { json?: boolean } & CliOpts) => {
+    const status = apiStatus(opts);
+    if (opts.json) {
+      print(status);
+    } else {
+      // The `API:` line is the fleet-uniform format from hasna/apps#1588: the
+      // resolved /v1 authority, never a bare origin and never the raw base.
+      console.log(`messages ${status.version}`);
+      console.log(`API: ${status.api_url ?? "(none)"}`);
+      console.log(`transport: ${status.transport}`);
+      console.log(`api key: ${status.api_key_present ? "present" : "absent"}`);
+    }
+    if (status.transport === "unconfigured") {
+      console.error(
+        `${MESSAGES_API_URL_ENV} is not set and ${MESSAGES_LOCAL_MODE_ENV}=1 was not given; ` +
+          "no transport is configured.",
+      );
+      process.exit(1);
+    }
   });
 
 // --- server ----------------------------------------------------------------

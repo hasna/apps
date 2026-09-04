@@ -54,15 +54,41 @@ describe("resolveMementosApiBase", () => {
     });
   });
 
-  test("an explicit prefix wins and is not doubled by the base", () => {
+  test("an explicit prefix replaces the versioned segment the base carries", () => {
+    // /mementos/v1 + explicit /api must not become /mementos/v1/api: the
+    // server serves no such route.
     expect(resolveMementosApiBase("https://api.hasna.com/mementos/v1", "/api")).toEqual({
-      baseUrl: "https://api.hasna.com/mementos/v1",
+      baseUrl: "https://api.hasna.com/mementos",
       prefix: "/api",
     });
     expect(resolveMementosApiBase("https://api.hasna.com/mementos/api", "/api")).toEqual({
       baseUrl: "https://api.hasna.com/mementos",
       prefix: "/api",
     });
+    expect(resolveMementosApiBase("https://api.hasna.com/mementos/api", "/v1")).toEqual({
+      baseUrl: "https://api.hasna.com/mementos",
+      prefix: "/v1",
+    });
+    // A base with no versioned segment keeps its whole path.
+    expect(resolveMementosApiBase("https://api.hasna.com/mementos", "/api")).toEqual({
+      baseUrl: "https://api.hasna.com/mementos",
+      prefix: "/api",
+    });
+  });
+
+  test("refuses a base carrying userinfo, a query or a fragment", () => {
+    for (const raw of [
+      "https://user:pass@api.hasna.com/mementos",
+      "https://api.hasna.com/mementos?x=1",
+      "https://api.hasna.com/mementos/v1#frag",
+    ]) {
+      expect(() => resolveMementosApiBase(raw)).toThrow(/userinfo, query, or fragment/);
+    }
+  });
+
+  test("refuses a non-http(s) or unparseable base", () => {
+    expect(() => resolveMementosApiBase("ftp://api.hasna.com/mementos")).toThrow(/absolute http\(s\) URL/);
+    expect(() => resolveMementosApiBase("api.hasna.com/mementos")).toThrow(/absolute http\(s\) URL/);
   });
 
   test("an empty or absent base falls back to the on-box default", () => {
