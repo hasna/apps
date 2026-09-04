@@ -190,3 +190,22 @@ export const PG_MIGRATIONS: string[] = [
   INSERT INTO _migrations (id) VALUES (1) ON CONFLICT DO NOTHING;
   `,
 ];
+
+/**
+ * Media copy columns (object_key + sha256) for calls/voicemails/messages.
+ *
+ * Deliberately NOT part of {@link PG_MIGRATIONS}: that array's index pins the
+ * rc.1 ledger ids (telephony_pg_001..003), and inserting here would shift the
+ * legacy program and break the prod ledger checksum guard. This runs as its
+ * own appended migration (see migrate-list.ts) with its own id, so the pinned
+ * statements stay byte-identical while fresh and existing deployments both
+ * gain the columns. `IF NOT EXISTS` keeps it idempotent for reruns.
+ */
+export const PG_MEDIA_OBJECT_KEYS_SQL = `
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS object_key TEXT;
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS sha256 TEXT;
+ALTER TABLE voicemails ADD COLUMN IF NOT EXISTS object_key TEXT;
+ALTER TABLE voicemails ADD COLUMN IF NOT EXISTS sha256 TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS object_key TEXT;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sha256 TEXT;
+`;

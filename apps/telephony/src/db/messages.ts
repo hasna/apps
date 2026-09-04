@@ -18,6 +18,8 @@ export function createMessage(
     to_number: string;
     body?: string;
     media_url?: string;
+    object_key?: string | null;
+    sha256?: string | null;
     status?: MessageStatus;
     agent_id?: string;
     project_id?: string;
@@ -30,8 +32,8 @@ export function createMessage(
   const timestamp = now();
 
   d.run(
-    `INSERT INTO messages (id, type, from_number, to_number, body, media_url, status, agent_id, project_id, twilio_sid, metadata, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
+    `INSERT INTO messages (id, type, from_number, to_number, body, media_url, object_key, sha256, status, agent_id, project_id, twilio_sid, metadata, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
     [
       id,
       input.type,
@@ -39,6 +41,8 @@ export function createMessage(
       input.to_number,
       input.body || null,
       input.media_url || null,
+      input.object_key || null,
+      input.sha256 || null,
       input.status || "queued",
       input.agent_id || null,
       input.project_id || null,
@@ -120,4 +124,14 @@ export function updateMessageStatus(id: string, status: MessageStatus, errorMess
   } else {
     d.run("UPDATE messages SET status = ?, updated_at = ? WHERE id = ?", [status, now(), id]);
   }
+}
+
+export function updateMessageMedia(id: string, extra: { object_key: string; sha256: string }, db?: Database): void {
+  const d = db || getDatabase();
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  if (extra.object_key) { sets.push("object_key = ?"); params.push(extra.object_key); }
+  if (extra.sha256) { sets.push("sha256 = ?"); params.push(extra.sha256); }
+  if (sets.length === 0) return;
+  d.run(`UPDATE messages SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`, [...params, now(), id]);
 }

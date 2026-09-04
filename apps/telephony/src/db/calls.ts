@@ -57,7 +57,7 @@ export function listCalls(
   return (d.prepare(`SELECT * FROM calls${where} ORDER BY created_at DESC LIMIT ?`).all(...params, filters?.limit || 50) as CallRow[]).map(rowToCall);
 }
 
-export function updateCallStatus(id: string, status: CallStatus, extra?: { duration?: number; recording_url?: string; transcription?: string }, db?: Database): void {
+export function updateCallStatus(id: string, status: CallStatus, extra?: { duration?: number; recording_url?: string; transcription?: string; object_key?: string | null; sha256?: string | null }, db?: Database): void {
   const d = db || getDatabase();
   const sets: string[] = ["status = ?"];
   const params: unknown[] = [status];
@@ -69,7 +69,15 @@ export function updateCallStatus(id: string, status: CallStatus, extra?: { durat
   if (extra?.duration !== undefined) { sets.push("duration = ?"); params.push(extra.duration); }
   if (extra?.recording_url) { sets.push("recording_url = ?"); params.push(extra.recording_url); }
   if (extra?.transcription) { sets.push("transcription = ?"); params.push(extra.transcription); }
+  if (extra?.object_key) { sets.push("object_key = ?"); params.push(extra.object_key); }
+  if (extra?.sha256) { sets.push("sha256 = ?"); params.push(extra.sha256); }
 
   params.push(id);
   d.run(`UPDATE calls SET ${sets.join(", ")} WHERE id = ?`, params);
+}
+
+export function getCallByTwilioSid(twilioSid: string, db?: Database): Call | null {
+  const d = db || getDatabase();
+  const row = d.prepare("SELECT * FROM calls WHERE twilio_sid = ? ORDER BY created_at DESC LIMIT 1").get(twilioSid) as CallRow | null;
+  return row ? rowToCall(row) : null;
 }

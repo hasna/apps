@@ -233,6 +233,8 @@ function mapMessage(r: Row) {
     to_number: String(r.to_number ?? ""),
     body: (r.body as string | null) ?? null,
     media_url: (r.media_url as string | null) ?? null,
+    object_key: (r.object_key as string | null) ?? null,
+    sha256: (r.sha256 as string | null) ?? null,
     status: String(r.status ?? ""),
     agent_id: (r.agent_id as string | null) ?? null,
     project_id: (r.project_id as string | null) ?? null,
@@ -253,6 +255,8 @@ function mapCall(r: Row) {
     status: String(r.status ?? ""),
     duration: (r.duration as number | null) ?? null,
     recording_url: (r.recording_url as string | null) ?? null,
+    object_key: (r.object_key as string | null) ?? null,
+    sha256: (r.sha256 as string | null) ?? null,
     transcription: (r.transcription as string | null) ?? null,
     agent_id: (r.agent_id as string | null) ?? null,
     project_id: (r.project_id as string | null) ?? null,
@@ -271,6 +275,8 @@ function mapVoicemail(r: Row) {
     from_number: String(r.from_number ?? ""),
     to_number: String(r.to_number ?? ""),
     recording_url: (r.recording_url as string | null) ?? null,
+    object_key: (r.object_key as string | null) ?? null,
+    sha256: (r.sha256 as string | null) ?? null,
     local_path: (r.local_path as string | null) ?? null,
     transcription: (r.transcription as string | null) ?? null,
     duration: (r.duration as number | null) ?? null,
@@ -664,7 +670,7 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
       > = {
         "/v1/numbers": { table: "phone_numbers", order: "created_at DESC", map: mapNumber, filters: ["agent_id", "project_id", "status", "number"] },
         "/v1/messages": { table: "messages", order: "created_at DESC", map: mapMessage, filters: ["agent_id", "project_id", "type"], search: ["body"], phone: true },
-        "/v1/calls": { table: "calls", order: "started_at DESC", map: mapCall, filters: ["agent_id", "project_id"] },
+        "/v1/calls": { table: "calls", order: "started_at DESC", map: mapCall, filters: ["agent_id", "project_id", "twilio_sid"] },
         "/v1/voicemails": { table: "voicemails", order: "created_at DESC", map: mapVoicemail, filters: ["agent_id", "project_id", "listened"], bools: ["listened"] },
       };
       if (listOnly[path] && method === "GET") {
@@ -800,8 +806,8 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
         await authOrThrow(req, ["telephony:write"]);
         const body = await readBody(req);
         const row = await db.get<Row>(
-          `INSERT INTO messages (id, type, from_number, to_number, body, media_url, status, agent_id, project_id, twilio_sid, metadata)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+          `INSERT INTO messages (id, type, from_number, to_number, body, media_url, object_key, sha256, status, agent_id, project_id, twilio_sid, metadata)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
           [
             uuid(),
             requireString(body, "type"),
@@ -809,6 +815,8 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
             requireString(body, "to_number"),
             (body.body as string) ?? null,
             (body.media_url as string) ?? null,
+            (body.object_key as string) ?? null,
+            (body.sha256 as string) ?? null,
             typeof body.status === "string" ? body.status : "queued",
             (body.agent_id as string) ?? null,
             (body.project_id as string) ?? null,
@@ -842,14 +850,16 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
         await authOrThrow(req, ["telephony:write"]);
         const body = await readBody(req);
         const row = await db.get<Row>(
-          `INSERT INTO voicemails (id, call_id, from_number, to_number, recording_url, local_path, transcription, duration, agent_id, project_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+          `INSERT INTO voicemails (id, call_id, from_number, to_number, recording_url, object_key, sha256, local_path, transcription, duration, agent_id, project_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
           [
             uuid(),
             (body.call_id as string) ?? null,
             requireString(body, "from_number"),
             requireString(body, "to_number"),
             (body.recording_url as string) ?? null,
+            (body.object_key as string) ?? null,
+            (body.sha256 as string) ?? null,
             (body.local_path as string) ?? null,
             (body.transcription as string) ?? null,
             typeof body.duration === "number" ? body.duration : null,
@@ -889,9 +899,9 @@ export function createServeHandler(deps: ServeDeps): (req: Request) => Promise<R
         const table = singleGet[resource]!.table;
         const mapper = singleGet[resource]!.map;
         const allowed: Record<string, string[]> = {
-          messages: ["status", "error_message", "twilio_sid"],
-          calls: ["status", "duration", "recording_url", "transcription", "ended_at", "twilio_sid"],
-          voicemails: ["listened", "transcription", "local_path"],
+          messages: ["status", "error_message", "twilio_sid", "object_key", "sha256"],
+          calls: ["status", "duration", "recording_url", "object_key", "sha256", "transcription", "ended_at", "twilio_sid"],
+          voicemails: ["listened", "transcription", "local_path", "object_key", "sha256"],
           numbers: ["agent_id", "project_id", "status", "friendly_name"],
         };
         const sets: string[] = [];
@@ -1236,6 +1246,8 @@ export function telephonyOpenApi(version: string): Record<string, unknown> {
       to_number: str,
       body: strN,
       media_url: strN,
+      object_key: strN,
+      sha256: strN,
       status: str,
       agent_id: strN,
       project_id: strN,
@@ -1257,6 +1269,8 @@ export function telephonyOpenApi(version: string): Record<string, unknown> {
       status: str,
       duration: intN,
       recording_url: strN,
+      object_key: strN,
+      sha256: strN,
       transcription: strN,
       agent_id: strN,
       project_id: strN,
@@ -1276,6 +1290,8 @@ export function telephonyOpenApi(version: string): Record<string, unknown> {
       from_number: str,
       to_number: str,
       recording_url: strN,
+      object_key: strN,
+      sha256: strN,
       local_path: strN,
       transcription: strN,
       duration: intN,
@@ -1646,7 +1662,10 @@ export function telephonyOpenApi(version: string): Record<string, unknown> {
         get: {
           operationId: "listCalls",
           summary: "List calls",
-          parameters: [{ name: "limit", in: "query", schema: { type: "integer" } }],
+          parameters: [
+            { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "twilio_sid", in: "query", schema: { type: "string" }, description: "Exact Twilio SID filter — finds the call row a provider webhook refers to" },
+          ],
           responses: {
             "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/CallList" } } } },
           },

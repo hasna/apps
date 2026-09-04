@@ -125,9 +125,43 @@ describe("getDatabase", () => {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
+      CREATE TABLE calls (
+        id TEXT PRIMARY KEY,
+        direction TEXT NOT NULL,
+        from_number TEXT NOT NULL,
+        to_number TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'initiated',
+        duration INTEGER,
+        recording_url TEXT,
+        transcription TEXT,
+        agent_id TEXT,
+        project_id TEXT,
+        twilio_sid TEXT,
+        metadata TEXT DEFAULT '{}',
+        started_at TEXT NOT NULL DEFAULT (datetime('now')),
+        ended_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE voicemails (
+        id TEXT PRIMARY KEY,
+        call_id TEXT,
+        from_number TEXT NOT NULL,
+        to_number TEXT NOT NULL,
+        recording_url TEXT,
+        local_path TEXT,
+        transcription TEXT,
+        duration INTEGER,
+        listened INTEGER NOT NULL DEFAULT 0,
+        agent_id TEXT,
+        project_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
     `);
     seed.run("INSERT INTO _migrations (version, applied_at) VALUES (?, ?)", [1, new Date().toISOString()]);
     seed.run("INSERT INTO _migrations (version, applied_at) VALUES (?, ?)", [2, new Date().toISOString()]);
+    // Seeded as an FTS-era store (migrations 1-3 applied) with the v1 schema,
+    // so the FTS migration re-runs over the pre-existing message AND the
+    // media-column migration (4) runs its ALTERs against the v1 tables.
     seed.run(
       "INSERT INTO messages (id, type, from_number, to_number, body, status) VALUES (?, ?, ?, ?, ?, ?)",
       ["msg-1", "sms_inbound", "+15550000001", "+15550000002", "existing searchable body", "received"],

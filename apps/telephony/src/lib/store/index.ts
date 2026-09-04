@@ -84,6 +84,8 @@ export interface CreateMessageInput {
   to_number: string;
   body?: string;
   media_url?: string;
+  object_key?: string | null;
+  sha256?: string | null;
   status?: MessageStatus;
   agent_id?: string;
   project_id?: string;
@@ -104,6 +106,8 @@ export interface CreateVoicemailInput {
   from_number: string;
   to_number: string;
   recording_url?: string;
+  object_key?: string | null;
+  sha256?: string | null;
   local_path?: string;
   transcription?: string;
   duration?: number;
@@ -227,6 +231,8 @@ export interface TelephonyStore {
   // Messages
   createMessage(input: CreateMessageInput): Promise<Message>;
   updateMessageStatus(id: string, status: MessageStatus, errorMessage?: string): Promise<void>;
+  /** Attach the media-copy pointers (object_key + sha256) to an existing message row. */
+  updateMessageMedia(id: string, extra: { object_key: string; sha256: string }): Promise<void>;
   listMessages(filters?: MessageFilters): Promise<Message[]>;
   searchMessages(query: string, limit?: number): Promise<Message[]>;
   getConversation(phoneNumber: string, limit?: number): Promise<Message[]>;
@@ -236,12 +242,16 @@ export interface TelephonyStore {
   updateCallStatus(
     id: string,
     status: CallStatus,
-    extra?: { duration?: number; recording_url?: string; transcription?: string },
+    extra?: { duration?: number; recording_url?: string; transcription?: string; object_key?: string; sha256?: string },
   ): Promise<void>;
+  /** Find a call row by its provider SID — what a Twilio webhook knows before it can address the row by id. */
+  getCallByTwilioSid(twilioSid: string): Promise<Call | null>;
   listCalls(filters?: CallFilters): Promise<Call[]>;
 
   // Voicemails
   createVoicemail(input: CreateVoicemailInput): Promise<Voicemail>;
+  /** Attach the media-copy pointers (object_key + sha256) to an existing voicemail row. */
+  updateVoicemailMedia(id: string, extra: { object_key: string; sha256: string }): Promise<void>;
   listVoicemails(filters?: VoicemailFilters): Promise<Voicemail[]>;
   markVoicemailListened(id: string): Promise<boolean>;
 
@@ -371,6 +381,9 @@ export class LocalStore implements TelephonyStore {
   async updateMessageStatus(id: string, status: MessageStatus, errorMessage?: string) {
     dbMessages.updateMessageStatus(id, status, errorMessage);
   }
+  async updateMessageMedia(id: string, extra: { object_key: string; sha256: string }) {
+    dbMessages.updateMessageMedia(id, extra);
+  }
   async listMessages(filters?: MessageFilters) {
     return dbMessages.listMessages(filters);
   }
@@ -388,9 +401,12 @@ export class LocalStore implements TelephonyStore {
   async updateCallStatus(
     id: string,
     status: CallStatus,
-    extra?: { duration?: number; recording_url?: string; transcription?: string },
+    extra?: { duration?: number; recording_url?: string; transcription?: string; object_key?: string; sha256?: string },
   ) {
     dbCalls.updateCallStatus(id, status, extra);
+  }
+  async getCallByTwilioSid(twilioSid: string) {
+    return dbCalls.getCallByTwilioSid(twilioSid);
   }
   async listCalls(filters?: CallFilters) {
     return dbCalls.listCalls(filters);
@@ -399,6 +415,9 @@ export class LocalStore implements TelephonyStore {
   // Voicemails
   async createVoicemail(input: CreateVoicemailInput) {
     return dbVoicemails.createVoicemail(input);
+  }
+  async updateVoicemailMedia(id: string, extra: { object_key: string; sha256: string }) {
+    dbVoicemails.updateVoicemailMedia(id, extra);
   }
   async listVoicemails(filters?: VoicemailFilters) {
     return dbVoicemails.listVoicemails(filters);
@@ -609,6 +628,11 @@ export class ApiStore implements TelephonyStore {
       ...(errorMessage ? { error_message: errorMessage } : {}),
     });
   }
+  async updateMessageMedia(id: string, extra: { object_key: string; sha256: string }) {
+    // The /v1 PATCH allowlist for messages carries object_key/sha256, so a
+    // provider-media copy made after the row was created can be attached here.
+    await this.cloud.update<Message>("messages", id, extra);
+  }
   async listMessages(filters?: MessageFilters) {
     return this.listAll<Message>("messages", { ...filters });
   }
@@ -634,9 +658,17 @@ export class ApiStore implements TelephonyStore {
   async updateCallStatus(
     id: string,
     status: CallStatus,
-    extra?: { duration?: number; recording_url?: string; transcription?: string },
+    extra?: { duration?: number; recording_url?: string; transcription?: string; object_key?: string; sha256?: string },
   ) {
     await this.cloud.update<Call>("calls", id, { status, ...(extra ?? {}) });
+  }
+  async getCallByTwilioSid(twilioSid: string) {
+    // Exact `twilio_sid` filter served DB-side (like getPhoneNumberByNumber's
+    // `number` filter) — never a client-side scan of a capped page, which
+    // would miss calls beyond the first page at fleet scale. Both list
+    // transports order newest-first, mirroring LocalStore's LIMIT 1.
+    const items = await this.listAll<Call>("calls", { twilio_sid: twilioSid });
+    return items[0] ?? null;
   }
   async listCalls(filters?: CallFilters) {
     return this.listAll<Call>("calls", { ...filters });
@@ -645,6 +677,10 @@ export class ApiStore implements TelephonyStore {
   // Voicemails
   async createVoicemail(input: CreateVoicemailInput) {
     return this.cloud.create<Voicemail>("voicemails", input);
+  }
+  async updateVoicemailMedia(id: string, extra: { object_key: string; sha256: string }) {
+    // The /v1 PATCH allowlist for voicemails carries object_key/sha256.
+    await this.cloud.update<Voicemail>("voicemails", id, extra);
   }
   async listVoicemails(filters?: VoicemailFilters) {
     const q: Record<string, string | number> = {};

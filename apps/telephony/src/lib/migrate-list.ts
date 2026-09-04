@@ -25,7 +25,7 @@
  */
 import { apiKeyMigrations } from '@hasna/contracts/auth';
 import { defineMigration, type Migration } from '../generated/storage-kit/migrations.js';
-import { PG_MIGRATIONS } from './pg-migrations.js';
+import { PG_MEDIA_OBJECT_KEYS_SQL, PG_MIGRATIONS } from './pg-migrations.js';
 import {
   API_KEYS_TENANCY_BRIDGE_SQL,
   LEGACY_TENANCY_AUTHORITY_MIGRATIONS,
@@ -46,5 +46,9 @@ export function buildTelephonyPostgresMigrations(): Migration[] {
     ),
     ...apiKeyMigrations().map((m) => defineMigration(m.id, m.sql)),
     defineMigration('telephony_api_keys_tenancy_001', API_KEYS_TENANCY_BRIDGE_SQL),
+    // Media copy columns (#1649). Appended AFTER the legacy program with its
+    // own id: the rc.1 ids are pinned byte-exactly by
+    // tests/legacy-ledger-compat.test.ts and must not shift.
+    defineMigration('telephony_pg_media_object_keys_001', PG_MEDIA_OBJECT_KEYS_SQL),
   ];
 }
