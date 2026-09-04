@@ -39,9 +39,11 @@ function credentialPointerEnvKey(name) {
 }
 
 // src/client/credentials.ts
+import { spawnSync } from "child_process";
 import { closeSync, fstatSync, openSync, readFileSync } from "fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "constants";
 import { createRequire } from "module";
+import { hostname as osHostname } from "os";
 import { isAbsolute, join } from "path";
 class CredentialResolutionError extends Error {
   appName;
@@ -62,8 +64,16 @@ class CredentialFileUnsafeError extends Error {
     this.path = path;
   }
 }
-var CONFIG_DIR = ".config";
-var CONFIG_NAMESPACE = "hasna";
+var HASNA_HOME_ENV_KEY = "HASNA_HOME";
+var HASNA_CONFIG_HOME_ENV_KEY = "HASNA_CONFIG_HOME";
+var KEYCHAIN_STATION_ENV_KEY = "HASNA_STATION";
+var HASNA_HOME_DIR = ".hasna";
+var CONFIG_SUBDIR = "config";
+var CREDENTIALS_FILE = "credentials";
+var KEYCHAIN_SECURITY_BIN = "/usr/bin/security";
+var KEYCHAIN_SERVICE_PREFIX = "hasna.credentials";
+var KEYCHAIN_ITEM_NOT_FOUND_STATUS = 44;
+var KEYCHAIN_SPAWN_TIMEOUT_MS = 1e4;
 var MAX_CREDENTIAL_FILE_BYTES = 64 * 1024;
 var SAFE_APP_SLUG = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 var SAFE_PROFILE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
@@ -73,20 +83,32 @@ function homeDir(env) {
   const home = env.HOME?.trim();
   return home ? home : null;
 }
-function credentialDiskSourceList(name, env, profile = null) {
+function absoluteOverride(env, key) {
+  const value = env[key]?.trim();
+  return value && isAbsolute(value) ? value : null;
+}
+function hasnaHomeDir(env) {
+  const override = absoluteOverride(env, HASNA_HOME_ENV_KEY);
+  if (override)
+    return override;
   const home = homeDir(env);
-  if (!home || !SAFE_APP_SLUG.test(name))
+  return home ? join(home, HASNA_HOME_DIR) : null;
+}
+function appConfigDir(name, env) {
+  const configRoot = absoluteOverride(env, HASNA_CONFIG_HOME_ENV_KEY);
+  if (configRoot)
+    return join(configRoot, name);
+  const root = hasnaHomeDir(env);
+  return root ? join(root, name, CONFIG_SUBDIR) : null;
+}
+function credentialDiskSourceList(name, env, profile = null) {
+  if (!SAFE_APP_SLUG.test(name))
     return [];
-  const configStem = profile ? `${name}-${profile}` : name;
-  const configuredRoot = env.XDG_CONFIG_HOME?.trim();
-  const configRoot = configuredRoot && isAbsolute(configuredRoot) ? configuredRoot : join(home, CONFIG_DIR);
-  return [
-    {
-      path: join(configRoot, CONFIG_NAMESPACE, `${configStem}.env`),
-      tier: "config",
-      deprecated: false
-    }
-  ];
+  const directory = appConfigDir(name, env);
+  if (!directory)
+    return [];
+  const file = profile ? `${CREDENTIALS_FILE}-${profile}` : CREDENTIALS_FILE;
+  return [{ path: join(directory, file), tier: "disk" }];
 }
 function credentialDiskSources(name, env) {
   return credentialDiskSourceList(name, env, null).map((s) => s.path);
@@ -229,7 +251,6 @@ function sealCredential(fields) {
     tier: fields.tier,
     source: fields.source,
     deliberate: fields.deliberate,
-    deprecated: fields.deprecated,
     diskCandidates: Object.freeze([...fields.diskCandidates]),
     warning: fields.warning
   };
@@ -273,7 +294,6 @@ function explicitCredential(appName, apiKey) {
     tier: "argument",
     source,
     deliberate: true,
-    deprecated: false,
     diskCandidates: [],
     warning: null
   });
@@ -287,7 +307,6 @@ function validateAndSealResolvedCredential(appName, credential) {
       tier: "argument",
       source: CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE,
       deliberate: true,
-      deprecated: false,
       diskCandidates: [],
       warning: null
     });
@@ -297,7 +316,6 @@ function validateAndSealResolvedCredential(appName, credential) {
     tier: credential.tier,
     source: credential.source,
     deliberate: credential.deliberate,
-    deprecated: credential.deprecated,
     diskCandidates: credential.diskCandidates,
     warning: credential.warning,
     ...credential.pointerVaultKey !== undefined ? { pointerVaultKey: credential.pointerVaultKey } : {}
@@ -313,24 +331,77 @@ function firstEnvValue(env, keys) {
   }
   return null;
 }
-var DEPRECATION_REGISTRY = Symbol.for("hasna:contracts:credentialDeprecationNotices");
-function deprecationNotified() {
-  const host = globalThis;
-  const existing = host[DEPRECATION_REGISTRY];
-  if (existing instanceof Set)
-    return existing;
-  const created = new Set;
-  host[DEPRECATION_REGISTRY] = created;
-  return created;
+var AMBIENT_ENVIRONMENT = Symbol.for("hasna:contracts:ambientClientEnvironment");
+function isAmbientEnvironment(env) {
+  return env === process.env || env[AMBIENT_ENVIRONMENT] === true;
 }
-function defaultDeprecationSink(message) {
-  if (typeof process !== "undefined" && process.stderr) {
-    process.stderr.write(`${message}
-`);
+function defaultKeychainRunner(argv) {
+  const result = spawnSync(KEYCHAIN_SECURITY_BIN, [...argv], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: KEYCHAIN_SPAWN_TIMEOUT_MS
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.error ? result.error.message : result.stderr ?? ""
+  };
+}
+function keychainTierEnabled(env, options) {
+  if ((options.platform ?? process.platform) !== "darwin")
+    return false;
+  if (options.enabled !== undefined)
+    return options.enabled;
+  return options.run !== undefined || isAmbientEnvironment(env);
+}
+function keychainAccount(env, options) {
+  const station = env[KEYCHAIN_STATION_ENV_KEY]?.trim();
+  if (station)
+    return station;
+  const host = (options.hostname ?? osHostname)().split(".")[0]?.trim() ?? "";
+  if (host)
+    return host;
+  const user = env.USER?.trim();
+  return user || null;
+}
+function keychainFailureHint(text) {
+  const line = text.split(/\r?\n/).find((entry) => entry.trim().length > 0)?.trim() ?? "";
+  const clean = line.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 200);
+  return clean ? `: ${clean}` : "";
+}
+function readKeychainItem(name, env, kind, options) {
+  if (!SAFE_APP_SLUG.test(name) || !keychainTierEnabled(env, options))
+    return null;
+  const account = keychainAccount(env, options);
+  if (!account)
+    return null;
+  const service = `${KEYCHAIN_SERVICE_PREFIX}.${name}.${kind}`;
+  const source = `keychain:${service}@${account}`;
+  const run = options.run ?? defaultKeychainRunner;
+  let result;
+  try {
+    result = run(["find-generic-password", "-a", account, "-s", service, "-w"]);
+  } catch (error) {
+    const reason = keychainFailureHint(error instanceof Error ? error.message : String(error));
+    throw new CredentialResolutionError(name, `The Keychain lookup for ${source} could not run${reason}. A Keychain failure is never resolved ` + `around: fix the keychain, or delete the item to fall through to the credential on disk.`, [source]);
   }
+  if (result.status === KEYCHAIN_ITEM_NOT_FOUND_STATUS)
+    return null;
+  if (result.status !== 0) {
+    throw new CredentialResolutionError(name, `The Keychain lookup for ${source} failed (security exited ` + `${result.status ?? "without a status"}${keychainFailureHint(result.stderr)}). A Keychain item that ` + `exists but cannot be read is never resolved around: unlock the keychain, run from a session that ` + `may use it, or delete the item to fall through to the credential on disk.`, [source]);
+  }
+  const value = result.stdout.trim();
+  if (!value) {
+    throw new CredentialResolutionError(name, `${source} exists but holds an empty value; a declared item never falls through to another ` + `identity. Store a value in it or delete the item.`, [source]);
+  }
+  return { value, source };
+}
+function keychainConfigValue(name, env, options = {}) {
+  return readKeychainItem(name, env, "api-url", options);
 }
 function snapshotClientEnvironment(name, env) {
   const keys = clientTransportEnvKeys(name);
+  const ambient = isAmbientEnvironment(env);
   const snapshot = Object.create(null);
   for (const key of [
     ...keys.apiUrlKeys,
@@ -339,7 +410,10 @@ function snapshotClientEnvironment(name, env) {
     credentialPointerEnvKey(name),
     CREDENTIAL_PROFILE_ENV_KEY,
     "HOME",
-    "XDG_CONFIG_HOME"
+    HASNA_HOME_ENV_KEY,
+    HASNA_CONFIG_HOME_ENV_KEY,
+    KEYCHAIN_STATION_ENV_KEY,
+    "USER"
   ]) {
     const descriptor = Object.getOwnPropertyDescriptor(env, key);
     if (!descriptor)
@@ -351,6 +425,14 @@ function snapshotClientEnvironment(name, env) {
       throw new CredentialResolutionError(name, `${key} must be a string data property.`, [key]);
     }
     snapshot[key] = descriptor.value;
+  }
+  if (ambient) {
+    Object.defineProperty(snapshot, AMBIENT_ENVIRONMENT, {
+      value: true,
+      enumerable: false,
+      writable: false,
+      configurable: false
+    });
   }
   return Object.freeze(snapshot);
 }
@@ -369,7 +451,6 @@ function resolveCredential(name, env, options = {}) {
       tier: "argument",
       source: "explicit apiKey argument",
       deliberate: true,
-      deprecated: false,
       diskCandidates: diskPaths,
       warning: null
     });
@@ -387,7 +468,6 @@ function resolveCredential(name, env, options = {}) {
       tier: "override",
       source: overrideKeyName,
       deliberate: true,
-      deprecated: false,
       diskCandidates: diskPaths,
       warning: null
     });
@@ -408,7 +488,6 @@ function resolveCredential(name, env, options = {}) {
       tier: "pointer",
       source: pointerKeyName,
       deliberate: true,
-      deprecated: false,
       diskCandidates: diskPaths,
       warning: null
     });
@@ -436,7 +515,6 @@ function resolveCredential(name, env, options = {}) {
           tier: "profile",
           source: path,
           deliberate: true,
-          deprecated: false,
           diskCandidates: paths,
           warning: null
         });
@@ -444,13 +522,27 @@ function resolveCredential(name, env, options = {}) {
     }
     throw new CredentialResolutionError(name, `Profile '${profile}' (from ${profileSource}) has no ${apiKeyKeys[0]} for '${name}'. ` + `Looked in: ${paths.join(", ") || "<no HOME in this environment>"}. ` + `A profile names WHICH identity to use, so it is never resolved around \u2014 ` + `create the profile's credential file or unset ${CREDENTIAL_PROFILE_ENV_KEY}.`, paths);
   }
-  const definedLegacyEntries = apiKeyKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, value: String(env[key]).trim() }));
-  const blankLegacy = definedLegacyEntries.find((entry) => entry.value.length === 0);
-  if (blankLegacy) {
-    throw new CredentialResolutionError(name, `${blankLegacy.key} is set but blank; a declared credential never falls through to another alias or identity.`, [blankLegacy.key]);
+  const definedEnvEntries = apiKeyKeys.filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined).map((key) => ({ key, value: String(env[key]).trim() }));
+  const blankEnv = definedEnvEntries.find((entry) => entry.value.length === 0);
+  if (blankEnv) {
+    throw new CredentialResolutionError(name, `${blankEnv.key} is set but blank; a declared credential never falls through to another alias or identity.`, [blankEnv.key]);
   }
-  if (definedLegacyEntries.length > 1 && new Set(definedLegacyEntries.map((entry) => entry.value)).size > 1) {
-    throw new CredentialResolutionError(name, `${definedLegacyEntries.map((entry) => entry.key).join(" and ")} disagree; credential aliases must be identical or only one may be set.`, definedLegacyEntries.map((entry) => entry.key));
+  if (definedEnvEntries.length > 1 && new Set(definedEnvEntries.map((entry) => entry.value)).size > 1) {
+    throw new CredentialResolutionError(name, `${definedEnvEntries.map((entry) => entry.key).join(" and ")} disagree; credential aliases must be identical or only one may be set.`, definedEnvEntries.map((entry) => entry.key));
+  }
+  const envHit = firstEnvValue(env, apiKeyKeys);
+  const keychainHit = readKeychainItem(name, env, "api-key", options.keychain ?? {});
+  if (keychainHit) {
+    assertUsableCredential(name, keychainHit.source, keychainHit.value);
+    const warning = envHit && envHit.value !== keychainHit.value ? `Credential sources disagree for '${name}': ${keychainHit.source} and ${envHit.key} hold ` + `different keys. ${keychainHit.source} wins, because the Keychain is re-read on every call while ` + `an environment variable is a snapshot. Reconcile them \u2014 a rotation that updated only one leaves ` + `the other to fail 401 wherever it is loaded first.` : null;
+    return sealCredential({
+      apiKey: keychainHit.value,
+      tier: "keychain",
+      source: keychainHit.source,
+      deliberate: false,
+      diskCandidates: diskPaths,
+      warning
+    });
   }
   const diskSourceList = credentialDiskSourceList(name, env, null);
   const diskHits = diskSourceList.map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) })).filter((hit) => hit.value !== null);
@@ -459,10 +551,7 @@ function resolveCredential(name, env, options = {}) {
     assertUsableCredential(name, winner.src.path, winner.value);
     const divergentSources = [
       ...diskHits.slice(1).filter((hit) => hit.value !== winner.value).map((hit) => hit.src.path),
-      ...(() => {
-        const legacyHit = firstEnvValue(env, apiKeyKeys);
-        return legacyHit && legacyHit.value !== winner.value ? [legacyHit.key] : [];
-      })()
+      ...envHit && envHit.value !== winner.value ? [envHit.key] : []
     ];
     const warning = divergentSources.length > 0 ? `Credential sources disagree for '${name}': ${winner.src.path} and ` + `${divergentSources.join(", ")} hold different keys. ${winner.src.path} wins, because a file on ` + `disk is re-read on every call while an environment variable is a snapshot. Reconcile them \u2014 ` + `a rotation that updated only one leaves the other to fail 401 wherever it is loaded first.` : null;
     return sealCredential({
@@ -470,30 +559,19 @@ function resolveCredential(name, env, options = {}) {
       tier: winner.src.tier,
       source: winner.src.path,
       deliberate: false,
-      deprecated: false,
       diskCandidates: diskPaths,
       warning
     });
   }
-  const legacy = firstEnvValue(env, apiKeyKeys);
-  if (legacy) {
-    assertUsableCredential(name, legacy.key, legacy.value);
-    const where = diskPaths.length > 0 ? `Provision the key in the secrets vault and reference it via ${credentialPointerEnvKey(name)}, or set ` + `${credentialOverrideEnvKey(name)} in the process environment.` : `This environment has no HOME, so no credential file could be consulted at all; the disk tier is ` + `unavailable here and this process will keep using the environment snapshot.`;
-    const message = `[${name}] DEPRECATED: the API key came from ${legacy.key} in this process's environment. ` + `Environment variables are a snapshot taken when this process started, so a shell that started ` + `before a key rotation keeps using the old key until it exits. ${where}`;
-    const sink = options.onDeprecation ?? defaultDeprecationSink;
-    const notified = deprecationNotified();
-    if (!notified.has(name)) {
-      notified.add(name);
-      sink(message);
-    }
+  if (envHit) {
+    assertUsableCredential(name, envHit.key, envHit.value);
     return sealCredential({
-      apiKey: legacy.value,
-      tier: "legacy-env",
-      source: legacy.key,
+      apiKey: envHit.value,
+      tier: "env",
+      source: envHit.key,
       deliberate: false,
-      deprecated: true,
       diskCandidates: diskPaths,
-      warning: message
+      warning: null
     });
   }
   return null;
@@ -534,7 +612,6 @@ async function completePointerCredential(name, pointerResolution, env = process.
     tier: "pointer",
     source: `${pointerEnvKey} -> vault:${vaultKey}`,
     deliberate: true,
-    deprecated: false,
     diskCandidates: pointerResolution.diskCandidates,
     warning: null
   });
@@ -543,6 +620,11 @@ async function completePointerCredential(name, pointerResolution, env = process.
 // src/client/transport.ts
 var FLEET_API_DOMAIN_ENV_KEY = "HASNA_FLEET_API_DOMAIN";
 var NEUTRAL_FLEET_API_DOMAIN = "your-deployment.example";
+var DEFAULT_FLEET_GATEWAY_ORIGIN = "https://api.hasna.com";
+var DEFAULT_AUTHORITY_SOURCE = "default";
+function defaultFleetGatewayBaseUrl(name) {
+  return `${DEFAULT_FLEET_GATEWAY_ORIGIN}/${validateAppSlug(name)}`;
+}
 var ASCII_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 var DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 function isValidDnsDomain(value) {
@@ -746,30 +828,45 @@ function resolveClientTransportSnapshot(name, env = process.env, options = {}) {
     throw new ClientTransportConfigurationError(name, `${usableUrlEntries.map((entry) => entry.key).join(" and ")} disagree; client authority aliases must be identical or only one may be set.`, usableUrlEntries.map((entry) => entry.key));
   }
   const envUrlHit = usableUrlEntries[0] ?? null;
+  const keychainUrlHit = keychainConfigValue(name, env, options.credentials?.keychain);
   const diskConfigUrlHit = appConfigDiskValue(name, env, keys.apiUrlKeys);
   if (diskConfigUrlHit?.unusable) {
     throw new ClientTransportConfigurationError(name, `${diskConfigUrlHit.key} in ${diskConfigUrlHit.path} is declared but blank or malformed; public clients require a valid HTTPS service authority.`, [diskConfigUrlHit.path]);
   }
-  if (envUrlHit && diskConfigUrlHit && envUrlHit.value !== diskConfigUrlHit.value.trim()) {
-    throw new ClientTransportConfigurationError(name, `${envUrlHit.key} and ${diskConfigUrlHit.path} select different service authorities; refusing to send a credential written for one authority to the other.`, [envUrlHit.key, diskConfigUrlHit.path]);
+  const urlCandidates = [
+    ...envUrlHit ? [envUrlHit] : [],
+    ...keychainUrlHit ? [{ key: keychainUrlHit.source, value: keychainUrlHit.value }] : [],
+    ...diskConfigUrlHit ? [{ key: diskConfigUrlHit.path, value: diskConfigUrlHit.value.trim() }] : []
+  ];
+  const configuredUrl = urlCandidates[0] ?? null;
+  const divergentUrls = urlCandidates.filter((candidate) => candidate.value !== configuredUrl?.value);
+  if (configuredUrl && divergentUrls.length > 0) {
+    throw new ClientTransportConfigurationError(name, `${configuredUrl.key} and ${divergentUrls.map((candidate) => candidate.key).join(" and ")} select different service authorities; refusing to send a credential written for one authority to the other.`, urlCandidates.map((candidate) => candidate.key));
   }
-  const diskUrlHit = envUrlHit ? null : diskConfigUrlHit;
-  const urlHit = envUrlHit ?? (diskUrlHit ? { key: diskUrlHit.path, value: diskUrlHit.value } : null);
   const warnings = [];
-  if (!urlHit) {
-    throw new ClientTransportConfigurationError(name, `${keys.apiUrlKeys[0]} is required; public clients use only the authenticated HTTPS service and never fall back to SQLite or another local store.`, keys.apiUrlKeys);
-  }
-  if (diskUrlHit) {
-    warnings.push(`No ${keys.apiUrlKeys[0]} in the environment; the server URL in ${diskUrlHit.path} was used, so this client connects to the server. ` + `Keep this XDG config entry aligned with the intended service authority.`);
+  if (configuredUrl && !envUrlHit) {
+    warnings.push(`No ${keys.apiUrlKeys[0]} in the environment; the server URL in ${configuredUrl.key} was used, so this client connects to the server. ` + `Keep that entry aligned with the intended service authority.`);
   }
   const credential = resolveCredential(name, env, options.credentials);
   if (!credential) {
     const diskHint = credentialDiskSourcesForMessage(name, env);
-    warnings.push(`${urlHit.key} selects the HTTP server for '${name}', but no API key could be resolved; ` + `refusing to create an unauthenticated client. ` + `Looked for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`);
-    throw new ClientTransportConfigurationError(name, warnings.join(" "), [urlHit.key]);
+    const lead = configuredUrl ? `${configuredUrl.key} selects the HTTP server for '${name}', but no API key could be resolved` : `${keys.apiUrlKeys[0]} is not set and no API key could be resolved for '${name}'; a credential is required before the default fleet gateway authority applies`;
+    warnings.push(`${lead}; refusing to create an unauthenticated client \u2014 public clients never fall back to SQLite or another local store. ` + `Looked in the Keychain (macOS only), then for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`);
+    throw new ClientTransportConfigurationError(name, warnings.join(" "), [configuredUrl?.key ?? keys.apiUrlKeys[0]]);
   }
   if (credential.warning)
     warnings.push(credential.warning);
+  let urlHit;
+  if (configuredUrl) {
+    urlHit = configuredUrl;
+  } else {
+    try {
+      urlHit = { key: DEFAULT_AUTHORITY_SOURCE, value: defaultFleetGatewayBaseUrl(name) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ClientTransportConfigurationError(name, `No ${keys.apiUrlKeys[0]} is configured and the default fleet gateway authority cannot be composed for '${name}': ${message}`, [keys.apiUrlKeys[0]]);
+    }
+  }
   const apiUrlSource = urlHit.key;
   let baseUrl;
   try {
@@ -798,7 +895,7 @@ function resolveClientTransport(name, env = process.env, options = {}) {
 }
 function credentialDiskSourcesForMessage(name, env) {
   const paths = credentialDiskSources(name, env);
-  return paths.length > 0 ? paths.join(" or ") : "<no HOME set in this environment, so no credential file was consulted>";
+  return paths.length > 0 ? paths.join(" or ") : "<no HOME or HASNA_HOME set in this environment, so no credential file was consulted>";
 }
 
 class HasnaHttpError extends Error {
@@ -843,10 +940,13 @@ function authFailureGuidance(credential) {
     const remedy = credential.source === CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE ? `Fix that provider so it returns the current key, or replace it with resolveCredential() ` + `so diagnostics can name the original source.` : `Rotate that key, or unset the override to use the credential on disk.`;
     return `${origin} \u2014 a credential you selected deliberately. It was NOT substituted with any other key: ` + `falling back here would authenticate as a different principal than the one you named, which is ` + `exactly the failure an override exists to prevent. ${remedy}`;
   }
-  if (credential.deprecated) {
+  if (credential.tier === "env") {
     const target = credential.diskCandidates[0];
-    const remedy = target ? `Write the CURRENT key to ${target} \u2014 that file is re-read on every call, so rotations take ` + `effect immediately and in every shell. Do not simply unset ${credential.source}: nothing was ` + `found on disk, so that would leave this client with no credential at all.` : `This environment has no HOME, so no credential file could be consulted; the disk tier is ` + `unavailable here and there is nothing to fall back to. Set HOME, or supply the key explicitly.`;
-    return `${origin}, a variable in this process's environment \u2014 which is a snapshot taken when the process ` + `started. A STALE SHELL is the most common cause of this error: this shell exported the key before ` + `it was rotated, and will keep sending the old one until it exits. ${remedy}`;
+    const remedy = target ? `Store the CURRENT key in the Keychain or write it to ${target} \u2014 both are re-read on every call, so ` + `rotations take effect immediately and in every shell. Do not simply unset ${credential.source}: ` + `nothing was found in the Keychain or on disk, so that would leave this client with no credential at all.` : `This environment has no HOME or HASNA_HOME, so no credential file could be consulted; the disk tier is ` + `unavailable here and there is nothing to fall back to. Set HOME, or supply the key explicitly.`;
+    return `${origin}, a variable in this process's environment. If a wrapper injected it for this one process, the ` + `wrapper re-reads its store on every invocation and the stored key itself is being rejected \u2014 rotate it. ` + `If this SHELL exported it, the export is a snapshot taken when the shell started: a STALE SHELL that ` + `exported the key before it was rotated keeps sending the old one until it exits. ${remedy}`;
+  }
+  if (credential.tier === "keychain") {
+    return `${origin}, which was re-read from the Keychain on this very call \u2014 so a stale shell is NOT the cause ` + `here. The stored item is genuinely being rejected: update it with the current key, or re-run the fleet ` + `key distribution so this machine gets the current key.`;
   }
   return `${origin}, which was re-read from disk on this very call \u2014 so a stale shell is NOT the cause here. ` + `The stored credential is genuinely being rejected: rotate it, or re-run the fleet key distribution ` + `so this machine gets the current key.`;
 }
@@ -1076,8 +1176,10 @@ export {
   toV1BaseUrl,
   resolveCredential,
   resolveClientTransport,
+  keychainConfigValue,
   fleetApiDomain,
   explicitCredential,
+  defaultFleetGatewayBaseUrl,
   defaultCloudBaseUrl,
   credentialPointerEnvKey,
   credentialOverrideEnvKey,
@@ -1089,7 +1191,12 @@ export {
   clientTransportEnvKeys,
   appendQuery,
   appConfigDiskValue,
+  KEYCHAIN_STATION_ENV_KEY,
   HasnaHttpError,
+  HASNA_HOME_ENV_KEY,
+  HASNA_CONFIG_HOME_ENV_KEY,
+  DEFAULT_FLEET_GATEWAY_ORIGIN,
+  DEFAULT_AUTHORITY_SOURCE,
   CredentialResolutionError,
   ClientTransportConfigurationError,
   CREDENTIAL_PROFILE_ENV_KEY,

@@ -17,9 +17,10 @@
 //
 // Rebased 2026-09-04 onto the current contracts surface (1.0.0): the client
 // now THROWS on blank/conflicting declarations (stricter than the original
-// misconfigured=true return), the credential disk layer is the single XDG
-// app-config file at ~/.config/hasna/<app>.env, and the config-reader guards
-// are exported as configFileModeAllowed / configFileReadsCoherent.
+// misconfigured=true return), the credential disk layer is the single
+// credentials file at ~/.hasna/<app>/config/credentials (home-layout ruling of
+// 2026-09-04), and the config-reader guards are exported as
+// configFileModeAllowed / configFileReadsCoherent.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -57,7 +58,7 @@ function systemChmod(path: string, mode: string): void {
 }
 
 function appConfigPath(home: string, app: string): string {
-  return join(home, ".config", "hasna", `${app}.env`);
+  return join(home, ".hasna", app, "config", "credentials");
 }
 
 function writeAppConfig(home: string, app: string, body: string): string {
@@ -203,11 +204,11 @@ describe("credential files enforce owner-only regular-file no-symlink safety", (
 
   test("a symlinked credential file is refused", () => {
     const home = makeHome();
-    const dir = join(home, ".config", "hasna");
+    const dir = join(home, ".hasna", "demo", "config");
     mkdirSync(dir, { recursive: true });
-    const real = join(dir, "real.env");
+    const real = join(dir, "real");
     writeFileSync(real, "HASNA_DEMO_API_KEY=diskA\n", { mode: 0o600 });
-    symlinkSync(real, join(dir, "demo.env"));
+    symlinkSync(real, join(dir, "credentials"));
     expect(() => resolveCredential("demo", { HOME: home })).toThrow(/not safe|symlink/i);
   });
 

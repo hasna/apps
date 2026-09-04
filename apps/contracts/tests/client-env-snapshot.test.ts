@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { createClientTransport, resolveClientTransport, resolveCredential } from "../src/client/transport";
 
-const quiet = { onDeprecation() {} };
+// No tier-1 flags. (The env tier is legitimate now, so there is no deprecation sink to silence.)
+const quiet = {};
 const configured = () => ({ HASNA_SNAPSHOT_API_URL: "https://snapshot.example.test", HASNA_SNAPSHOT_API_KEY: "fixture-key-a" });
 
-for (const key of ["HASNA_SNAPSHOT_API_URL", "SNAPSHOT_API_URL", "HASNA_SNAPSHOT_API_KEY", "SNAPSHOT_API_KEY", "HASNA_SNAPSHOT_API_KEY_OVERRIDE", "HASNA_SNAPSHOT_API_KEY_REF", "HASNA_PROFILE", "HOME", "XDG_CONFIG_HOME"]) {
+for (const key of ["HASNA_SNAPSHOT_API_URL", "SNAPSHOT_API_URL", "HASNA_SNAPSHOT_API_KEY", "SNAPSHOT_API_KEY", "HASNA_SNAPSHOT_API_KEY_OVERRIDE", "HASNA_SNAPSHOT_API_KEY_REF", "HASNA_PROFILE", "HOME", "HASNA_HOME", "HASNA_CONFIG_HOME", "HASNA_STATION", "USER"]) {
   test(`rejects own accessor ${key} without invoking it or fetching`, () => {
     const env = configured();
     let reads = 0, fetches = 0;

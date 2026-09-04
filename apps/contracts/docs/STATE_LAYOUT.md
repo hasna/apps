@@ -38,15 +38,21 @@ in the no-cloud scanner as a forbidden legacy runtime path.
 ## Credential resolution paths (read, never owned)
 
 `@hasna/contracts` does not own these directories, but its credential resolver
-reads only the owner-safe XDG app config (see CONTRACT.md §3a):
+reads only the owner-safe app credentials file (see CONTRACT.md §3a; the
+2026-09-04 home-layout ruling, `~/.hasna/<name>/` on every platform):
 
 ```text
-$XDG_CONFIG_HOME/hasna/<name>.env    (default ~/.config/hasna/<name>.env)
+~/.hasna/<name>/config/credentials             (HASNA_HOME replaces ~/.hasna)
+<HASNA_CONFIG_HOME>/<name>/credentials         (when HASNA_CONFIG_HOME is set)
+~/.hasna/<name>/config/credentials-<profile>   (profiles)
 ```
 
 Files must be regular, current-user-owned, and mode 0400 or 0600; unsafe files
-fail closed. Legacy `~/.hasna/**` and `*-cloud.env` files are not consulted.
-`@hasna/contracts` never writes, copies, moves, or deletes these files.
+fail closed. `XDG_CONFIG_HOME` is not consulted. Retired `~/.hasna/fleet-env/`,
+`~/.hasna/cloud/`, `~/.config/hasna/` and `*-cloud.env` files are never
+consulted. On macOS the login keychain item `hasna.credentials.<name>.api-key`
+(and `.api-url`) is read, fresh per call, before the file. `@hasna/contracts`
+never writes, copies, moves, or deletes these files or items.
 Explicit legacy migration tooling may preserve/import old data, but ordinary
 clients never use it as an authoritative dataset.
 

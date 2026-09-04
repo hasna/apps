@@ -24,16 +24,42 @@
 //   1. an explicit argument            — `--api-key` / `--profile`
 //   2. a deliberate env pointer        — `HASNA_<NAME>_API_KEY_OVERRIDE`, `HASNA_PROFILE`,
 //                                        `HASNA_<NAME>_API_KEY_REF` (secrets-vault pointer)
-//   3. DISK, read at call time         — `$XDG_CONFIG_HOME/hasna/<app>.env`
-//                                        (`~/.config/hasna/<app>.env` by default)
-//   4. the legacy `HASNA_<NAME>_API_KEY` process env — fallback only, deprecated
+//   3. the macOS Keychain (darwin only)— generic-password item
+//                                        `hasna.credentials.<app>.api-key`, account
+//                                        `HASNA_STATION`, else the short hostname, else `USER`
+//   4. DISK, read at call time         — `~/.hasna/<app>/config/credentials`
+//                                        (`HASNA_HOME` replaces `~/.hasna`; `HASNA_CONFIG_HOME`
+//                                        replaces the config root, giving
+//                                        `<HASNA_CONFIG_HOME>/<app>/credentials`; a profile
+//                                        reads `credentials-<profile>` beside it)
+//   5. the `HASNA_<NAME>_API_KEY` process env — a legitimate tier, below disk
 //
-// Tier 4 is the demotion that fixes stale shells IMMEDIATELY, without waiting
-// for shells to cycle or for a shell-init change to land on every machine.
+// The service URL follows the same ladder (`HASNA_<NAME>_API_URL`, the Keychain
+// `api-url` item, the credentials file) and, when nothing configures it,
+// defaults to the fleet gateway — see `resolveClientTransport` in transport.ts.
 //
-// Retired `~/.hasna/**` and `*-cloud.env` locations are not automatic inputs.
-// Explicit migration tooling may inspect them, but ordinary client resolution
-// cannot acquire authority or credentials from those paths.
+// TIER 5 IS NOT DEPRECATED, and it sits BELOW disk on purpose. A station wrapper
+// that injects `HASNA_<NAME>_API_KEY` into one child process from the Keychain
+// is correct: it re-reads the store on every invocation, so nothing it injects
+// can go stale. What goes stale is a shell `export`. Putting disk above env is
+// what fixes that IMMEDIATELY, without waiting for shells to cycle: when both
+// exist, a rotated on-disk key beats a stale export. (Home-layout ruling of
+// 2026-09-04, knowledge k_ms4qm9tt_puf1rt; hasna/apps#1668, #1690.)
+//
+// TIER 3 reads the login keychain with `security find-generic-password … -w`,
+// spawned by argv with no shell, on every call. A missing item is simply an
+// absent tier; any other `security` failure is a loud error, because an item
+// that exists but cannot be read must never be resolved around. The value is
+// never logged. The tier is AMBIENT: it runs for the live `process.env` (and
+// for an injected runner), never for a caller-built env object — see the
+// hermetic seam on `homeDir`.
+//
+// RETIRED LOCATIONS, never inputs: `~/.hasna/fleet-env/`, `~/.hasna/cloud/`,
+// `~/.config/hasna/` (with `$XDG_CONFIG_HOME/hasna/`), and any `*-cloud.env`.
+// The `~/.hasna` root is a closed namespace of app folders, and
+// `XDG_CONFIG_HOME` is not consulted at all. Explicit migration tooling may
+// inspect the retired paths, but ordinary client resolution cannot acquire
+// authority or credentials from them.
 //
 // NEVER FALL BACK TO LOCAL DATA ON A 401. Serving local results when auth fails
 // prints healthy output while authentication is broken — a false green that is
@@ -41,9 +67,11 @@
 // but they must be a deliberate mode decided BEFORE the request, never an error
 // path. Nothing in this module may acquire such a fallback.
 
+import { spawnSync } from "node:child_process";
 import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { O_NOFOLLOW, O_NONBLOCK, O_RDONLY } from "node:constants";
 import { createRequire } from "node:module";
+import { hostname as osHostname } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { Env } from "../env-token.js";
 import {
@@ -59,9 +87,9 @@ export type CredentialTier =
   | "override"
   | "pointer"
   | "profile"
+  | "keychain"
   | "disk"
-  | "config"
-  | "legacy-env";
+  | "env";
 
 export interface ResolvedCredential {
   /**
@@ -78,12 +106,13 @@ export interface ResolvedCredential {
    */
   readonly apiKey: string;
   readonly tier: CredentialTier;
-  /** Where it came from: an env key NAME or an absolute file path. Never a value. */
+  /**
+   * Where it came from: an env key NAME, an absolute file path, or a Keychain
+   * item reference (`keychain:<service>@<account>`). Never a value.
+   */
   readonly source: string;
   /** True for tiers an operator sets on purpose. These never fall through. */
   readonly deliberate: boolean;
-  /** True when it came from the deprecated process-environment tier. */
-  readonly deprecated: boolean;
   /**
    * When tier === "pointer", the vault ITEM KEY to resolve through the
    * @hasna/secrets SDK at request time. Never a credential value. Non-enumerable
@@ -102,16 +131,49 @@ export interface ResolvedCredential {
   readonly warning: string | null;
 }
 
+/** The captured outcome of one `security` invocation. `stdout` IS the secret; it is never logged. */
+export interface KeychainCommandResult {
+  /** Exit status; null when the tool could not be started or was killed. */
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** Runs `/usr/bin/security` with the given argv — no shell. Injected by tests. */
+export type KeychainCommandRunner = (argv: readonly string[]) => KeychainCommandResult;
+
+/** Tier 3 controls. Every field is optional; production callers pass nothing. */
+export interface KeychainTierOptions {
+  /**
+   * Whether the Keychain is consulted for a caller-built env object.
+   *
+   * The tier is AMBIENT: by default it runs only when the resolver is handed
+   * the live `process.env`, because a caller-built env is the whole world (the
+   * hermetic seam) and the machine's Keychain is outside it. `true` turns the
+   * tier on for a caller-built env; `false` turns it off even for the live
+   * environment (a CI job on a Mac runner that must never touch a login
+   * keychain). Injecting `run` implies `true`.
+   */
+  enabled?: boolean;
+  /** Defaults to `process.platform`; the tier exists only on `"darwin"`. */
+  platform?: string;
+  /**
+   * The machine's host name, used as the account when `HASNA_STATION` is
+   * unset. Only the label before the first dot is used (`hostname -s`).
+   * Defaults to `os.hostname()`.
+   */
+  hostname?: () => string;
+  /** The `security` runner. Defaults to spawning `/usr/bin/security` by argv. */
+  run?: KeychainCommandRunner;
+}
+
 export interface CredentialChainOptions {
   /** Tier 1: an explicit key, e.g. from `--api-key`. */
   apiKey?: string;
   /** Tier 1: an explicit profile name, e.g. from `--profile`. Beats `HASNA_PROFILE`. */
   profile?: string;
-  /**
-   * Sink for the one-line legacy-env deprecation. Defaults to a once-per-app
-   * stderr writer. Injected by tests so they never touch the real stderr.
-   */
-  onDeprecation?: (message: string) => void;
+  /** Tier 3: Keychain controls — a fake `security` runner in tests, an opt-out on CI. */
+  keychain?: KeychainTierOptions;
 }
 
 /**
@@ -145,12 +207,24 @@ export class CredentialFileUnsafeError extends Error {
   }
 }
 
-// Credential and endpoint files are non-authoritative client configuration, so
-// they belong under the XDG config root. Legacy ~/.hasna data paths are not
-// automatic client inputs; explicit migration tooling owns any import from
-// them.
-const CONFIG_DIR = ".config";
-const CONFIG_NAMESPACE = "hasna";
+// The `~/.hasna` root is a closed namespace of app folders (the 2026-09-04
+// home-layout ruling): every app owns exactly `~/.hasna/<app>/`, and its
+// credentials plus non-secret routing config live in the `config/` subfolder.
+// The overrides follow XDG semantics — absolute only, blank is unset — but
+// XDG's own variables are not read: `HASNA_HOME` replaces the root and
+// `HASNA_CONFIG_HOME` replaces the config root for every app at once.
+export const HASNA_HOME_ENV_KEY = "HASNA_HOME";
+export const HASNA_CONFIG_HOME_ENV_KEY = "HASNA_CONFIG_HOME";
+/** The Keychain account; absent, the short hostname is used, then `USER`. */
+export const KEYCHAIN_STATION_ENV_KEY = "HASNA_STATION";
+const HASNA_HOME_DIR = ".hasna";
+const CONFIG_SUBDIR = "config";
+const CREDENTIALS_FILE = "credentials";
+const KEYCHAIN_SECURITY_BIN = "/usr/bin/security";
+const KEYCHAIN_SERVICE_PREFIX = "hasna.credentials";
+/** `errSecItemNotFound`: `security find-generic-password` exits 44 when no item matches. */
+const KEYCHAIN_ITEM_NOT_FOUND_STATUS = 44;
+const KEYCHAIN_SPAWN_TIMEOUT_MS = 10_000;
 
 /**
  * A credential file is small. The cap bounds how much a hostile or corrupt file
@@ -199,60 +273,79 @@ const VAULT_POINTER_SHAPE = /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-_.]*){2,}$/
  * from `os.homedir()`.
  *
  * This is the hermetic seam. A caller that passes an explicit env is declaring
- * that object to be the whole environment, so an env with no HOME performs no
- * disk read at all; that is what keeps the test suite independent of whatever
- * credentials happen to exist on the machine running it. Callers that take the
- * `process.env` default get the real HOME and therefore the real disk.
+ * that object to be the whole environment, so an env with neither HOME nor
+ * HASNA_HOME performs no disk read at all, and — the same principle applied to
+ * an ambient store — a caller-built env never reaches the machine's Keychain
+ * unless a runner is injected. That is what keeps the test suite independent
+ * of whatever credentials happen to exist on the machine running it. Callers
+ * that take the `process.env` default get the real HOME, the real disk, and
+ * the real Keychain.
  */
 function homeDir(env: Env): string | null {
   const home = env.HOME?.trim();
   return home ? home : null;
 }
 
-/** One on-disk credential source: its absolute path, its tier, and whether it is deprecated. */
+/** An XDG-style override: an absolute, non-blank value; anything else is unset. */
+function absoluteOverride(env: Env, key: string): string | null {
+  const value = env[key]?.trim();
+  return value && isAbsolute(value) ? value : null;
+}
+
+/** The `~/.hasna` root: `HASNA_HOME`, else `$HOME/.hasna`; null with neither. */
+function hasnaHomeDir(env: Env): string | null {
+  const override = absoluteOverride(env, HASNA_HOME_ENV_KEY);
+  if (override) return override;
+  const home = homeDir(env);
+  return home ? join(home, HASNA_HOME_DIR) : null;
+}
+
+/**
+ * The app's config directory: `<HASNA_CONFIG_HOME>/<app>` when the config root
+ * is overridden, else `<hasna home>/<app>/config`.
+ */
+function appConfigDir(name: string, env: Env): string | null {
+  const configRoot = absoluteOverride(env, HASNA_CONFIG_HOME_ENV_KEY);
+  if (configRoot) return join(configRoot, name);
+  const root = hasnaHomeDir(env);
+  return root ? join(root, name, CONFIG_SUBDIR) : null;
+}
+
+/** One on-disk credential source: its absolute path and its tier. */
 export interface DiskCredentialSource {
   path: string;
   tier: CredentialTier;
-  /** Retained in the public shape; canonical XDG sources are never deprecated. */
-  deprecated: boolean;
 }
 
 /**
  * All on-disk credential sources for an app, in precedence order.
  *
- * Exactly one XDG layer exists. Returns an empty list when there is no HOME to
- * anchor the default, or when the app name is not safe to place in a path.
+ * Exactly one disk layer exists: `~/.hasna/<app>/config/credentials`, or the
+ * `credentials-<profile>` file beside it. Returns an empty list when neither
+ * HOME nor HASNA_HOME anchors the root, or when the app name is not safe to
+ * place in a path.
  */
 export function credentialDiskSourceList(
   name: string,
   env: Env,
   profile: string | null = null,
 ): DiskCredentialSource[] {
-  const home = homeDir(env);
   // A name that is not a safe slug never reaches the filesystem. Without this,
   // `resolveCredential("../../elsewhere", env)` composes a path outside the
   // credential directory, and the transport's slug check runs too late to stop
   // the read.
-  if (!home || !SAFE_APP_SLUG.test(name)) return [];
-  const configStem = profile ? `${name}-${profile}` : name;
-  const configuredRoot = env.XDG_CONFIG_HOME?.trim();
-  const configRoot = configuredRoot && isAbsolute(configuredRoot)
-    ? configuredRoot
-    : join(home, CONFIG_DIR);
-  return [
-    {
-      path: join(configRoot, CONFIG_NAMESPACE, `${configStem}.env`),
-      tier: "config",
-      deprecated: false,
-    },
-  ];
+  if (!SAFE_APP_SLUG.test(name)) return [];
+  const directory = appConfigDir(name, env);
+  if (!directory) return [];
+  const file = profile ? `${CREDENTIALS_FILE}-${profile}` : CREDENTIALS_FILE;
+  return [{ path: join(directory, file), tier: "disk" }];
 }
 
 /**
  * The disk files that may hold an app's credential, in precedence order.
  *
- * Exactly one XDG layer exists. Exported so callers and error messages can name
- * the exact path consulted.
+ * Exactly one disk layer exists. Exported so callers and error messages can
+ * name the exact path consulted.
  */
 export function credentialDiskSources(name: string, env: Env): string[] {
   return credentialDiskSourceList(name, env, null).map((s) => s.path);
@@ -337,8 +430,8 @@ export function configFileReadsCoherent(
 }
 
 /**
- * Read and parse one XDG app-config file. Missing paths are absent; unsafe,
- * unreadable, oversized, and non-regular paths fail closed.
+ * Read and parse one app-config file (the credentials file). Missing paths are
+ * absent; unsafe, unreadable, oversized, and non-regular paths fail closed.
  *
  * Open without following the leaf symlink and without blocking on a FIFO;
  * validate ownership, mode, size and file type on that same descriptor. A
@@ -411,7 +504,7 @@ export interface AppConfigDiskHit {
 /**
  * Keys this function will never hand back, however the caller asks for them.
  *
- * The XDG app-config file holds a credential AND non-secret routing config in
+ * The credentials file holds a credential AND non-secret routing config in
  * the same place. That is exactly why this boundary has to be explicit: without
  * it, `appConfigDiskValue(name, env, ["HASNA_TODOS_API_KEY"])` would be a
  * second, UNSEALED way to read the secret out of a file whose only other reader
@@ -433,7 +526,7 @@ const CREDENTIAL_SHAPED_KEY =
   /(?:^|_)(?:API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)(?:_|$)/;
 
 /**
- * Read a NON-SECRET config value from the fleet app-config file on disk.
+ * Read a NON-SECRET config value from the app's credentials file on disk.
  *
  * This is the tier that closes the gap the credential chain left open: the same
  * file already supplies the API key, and every other field in it was discarded.
@@ -537,7 +630,6 @@ function sealCredential(fields: {
   tier: CredentialTier;
   source: string;
   deliberate: boolean;
-  deprecated: boolean;
   diskCandidates: readonly string[];
   warning: string | null;
   pointerVaultKey?: string;
@@ -547,7 +639,6 @@ function sealCredential(fields: {
     tier: fields.tier,
     source: fields.source,
     deliberate: fields.deliberate,
-    deprecated: fields.deprecated,
     diskCandidates: Object.freeze([...fields.diskCandidates]),
     warning: fields.warning,
   };
@@ -629,7 +720,6 @@ export function explicitCredential(appName: string, apiKey: string): ResolvedCre
     tier: "argument",
     source,
     deliberate: true,
-    deprecated: false,
     diskCandidates: [],
     warning: null,
   });
@@ -657,7 +747,6 @@ export function validateAndSealResolvedCredential(
       tier: "argument",
       source: CALLER_SUPPLIED_CREDENTIAL_PROVIDER_SOURCE,
       deliberate: true,
-      deprecated: false,
       diskCandidates: [],
       warning: null,
     });
@@ -670,7 +759,6 @@ export function validateAndSealResolvedCredential(
     tier: credential.tier,
     source: credential.source,
     deliberate: credential.deliberate,
-    deprecated: credential.deprecated,
     diskCandidates: credential.diskCandidates,
     warning: credential.warning,
     ...(credential.pointerVaultKey !== undefined ? { pointerVaultKey: credential.pointerVaultKey } : {}),
@@ -686,43 +774,136 @@ function firstEnvValue(env: Env, keys: readonly string[]): { key: string; value:
   return null;
 }
 
-// One deprecation line per app per PROCESS. A warning printed on every call is
-// noise that operators filter out, and a filtered warning is not a warning.
-//
-// Anchored on `globalThis` rather than in module scope because the published
-// package inlines this module into several entry bundles
-// (`dist/client/transport.js`, `dist/client/storage.js`, `dist/index.js`), each
-// of which would otherwise carry its OWN Set — so a consumer touching two entry
-// points got two warnings, and the reset seam cleared only one of them. Invisible
-// to tests, which run against a single instance of `src/`.
-// Colon-separated, NOT dotted. `tests/state-layout.test.ts` forbids any source
-// file from containing the dotted legacy package-global home-directory names,
-// and a dotted registry key would have spelled one of them by accident.
-const DEPRECATION_REGISTRY = Symbol.for("hasna:contracts:credentialDeprecationNotices");
+// The Keychain is an AMBIENT source — it belongs to the machine, not to any env
+// object — so the resolver has to know whether it was handed the live process
+// environment or a caller-built one. The snapshot carries that fact as a
+// non-enumerable symbol, so it survives the re-snapshot `resolveCredential`
+// performs on an env the transport has already snapshotted. Colon-separated,
+// not dotted: `tests/state-layout.test.ts` forbids the dotted legacy
+// package-global home-directory names in any source file.
+const AMBIENT_ENVIRONMENT = Symbol.for("hasna:contracts:ambientClientEnvironment");
 
-function deprecationNotified(): Set<string> {
-  const host = globalThis as Record<symbol, unknown>;
-  const existing = host[DEPRECATION_REGISTRY];
-  if (existing instanceof Set) return existing as Set<string>;
-  const created = new Set<string>();
-  host[DEPRECATION_REGISTRY] = created;
-  return created;
+function isAmbientEnvironment(env: Env): boolean {
+  return env === process.env || (env as unknown as Record<symbol, unknown>)[AMBIENT_ENVIRONMENT] === true;
 }
 
-/** Test seam: forget which apps have already emitted their deprecation. */
-export function __resetCredentialDeprecationNotices(): void {
-  deprecationNotified().clear();
+/** Spawn `/usr/bin/security` by argv — no shell, nothing on stdin, both streams captured. */
+function defaultKeychainRunner(argv: readonly string[]): KeychainCommandResult {
+  const result = spawnSync(KEYCHAIN_SECURITY_BIN, [...argv], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: KEYCHAIN_SPAWN_TIMEOUT_MS,
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.error ? result.error.message : (result.stderr ?? ""),
+  };
 }
 
-function defaultDeprecationSink(message: string): void {
-  if (typeof process !== "undefined" && process.stderr) {
-    process.stderr.write(`${message}\n`);
+function keychainTierEnabled(env: Env, options: KeychainTierOptions): boolean {
+  if ((options.platform ?? process.platform) !== "darwin") return false;
+  if (options.enabled !== undefined) return options.enabled;
+  return options.run !== undefined || isAmbientEnvironment(env);
+}
+
+/** `HASNA_STATION`, else the short hostname, else `USER`; null when all are blank. */
+function keychainAccount(env: Env, options: KeychainTierOptions): string | null {
+  const station = env[KEYCHAIN_STATION_ENV_KEY]?.trim();
+  if (station) return station;
+  // `hostname -s`: the label before the first dot, whatever form the source gives.
+  const host = (options.hostname ?? osHostname)().split(".")[0]?.trim() ?? "";
+  if (host) return host;
+  const user = env.USER?.trim();
+  return user || null;
+}
+
+/** One line of diagnostic text, control characters removed and bounded. NEVER stdout. */
+function keychainFailureHint(text: string): string {
+  const line = text.split(/\r?\n/).find((entry) => entry.trim().length > 0)?.trim() ?? "";
+  const clean = line.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 200);
+  return clean ? `: ${clean}` : "";
+}
+
+/** A Keychain item's value and its diagnostic source. The value is never logged. */
+export interface KeychainItemHit {
+  value: string;
+  /** `keychain:<service>@<account>` — names the item, never its value. */
+  source: string;
+}
+
+/**
+ * Read one generic-password item from the login keychain, fresh.
+ *
+ * Absent (null) when the tier is off for this env/platform, when no account can
+ * be derived, or when the item does not exist (`security` exit 44). Every other
+ * failure — the tool cannot run, the keychain is locked or interaction is not
+ * allowed, the item exists but is empty — is a TERMINAL
+ * {@link CredentialResolutionError}: an item that exists but cannot be read is
+ * never resolved around, because falling through would authenticate as
+ * whatever identity comes next in the chain. No message ever carries stdout.
+ */
+function readKeychainItem(
+  name: string,
+  env: Env,
+  kind: "api-key" | "api-url",
+  options: KeychainTierOptions,
+): KeychainItemHit | null {
+  if (!SAFE_APP_SLUG.test(name) || !keychainTierEnabled(env, options)) return null;
+  const account = keychainAccount(env, options);
+  if (!account) return null;
+  const service = `${KEYCHAIN_SERVICE_PREFIX}.${name}.${kind}`;
+  const source = `keychain:${service}@${account}`;
+  const run = options.run ?? defaultKeychainRunner;
+  let result: KeychainCommandResult;
+  try {
+    result = run(["find-generic-password", "-a", account, "-s", service, "-w"]);
+  } catch (error) {
+    const reason = keychainFailureHint(error instanceof Error ? error.message : String(error));
+    throw new CredentialResolutionError(
+      name,
+      `The Keychain lookup for ${source} could not run${reason}. A Keychain failure is never resolved ` +
+        `around: fix the keychain, or delete the item to fall through to the credential on disk.`,
+      [source],
+    );
   }
+  if (result.status === KEYCHAIN_ITEM_NOT_FOUND_STATUS) return null;
+  if (result.status !== 0) {
+    throw new CredentialResolutionError(
+      name,
+      `The Keychain lookup for ${source} failed (security exited ` +
+        `${result.status ?? "without a status"}${keychainFailureHint(result.stderr)}). A Keychain item that ` +
+        `exists but cannot be read is never resolved around: unlock the keychain, run from a session that ` +
+        `may use it, or delete the item to fall through to the credential on disk.`,
+      [source],
+    );
+  }
+  const value = result.stdout.trim();
+  if (!value) {
+    throw new CredentialResolutionError(
+      name,
+      `${source} exists but holds an empty value; a declared item never falls through to another ` +
+        `identity. Store a value in it or delete the item.`,
+      [source],
+    );
+  }
+  return { value, source };
+}
+
+/**
+ * The Keychain's `api-url` item for an app — the authority tier that sits
+ * beside the credential item, so a station can pin a non-default service URL
+ * without a file or an env var. Same account rules and failure semantics as
+ * the credential item.
+ */
+export function keychainConfigValue(name: string, env: Env, options: KeychainTierOptions = {}): KeychainItemHit | null {
+  return readKeychainItem(name, env, "api-url", options);
 }
 
 /** @internal Snapshot only this client's configuration, without executing getters. */
 export function snapshotClientEnvironment(name: string, env: Env): Env {
   const keys = clientTransportEnvKeys(name);
+  const ambient = isAmbientEnvironment(env);
   const snapshot: Env = Object.create(null);
   for (const key of [
     ...keys.apiUrlKeys,
@@ -731,7 +912,10 @@ export function snapshotClientEnvironment(name: string, env: Env): Env {
     credentialPointerEnvKey(name),
     CREDENTIAL_PROFILE_ENV_KEY,
     "HOME",
-    "XDG_CONFIG_HOME",
+    HASNA_HOME_ENV_KEY,
+    HASNA_CONFIG_HOME_ENV_KEY,
+    KEYCHAIN_STATION_ENV_KEY,
+    "USER",
   ]) {
     const descriptor = Object.getOwnPropertyDescriptor(env, key);
     if (!descriptor) continue;
@@ -742,6 +926,14 @@ export function snapshotClientEnvironment(name: string, env: Env): Env {
       throw new CredentialResolutionError(name, `${key} must be a string data property.`, [key]);
     }
     snapshot[key] = descriptor.value;
+  }
+  if (ambient) {
+    Object.defineProperty(snapshot, AMBIENT_ENVIRONMENT, {
+      value: true,
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
   }
   return Object.freeze(snapshot);
 }
@@ -780,7 +972,6 @@ export function resolveCredential(
       tier: "argument",
       source: "explicit apiKey argument",
       deliberate: true,
-      deprecated: false,
       diskCandidates: diskPaths,
       warning: null,
     });
@@ -809,7 +1000,6 @@ export function resolveCredential(
       tier: "override",
       source: overrideKeyName,
       deliberate: true,
-      deprecated: false,
       diskCandidates: diskPaths,
       warning: null,
     });
@@ -848,7 +1038,6 @@ export function resolveCredential(
       tier: "pointer",
       source: pointerKeyName,
       deliberate: true,
-      deprecated: false,
       diskCandidates: diskPaths,
       warning: null,
     });
@@ -888,7 +1077,6 @@ export function resolveCredential(
           tier: "profile",
           source: path,
           deliberate: true,
-          deprecated: false,
           diskCandidates: paths,
           warning: null,
         });
@@ -904,32 +1092,64 @@ export function resolveCredential(
     );
   }
 
-  const definedLegacyEntries = apiKeyKeys
+  // The process-env tier is validated up front, whichever tier ends up winning:
+  // a DECLARED-but-blank alias, or two aliases that disagree, is a
+  // misconfiguration that must not be papered over by a higher tier.
+  const definedEnvEntries = apiKeyKeys
     .filter((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined)
     .map((key) => ({ key, value: String(env[key]).trim() }));
-  const blankLegacy = definedLegacyEntries.find((entry) => entry.value.length === 0);
-  if (blankLegacy) {
+  const blankEnv = definedEnvEntries.find((entry) => entry.value.length === 0);
+  if (blankEnv) {
     throw new CredentialResolutionError(
       name,
-      `${blankLegacy.key} is set but blank; a declared credential never falls through to another alias or identity.`,
-      [blankLegacy.key],
+      `${blankEnv.key} is set but blank; a declared credential never falls through to another alias or identity.`,
+      [blankEnv.key],
     );
   }
-  if (definedLegacyEntries.length > 1 && new Set(definedLegacyEntries.map((entry) => entry.value)).size > 1) {
+  if (definedEnvEntries.length > 1 && new Set(definedEnvEntries.map((entry) => entry.value)).size > 1) {
     throw new CredentialResolutionError(
       name,
-      `${definedLegacyEntries.map((entry) => entry.key).join(" and ")} disagree; credential aliases must be identical or only one may be set.`,
-      definedLegacyEntries.map((entry) => entry.key),
+      `${definedEnvEntries.map((entry) => entry.key).join(" and ")} disagree; credential aliases must be identical or only one may be set.`,
+      definedEnvEntries.map((entry) => entry.key),
     );
+  }
+  const envHit = firstEnvValue(env, apiKeyKeys);
+
+  // ---- Tier 3: the macOS Keychain, read at call time. --------------------
+  // The station's own store, consulted before disk so a machine that keeps its
+  // key in the login keychain needs neither a file nor a wrapper. A missing
+  // item is an absent tier; any other failure threw above. There is no cache:
+  // a cache is the same snapshot defect at a smaller timescale.
+  const keychainHit = readKeychainItem(name, env, "api-key", options.keychain ?? {});
+  if (keychainHit) {
+    assertUsableCredential(name, keychainHit.source, keychainHit.value);
+    // Only the env is compared here — comparing the disk file too would cost a
+    // file read on every call for a tier that has already decided.
+    const warning =
+      envHit && envHit.value !== keychainHit.value
+        ? `Credential sources disagree for '${name}': ${keychainHit.source} and ${envHit.key} hold ` +
+          `different keys. ${keychainHit.source} wins, because the Keychain is re-read on every call while ` +
+          `an environment variable is a snapshot. Reconcile them — a rotation that updated only one leaves ` +
+          `the other to fail 401 wherever it is loaded first.`
+        : null;
+    return sealCredential({
+      apiKey: keychainHit.value,
+      tier: "keychain",
+      source: keychainHit.source,
+      deliberate: false,
+      diskCandidates: diskPaths,
+      warning,
+    });
   }
 
-  // ---- Tier 3: disk, read at call time. ----------------------------------
+  // ---- Tier 4: disk, read at call time. ----------------------------------
   // This is what makes a rotation heal in any shell, however old: the file is
   // re-read on every call, so there is no snapshot to go stale. There is
   // deliberately NO CACHE here — a cache is the same defect at a smaller
   // timescale.
   //
-  // The sole automatic disk source is the owner-only XDG config file.
+  // The sole automatic disk source is the owner-only credentials file in the
+  // app's config directory.
   const diskSourceList = credentialDiskSourceList(name, env, null);
   const diskHits = diskSourceList
     .map((src) => ({ src, value: readCredentialFile(src.path, apiKeyKeys) }))
@@ -942,17 +1162,14 @@ export function resolveCredential(
     // fingerprint of the secret — even a truncated digest — is a derived
     // encoding of credential material and a confirmation oracle, so none is
     // emitted.
+    //
+    // Disk OUTRANKS the process env, which introduces a failure this chain did
+    // not previously have: an operator whose environment key works today
+    // starts using a DIFFERENT key the moment a stale file exists on disk, and
+    // would otherwise get no signal at all.
     const divergentSources = [
       ...diskHits.slice(1).filter((hit) => hit.value !== winner.value).map((hit) => hit.src.path),
-      // Disk now OUTRANKS the legacy env var, which introduces a failure this
-      // chain did not previously have: an operator whose environment key works
-      // today starts using a DIFFERENT key the moment a stale file exists on
-      // disk, and would otherwise get no signal at all. Comparing only the two
-      // disk layers to each other would miss exactly that case.
-      ...(() => {
-        const legacyHit = firstEnvValue(env, apiKeyKeys);
-        return legacyHit && legacyHit.value !== winner.value ? [legacyHit.key] : [];
-      })(),
+      ...(envHit && envHit.value !== winner.value ? [envHit.key] : []),
     ];
     const warning =
       divergentSources.length > 0
@@ -967,43 +1184,27 @@ export function resolveCredential(
       tier: winner.src.tier,
       source: winner.src.path,
       deliberate: false,
-      deprecated: false,
       diskCandidates: diskPaths,
       warning,
     });
   }
 
-  // ---- Tier 4: the legacy process env, demoted to a deprecated fallback. --
-  const legacy = firstEnvValue(env, apiKeyKeys);
-  if (legacy) {
-    assertUsableCredential(name, legacy.key, legacy.value);
-    // Reaching here PROVES the disk had nothing: tier 3 ran first and found no
-    // credential. Any advice given from here must say so, rather than implying
-    // a disk credential is waiting to be picked up.
-    const where =
-      diskPaths.length > 0
-        ? `Provision the key in the secrets vault and reference it via ${credentialPointerEnvKey(name)}, or set ` +
-          `${credentialOverrideEnvKey(name)} in the process environment.`
-        : `This environment has no HOME, so no credential file could be consulted at all; the disk tier is ` +
-          `unavailable here and this process will keep using the environment snapshot.`;
-    const message =
-      `[${name}] DEPRECATED: the API key came from ${legacy.key} in this process's environment. ` +
-      `Environment variables are a snapshot taken when this process started, so a shell that started ` +
-      `before a key rotation keeps using the old key until it exits. ${where}`;
-    const sink = options.onDeprecation ?? defaultDeprecationSink;
-    const notified = deprecationNotified();
-    if (!notified.has(name)) {
-      notified.add(name);
-      sink(message);
-    }
+  // ---- Tier 5: the process environment. ----------------------------------
+  // A legitimate tier, not a deprecated one: a station wrapper that injects
+  // the key per process from the Keychain is exactly right, and re-reads its
+  // store on every invocation. It sits below disk so that a rotated on-disk
+  // key beats a stale shell export when both exist. Reaching here PROVES the
+  // Keychain and the disk had nothing — the auth-failure guidance in
+  // transport.ts relies on that when it says where to put the current key.
+  if (envHit) {
+    assertUsableCredential(name, envHit.key, envHit.value);
     return sealCredential({
-      apiKey: legacy.value,
-      tier: "legacy-env",
-      source: legacy.key,
+      apiKey: envHit.value,
+      tier: "env",
+      source: envHit.key,
       deliberate: false,
-      deprecated: true,
       diskCandidates: diskPaths,
-      warning: message,
+      warning: null,
     });
   }
 
@@ -1111,7 +1312,6 @@ export async function completePointerCredential(
     tier: "pointer",
     source: `${pointerEnvKey} -> vault:${vaultKey}`,
     deliberate: true,
-    deprecated: false,
     diskCandidates: pointerResolution.diskCandidates,
     warning: null,
   });

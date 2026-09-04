@@ -48,7 +48,6 @@ describe("credential review regressions", () => {
       tier: "override",
       source: "untrusted label",
       deliberate: true,
-      deprecated: false,
       diskCandidates: [],
       warning: "untrusted warning",
     });

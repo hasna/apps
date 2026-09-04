@@ -12,7 +12,7 @@ import {
   resolveClientTransport,
   toV1BaseUrl,
 } from "./transport.js";
-import { __resetCredentialDeprecationNotices, resolveCredential } from "./credentials.js";
+import { resolveCredential } from "./credentials.js";
 import { createLoopbackTestGate } from "../testing/loopback.js";
 
 // Each suite below is gated on the bind it actually performs, not on a single

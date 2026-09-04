@@ -27,7 +27,7 @@ import {
 // The credential chain is part of this module's public surface: callers wire
 // `--api-key` / `--profile` through it, and consumers migrating off a direct
 // `process.env` read need its types.
-import { appConfigDiskValue, credentialDiskSources } from "./credentials.js";
+import { appConfigDiskValue, credentialDiskSources, keychainConfigValue } from "./credentials.js";
 
 export {
   appConfigDiskValue,
@@ -36,6 +36,10 @@ export {
   credentialDiskSources,
   CredentialResolutionError,
   explicitCredential,
+  HASNA_CONFIG_HOME_ENV_KEY,
+  HASNA_HOME_ENV_KEY,
+  KEYCHAIN_STATION_ENV_KEY,
+  keychainConfigValue,
   resolveCredential,
 } from "./credentials.js";
 export type {
@@ -43,6 +47,10 @@ export type {
   CredentialChainOptions,
   CredentialTier,
   DiskCredentialSource,
+  KeychainCommandResult,
+  KeychainCommandRunner,
+  KeychainItemHit,
+  KeychainTierOptions,
   ResolvedCredential,
 } from "./credentials.js";
 export {
@@ -55,6 +63,24 @@ export type { ClientTransportEnvKeys } from "./env-keys.js";
 
 const FLEET_API_DOMAIN_ENV_KEY = "HASNA_FLEET_API_DOMAIN";
 const NEUTRAL_FLEET_API_DOMAIN = "your-deployment.example";
+
+/**
+ * The fleet gateway every app is served through, path-prefixed by app:
+ * `https://api.hasna.com/<app>` (the client appends `/v1`). It is the DEFAULT
+ * authority when nothing configures a URL — a key from any tier is enough to
+ * reach the fleet, and URLs never need configuring (owner directive,
+ * 2026-09-04). `HASNA_<NAME>_API_URL`, the Keychain `api-url` item, and the
+ * credentials file all override it. This is a PUBLIC hostname; the per-app
+ * origin domain behind the gateway stays unnamed here (see `fleetApiDomain`).
+ */
+export const DEFAULT_FLEET_GATEWAY_ORIGIN = "https://api.hasna.com";
+/** The `apiUrlSource` / `transportSource` reported when the default gateway applies. */
+export const DEFAULT_AUTHORITY_SOURCE = "default";
+
+/** `https://api.hasna.com/<app>` for a valid app slug; throws for an unsafe name. */
+export function defaultFleetGatewayBaseUrl(name: string): string {
+  return `${DEFAULT_FLEET_GATEWAY_ORIGIN}/${validateAppSlug(name)}`;
+}
 const ASCII_CONTROL_PATTERN = /[\u0000-\u001f\u007f]/;
 const DNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
@@ -164,9 +190,11 @@ function resolveDefaultCloudBaseUrl(
 }
 
 /**
- * Fleet API domain suffix. This published package never ships a real internal
- * hostname: override with `HASNA_FLEET_API_DOMAIN` (REQUIRED in a real
- * deployment) or set an explicit `HASNA_<NAME>_API_URL` per app. Absent both,
+ * Fleet API domain suffix for a per-app ORIGIN hostname. This published
+ * package never ships a real origin hostname: override with
+ * `HASNA_FLEET_API_DOMAIN` or set an explicit `HASNA_<NAME>_API_URL` per app.
+ * (Clients need neither any more — `resolveClientTransport` defaults to the
+ * public gateway, `DEFAULT_FLEET_GATEWAY_ORIGIN`.) Absent both,
  * this falls back to a neutral placeholder that intentionally does not
  * resolve to any service. Blank, malformed, and suffixes that cannot form a
  * valid total hostname with the app prefix use the same deterministic
@@ -338,15 +366,16 @@ export interface ClientTransportResolution {
   /** Where the client should read/write from. */
   transport: ClientTransportKind;
   /**
-   * What selected the transport: an API URL env key NAME or the absolute PATH
-   * of the XDG app-config file that supplied the URL.
+   * What selected the transport: an API URL env key NAME, a Keychain item
+   * reference, the absolute PATH of the credentials file that supplied the
+   * URL, or `"default"` when the fleet gateway applied.
    */
   transportSource: string;
   /** `<origin>/v1` base for the server API. */
   baseUrl: string;
   /**
-   * WHERE the API URL/domain came from: an env key NAME, an absolute file PATH,
-   * `"default"` (neutral placeholder), or null.
+   * WHERE the API URL/domain came from: an env key NAME, a Keychain item
+   * reference, an absolute file PATH, `"default"` (the fleet gateway), or null.
    */
   apiUrlSource: string | null;
   /** Whether an API key is present (value never exposed). */
@@ -372,7 +401,7 @@ export interface ClientTransportResolution {
 }
 
 export interface ResolveClientTransportOptions {
-  /** Tier-1 credential inputs, e.g. from `--api-key` / `--profile` flags. */
+  /** Tier-1 credential inputs (`--api-key` / `--profile`) and Keychain-tier controls. */
   credentials?: CredentialChainOptions;
 }
 
@@ -383,8 +412,10 @@ interface ResolvedClientTransportSnapshot {
 
 /**
  * Resolve the sole authenticated service transport. The authority is read from
- * the environment first and then XDG app config. Missing, blank, conflicting,
- * or invalid declarations throw. Credentials are resolved at call time.
+ * the environment, then the Keychain `api-url` item, then the credentials
+ * file, and defaults to the fleet gateway once a credential has resolved.
+ * Missing, blank, conflicting, or invalid declarations throw. Credentials are
+ * resolved at call time.
  */
 function resolveClientTransportSnapshot(
   name: string,
@@ -417,6 +448,7 @@ function resolveClientTransportSnapshot(
     );
   }
   const envUrlHit = usableUrlEntries[0] ?? null;
+  const keychainUrlHit = keychainConfigValue(name, env, options.credentials?.keychain);
   const diskConfigUrlHit = appConfigDiskValue(name, env, keys.apiUrlKeys);
   if (diskConfigUrlHit?.unusable) {
     throw new ClientTransportConfigurationError(
@@ -425,54 +457,71 @@ function resolveClientTransportSnapshot(
       [diskConfigUrlHit.path],
     );
   }
-  if (envUrlHit && diskConfigUrlHit && envUrlHit.value !== diskConfigUrlHit.value.trim()) {
+  // Every configured authority in precedence order — env, Keychain, disk —
+  // each carrying its SOURCE (an env key name, a Keychain item reference, or
+  // the absolute path of the file that decided). `apiKeySource` already
+  // reports its tier this way, so an operator reads both the same way. All of
+  // them must agree: a credential written for one authority is never sent to
+  // another.
+  const urlCandidates = [
+    ...(envUrlHit ? [envUrlHit] : []),
+    ...(keychainUrlHit ? [{ key: keychainUrlHit.source, value: keychainUrlHit.value }] : []),
+    ...(diskConfigUrlHit ? [{ key: diskConfigUrlHit.path, value: diskConfigUrlHit.value.trim() }] : []),
+  ];
+  const configuredUrl = urlCandidates[0] ?? null;
+  const divergentUrls = urlCandidates.filter((candidate) => candidate.value !== configuredUrl?.value);
+  if (configuredUrl && divergentUrls.length > 0) {
     throw new ClientTransportConfigurationError(
       name,
-      `${envUrlHit.key} and ${diskConfigUrlHit.path} select different service authorities; refusing to send a credential written for one authority to the other.`,
-      [envUrlHit.key, diskConfigUrlHit.path],
+      `${configuredUrl.key} and ${divergentUrls.map((candidate) => candidate.key).join(" and ")} select different service authorities; refusing to send a credential written for one authority to the other.`,
+      urlCandidates.map((candidate) => candidate.key),
     );
   }
-  const diskUrlHit = envUrlHit ? null : diskConfigUrlHit;
-  // `key` carries the SOURCE for every downstream field: an env key name, or the
-  // absolute path of the file that decided. `apiKeySource` already reports its
-  // tier this way, so an operator reads both the same way.
-  const urlHit = envUrlHit ?? (diskUrlHit ? { key: diskUrlHit.path, value: diskUrlHit.value } : null);
   const warnings: string[] = [];
 
-  // No URL is never a local-data selection. Public clients fail before any
-  // data operation can run.
-  if (!urlHit) {
-    throw new ClientTransportConfigurationError(
-      name,
-      `${keys.apiUrlKeys[0]} is required; public clients use only the authenticated HTTPS service and never fall back to SQLite or another local store.`,
-      keys.apiUrlKeys,
-    );
-  }
-
-  // A server URL decided by a disk pointer while the environment was silent is
-  // a deliberate flip, and it must not be silent: name the file that decided.
-  if (diskUrlHit) {
+  // A server URL decided by a store while the environment was silent is a
+  // deliberate flip, and it must not be silent: name the source that decided.
+  if (configuredUrl && !envUrlHit) {
     warnings.push(
-      `No ${keys.apiUrlKeys[0]} in the environment; the server URL in ${diskUrlHit.path} was used, so this client connects to the server. ` +
-        `Keep this XDG config entry aligned with the intended service authority.`,
+      `No ${keys.apiUrlKeys[0]} in the environment; the server URL in ${configuredUrl.key} was used, so this client connects to the server. ` +
+        `Keep that entry aligned with the intended service authority.`,
     );
   }
 
-  // An API URL explicitly selects HTTP. Resolve the credential at call time.
-  // A deliberate tier that cannot be honoured still throws rather than
-  // authenticating as a different principal.
+  // Resolve the credential at call time. A deliberate tier that cannot be
+  // honoured still throws rather than authenticating as a different principal.
   const credential: ResolvedCredential | null = resolveCredential(name, env, options.credentials);
 
   if (!credential) {
     const diskHint = credentialDiskSourcesForMessage(name, env);
+    const lead = configuredUrl
+      ? `${configuredUrl.key} selects the HTTP server for '${name}', but no API key could be resolved`
+      : `${keys.apiUrlKeys[0]} is not set and no API key could be resolved for '${name}'; a credential is required before the default fleet gateway authority applies`;
     warnings.push(
-      `${urlHit.key} selects the HTTP server for '${name}', but no API key could be resolved; ` +
-        `refusing to create an unauthenticated client. ` +
-        `Looked for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`,
+      `${lead}; refusing to create an unauthenticated client — public clients never fall back to SQLite or another local store. ` +
+        `Looked in the Keychain (macOS only), then for a credential file at ${diskHint}, then for ${keys.apiKeyKeys[0]} in the environment.`,
     );
-    throw new ClientTransportConfigurationError(name, warnings.join(" "), [urlHit.key]);
+    throw new ClientTransportConfigurationError(name, warnings.join(" "), [configuredUrl?.key ?? keys.apiUrlKeys[0]!]);
   }
   if (credential.warning) warnings.push(credential.warning);
+
+  // With a credential in hand and nothing configuring the authority, the fleet
+  // gateway IS the authority: URLs never need configuring.
+  let urlHit: { key: string; value: string };
+  if (configuredUrl) {
+    urlHit = configuredUrl;
+  } else {
+    try {
+      urlHit = { key: DEFAULT_AUTHORITY_SOURCE, value: defaultFleetGatewayBaseUrl(name) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new ClientTransportConfigurationError(
+        name,
+        `No ${keys.apiUrlKeys[0]} is configured and the default fleet gateway authority cannot be composed for '${name}': ${message}`,
+        [keys.apiUrlKeys[0]!],
+      );
+    }
+  }
 
   const apiUrlSource = urlHit.key;
   let baseUrl: string;
@@ -518,7 +567,9 @@ export function resolveClientTransport(
 /** Render the disk candidates for a diagnostic, without touching their contents. */
 function credentialDiskSourcesForMessage(name: string, env: Env): string {
   const paths = credentialDiskSources(name, env);
-  return paths.length > 0 ? paths.join(" or ") : "<no HOME set in this environment, so no credential file was consulted>";
+  return paths.length > 0
+    ? paths.join(" or ")
+    : "<no HOME or HASNA_HOME set in this environment, so no credential file was consulted>";
 }
 
 /** Thrown when a cloud HTTP request returns a non-2xx status, including redirects. */
@@ -620,22 +671,30 @@ function authFailureGuidance(credential: ResolvedCredential): string {
       `exactly the failure an override exists to prevent. ${remedy}`
     );
   }
-  if (credential.deprecated) {
-    // Reaching the legacy tier PROVES the disk had no credential — tier 3 runs
-    // first. So the advice must be "write the key to disk", never "unset this
-    // variable": unsetting it with nothing on disk leaves the client with no
-    // credential and makes the authenticated request fail closed.
+  if (credential.tier === "env") {
+    // Reaching the env tier PROVES the Keychain and the disk had no credential
+    // — both run first. So the advice must be "put the key where it is re-read",
+    // never "unset this variable": unsetting it with nothing in either store
+    // leaves the client with no credential and makes the request fail closed.
     const target = credential.diskCandidates[0];
     const remedy = target
-      ? `Write the CURRENT key to ${target} — that file is re-read on every call, so rotations take ` +
-        `effect immediately and in every shell. Do not simply unset ${credential.source}: nothing was ` +
-        `found on disk, so that would leave this client with no credential at all.`
-      : `This environment has no HOME, so no credential file could be consulted; the disk tier is ` +
+      ? `Store the CURRENT key in the Keychain or write it to ${target} — both are re-read on every call, so ` +
+        `rotations take effect immediately and in every shell. Do not simply unset ${credential.source}: ` +
+        `nothing was found in the Keychain or on disk, so that would leave this client with no credential at all.`
+      : `This environment has no HOME or HASNA_HOME, so no credential file could be consulted; the disk tier is ` +
         `unavailable here and there is nothing to fall back to. Set HOME, or supply the key explicitly.`;
     return (
-      `${origin}, a variable in this process's environment — which is a snapshot taken when the process ` +
-      `started. A STALE SHELL is the most common cause of this error: this shell exported the key before ` +
-      `it was rotated, and will keep sending the old one until it exits. ${remedy}`
+      `${origin}, a variable in this process's environment. If a wrapper injected it for this one process, the ` +
+      `wrapper re-reads its store on every invocation and the stored key itself is being rejected — rotate it. ` +
+      `If this SHELL exported it, the export is a snapshot taken when the shell started: a STALE SHELL that ` +
+      `exported the key before it was rotated keeps sending the old one until it exits. ${remedy}`
+    );
+  }
+  if (credential.tier === "keychain") {
+    return (
+      `${origin}, which was re-read from the Keychain on this very call — so a stale shell is NOT the cause ` +
+      `here. The stored item is genuinely being rejected: update it with the current key, or re-run the fleet ` +
+      `key distribution so this machine gets the current key.`
     );
   }
   return (

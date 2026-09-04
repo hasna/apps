@@ -10,7 +10,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CredentialResolutionError,
-  __resetCredentialDeprecationNotices,
   credentialDiskSources,
   resolveCredential,
   type ResolvedCredential,
@@ -26,24 +25,20 @@ function makeHome(): string {
   return home;
 }
 
+/** The ruled disk tier: `~/.hasna/<app>/config/credentials`, owner-only. */
 function writeCloudEnv(home: string, app: string, body: string): string {
-  const dir = join(home, ".config", "hasna");
+  const dir = join(home, ".hasna", app, "config");
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${app}.env`);
+  const path = join(dir, "credentials");
   writeFileSync(path, body, { mode: 0o600 });
   return path;
 }
 
 function writeConfigEnv(home: string, app: string, body: string): string {
-  const dir = join(home, ".config", "hasna");
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${app}.env`);
-  writeFileSync(path, body, { mode: 0o600 });
-  return path;
+  return writeCloudEnv(home, app, body);
 }
 
 afterEach(() => {
-  __resetCredentialDeprecationNotices();
   while (homes.length > 0) rmSync(homes.pop()!, { recursive: true, force: true });
 });
 
@@ -161,7 +156,6 @@ describe("a caller-supplied CredentialProvider gets the credential protections",
       tier: "disk",
       source: "caller-supplied provider",
       deliberate: false,
-      deprecated: false,
       diskCandidates: [],
       warning: null,
     };
@@ -199,10 +193,9 @@ describe("a caller-supplied CredentialProvider gets the credential protections",
       retry: false,
       apiKey: () => ({
         apiKey: PLAINTEXT,
-        tier: "legacy-env",
+        tier: "env",
         source: PLAINTEXT,
         deliberate: false,
-        deprecated: true,
         diskCandidates: [PLAINTEXT],
         warning: `warning ${PLAINTEXT}`,
       }),
@@ -281,7 +274,6 @@ describe("a caller-supplied CredentialProvider gets the credential protections",
           tier: "disk",
           source: "caller-supplied provider",
           deliberate: false,
-          deprecated: false,
           diskCandidates: [],
           warning: null,
         };
