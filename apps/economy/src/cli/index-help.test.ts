@@ -11,15 +11,19 @@ const tempRoots: string[] = []
 // clearing the API URL/KEY pair (the contracts 0.11.1 client selects the http
 // transport purely from their presence).
 const localStorageEnv = {
-  // The contracts 0.11.1 client selects the http transport from the API
-  // URL/KEY pair alone (modes are retired). The fleet shell exports
-  // HASNA_ECONOMY_API_URL/KEY and the disk app-config tier derives from HOME,
-  // so a spawned CLI needs both tiers neutralized to stay on the local store.
+  // The contracts client selects the http transport from the API URL/KEY pair
+  // alone (modes are retired). The fleet shell exports HASNA_ECONOMY_API_URL/KEY
+  // and the disk app-config tier derives from HOME, so a spawned CLI needs both
+  // tiers neutralized to stay on the local store. HASNA_ECONOMY_LOCAL is the
+  // explicit opt-in that keeps this a legal local-mode run — without it the
+  // CLI fails closed (see src/lib/cloud-storage.ts).
   HOME: '',
   HASNA_ECONOMY_API_URL: '',
   HASNA_ECONOMY_API_KEY: '',
   ECONOMY_API_URL: '',
   ECONOMY_API_KEY: '',
+  HASNA_ECONOMY_LOCAL: '1',
+  ECONOMY_LOCAL: '1',
 } as const
 
 async function runCli(

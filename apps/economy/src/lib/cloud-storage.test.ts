@@ -9,10 +9,17 @@ import {
 const KEY = "hasna_economy_testkey_0000000000";
 
 describe("resolveEconomyCloudStorage", () => {
-  it("is inactive (local) when no mode/env is set", () => {
-    const r = resolveEconomyCloudStorage({});
-    expect(r.active).toBe(false);
-    expect(r.client).toBeNull();
+  // Fail-closed default (owner directive 2026-09-04): without the fleet API
+  // environment AND without the explicit local opt-in, resolution must throw —
+  // the CLI may never silently serve the local SQLite store with a false-green
+  // exit. The error names the required variables so a missing-env run is
+  // actionable.
+  it("throws when no mode/env is set, naming the required API environment and the local opt-in", () => {
+    expect(() => resolveEconomyCloudStorage({})).toThrow(
+      /HASNA_ECONOMY_API_URL and HASNA_ECONOMY_API_KEY/,
+    );
+    expect(() => resolveEconomyCloudStorage({})).toThrow(/HASNA_ECONOMY_LOCAL=1/);
+    expect(() => resolveEconomyCloudStorage({})).toThrow(/fail\w*\s*closed/i);
   });
 
   // Deployment modes no longer exist (owner directive 2026-07-29). A retired
@@ -71,13 +78,54 @@ describe("resolveEconomyCloudStorage", () => {
     ).toThrow(/API key/i);
   });
 
-  // Guard against over-firing: an unconfigured machine is a legitimate local
-  // client and must stay silent. This is the negative control for the test above
-  // -- if the partial-flip fix ever starts throwing here, it has become a
-  // fleet-wide outage rather than a safety check.
-  it("stays silently local when neither API_URL nor API_KEY is set", () => {
-    expect(() => resolveEconomyCloudStorage({})).not.toThrow();
-    expect(resolveEconomyCloudStorage({}).active).toBe(false);
+  // The explicit local opt-in (HASNA_ECONOMY_LOCAL, alias ECONOMY_LOCAL) is the
+  // only way to reach the on-box SQLite store without the fleet API env. These
+  // are the negative controls for the fail-closed test above: once opted in,
+  // an unconfigured machine is a legitimate local client again.
+  it("is inactive (local) when the explicit local opt-in is set and no API env is set", () => {
+    const r = resolveEconomyCloudStorage({ HASNA_ECONOMY_LOCAL: "1" });
+    expect(r.active).toBe(false);
+    expect(r.client).toBeNull();
+    expect(() => resolveEconomyCloudStorage({ HASNA_ECONOMY_LOCAL: "1" })).not.toThrow();
+  });
+
+  it("accepts the unprefixed ECONOMY_LOCAL alias for the opt-in", () => {
+    expect(resolveEconomyCloudStorage({ ECONOMY_LOCAL: "true" }).active).toBe(false);
+  });
+
+  it("treats blank/false-y opt-in values as not opted in (fail closed)", () => {
+    for (const value of ["", "0", "false", "no", "off", "FALSE"]) {
+      expect(() => resolveEconomyCloudStorage({ HASNA_ECONOMY_LOCAL: value })).toThrow(
+        /HASNA_ECONOMY_API_URL/,
+      );
+    }
+  });
+
+  it("opt-in keeps the explicit-blank API URL/KEY pair on the local store", () => {
+    // The shape spawned-CLI local-mode tests use: both tiers of the API env are
+    // cleared, and local is opted into explicitly.
+    const r = resolveEconomyCloudStorage({
+      HASNA_ECONOMY_API_URL: "",
+      HASNA_ECONOMY_API_KEY: "",
+      ECONOMY_API_URL: "",
+      ECONOMY_API_KEY: "",
+      HASNA_ECONOMY_LOCAL: "1",
+    });
+    expect(r.active).toBe(false);
+    expect(r.client).toBeNull();
+  });
+
+  // The opt-in is a local-mode switch, never a misconfiguration bypass: an API
+  // URL present without a key still refuses to route (the contracts seam
+  // reports the resolution as misconfigured), because falling back to the local
+  // dataset would read the wrong store for an operator who pointed at the API.
+  it("throws on API_URL without API_KEY even when the local opt-in is set", () => {
+    expect(() =>
+      resolveEconomyCloudStorage({
+        HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
+        HASNA_ECONOMY_LOCAL: "1",
+      }),
+    ).toThrow(/API key/i);
   });
 
 

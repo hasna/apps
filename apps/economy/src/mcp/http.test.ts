@@ -4,8 +4,25 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { buildServer } from './server.js'
-import { DEFAULT_MCP_HTTP_PORT, MCP_HTTP_IDLE_TIMEOUT_SECONDS, MCP_NAME, startHttpServer } from './http.js'
+
+// server.js resolves the storage seam (getStore()) at module scope, and that
+// resolution now FAILS CLOSED unless the fleet API env or the explicit local
+// opt-in is present. These tests serve the on-box SQLite store under
+// HASNA_ECONOMY_DB_PATH, so pin the local opt-in and a hermetic no-API env
+// BEFORE the server module is first evaluated (dynamic import, below).
+for (const key of [
+  'HASNA_ECONOMY_API_URL',
+  'HASNA_ECONOMY_API_KEY',
+  'ECONOMY_API_URL',
+  'ECONOMY_API_KEY',
+]) {
+  delete process.env[key]
+}
+process.env['HASNA_ECONOMY_LOCAL'] = '1'
+process.env['ECONOMY_LOCAL'] = '1'
+
+const { buildServer, DEFAULT_MCP_HTTP_PORT, MCP_NAME } = await import('./server.js')
+const { startHttpServer, MCP_HTTP_IDLE_TIMEOUT_SECONDS } = await import('./http.js')
 
 const roots: string[] = []
 const servers: Array<ReturnType<typeof startHttpServer>> = []

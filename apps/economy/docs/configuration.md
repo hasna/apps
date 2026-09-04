@@ -34,7 +34,7 @@ The same agent-specific pattern applies to all eight supported agents. Account k
 
 ## CLI/MCP cloud client
 
-Local is the default. To route CLI and MCP data operations to a shared server, set:
+The CLI and MCP server fail closed when the fleet API environment is absent: they never silently fall back to the on-box SQLite store. To route CLI and MCP data operations to a shared server, set:
 
 ```bash
 export HASNA_ECONOMY_API_URL=https://economy.example.com
@@ -42,6 +42,14 @@ export HASNA_ECONOMY_API_KEY='...'
 ```
 
 URL plus key is the entire cloud signal: it routes CLI and MCP data operations to the HTTP API. Unprefixed `ECONOMY_API_URL`/`ECONOMY_API_KEY` aliases are accepted. An existing `/v1` suffix is normalized, otherwise it is appended. A URL without a key (or an invalid URL) fails rather than reading an unintended local dataset.
+
+Local mode (the on-box SQLite store at the default data directory above) is reachable only by explicit opt-in:
+
+```bash
+export HASNA_ECONOMY_LOCAL=1
+```
+
+The unprefixed `ECONOMY_LOCAL=1` alias is accepted. With neither the API environment nor the opt-in, data commands exit non-zero with an error naming the required variables, and no local database is created — a run that cannot prove which dataset it serves refuses to serve one.
 
 Retired `*_STORAGE_MODE` / `*_MODE` variables no longer exist as selectors: `HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`, plus the accounts variants `HASNA_ACCOUNTS_*_MODE`) are a hard error on the client too — delete them and let the URL + key pair do the routing.
 
