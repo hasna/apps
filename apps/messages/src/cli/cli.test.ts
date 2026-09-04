@@ -118,6 +118,56 @@ describe("messages CLI", () => {
     }
   });
 
+  test("status prints the resolved /v1 authority and carries api_url in --json (#1588)", async () => {
+    // Gateway form without /v1: the printed authority must be the resolved
+    // /v1 root, never the bare base and never the origin alone.
+    const human = runCli(["status"], { HASNA_MESSAGES_API_URL: "https://api.hasna.com/messages" });
+    expect(human.status).toBe(0);
+    expect(human.stdout).toContain("API: https://api.hasna.com/messages/v1");
+    expect(human.stdout).toContain("transport: http");
+
+    const json = runCli(["status", "--json"], {
+      HASNA_MESSAGES_API_URL: "https://api.hasna.com/messages/v1",
+      HASNA_MESSAGES_API_KEY: "fixture-key",
+    });
+    expect(json.status).toBe(0);
+    const report = JSON.parse(json.stdout) as {
+      app: string;
+      transport: string;
+      api_url: string;
+      api_base: string;
+      api_key_present: boolean;
+    };
+    expect(report.app).toBe("messages");
+    expect(report.transport).toBe("http");
+    // Already-resolved input is reported unchanged, not doubled to /v1/v1.
+    expect(report.api_url).toBe("https://api.hasna.com/messages/v1");
+    expect(report.api_base).toBe("https://api.hasna.com/messages/v1");
+    expect(report.api_key_present).toBe(true);
+  });
+
+  test("status reports the local opt-in and fails closed when unconfigured (#1588)", async () => {
+    const local = runCli(["status", "--json"]);
+    expect(local.status).toBe(0);
+    const localReport = JSON.parse(local.stdout) as { transport: string; api_url: string | null };
+    expect(localReport.transport).toBe("local");
+    expect(localReport.api_url).toBeNull();
+
+    const unconfigured = runCli(["status"], { HASNA_MESSAGES_LOCAL: "" });
+    expect(unconfigured.status).not.toBe(0);
+    expect(unconfigured.stdout).toContain("transport: unconfigured");
+    expect(unconfigured.stderr).toContain("HASNA_MESSAGES_API_URL");
+  });
+
+  test("whoami --json carries the resolved api_url and transport (#1588)", async () => {
+    const res = runCli(["whoami", "--agent", "statuser", "--json"]);
+    expect(res.status).toBe(0);
+    const who = JSON.parse(res.stdout) as { name: string; transport: string; api_url: string | null };
+    expect(who.name).toBe("statuser");
+    expect(who.transport).toBe("local");
+    expect(who.api_url).toBeNull();
+  });
+
   test("send refuses missing required flags", async () => {
     const res = runCli(["send", "--from", "augustus"]);
     expect(res.status).not.toBe(0);

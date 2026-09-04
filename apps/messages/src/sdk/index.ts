@@ -88,6 +88,49 @@ export function resolveMessagesClientTransport(env: Record<string, string | unde
   throw messagesTransportMisconfiguredError();
 }
 
+/** The route prefix every messages-serve route lives under. */
+export const MESSAGES_API_VERSION_PREFIX = "/v1";
+
+/**
+ * Resolve a configured base URL to the authority-plus-path root the client
+ * appends `/v1/...` to, and to the canonical `/v1` root that status surfaces
+ * print (hasna/apps#1588).
+ *
+ * The gateway addresses this app as `https://api.hasna.com/messages/v1/...`
+ * (hasna/apps#1512), so an operator may configure `https://host`,
+ * `https://host/v1`, `https://api.hasna.com/messages` or
+ * `https://api.hasna.com/messages/v1`. The path prefix must SURVIVE (dropping
+ * it to `URL.origin` is the hasna/apps#1601 defect) and a base that already
+ * carries `/v1` must not be doubled into `/messages/v1/v1/agents`.
+ *
+ * A base carrying userinfo, a query or a fragment is REFUSED rather than
+ * concatenated into a malformed request URL, and refusing also keeps
+ * operator-supplied credential material out of the printed API line.
+ *
+ * TODO(hasna/apps#1588): replace this with the shared base-URL helper from
+ * `@hasna/contracts` once that release lands and this package's pin is
+ * bumped; the semantics here are intentionally identical to it.
+ */
+export function resolveMessagesApiBase(rawBaseUrl: string): { baseUrl: string; apiUrl: string } {
+  const trimmed = (rawBaseUrl ?? "").trim().replace(/\/+$/, "");
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error(`${MESSAGES_API_URL_ENV} must be an absolute http(s) URL, got ${JSON.stringify(rawBaseUrl)}`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`${MESSAGES_API_URL_ENV} must be an absolute http(s) URL`);
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(`${MESSAGES_API_URL_ENV} must not contain userinfo, query, or fragment data`);
+  }
+  const pathname = url.pathname.replace(/\/+$/, "");
+  const prefix = pathname === MESSAGES_API_VERSION_PREFIX ? "" : pathname.replace(/\/v1$/, "");
+  const baseUrl = `${url.origin}${prefix}`;
+  return { baseUrl, apiUrl: `${baseUrl}${MESSAGES_API_VERSION_PREFIX}` };
+}
+
 export interface MessagesClientOptions {
   /** Base URL of messages-serve, e.g. https://messages.example.com */
   baseUrl: string;
@@ -99,13 +142,25 @@ export interface MessagesClientOptions {
 
 export class MessagesClient {
   private readonly baseUrl: string;
+  private readonly resolvedApiUrl: string;
   private readonly apiKey?: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: MessagesClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, "");
+    const resolved = resolveMessagesApiBase(options.baseUrl);
+    this.baseUrl = resolved.baseUrl;
+    this.resolvedApiUrl = resolved.apiUrl;
     this.apiKey = options.apiKey;
     this.fetchImpl = options.fetch ?? fetch;
+  }
+
+  /**
+   * The resolved `/v1` authority this client talks to — the value status and
+   * whoami surfaces print (hasna/apps#1588). Never a bare origin, never the
+   * raw configured base.
+   */
+  get apiUrl(): string {
+    return this.resolvedApiUrl;
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

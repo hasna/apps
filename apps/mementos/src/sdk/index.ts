@@ -678,12 +678,29 @@ export function resolveMementosApiBase(
   explicitPrefix?: string,
 ): { baseUrl: string; prefix: string } {
   const trimmed = (rawBaseUrl ?? MEMENTOS_DEFAULT_BASE_URL).trim().replace(/\/+$/, "") || MEMENTOS_DEFAULT_BASE_URL;
+  // Validate before splitting. A base carrying userinfo, a query or a fragment
+  // would otherwise be concatenated into a malformed request URL such as
+  // `https://api.hasna.com/mementos?x=1/v1/memories`; refusing also keeps
+  // operator-supplied credential material out of any printed API line.
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error(`mementos base URL must be an absolute http(s) URL, got ${JSON.stringify(rawBaseUrl)}`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("mementos base URL must be an absolute http(s) URL");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("mementos base URL must not contain userinfo, query, or fragment data");
+  }
   const prefixMatch = /^(.*)(\/(?:v1|api))$/.exec(trimmed);
   if (explicitPrefix !== undefined) {
     const prefix = explicitPrefix.replace(/\/+$/, "");
-    // An explicit prefix wins, so a base that already carries the same
-    // versioned segment is folded back into the root rather than doubled.
-    const baseUrl = prefixMatch && prefixMatch[2] === prefix ? (prefixMatch[1] || trimmed) : trimmed;
+    // An explicit prefix REPLACES any versioned segment the base already
+    // carries, whichever one it is: `/mementos/v1` + prefix `/api` must be
+    // `/mementos/api/...`, never `/mementos/v1/api/...` (no such route exists).
+    const baseUrl = prefixMatch ? (prefixMatch[1] || trimmed) : trimmed;
     return { baseUrl, prefix };
   }
   if (prefixMatch) return { baseUrl: prefixMatch[1] || trimmed, prefix: prefixMatch[2]! };

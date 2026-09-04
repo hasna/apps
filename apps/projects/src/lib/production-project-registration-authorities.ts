@@ -81,6 +81,23 @@ function firstConfigured(
   return null;
 }
 
+/**
+ * Normalize a configured authority base URL to the root the shipped HTTP
+ * clients append `/v1/...` to.
+ *
+ * The gateway addresses each app as `https://api.hasna.com/<app>/v1/...`
+ * (hasna/apps#1512), so an operator may configure `https://host`,
+ * `https://host/v1`, `https://api.hasna.com/todos` or
+ * `https://api.hasna.com/todos/v1`. The path prefix must SURVIVE: returning
+ * `url.origin` here was the hasna/apps#1601 defect — it silently dropped
+ * `/todos` and the authority could never be reached through the gateway. A
+ * base that already carries `/v1` has it folded off exactly once, because the
+ * clients add their own `/v1` route prefix.
+ *
+ * TODO(hasna/apps#1601): replace this with the shared base-URL join helper
+ * from `@hasna/contracts` once that release lands and this package's pin is
+ * bumped; the semantics here are intentionally identical to it.
+ */
 function authorityRoot(raw: string, sourceKey: string): string {
   let url: URL;
   try {
@@ -95,10 +112,8 @@ function authorityRoot(raw: string, sourceKey: string): string {
     throw new Error(`${sourceKey} must not contain userinfo, query, or fragment data`);
   }
   const pathname = url.pathname.replace(/\/+$/, "");
-  if (pathname && pathname !== "/v1") {
-    throw new Error(`${sourceKey} must be an authority root or end in /v1`);
-  }
-  return url.origin;
+  const prefix = pathname === "/v1" ? "" : pathname.replace(/\/v1$/, "");
+  return `${url.origin}${prefix}`;
 }
 
 function authorityHttpConfig(

@@ -510,6 +510,82 @@ describe("production project registration authorities", () => {
     expect(authorities.conversations.transport).toBe("api");
   });
 
+  test("keeps the gateway path prefix on the authority base URL (#1601)", async () => {
+    const fakes = memorySet();
+    const options: Record<string, Record<string, unknown>> = {};
+    class ConversationsClientFixture {
+      constructor(input: Record<string, unknown>) {
+        options.conversations = input;
+      }
+      async getProjectChannelRegistrationCapability() {
+        return fakes.conversations.capability();
+      }
+    }
+    const authorities = productionProjectRegistrationAuthorities({
+      env: {
+        // The station wrappers configure the gateway form without /v1; the
+        // /v1 form must resolve to the same root, not to /v1/v1.
+        HASNA_TODOS_API_URL: "https://api.hasna.com/todos",
+        HASNA_TODOS_API_KEY: "fixture-auth",
+        HASNA_MEMENTOS_API_URL: "https://api.hasna.com/mementos/v1",
+        HASNA_MEMENTOS_API_KEY: "fixture-auth",
+        HASNA_CONVERSATIONS_API_URL: "https://api.hasna.com/conversations/",
+        HASNA_CONVERSATIONS_API_KEY: "fixture-auth",
+      },
+      fetch: (() => Promise.reject(new Error(
+        "fixture fetch must stay behind shipped clients",
+      ))) as unknown as typeof fetch,
+      importModule: async (specifier) => {
+        if (specifier === "@hasna/todos/project-registration") {
+          return {
+            createTodosProjectRegistrationHttpClient: (input: Record<string, unknown>) => {
+              options.todos = input;
+              return fakes.todos;
+            },
+          };
+        }
+        if (specifier === "@hasna/mementos/project-registration") {
+          return {
+            createMementosProjectRegistrationHttpClient: (input: Record<string, unknown>) => {
+              options.mementos = input;
+              return fakes.mementos;
+            },
+          };
+        }
+        if (specifier === "@hasna/conversations/sdk") {
+          return { ConversationsClient: ConversationsClientFixture };
+        }
+        throw new Error(`unexpected fixture import: ${specifier}`);
+      },
+    });
+
+    const report = await preflightProjectRegistrationAuthorities(authorities);
+    expect(report.ok).toBe(true);
+    // The path prefix survives: url.origin here was the #1601 defect.
+    expect(options.todos?.baseUrl).toBe("https://api.hasna.com/todos");
+    expect(options.mementos?.baseUrl).toBe("https://api.hasna.com/mementos");
+    expect(options.conversations?.baseUrl).toBe("https://api.hasna.com/conversations");
+  });
+
+  test("still rejects an authority base URL carrying credential material (#1601)", async () => {
+    for (const raw of [
+      "https://user:pass@api.hasna.com/todos",
+      "https://api.hasna.com/todos?token=abc",
+      "https://api.hasna.com/todos#frag",
+      "ftp://api.hasna.com/todos",
+      "not a url",
+    ]) {
+      const authorities = productionProjectRegistrationAuthorities({
+        env: { HASNA_TODOS_API_URL: raw, HASNA_TODOS_API_KEY: "fixture-auth" },
+        fetch: (() => Promise.reject(new Error("unused"))) as unknown as typeof fetch,
+        importModule: async () => ({}),
+      });
+      // Resolution is lazy, so the refusal surfaces on first use.
+      await expect(authorities.todos.capability()).rejects.toThrow(/HASNA_TODOS_API_URL/);
+    }
+  });
+
+
   test("forwards the package-owned guarded update, exact receipt lookup, and rollback methods", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-authority-guarded-forwarding-"));
     const fakes = memorySet();
