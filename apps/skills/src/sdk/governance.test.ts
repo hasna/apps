@@ -367,7 +367,13 @@ describe("governance outputs: privacy, redaction, size limits, TTLs, deletion re
     const stored = await store.getArtifact(principalA, run.id, "art_vis");
     expect(stored?.visibility).toBe("private");
     expect(stored?.expiresAt).toBeDefined();
-    expect(Date.parse(stored!.expiresAt!) - Date.parse(stored!.createdAt)).toBe(60_000);
+    // The writer computes expiresAt from the createdAt it captured, then the
+    // store re-stamps the row's createdAt on insert — so the window can be up
+    // to a few milliseconds short of the exact TTL when a tick falls between
+    // the two stamps (measured: 59999). Assert the 60s window, not the tick.
+    const ttlWindowMs = Date.parse(stored!.expiresAt!) - Date.parse(stored!.createdAt);
+    expect(ttlWindowMs).toBeGreaterThanOrEqual(59_998);
+    expect(ttlWindowMs).toBeLessThanOrEqual(60_002);
   });
 
   test("positive: hard size limits refuse the write before any row exists", async () => {
