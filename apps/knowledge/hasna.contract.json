@@ -10,10 +10,70 @@
     "knowledge-mcp",
     "knowledge-serve"
   ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "knowledge-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/openapi.json"
+    },
+    {
+      "name": "package-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "knowledge-mcp",
+      "authMode": "local-only"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "knowledge",
+      "authMode": "local-only"
+    }
+  ],
   "storage": {
+    "backend": "sqlite",
     "envPrefix": "HASNA_KNOWLEDGE_",
-    "databaseUrlSecretRef": "hasna/oss/knowledge/database-url",
-    "sqlitePath": "~/.hasna/knowledge/knowledge.db"
+    "aliasEnvPrefix": "KNOWLEDGE_",
+    "sqlitePath": "~/.hasna/knowledge/knowledge.db",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "pgTestGate": {
+      "envVar": "HASNA_KNOWLEDGE_TEST_DATABASE_URL",
+      "command": "HASNA_KNOWLEDGE_DATABASE_URL=\"${HASNA_KNOWLEDGE_TEST_DATABASE_URL:?point it at a throwaway Postgres; the live-PG gate must not pass without one}\" bun scripts/apply-postgres-migrations.mjs --dry-run"
+    }
   },
   "metadata": {
     "service": {
@@ -24,16 +84,21 @@
       "openapiPath": "/openapi.json",
       "apiVersion": "v1",
       "auth": "api-key",
-      "signingSecretSecretRef": "hasna/oss/knowledge/api-key-signing-secret",
+      "signingSecretEnvVar": "HASNA_KNOWLEDGE_API_SIGNING_KEY",
       "migrationCommand": [
         "bun",
         "scripts/apply-postgres-migrations.mjs"
       ],
-      "ownerDatabaseUrlSecretRef": "hasna/oss/knowledge/database-url-owner"
+      "ownerDatabaseUrlEnvVar": "HASNA_KNOWLEDGE_DATABASE_URL_OWNER"
     },
     "client": {
       "apiUrlEnv": "HASNA_KNOWLEDGE_API_URL",
       "apiKeyEnv": "HASNA_KNOWLEDGE_API_KEY"
+    },
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
     }
   }
 }
