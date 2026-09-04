@@ -11,10 +11,11 @@
 //     published @hasna/contracts storage client.
 //
 // `resolveStore()` (./client-store.ts) picks the transport from the client env:
-// `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY` select the hosted API,
-// otherwise the on-box SQLite store is used. Callers NEVER branch on the
-// transport themselves and NEVER touch sqlite or fetch directly — that
-// split-brain path is the bug this abstraction eliminates.
+// `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY` select the hosted API;
+// otherwise it FAILS CLOSED unless local mode was explicitly opted into
+// (SHORTLINKS_LOCAL=1 or --db). Callers NEVER branch on the transport
+// themselves and NEVER touch sqlite or fetch directly — that split-brain path
+// is the bug this abstraction eliminates.
 //
 // SAFETY: the API key lives only inside the ApiStore transport; it is never
 // logged, returned, or embedded in any value produced through this interface.

@@ -8,8 +8,10 @@
  *   shortlinks-mcp --http     Streamable HTTP on 127.0.0.1:8851 (shared service)
  *
  * Every tool routes through the shared client {@link Store}: the cloud ApiStore
- * (HTTPS `/v1` + bearer key) when the client flip is on, otherwise the on-box
- * LocalStore SQLite. No DSN, no direct sqlite/fetch — same seam the CLI uses.
+ * (HTTPS `/v1` + bearer key) when the client flip is on; otherwise the tool
+ * FAILS CLOSED naming the required env (SHORTLINKS_LOCAL=1 opts into the
+ * on-box LocalStore SQLite — never a silent default). No DSN, no direct
+ * sqlite/fetch — same seam the CLI uses.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
