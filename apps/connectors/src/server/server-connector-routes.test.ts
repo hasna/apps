@@ -46,7 +46,7 @@ describe("server API routes", () => {
   beforeAll(async () => {
     process.env.HOME = TEST_HOME;
     serverPort = 40000 + Math.floor(Math.random() * 10000);
-    serverPort = await startServer(serverPort, { open: false });
+    serverPort = await startServer(serverPort);
     baseUrl = `http://localhost:${serverPort}`;
   });
 
@@ -209,20 +209,11 @@ describe("server API routes", () => {
   // ── 404 for unknown routes ──
 
   describe("unknown routes", () => {
-    test("GET /api/nonexistent does not return valid connector API data", async () => {
+    test("GET /api/nonexistent returns 404 json, never HTML", async () => {
       const res = await fetch(`${baseUrl}/api/nonexistent`);
-      // If dashboard is built, SPA fallback may serve index.html (200).
-      // If not built, server returns JSON { error: "Not found" } with 404.
-      const text = await res.text();
-      try {
-        const data = JSON.parse(text);
-        if (data.error) {
-          expect(data.error).toContain("Not found");
-        }
-      } catch {
-        // HTML response from SPA fallback is acceptable
-        expect(text).toContain("<!DOCTYPE");
-      }
+      expect(res.status).toBe(404);
+      const data = await res.json();
+      expect(data.error).toContain("Not found");
     });
 
     test("POST to unknown path returns 404 JSON", async () => {
@@ -474,11 +465,9 @@ describe("server API routes", () => {
   // ── HEAD request handling ──
 
   describe("HEAD requests", () => {
-    test("HEAD to root path does not return 404", async () => {
+    test("HEAD to root path returns 404 (no SPA fallback)", async () => {
       const res = await fetch(`${baseUrl}/`, { method: "HEAD" });
-      // Should serve dashboard index.html or 404 if not built
-      // Either way it shouldn't crash
-      expect([200, 404]).toContain(res.status);
+      expect(res.status).toBe(404);
     });
   });
 

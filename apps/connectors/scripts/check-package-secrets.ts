@@ -381,8 +381,8 @@ export function scanPaths(paths: string[]): ScanResult {
       findings.push(...scanBunConfig(path, lines));
     }
     // Token and credentialed-URL rules apply EXACTLY ONCE to every scanned
-    // text file — lockfiles, source, docs, generated bundles (bin/, dist/,
-    // dashboard/dist/) once the scan runs after the build, and npmrc/bunfig
+    // text file — lockfiles, source, docs, generated bundles (bin/, dist/)
+    // once the scan runs after the build, and npmrc/bunfig
     // alike. A value that survived bundling or config formatting is still a
     // value. Format-specific checks live in the parsers above.
     findings.push(...scanLineRules(path, lines));

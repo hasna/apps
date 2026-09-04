@@ -38,7 +38,7 @@ describe("server entry (connectors-serve)", () => {
     expect(exitCode).toBe(0);
     expect(stderr).toBe("");
     expect(stdout).toContain("Usage: connectors-serve");
-    expect(stdout).toContain("--no-open");
+    expect(stdout).toContain("--port");
   });
 
   test("prints version and exits", async () => {

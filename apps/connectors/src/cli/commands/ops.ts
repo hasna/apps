@@ -296,7 +296,7 @@ export function registerCommands(program: Command): void {
 
             try {
               const { startServer } = await import("../../server/serve.js");
-              await startServer(port, { open: false, strict: true });
+              await startServer(port, { strict: true });
 
               console.log(`\n  ${chalk.bold("Open this URL to authenticate:")}`);
               console.log(`  ${chalk.cyan(oauthUrl)}\n`);
@@ -312,7 +312,7 @@ export function registerCommands(program: Command): void {
               await new Promise<void>(() => {});
             } catch (err) {
               console.log(`  ${chalk.red("✗")} OAuth flow failed: ${err}`);
-              console.log(chalk.dim("  Try 'connectors serve' to use the full dashboard."));
+              console.log(chalk.dim("  Try 'connectors serve' for the OAuth flow."));
             }
             process.exit(0);
             return;

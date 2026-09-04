@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Standalone entry point for the connector auth dashboard server.
+ * Standalone entry point for the connector API + OAuth server.
  * Usage: connectors-serve [--port 9876]
  */
 
@@ -16,12 +16,11 @@ function hasFlag(flag: string): boolean {
 function printHelp(): void {
   console.log(`Usage: connectors-serve [options]
 
-Start the Connectors dashboard server
+Start the Connectors API + OAuth server
 
 Options:
   --port <port>     Port to bind (default: ${DEFAULT_PORT})
   --port=<port>     Port to bind (default: ${DEFAULT_PORT})
-  --no-open         Do not open the dashboard in a browser
   -V, --version     Output the version number
   -h, --help        Display help for command`);
 }
@@ -48,5 +47,4 @@ if (hasFlag("--version") || hasFlag("-V")) {
   process.exit(0);
 }
 
-const shouldOpen = !process.argv.includes("--no-open");
-startServer(parsePort(), { open: shouldOpen });
+startServer(parsePort());

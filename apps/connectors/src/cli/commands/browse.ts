@@ -614,16 +614,12 @@ export function registerCommands(program: Command): void {
       }
     });
 
-  // Serve command — local dashboard for auth management
+  // Serve command — local API + OAuth server for connector auth
   program
     .command("serve")
-    .alias("dashboard")
-    .alias("open")
-    .option("-p, --port <port>", "Port to run the dashboard on", "9876")
-    .option("--open", "Open dashboard in browser (default)", true)
-    .option("--no-open", "Don't open browser automatically")
-    .description("Start local dashboard for connector auth management")
-    .action(async (options: { port: string; open: boolean }) => {
+    .option("-p, --port <port>", "Port to run the server on", "9876")
+    .description("Start local API + OAuth server for connector auth")
+    .action(async (options: { port: string }) => {
       const port = parseInt(options.port, 10);
       if (isNaN(port) || port < 1 || port > 65535) {
         console.log(chalk.red("Invalid port number"));
@@ -631,9 +627,9 @@ export function registerCommands(program: Command): void {
         return;
       }
 
-      console.log(chalk.bold("\nStarting Connectors Dashboard...\n"));
+      console.log(chalk.bold("\nStarting Connectors API + OAuth server...\n"));
 
       const { startServer } = await import("../../server/serve.js");
-      await startServer(port, { open: options.open });
+      await startServer(port);
     });
 }
