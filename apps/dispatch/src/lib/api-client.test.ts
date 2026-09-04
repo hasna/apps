@@ -164,6 +164,46 @@ describe("dispatch API route resolution", () => {
       }),
     ).toMatchObject({ selected: true, ok: true, v1BaseUrl: "https://dispatch.hasna.xyz/v1" });
   });
+
+  test("path-prefixed gateway URLs are accepted and normalized to the /v1 base", () => {
+    // https://api.hasna.com/<app> is the fleet gateway shape (#1512); the base
+    // may be an authority root, the /dispatch prefix, or already end in /v1.
+    const cases: Array<[string, string]> = [
+      ["https://api.hasna.com/dispatch", "https://api.hasna.com/dispatch/v1"],
+      ["https://api.hasna.com/dispatch/", "https://api.hasna.com/dispatch/v1"],
+      ["https://api.hasna.com/dispatch/v1", "https://api.hasna.com/dispatch/v1"],
+      ["https://api.hasna.com/dispatch/v1/", "https://api.hasna.com/dispatch/v1"],
+      ["https://dispatch.hasna.xyz", "https://dispatch.hasna.xyz/v1"],
+      ["https://dispatch.hasna.xyz/v1", "https://dispatch.hasna.xyz/v1"],
+    ];
+    for (const [input, expected] of cases) {
+      expect(
+        getDispatchApiConfigStatus({ HASNA_DISPATCH_API_URL: input, HASNA_DISPATCH_API_KEY: "test-key" }),
+      ).toMatchObject({ selected: true, ok: true, v1BaseUrl: expected });
+    }
+  });
+
+  test("an env-driven client resolves a gateway-style base to the /dispatch/v1 authority", () => {
+    const client = getDispatchApiClient({
+      HASNA_DISPATCH_API_URL: "https://api.hasna.com/dispatch",
+      HASNA_DISPATCH_API_KEY: "test-key",
+    });
+    expect(client).toBeInstanceOf(DispatchApiClient);
+    expect((client as DispatchApiClient).baseUrl).toBe("https://api.hasna.com/dispatch/v1");
+  });
+
+  test("non-app paths and /api/v1 styles stay rejected", () => {
+    for (const input of [
+      "https://api.hasna.com/other",
+      "https://api.hasna.com/api/v1",
+      "https://api.hasna.com/dispatch/v2",
+      "https://api.hasna.com/dispatch/api/v1",
+    ]) {
+      const status = getDispatchApiConfigStatus({ HASNA_DISPATCH_API_URL: input, HASNA_DISPATCH_API_KEY: "test-key" });
+      expect(status.ok).toBe(false);
+      expect(status.issues.join("\n")).toMatch(/REMOTE_API_URL_INVALID/);
+    }
+  });
 });
 
 describe("DispatchApiClient", () => {

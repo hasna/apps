@@ -197,9 +197,16 @@ function normalizeApiAuthorityUrl(value: string): string {
   if (url.search || url.hash) {
     throw new Error("REMOTE_API_URL_INVALID: HASNA_DISPATCH_API_URL must not contain a query or fragment; local fallback is disabled");
   }
-  if (url.pathname !== "/" && url.pathname !== "/v1" && url.pathname !== "/v1/") {
+  // The gateway addresses this app as https://api.hasna.com/dispatch/v1, so the
+  // base may be an authority root, the /dispatch prefix, or already end in /v1
+  // (with optional trailing slash). Anything else — including /api/v1 — is
+  // rejected the same way the todos transport rejects it (#1557 pattern).
+  const pathname = url.pathname.replace(/\/+$/, "") || "/";
+  const endsWithV1 = pathname === "/v1" || pathname === "/dispatch/v1";
+  const isAuthorityRoot = pathname === "/" || pathname === "/dispatch";
+  if (!endsWithV1 && !isAuthorityRoot) {
     throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_DISPATCH_API_URL must be an authority root or end in /v1; local fallback is disabled",
+      "REMOTE_API_URL_INVALID: HASNA_DISPATCH_API_URL must be an authority root, the /dispatch prefix, or end in /v1; local fallback is disabled",
     );
   }
   const hostname = url.hostname.toLowerCase();
@@ -207,7 +214,7 @@ function normalizeApiAuthorityUrl(value: string): string {
   if (url.protocol === "http:" && !loopback) {
     throw new Error("REMOTE_API_URL_INVALID: plaintext HTTP is allowed only for loopback Dispatch authorities; local fallback is disabled");
   }
-  return `${url.origin}/v1`;
+  return pathname === "/" ? `${url.origin}/v1` : endsWithV1 ? `${url.origin}${pathname}` : `${url.origin}${pathname}/v1`;
 }
 
 /** True when the failure is a client-side abort/timeout rather than an authority response. */
