@@ -271,9 +271,22 @@ describe("ApiStore nested resources", () => {
 });
 
 describe("store resolution", () => {
-  test("no hosted env resolves a LocalStore", () => {
-    expect(getStore({})).toBeInstanceOf(LocalStore);
-    expect(isCloudStore({})).toBe(false);
+  test("no hosted env and no local opt-in FAILS CLOSED instead of serving local sqlite", () => {
+    // The owner ruling: without the API env the client must never silently
+    // fall back to the default local database. getStore AND isCloudStore throw
+    // so a bare `false` can never be read as a licence to open sqlite.
+    expect(() => getStore({})).toThrow(/HASNA_DOMAINS_API_URL/);
+    expect(() => getStore({})).toThrow(/HASNA_DOMAINS_API_KEY/);
+    expect(() => getStore({})).toThrow(/fails closed/);
+    expect(() => isCloudStore({})).toThrow(/HASNA_DOMAINS_API_URL/);
+  });
+
+  test("an explicit local path opt-in still resolves a LocalStore", () => {
+    // Local mode survives strictly as an explicit opt-in: a local path var
+    // names the database the operator actually wants.
+    expect(getStore({ DOMAINS_DB_PATH: "/tmp/scratch.db" })).toBeInstanceOf(LocalStore);
+    expect(getStore({ HASNA_DOMAINS_DIR: "/tmp/domains" })).toBeInstanceOf(LocalStore);
+    expect(isCloudStore({ DOMAINS_DB_PATH: "/tmp/scratch.db" })).toBe(false);
   });
 
   test("supports the unprefixed DOMAINS_API_URL/key aliases", () => {

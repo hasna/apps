@@ -38,9 +38,15 @@ describe("store isolation under test", () => {
     expect((getStore(env) as unknown as { transport: string }).transport).toBe("http");
   });
 
-  test("NEGATIVE CONTROL: no hosted env resolves local whether or not under test", () => {
-    expect(isCloudStore({ NODE_ENV: "test" })).toBe(false);
-    expect(isCloudStore({ NODE_ENV: "production" })).toBe(false);
+  test("NEGATIVE CONTROL: no hosted env is never a local licence — resolution fails closed", () => {
+    // Fail-closed ruling: without the API env the store must not silently
+    // default to local sqlite, in a test run or not.
+    expect(() => isCloudStore({ NODE_ENV: "test" })).toThrow(/HASNA_DOMAINS_API_URL/);
+    expect(() => isCloudStore({ NODE_ENV: "production" })).toThrow(/fails closed/);
+    expect(() => getStore({ NODE_ENV: "production" })).toThrow(/HASNA_DOMAINS_API_KEY/);
+    // An explicit local path opt-in still resolves local under test.
+    expect(isCloudStore({ NODE_ENV: "test", DOMAINS_DIR: "/tmp/whatever" })).toBe(false);
+    expect((getStore({ NODE_ENV: "test", DOMAINS_DIR: "/tmp/whatever" }) as unknown as { transport: string }).transport).toBe("local");
   });
 
   test("ESCAPE HATCH: an explicit opt-out re-enables the hosted store under test", () => {

@@ -5,7 +5,9 @@ import { getStore, LocalStore, resolveClientFlip, RETIRED_MODE_KEYS } from "./st
 //
 // The deployment-mode enum is REMOVED. The client selects its backend by the
 // environment: HASNA_DOMAINS_API_URL + HASNA_DOMAINS_API_KEY both set -> hosted
-// HTTP client; neither set -> local SQLite; exactly one set -> hard error
+// HTTP client; neither set -> FAIL CLOSED unless local sqlite is explicitly
+// opted into with a local path var (DOMAINS_DB_PATH / HASNA_DOMAINS_DB_PATH /
+// DOMAINS_DIR / HASNA_DOMAINS_DIR); exactly one set -> hard error
 // (fail-closed). The retired storage-mode env keys are never read.
 
 const HOSTED = {
@@ -48,8 +50,13 @@ describe("resolveClientFlip", () => {
 
 describe("the retired storage-mode env keys are not a selection mechanism", () => {
   test("a stale mode var does not change resolution in either direction", () => {
-    // Without URL/key, a stale mode var must still resolve local.
-    expect(getStore({ HASNA_DOMAINS_STORAGE_MODE: "cloud" })).toBeInstanceOf(LocalStore);
+    // Without URL/key AND without a local opt-in, a stale mode var must not
+    // smuggle the client into a backend at all — resolution fails closed.
+    expect(() => getStore({ HASNA_DOMAINS_STORAGE_MODE: "cloud" })).toThrow(/fails closed/);
+    // A stale mode var cannot veto an explicit local path opt-in either.
+    expect(
+      getStore({ HASNA_DOMAINS_STORAGE_MODE: "cloud", DOMAINS_DB_PATH: "/tmp/scratch.db" }),
+    ).toBeInstanceOf(LocalStore);
     // With URL/key, a stale mode var must still resolve hosted.
     const env = { ...HOSTED, HASNA_DOMAINS_STORAGE_MODE: "local" };
     expect((getStore({ ...env, NODE_ENV: "production" }) as unknown as { transport: string }).transport).toBe("http");
