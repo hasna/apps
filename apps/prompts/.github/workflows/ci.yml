@@ -22,10 +22,6 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Install dashboard dependencies
-        working-directory: dashboard
-        run: bun install --frozen-lockfile
-
       - name: Typecheck
         run: bun run typecheck
 

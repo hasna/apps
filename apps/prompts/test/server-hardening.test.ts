@@ -6,10 +6,10 @@ import * as path from "node:path";
 // Regression for O15-04626: @hasna/prompts 0.3.38 was published from a tree
 // that carried the bearer-token gate but NOT the loopback-origin CORS
 // carve-out of finding code-prompts-1. The published dist/server bundle had
-// zero Access-Control-Allow-Origin headers anywhere, so the documented
-// dashboard workflow (a Vite dev server on a loopback origin) was dead in the
-// released artifact and the remediation was incomplete. Measured on the
-// registry tarball: PROMPTS_API_CORS_ORIGIN and every CORS marker absent.
+// zero Access-Control-Allow-Origin headers anywhere, so local browser API use
+// against a loopback origin was dead in the released artifact and the
+// remediation was incomplete. Measured on the registry tarball:
+// PROMPTS_API_CORS_ORIGIN and every CORS marker absent.
 //
 // This test builds the server bundle exactly as prepack does and asserts the
 // COMPLETE hardening is present in the artifact that will ship: the bearer
