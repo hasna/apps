@@ -157,8 +157,17 @@ describe("Emails self-hosted client resolver", () => {
     restoreInheritedProcessEnv();
   });
 
-  test("unset env selects local and direct self-hosted resolution fails loud", () => {
-    expect(isSelfHostedMode()).toBe(false);
+  test("unset env fails closed (never selects local) and direct self-hosted resolution fails loud", () => {
+    // Fail-closed ruling (2026-09-04): an absent API environment is a refusal, not the
+    // local mode. The shared mode predicate never answers `false` over missing
+    // configuration — it throws the deployment selector's refusal, which names the
+    // settings to provide and the explicit opt-ins that do select local storage.
+    let thrown: unknown;
+    try { isSelfHostedMode(); } catch (error) { thrown = error; }
+    expect(String(thrown)).toContain("EMAILS_SELF_HOSTED_URL");
+    expect(String(thrown)).toContain("HASNA_EMAILS_DB_PATH");
+    // Direct self-hosted resolution still fails loud on its own terms: no mode word, no
+    // client — and this file's other cases cover the explicit-local refusal.
     expect(() => resolveSelfHostedConfig()).toThrow("requires EMAILS_MODE=self_hosted");
     expect(() => selfHostedStoreFor("domains")).toThrow("requires EMAILS_MODE=self_hosted");
   });

@@ -233,17 +233,22 @@ describe("processForwardingRules storage gate", () => {
     await expect(processForwardingRules()).rejects.toThrow(new RegExp(`Unset ${API_BASE_URL_SETTING}`));
   });
 
-  it("runs against the DEFAULT local database when no path setting names one", async () => {
-    // The shape most installations have, and it was the one shape with no coverage: the cases
-    // above all set a path, which is a different branch of the database layer's resolution than
-    // the documented default. `HOME` is redirected, so the default lands in this case's own
-    // temporary directory rather than in a developer's real mailbox.
+  it("REFUSES on an ALL-UNSET configuration instead of defaulting to the local database", async () => {
+    // Fail-closed ruling (2026-09-04): with neither an API configuration nor an explicit
+    // database path, the run is REFUSED. The unconfigured local-database default is gone,
+    // because `{ attempted: 0, sent: 0 }` over a mailbox nothing configured is
+    // indistinguishable from "your mail is fully forwarded" — the false green this refusal
+    // exists to prevent. The explicit-path runs are the sibling cases below.
     closeDatabase();
     clearStoreSettings();
-    await expect(processForwardingRules()).resolves.toEqual({
-      attempted: 0, sent: 0, failed: 0, skipped: 0, items: [],
-    });
-    expect(existsSync(join(home, ".hasna", "emails", "emails.db"))).toBe(true);
+
+    await expect(processForwardingRules()).rejects.toThrow("No Emails API configuration is present");
+    // The refusal names the API setting to provide and the explicit opt-ins that do select
+    // local storage, so an operator can act on it.
+    await expect(processForwardingRules()).rejects.toThrow(new RegExp(API_BASE_URL_SETTING));
+    await expect(processForwardingRules()).rejects.toThrow(new RegExp(DATABASE_PATH_SETTINGS[1]));
+    // The refusal never opened any database: no data root exists in this HOME.
+    expect(existsSync(join(home, ".hasna"))).toBe(false);
   });
 
   it("runs against the local database the configuration names", async () => {

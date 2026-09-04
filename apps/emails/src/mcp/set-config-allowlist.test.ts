@@ -64,6 +64,7 @@ const FORBIDDEN_KEYS = [
 let tmpHome: string;
 let originalHome: string | undefined;
 let originalMcpToken: string | undefined;
+let originalEmailsDbPath: string | undefined;
 
 // The MCP HTTP transport requires a bearer token once #68 lands, and ignores one
 // before that. Setting it (and sending it) here keeps this file green whichever
@@ -73,9 +74,17 @@ const MCP_HTTP_TOKEN = "set-config-allowlist-test-token-0123456789";
 beforeEach(() => {
   originalHome = process.env["HOME"];
   originalMcpToken = process.env["EMAILS_MCP_HTTP_TOKEN"];
+  originalEmailsDbPath = process.env["EMAILS_DB_PATH"];
   tmpHome = mkdtempSync(join(tmpdir(), "emails-set-config-allowlist-"));
   process.env["HOME"] = tmpHome;
   process.env["EMAILS_MCP_HTTP_TOKEN"] = MCP_HTTP_TOKEN;
+  // The HTTP server builds the MCP graph on the first authorized request, and
+  // buildServer() refuses to register against an unresolved deployment (fail-closed
+  // ruling, 2026-09-04). These cases exercise the set_config allowlist, not storage
+  // selection, so the explicit local database is selected the way the suite's
+  // local-mode cases do (an explicit database path is local-mode's documented opt-in;
+  // the mode selector itself is never spelled in a test file).
+  process.env["EMAILS_DB_PATH"] = ":memory:";
 });
 
 afterEach(() => {
@@ -83,6 +92,8 @@ afterEach(() => {
   else process.env["HOME"] = originalHome;
   if (originalMcpToken === undefined) delete process.env["EMAILS_MCP_HTTP_TOKEN"];
   else process.env["EMAILS_MCP_HTTP_TOKEN"] = originalMcpToken;
+  if (originalEmailsDbPath === undefined) delete process.env["EMAILS_DB_PATH"];
+  else process.env["EMAILS_DB_PATH"] = originalEmailsDbPath;
   rmSync(tmpHome, { recursive: true, force: true });
 });
 

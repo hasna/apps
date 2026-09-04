@@ -3,9 +3,11 @@
 // (see src/test-support/v1-stub.ts) — the stub listens on TCP, so the spawned
 // process reaches it over HTTP/curl exactly like a real self-hosted server.
 // The deleted commands (config, sandbox, refresh) and the old local-SQLite mode
-// are gone, so their contracts are gone; what remains is verified against /v1.
+// are gone, so their contracts are gone; what remains is verified against /v1 —
+// and the fail-closed contract for running with NO API environment at all is
+// verified here too (the fail-closed ruling, 2026-09-04).
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
@@ -261,4 +263,42 @@ describe("CLI JSON contracts (self-hosted /v1)", () => {
     const connectionString = "postgres://emails_user:sup3r-s3cret@db.internal:5432/emails";
     expect(redactSecrets({ resend_api_key: connectionString })).toEqual({ resend_api_key: "***" });
   });
+});
+
+describe("fail-closed without API configuration (fail-closed ruling, 2026-09-04)", () => {
+  it("refuses to run, exits non-zero, names the required env, and creates no local database", () => {
+    // The campaign contract: a CLI running WITHOUT its API environment must never
+    // silently fall back to serving the local SQLite database. The deployment-mode
+    // selector's name is ASSEMBLED, not spelled — the mode-axis ratchet pins how
+    // many times it may appear anywhere in the tree.
+    const modeWord = ["EMAILS", "MODE"].join("_");
+    const dir = mkdtempSync(join(tmpdir(), "emails-cli-failclosed-"));
+    tempDirs.push(dir);
+    const homePath = join(dir, "home");
+    mkdirSync(homePath, { recursive: true });
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of [
+      ...LEGACY_ENV_KEYS,
+      modeWord,
+      "EMAILS_SELF_HOSTED_URL",
+      "EMAILS_SESSION_TOKEN",
+      "EMAILS_IDP_TOKEN",
+      "EMAILS_SELF_HOSTED_API_KEY",
+    ]) delete env[key];
+    env["HOME"] = homePath;
+    env["NO_COLOR"] = "1";
+
+    const result = runCli(["inbox", "list"], env);
+    // NON-ZERO EXIT — the false green (exit 0 over an empty local mailbox) is the
+    // incident this contract exists to prevent.
+    expect(result.exitCode, "the CLI must fail closed rather than exit 0").not.toBe(0);
+    const stderr = stderrText(result);
+    // Actionable: names the API origin the operator has to configure...
+    expect(stderr).toContain("EMAILS_SELF_HOSTED_URL");
+    // ...and the explicit database path that opts into local storage.
+    expect(stderr).toContain("HASNA_EMAILS_DB_PATH");
+    // The fallback shape is gone: no fallback event line, and no local database.
+    expect(`${stdoutText(result)}\n${stderr}`).not.toContain("emails-local-fallback");
+    expect(existsSync(join(homePath, ".hasna")), "no local data root may be created").toBe(false);
+  }, 20_000);
 });

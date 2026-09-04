@@ -22,10 +22,12 @@
 //     dispatch helper or the mode read: naming either identifier here would raise its own
 //     counter. The ratchet counts them tree-wide, this file included.
 //
-// `HOME` IS REDIRECTED IN EVERY CASE, and that is a safety property rather than tidiness. When no
-// database path is configured the database layer resolves `~/.hasna/emails/emails.db` and CREATES
-// it, so a case that asserts a refusal must not be able to touch a developer's real mailbox on the
-// way to failing — and one case below deliberately exercises that default path.
+// `HOME` IS REDIRECTED IN EVERY CASE, and that is a safety property rather than tidiness. The
+// low-level database layer still resolves `~/.hasna/emails/emails.db` and creates it when driven
+// directly (fixtures), so a case that asserts a refusal must not be able to touch a developer's
+// real mailbox on the way to failing; the receiver gate itself refuses before any database opens
+// when no explicit path names one (fail-closed ruling, 2026-09-04), and one case below exercises
+// the explicit-path start that the database layer's file creation belongs to.
 //
 // EVERY LISTENER IS TRACKED AND STOPPED. `Bun.serve` holds the process open, so an untracked
 // server turns a failing assertion into a hung suite, which is a worse failure than a red one.
@@ -241,23 +243,41 @@ describe("createWebhookServer storage gate", () => {
     expect(message).toContain("Unset");
   });
 
-  it("creates NO local data directory on the way to refusing, at the path the code actually uses", () => {
+  it("creates NO local data directory on the way to refusing, at the path the code actually uses", async () => {
     const dataDirectory = join(home, ".hasna", "emails");
 
-    // POSITIVE CONTROL FIRST. With no storage setting at all the resolution defaults to a local
-    // database under the redirected HOME, the receiver starts, and the directory appears. Without
-    // this, the absence asserted below would also pass for a path that is simply wrong.
+    // POSITIVE CONTROL FIRST. The local database is only ever reached through an EXPLICIT path
+    // (fail-closed ruling, 2026-09-04 — the all-unset default is gone). Construction creates
+    // nothing (a configured path resolves without creating, unlike the deleted default), so the
+    // receiver's FIRST real delivery is what opens the database at the configured path and makes
+    // the directory appear — which is exactly the path whose absence the refusals below assert.
+    // Without this, that absence would also pass for a path that is simply wrong.
     clearStoreSettings();
+    process.env[DATABASE_PATH_SETTINGS[1]] = join(dataDirectory, "emails.db");
+    // Drop the beforeEach in-memory handle so the receiver opens the configured FILE rather than
+    // the memoised `:memory:` connection nothing configured it to use.
+    closeDatabase();
     const started = createWebhookServer(0, PROVIDER_ID, WEBHOOK_SECRET);
     running.push(started);
+    expect(existsSync(dataDirectory), "construction must not create the data directory yet").toBe(false);
+    // Signed and well-formed; whether the fresh file's missing provider row makes persistence
+    // succeed or fail as retryable does not matter — the OPEN is what creates the directory.
+    await postResend(`http://127.0.0.1:${started.port}`, resendBody("evt-positive-control"), "msg_positive_control");
     expect(existsSync(dataDirectory), "the positive control did not create the data directory").toBe(true);
     started.stop(true);
+    closeDatabase();
     rmSync(join(home, ".hasna"), { recursive: true, force: true });
     expect(existsSync(dataDirectory)).toBe(false);
 
-    // Now the refusal, against the very same path.
-    configureApiStore();
-    expect(() => createWebhookServer(0, PROVIDER_ID, WEBHOOK_SECRET)).toThrow();
+    // Now the ALL-UNSET refusal, against the very same path: with neither an API configuration
+    // nor an explicit database path the receiver refuses instead of serving a default local
+    // database — and refusing must not create the local data directory either.
+    clearStoreSettings();
+    const message = refusalMessage();
+    // Non-vacuous: the refusal names the API setting an operator has to provide...
+    expect(message).toContain(API_BASE_URL_SETTING);
+    // ...and the explicit path that does opt into the local database.
+    expect(message).toContain(DATABASE_PATH_SETTINGS[1]!);
     expect(existsSync(dataDirectory), "refusing created a local data directory anyway").toBe(false);
   });
 

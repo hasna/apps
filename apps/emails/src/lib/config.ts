@@ -103,8 +103,14 @@ function ensureConfigFileMode(path = getConfigPath()): void {
   if (existsSync(path)) chmodBestEffort(path, CONFIG_FILE_MODE);
 }
 
-export function loadConfig(): EmailsConfig {
-  ensureConfigDir();
+/**
+ * Read the config file WITHOUT creating anything on disk. `loadConfig()` ensures
+ * the directory and then delegates here; callers that only inspect configuration —
+ * like the deployment-mode resolver, which must leave no footprint in a home that
+ * has never configured the app — use `readConfigFile()` so a missing file stays
+ * missing and no data root springs into existence from a mere read.
+ */
+export function readConfigFile(): EmailsConfig {
   const path = getConfigPath();
   if (!existsSync(path)) {
     if (configCache?.path === path) configCache = null;
@@ -130,6 +136,11 @@ export function loadConfig(): EmailsConfig {
     configCache = { path, mtimeMs: stats.mtimeMs, size: stats.size, config: {} };
     return {};
   }
+}
+
+export function loadConfig(): EmailsConfig {
+  ensureConfigDir();
+  return readConfigFile();
 }
 
 export function saveConfig(config: EmailsConfig): void {

@@ -8,8 +8,8 @@
 //
 //   | database path | API base URL | result                                        |
 //   |---------------|--------------|-----------------------------------------------|
-//   | unset         | unset        | SQLite at the documented default path         |
-//   | set           | unset        | SQLite at that path                           |
+//   | unset         | unset        | **HARD BOOT ERROR** — fail closed             |
+//   | set           | unset        | SQLite at that path (an explicit choice)      |
 //   | unset         | set          | the API client                                |
 //   | SET           | SET          | **HARD BOOT ERROR** — see below               |
 //
@@ -21,6 +21,14 @@
 // inferred instead of declared, and the failure mode is mail written to, or read from,
 // the store the operator did not mean. The only honest answer to a contradiction is to
 // refuse to start and name both settings.
+//
+// NOTHING CONFIGURED IS A BOOT ERROR TOO (the fail-closed ruling, 2026-09-04).
+// The all-unset row used to serve local SQLite at the documented default path, with a
+// one-line stderr notice; incident 715712 showed that shape still reads as a false
+// green — a harness re-provision dropped the API environment and the CLI reported an
+// empty mailbox at rc=0. Local storage is now reachable ONLY through an explicit
+// choice: a configured database path (the keys below), never through an absence of
+// configuration.
 //
 // WHAT THIS MODULE DELIBERATELY DOES NOT READ: any deployment-mode variable, and any
 // module that resolves one. Selection here is a fact about STORAGE configuration. A
@@ -36,7 +44,6 @@
 // discriminant: after construction nobody may ask what kind of store they have (see
 // src/store/descriptor.ts for what happened the last time a label like that existed).
 
-import { defaultDatabasePath } from "./db/database.js";
 import {
   CLIENT_ENV_CREDENTIAL_SELECTION_KEYS,
   EMAILS_CLIENT_ENV_SECRET_ENV,
@@ -108,14 +115,18 @@ export type StorePlan =
   | {
       readonly store: "sqlite";
       /**
-       * The configured path AS GIVEN, or the documented default when nothing named one.
-       * Safe to print. Not necessarily canonical: the database layer resolves symlinks
-       * and relative segments when it opens the file, so this is what the operator wrote
-       * rather than what the connection ends up bound to.
+       * The configured path AS GIVEN. Safe to print. Not necessarily canonical: the
+       * database layer resolves symlinks and relative segments when it opens the file,
+       * so this is what the operator wrote rather than what the connection ends up
+       * bound to. The documented default path is never produced here — a local store
+       * requires an explicit path (see the module header).
        */
       readonly databasePath: string;
-      /** Which setting supplied it, or null when it is the documented default. */
-      readonly setting: string | null;
+      /**
+       * Which setting supplied the path. Never null: a local plan is only ever
+       * produced from an explicitly configured database path.
+       */
+      readonly setting: string;
     }
   | {
       readonly store: "api";
@@ -208,46 +219,12 @@ function credentialFreeOrigin(value: string): string {
 }
 
 /**
- * Once-only per-process guard for the local-fallback notice. A long-running
- * consumer (MCP server) must not emit a notice per request; a CLI one-shot
- * emits at most one line before its first local read.
- */
-let emailsLocalFallbackNoticeEmitted = false;
-
-/** Test hook: re-arm the once-only local-fallback notice. */
-export function resetEmailsLocalFallbackNotice(): void {
-  emailsLocalFallbackNoticeEmitted = false;
-}
-
-/**
- * Emit one machine-readable JSON line on stderr when the store falls back to
- * the local database with NO hosted intent in the environment (the all-unset
- * default row). Incident 715712: a harness session-env re-provision dropped
- * EMAILS_SELF_HOSTED_URL (+ the pointer) and the CLI silently served the
- * local SQLite store at rc=0 — the mailbox appeared empty. The notice names
- * the mode switch so a false-empty read is never silent (the same family as
- * the merged secrets fix, PR #681 / incident 715558). stdout stays pure for
- * parsers. Values are never included.
- */
-function emitEmailsLocalFallbackNotice(): void {
-  if (emailsLocalFallbackNoticeEmitted) return;
-  emailsLocalFallbackNoticeEmitted = true;
-  const notice = {
-    event: "emails-local-fallback",
-    store: "sqlite",
-    setting: null,
-    notice:
-      `No hosted API config (${API_BASE_URL_SETTING} + ${API_SETTINGS_POINTER}) is present; ` +
-      "using local SQLite. Hosted mail is NOT visible in this output.",
-  };
-  console.error(JSON.stringify(notice));
-}
-
-/**
  * Decide which store this configuration means, or throw.
  *
- * Pure apart from the default-path branch, which resolves (and, as the database layer
- * always has, creates) the data directory.
+ * PURE: it reads only the environment handed to it and never touches the filesystem —
+ * no path resolution that creates directories, no connection. The all-unset row and
+ * every contradictory or incomplete row arrive as a typed `StoreConfigurationError`
+ * whose `settings` name the keys at fault; there is no default to fall back to.
  */
 export function planEmailStore(env: NodeJS.ProcessEnv = process.env): StorePlan {
   const databaseKeys = databasePathSettings(env);
@@ -296,8 +273,9 @@ export function planEmailStore(env: NodeJS.ProcessEnv = process.env): StorePlan 
     throw new StoreConfigurationError(
       `${API_SETTINGS_POINTER} is set, but ${API_BASE_URL_SETTING} is not present in this ` +
         "environment. That pointer only DELIVERS the API settings; load the client " +
-        `environment it names before resolving a store, or unset ${API_SETTINGS_POINTER} to ` +
-        "use the local database.",
+        `environment it names before resolving a store, or unset ${API_SETTINGS_POINTER} and ` +
+        `set ${DATABASE_PATH_SETTINGS.join(" or ")} to a database file to use the local ` +
+        "database explicitly.",
       [API_SETTINGS_POINTER, API_BASE_URL_SETTING],
     );
   }
@@ -313,7 +291,9 @@ export function planEmailStore(env: NodeJS.ProcessEnv = process.env): StorePlan 
         `${API_BASE_URL_SETTING} configures an Emails API but no credential is set. ` +
           `Set ${API_CREDENTIAL_SETTINGS.join(" or ")} (when several are set, the ` +
           `earlier-listed one wins: user session, then the caller's identity token, then ` +
-          `the operator API key), or unset ${API_BASE_URL_SETTING} to use the local database.`,
+          `the operator API key), or unset ${API_BASE_URL_SETTING} and set ` +
+          `${DATABASE_PATH_SETTINGS.join(" or ")} to a database file to use the local ` +
+          "database explicitly.",
         [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS],
       );
     }
@@ -325,19 +305,33 @@ export function planEmailStore(env: NodeJS.ProcessEnv = process.env): StorePlan 
     });
   }
 
-  // 5. The default: the local database. `setting` is null when nothing named it, which
-  //    is the case a `doctor` line has to be able to report as "defaulted".
-  const setting = databaseKeys[0] ?? null;
-  if (setting === null) {
-    // The all-unset row: no database path AND no API config. This is the
-    // unselected fallback of incident 715712 — name the mode switch once per
-    // process so a false-empty mailbox can never be a silent rc=0. An
-    // EXPLICIT database path (setting non-null) is a chosen local store and
-    // stays silent, exactly like the secrets fallback fix (PR #681).
-    emitEmailsLocalFallbackNotice();
+  // 5. The ALL-UNSET row: no database path AND no API config. There is no default
+  //    any more — incident 715712 (a dropped API environment served an empty local
+  //    mailbox at rc=0) ended the silent fallback, and the fail-closed ruling
+  //    (2026-09-04) made a bare Error the answer: refuse to start and name the
+  //    required API settings and the explicit ways back to local. `settings` is
+  //    only ever keys, never values — a value in this row can be a credential.
+  if (databaseKeys.length === 0) {
+    throw new StoreConfigurationError(
+      `No Emails API configuration is present in this environment: set ` +
+        `${API_BASE_URL_SETTING} and one of ${API_CREDENTIAL_SETTINGS.join(" or ")} ` +
+        `(or set ${API_SETTINGS_POINTER} to the vault pointer that delivers them). To ` +
+        `use the local database instead, choose it explicitly: set ` +
+        `${DATABASE_PATH_SETTINGS.join(" or ")} to a database file. The local database ` +
+        "is never served on an absence of configuration.",
+      [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS, API_SETTINGS_POINTER],
+    );
   }
-  const databasePath = setting === null ? defaultDatabasePath() : (configured(env, setting) as string);
-  return Object.freeze({ store: "sqlite" as const, databasePath, setting });
+
+  // 6. Local, from the EXPLICIT path the operator configured. `setting` is never
+  //    null here — an unset row threw above — so a `doctor` line can report which
+  //    key was chosen rather than a "defaulted" that no longer exists.
+  const setting = databaseKeys[0] as string;
+  return Object.freeze({
+    store: "sqlite" as const,
+    databasePath: configured(env, setting) as string,
+    setting,
+  });
 }
 
 /**

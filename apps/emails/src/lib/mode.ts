@@ -1,6 +1,13 @@
 import { resolveSelfHostedConfig } from "../db/self-hosted-store.js";
-import { API_BASE_URL_SETTING, StoreConfigurationError, planEmailStore } from "../store-resolution.js";
-import { loadConfig } from "./config.js";
+import {
+  API_BASE_URL_SETTING,
+  API_CREDENTIAL_SETTINGS,
+  API_SETTINGS_POINTER,
+  DATABASE_PATH_SETTINGS,
+  StoreConfigurationError,
+  planEmailStore,
+} from "../store-resolution.js";
+import { readConfigFile } from "./config.js";
 import { EMAILS_CLIENT_ENV_SECRET_ENV, EMAILS_SESSION_TOKEN_ENV, loadEmailsClientEnvSecret } from "./client-env.js";
 import { redactStructuredDiagnosticValue } from "./redaction.js";
 export { EMAILS_CLIENT_ENV_SECRET_ENV } from "./client-env.js";
@@ -226,17 +233,20 @@ export function clientEnvCredentialOverrideWarning(modeEnvKey: string, url: stri
  * moved are still dispatched by the word this module resolves. For ONE common
  * configuration their answers contradict: an API base URL plus a credential, with
  * the deployment word unset, sends the seam families to the HTTP API while the
- * word default sends everything else to local SQLite — two mailboxes in the same
- * process, no diagnostic, and single commands straddle both regimes (owners read
- * locally, send keys minted through the API). That is the silent wrong-store read
- * this repo classes as its worst bug, so the DEFAULTING side refuses to guess and
- * names both settings. Loud beats wrong; the axis deletion retires this guard.
+ * word-routed families — with no selector and no explicit database path — now
+ * refuse every default that would read a second store (fail-closed ruling,
+ * 2026-09-04). The same process would mix working API commands with commands that
+ * cannot start, and no diagnostic would say the two halves disagree. That is the
+ * silent wrong-store read this repo classes as its worst bug, so the DEFAULTING
+ * side refuses to guess and names both settings. Loud beats wrong; the axis
+ * deletion retires this guard.
  *
  * Deliberately null when the storage resolution itself refuses the environment (a
  * both-configured contradiction, or an API URL missing its credential): those
- * configurations already fail closed in the seam's own words on every seam call,
- * and a second refusal in a different dialect on the word-routed side would bury
- * the actionable message rather than sharpen it.
+ * configurations already fail closed in the seam's own words, and the default row
+ * below lets that SAME refusal propagate to the word-routed families rather than
+ * adding a second one in a different dialect, which would bury the actionable
+ * message rather than sharpen it.
  *
  * Kept OUT of src/store-resolution.ts on purpose: the check needs the deployment
  * word's absence, and that module's load-bearing property is that it never reads
@@ -259,10 +269,12 @@ function defaultSelectionStorageConflict(env: NodeJS.ProcessEnv): StoreConfigura
   return new StoreConfigurationError(
     `${API_BASE_URL_SETTING} configures an Emails API, but ${MODE_WORD_SETTING} is unset — so ` +
       "the families already reading storage configuration would use that API while the " +
-      "families still routed by the deployment word would default to the LOCAL database, in " +
-      "the same process. Two configured places to keep mail and no way to tell which one " +
-      `you meant: set ${MODE_WORD_SETTING}=self_hosted to route this process through the ` +
-      `API, or unset ${API_BASE_URL_SETTING} to use the local database.`,
+      "families still routed by the deployment word would refuse every default, in the " +
+      "same process. Two halves of one configuration and no way to tell which one you " +
+      `meant: set ${MODE_WORD_SETTING}=self_hosted to route this process through the ` +
+      `API, or unset ${API_BASE_URL_SETTING} and set ` +
+      `${DATABASE_PATH_SETTINGS.join(" or ")} to a database file to use the local database ` +
+      "explicitly.",
     [MODE_WORD_SETTING, API_BASE_URL_SETTING],
   );
 }
@@ -295,7 +307,10 @@ export function resolveEmailsModeSelection(env: NodeJS.ProcessEnv = process.env)
     });
   }
 
-  const config = loadConfig();
+  // The config-file keys are inspected with a READ-ONLY accessor: mode selection
+  // must not create the data root just to check whether the file exists, least of
+  // all on the fail-closed default row, which must leave a fresh home untouched.
+  const config = readConfigFile();
   for (const key of ["mailery_mode", "mode", "storage_mode"] as const) {
     const value = config[key];
     if (typeof value === "string" && value.trim()) {
@@ -312,14 +327,63 @@ export function resolveEmailsModeSelection(env: NodeJS.ProcessEnv = process.env)
   // resolves for the seam-routed families; see the conflict helper above.
   const conflict = defaultSelectionStorageConflict(env);
   if (conflict !== null) throw conflict;
-  return resolution("local", { kind: "default", name: null, value: null });
+
+  // No selector, no pointer, no config key: this is the default row, and under the
+  // fail-closed ruling (2026-09-04) it has no silent answer. Incident 715712's shape
+  // was exactly this row — a dropped API environment serving an empty local mailbox
+  // at rc=0 — so the local database is only reachable through an explicit choice.
+  //
+  // A configured database path IS that choice, and it is the ONE explicit local
+  // choice both regimes can see: the store seam resolves a local store from it
+  // (src/store-resolution.ts, which structurally never reads this word), so the
+  // hermetic suites and DB-path deployments resolve identically on both sides of
+  // the axis.
+  for (const databaseSetting of DATABASE_PATH_SETTINGS) {
+    const path = env[databaseSetting]?.trim();
+    if (!path) continue;
+    return resolution("local", { kind: "env", name: databaseSetting, value: path });
+  }
+
+  // An API base URL that reached this row can only be an API the seam refused above
+  // (a working API would have made the conflict guard throw): most commonly a URL
+  // with no credential. Surface the SEAM's own refusal — one dialect, the exact
+  // missing settings named — instead of a second error in this module's words.
+  // `planEmailStore` is called purely for that throw; reaching the line after it is
+  // impossible by construction and refused anyway so a future seam change cannot
+  // silently turn this row into a local default.
+  if (env[API_BASE_URL_SETTING]?.trim()) {
+    planEmailStore(env);
+    throw new StoreConfigurationError(
+      `${API_BASE_URL_SETTING} names an Emails API this process cannot use, and the store ` +
+        "resolution above refused it and named the exact missing settings. To use the " +
+        `local database instead, set ${DATABASE_PATH_SETTINGS.join(" or ")} to a database ` +
+        "file explicitly.",
+      [API_BASE_URL_SETTING],
+    );
+  }
+
+  // The ALL-UNSET row: nothing configured a mode, a pointer, an API, or a database
+  // path. Refuse to start and name the required environment and every explicit way
+  // back to local. The mode selector itself is intentionally absent from the list:
+  // an operator who had set it would have been served by the selector branch above,
+  // so naming it here would only add a key this error cannot fire for.
+  throw new StoreConfigurationError(
+    `No Emails API configuration is present in this environment: set ${API_BASE_URL_SETTING} ` +
+      `and one of ${API_CREDENTIAL_SETTINGS.join(" or ")} (or set ${API_SETTINGS_POINTER} to ` +
+      `the vault pointer that delivers them). To use the local database instead, choose it ` +
+      `explicitly: set ${DATABASE_PATH_SETTINGS.join(" or ")} to a database file, or an ` +
+      "'emails_mode' key in the config file. The local database is never a silent default.",
+    [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS, API_SETTINGS_POINTER],
+  );
 }
 
 /**
- * Resolve one client data-source mode for the whole process. Local is the safe
- * default and never reads a client credential. Self-hosted is explicit and
- * fail-closed: URL + API/session credential are validated before repository,
- * CLI, or MCP callers can reach the operator API.
+ * Resolve one client data-source mode for the whole process. Local is explicit
+ * only — a selector, a config-file key, or a configured database path — and
+ * never reads a client credential. Self-hosted is explicit and fail-closed: URL
+ * + API/session credential are validated before repository, CLI, or MCP callers
+ * can reach the operator API. Nothing configured fails closed instead of
+ * defaulting (fail-closed ruling, 2026-09-04).
  */
 export function resolveEmailsMode(env: NodeJS.ProcessEnv = process.env): EmailsModeResolution {
   const selected = resolveEmailsModeSelection(env);
