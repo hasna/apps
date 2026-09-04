@@ -25,7 +25,12 @@ name: fleet-key-provision
 # published to the job summary. See `planMint` in tooling/fleet/key-provisioning.ts.
 #
 # ROLLOUT SWITCH (temporary, hasna/apps#1595). AWS-side prerequisites for this
-# job live in infra-live, not here:
+# job live in infra-live, not here, and none of them exists yet — verified
+# against infra-live@1ab5ad4, where infra/modules/deploy-oidc-role (which
+# conversations, mementos, projects and skills all instantiate) grants NO
+# secretsmanager action at all and scopes ecs:RunTask to the migration family.
+# They are TRACKED, not merely disclosed: hasna-internal/infra-live#46 is the
+# infra work, hasna/apps#1768 is flipping these switches on and deleting them.
 #   * the `<app>-prod-gha-deploy` role must carry secretsmanager:GetSecretValue
 #     on hasna/oss/<app>/api-key, plus ecs:RunTask / ecs:DescribeTasks and
 #     iam:PassRole for the mint task family;
@@ -110,6 +115,10 @@ jobs:
             echo "   \`iam:PassRole\` for the mint task;"
             echo "2. \`/hasna/deploy/${APP}\` (SSM) carries \`mint_key_task_family\`;"
             echo "3. set the repository variable \`FLEET_KEY_PROVISION_ENABLED=true\`."
+            echo
+            echo "Tracked: hasna-internal/infra-live#46 (the infra) and hasna/apps#1768 (turning"
+            echo "this on and deleting the switch). If either issue is closed and this warning is"
+            echo "still here, the switch was forgotten — that is the bug, not the notice."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       # Pinned to the same commit and the same toolchain version the deploy

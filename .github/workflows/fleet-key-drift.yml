@@ -37,7 +37,10 @@ name: fleet-key-drift
 # not `repo:hasna/apps:environment:production`.
 #
 # ROLLOUT SWITCH (temporary, hasna/apps#1595). The audit role and the per-app
-# secrets live in infra-live, not here. Until they exist every scheduled run
+# secrets live in infra-live, not here, and `fleet-key-audit-gha` does not exist
+# there yet (verified against infra-live@1ab5ad4). It is TRACKED, not merely
+# disclosed: hasna-internal/infra-live#46 creates the role, hasna/apps#1768
+# flips this switch on and deletes it. Until they exist every scheduled run
 # would fail on credentials rather than on a finding, which teaches people to
 # ignore this lane before it has ever said anything true. So the AWS half runs
 # only when the repository variable FLEET_KEY_DRIFT_ENABLED is exactly "true".
@@ -108,6 +111,9 @@ jobs:
             echo "   OIDC subject \`repo:hasna/apps:ref:refs/heads/main\`, with"
             echo "   \`secretsmanager:GetSecretValue\` on \`hasna/oss/*/api-key\`;"
             echo "2. set the repository variable \`FLEET_KEY_DRIFT_ENABLED=true\`."
+            echo
+            echo "Tracked: hasna-internal/infra-live#46 (the role) and hasna/apps#1768 (turning"
+            echo "this on and deleting the switch)."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Configure AWS credentials

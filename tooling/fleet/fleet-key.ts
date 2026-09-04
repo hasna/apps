@@ -23,7 +23,11 @@
  *       Print the registry. Used by humans and by the workflow that needs the
  *       list without duplicating it.
  *
- * Exit codes: 0 clean, 1 findings, 2 usage/configuration error.
+ * Exit codes: 0 clean, 1 findings, 2 usage/configuration error — including a
+ * missing AWS PREREQUISITE (an IAM grant or a task definition that infra-live
+ * has not landed yet, hasna-internal/infra-live#46). A prerequisite failure is
+ * reported as one and never as a key finding: nothing has been proved about the
+ * key and nothing has been written.
  *
  * No key value is ever printed. Every line this command writes carries app
  * names, HTTP statuses and verdicts only.
@@ -31,6 +35,7 @@
 import {
   checkApp,
   createIo,
+  FleetKeyPrerequisiteError,
   loadRegistry,
   mintTargetFrom,
   missingMintTargetMessage,
@@ -351,6 +356,15 @@ export async function main(argv: readonly string[], io: Io = createIo()): Promis
         return 2;
     }
   } catch (e) {
+    // A missing IAM statement or an unregistered task definition is an infra
+    // gap a human fixes once, not a dead key and not an incident. It is loud —
+    // this still exits non-zero — but it says which grant is missing, and it is
+    // never mistaken for a finding about the key itself.
+    if (e instanceof FleetKeyPrerequisiteError) {
+      console.error(`[fleet-key] PREREQUISITE MISSING: ${e.message}`);
+      await publishNotice(`PREREQUISITE MISSING: ${e.message}`);
+      return 2;
+    }
     console.error(`[fleet-key] ${(e as Error).message}`);
     return 2;
   }

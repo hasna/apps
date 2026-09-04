@@ -17,6 +17,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   FAILING_STATES,
+  FleetKeyPrerequisiteError,
   KEY_PROBE_PATH,
   REGISTRY_PATH,
   assessKey,
@@ -37,6 +38,8 @@ import {
   rotationNotice,
   rotationRefusedMessage,
   runMintTask,
+  secretReadDeniedMessage,
+  withPrerequisiteContext,
   type FleetApp,
   type Io,
   type KeyAssessment,
@@ -149,7 +152,37 @@ describe("probe classification — the part that must not report a dead key as h
   test("refused unkeyed + served keyed is the only 'authenticated' verdict", () => {
     expect(classifyProbe(401, 404)).toBe("authenticated");
     expect(classifyProbe(403, 200)).toBe("authenticated");
-    expect(classifyProbe(401, 500)).toBe("authenticated");
+    expect(classifyProbe(401, 429)).not.toBe("authenticated");
+    expect(classifyProbe(401, 500)).not.toBe("authenticated");
+  });
+
+  test("a status that judged no credential concludes nothing, on either half", () => {
+    // "not a 401, therefore the key works" is the same false green the unkeyed
+    // control exists to prevent, arriving through the keyed half: a 5xx is the
+    // origin failing before the gate, and a 429 is the request never being
+    // judged at all.
+    expect(classifyProbe(401, 500)).toBe("inconclusive");
+    expect(classifyProbe(401, 502)).toBe("inconclusive");
+    expect(classifyProbe(403, 429)).toBe("inconclusive");
+    // And the same on the control side: a 503 is not evidence that /v1/* is
+    // unguarded, so it must not be reported as `ungated` either.
+    expect(classifyProbe(503, 404)).toBe("inconclusive");
+    expect(classifyProbe(429, 401)).toBe("inconclusive");
+    // A refusal is still a refusal: a dead key must not hide behind this.
+    expect(classifyProbe(401, 401)).toBe("rejected");
+  });
+
+  test("an inconclusive probe is 'unverifiable', so provisioning refuses to write", () => {
+    const assessment = assessKey({
+      app: "messages",
+      secretPresent: true,
+      verdict: "inconclusive",
+      statuses: { withoutKey: 401, withKey: 503 },
+    });
+    expect(assessment.state).toBe("unverifiable");
+    expect(planMint(assessment).action).toBe("refuse");
+    // Even with rotation authorised: the probe proved nothing to rotate on.
+    expect(planMint(assessment, { allowRotate: true }).action).toBe("refuse");
   });
 
   test("refused with the key means the key is dead — the projects/knowledge failure", () => {
@@ -175,7 +208,7 @@ describe("probe classification — the part that must not report a dead key as h
 
 describe("assessment and partitioning", () => {
   test("an absent secret is 'missing' whatever the probe said — the messages failure", () => {
-    for (const verdict of ["authenticated", "rejected", "ungated", "unreachable"] as const) {
+    for (const verdict of ["authenticated", "rejected", "ungated", "unreachable", "inconclusive"] as const) {
       expect(assessKey({ app: "messages", secretPresent: false, verdict }).state).toBe("missing");
     }
   });
@@ -642,6 +675,204 @@ describe("provision, end to end, with the real command path", () => {
     const { code } = await run(["provision", "--app", "messages", "--dry-run"], io);
     expect(awsCalls).toEqual([]);
     expect(code).toBe(1);
+  });
+});
+
+describe("a missing AWS prerequisite is reported as one, never as a key finding", () => {
+  /**
+   * WHY THIS SUITE EXISTS.
+   *
+   * Nothing this checker needs on the AWS side exists yet: at infra-live@1ab5ad4
+   * the `deploy-oidc-role` module — which conversations, mementos, projects and
+   * skills all instantiate — grants no `secretsmanager` action at all and scopes
+   * `ecs:RunTask` to the migration task family, and no `hasna-ops-mint-key-*`
+   * task definition exists anywhere. So the FIRST failure these lanes will meet
+   * once they are switched on is `AccessDeniedException`, not a dead key.
+   *
+   * Re-raised as a generic error, that reads in a deploy log exactly like a key
+   * that cannot be read — a one-line IAM fix disguised as an incident. Every
+   * assertion below is that the two stay apart, and that neither one ever
+   * writes.
+   */
+  const denied = () =>
+    Object.assign(new Error("Command failed"), {
+      stderr:
+        "An error occurred (AccessDeniedException) when calling the GetSecretValue operation: " +
+        "User: arn:aws:sts::0:assumed-role/skills-prod-gha-deploy/x is not authorized to perform: " +
+        "secretsmanager:GetSecretValue",
+    });
+
+  test("AccessDenied becomes a prerequisite error naming the grant, not a mystery", async () => {
+    const error = await withPrerequisiteContext(
+      async () => {
+        throw denied();
+      },
+      { denied: () => secretReadDeniedMessage("hasna/oss/skills/api-key") },
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(FleetKeyPrerequisiteError);
+    const message = (error as Error).message;
+    expect(message).toContain("secretsmanager:GetSecretValue");
+    expect(message).toContain("hasna/oss/skills/api-key");
+    // It must say who fixes it and where, or it is just a nicer stack trace.
+    expect(message).toContain("infra-live#46");
+    // And it must NOT read as a verdict about the key.
+    expect(message).toContain("nothing has been proved about the");
+  });
+
+  test("a real fault is passed through untouched — this must not swallow errors", async () => {
+    const boom = new Error("connection reset by peer");
+    const error = await withPrerequisiteContext(
+      async () => {
+        throw boom;
+      },
+      { denied: () => "should not be used", missing: () => "nor this" },
+    ).catch((e: unknown) => e);
+    expect(error).toBe(boom);
+    expect(error).not.toBeInstanceOf(FleetKeyPrerequisiteError);
+  });
+
+  test("run-task AccessDenied names ecs:RunTask/PassRole, and nothing was minted", async () => {
+    const calls: string[][] = [];
+    const io: Io = {
+      readSecret: async () => "k",
+      probe: async () => 404,
+      aws: async (args) => {
+        calls.push([...args]);
+        throw denied();
+      },
+    };
+    const error = await runMintTask(
+      {
+        cluster: "hasna-prod",
+        taskFamily: "hasna-ops-mint-key-skills",
+        subnets: ["subnet-a"],
+        securityGroups: ["sg-1"],
+        assignPublicIp: "DISABLED",
+      },
+      io,
+      "us-east-1",
+      "test",
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(FleetKeyPrerequisiteError);
+    expect((error as Error).message).toContain("ecs:RunTask");
+    expect((error as Error).message).toContain("iam:PassRole");
+    expect((error as Error).message).toContain("hasna-ops-mint-key-skills");
+    expect((error as Error).message).toContain("no secret was written");
+    // It failed on the FIRST call: nothing waited, nothing was described.
+    expect(calls).toHaveLength(1);
+  });
+
+  test("an unregistered mint task is reported as absent, not as forbidden", async () => {
+    const io: Io = {
+      readSecret: async () => "k",
+      probe: async () => 404,
+      aws: async () => {
+        throw Object.assign(new Error("Command failed"), {
+          stderr: "An error occurred (ClusterNotFoundException) when calling the RunTask operation",
+        });
+      },
+    };
+    const error = await runMintTask(
+      {
+        cluster: "hasna-prod",
+        taskFamily: "hasna-ops-mint-key-skills",
+        subnets: ["subnet-a"],
+        securityGroups: ["sg-1"],
+        assignPublicIp: "DISABLED",
+      },
+      io,
+      "us-east-1",
+      "test",
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(FleetKeyPrerequisiteError);
+    expect((error as Error).message).toContain("does not exist");
+    expect((error as Error).message).toContain("infra-live#46");
+  });
+
+  test("through the real command path: exit 2, no mint, and the operator is told which grant", async () => {
+    const calls: string[][] = [];
+    const io: Io = {
+      readSecret: async () => {
+        throw new FleetKeyPrerequisiteError(secretReadDeniedMessage("hasna/oss/messages/api-key"));
+      },
+      probe: async () => 404,
+      aws: async (args) => {
+        calls.push([...args]);
+        return "";
+      },
+    };
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fleet-key-prereq-"));
+    const summary = path.join(dir, "summary.md");
+    fs.writeFileSync(summary, "");
+    const previous = process.env.GITHUB_STEP_SUMMARY;
+    const log = console.log;
+    const error = console.error;
+    process.env.GITHUB_STEP_SUMMARY = summary;
+    console.log = () => {};
+    console.error = () => {};
+    let code: number;
+    try {
+      code = await main(["provision", "--app", "messages"], io);
+    } finally {
+      console.log = log;
+      console.error = error;
+      if (previous === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+      else process.env.GITHUB_STEP_SUMMARY = previous;
+    }
+    const published = fs.readFileSync(summary, "utf8");
+    fs.rmSync(dir, { recursive: true, force: true });
+    // 2 is "this lane is misconfigured", distinct from 1, "a key is bad".
+    expect(code).toBe(2);
+    // Nothing ran against AWS after the refusal, so nothing was written.
+    expect(calls).toEqual([]);
+    expect(published).toContain("PREREQUISITE MISSING");
+    expect(published).toContain("secretsmanager:GetSecretValue");
+  });
+});
+
+describe("the infra prerequisites are TRACKED, not just disclosed", () => {
+  /**
+   * A PR body honestly listing three things "not in this repo" that nobody is
+   * assigned to do is how two permanently-disabled lanes become background
+   * noise. Every place that tells a human "this is off" must also tell them
+   * where the work lives, and these assertions fail if an issue reference is
+   * dropped in a later edit.
+   */
+  const INFRA_ISSUE = "infra-live#46";
+  const SWITCH_ISSUE = "apps#1768";
+  const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), "utf8");
+
+  test("both disabled-lane notices point at the issue that fixes them", () => {
+    for (const wf of [".github/workflows/fleet-key-provision.yml", ".github/workflows/fleet-key-drift.yml"]) {
+      const text = read(wf);
+      expect(text).toContain(INFRA_ISSUE);
+      expect(text).toContain(SWITCH_ISSUE);
+      // Inside the notice a disabled run actually prints — not only in a
+      // comment a reader of the log never sees.
+      const notice = text.split(/\n\s+- name: /).find((step) => step.includes("is not enabled yet"));
+      expect(notice).toBeDefined();
+      expect(notice).toContain(INFRA_ISSUE);
+    }
+  });
+
+  test("the README says who owns the AWS half and what it must contain", () => {
+    const readme = read(path.join("tooling", "fleet", "README.md"));
+    expect(readme).toContain(INFRA_ISSUE);
+    expect(readme).toContain(SWITCH_ISSUE);
+    expect(readme).toContain("fleet-key-audit-gha");
+    expect(readme).toContain("mint_key_task_family");
+  });
+
+  test("messages does not claim a deploy lane it does not have", () => {
+    // messages is the app #1595 was filed for and the one app on-deploy
+    // provisioning cannot cover: there is no deploy-messages.yml here.
+    const lanes = fs
+      .readdirSync(path.join(ROOT, ".github", "workflows"))
+      .filter((f) => /^deploy-[a-z][a-z0-9-]*\.yml$/.test(f));
+    expect(lanes).not.toContain("deploy-messages.yml");
+    const readme = read(path.join("apps", "messages", "README.md"));
+    expect(readme).not.toMatch(/provisioned by the deploy lane/);
+    expect(readme).toContain("no deploy lane in this");
   });
 });
 

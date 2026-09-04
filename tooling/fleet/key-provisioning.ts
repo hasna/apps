@@ -223,23 +223,46 @@ export type ProbeVerdict =
   /** The unkeyed call was NOT refused: /v1/* is not credential-gated at all. */
   | "ungated"
   /** One of the two calls did not complete: nothing can be concluded. */
-  | "unreachable";
+  | "unreachable"
+  /** A call completed with a status that answers nothing about the credential. */
+  | "inconclusive";
 
 function isRefusal(status: number): boolean {
   return (REFUSAL_STATUSES as readonly number[]).includes(status);
 }
 
 /**
+ * Statuses that say nothing about the credential presented.
+ *
+ * A 5xx is the origin failing before or independently of the gate, and a 429 is
+ * the request never being judged at all. Reading either as "not a refusal, so
+ * the key works" is how a rate-limited or broken origin reports a green key —
+ * exactly the "a check that cannot fail is worse than none" failure the unkeyed
+ * control exists to prevent, arriving through the other half of the probe.
+ */
+export function isInconclusiveStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/**
  * Classify a two-sided probe. `null` means the request did not complete.
  *
- * Order matters: `unreachable` outranks everything (an incomplete probe proves
- * nothing), and `ungated` outranks `authenticated` (a service that accepts an
- * unkeyed call would make ANY key look valid).
+ * Order matters:
+ *   - `unreachable` outranks everything (an incomplete probe proves nothing);
+ *   - an inconclusive UNKEYED status outranks `ungated`, because "not a 401"
+ *     from a 503 is not evidence that /v1/* is unguarded;
+ *   - `ungated` outranks the keyed reading entirely (a service that accepts an
+ *     unkeyed call would make ANY key look valid);
+ *   - a refusal is a refusal, but anything else must still be a status the
+ *     origin actually judged before it counts as `authenticated`.
  */
 export function classifyProbe(withoutKey: number | null, withKey: number | null): ProbeVerdict {
   if (withoutKey === null || withKey === null) return "unreachable";
+  if (isInconclusiveStatus(withoutKey)) return "inconclusive";
   if (!isRefusal(withoutKey)) return "ungated";
-  return isRefusal(withKey) ? "rejected" : "authenticated";
+  if (isRefusal(withKey)) return "rejected";
+  if (isInconclusiveStatus(withKey)) return "inconclusive";
+  return "authenticated";
 }
 
 export type KeyState =
@@ -302,6 +325,14 @@ export function assessKey(input: AssessInput): KeyAssessment {
       };
     case "unreachable":
       return { app, state: "unverifiable", detail: `${app} did not answer the probe${seen}` };
+    case "inconclusive":
+      return {
+        app,
+        state: "unverifiable",
+        detail:
+          `${app} answered the probe with a status that judges no credential (5xx or 429), ` +
+          `so neither half of the check proved anything${seen}`,
+      };
   }
 }
 
@@ -377,6 +408,103 @@ export interface Io {
 /** Sentinel AWS error meaning "no such secret" — the `missing` case, not a fault. */
 const NOT_FOUND = /ResourceNotFoundException|Secrets Manager can't find the specified secret/i;
 
+/** AWS's several ways of saying "this role may not do that". */
+const ACCESS_DENIED = /AccessDenied|UnauthorizedOperation|is not authorized to perform|AuthorizationError/i;
+
+/** AWS's ways of saying "the thing you named does not exist". */
+const NO_SUCH_TARGET =
+  /ClusterNotFoundException|TaskDefinitionNotFoundException|Unable to describe task definition|ParameterNotFound/i;
+
+/**
+ * The AWS side of this checker is NOT in this repository.
+ *
+ * Every grant and every task definition it needs lives in
+ * hasna-internal/infra-live (tracked in hasna-internal/infra-live#46; the
+ * rollout switches that keep the lanes off until it lands are hasna/apps#1768).
+ * Verified absent at infra-live@1ab5ad4: `infra/modules/deploy-oidc-role` —
+ * which conversations, mementos, projects and skills all instantiate — grants
+ * NO secretsmanager action at all and scopes `ecs:RunTask` to
+ * `${migration_task_family}:*`, and no `hasna-ops-mint-key-*` task definition
+ * exists anywhere.
+ *
+ * So the failure this code will actually meet first is `AccessDeniedException`,
+ * not a broken key. An `AccessDeniedException` re-raised as a generic error
+ * reads, in a deploy lane's log, exactly like the app's key being unreadable —
+ * one is a missing IAM statement a human must add once, the other is an
+ * incident. This error type keeps them apart and says which grant is missing.
+ */
+export class FleetKeyPrerequisiteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FleetKeyPrerequisiteError";
+  }
+}
+
+/** stderr and message together: an injected Io throws plain Errors, execFile attaches stderr. */
+function awsErrorText(e: unknown): string {
+  const stderr = (e as { stderr?: string }).stderr ?? "";
+  const message = e instanceof Error ? e.message : String(e);
+  return `${stderr}\n${message}`;
+}
+
+/** The message shown when the lane's role cannot read a client key at all. */
+export function secretReadDeniedMessage(secretId: string): string {
+  return [
+    `this role may not read ${secretId} (AccessDenied).`,
+    "That is a missing IAM statement, not a missing or dead key: nothing has been proved about the",
+    "key itself and nothing has been written.",
+    `Grant secretsmanager:GetSecretValue on arn:aws:secretsmanager:<region>:<account>:secret:${secretId}-*`,
+    "to the role this lane assumes — infra/modules/deploy-oidc-role for a deploy lane, the",
+    "fleet-key-audit-gha role for the daily drift lane. Tracked in hasna-internal/infra-live#46;",
+    "the rollout switches are hasna/apps#1768.",
+  ].join("\n");
+}
+
+/** The message shown when the lane's role may not start the mint task. */
+export function mintDeniedMessage(taskFamily: string, cluster: string): string {
+  return [
+    `this role may not run the mint task ${taskFamily} in ${cluster} (AccessDenied).`,
+    "Nothing was minted and no secret was written.",
+    `Grant ecs:RunTask on task-definition/${taskFamily}:* (conditioned on this cluster),`,
+    "ecs:DescribeTasks, and iam:PassRole for the mint task's task and execution roles.",
+    "infra/modules/deploy-oidc-role scopes ecs:RunTask to the migration family only today.",
+    "Tracked in hasna-internal/infra-live#46.",
+  ].join("\n");
+}
+
+/** The message shown when the mint task definition or cluster does not exist. */
+export function mintTargetMissingMessage(taskFamily: string, cluster: string): string {
+  return [
+    `the mint task ${taskFamily} does not exist in ${cluster}.`,
+    "Nothing was minted and no secret was written.",
+    `Register the in-VPC one-off task definition ${taskFamily} — it runs "@hasna/contracts issue-key"`,
+    "and writes the result straight to Secrets Manager, so the plaintext never leaves the VPC.",
+    "Tracked in hasna-internal/infra-live#46.",
+  ].join("\n");
+}
+
+/**
+ * Re-raise an AWS failure as a prerequisite error when it is one.
+ *
+ * `denied` and `missing` are built lazily so a caller pays nothing on the happy
+ * path. Anything else is re-thrown untouched — this must not swallow a real
+ * fault into a reassuring message.
+ */
+export async function withPrerequisiteContext<T>(
+  run: () => Promise<T>,
+  messages: { denied: () => string; missing?: () => string },
+): Promise<T> {
+  try {
+    return await run();
+  } catch (e) {
+    if (e instanceof FleetKeyPrerequisiteError) throw e;
+    const text = awsErrorText(e);
+    if (ACCESS_DENIED.test(text)) throw new FleetKeyPrerequisiteError(messages.denied());
+    if (messages.missing && NO_SUCH_TARGET.test(text)) throw new FleetKeyPrerequisiteError(messages.missing());
+    throw e;
+  }
+}
+
 export function createIo(options: { timeoutMs?: number } = {}): Io {
   const timeoutMs = options.timeoutMs ?? 15_000;
   const aws = async (args: readonly string[]): Promise<string> => {
@@ -406,7 +534,11 @@ export function createIo(options: { timeoutMs?: number } = {}): Io {
         return value.length > 0 ? value : null;
       } catch (e) {
         const stderr = (e as { stderr?: string }).stderr ?? "";
+        // "no such secret" is the `missing` case the whole lane exists to fix.
         if (NOT_FOUND.test(stderr)) return null;
+        // "you may not look" is a missing IAM statement, and saying so is the
+        // difference between a one-line infra fix and a hunt for a dead key.
+        if (ACCESS_DENIED.test(stderr)) throw new FleetKeyPrerequisiteError(secretReadDeniedMessage(secretId));
         throw new Error(`reading ${secretId} failed: ${firstLine(stderr) || (e as Error).message}`);
       }
     },
@@ -496,6 +628,7 @@ export function missingMintTargetMessage(app: string, manifestName: string): str
     `one-off task definition that runs "@hasna/contracts issue-key" for ${app} and writes the`,
     `result to ${keySecretIdFor(app)} (the hasna-ops-mint-key-${app} family). The deploy itself`,
     "succeeded; the service is running without a usable client key until this is done.",
+    "Neither the task family nor the grant to start it exists yet — hasna-internal/infra-live#46.",
   ].join("\n");
 }
 
@@ -509,47 +642,63 @@ export async function runMintTask(target: MintTarget, io: Io, region: string, st
   const network =
     `awsvpcConfiguration={subnets=[${target.subnets.join(",")}],` +
     `securityGroups=[${target.securityGroups.join(",")}],assignPublicIp=${target.assignPublicIp}}`;
+  // Both prerequisites this call depends on are absent from infra-live today
+  // (see FleetKeyPrerequisiteError): the deploy role's ecs:RunTask is scoped to
+  // the migration family, and no hasna-ops-mint-key-* task definition exists.
+  // Whichever lands last, the operator must be told WHICH — not "mint task
+  // failed to start".
   const taskArn = (
-    await io.aws([
-      "ecs",
-      "run-task",
-      "--region",
-      region,
-      "--cluster",
-      target.cluster,
-      "--task-definition",
-      target.taskFamily,
-      "--launch-type",
-      "FARGATE",
-      "--count",
-      "1",
-      "--started-by",
-      startedBy,
-      "--network-configuration",
-      network,
-      "--query",
-      "tasks[0].taskArn",
-      "--output",
-      "text",
-    ])
+    await withPrerequisiteContext(
+      () =>
+        io.aws([
+          "ecs",
+          "run-task",
+          "--region",
+          region,
+          "--cluster",
+          target.cluster,
+          "--task-definition",
+          target.taskFamily,
+          "--launch-type",
+          "FARGATE",
+          "--count",
+          "1",
+          "--started-by",
+          startedBy,
+          "--network-configuration",
+          network,
+          "--query",
+          "tasks[0].taskArn",
+          "--output",
+          "text",
+        ]),
+      {
+        denied: () => mintDeniedMessage(target.taskFamily, target.cluster),
+        missing: () => mintTargetMissingMessage(target.taskFamily, target.cluster),
+      },
+    )
   ).trim();
   if (!taskArn || taskArn === "None") throw new Error("mint task failed to start");
   await io.aws(["ecs", "wait", "tasks-stopped", "--region", region, "--cluster", target.cluster, "--tasks", taskArn]);
   const exit = (
-    await io.aws([
-      "ecs",
-      "describe-tasks",
-      "--region",
-      region,
-      "--cluster",
-      target.cluster,
-      "--tasks",
-      taskArn,
-      "--query",
-      "tasks[0].containers[0].exitCode",
-      "--output",
-      "text",
-    ])
+    await withPrerequisiteContext(
+      () =>
+        io.aws([
+          "ecs",
+          "describe-tasks",
+          "--region",
+          region,
+          "--cluster",
+          target.cluster,
+          "--tasks",
+          taskArn,
+          "--query",
+          "tasks[0].containers[0].exitCode",
+          "--output",
+          "text",
+        ]),
+      { denied: () => mintDeniedMessage(target.taskFamily, target.cluster) },
+    )
   ).trim();
   const code = Number(exit);
   return Number.isFinite(code) ? code : 1;

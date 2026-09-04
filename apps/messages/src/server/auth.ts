@@ -161,8 +161,14 @@ function json(body: unknown, status: number): Response {
 
 /**
  * Build an {@link AuthQueryClient} over the app's Postgres, or `null` when no
- * database is configured. `pg` is imported lazily so a SQLite-backed local
- * server never pays for it.
+ * database is configured.
+ *
+ * `pg` is a STATIC import at the top of this file, deliberately: postgres-store
+ * imports it statically too, so a lazy import here would buy nothing on the
+ * server path. What keeps a SQLite-backed local run from paying for it is that
+ * the CLI reaches serve-entry only through `await import` — this module is not
+ * loaded at all unless the server is. (An earlier version of this comment
+ * claimed the import was lazy. It never was.)
  */
 export function makeAuthQueryClient(env: Env): AuthQueryClient | null {
   const dsn = env.HASNA_MESSAGES_DATABASE_URL?.trim();

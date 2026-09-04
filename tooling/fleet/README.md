@@ -109,8 +109,9 @@ inside one process. Reports carry app names, HTTP statuses and verdicts only.
 
 ## Rollout: what is not in this repository
 
-The checker is here; the AWS side is in `infra-live`, and until it lands both
-lanes would fail for reasons no deploy caused. Both therefore sit behind a
+The checker is here; the AWS side is in `infra-live` — **none of it exists
+yet**, verified against `infra-live@1ab5ad4` — and until it lands both lanes
+would fail for reasons no deploy caused. Both therefore sit behind a
 **rollout switch**, off by default, that still says loudly on every run that the
 key was not checked — a disabled check that is quiet is the exact failure
 hasna/apps#1595 was filed about. Delete the switches once the prerequisites are
@@ -124,6 +125,25 @@ real.
 The drift lane declares **no** `environment:`, unlike the deploy lanes: a
 scheduled audit that a deployment approval gate can hold is an audit that
 silently stops running, and 06:17 has nobody to approve it.
+
+### Who is doing the infra half
+
+Disclosure without an assignee is how two disabled lanes become background
+noise, so the prerequisites are tracked, not just described:
+
+| issue | what it covers |
+|-------|----------------|
+| [hasna-internal/infra-live#46](https://github.com/hasna-internal/infra-live/issues/46) | the `secretsmanager:GetSecretValue` grant on `deploy-oidc-role`, the `hasna-ops-mint-key-<app>` task family + `ecs:RunTask`/`iam:PassRole` for it, `mint_key_task_family` in the SSM manifest, and the `fleet-key-audit-gha` audit role |
+| [hasna/apps#1768](https://github.com/hasna/apps/issues/1768) | flipping the two repository variables on, watching one real deploy, and **deleting both switches** |
+
+What `infra-live@1ab5ad4` actually has today, for whoever picks that up:
+`infra/modules/deploy-oidc-role/main.tf` — instantiated by conversations,
+mementos, projects and skills — carries **no** `secretsmanager` statement of any
+kind, scopes `ecs:RunTask` to `${migration_task_family}:*` (`main.tf:111,345`),
+and passes only the app's own task/execution roles. Nothing named
+`hasna-ops-mint-key`, `mint_key_task_family` or `fleet-key-audit` exists in the
+repository. Until that changes, `fleet-key` reports an `AccessDenied` as a
+**PREREQUISITE MISSING** naming the exact grant, never as a finding about a key.
 
 ### messages is not finished by this repository
 
@@ -139,6 +159,6 @@ out-of-repo deploy. Sequence, in order:
    task;
 3. confirm `bun tooling/fleet/fleet-key.ts drift --apps messages` is green.
 
-Until 1 and 2, the daily report names `messages` every day. That is the check
-working, not the check failing — and it is why #1595's acceptance items (a) and
+Until 1 and 2, the daily report names `messages` every day (once the drift lane
+is enabled at all). That is the check working, not the check failing — and it is why #1595's acceptance items (a) and
 (c) are ops outcomes tracked beyond the pull request that added this directory.
