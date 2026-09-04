@@ -25,12 +25,11 @@ function cliEnv(): Record<string, string | undefined> {
     ...process.env,
     HASNA_SECRETS_DB_PATH: join(vaultDir, "vault.db"),
     HASNA_SECRETS_KEY_DIR: join(vaultDir, "keys"),
-    // #681: an unselected/default transport emits a machine-readable
-    // `secrets-local-fallback` JSON line on stderr when a local store exists.
-    // Retired storage-mode variables are a hard error now, so there is no
-    // "explicitly selected local" anymore — every local run without a URL+key
-    // pair emits the fallback line, and assertions below tolerate exactly that
-    // one line. The corrupting-server test below routes with URL + key only.
+    // Local runs happen under the test preload's explicit HASNA_SECRETS_LOCAL_VAULT=1
+    // opt-in (owner ruling 2026-09-04: no env => fail closed, no fallback event).
+    // Retired storage-mode variables are a hard error, and there is no
+    // `secrets-local-fallback` event anymore — stderr must be clean. The
+    // corrupting-server test below routes with URL + key only.
     NO_COLOR: "1",
   };
 }
@@ -121,14 +120,11 @@ describe("CLI copy — value-safety invariant", () => {
   it("copies value-free in --json mode too", async () => {
     const copy = await runCli(["copy", FIXTURE_KEY, FIXTURE_DEST, "--json"]);
     expect(copy.exitCode).toBe(0);
-    // The #681 local-fallback JSON line is expected on stderr for a local run
-    // without a URL+key pair (retired mode vars cannot select local anymore);
-    // nothing else may appear there.
-    const fallbackLines = copy.stderr
-      .split("\n")
-      .filter((line) => line.includes('"event":"secrets-local-fallback"'));
-    expect(fallbackLines.length).toBe(1);
-    expect(copy.stderr.replace(fallbackLines.join("\n"), "").trim()).toBe("");
+    // A local run is an explicit opt-in now (owner ruling 2026-09-04): there is
+    // no `secrets-local-fallback` event anymore, and nothing else may appear on
+    // stderr — stdout stays the only JSON surface.
+    expect(copy.stderr).not.toContain('"event":"secrets-local-fallback"');
+    expect(copy.stderr.trim()).toBe("");
     expect(copy.stdout).not.toContain(FIXTURE_VALUE);
     const parsed = JSON.parse(copy.stdout);
     expect(parsed.old_key).toBe(FIXTURE_KEY);

@@ -195,9 +195,10 @@ describe("generic Hasna storage client", () => {
   });
 
   it("resolves local and cloud storage clients", async () => {
-    // The resolution travels with the local result too — the CLI's fallback notice
-    // depends on seeing WHY local was selected (no URL+key pair = unselected
-    // fallback, incident 715558). It must never be dropped at this layer.
+    // The resolution travels with the local result too — an app's store resolver
+    // depends on seeing WHY local was selected (no URL+key pair, so the app
+    // fails closed unless its local-vault opt-in is set; owner ruling
+    // 2026-09-04). It must never be dropped at this layer.
     expect(resolveStorageClient("demo", {})).toEqual({
       transport: "local",
       client: null,
