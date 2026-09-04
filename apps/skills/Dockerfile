@@ -50,6 +50,11 @@ ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=build /app/bin ./bin
 COPY --from=build /app/dist ./dist
+# The bundled corpus (skills/<slug>/SKILL.md ...). The boot seed publishes each of these
+# as slug@<package version> (hasna/apps#1630) and skips any whose directory is absent - which
+# was all 86 of them while only bin/, dist/ and migrations/ were copied ("0 seeded, 86
+# skipped" in the first 0.2.0 boot). ~3 MB.
+COPY --from=build /app/skills ./skills
 COPY package.json ./
 COPY migrations ./migrations
 EXPOSE 8787
