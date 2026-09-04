@@ -39,13 +39,14 @@
     "build:server": "rm -rf dist/server dist/sdk && bun run scripts/build-bundles.ts --server-only",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "migrate": "bun run scripts/migrate.ts",
+    "scan:artifact": "bun scripts/scan-artifact.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "prepublishOnly": "bun run typecheck && bun test && bun run build",
-    "postinstall": "install -d -m 700 \"$HOME/.hasna/contacts\" \"$HOME/.hasna/contacts/backups\" \"$HOME/.hasna/contacts/images\" \"$HOME/.hasna/contacts/documents\" 2>/dev/null || mkdir -p $HOME/.hasna/contacts/{backups,images,documents} 2>/dev/null || true"
+    "prepack": "bun run scan:artifact",
+    "prepublishOnly": "bun run typecheck && bun test && bun run build && bun run scan:artifact"
   },
   "keywords": [
     "contacts",
@@ -75,7 +76,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "^0.5.1",
+    "@hasna/contracts": "0.14.2",
     "@hasna/events": "^0.1.6",
     "chalk": "^5.4.1",
     "commander": "^13.1.0",
@@ -104,6 +105,5 @@
   },
   "overrides": {
     "fast-uri": "3.1.3"
-  },
-  "postinstall": "install -d -m 700 \"$HOME/.local/share/hasna/contacts\" \"$HOME/.local/share/hasna/contacts/backups\" \"$HOME/.local/share/hasna/contacts/images\" \"$HOME/.local/share/hasna/contacts/documents\" 2>/dev/null || mkdir -p \"$HOME/.local/share/hasna/contacts/backups\" \"$HOME/.local/share/hasna/contacts/images\" \"$HOME/.local/share/hasna/contacts/documents\" 2>/dev/null || true"
+  }
 }

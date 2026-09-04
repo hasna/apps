@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildServer } from "./index.js";
 
-describe("contacts MCP storage contract", () => {
-  it("registers contacts-owned storage tools without shared cloud tools", () => {
+describe("contacts MCP connection contract", () => {
+  it("registers one value-free HTTPS status tool without storage selectors", () => {
     const mcpSource = readFileSync(join(import.meta.dir, "index.ts"), "utf8");
     const storageSource = readFileSync(join(import.meta.dir, "storage-tools.ts"), "utf8");
     const forbidden = [
@@ -19,11 +19,10 @@ describe("contacts MCP storage contract", () => {
       (server as unknown as { _registeredTools: Record<string, unknown> })._registeredTools
     );
 
-    // Read-only status + feedback only. The forbidden client-side Postgres-DSN
-    // sync tools (push/pull/sync) must NOT be registered.
-    expect(registeredTools).toContain("contacts_storage_status");
-    expect(registeredTools).toContain("contacts_cloud_status");
-    expect(registeredTools).toContain("contacts_cloud_feedback");
+    expect(registeredTools).toContain("contacts_connection_status");
+    expect(registeredTools).not.toContain("contacts_storage_status");
+    expect(registeredTools).not.toContain("contacts_cloud_status");
+    expect(registeredTools).not.toContain("contacts_cloud_feedback");
     for (const removed of [
       "contacts_storage_push",
       "contacts_storage_pull",
@@ -39,10 +38,10 @@ describe("contacts MCP storage contract", () => {
       expect(storageSource).not.toContain(term);
     }
 
-    // The storage tools must route through the single Store — never the db/*
-    // layer or raw SQLite directly (the split-brain bug this rebuild eliminates).
-    expect(storageSource).toContain("getStore");
+    // Status is value-free and must never initialize a store or local database.
+    expect(storageSource).not.toContain("getStore");
     expect(storageSource).not.toContain("../db/");
     expect(storageSource).not.toContain("getDatabase");
+    expect(storageSource).toContain("local_fallback: false");
   });
 });

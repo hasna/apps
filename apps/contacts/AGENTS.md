@@ -95,11 +95,16 @@ export_contacts({ format: "vcf", tag: "client" })
 | `get_activity` | contact_id, limit | Activity log |
 | `log_activity` | contact_id, type, notes | Activity entry |
 
-## Database Location
+## Connection contract
 
-By default: `~/.hasna/contacts/contacts.db`
+Every tool uses the canonical authenticated HTTPS `/v1` client. Configure an
+explicit `HASNA_CONTACTS_API_URL` and a contacts API key through the shared
+`@hasna/contracts` credential chain. There is no default hosted URL, client
+database path, storage mode, or local SQLite fallback.
 
-Override with env var: `CONTACTS_DB_PATH=/path/to/contacts.db contacts-mcp`
+Use `contacts_connection_status` to inspect value-free configuration details.
+For retired local data, use `contacts legacy inspect` and `contacts legacy
+preserve`; these commands never select the database as a live store.
 
 ## Tips for Agents
 

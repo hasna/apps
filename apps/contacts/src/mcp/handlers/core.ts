@@ -3,7 +3,7 @@
  *
  * Every handler routes through the single `Store` abstraction (getStore()). No
  * handler touches SQLite (`getDatabase`) or performs raw HTTP directly — the
- * transport (local SQLite vs self_hosted /v1) is resolved once, inside the Store.
+ * authenticated HTTPS transport is resolved once, inside the Store.
  */
 import type { ToolHandler } from "./types.js";
 import type {
@@ -25,7 +25,7 @@ const stripUndef = (o: Record<string, unknown>): Record<string, unknown> => {
   return out;
 };
 
-/** Enrich a contact with its many-to-many project ids. In self_hosted mode the
+/** Enrich a contact with its many-to-many project ids. The
  * /v1 API does not expose project links yet, so this degrades gracefully rather
  * than failing the whole call (it never falls back to writing local SQLite). */
 async function withProjectIds<T extends { id: string } | null>(store: Store, contact: T): Promise<T | (T & { project_ids: string[] })> {
