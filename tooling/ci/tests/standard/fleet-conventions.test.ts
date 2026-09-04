@@ -85,14 +85,17 @@ function walk(root: string, onFile: (absolute: string, relative: string) => void
  *     in the issue does not see at all and which is how the projects
  *     permission scanner kept the layout alive.
  *
- * `.hasna/projects` and the hyphenated `.hasna/project-context-*` FILES are not
- * matches: the first is the convention, and the second is a different family of
- * flat files (they create no `project` directory). Folding those into
- * `.hasna/projects/` is item 2 of the issue and is tracked there.
+ * `.hasna/projects` is the convention and never matches. The hyphenated
+ * `.hasna/project-context-*` files USED to be exempt here — they create no
+ * `project` directory — but item 2 of the issue folded them under
+ * `.hasna/projects/` (see `PROJECT_CONTEXT_MANIFEST_PATH` and its siblings in
+ * apps/instructions/src/lib/project-context.ts), so the singular spelling has no
+ * remaining legitimate use and the exemption is gone: anything under `.hasna/`
+ * that starts with `project` and does not continue with `s` is a violation.
  */
 const RETIRED_LAYOUT_PATTERNS: RegExp[] = [
-  /\.hasna\/project(?![s\w-])/,
-  /["']\.hasna["']\s*,\s*["']project["']/,
+  /\.hasna\/project(?!s)/,
+  /["']\.hasna["']\s*,\s*["']project(?!s)/,
 ];
 
 interface ConventionScan {
@@ -176,17 +179,21 @@ describe("standard-adherence: fleet conventions", () => {
       fs.mkdirSync(src, { recursive: true });
       fs.writeFileSync(path.join(src, "bad.ts"), 'const base = `${url.origin}/v1`;\nconst dir = ".hasna/project/dashboard";\n');
       fs.writeFileSync(path.join(src, "bad-join.ts"), 'join(root, ".hasna", "project", "dashboard");\n');
-      expect(retiredProjectLayoutViolations(root)).toHaveLength(2);
+      // The hyphenated siblings are no longer exempt (issue item 2 moved them).
+      fs.writeFileSync(path.join(src, "bad-context.ts"), 'const m = ".hasna/project-context-manifest.json";\n');
+      expect(retiredProjectLayoutViolations(root)).toHaveLength(3);
       expect(originV1Violations(root)).toHaveLength(1);
 
       fs.rmSync(path.join(src, "bad.ts"));
       fs.rmSync(path.join(src, "bad-join.ts"));
+      fs.rmSync(path.join(src, "bad-context.ts"));
       fs.writeFileSync(
         path.join(src, "good.ts"),
         [
           'const base = joinApiPath(resolveApiBase(url), "/keys");',
           'const dir = ".hasna/projects/workspaces/wks_1";',
-          'const manifest = ".hasna/project-context-manifest.json";',
+          'const manifest = ".hasna/projects/project-context-manifest.json";',
+          'const cache = join(root, ".hasna", "projects", "project-context-cache.json");',
           "const local = `${origin}/v1`;",
           "// the old code said `${url.origin}/v1`, which dropped the prefix",
         ].join("\n"),

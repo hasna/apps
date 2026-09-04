@@ -9,6 +9,7 @@ import {
   verifyApiKeyToken,
 } from "../src/auth/index";
 import { runIssueKey } from "../src/cli/issue-key";
+import { checkSigningSecret, runCheckSigningSecret } from "../src/cli/check-signing-secret";
 
 // hasna/apps#1543: the stored fleet signing secrets are 64 hex characters plus
 // the trailing newline `aws secretsmanager get-secret-value` leaves behind.
@@ -105,6 +106,104 @@ describe("resolveSigningSecret", () => {
   test("the provisioning check flags a secret that needs trimming", () => {
     expect(signingSecretHasSurroundingWhitespace(RAW_SECRET)).toBe(true);
     expect(signingSecretHasSurroundingWhitespace(HEX_SECRET)).toBe(false);
+  });
+});
+
+// The issue's SECOND acceptance bullet: "A provisioning check fails on any
+// api-key-signing-secret with trailing whitespace." Trimming on read makes the
+// stored byte harmless, not correct — without a check that refuses it, the
+// tooling keeps writing it and the next reader that forgets to trim reopens the
+// same outage. `contracts check-signing-secret` is that check.
+describe("contracts check-signing-secret (provisioning gate)", () => {
+  test("fails on the exact stored shape: 64 hex characters plus a newline", () => {
+    const result = checkSigningSecret(
+      { app: "projects" },
+      { env: { HASNA_PROJECTS_API_SIGNING_KEY: RAW_SECRET } },
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.payload["ok"]).toBe(false);
+    expect(result.payload["code"]).toBe("signing_secret_untrimmed");
+    expect(result.payload["source"]).toBe("HASNA_PROJECTS_API_SIGNING_KEY");
+    expect(result.payload["raw_bytes"]).toBe(65);
+    expect(result.payload["trimmed_bytes"]).toBe(64);
+  });
+
+  test("passes on the same secret stored without the whitespace", () => {
+    const result = checkSigningSecret(
+      { app: "projects" },
+      { env: { HASNA_PROJECTS_API_SIGNING_KEY: HEX_SECRET } },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.payload["ok"]).toBe(true);
+  });
+
+  test("leading whitespace and the shared fallback key are covered too", () => {
+    expect(
+      checkSigningSecret({ app: "projects" }, { env: { HASNA_API_SIGNING_KEY: ` ${HEX_SECRET}` } }).exitCode,
+    ).toBe(1);
+    expect(
+      checkSigningSecret({ app: "projects" }, { env: { HASNA_API_SIGNING_KEY: HEX_SECRET } }).exitCode,
+    ).toBe(0);
+  });
+
+  test("an explicitly named env var is terminal — it never falls back", () => {
+    const result = checkSigningSecret(
+      { app: "projects", signingSecretEnv: "HASNA_PROJECTS_API_SIGNING_KEY" },
+      { env: { HASNA_API_SIGNING_KEY: HEX_SECRET } },
+    );
+    expect(result.exitCode).toBe(2);
+    expect(result.payload["code"]).toBe("signing_secret_missing");
+  });
+
+  test("a polluted Object.prototype cannot choose the app this reports on", () => {
+    const polluted = Object.create({ app: "todos", signingSecretEnv: "HASNA_TODOS_API_SIGNING_KEY" }) as {
+      app?: string;
+    };
+    polluted.app = "projects";
+    const result = checkSigningSecret(polluted, {
+      env: { HASNA_PROJECTS_API_SIGNING_KEY: RAW_SECRET, HASNA_TODOS_API_SIGNING_KEY: HEX_SECRET },
+    });
+    expect(result.payload["app"]).toBe("projects");
+    expect(result.payload["source"]).toBe("HASNA_PROJECTS_API_SIGNING_KEY");
+    expect(result.exitCode).toBe(1);
+  });
+
+  test("a secret the lane cannot see is a failure, never a pass", () => {
+    const result = checkSigningSecret({ app: "projects" }, { env: {} });
+    expect(result.exitCode).toBe(2);
+    expect(result.payload["ok"]).toBe(false);
+  });
+
+  test("nothing it prints contains the secret, in either output mode", () => {
+    for (const json of [false, true]) {
+      const lines: string[] = [];
+      const code = runCheckSigningSecret(
+        { app: "projects", json },
+        {
+          env: { HASNA_PROJECTS_API_SIGNING_KEY: RAW_SECRET },
+          log: (line) => lines.push(line),
+          errorLog: (line) => lines.push(line),
+        },
+      );
+      expect(code).toBe(1);
+      expect(lines.length).toBeGreaterThan(0);
+      const printed = lines.join("\n");
+      expect(printed).not.toContain(HEX_SECRET);
+      expect(printed).toContain("HASNA_PROJECTS_API_SIGNING_KEY");
+    }
+
+    const cleanLines: string[] = [];
+    expect(
+      runCheckSigningSecret(
+        { app: "projects" },
+        {
+          env: { HASNA_PROJECTS_API_SIGNING_KEY: HEX_SECRET },
+          log: (line) => cleanLines.push(line),
+          errorLog: (line) => cleanLines.push(line),
+        },
+      ),
+    ).toBe(0);
+    expect(cleanLines.join("\n")).not.toContain(HEX_SECRET);
   });
 });
 

@@ -17,6 +17,7 @@ import { runIssueKey } from "./issue-key";
 import { formatArtifactScanReport, resolveAssetInventoryWaivers, scanPublishedArtifact } from "../artifact-scan";
 import { runSafeReadCli } from "./read";
 import { runVerifyWriteCli } from "./verify-write";
+import { runCheckSigningSecret } from "./check-signing-secret";
 
 function collectJsonFiles(root: string): string[] {
   const stat = statSync(root);
@@ -523,6 +524,21 @@ export function createContractsProgram() {
     .option("-j, --json", "Output metadata-only JSON")
     .action((target: string, command: string[], options: Record<string, unknown>) => {
       process.exitCode = runVerifyWriteCli(target, command ?? [], options as never);
+    });
+
+  program
+    .command("check-signing-secret")
+    .description(
+      "Provisioning check (hasna/apps#1543): fail when an app's API-key signing secret carries surrounding whitespace. Reads the value from the environment and never prints it",
+    )
+    .requiredOption("--app <app>", "App slug whose signing secret is checked (e.g. projects)")
+    .option(
+      "--signing-secret-env <name>",
+      "Env var holding the secret (default HASNA_<APP>_API_SIGNING_KEY, then HASNA_API_SIGNING_KEY)",
+    )
+    .option("-j, --json", "Output JSON (metadata only: env key, byte lengths, sha256 prefix)")
+    .action((options: Record<string, unknown>) => {
+      process.exitCode = runCheckSigningSecret(options as never);
     });
 
   program
