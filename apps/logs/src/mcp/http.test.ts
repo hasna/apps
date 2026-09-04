@@ -2,6 +2,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   DEFAULT_MCP_HTTP_PORT,
   isHttpMode,
@@ -9,6 +12,29 @@ import {
   startMcpHttpServer,
 } from "./http.ts";
 import { buildServer } from "./index.ts";
+
+// buildServer() resolves its store from process.env and FAILS CLOSED without
+// the fleet API env, so these in-process servers opt in explicitly with
+// HASNA_LOGS_LOCAL=1. The machine's real HASNA_LOGS_API_* vars are scrubbed
+// for the whole file so resolution stays hermetic (local, temp HOME).
+const ORIG_ENV: Record<string, string | undefined> = {
+  HASNA_LOGS_API_URL: process.env.HASNA_LOGS_API_URL,
+  HASNA_LOGS_API_KEY: process.env.HASNA_LOGS_API_KEY,
+  HASNA_LOGS_LOCAL: process.env.HASNA_LOGS_LOCAL,
+  HOME: process.env.HOME,
+};
+beforeAll(() => {
+  delete process.env.HASNA_LOGS_API_URL;
+  delete process.env.HASNA_LOGS_API_KEY;
+  process.env.HASNA_LOGS_LOCAL = "1";
+  process.env.HOME = mkdtempSync(join(tmpdir(), "logs-mcp-http-home-"));
+});
+afterAll(() => {
+  for (const [key, value] of Object.entries(ORIG_ENV)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 describe("logs MCP HTTP transport", () => {
   test("defaults port to 8864", () => {

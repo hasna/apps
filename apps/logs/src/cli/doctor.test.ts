@@ -24,6 +24,7 @@ function testEnv(
     ...process.env,
       HASNA_LOGS_API_URL: undefined,
       HASNA_LOGS_API_KEY: undefined,
+      HASNA_LOGS_LOCAL: "1",
     HOME: dataDir,
     HASNA_LOGS_DATA_DIR: dataDir,
     HASNA_LOGS_DB_PATH: join(dataDir, "logs.db"),

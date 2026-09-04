@@ -33,13 +33,16 @@ function testEnv(extra: Record<string, string> = {}): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) {
     if (typeof value === "string") env[key] = value;
   }
-  // The machine may carry real HASNA_LOGS_API_* vars; the 0.11.1 client
-  // warns on env keys and reconciles them against the disk tier, so the tests
-  // scrub them for hermetic resolution.
+  // The machine may carry real HASNA_LOGS_API_* vars; the client reconciles
+  // env keys, so the tests scrub them for hermetic resolution. The store
+  // resolver FAILS CLOSED without the fleet API env, so local-mode children
+  // opt in explicitly with HASNA_LOGS_LOCAL=1.
   delete env.HASNA_LOGS_API_URL;
   delete env.HASNA_LOGS_API_KEY;
   delete env.HASNA_LOGS_STORAGE_MODE;
-  return { ...env, ...extra };
+  delete env.HASNA_LOGS_LOCAL;
+  delete env.LOGS_LOCAL;
+  return { ...env, HASNA_LOGS_LOCAL: "1", ...extra };
 }
 
 // The in-process MCP server resolves its store from process.env, so the

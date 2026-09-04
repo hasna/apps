@@ -129,10 +129,13 @@ export function buildServer(): McpServer {
     }));
   }
 
-  // The unified data-plane Store: LocalStore (SQLite) or ApiStore (HTTP /v1 +
-  // bearer key), resolved from the environment. Every data-plane tool routes
-  // through this — no per-tool transport branching, no `getDb()` reads
-  // in handlers. Fully reversible: unset HASNA_LOGS_API_URL/KEY -> local.
+  // The unified data-plane Store: ApiStore (HTTP /v1 + bearer key) when the
+  // fleet API env is present, LocalStore (SQLite) only under the EXPLICIT
+  // opt-in HASNA_LOGS_LOCAL=1 — otherwise FAILS CLOSED (owner ruling
+  // 2026-09-04): no silent local fallback to ~/.hasna/logs/logs.db. Every
+  // data-plane tool routes through this — no per-tool transport branching,
+  // no `getDb()` reads in handlers. Reversible: unset the API vars and set
+  // HASNA_LOGS_LOCAL=1.
   const store = resolveStore();
 
   // Resolve a project name-or-id through the live store (local db or /v1).
