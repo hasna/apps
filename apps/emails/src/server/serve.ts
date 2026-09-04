@@ -1,27 +1,13 @@
 /**
- * HTTP server for the emails dashboard.
- * Provides REST API and serves the static dashboard from dashboard/index.html.
+ * HTTP server for the emails dashboard API and self-hosted /v1 service.
+ * Serves the REST routes (/api, /track, /webhook, /open, /click); the static
+ * browser dashboard was removed (tracker #1612), so unknown non-API routes
+ * return a plain 404 instead of an SPA fallback.
  *
  * API route logic lives in api-routes.ts to keep this file thin.
  */
 
-import { existsSync, readFileSync } from "fs";
-import { join, dirname, extname, isAbsolute, relative, resolve, sep } from "path";
-import { fileURLToPath } from "url";
 import { handleApiRequest } from "./api-routes.js";
-
-const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "application/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-};
 
 const API_ALLOWED_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
 const API_ALLOWED_HEADERS = "Content-Type, Authorization";
@@ -32,26 +18,6 @@ export interface DashboardApiOriginAccess {
   allowed: boolean;
   origin?: string;
   reason?: string;
-}
-
-export function staticResponseHeaders(mimeType: string): Headers {
-  return new Headers({
-    "Content-Type": mimeType,
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-    "Cross-Origin-Opener-Policy": "same-origin",
-    "Content-Security-Policy": [
-      "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
-      "connect-src 'self'",
-      "frame-src 'self'",
-      "object-src 'none'",
-      "base-uri 'none'",
-      "form-action 'self'",
-    ].join("; "),
-  });
 }
 
 function configuredAllowedOrigins(): Set<string> {
@@ -172,59 +138,8 @@ export function withDashboardApiCors(response: Response, access: DashboardApiOri
   });
 }
 
-function resolveDashboardDir(): string {
-  const candidates: string[] = [];
-
-  try {
-    const scriptDir = dirname(fileURLToPath(import.meta.url));
-    candidates.push(join(scriptDir, "..", "dashboard"));
-    candidates.push(join(scriptDir, "..", "..", "dashboard"));
-  } catch {
-    // import.meta.url may not be available in all contexts
-  }
-
-  if (process.argv[1]) {
-    const mainDir = dirname(process.argv[1]);
-    candidates.push(join(mainDir, "..", "dashboard"));
-    candidates.push(join(mainDir, "..", "..", "dashboard"));
-  }
-
-  candidates.push(join(process.cwd(), "dashboard"));
-
-  for (const candidate of candidates) {
-    if (existsSync(join(candidate, "index.html"))) return candidate;
-  }
-
-  return join(process.cwd(), "dashboard");
-}
-
-export function resolveDashboardStaticPath(dashboardDir: string, requestPath: string): string | null {
-  const root = resolve(dashboardDir);
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(requestPath);
-  } catch {
-    return null;
-  }
-  const requested = requestPath === "/" || requestPath === "/index.html"
-    ? "index.html"
-    : decoded.replace(/^\/+/, "");
-  const filePath = resolve(root, requested);
-  const rel = relative(root, filePath);
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
-  if (!extname(filePath)) {
-    const htmlPath = `${filePath}.html`;
-    const htmlRel = relative(root, htmlPath);
-    if (!(htmlRel === ".." || htmlRel.startsWith(`..${sep}`) || isAbsolute(htmlRel)) && existsSync(htmlPath)) {
-      return htmlPath;
-    }
-  }
-  return filePath;
-}
-
 export async function handleDashboardRequest(
   req: Request,
-  dashboardDir = resolveDashboardDir(),
   socketAddress?: string | null,
 ): Promise<Response> {
   const url = new URL(req.url);
@@ -247,35 +162,12 @@ export async function handleDashboardRequest(
     }
   }
 
-  // ─── STATIC DASHBOARD ────────────────────────────────────────────────
-  if (method === "GET") {
-    const filePath = resolveDashboardStaticPath(dashboardDir, path);
-
-    if (filePath && existsSync(filePath)) {
-      const ext = extname(filePath);
-      const mimeType = MIME_TYPES[ext] ?? "application/octet-stream";
-      return new Response(readFileSync(filePath), {
-        headers: staticResponseHeaders(mimeType),
-      });
-    }
-
-    // SPA fallback
-    const indexPath = join(dashboardDir, "index.html");
-    if (existsSync(indexPath)) {
-      return new Response(readFileSync(indexPath), {
-        headers: staticResponseHeaders("text/html; charset=utf-8"),
-      });
-    }
-
-    return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
-  }
-
+  // Static browser dashboard removed (tracker #1612 sweep): unknown non-API
+  // routes return a plain 404 instead of an SPA fallback.
   return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
 }
 
 export async function startServer(port = 3900, hostname = "127.0.0.1"): Promise<void> {
-  const dashboardDir = resolveDashboardDir();
-
   // Safety: the dashboard /api/* routes are unauthenticated and assume a trusted
   // loopback caller. Refuse to bind a non-loopback interface (exposing them to
   // the LAN/internet) unless the operator explicitly opts in.
@@ -290,10 +182,10 @@ export async function startServer(port = 3900, hostname = "127.0.0.1"): Promise<
   const server = Bun.serve({
     port,
     hostname,
-    fetch: (req, server) => handleDashboardRequest(req, dashboardDir, server.requestIP(req)?.address),
+    fetch: (req, server) => handleDashboardRequest(req, server.requestIP(req)?.address),
   });
 
-  console.log(`\nEmails dashboard running at http://${hostname}:${server.port}`);
+  console.log(`\nEmails API running at http://${hostname}:${server.port}`);
   console.log(`API available at http://${hostname}:${server.port}/api`);
   console.log(`Press Ctrl+C to stop\n`);
 }

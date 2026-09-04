@@ -45,8 +45,6 @@
   },
   "files": [
     "dist",
-    "dashboard/index.html",
-    "dashboard/open-source.html",
     "LICENSE",
     "README.md"
   ],

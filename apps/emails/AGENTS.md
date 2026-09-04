@@ -22,7 +22,7 @@ breaks for each one.
 - **Receive** inbound emails via SMTP listener or webhooks
 - **Track** delivery events, opens, clicks, replies
 - **Manage** domains, addresses, templates, contacts, sequences
-- **Serve** a local dashboard and REST API
+- **Serve** a local dashboard API and REST API
 
 Local data is stored in the effective data root resolved through the
 `@hasna/paths` resolver (XDG/macOS home layout): the legacy

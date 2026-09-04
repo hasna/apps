@@ -1,7 +1,7 @@
 # Self-hosted authentication
 
 Authentication applies to the operator-owned self-hosted `/v1` service. The
-local SQLite dashboard has a separate loopback-oriented trust boundary and does
+local SQLite dashboard API has a separate loopback-oriented trust boundary and does
 not use these accounts.
 
 ## Client configuration

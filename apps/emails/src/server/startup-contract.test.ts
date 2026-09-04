@@ -183,7 +183,7 @@ describe("server startup contract", () => {
 
     try {
       let response: Response | undefined;
-      for (let attempt = 0; attempt < 40; attempt++) {
+      for (let attempt = 0; attempt < 80; attempt++) {
         try {
           response = await fetch(`http://127.0.0.1:${requestedPort}/`);
           break;
@@ -191,7 +191,10 @@ describe("server startup contract", () => {
           await Bun.sleep(50);
         }
       }
-      expect(response?.status).toBe(200);
+      // The static browser dashboard was removed (tracker #1612): unknown
+      // non-API routes now return the API-only 404. Any HTTP answer proves the
+      // server bound to the requested --host/--port; 404 is the API-only one.
+      expect(response?.status).toBe(404);
     } finally {
       child.kill();
       await child.exited;
