@@ -3,7 +3,11 @@ import { registerEventsCommands } from "@hasna/events/commander";
 import { Command } from "commander";
 import chalk from "chalk";
 import { homedir } from "node:os";
-import { migrateLegacyData, scanLegacyData } from "../db/database.js";
+// NOTE: the legacy SQLite migration helpers are NOT imported at module scope.
+// This CLI is remote-only in api mode (HASNA_CALENDAR_API_URL configured):
+// nothing may open or create a local database then. `db/database.js` is loaded
+// lazily only by `db-migrate`, after that command has refused to run in api
+// mode — so `new Database(...)` is unreachable whenever the API URL is set.
 import { getStore } from "../store/index.js";
 import type { CalendarVisibility, EventStatus, EventBusyType, AttendeeStatus, OrgRole } from "../types/index.js";
 
@@ -440,12 +444,31 @@ listCommand("agent-orgs <agentId>")
     });
   });
 
-// ── Local database ───────────────────────────────────────────────────────────
+// ── Local database (legacy, LOCAL-ONLY) ─────────────────────────────────────
+
+function isApiModeConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env["HASNA_CALENDAR_API_URL"] !== undefined || env["CALENDAR_API_URL"] !== undefined
+    || env["HASNA_CALENDAR_API_KEY"] !== undefined || env["CALENDAR_API_KEY"] !== undefined;
+}
 
 calendarCommand("db-migrate")
-  .description("One-time migration of legacy non-canonical calendar data into ~/.hasna/calendar")
+  .description("One-time migration of legacy non-canonical calendar data into ~/.hasna/calendar (LOCAL-ONLY; refused in api mode)")
   .option("--dry-run", "Report what would migrate without writing anything")
-  .action((opts) => {
+  .action(async (opts) => {
+    // Fleet doctrine (docs/fleet-local-storage.md): in api mode the hosted API
+    // is the only write path — a fleet CLI must not create, open, or migrate
+    // any local database. Refuse BEFORE the sqlite layer is even loaded, and
+    // emit no legacy-data JSON (it would leak local paths).
+    if (isApiModeConfigured()) {
+      fail(
+        "calendar db-migrate is LOCAL-ONLY and refused in api mode: HASNA_CALENDAR_API_URL "
+          + "is configured, so the hosted API is the only write path and no local database "
+          + "may be created or migrated. Unset the API URL/key to run the one-time legacy migration.",
+      );
+    }
+    // Loaded only here, only in local mode: keeps `bun:sqlite` out of the
+    // api-mode CLI bundle and makes the local tier unreachable in api mode.
+    const { migrateLegacyData, scanLegacyData } = await import("../db/database.js");
     const scan = scanLegacyData();
     if (opts.dryRun) {
       outputJsonOrText(scan, `Legacy data scan: ${scan.reason} (source: ${scan.source ?? "none"}, target: ${scan.target})`, opts);

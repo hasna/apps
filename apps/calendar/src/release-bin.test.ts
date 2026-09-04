@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawn, spawnSync, type ChildProcess, type SpawnSyncReturns } from "node:child_process";
@@ -144,12 +144,21 @@ describe("release bin artifacts", () => {
     "build emits executable bun bin files and package metadata preserves them",
     () => {
       const pkg = readPackageJson();
-      for (const surface of ["dist/index.js", "dist/sdk/index.js", "dist/mcp/index.js", "dist/server/index.js"]) {
+      for (const surface of ["dist/index.js", "dist/sdk/index.js", "dist/mcp/index.js", "dist/server/index.js", "dist/cli/index.js"]) {
         const code = readFileSync(join(repoRoot, surface), "utf8");
         expect(code).not.toContain("bun:sqlite");
         expect(code).not.toContain("class LocalStore");
         expect(code).not.toContain("installDomainFixture");
       }
+      // Fleet storage doctrine: the api-mode CLI entry must not carry the
+      // SQLite layer at all — the legacy `db-migrate` path lives in a
+      // separately built chunk (--splitting) that only a local-mode run can
+      // load. Drift = any emitted cli chunk OTHER than the single named
+      // legacy chunk containing "bun:sqlite".
+      const cliChunks = readdirSync(join(repoRoot, "dist", "cli")).filter((f) => f.endsWith(".js") && f !== "index.js");
+      const sqliteChunks = cliChunks.filter((f) => readFileSync(join(repoRoot, "dist", "cli", f), "utf8").includes("bun:sqlite"));
+      expect(sqliteChunks).toHaveLength(1);
+      expect(sqliteChunks[0]).toMatch(/^database-[a-z0-9]+\.js$/);
       const binEntries = Object.entries(pkg.bin ?? {});
       expect(binEntries.length).toBeGreaterThan(0);
 

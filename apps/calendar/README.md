@@ -8,6 +8,12 @@ domain operations are authenticated HTTPS clients. Embedded Events/channel/repla
 commands and explicit `db-migrate` retain their existing local semantics pending
 an approved migration contract; legacy data is not moved or deleted by this change.
 
+**Fleet storage doctrine (`docs/fleet-local-storage.md`): in api mode the CLI
+creates, opens, and migrates NO local database.** Installation no longer
+pre-creates `~/.hasna/calendar`; `db-migrate` is `LOCAL-ONLY` and refuses to
+run whenever an API URL/key is configured, loading the SQLite layer only when
+it is actually allowed to run.
+
 ## Install
 
 ```sh
@@ -29,6 +35,13 @@ The `CALENDAR_*` aliases are accepted only when nonblank and nonconflicting.
 Absent, partial, blank, malformed and conflicting configuration fails closed.
 Retired placement selectors are rejected. Network/authentication failures never
 fall back to a local domain database. Clients do not consume database DSNs.
+
+In api mode the CLI loads no local database at all: no SQLite adapter is
+instantiated, no shadow mirror or outbox exists, and `~/.hasna/calendar` is
+never created by the package (there is no `postinstall` and no command path
+that touches a local database when `HASNA_CALENDAR_API_URL` is set). The only
+local database surface is the explicit legacy `db-migrate` command, which is
+LOCAL-ONLY and refuses to run in api mode.
 
 Each client snapshots its authority and credential. Redirects and authentication
 header overrides are refused. Only reads may retry; server write deduplication
@@ -62,8 +75,11 @@ product/API decisions; no tenant mapping or administrative scope was invented.
 - Embedded `events` and `channels` commands from `@hasna/events` still use
   that package's local event/channel/delivery store. They are distinct from
   Calendar scheduling events and have no matching Calendar API routes.
-- Explicit `db-migrate` retains its existing legacy SQLite copy semantics.
-  It is not a server import and does not establish remote authority.
+- Explicit `db-migrate` retains its existing legacy SQLite copy semantics
+  as a LOCAL-ONLY surface: it refuses to run when `HASNA_CALENDAR_API_URL`
+  (or an alias) is configured, and its SQLite layer is loaded lazily so an
+  api-mode CLI never opens the local tier. It is not a server import and does
+  not establish remote authority.
 - `LocalStore` is no longer a public root export or a selectable domain
   transport. Internal SQLite code remains for fixtures and the explicit legacy
   command. No new runtime paths are introduced; legacy data stays untouched.
