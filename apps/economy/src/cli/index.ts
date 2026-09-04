@@ -12,7 +12,6 @@ import { openDatabase, getMachineId } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
-import { execSync } from 'child_process'
 import { getStore, isCloudStore } from '../lib/store/index.js'
 import { syncAllToCloud, billingSyncToCloud } from '../lib/cloud-ingest.js'
 import { economyCloudStorage } from '../lib/cloud-storage.js'
@@ -975,61 +974,6 @@ program
     const port = parseCliPort(opts.port ?? '3456', '--port')
     const { startServer } = await import('../server/serve.js')
     startServer(port)
-  })
-
-// ── dashboard ─────────────────────────────────────────────────────────────────
-
-program
-  .command('dashboard')
-  .description('Open the web dashboard (auto-starts server if not running)')
-  .option('-p, --port <port>', 'Server port', '3456')
-  .action(async (opts: { port?: string }) => {
-    const port = parseCliPort(opts.port ?? '3456', '--port')
-    const url = `http://localhost:${port}`
-
-    // Check if server is already running
-    let serverRunning = false
-    try {
-      const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(500) })
-      serverRunning = res.ok
-    } catch { /* not running */ }
-
-    if (!serverRunning) {
-      console.log(chalk.cyan(`→ Starting economy server on port ${port}...`))
-      // Spawn server as detached background process
-      const { spawn } = await import('child_process')
-      const { resolve, dirname } = await import('path')
-      // Resolve serve script relative to this CLI binary
-      const serveScript = resolve(dirname(process.argv[1]!), '..', 'server', 'index.js')
-      const child = spawn(process.execPath, [serveScript], {
-        detached: true,
-        stdio: 'ignore',
-        env: { ...process.env, ECONOMY_PORT: String(port) },
-      })
-      child.unref()
-      // Wait for it to start
-      let attempts = 0
-      while (attempts < 20) {
-        await new Promise(r => setTimeout(r, 250))
-        try {
-          const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(300) })
-          if (res.ok) { serverRunning = true; break }
-        } catch { /* wait */ }
-        attempts++
-      }
-      if (serverRunning) {
-        console.log(chalk.green(`✓ Server started`))
-      } else {
-        console.log(chalk.yellow(`⚠ Server didn't respond — open ${url} manually after running \`economy serve\``))
-      }
-    }
-
-    console.log(chalk.cyan(`Opening ${url}`))
-    try {
-      execSync(`open ${url}`)
-    } catch {
-      console.log(chalk.yellow(`Open your browser at ${url}`))
-    }
   })
 
 // ── mcp ───────────────────────────────────────────────────────────────────────

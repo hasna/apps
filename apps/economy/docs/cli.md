@@ -6,7 +6,7 @@ Installing `@hasna/economy` provides four binaries:
 | --- | --- |
 | `economy` | Ingest, query, and manage Economy data. |
 | `economy-mcp` | Run the MCP server over stdio or Streamable HTTP. |
-| `economy-serve` | Serve the REST API and built dashboard, or migrate a self-hosted database. |
+| `economy-serve` | Serve the REST API, or migrate a self-hosted database. |
 | `economy-otel` | Ingest OTLP/HTTP metrics or simplified cost events into local SQLite. |
 
 Use `<binary> --help` and `economy <command> --help` for the exact help emitted by the installed version.
@@ -67,7 +67,6 @@ Human output for high-cardinality commands is intentionally capped. Use the comm
 | Command | Behavior |
 | --- | --- |
 | `economy serve --port <port>` | Start the REST API in-process. Equivalent server controls are documented under [`economy-serve`](configuration.md#rest-server). |
-| `economy dashboard --port <port>` | Start the server when necessary and open the dashboard URL. |
 | `economy mcp` | Print Claude Code, Codex, and Gemini MCP configuration; select one or use `--all`. |
 | `economy completion <shell>` | Print completion for `bash`, `zsh`, or `fish`. |
 | `economy menubar` | `install [--force]`, `start`, `stop`, or `uninstall` the macOS Economy Bar app. |
