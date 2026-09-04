@@ -26,7 +26,9 @@
  * the acceptance the deploy lane enforces, reproduced here so the class
  * cannot regress without a failing suite.
  *
- * The seven members are the pass-9 deploy block named by O15-00731.
+ * The five members are the remaining pass-9 deploy block named by O15-00731
+ * (sessions retired from the public tree with the removal wave; its deploy
+ * lane moved to hasna-internal with the member).
  * Deliberately scoped: this suite asserts the deploy-lane contract for
  * exactly these members; a member added to the deploy set extends this
  * list in the change that adds it.
