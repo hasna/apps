@@ -116,9 +116,11 @@ for (const backend of backends) {
         }
         expect(manifest.provenance).toMatchObject({ machine: expect.any(String), cliVersion: expect.any(String), packedAt: expect.any(String) });
 
-        // 2. Same bytes again: idempotent, nothing new in the bucket.
+        // 2. Same bytes again: idempotent, nothing new in the bucket, and the CLI is
+        // told it was already published rather than claiming a fresh one.
         const again = await pushSkill("release-notes", { rootDir: root, client });
         expect(again.published).toBe(true);
+        expect(again.alreadyPublished).toBe(true);
         expect(again.sha256).toBe(first.sha256);
         expect(s3.keys()).toHaveLength(3);
         expect(await client.listSkillVersions("release-notes")).toHaveLength(1);
@@ -140,6 +142,7 @@ for (const backend of backends) {
         // 4. --force-new-version publishes the next patch and keeps both versions.
         const forced = await pushSkill("release-notes", { rootDir: root, client, forceNewVersion: true });
         expect(forced.published).toBe(true);
+        expect(forced.alreadyPublished).toBeUndefined();
         expect(forced.version).toBe("2.1.1");
         expect(forced.sha256).not.toBe(first.sha256);
         const versions = await client.listSkillVersions("release-notes");
@@ -151,6 +154,18 @@ for (const backend of backends) {
         expect(s3.keys()).toContain(`${PREFIX}/skills/${ORG.orgId}/release-notes/2.1.1/manifest.json`);
         // The v1 content-addressed object survived the re-publish: a version references it.
         expect(s3.keys()).toContain(`${PREFIX}/bundles/${ORG.orgId}/${first.sha256}.tar.gz`);
+
+        // 4b. A second --force-new-version from the same sources bumps to 2.1.1 again —
+        // which already holds these exact bytes — so it is reported as already published
+        // (a no-op), never as a fresh publish of a bump that did not happen.
+        const keysAfterForced = s3.keys();
+        const forcedAgain = await pushSkill("release-notes", { rootDir: root, client, forceNewVersion: true });
+        expect(forcedAgain.published).toBe(true);
+        expect(forcedAgain.alreadyPublished).toBe(true);
+        expect(forcedAgain.version).toBe("2.1.1");
+        expect(forcedAgain.sha256).toBe(forced.sha256);
+        expect(s3.keys()).toEqual(keysAfterForced);
+        expect(await client.listSkillVersions("release-notes")).toHaveLength(2);
 
         // 5. Pull an exact version: bytes match the recorded digest and the header names it.
         const v1 = await client.getBundle("release-notes", "2.1.0");
@@ -193,7 +208,6 @@ for (const backend of backends) {
             v1Bytes,
             (await client.getSkill("release-notes"))?.revisionId as string,
           );
-          expect([400, 409]).toContain(attempt.status);
           expect(attempt.status).toBe(400);
           expect(((await attempt.json()) as { code?: string }).code).toBe("INVALID_VERSION");
         }

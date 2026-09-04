@@ -37,6 +37,7 @@ import {
   hasPackageDependencies,
   normalizePortableSkillName,
   parseSkillKind,
+  readDeclaredSkillVersion,
   readPortableSkillManifest,
   writeInstructionSkillTemplate,
   writePortableSkillTemplate,
@@ -64,6 +65,7 @@ import {
 
 export {
   normalizePortableSkillName,
+  readDeclaredSkillVersion,
   readPortableSkillManifest,
 };
 export * from "./portable-skills-types.js";

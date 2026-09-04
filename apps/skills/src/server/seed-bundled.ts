@@ -65,7 +65,7 @@ export async function seedBundledCorpus(options: SeedBundledCorpusOptions): Prom
       const skillMdPath = join(dir, "SKILL.md");
       const skillMd = existsSync(skillMdPath) ? readFileSync(skillMdPath, "utf-8") : undefined;
       const current = await options.store.getSkill(options.principal, slug);
-      const record = await storePublishedSkill(
+      const { record } = await storePublishedSkill(
         options.store,
         options.artifactStorage,
         options.principal,

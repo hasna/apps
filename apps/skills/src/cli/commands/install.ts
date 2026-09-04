@@ -32,7 +32,7 @@ export function registerInstall(parent: Command) {
     .option("--json", "Output results as JSON", false)
     .option("--dry-run", "Print what would happen without actually pinning", false)
     .option("--category <category>", "Pin all skills in a category (case-insensitive)")
-    .option("--remote", "Pin skills from the remote registry configured by SKILLS_API_URL or config apiUrl", false)
+    .option("--remote", "Pin skills from the remote registry configured by SKILLS_API_URL or config apiUrl (implied for name@version pins)", false)
     .description("Pin skills in .skills/project.json without copying source")
     .action((skills: string[], options) => {
       void handlePin(skills, options).catch(handlePinError);
@@ -146,7 +146,12 @@ async function handlePin(skills: string[], options: any) {
     const { name: pinName, version: pinnedVersion } = splitNameVersion(skills[i]);
     if (total > 1 && !options.json) process.stdout.write(`[${i + 1}/${total}] Pinning ${skills[i]}...`);
     const result = pinnedVersion
-      ? await pinExactVersion(pinName, pinnedVersion, { useRemote, overwrite: options.overwrite })
+      ? await pinExactVersion(pinName, pinnedVersion, {
+          // An exact version only exists on an instance: name@version implies the remote
+          // fetch, so --remote is not required for it (hasna/apps#1671).
+          useRemote: true,
+          overwrite: options.overwrite,
+        })
       : useRemote
         ? pinRemoteSkill(pinName, remoteByName, options.overwrite)
         : installSkill(pinName, { overwrite: options.overwrite });
@@ -254,7 +259,12 @@ export async function pinExactVersion(
   options: { useRemote: boolean; overwrite: boolean; pull?: (spec: string) => Promise<{ success: boolean; version?: string; error?: string }> },
 ): Promise<InstallResult> {
   if (!options.useRemote) {
-    return { skill: name, success: false, error: `Pinning '${name}@${version}' needs a configured Skills instance to fetch that version from (skills login / SKILLS_API_URL).`, mode: "pin" };
+    return {
+      skill: name,
+      success: false,
+      error: `Pinning '${name}@${version}' needs a configured Skills instance: an exact version only exists on an instance, so the fetch is implied for name@version pins (skills login / SKILLS_API_URL).`,
+      mode: "pin",
+    };
   }
   const pull = options.pull ?? (async (spec: string) => (await pullSkills({ names: [spec] })).results[0] ?? { success: false, error: "pull returned no result" });
   const pulled = await pull(`${name}@${version}`);

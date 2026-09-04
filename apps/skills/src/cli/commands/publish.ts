@@ -17,6 +17,7 @@ import type { Command } from "commander";
 
 import {
   findPortableSkill,
+  readDeclaredSkillVersion,
   readPortableSkillManifest,
   validatePortableSkillDirectory,
 } from "../../lib/portable-skills.js";
@@ -64,6 +65,12 @@ export interface PushSkillResult {
   response?: unknown;
   /** The version the instance recorded (after any --force-new-version bump). */
   version?: string;
+  /**
+   * True when the publish was idempotent: the version this push ended on already
+   * existed on the instance with these exact bytes, so nothing new was recorded
+   * (hasna/apps#1671). Distinct from a fresh "published as X".
+   */
+  alreadyPublished?: boolean;
   /** Per-file digests and provenance sent alongside the bundle. */
   manifest?: SkillVersionManifest;
 }
@@ -132,6 +139,18 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
   }
 
   const manifest = readPortableSkillManifest(skill.path, skill.name);
+  // A version is the identity of an immutable artefact (hasna/apps#1630): inventing
+  // '0.1.0' for a skill that declares none would silently misversion every future pull
+  // and every --force-new-version bump off that wrong base. Refuse instead, naming the
+  // three places a version can be declared (skill.json, SKILL.md frontmatter,
+  // package.json) and the --version flag that overrides all of them.
+  const declaredVersion = options.version ?? readDeclaredSkillVersion(skill.path);
+  if (!declaredVersion) {
+    throw new PushSkillError(
+      `Skill '${skill.name}' declares no version, so it was not published as an invented '0.1.0'.`,
+      ["Declare a version in skill.json (or the SKILL.md frontmatter / package.json), or pass --version <version> to this push."],
+    );
+  }
   const packed = packSkillBundle(skill.path, { maxUnpackedBytes: MAX_UNPACKED_BYTES });
   const versionManifest = buildVersionManifest(skill.path, packed);
   const skillMdPath = join(skill.path, "SKILL.md");
@@ -166,7 +185,7 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
   // of silently overwriting it.
   const current = await client.getSkill(skill.name);
   const ifMatch = current && typeof current.revisionId === "string" && current.revisionId ? current.revisionId : undefined;
-  let version = options.version ?? manifest.version ?? "0.1.0";
+  let version = options.version ?? manifest.version;
   let response = await publishOnce(client, skill, manifest, packed, skillMd, versionManifest, version, ifMatch);
   let payload = await readBody(response);
   // Immutable versions (hasna/apps#1630): the instance refuses to overwrite name@version with
@@ -185,6 +204,14 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
     version = bumpPatch(version);
     response = await publishOnce(client, skill, manifest, packed, skillMd, versionManifest, version, ifMatch);
     payload = await readBody(response);
+    // Even the bumped version can be taken (a concurrent push won the race): say so
+    // instead of falling into the generic revision-conflict message.
+    if (response.status === 409 && codeOf(payload) === "SKILL_VERSION_EXISTS") {
+      throw new PushSkillError(
+        `Publishing '${skill.name}@${version}' failed: even the bumped version already exists on the instance with different content.`,
+        ["code: SKILL_VERSION_EXISTS", "Pick an explicit --version <new> that is free, and push again."],
+      );
+    }
   }
   if (!response.ok) {
     const code = codeOf(payload);
@@ -204,7 +231,19 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
     );
   }
 
-  return { ...base, published: true, status: response.status, response: payload, version };
+  // The server answers every accepted publish 201; `alreadyPublished` inside the
+  // payload is the server's word that the version already existed with these exact
+  // bytes (idempotent re-push or an earlier --force-new-version run) — never report a
+  // fresh publish that did not happen (hasna/apps#1671).
+  const alreadyPublished = isAlreadyPublishedPayload(payload);
+  return {
+    ...base,
+    published: true,
+    status: response.status,
+    response: payload,
+    version,
+    ...(alreadyPublished ? { alreadyPublished: true } : {}),
+  };
 }
 
 async function publishOnce(
@@ -239,6 +278,11 @@ async function publishOnce(
 
 function codeOf(payload: unknown): string | undefined {
   return typeof payload === "object" && payload && "code" in payload ? String((payload as { code: unknown }).code) : undefined;
+}
+
+/** The server's word that the version already existed with the same digest. */
+function isAlreadyPublishedPayload(payload: unknown): boolean {
+  return typeof payload === "object" && payload !== null && (payload as { alreadyPublished?: unknown }).alreadyPublished === true;
 }
 
 /** 1.2.3 -> 1.2.4; anything non-semver gets a numeric suffix so the bump is still unique. */
@@ -280,11 +324,36 @@ export function buildVersionManifest(skillDir: string, packed: PackedSkillBundle
       machine: hostname(),
       agent: process.env.SKILLS_AGENT_ID ?? process.env.HASNA_AGENT_ID ?? process.env.AGENT_ID ?? null,
       cliVersion: pkg.version,
-      gitRemote: gitValue(skillDir, ["remote", "get-url", "origin"]),
+      // A remote configured with embedded credentials (https://user:token@host/...) must
+      // never carry them into manifest.json in the bucket (hasna/apps#1671): strip
+      // userinfo before recording. The scp-style `git@host:path` user is the transport
+      // user, not a credential, and is left alone.
+      gitRemote: sanitizeGitRemote(gitValue(skillDir, ["remote", "get-url", "origin"])),
       gitSha: gitValue(skillDir, ["rev-parse", "HEAD"]),
       packedAt: new Date().toISOString(),
     },
   };
+}
+
+/**
+ * Strip userinfo (username/password) from a git remote URL before it is recorded in a
+ * version manifest. Only URL schemes where userinfo is HTTP-style credentials are
+ * stripped: an ssh login user (`ssh://git@host/...`, or scp-style `git@host:path`,
+ * which never parses as a URL) is the transport user, not an embedded credential, and
+ * passes through unchanged.
+ */
+export function sanitizeGitRemote(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    if (!parsed.username && !parsed.password) return url;
+    if (parsed.protocol === "ssh:") return url;
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    return url;
+  }
 }
 
 function gitValue(dir: string, args: string[]): string | null {
@@ -299,8 +368,13 @@ function gitValue(dir: string, args: string[]): string | null {
 function printHuman(result: PushSkillResult): void {
   if (!result.published) {
     console.log(chalk.bold(`\nDry run: '${result.slug}' would be published\n`));
+  } else if (result.alreadyPublished) {
+    // An idempotent publish: the version already existed with these exact bytes, so no
+    // new artefact was recorded — report the no-op as a no-op, never as a fresh
+    // publish (a second --force-new-version run bumps to a version that already exists).
+    console.log(chalk.green(`\n✓ '${result.slug}@${result.version}' was already published — no new version created\n`));
   } else {
-    console.log(chalk.green(`\n✓ Published '${result.slug}'\n`));
+    console.log(chalk.green(`\n✓ Published '${result.slug}'${result.version ? ` as ${result.version}` : ""}\n`));
   }
   console.log(`  ${chalk.dim("source")}    ${result.path}`);
   console.log(`  ${chalk.dim("files")}     ${result.fileCount}`);

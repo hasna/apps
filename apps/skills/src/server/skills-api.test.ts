@@ -54,7 +54,8 @@ const BUNDLE = ownBytes(new TextEncoder().encode("not really a tarball, but it i
 async function publish(store: SqliteSkillsStore, manifest: Record<string, unknown>, bundle?: Uint8Array) {
   const storage = new ArtifactStorage({});
   const parsed = await parsePublishRequest(publishRequest(manifest, bundle), CONFIG);
-  return storePublishedSkill(store, storage, PRINCIPAL, parsed);
+  const { record } = await storePublishedSkill(store, storage, PRINCIPAL, parsed);
+  return record;
 }
 
 describe("bundle digest verification", () => {
@@ -233,7 +234,8 @@ describe("a refused publish discards the bundle object it just uploaded", () => 
     expectedRevisionId?: string,
   ) {
     const parsed = await parsePublishRequest(publishRequest(manifest, bundle), CONFIG);
-    return storePublishedSkill(store, storage, PRINCIPAL, parsed, expectedRevisionId);
+    const { record } = await storePublishedSkill(store, storage, PRINCIPAL, parsed, expectedRevisionId);
+    return record;
   }
 
   test("a stale If-Match publish is refused before any object is uploaded, leaving no row and nothing to discard", async () => {

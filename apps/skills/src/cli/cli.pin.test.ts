@@ -8,6 +8,7 @@ import {
   runCli,
   runCliInCwd,
 } from "./cli.test-utils";
+import { packSkillBundle } from "../lib/skill-bundle.js";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -111,6 +112,62 @@ describe("CLI pin and search controls", () => {
       } finally {
         server.stop(true);
         rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    test("name@version pins fetch from the instance even without --remote (hasna/apps#1671)", async () => {
+      const { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("fs");
+      const { tmpdir } = require("os");
+      const { join } = require("path");
+      const tmpDir = mkdtempSync(join(tmpdir(), "cli-version-pin-"));
+      const source = mkdtempSync(join(tmpdir(), "cli-version-pin-src-"));
+      mkdirSync(join(source, "scripts"), { recursive: true });
+      writeFileSync(join(source, "SKILL.md"), "---\nname: release-notes\ndescription: Draft release notes from a changelog\nversion: 2.1.0\n---\n\n# Release Notes\n");
+      writeFileSync(join(source, "scripts", "run.ts"), "console.log('release notes 2.1.0')\n");
+      const packed = packSkillBundle(source);
+      const server = Bun.serve({
+        port: 0,
+        fetch: (req) => {
+          const path = new URL(req.url).pathname;
+          expect(req.headers.get("authorization")).toBe("Bearer fixture-version-pin");
+          if (path === "/api/v1/skills/release-notes") {
+            return Response.json({ slug: "release-notes", displayName: "Release Notes", description: "Draft release notes", kind: "executable", version: "2.1.0", publishedSource: "custom", category: "Development Tools", tags: [] });
+          }
+          if (path === "/api/v1/skills/release-notes/versions/2.1.0") {
+            return Response.json({ slug: "release-notes", version: "2.1.0", bundleSha256: packed.sha256, bundleByteSize: packed.bytes.byteLength, createdAt: new Date().toISOString(), current: true });
+          }
+          if (path === "/api/v1/skills/release-notes/versions/2.1.0/bundle") {
+            return new Response(packed.bytes.buffer as ArrayBuffer, {
+              headers: { "X-Skill-Bundle-Sha256": packed.sha256, "X-Skill-Version": "2.1.0", "Content-Type": "application/gzip" },
+            });
+          }
+          return Response.json({ error: `unexpected route ${path}` }, { status: 500 });
+        },
+      });
+
+      try {
+        const { stdout, exitCode } = await runCliInCwd(["pin", "release-notes@2.1.0", "--json"], tmpDir, {
+          HOME: tmpDir,
+          SKILLS_API_URL: `http://localhost:${server.port}/api/v1`,
+          SKILLS_API_KEY: "fixture-version-pin",
+        });
+        const data = JSON.parse(stdout);
+        expect(exitCode).toBe(0);
+        expect(data[0]).toMatchObject({
+          skill: "release-notes",
+          success: true,
+          mode: "pin",
+          source: "remote",
+          version: "2.1.0",
+        });
+        // The version was fetched and digest-verified before the pin was recorded.
+        const projectConfig = JSON.parse(readFileSync(join(tmpDir, ".skills", "project.json"), "utf-8"));
+        expect(projectConfig.pinnedSkills).toEqual(["release-notes"]);
+        expect(projectConfig.pins["release-notes"]).toMatchObject({ version: "2.1.0", source: "remote" });
+      } finally {
+        server.stop(true);
+        rmSync(tmpDir, { recursive: true, force: true });
+        rmSync(source, { recursive: true, force: true });
       }
     });
   });
