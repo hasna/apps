@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Standalone entry point for the todos dashboard server.
+ * Standalone entry point for the todos HTTP server.
  * Usage: todos-serve [--port 19427]
  *
  * If the default port is in use, automatically finds the next free port.
@@ -20,7 +20,7 @@ function hasHelpFlag(): boolean {
 function printHelp(): void {
   console.log(`Usage: todos-serve [options]
 
-Start the @hasna/todos dashboard server.
+Start the @hasna/todos HTTP server (REST API + MCP).
 
 Commands:
   migrate                 Apply idempotent schema migrations
@@ -31,8 +31,7 @@ Commands:
 Options:
   --port <port>     HTTP port to bind. Defaults to ${DEFAULT_PORT}
   --host <host>     Hostname to bind. Defaults to 127.0.0.1
-  --api-key <key>   Require this API key for dashboard/API requests
-  --no-open         Do not open the dashboard in a browser
+  --api-key <key>   Require this API key for API requests
   --batch-size <n>  redact-comments / backfill-timestamps batch size,
                     1-500 (default: 100)
   --apply           Apply changes (default is dry-run) for redact-comments
@@ -46,8 +45,7 @@ Options:
   -h, --help        display help for command
 
 Environment:
-  TODOS_NO_OPEN=true       Do not open the dashboard in a browser
-  TODOS_API_KEY=<key>      Require this API key for dashboard/API requests`);
+  TODOS_API_KEY=<key>      Require this API key for API requests`);
 }
 
 function parsePort(): number {
@@ -253,11 +251,9 @@ async function main() {
   if (port !== requestedPort) {
     console.log(`Port ${requestedPort} in use, using ${port}`);
   }
-  const noOpen = process.argv.includes("--no-open") || process.env["TODOS_NO_OPEN"] === "true" || Boolean(envPort);
   const { startServer } = await import("./serve.js");
   try {
     await startServer(port, {
-      open: !noOpen,
       host: parseStringArg("--host") || process.env.HOST,
       apiKey: parseStringArg("--api-key"),
       allowAnonymous: process.argv.includes("--allow-anonymous"),

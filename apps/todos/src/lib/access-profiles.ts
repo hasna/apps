@@ -173,7 +173,7 @@ export function getHeadlessUsageNotes(profile?: AccessProfile): string[] {
   return [
     `Active profile: ${p} — ${meta.description}`,
     "Headless agents should prefer MCP with TODOS_PROFILE=minimal or agent_safe.",
-    "Local HTTP dashboard mutations require localhost API only (see headless-boundaries).",
+    "Local HTTP API mutations require localhost API only (see headless-boundaries).",
     "Dangerous tools require TODOS_PROFILE=admin and explicit invocation.",
   ];
 }

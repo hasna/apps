@@ -377,16 +377,15 @@ export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGa
   addIf(failures, Object.hasOwn(packageJson.exports ?? {}, "./remote"), "export-remote", "package must not export hosted remote code");
 
   const files = packageJson.files ?? [];
-  for (const required of ["dist", "dashboard/dist", "LICENSE", "README.md"]) {
+  for (const required of ["dist", "LICENSE", "README.md"]) {
     addIf(failures, !files.includes(required), "package-files", `files must include ${required}`);
   }
-  const allowedFiles = ["dist", "dashboard/dist", "postinstall.js", "LICENSE", "README.md"];
+  const allowedFiles = ["dist", "postinstall.js", "LICENSE", "README.md"];
   for (const file of files) {
     addIf(failures, !allowedFiles.includes(file), "package-files-extra", `files must not include unbuilt or unreviewed path ${file}`);
   }
   addIf(failures, packageJson.packageManager !== "bun@1.3.14", "package-manager", "packageManager must pin bun@1.3.14");
   failures.push(...validatePackLifecycleScripts(packageJson));
-  addIf(failures, !packageJson.workspaces?.includes("dashboard"), "workspace-dashboard", "workspaces must include dashboard");
 
   for (const name of Object.keys(packageJson.dependencies ?? {})) {
     const lower = name.toLowerCase();
@@ -521,7 +520,6 @@ export function validatePackedPackageFiles(paths: string[], packageJson?: Packag
     "package/dist/mcp/index.js",
     "package/dist/server/index.js",
     "package/dist/release-provenance.json",
-    "package/dashboard/dist/index.html",
   ]);
   if (packageJson) {
     for (const target of derivePackedPackageTargets(packageJson)) requiredPaths.add(target);
@@ -796,22 +794,10 @@ export function isPackedTextContent(content: Uint8Array): boolean {
   }
 }
 
-export function validatePackedBinaryFile(
-  path: string,
-  content: Uint8Array,
-  expectedLogoContent?: Uint8Array,
-): ReleaseGateFailure[] {
-  if (path !== "package/dashboard/dist/logo.jpg") {
-    return [{ check: "pack-binary-allowlist", message: `packed binary file is not allowlisted: ${path}` }];
-  }
-  const jpeg = content.length >= 4 && content[0] === 0xff && content[1] === 0xd8 &&
-    content[content.length - 2] === 0xff && content[content.length - 1] === 0xd9;
-  const failures: ReleaseGateFailure[] = [];
-  addIf(failures, !jpeg, "pack-binary-signature", `${path} does not have a complete JPEG signature`);
-  const sourceMatches = expectedLogoContent !== undefined && content.length === expectedLogoContent.length &&
-    content.every((byte, index) => byte === expectedLogoContent[index]);
-  addIf(failures, !sourceMatches, "pack-binary-source-match", `${path} must byte-match tracked dashboard/public/logo.jpg`);
-  return failures;
+export function validatePackedBinaryFile(path: string): ReleaseGateFailure[] {
+  // The @hasna/todos tarball ships no binary files; any packed binary file is
+  // not allowlisted.
+  return [{ check: "pack-binary-allowlist", message: `packed binary file is not allowlisted: ${path}` }];
 }
 
 export function resolveReleaseProvenanceTimestamp(

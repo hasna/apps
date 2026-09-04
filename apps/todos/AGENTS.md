@@ -12,7 +12,7 @@ bun install -g @hasna/todos
 todos mcp --claude
 
 # Or run standalone
-todos serve  # starts REST API + dashboard at http://localhost:19427
+todos serve  # starts REST API + MCP at http://localhost:19427
 ```
 
 ## MCP Integration (Recommended)

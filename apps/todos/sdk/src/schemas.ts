@@ -136,7 +136,7 @@ export const todosTools = [
   },
   {
     name: "todos_get_stats",
-    description: "Get dashboard statistics (total tasks, pending, completed, etc.)",
+    description: "Get task statistics (total tasks, pending, completed, etc.)",
     parameters: { type: "object", properties: {} },
   },
   {

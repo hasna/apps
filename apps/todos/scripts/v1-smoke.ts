@@ -20,7 +20,7 @@ function ok(label: string, cond: boolean, detail = "") {
   if (!cond) process.exitCode = 1;
 }
 
-await startServer(PORT, { open: false, host: "127.0.0.1" });
+await startServer(PORT, { host: "127.0.0.1" });
 await new Promise((r) => setTimeout(r, 500));
 
 try {

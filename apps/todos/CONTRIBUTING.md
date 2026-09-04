@@ -20,9 +20,6 @@ bun run typecheck
 
 # Build
 bun run build
-
-# Build dashboard
-cd dashboard && bun install && bun run build
 ```
 
 ## Project Structure
@@ -36,9 +33,6 @@ src/
   mcp/       - MCP server with stdio transport
   server/    - HTTP server with REST API
   index.ts   - Library re-exports
-
-dashboard/
-  src/       - React + shadcn/ui web dashboard
 ```
 
 ## Running in Development
@@ -50,11 +44,8 @@ bun run dev:cli
 # MCP server
 bun run dev:mcp
 
-# Dashboard (with hot reload)
-cd dashboard && bun run dev
-
 # Server
-bun run src/cli/index.tsx serve --port 19420 --no-open
+bun run src/cli/index.tsx serve --port 19420
 ```
 
 ## Testing

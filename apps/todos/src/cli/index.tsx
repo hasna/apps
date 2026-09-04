@@ -183,7 +183,7 @@ program
   // parse-time fold on this flag was tried and reverted. It fixed the
   // claim/release round trip for `--agent`, but the flag is the wrong layer —
   // `claim <agent>` and `steal <agent>` take the agent POSITIONALLY, and the
-  // MCP, TUI and dashboard writers never see this option at all, so the same
+  // MCP, TUI and headless HTTP writers never see this option at all, so the same
   // unreleasable-lock defect simply reappeared one verb over. It also broke a
   // legitimate consumer: `inspect` with no id looks up the caller's active task
   // by `assigned_to`, and folding the query made it miss rows stored with a

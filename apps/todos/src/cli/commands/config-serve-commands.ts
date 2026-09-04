@@ -1162,15 +1162,14 @@ export function registerConfigServeCommands(program: Command) {
       }
     });
 
-  // serve (web dashboard)
+  // serve (local HTTP server)
   program
     .command("serve")
-    .description("Start the web dashboard")
+    .description("Start the local HTTP server (REST API + MCP)")
     .option("--port <port>", "Port number", String(DEFAULT_SERVER_PORT))
     .option("--host <host>", "Host to bind (default: 127.0.0.1 localhost only, use 0.0.0.0 for all interfaces)")
     .option("--api-key <key>", "Require this API key for /api/* requests")
     .option("--allow-anonymous", "Local dev only: serve /api/* and /mcp without a credential (refused unless the bind host is loopback)")
-    .option("--no-open", "Don't open browser automatically")
     .action(async (opts) => {
       const { startServer } = await import("../../server/serve.js");
       const { coercePort, findFreePort, refuseInvalidPort } = await import("../../server/port.js");
@@ -1189,7 +1188,6 @@ export function registerConfigServeCommands(program: Command) {
       }
       try {
         await startServer(port, {
-          open: opts.open !== false,
           host: opts.host,
           apiKey: opts.apiKey,
           allowAnonymous: opts.allowAnonymous === true,

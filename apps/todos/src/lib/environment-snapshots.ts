@@ -109,7 +109,7 @@ export interface EnvironmentSnapshotComparison {
   warnings: string[];
 }
 
-const MANIFEST_FILES = ["package.json", "dashboard/package.json", "sdk/package.json"];
+const MANIFEST_FILES = ["package.json", "sdk/package.json"];
 const LOCKFILES = ["bun.lock", "bun.lockb", "package-lock.json", "npm-shrinkwrap.json"];
 const CONFIG_FILES = [
   "AGENTS.md",
@@ -123,7 +123,6 @@ const CONFIG_FILES = [
   "next.config.mjs",
   "next.config.ts",
   "vite.config.ts",
-  "dashboard/vite.config.ts",
 ];
 
 function sha256(value: string | Buffer): string {

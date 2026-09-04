@@ -67,39 +67,6 @@ describe("assertHeadlessOutboundUrl", () => {
   });
 });
 
-describe("dashboard web surface regression", () => {
-  it("dashboard fetch calls use local /api paths only", () => {
-    const dashboardRoot = join(import.meta.dir, "..", "..", "dashboard", "src");
-    const files = walkSourceFiles(dashboardRoot);
-    const violations: string[] = [];
-
-    for (const file of files) {
-      const source = readFileSync(file, "utf8");
-      const fetchCalls = source.match(/fetch\s*\(\s*[`'"]([^`'"]+)[`'"]/g) ?? [];
-      for (const call of fetchCalls) {
-        const urlMatch = call.match(/fetch\s*\(\s*[`'"]([^`'"]+)[`'"]/);
-        const url = urlMatch?.[1] ?? "";
-        if (url.startsWith("/api/")) continue;
-        if (url.includes("${")) continue; // template with local path
-        violations.push(`${file}: non-local fetch: ${url}`);
-      }
-      violations.push(...scanSourceForForbiddenWebPatterns(file, source));
-    }
-
-    expect(violations).toEqual([]);
-  });
-
-  it("dashboard must not reference hosted mutation endpoints", () => {
-    const dashboardRoot = join(import.meta.dir, "..", "..", "dashboard", "src");
-    const combined = walkSourceFiles(dashboardRoot)
-      .map((f) => readFileSync(f, "utf8"))
-      .join("\n");
-    for (const rule of FORBIDDEN_WEB_PATTERNS) {
-      expect(rule.pattern.test(combined)).toBe(false);
-    }
-  });
-});
-
 describe("server web surface regression", () => {
   it("server code must not proxy to platform-todos or todos.md", () => {
     const serverRoot = join(import.meta.dir, "..", "server");

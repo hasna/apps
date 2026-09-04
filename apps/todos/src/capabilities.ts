@@ -219,7 +219,7 @@ function buildCapabilities(version: string): TodosCapability[] {
       id: "server.local-api",
       kind: "server",
       name: "todos-serve",
-      description: "Start the local HTTP server for task APIs and dashboard support.",
+      description: "Start the local HTTP server for task APIs.",
       tags: ["server", "api", "local"],
       docsPath: "README.md#server",
       stability: "experimental",

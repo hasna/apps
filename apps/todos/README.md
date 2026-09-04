@@ -1480,7 +1480,7 @@ todos-mcp --port 8881         # explicit HTTP port (default MCP HTTP port is 888
 
 - Bind: `127.0.0.1` only
 - Health: `GET /health` → `{"status":"ok","name":"todos"}`
-- MCP: `POST /mcp` on the same server as the dashboard/API (Streamable HTTP, stateless)
+- MCP: `POST /mcp` on the same server as the REST API (Streamable HTTP, stateless)
 
 The MCP server defaults to the token-saving `TODOS_PROFILE=minimal` profile.
 Use `TODOS_PROFILE=standard` for broader task/project/resource tools, or
@@ -1542,8 +1542,8 @@ Data is stored in `~/.hasna/todos/`.
 
 ## Local-Only Security Boundary
 
-`@hasna/todos` is an open source, local-first package. The CLI, MCP server, SDK,
-and local dashboard read and write local state by default and do not require a
+`@hasna/todos` is an open source, local-first package. The CLI, MCP server, and
+SDK read and write local state by default and do not require a
 hosted API, cloud account, billing provider, or remote model provider.
 
 Release checks enforce that boundary before publishing:

@@ -55,7 +55,7 @@ describe("SQLite storage adapter honours the calling principal", () => {
   });
 });
 
-describe("the dashboard task-create route records authorship", () => {
+describe("the task-create route records authorship", () => {
   beforeEach(() => {
     process.env["TODOS_DB_PATH"] = ":memory:";
     resetDatabase();
@@ -69,8 +69,6 @@ describe("the dashboard task-create route records authorship", () => {
     sseClients: new Set(),
     filteredSseClients: new Set(),
     broadcastEvent: () => {},
-    dashboardExists: false,
-    dashboardDir: "",
     apiKey: null,
   } as unknown as RouteContext;
 
@@ -87,10 +85,10 @@ describe("the dashboard task-create route records authorship", () => {
     return (await res.json()) as Task;
   }
 
-  it("attributes a task the dashboard filed, rather than leaving it unattributable", async () => {
+  it("attributes a task filed without a caller identity, rather than leaving it unattributable", async () => {
     // This route dropped every field except title/description/priority/project_id, so
-    // each dashboard-filed task landed with a null author no matter what was sent.
-    const task = await post({ title: "filed from the dashboard" });
+    // a task filed without created_by/agent_id used to land with a null author no matter what was sent.
+    const task = await post({ title: "filed without an author" });
     expect(task.created_by).toBe("dashboard");
   });
 

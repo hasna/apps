@@ -1,5 +1,5 @@
 /**
- * Port resolution shared by every entry point that can start the dashboard
+ * Port resolution shared by every entry point that can start the HTTP
  * server: the standalone `todos-serve` entry (src/server/index.ts) and the
  * `todos serve` CLI command (src/cli/commands/config-serve-commands.ts).
  *
@@ -9,7 +9,7 @@
  * random ephemeral port. One parser, one scan, one default.
  */
 
-/** Documented default port for the dashboard/API server. */
+/** Documented default port for the HTTP/API server. */
 export const DEFAULT_PORT = 19427;
 
 /**
