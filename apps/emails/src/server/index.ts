@@ -22,7 +22,7 @@ Commands:
                          (GET /health, /ready, /version and the API-key
                          authenticated /v1 surface), binding 0.0.0.0.
                        - SQLite (EMAILS_DATABASE_URL unset): the SQLite
-                         dashboard on 127.0.0.1.
+                         dashboard API on 127.0.0.1.
   ingest-worker      Run the SES-inbound ingestion worker: long-poll the SQS
                      queue (EMAILS_INGEST_QUEUE_URL), fetch each archived raw
                      message from S3, and write it to self-hosted Postgres.

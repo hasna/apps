@@ -103,7 +103,7 @@ export function retiredSettingNotice(settings: readonly string[]): string {
   return `${settings.join(" and ")} no longer selects anything in emails-serve and is IGNORED: `
     + `this server's internal store follows ${SERVER_DATABASE_URL_SETTING} alone. Delete `
     + `${settings.join(" and ")} — set ${SERVER_DATABASE_URL_SETTING} to serve the operator /v1 `
-    + "API from your own PostgreSQL, or leave it unset to serve the local SQLite dashboard.";
+    + "API from your own PostgreSQL, or leave it unset to serve the local SQLite dashboard API.";
 }
 
 /**
@@ -142,7 +142,7 @@ export function resolveServerStorageBackend(
           + "switch has been removed — there is no cloud, remote, hybrid, or hyphenated variant, and "
           + `there is no longer anything for a value to select. Delete ${key}: this server's internal `
           + `store follows ${SERVER_DATABASE_URL_SETTING} alone, set to serve the operator /v1 API `
-          + "from your own PostgreSQL and unset to serve the local SQLite dashboard.",
+          + "from your own PostgreSQL and unset to serve the local SQLite dashboard API.",
         [key, SERVER_DATABASE_URL_SETTING],
       );
     }

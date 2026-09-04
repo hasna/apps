@@ -94,7 +94,7 @@ describe("no hosted control plane", () => {
     const kindOf = (path: string) => extname(path).toLowerCase() || "(extensionless)";
     const scannedKinds = new Set(scanned.map(kindOf));
     expect([...new Set(tracked.map(kindOf))].filter((kind) => !scannedKinds.has(kind))).toEqual([]);
-    for (const kind of [".ts", ".tsx", ".tf", ".hcl", ".sh", ".mjs", ".md", ".yml", ".json", ".toml", ".lock", ".example", ".html", "(extensionless)"]) {
+    for (const kind of [".ts", ".tsx", ".tf", ".hcl", ".sh", ".mjs", ".md", ".yml", ".json", ".toml", ".lock", ".example", "(extensionless)"]) {
       expect(scannedKinds).toContain(kind);
     }
   });
