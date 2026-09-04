@@ -120,7 +120,12 @@ export function fallbackSshCommand(id: string, command: string): string {
 export class RemoteRunner implements Runner {
   constructor(
     readonly machine: string,
-    private readonly resolve: MachineCommandResolver,
+    /**
+     * How a command becomes a shell line for this machine. Public so the route
+     * can be INSPECTED without being executed — tests assert the plan instead
+     * of spawning a real ssh at a machine id that may or may not resolve.
+     */
+    readonly resolve: MachineCommandResolver,
     private readonly timeoutMs: number = remoteTimeoutMs(),
   ) {}
 

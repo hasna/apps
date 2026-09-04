@@ -42,12 +42,39 @@ curl -X POST http://127.0.0.1:8788/api/v1/auth/device/approve \
   -H 'authorization: Bearer <token>' -d '{"userCode":"XXXX-XXXX"}'
 ```
 
-Passwordless login is rate limited on **both** dimensions (issue #1542): 5
-`/auth/login` requests per hour per source IP **and** 5 per hour per target
-email address, plus 20 `/auth/verify` attempts per hour on each. A per-IP limit
-alone would let a distributed caller mint unlimited live login codes for one
-victim address; each code is a login credential for that account. Codes expire
-after 10 minutes.
+Passwordless login is limited on **both** dimensions (issue #1542), and the two
+dimensions are deliberately shaped differently:
+
+- **Per source IP** — an hourly quota: 5 `/auth/login` and 20 `/auth/verify`
+  requests per hour. The key is the caller's own address, so spending the
+  budget only costs the caller.
+- **Per target email** — never a quota. `/auth/login` enforces a *minimum
+  interval* (60 s) between minted codes: a request inside the interval is
+  answered `200` with the code that is already outstanding, and nothing new is
+  minted, logged or delivered. `/auth/verify` counts consecutive wrong codes
+  for an address across every source IP and, after 10, **burns the code** —
+  never the account.
+
+The asymmetry is the point. A per-hour quota keyed on someone else's email is
+an account-lockout primitive: anyone who knows an address could spend its
+budget from throwaway IPs and keep the owner from logging in for the rest of
+the window, renewably, for as long as they cared to — a worse outcome than the
+code flood it prevents. The min-interval bounds a flood to one code per address
+per minute while never refusing the owner (every code for an address is
+delivered only to that address, so the owner already holds a usable one), and
+burning the code bounds guessing at 10 tries per issued code — far tighter than
+any per-hour cap — while leaving recovery to one more `/auth/login`: the burn
+clears the interval, so the next request mints immediately.
+
+Codes expire after 10 minutes. Both per-address counters live in the server
+process, so behind several tasks the ceilings apply per task; the per-IP quotas
+have always had the same property.
+
+One residual signal, stated rather than hidden: a coalesced `/auth/login`
+response is the outstanding code's own envelope, so its `expiresAt` shows that
+a code was requested for that address within the last interval. That is an
+activity signal, not an account-existence signal — every address gets a code,
+whether or not an account exists.
 
 The listener defaults to loopback HTTP. Terminate TLS before connecting a client:
 all canonical Notes clients require HASNA_NOTES_API_URL with HTTPS and

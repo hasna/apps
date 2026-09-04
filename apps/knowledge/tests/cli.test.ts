@@ -2780,8 +2780,12 @@ describe('knowledge cli', () => {
     expect(storageOut.canonical_example.active).toBe(false);
 
     const before = runCli(['auth', 'whoami', '--scope', 'project', '--json'], dir, env);
-    expect(before.exitCode).toBe(0);
-    expect(JSON.parse(new TextDecoder().decode(before.stdout)).authenticated).toBe(false);
+    // Unauthenticated is a non-zero verdict (#1587): whoami is a gate, not a
+    // report that merely succeeded in printing.
+    expect(before.exitCode).toBe(1);
+    const beforeOut = JSON.parse(new TextDecoder().decode(before.stdout));
+    expect(beforeOut.ok).toBe(false);
+    expect(beforeOut.authenticated).toBe(false);
 
     const login = runCli(['auth', 'login', '--api-key', 'kh_cli', '--email', 'agent@example.com', '--org', 'hasna', '--scope', 'project', '--json'], dir, env);
     expect(login.exitCode).toBe(0);

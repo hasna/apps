@@ -137,11 +137,16 @@ describe("@hasna/machines is fully dropped (#1603)", () => {
 
   test("createRunner defaults a remote machine to the ssh route without loading any optional package", async () => {
     const r = (await createRunner("box")) as RemoteRunner;
-    // Executing proves the default resolver is wired: no dynamic import of a
-    // deleted package can be involved, because none is referenced any more.
-    const res = r.run(["true"]);
-    expect(res.source).toBe("ssh");
     expect(r.machine).toBe("box");
+    // Assert the PLAN, never execute it: running would spawn a real ssh at
+    // "box", which is a live DNS/connect attempt on whatever host runs the
+    // suite. The resolver being the built-in ssh one is the whole claim —
+    // no dynamic import of a deleted package can be involved, because none is
+    // referenced any more.
+    expect(r.resolve).toBe(sshMachineCommandResolver);
+    const plan = r.resolve("box", quoteArgv(["true"]));
+    expect(plan.source).toBe("ssh");
+    expect(plan.shellCommand).toBe(fallbackSshCommand("box", quoteArgv(["true"])));
   });
 
   test("runner.ts references no @hasna/machines specifier", () => {

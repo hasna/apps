@@ -1499,6 +1499,11 @@ async function run(argv: string[]): Promise<void> {
       // — present in env, rejected by every read — reports authenticated:
       // false with the reason and the failing key's kid instead of the
       // presence-based true it claimed before (issue #1587).
+      //
+      // A negative verdict is also a non-zero exit with `ok: false` (both,
+      // regardless of --json): the issue's first acceptance bullet, and what
+      // makes `knowledge auth whoami` usable as a station health gate — a
+      // rejected key must not pass `... --json | jq -e .ok` or `$?`.
       const configured = service.authStatus(process.env);
       const probe = await service.probeAuth(process.env);
       const authenticated = probe.probed && probe.verified;
@@ -1521,7 +1526,11 @@ async function run(argv: string[]): Promise<void> {
         message = 'Not authenticated';
       }
       output({
-        ok: true,
+        // `ok` is the answer to the question asked, not "the report printed":
+        // #1587 was filed because a station script that gates on `ok` (or on
+        // the exit code) got a green light from a REVOKED key. Both now track
+        // the live verdict, in --json too.
+        ok: authenticated,
         ...configured,
         authenticated,
         probe: probe.probed ? 'live' : 'none',
@@ -1531,6 +1540,7 @@ async function run(argv: string[]): Promise<void> {
         principal: probe.principal,
         message,
       }, flags.json, flags);
+      if (!authenticated) process.exitCode = 1;
       return;
     }
     if (action === 'login') {

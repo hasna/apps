@@ -982,6 +982,13 @@ knowledge auth logout [--scope project] [--json]
 knowledge remote status [--scope project] [--json]
 knowledge remote contracts [--scope project] [--json]
 ```
+`auth whoami` (alias `auth status`) answers a live question: it sends one
+authenticated read through the same transport the client uses and reports the
+server's verdict, so a revoked key comes back `authenticated: false` with the
+reason and the failing key's kid. A negative verdict **exits non-zero** and
+carries `ok: false`, in `--json` too — `knowledge auth whoami --json | jq -e .ok`
+is a usable health gate (issue #1587).
+
 The OSS package stays on-box by default, while `HASNA_KNOWLEDGE_API_URL` and
 `HASNA_KNOWLEDGE_API_KEY` select the HTTP client boundary. Credentials are
 stored locally in `~/.hasna/knowledge/auth.json` or supplied by env vars.
