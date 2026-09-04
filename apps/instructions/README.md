@@ -124,7 +124,8 @@ Surfaces:
 - `GET /openapi.json`, `GET /v1/openapi.json` → the OpenAPI 3.1 document the SDK
   is generated from.
 - `/v1/*` — versioned cloud API (configs, profiles, snapshots, stats).
-- `/api/*` — the local dashboard/REST surface.
+- No `/api/*` — the former local REST surface is not mounted (the removed
+  bundled dashboard was its only consumer).
 
 ### Server data backend (postgresql)
 
