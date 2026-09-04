@@ -216,6 +216,7 @@ export function publicRunReceipt(receipt: RunReceipt): Record<string, unknown> {
       stderr_bytes: receipt.summary.stderr_bytes,
       duration_ms: receipt.summary.duration_ms,
     },
+    bundle: receipt.bundle,
     result_ref: receipt.digest_id,
     created_at: receipt.created_at,
     updated_at: receipt.updated_at,

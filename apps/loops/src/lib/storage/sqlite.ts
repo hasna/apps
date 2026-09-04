@@ -39,6 +39,15 @@ export class SqliteLoopStorage implements LoopStorageContract {
   archiveLoop(...args: StoreMethod<"archiveLoop">["args"]) { return this.call("archiveLoop", ...args); }
   unarchiveLoop(...args: StoreMethod<"unarchiveLoop">["args"]) { return this.call("unarchiveLoop", ...args); }
   deleteLoop(...args: StoreMethod<"deleteLoop">["args"]) { return this.call("deleteLoop", ...args); }
+  setLoopBundleName(...args: StoreMethod<"setLoopBundleName">["args"]) { return this.call("setLoopBundleName", ...args); }
+  setLoopBundlePin(...args: StoreMethod<"setLoopBundlePin">["args"]) { return this.call("setLoopBundlePin", ...args); }
+  findLoopByBundleName(...args: StoreMethod<"findLoopByBundleName">["args"]) { return this.call("findLoopByBundleName", ...args); }
+  createLoopRevision(...args: StoreMethod<"createLoopRevision">["args"]) { return this.call("createLoopRevision", ...args); }
+  getLoopRevision(...args: StoreMethod<"getLoopRevision">["args"]) { return this.call("getLoopRevision", ...args); }
+  latestLoopRevision(...args: StoreMethod<"latestLoopRevision">["args"]) { return this.call("latestLoopRevision", ...args); }
+  findLoopRevisionByDigest(...args: StoreMethod<"findLoopRevisionByDigest">["args"]) { return this.call("findLoopRevisionByDigest", ...args); }
+  listLoopRevisions(...args: StoreMethod<"listLoopRevisions">["args"]) { return this.call("listLoopRevisions", ...args); }
+  listLoopBundles(...args: StoreMethod<"listLoopBundles">["args"]) { return this.call("listLoopBundles", ...args); }
   upsertMigrationLoop(...args: StoreMethod<"upsertMigrationLoop">["args"]) { return this.call("upsertMigrationLoop", ...args); }
   upsertMigrationRun(...args: StoreMethod<"upsertMigrationRun">["args"]) { return this.call("upsertMigrationRun", ...args); }
   upsertMigrationWorkflow(...args: StoreMethod<"upsertMigrationWorkflow">["args"]) { return this.call("upsertMigrationWorkflow", ...args); }

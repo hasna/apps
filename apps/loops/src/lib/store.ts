@@ -5,6 +5,7 @@ import { basename, dirname, join } from "node:path";
 import type {
   CatchUpPolicy,
   CreateLoopInput,
+  CreateLoopRevisionInput,
   CreateWorkflowInvocationInput,
   CreateWorkflowInput,
   Goal,
@@ -15,6 +16,8 @@ import type {
   GoalSpec,
   GoalStatus,
   Loop,
+  LoopBundleSummary,
+  LoopRevision,
   LoopRun,
   LoopStatus,
   LoopTarget,
@@ -37,11 +40,13 @@ import type {
 } from "../types.js";
 import {
   AmbiguousNameError,
+  BundleNameTakenError,
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopMutationConflictError,
   LoopNotFoundError,
+  LoopVersionNotFoundError,
   RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
@@ -179,8 +184,31 @@ export interface LoopRow {
   lease_ms: number;
   expires_at: string | null;
   expires_after_runs: number | null;
+  bundle_name: string | null;
+  bundle_pinned_version: number | null;
   created_at: string;
   updated_at: string;
+}
+
+/** A row of the append-only `loop_revisions` ledger (sqlite mirror of pg 0016). */
+export interface LoopRevisionRow {
+  loop_id: string;
+  version: number;
+  bundle_name: string;
+  bundle_digest: string;
+  archive_sha256: string;
+  archive_bytes: number;
+  storage_kind: string;
+  storage_key: string | null;
+  manifest_json: string;
+  loop_json: string;
+  carries_prompt: number;
+  author: string;
+  source_station: string | null;
+  source_agent: string | null;
+  reason: string | null;
+  rolled_back_from: number | null;
+  created_at: string;
 }
 
 export interface RunRow {
@@ -224,6 +252,7 @@ export interface RunReceiptRow {
   exit_code: number | null;
   summary_json: string;
   evidence_paths_json: string;
+  bundle_json: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -453,8 +482,32 @@ export function rowToLoop(row: LoopRow): Loop {
     leaseMs: row.lease_ms,
     expiresAt: row.expires_at ?? undefined,
     expiresAfterRuns: row.expires_after_runs ?? undefined,
+    bundleName: row.bundle_name ?? undefined,
+    bundlePinnedVersion: row.bundle_pinned_version ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+export function rowToLoopRevision(row: LoopRevisionRow): LoopRevision {
+  return {
+    loopId: row.loop_id,
+    version: row.version,
+    bundleName: row.bundle_name,
+    bundleDigest: row.bundle_digest,
+    archiveSha256: row.archive_sha256,
+    archiveBytes: row.archive_bytes,
+    storageKind: row.storage_kind === "s3" ? "s3" : "db",
+    storageKey: row.storage_key ?? undefined,
+    manifest: JSON.parse(row.manifest_json) as Record<string, unknown>,
+    loopJson: JSON.parse(row.loop_json) as Record<string, unknown>,
+    carriesPrompt: row.carries_prompt !== 0,
+    author: row.author,
+    sourceStation: row.source_station ?? undefined,
+    sourceAgent: row.source_agent ?? undefined,
+    reason: row.reason ?? undefined,
+    rolledBackFrom: row.rolled_back_from ?? undefined,
+    createdAt: row.created_at,
   };
 }
 
@@ -499,6 +552,7 @@ export function rowToRunReceipt(row: RunReceiptRow): RunReceipt {
     exit_code: row.exit_code,
     summary: JSON.parse(row.summary_json) as RunReceipt["summary"],
     evidence_paths: JSON.parse(row.evidence_paths_json) as string[],
+    bundle: row.bundle_json ? (JSON.parse(row.bundle_json) as RunReceipt["bundle"]) : null,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -1300,6 +1354,10 @@ export class Store {
           this.addColumnIfMissing("loops", "expires_after_runs", "INTEGER");
         },
       },
+      {
+        id: "0017_loop_revisions",
+        apply: () => this.createLoopRevisionSchema(),
+      },
     ];
   }
 
@@ -1641,6 +1699,60 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_goal_runs_goal_created ON goal_runs(goal_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_goal_runs_loop_run ON goal_runs(loop_run_id);
       CREATE INDEX IF NOT EXISTS idx_goal_runs_workflow_run ON goal_runs(workflow_run_id);
+    `);
+  }
+
+  /**
+   * `loop_revisions` — the append-only bundle ledger, plus the two columns on
+   * `loops` that point into it.
+   *
+   * Additive on every axis (nullable columns, a new table), so
+   * SCHEMA_USER_VERSION and the compatibility floor stay unchanged: an older
+   * binary opening this database ignores the table and keeps scheduling.
+   *
+   * Append-only is enforced by TRIGGER here rather than by privilege (sqlite
+   * has no roles): the Postgres mirror revokes UPDATE/DELETE from the runtime
+   * role instead. Either way "the ledger is never rewritten" is a property of
+   * the database, not a convention in the code that writes to it.
+   */
+  private createLoopRevisionSchema(): void {
+    this.addColumnIfMissing("loops", "bundle_name", "TEXT");
+    // Run provenance: which bundle version produced a run. Nullable, so every
+    // pre-bundle receipt keeps its exact digest.
+    this.addColumnIfMissing("run_receipts", "bundle_json", "TEXT");
+    this.addColumnIfMissing("loops", "bundle_pinned_version", "INTEGER");
+    this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_loops_bundle_name ON loops(bundle_name) WHERE bundle_name IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS loop_revisions (
+        loop_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version >= 1),
+        bundle_name TEXT NOT NULL,
+        bundle_digest TEXT NOT NULL,
+        archive_sha256 TEXT NOT NULL,
+        archive_bytes INTEGER NOT NULL CHECK (archive_bytes > 0),
+        storage_kind TEXT NOT NULL DEFAULT 'db' CHECK (storage_kind IN ('db','s3')),
+        storage_key TEXT,
+        manifest_json TEXT NOT NULL DEFAULT '{}',
+        loop_json TEXT NOT NULL,
+        carries_prompt INTEGER NOT NULL DEFAULT 0,
+        author TEXT NOT NULL,
+        source_station TEXT,
+        source_agent TEXT,
+        reason TEXT,
+        rolled_back_from INTEGER,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (loop_id, version),
+        FOREIGN KEY (loop_id) REFERENCES loops(id) ON DELETE CASCADE,
+        CHECK (storage_kind <> 's3' OR storage_key IS NOT NULL)
+      );
+      CREATE INDEX IF NOT EXISTS idx_loop_revisions_loop ON loop_revisions(loop_id, version DESC);
+      CREATE INDEX IF NOT EXISTS idx_loop_revisions_digest ON loop_revisions(bundle_digest);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_loop_revisions_name_version ON loop_revisions(bundle_name, version);
+      CREATE TRIGGER IF NOT EXISTS loop_revisions_no_update
+      BEFORE UPDATE ON loop_revisions
+      BEGIN
+        SELECT RAISE(ABORT, 'loop revisions are append-only');
+      END;
     `);
   }
 
@@ -5151,6 +5263,191 @@ export class Store {
     };
   }
 
+  // ── loop bundles / revisions ───────────────────────────────────────────────
+
+  /**
+   * Claim the bundle namespace key for a loop.
+   *
+   * The unique index on `bundle_name` is what makes an S3 prefix and a CLI
+   * argument resolve to exactly one loop even though `loops.name` is not
+   * unique. A name already held by a DIFFERENT loop is a conflict, not a
+   * silent takeover — the loser would otherwise start pushing versions into
+   * the winner's history.
+   */
+  setLoopBundleName(loopId: string, bundleName: string, opts: { now?: Date } = {}): Loop {
+    const updated = (opts.now ?? new Date()).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const loop = this.getLoop(loopId);
+      if (!loop) throw new LoopNotFoundError(loopId);
+      if (loop.archivedAt) throw new LoopArchivedError(loop.name || loopId);
+      const holder = this.db
+        .query<{ id: string }, [string]>("SELECT id FROM loops WHERE bundle_name = ?")
+        .get(bundleName);
+      if (holder && holder.id !== loopId) {
+        throw new BundleNameTakenError(bundleName, holder.id);
+      }
+      this.db.query("UPDATE loops SET bundle_name=?, updated_at=? WHERE id=?").run(bundleName, updated, loopId);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+    return this.requireLoop(loopId);
+  }
+
+  /** Pin a loop to one bundle version, or `null` to follow latest. */
+  setLoopBundlePin(loopId: string, version: number | null, opts: { now?: Date } = {}): Loop {
+    const updated = (opts.now ?? new Date()).toISOString();
+    const loop = this.getLoop(loopId);
+    if (!loop) throw new LoopNotFoundError(loopId);
+    if (version !== null && !this.getLoopRevision(loopId, version)) {
+      // Pinning a version that does not exist is the kind of error that only
+      // shows up at 3am on a runner that can no longer materialise anything.
+      throw new LoopVersionNotFoundError(loopId, version);
+    }
+    this.db.query("UPDATE loops SET bundle_pinned_version=?, updated_at=? WHERE id=?").run(version, updated, loopId);
+    return this.requireLoop(loopId);
+  }
+
+  findLoopByBundleName(bundleName: string): Loop | undefined {
+    const row = this.db.query<LoopRow, [string]>("SELECT * FROM loops WHERE bundle_name = ?").get(bundleName);
+    return row ? rowToLoop(row) : undefined;
+  }
+
+  /**
+   * Append a revision, allocating its version inside the same transaction.
+   *
+   * `version = MAX(version) + 1` under `BEGIN IMMEDIATE` and a unique index, so
+   * two concurrent pushes get two versions and neither overwrites the other.
+   * The caller writes the objects AFTER this returns, using the storage key it
+   * recorded here: a crash then leaves a row whose objects are missing (loud,
+   * reported as `incomplete`) rather than an object no row references.
+   */
+  createLoopRevision(input: CreateLoopRevisionInput, opts: { now?: Date } = {}): LoopRevision {
+    const createdAt = (opts.now ?? new Date()).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const loop = this.getLoop(input.loopId);
+      if (!loop) throw new LoopNotFoundError(input.loopId);
+      if (loop.archivedAt) throw new LoopArchivedError(loop.name || input.loopId);
+      const head = this.db
+        .query<{ version: number | null }, [string]>("SELECT MAX(version) AS version FROM loop_revisions WHERE loop_id = ?")
+        .get(input.loopId);
+      const version = (head?.version ?? 0) + 1;
+      this.db
+        .query(
+          `INSERT INTO loop_revisions (loop_id, version, bundle_name, bundle_digest, archive_sha256, archive_bytes,
+             storage_kind, storage_key, manifest_json, loop_json, carries_prompt, author, source_station, source_agent,
+             reason, rolled_back_from, created_at)
+           VALUES ($loopId, $version, $bundleName, $bundleDigest, $archiveSha256, $archiveBytes,
+             $storageKind, $storageKey, $manifestJson, $loopJson, $carriesPrompt, $author, $sourceStation, $sourceAgent,
+             $reason, $rolledBackFrom, $createdAt)`,
+        )
+        .run({
+          $loopId: input.loopId,
+          $version: version,
+          $bundleName: input.bundleName,
+          $bundleDigest: input.bundleDigest,
+          $archiveSha256: input.archiveSha256,
+          $archiveBytes: input.archiveBytes,
+          $storageKind: input.storageKind,
+          $storageKey: input.storageKeyFor?.(version) ?? input.storageKey ?? null,
+          $manifestJson: JSON.stringify(input.manifest ?? {}),
+          $loopJson: JSON.stringify(input.loopJson),
+          $carriesPrompt: input.carriesPrompt ? 1 : 0,
+          $author: input.author,
+          $sourceStation: input.sourceStation ?? null,
+          $sourceAgent: input.sourceAgent ?? null,
+          $reason: input.reason ?? null,
+          $rolledBackFrom: input.rolledBackFrom ?? null,
+          $createdAt: createdAt,
+        });
+      this.db.query("UPDATE loops SET bundle_name=?, updated_at=? WHERE id=?").run(input.bundleName, createdAt, input.loopId);
+      this.db.exec("COMMIT");
+      const created = this.getLoopRevision(input.loopId, version);
+      if (!created) throw new Error(`loop revision missing after insert: ${input.loopId}@${version}`);
+      return created;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getLoopRevision(loopId: string, version: number): LoopRevision | undefined {
+    const row = this.db
+      .query<LoopRevisionRow, [string, number]>("SELECT * FROM loop_revisions WHERE loop_id = ? AND version = ?")
+      .get(loopId, version);
+    return row ? rowToLoopRevision(row) : undefined;
+  }
+
+  latestLoopRevision(loopId: string): LoopRevision | undefined {
+    const row = this.db
+      .query<LoopRevisionRow, [string]>("SELECT * FROM loop_revisions WHERE loop_id = ? ORDER BY version DESC LIMIT 1")
+      .get(loopId);
+    return row ? rowToLoopRevision(row) : undefined;
+  }
+
+  /**
+   * The head revision carrying `bundleDigest`, if any.
+   *
+   * This is what makes a re-push of an unchanged tree idempotent: the content
+   * digest is framing-independent, so an identical tree packed on another
+   * machine at another time still finds its existing revision instead of
+   * allocating a duplicate version.
+   */
+  findLoopRevisionByDigest(loopId: string, bundleDigest: string): LoopRevision | undefined {
+    const row = this.db
+      .query<LoopRevisionRow, [string, string]>(
+        "SELECT * FROM loop_revisions WHERE loop_id = ? AND bundle_digest = ? ORDER BY version DESC LIMIT 1",
+      )
+      .get(loopId, bundleDigest);
+    return row ? rowToLoopRevision(row) : undefined;
+  }
+
+  listLoopRevisions(loopId: string, opts: { limit?: number; offset?: number } = {}): { revisions: LoopRevision[]; total: number } {
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    const rows = this.db
+      .query<LoopRevisionRow, [string, number, number]>(
+        "SELECT * FROM loop_revisions WHERE loop_id = ? ORDER BY version DESC LIMIT ? OFFSET ?",
+      )
+      .all(loopId, limit, offset);
+    const total = this.db
+      .query<{ total: number }, [string]>("SELECT COUNT(*) AS total FROM loop_revisions WHERE loop_id = ?")
+      .get(loopId)?.total ?? 0;
+    return { revisions: rows.map(rowToLoopRevision), total };
+  }
+
+  /** Tenant-wide bundle index. `machine` is what `sync --for-machine` filters on. */
+  listLoopBundles(opts: { machine?: string; limit?: number; offset?: number } = {}): { bundles: LoopBundleSummary[]; total: number } {
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    const rows = this.db
+      .query<LoopRow, []>("SELECT * FROM loops WHERE bundle_name IS NOT NULL ORDER BY bundle_name ASC")
+      .all()
+      .map(rowToLoop)
+      .filter((loop) => (opts.machine ? loop.machine?.id === opts.machine : true));
+    const page = rows.slice(offset, offset + limit);
+    return {
+      bundles: page.map((loop) => {
+        const head = this.latestLoopRevision(loop.id);
+        return {
+          bundleName: loop.bundleName!,
+          loopId: loop.id,
+          loopName: loop.name,
+          latestVersion: head?.version ?? 0,
+          ...(loop.bundlePinnedVersion === undefined ? {} : { pinnedVersion: loop.bundlePinnedVersion }),
+          ...(head?.bundleDigest === undefined ? {} : { bundleDigest: head.bundleDigest }),
+          carriesPrompt: head?.carriesPrompt ?? false,
+          ...(loop.machine?.id === undefined ? {} : { machineId: loop.machine.id }),
+          updatedAt: head?.createdAt ?? loop.updatedAt,
+        };
+      }),
+      total: rows.length,
+    };
+  }
+
   writeRunReceipt(input: WriteRunReceiptInput, opts: { now?: Date } = {}): RunReceipt {
     const inputRunId = typeof input.run_id === "string" && input.run_id.trim() ? input.run_id : undefined;
     const existing = inputRunId ? this.getRunReceipt(inputRunId) : undefined;
@@ -5160,9 +5457,9 @@ export class Store {
     this.db
       .query(
         `INSERT INTO run_receipts (run_id, loop_id, machine_json, repo, task_ids_json, knowledge_ids_json, digest_id,
-          started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, created_at, updated_at)
+          started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, bundle_json, created_at, updated_at)
          VALUES ($runId, $loopId, $machineJson, $repo, $taskIdsJson, $knowledgeIdsJson, $digestId,
-          $startedAt, $finishedAt, $status, $exitCode, $summaryJson, $evidencePathsJson, $createdAt, $updatedAt)
+          $startedAt, $finishedAt, $status, $exitCode, $summaryJson, $evidencePathsJson, $bundleJson, $createdAt, $updatedAt)
          ON CONFLICT(run_id) DO UPDATE SET
           loop_id=excluded.loop_id,
           machine_json=excluded.machine_json,
@@ -5176,6 +5473,7 @@ export class Store {
           exit_code=excluded.exit_code,
           summary_json=excluded.summary_json,
           evidence_paths_json=excluded.evidence_paths_json,
+          bundle_json=excluded.bundle_json,
           updated_at=excluded.updated_at`,
       )
       .run({
@@ -5192,6 +5490,7 @@ export class Store {
         $exitCode: receipt.exit_code,
         $summaryJson: JSON.stringify(receipt.summary),
         $evidencePathsJson: JSON.stringify(receipt.evidence_paths),
+        $bundleJson: receipt.bundle ? JSON.stringify(receipt.bundle) : null,
         $createdAt: receipt.created_at,
         $updatedAt: receipt.updated_at,
       });

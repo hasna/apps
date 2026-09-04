@@ -51,6 +51,26 @@ export class RunFinalizationConflictError extends CodedError {
   }
 }
 
+/**
+ * The bundle namespace key is already held by another loop in this tenant.
+ *
+ * A conflict rather than a takeover: loop names are not unique, so two loops
+ * can legitimately both want to be called `pr-drain` — but only one of them can
+ * own the S3 prefix and the CLI argument, and the loser silently pushing into
+ * the winner's version history would be unrecoverable.
+ */
+export class BundleNameTakenError extends CodedError {
+  constructor(bundleName: string, holderLoopId: string) {
+    super("BUNDLE_NAME_TAKEN", `bundle name '${bundleName}' already belongs to loop ${holderLoopId}`);
+  }
+}
+
+export class LoopVersionNotFoundError extends CodedError {
+  constructor(loopId: string, version: number | string) {
+    super("LOOP_VERSION_NOT_FOUND", `loop ${loopId} has no bundle version ${version}`);
+  }
+}
+
 export class AmbiguousNameError extends CodedError {
   constructor(name: string) {
     super("AMBIGUOUS_NAME", `ambiguous loop name: ${name}; use a loop id`);

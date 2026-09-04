@@ -1952,4 +1952,80 @@ REVOKE CREATE ON SCHEMA public FROM open_loops_owner, open_loops_migrator;
 GRANT USAGE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
     `,
   ),
+  // Loop bundles (hasna/apps#1724). A loop is a row, and — once bundled — also
+  // a directory of files, because a loop may carry scripts and a row cannot.
+  // The row stays the runtime authority; `loop_revisions` is the append-only
+  // ledger of what that row WAS at each published version, and the two new
+  // `loops` columns point into it.
+  //
+  // Additive on every axis: both columns are nullable, the table starts empty,
+  // and an older `loops-serve` binary that knows nothing about bundles keeps
+  // scheduling unchanged. Rolling back is dropping an empty table.
+  //
+  // `bundle_name` exists rather than reusing `loops.name` because loop names
+  // are NOT unique (idx_loops_name is a plain index, and `loops hygiene
+  // duplicates` exists because duplicates do), while an object-store prefix and
+  // a CLI argument must resolve to exactly one loop.
+  migration(
+    "0016_loop_revisions",
+    `
+GRANT USAGE, CREATE ON SCHEMA public TO open_loops_owner;
+SET ROLE open_loops_owner;
+
+ALTER TABLE loops ADD COLUMN IF NOT EXISTS bundle_name TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS loops_bundle_name_key
+  ON loops(tenant_id, bundle_name) WHERE bundle_name IS NOT NULL;
+ALTER TABLE loops ADD COLUMN IF NOT EXISTS bundle_pinned_version INTEGER;
+
+-- Run provenance: which bundle version produced a run. Nullable, so every
+-- receipt written before bundles existed keeps its exact digest.
+ALTER TABLE run_receipts ADD COLUMN IF NOT EXISTS bundle_json JSONB;
+
+CREATE TABLE loop_revisions (
+  tenant_id        TEXT NOT NULL REFERENCES tenants(id),
+  loop_id          TEXT NOT NULL,
+  version          INTEGER NOT NULL CHECK (version >= 1),
+  bundle_name      TEXT NOT NULL,
+  bundle_digest    TEXT NOT NULL CHECK (bundle_digest ~ '^sha256:[0-9a-f]{64}$'),
+  archive_sha256   TEXT NOT NULL CHECK (archive_sha256 ~ '^[0-9a-f]{64}$'),
+  archive_bytes    INTEGER NOT NULL CHECK (archive_bytes > 0),
+  storage_kind     TEXT NOT NULL DEFAULT 'db' CHECK (storage_kind IN ('db','s3')),
+  storage_key      TEXT,
+  manifest_json    JSONB NOT NULL DEFAULT '{}'::jsonb,
+  loop_json        JSONB NOT NULL,
+  carries_prompt   BOOLEAN NOT NULL DEFAULT false,
+  author           TEXT NOT NULL,
+  source_station   TEXT,
+  source_agent     TEXT,
+  reason           TEXT,
+  rolled_back_from INTEGER,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, loop_id, version),
+  FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE CASCADE,
+  CONSTRAINT loop_revisions_s3_key CHECK (storage_kind <> 's3' OR storage_key IS NOT NULL)
+);
+CREATE INDEX loop_revisions_loop_created_idx
+  ON loop_revisions(tenant_id, loop_id, version DESC);
+CREATE INDEX loop_revisions_digest_idx
+  ON loop_revisions(tenant_id, bundle_digest);
+CREATE UNIQUE INDEX loop_revisions_name_version_key
+  ON loop_revisions(tenant_id, bundle_name, version);
+
+ALTER TABLE loop_revisions OWNER TO open_loops_owner;
+ALTER TABLE loop_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE loop_revisions FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON loop_revisions
+  USING (tenant_id = open_loops_current_tenant_id())
+  WITH CHECK (tenant_id = open_loops_current_tenant_id());
+-- Append-only at the PRIVILEGE level, not only by convention: the runtime role
+-- gets INSERT and SELECT and is granted no UPDATE and no DELETE on this table,
+-- so a rollback can only ever append a new revision. Rows leave exclusively
+-- through the loop's own ON DELETE CASCADE.
+GRANT SELECT, INSERT ON loop_revisions TO open_loops_runtime;
+
+RESET ROLE;
+REVOKE CREATE ON SCHEMA public FROM open_loops_owner;
+GRANT USAGE ON SCHEMA public TO open_loops_owner;
+    `,
+  ),
 ]);

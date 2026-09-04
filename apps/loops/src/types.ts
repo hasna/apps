@@ -568,6 +568,16 @@ export interface Loop {
   expiresAt?: string;
   /** Expire the loop after this many consecutive successful runs. Independent of expiresAt. */
   expiresAfterRuns?: number;
+  /**
+   * The bundle namespace key: the S3 prefix and the CLI argument that name this
+   * loop's portable, versioned representation. NULL until the loop is first
+   * bundled. Distinct from `name` because loop names are NOT unique (the
+   * `loops hygiene duplicates` report exists because duplicates do), while an
+   * object key and a CLI argument must resolve to exactly one loop.
+   */
+  bundleName?: string;
+  /** The bundle version a runner must materialise. Absent means "follow latest". */
+  bundlePinnedVersion?: number;
   latestRunId?: string;
   latestRunStatus?: RunStatus;
   lastRunAt?: string;
@@ -611,6 +621,20 @@ export interface RunReceiptSummary {
   duration_ms?: number;
 }
 
+/**
+ * Which immutable bundle version produced a run.
+ *
+ * Present only for bundled loops. It is the receipt's answer to "what code ran
+ * here?" - the digest names the exact file set, so a receipt can be tied back
+ * to a `loop_revisions` row (and to the object in the artifact bucket) long
+ * after the local tree has moved on.
+ */
+export interface RunReceiptBundle {
+  name: string;
+  version: number;
+  digest: string;
+}
+
 export interface RunReceipt {
   loop_id: string;
   run_id: string;
@@ -625,6 +649,7 @@ export interface RunReceipt {
   exit_code: number | null;
   summary: RunReceiptSummary;
   evidence_paths: string[];
+  bundle: RunReceiptBundle | null;
   created_at: string;
   updated_at: string;
 }
@@ -632,6 +657,7 @@ export interface RunReceipt {
 export interface WriteRunReceiptInput {
   loop_id?: string;
   run_id: string;
+  bundle?: RunReceiptBundle | null;
   machine?: RunReceiptMachine;
   repo?: string;
   task_ids?: string[];
@@ -678,9 +704,92 @@ export interface ExecutorResult {
   startedAt: string;
   finishedAt: string;
   durationMs: number;
+  /**
+   * The bundle version this run executed, for a bundled loop.
+   *
+   * Carried out of the executor rather than re-derived by whoever writes the
+   * receipt: by then the tree may already have been re-pulled, and a receipt
+   * that names the version present at WRITE time instead of at RUN time proves
+   * nothing.
+   */
+  bundle?: RunReceiptBundle;
 }
 
 export interface PersistGuardOptions {
   beforePersist?: () => void;
   daemonLeaseId?: string;
+}
+
+/** Where a revision's archive bytes were placed. `db` is reserved for the shared kit's column shape. */
+export type LoopRevisionStorageKind = "db" | "s3";
+
+/**
+ * One row of the append-only loop revision ledger.
+ *
+ * Never updated and never deleted except by the loop's own cascade. A rollback
+ * appends a NEW revision carrying the older revision's digest and storage key,
+ * with `rolledBackFrom` set — the history of what a loop was is not editable by
+ * the act of going back to it.
+ */
+export interface LoopRevision {
+  loopId: string;
+  version: number;
+  bundleName: string;
+  bundleDigest: string;
+  archiveSha256: string;
+  archiveBytes: number;
+  storageKind: LoopRevisionStorageKind;
+  storageKey?: string;
+  manifest: Record<string, unknown>;
+  /** The loop definition as of this version — `loop.json`, verbatim. */
+  loopJson: Record<string, unknown>;
+  carriesPrompt: boolean;
+  /** Principal id of the key that pushed it. */
+  author: string;
+  sourceStation?: string;
+  sourceAgent?: string;
+  reason?: string;
+  /** Set when this revision was produced by a rollback to that earlier version. */
+  rolledBackFrom?: number;
+  createdAt: string;
+}
+
+export interface CreateLoopRevisionInput {
+  loopId: string;
+  bundleName: string;
+  bundleDigest: string;
+  archiveSha256: string;
+  archiveBytes: number;
+  storageKind: LoopRevisionStorageKind;
+  storageKey?: string;
+  /**
+   * Builds the storage key from the version the store actually allocated.
+   *
+   * The key contains the version, and the version is not known until the insert
+   * transaction has taken it — so a caller that guessed the version beforehand
+   * would record the wrong key the moment two pushes raced. Not persisted; when
+   * present it wins over `storageKey`.
+   */
+  storageKeyFor?: (version: number) => string;
+  manifest: Record<string, unknown>;
+  loopJson: Record<string, unknown>;
+  carriesPrompt: boolean;
+  author: string;
+  sourceStation?: string;
+  sourceAgent?: string;
+  reason?: string;
+  rolledBackFrom?: number;
+}
+
+/** One entry of the tenant-wide bundle index that `loops bundle sync` reads. */
+export interface LoopBundleSummary {
+  bundleName: string;
+  loopId: string;
+  loopName: string;
+  latestVersion: number;
+  pinnedVersion?: number;
+  bundleDigest?: string;
+  carriesPrompt: boolean;
+  machineId?: string;
+  updatedAt: string;
 }

@@ -75,6 +75,16 @@
       "id": "0014_loop_expires_after_runs",
       "file": "0014_loop_expires_after_runs.sql",
       "checksum": "sha256:4c60d6c900c2f3146bd20da3bc3665a0a40e1b7e145433d8944d663da57460d7"
+    },
+    {
+      "id": "0015_run_receipts_loop_cascade",
+      "file": "0015_run_receipts_loop_cascade.sql",
+      "checksum": "sha256:ac4ebc03cdf15383a7fd2f6ad12253cee4ddf68011b9d65c22e15d85693d3492"
+    },
+    {
+      "id": "0016_loop_revisions",
+      "file": "0016_loop_revisions.sql",
+      "checksum": "sha256:c5ef0f1fbc0f61de7736a4af1a558c993f9d916bc0ee7623ba0d5709196d754e"
     }
   ]
 }

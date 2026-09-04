@@ -15,6 +15,7 @@ import {
 import { dueSlots } from "./recurrence.js";
 import { classifyLoopExecutionResult } from "./loop-result.js";
 import type { Store } from "./store.js";
+import type { ExecuteOptions } from "./executor.js";
 import { executeLoopTarget } from "./workflow-runner.js";
 
 export {
@@ -131,6 +132,14 @@ export interface RunLoopNowDeps {
   mode?: RunLoopNowMode;
   now?: () => Date;
   execute?: (loop: Loop, run: LoopRun) => Promise<ExecutorResult>;
+  /**
+   * Run a bundled loop whose tree no longer matches its manifest.
+   *
+   * Only the MANUAL path carries this: `loops run-now --allow-dirty` is an
+   * operator deliberately accepting an unreviewed tree for one run. The daemon
+   * and the runner never set it, so scheduled execution always verifies.
+   */
+  allowDirtyBundle?: boolean;
 }
 
 export interface RunLoopNowScheduled {
@@ -231,6 +240,7 @@ export async function runLoopNow(deps: RunLoopNowDeps): Promise<RunLoopNowResult
     run: claim.run,
     now: deps.now,
     execute: deps.execute,
+    executeOptions: deps.allowDirtyBundle ? { allowDirtyBundle: true } : undefined,
   });
   if (shouldAdvance) {
     advanceLoop(store, claim.loop, run, new Date(run.updatedAt), run.status === "succeeded");
@@ -357,6 +367,8 @@ export async function executeClaimedRun(deps: {
   beforeFinalize?: (loop: Loop, run: LoopRun) => void;
   daemonLeaseId?: string;
   execute?: (loop: Loop, run: LoopRun) => Promise<ExecutorResult>;
+  /** Extra executor options for the default execute path (the manual --allow-dirty bypass). */
+  executeOptions?: ExecuteOptions;
   finalizeResult?: (result: ExecutorResult, loop: Loop, run: LoopRun) => Omit<ExecutorResult, "status"> & { status: LoopRun["status"] };
   onError?: (loop: Loop, error: unknown) => void;
 }): Promise<LoopRun> {
@@ -373,6 +385,7 @@ export async function executeClaimedRun(deps: {
   try {
     const result = await (deps.execute ?? ((loop, run) =>
       executeLoopTarget(deps.store, loop, run, {
+        ...deps.executeOptions,
         daemonLeaseId: deps.daemonLeaseId,
         onSpawn: (pid) => deps.store.markRunPid(run.id, pid, deps.runnerId, {
           daemonLeaseId: deps.daemonLeaseId,

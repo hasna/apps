@@ -73,6 +73,7 @@ import { isExpiresAfterRuns, isLeaseMs, isLoopStatus, isMaxAttempts, LOOP_STATUS
 import { normalizeRunCompletion } from "../lib/run-completion.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
+import type { BundleArtifactStorage } from "../lib/bundle/artifact-storage.js";
 import { routePolicy, type RoutePolicy } from "../lib/auth/route-policy.js";
 import type { TenantAuthContext, TenantAuthDecision } from "../lib/auth/tenant-auth.js";
 import { packageVersion } from "../lib/version.js";
@@ -87,6 +88,12 @@ import {
   type LoopMutationEnvelope,
   type PrivateOperationDescriptor,
 } from "../lib/operation-contract.js";
+import {
+  BUNDLE_ERROR_STATUS,
+  DEFAULT_BUNDLE_LIMIT_BYTES,
+  handleBundlesIndexRequest,
+  handleLoopBundleRequest,
+} from "./bundles.js";
 import openApiSpec from "../../openapi/loops.json" with { type: "json" };
 
 /** The serve OpenAPI document (source of the generated SDK), version-synced. */
@@ -149,6 +156,10 @@ export interface LoopsApiServerOptions {
   bodyLimitBytes?: number;
   evidenceLimitBytes?: number;
   importLimitBytes?: number;
+  /** Body budget for the multipart bundle upload. Separate from the JSON limit. */
+  bundleLimitBytes?: number;
+  /** Object storage for bundle archives. Defaults to the environment-configured placement. */
+  artifacts?: BundleArtifactStorage;
   now?: () => Date;
   random?: () => number;
   circuitBreakerThreshold?: CircuitBreakerThreshold;
@@ -181,7 +192,7 @@ export interface LoopsApiServerOptions {
  * a runner that needs enforcement has to establish it BEFORE its first claim —
  * discovering non-enforcement from the response is already too late.
  */
-const API_CAPABILITIES = ["runner.claimScope"] as const;
+const API_CAPABILITIES = ["runner.claimScope", "bundles"] as const;
 
 /** Shared { status, version, storage, connection } envelope for /health, /ready, /version. */
 function foundationEnvelope(
@@ -308,6 +319,8 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
           bodyLimitBytes: opts.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES,
           evidenceLimitBytes: opts.evidenceLimitBytes ?? DEFAULT_EVIDENCE_LIMIT_BYTES,
           importLimitBytes: opts.importLimitBytes ?? DEFAULT_IMPORT_LIMIT_BYTES,
+          bundleLimitBytes: opts.bundleLimitBytes ?? DEFAULT_BUNDLE_LIMIT_BYTES,
+          artifacts: opts.artifacts,
           now: opts.now ?? (() => new Date()),
           random: opts.random ?? Math.random,
           circuitBreakerThreshold: opts.circuitBreakerThreshold,
@@ -331,9 +344,11 @@ interface V1RequestContext {
   bodyLimitBytes: number;
   evidenceLimitBytes: number;
   importLimitBytes: number;
+  bundleLimitBytes?: number;
   now: () => Date;
   random: () => number;
   circuitBreakerThreshold?: CircuitBreakerThreshold;
+  artifacts?: BundleArtifactStorage;
 }
 
 type RunnerGoalInput = Parameters<LoopStorageContract["createGoal"]>[0];
@@ -359,6 +374,11 @@ async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
   if (ctx.request.method === "GET" && segments[1] === "status") return Response.json(apiStatus());
   if (segments[1] === "import") return await handleImportRequest(ctx, segments.slice(2));
   if (segments[1] === "loops") return await handleLoopsRequest(ctx, segments.slice(2));
+  if (segments[1] === "bundles" && segments.length === 2) {
+    const response = await handleBundlesIndexRequest(bundleContext(ctx));
+    if (response) return response;
+    return fail("not_found", 404);
+  }
   if (segments[1] === "loop-mutations") return await handleLoopMutationsRequest(ctx, segments.slice(2));
   if (segments[1] === "runs") return await handleRunsRequest(ctx, segments.slice(2));
   if (segments[1] === "receipts") return await handleReceiptsRequest(ctx, segments.slice(2));
@@ -829,7 +849,27 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
       },
     });
   }
+  const bundleResponse = await handleLoopBundleRequest(bundleContext(ctx), id, segments.slice(1));
+  if (bundleResponse) return bundleResponse;
   return fail("not_found", 404);
+}
+
+/**
+ * The bundle routes take a narrower context than the rest of `/v1` — they never
+ * touch the evidence/import limits — and carry their own body budget, because a
+ * 2 MiB archive must not pass through `readJsonBody`'s 64 KiB ceiling.
+ */
+function bundleContext(ctx: V1RequestContext) {
+  return {
+    request: ctx.request,
+    url: ctx.url,
+    storage: ctx.storage,
+    auth: ctx.auth,
+    bodyLimitBytes: ctx.bodyLimitBytes,
+    bundleLimitBytes: ctx.bundleLimitBytes ?? DEFAULT_BUNDLE_LIMIT_BYTES,
+    now: ctx.now,
+    artifacts: ctx.artifacts,
+  };
 }
 
 async function handleLoopMutationsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
@@ -2422,6 +2462,8 @@ function codedErrorFailure(error: unknown): Response | undefined {
       return safeReason ? fail(safeReason, 409) : undefined;
     case "AMBIGUOUS_NAME":
       return fail("ambiguous_name", 409);
+    case "BUNDLE_STORAGE_UNAVAILABLE":
+      return fail("bundle_storage_unavailable", 503);
     case "RUN_FINALIZATION_CONFLICT":
       return safeReason ? fail(safeReason, 409) : undefined;
     case "VALIDATION_ERROR": {
@@ -2466,7 +2508,32 @@ function errorResponse(error: unknown): Response {
   // own dist bundle with their own CodedError class copies, so their errors
   // defeat every instanceof check above. Their stable `.code` survives
   // bundling, so match on it last.
-  return codedErrorFailure(error) ?? fail("internal_error", 500);
+  return codedErrorFailure(error) ?? bundleErrorFailure(error) ?? fail("internal_error", 500);
+}
+
+/**
+ * Map a bundle integrity/conflict code to its public failure.
+ *
+ * Matched on the stable `.code` rather than by `instanceof`, for the same
+ * reason `codedErrorFailure` is: the dist layout bundles api/index.ts and the
+ * bundle library separately, so class identity does not survive.
+ */
+function bundleErrorFailure(error: unknown): Response | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  let code: unknown;
+  let message: unknown;
+  try {
+    code = (error as Record<string, unknown>).code;
+    message = (error as Record<string, unknown>).message;
+  } catch {
+    return undefined;
+  }
+  if (typeof code !== "string") return undefined;
+  const status = BUNDLE_ERROR_STATUS[code] ?? (code.startsWith("BUNDLE_") || code.startsWith("UNEXPECTED_PART") || code.startsWith("DUPLICATE_PART") ? 400 : undefined);
+  if (status === undefined) return undefined;
+  // The message names paths and offsets only — never file contents and never a
+  // matched credential value (see assertNoCredentials).
+  return fail(code.toLowerCase(), status, typeof message === "string" ? { message } : undefined);
 }
 
 function requestIdentifier(request: Request): string {

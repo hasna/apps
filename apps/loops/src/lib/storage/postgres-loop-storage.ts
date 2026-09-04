@@ -48,6 +48,7 @@ import {
   rowToGoalRun,
   rowToLease,
   rowToLoop,
+  rowToLoopRevision,
   rowToRun,
   rowToRunReceipt,
   rowToWorkflow,
@@ -62,6 +63,7 @@ import {
   type GoalRow,
   type GoalRunRow,
   type LeaseRow,
+  type LoopRevisionRow,
   type LoopRow,
   type RunReceiptRow,
   type RunRow,
@@ -74,11 +76,13 @@ import {
 } from "../store.js";
 import {
   AmbiguousNameError,
+  BundleNameTakenError,
   DuplicateWorkflowEventError,
   LegacyWorkflowRunProvenanceError,
   LoopArchivedError,
   LoopMutationConflictError,
   LoopNotFoundError,
+  LoopVersionNotFoundError,
   RunFinalizationConflictError,
   ValidationError,
   WorkflowRunDefinitionConflictError,
@@ -1089,6 +1093,224 @@ export class PostgresLoopStorage implements LoopStorageContract {
     });
   }
 
+  // ── loop bundles / revisions (hasna/apps#1724) ────────────────────────────
+
+  async setLoopBundleName(...args: M<"setLoopBundleName">["args"]): Promise<M<"setLoopBundleName">["result"]> {
+    const [loopId, bundleName, opts = {}] = args;
+    const updated = (opts.now ?? new Date()).toISOString();
+    return this.client.transaction(async (c) => {
+      const loop = await this.loadLoop(c, loopId);
+      if (!loop) throw new LoopNotFoundError(loopId);
+      if (loop.archivedAt) throw new LoopArchivedError(loop.name || loopId);
+      // The unique partial index enforces this too; checking first turns the
+      // 23505 into a coded conflict the API can map to 409 instead of a 500.
+      const holder = await c.get<{ id: string }>(
+        "SELECT id FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND bundle_name = $1",
+        [bundleName],
+      );
+      if (holder && holder.id !== loopId) throw new BundleNameTakenError(bundleName, holder.id);
+      await c.execute(
+        "UPDATE loops SET bundle_name=$1, updated_at=$2 WHERE tenant_id = open_loops_current_tenant_id() AND id=$3",
+        [bundleName, updated, loopId],
+      );
+      const after = await this.loadLoop(c, loopId);
+      if (!after) throw new Error(`loop not found after bundle-name claim: ${loopId}`);
+      return after;
+    });
+  }
+
+  async setLoopBundlePin(...args: M<"setLoopBundlePin">["args"]): Promise<M<"setLoopBundlePin">["result"]> {
+    const [loopId, version, opts = {}] = args;
+    const updated = (opts.now ?? new Date()).toISOString();
+    return this.client.transaction(async (c) => {
+      const loop = await this.loadLoop(c, loopId);
+      if (!loop) throw new LoopNotFoundError(loopId);
+      if (version !== null) {
+        const revision = await c.get<{ version: number }>(
+          "SELECT version FROM loop_revisions WHERE tenant_id = open_loops_current_tenant_id() AND loop_id=$1 AND version=$2",
+          [loopId, version],
+        );
+        if (!revision) throw new LoopVersionNotFoundError(loopId, version);
+      }
+      await c.execute(
+        "UPDATE loops SET bundle_pinned_version=$1, updated_at=$2 WHERE tenant_id = open_loops_current_tenant_id() AND id=$3",
+        [version, updated, loopId],
+      );
+      const after = await this.loadLoop(c, loopId);
+      if (!after) throw new Error(`loop not found after pin: ${loopId}`);
+      return after;
+    });
+  }
+
+  async findLoopByBundleName(...args: M<"findLoopByBundleName">["args"]): Promise<M<"findLoopByBundleName">["result"]> {
+    const [bundleName] = args;
+    const row = await this.client.get<LoopRow>(
+      "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND bundle_name = $1",
+      [bundleName],
+    );
+    return row ? rowToLoop(row) : undefined;
+  }
+
+  async createLoopRevision(...args: M<"createLoopRevision">["args"]): Promise<M<"createLoopRevision">["result"]> {
+    const [input, opts = {}] = args;
+    const createdAt = (opts.now ?? new Date()).toISOString();
+    return this.client.transaction(async (c) => {
+      // FOR UPDATE on the loop row serialises version allocation for this loop:
+      // two concurrent pushes queue here, get N and N+1, and neither can
+      // overwrite the other's object because the key carries the version.
+      const locked = await c.get<LoopRow>(
+        "SELECT * FROM loops WHERE tenant_id = open_loops_current_tenant_id() AND id = $1 FOR UPDATE",
+        [input.loopId],
+      );
+      if (!locked) throw new LoopNotFoundError(input.loopId);
+      const loop = rowToLoop(locked);
+      if (loop.archivedAt) throw new LoopArchivedError(loop.name || input.loopId);
+      const head = await c.get<{ version: number | null }>(
+        "SELECT MAX(version) AS version FROM loop_revisions WHERE tenant_id = open_loops_current_tenant_id() AND loop_id = $1",
+        [input.loopId],
+      );
+      const version = Number(head?.version ?? 0) + 1;
+      await c.execute(
+        `INSERT INTO loop_revisions (tenant_id, loop_id, version, bundle_name, bundle_digest, archive_sha256, archive_bytes,
+           storage_kind, storage_key, manifest_json, loop_json, carries_prompt, author, source_station, source_agent,
+           reason, rolled_back_from, created_at)
+         VALUES (open_loops_current_tenant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14, $15, $16, $17)`,
+        [
+          input.loopId,
+          version,
+          input.bundleName,
+          input.bundleDigest,
+          input.archiveSha256,
+          input.archiveBytes,
+          input.storageKind,
+          input.storageKeyFor?.(version) ?? input.storageKey ?? null,
+          JSON.stringify(input.manifest ?? {}),
+          JSON.stringify(input.loopJson),
+          input.carriesPrompt,
+          input.author,
+          input.sourceStation ?? null,
+          input.sourceAgent ?? null,
+          input.reason ?? null,
+          input.rolledBackFrom ?? null,
+          createdAt,
+        ],
+      );
+      await c.execute(
+        "UPDATE loops SET bundle_name=$1, updated_at=$2 WHERE tenant_id = open_loops_current_tenant_id() AND id=$3",
+        [input.bundleName, createdAt, input.loopId],
+      );
+      const row = await c.get<LoopRevisionRow>(
+        "SELECT * FROM loop_revisions WHERE tenant_id = open_loops_current_tenant_id() AND loop_id=$1 AND version=$2",
+        [input.loopId, version],
+      );
+      if (!row) throw new Error(`loop revision missing after insert: ${input.loopId}@${version}`);
+      return rowToLoopRevision(row);
+    });
+  }
+
+  async getLoopRevision(...args: M<"getLoopRevision">["args"]): Promise<M<"getLoopRevision">["result"]> {
+    const [loopId, version] = args;
+    const row = await this.client.get<LoopRevisionRow>(
+      "SELECT * FROM loop_revisions WHERE tenant_id = open_loops_current_tenant_id() AND loop_id=$1 AND version=$2",
+      [loopId, version],
+    );
+    return row ? rowToLoopRevision(row) : undefined;
+  }
+
+  async latestLoopRevision(...args: M<"latestLoopRevision">["args"]): Promise<M<"latestLoopRevision">["result"]> {
+    const [loopId] = args;
+    const row = await this.client.get<LoopRevisionRow>(
+      "SELECT * FROM loop_revisions WHERE tenant_id = open_loops_current_tenant_id() AND loop_id=$1 ORDER BY version DESC LIMIT 1",
+      [loopId],
+    );
+    return row ? rowToLoopRevision(row) : undefined;
+  }
+
+  async findLoopRevisionByDigest(...args: M<"findLoopRevisionByDigest">["args"]): Promise<M<"findLoopRevisionByDigest">["result"]> {
+    const [loopId, bundleDigest] = args;
+    const row = await this.client.get<LoopRevisionRow>(
+      "SELECT * FROM loop_revisions WHERE tenant_id = open_loops_current_tenant_id() AND loop_id=$1 AND bundle_digest=$2 ORDER BY version DESC LIMIT 1",
+      [loopId, bundleDigest],
+    );
+    return row ? rowToLoopRevision(row) : undefined;
+  }
+
+  async listLoopRevisions(...args: M<"listLoopRevisions">["args"]): Promise<M<"listLoopRevisions">["result"]> {
+    const [loopId, opts = {}] = args;
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    const rows = await this.client.many<LoopRevisionRow>(
+      "SELECT * FROM loop_revisions WHERE tenant_id = open_loops_current_tenant_id() AND loop_id=$1 ORDER BY version DESC LIMIT $2 OFFSET $3",
+      [loopId, limit, offset],
+    );
+    const total = await this.client.get<{ total: string | number }>(
+      "SELECT COUNT(*) AS total FROM loop_revisions WHERE tenant_id = open_loops_current_tenant_id() AND loop_id=$1",
+      [loopId],
+    );
+    return { revisions: rows.map(rowToLoopRevision), total: Number(total?.total ?? 0) };
+  }
+
+  async listLoopBundles(...args: M<"listLoopBundles">["args"]): Promise<M<"listLoopBundles">["result"]> {
+    const [opts = {}] = args;
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+    const offset = Math.max(opts.offset ?? 0, 0);
+    // The head revision per bundle comes from a lateral join rather than N+1
+    // round trips: `sync --for-machine` on a busy runner asks for the whole
+    // index at once.
+    const rows = await this.client.many<{
+      bundle_name: string;
+      loop_id: string;
+      loop_name: string;
+      bundle_pinned_version: number | null;
+      machine_json: string | null;
+      loop_updated_at: string;
+      version: number | null;
+      bundle_digest: string | null;
+      carries_prompt: boolean | null;
+      created_at: string | null;
+    }>(
+      `SELECT l.bundle_name, l.id AS loop_id, l.name AS loop_name, l.bundle_pinned_version,
+              l.machine_json, l.updated_at AS loop_updated_at,
+              head.version, head.bundle_digest, head.carries_prompt, head.created_at
+         FROM loops l
+         LEFT JOIN LATERAL (
+           SELECT version, bundle_digest, carries_prompt, created_at
+             FROM loop_revisions r
+            WHERE r.tenant_id = open_loops_current_tenant_id() AND r.loop_id = l.id
+            ORDER BY r.version DESC LIMIT 1
+         ) head ON TRUE
+        WHERE l.tenant_id = open_loops_current_tenant_id()
+          AND l.bundle_name IS NOT NULL
+          AND ($1::text IS NULL OR l.machine_json->>'id' = $1)
+        ORDER BY l.bundle_name ASC
+        LIMIT $2 OFFSET $3`,
+      [opts.machine ?? null, limit, offset],
+    );
+    const total = await this.client.get<{ total: string | number }>(
+      `SELECT COUNT(*) AS total FROM loops
+        WHERE tenant_id = open_loops_current_tenant_id() AND bundle_name IS NOT NULL
+          AND ($1::text IS NULL OR machine_json->>'id' = $1)`,
+      [opts.machine ?? null],
+    );
+    return {
+      bundles: rows.map((row) => {
+        const machine = row.machine_json ? (JSON.parse(row.machine_json) as { id?: string }) : undefined;
+        return {
+          bundleName: row.bundle_name,
+          loopId: row.loop_id,
+          loopName: row.loop_name,
+          latestVersion: row.version ?? 0,
+          ...(row.bundle_pinned_version === null ? {} : { pinnedVersion: row.bundle_pinned_version }),
+          ...(row.bundle_digest === null ? {} : { bundleDigest: row.bundle_digest }),
+          carriesPrompt: row.carries_prompt === true,
+          ...(machine?.id === undefined ? {} : { machineId: machine.id }),
+          updatedAt: row.created_at ?? row.loop_updated_at,
+        };
+      }),
+      total: Number(total?.total ?? 0),
+    };
+  }
+
   async renameLoop(...args: M<"renameLoop">["args"]): Promise<M<"renameLoop">["result"]> {
     const [id, name, opts = {}] = args;
     const current = await this.getLoop(id);
@@ -1835,8 +2057,8 @@ export class PostgresLoopStorage implements LoopStorageContract {
     const receipt = normalizeRunReceipt(input, { now: opts.now, run, loop, existing });
     await this.client.execute(
       `INSERT INTO run_receipts (run_id, loop_id, machine_json, repo, task_ids_json, knowledge_ids_json, digest_id,
-        started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, created_at, updated_at, tenant_id)
-       VALUES ($1,$2,$3::jsonb,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,open_loops_current_tenant_id())
+        started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, bundle_json, created_at, updated_at, tenant_id)
+       VALUES ($1,$2,$3::jsonb,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16,open_loops_current_tenant_id())
        ON CONFLICT(tenant_id,run_id) DO UPDATE SET
         loop_id=EXCLUDED.loop_id,
         machine_json=EXCLUDED.machine_json,
@@ -1850,6 +2072,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
         exit_code=EXCLUDED.exit_code,
         summary_json=EXCLUDED.summary_json,
         evidence_paths_json=EXCLUDED.evidence_paths_json,
+        bundle_json=EXCLUDED.bundle_json,
         updated_at=EXCLUDED.updated_at`,
       [
         receipt.run_id,
@@ -1865,6 +2088,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
         receipt.exit_code,
         JSON.stringify(receipt.summary),
         JSON.stringify(receipt.evidence_paths),
+        receipt.bundle ? JSON.stringify(receipt.bundle) : null,
         receipt.created_at,
         receipt.updated_at,
       ],

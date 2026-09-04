@@ -3815,6 +3815,430 @@
           }
         }
       }
+    },
+    "/v1/loops/{id}/versions": {
+      "get": {
+        "operationId": "listLoopVersions",
+        "summary": "List a loop's published bundle versions",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Loop id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "versions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopVersionListResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.versions.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      },
+      "post": {
+        "operationId": "createLoopVersion",
+        "summary": "Publish a bundle as the next immutable version",
+        "description": "multipart/form-data with exactly two parts: 'manifest' (manifest.json text) and 'bundle' (bundle.tar.zst). An unchanged digest returns 200 with created=false instead of allocating a duplicate version.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Loop id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "adopt",
+            "in": "query",
+            "required": false,
+            "description": "Re-home a bundle whose loop.json names a different loop.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "manifest",
+                  "bundle"
+                ],
+                "properties": {
+                  "manifest": {
+                    "type": "string"
+                  },
+                  "bundle": {
+                    "type": "string",
+                    "format": "binary"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "already published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopVersionCreatedResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopVersionCreatedResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.versions.create",
+        "x-required-scopes": [
+          "loops:write",
+          "loops:bundle"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/loops/{id}/versions/{version}": {
+      "get": {
+        "operationId": "getLoopVersion",
+        "summary": "Read one bundle version's manifest and definition",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Loop id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Version integer, or the literal 'latest'.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopVersionResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.versions.get",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/loops/{id}/versions/{version}/bundle": {
+      "get": {
+        "operationId": "downloadLoopVersionBundle",
+        "summary": "Download a version's bundle.tar.zst",
+        "description": "The server streams the object itself. No presigned URL is ever returned: these bytes can contain an agent prompt.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Loop id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "description": "Version integer, or the literal 'latest'.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "bundle archive",
+            "content": {
+              "application/zstd": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.versions.bundle",
+        "x-required-scopes": [
+          "loops:bundle"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
+    },
+    "/v1/loops/{id}/rollback": {
+      "post": {
+        "operationId": "rollbackLoop",
+        "summary": "Apply an earlier version and append a new revision",
+        "description": "Forward-only: nothing in the ledger is mutated or deleted.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Loop id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopRollbackInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "rollback result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopRollbackResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.rollback",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/loops/{id}/pin": {
+      "post": {
+        "operationId": "pinLoopVersion",
+        "summary": "Pin a loop to a bundle version, or unpin it",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "Loop id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoopPinInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "pin state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoopPinResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.pin",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write"
+      }
+    },
+    "/v1/bundles": {
+      "get": {
+        "operationId": "listBundles",
+        "summary": "Tenant-wide bundle index",
+        "parameters": [
+          {
+            "name": "machine",
+            "in": "query",
+            "required": false,
+            "description": "Filter to loops assigned to this machine; what 'loops bundle sync --for-machine' calls.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "bundles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleListResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "loops.bundles.list",
+        "x-required-scopes": [
+          "loops:read"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "member",
+          "readonly",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "read"
+      }
     }
   },
   "components": {
@@ -5907,6 +6331,400 @@
         "required": [
           "id"
         ]
+      },
+      "BundleManifestFile": {
+        "type": "object",
+        "required": [
+          "path",
+          "sha256",
+          "mode",
+          "size"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "POSIX path relative to the bundle root; no leading slash, no '..' segment."
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "integer",
+            "enum": [
+              384,
+              448
+            ],
+            "description": "384 = 0o600 for data, 448 = 0o700 for scripts/**."
+          },
+          "size": {
+            "type": "integer"
+          }
+        }
+      },
+      "BundleManifest": {
+        "type": "object",
+        "required": [
+          "schema",
+          "version",
+          "loopId",
+          "name",
+          "bundleDigest",
+          "createdAt",
+          "files",
+          "source"
+        ],
+        "properties": {
+          "schema": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "description": "0 is a never-pushed local draft; >= 1 is a server-allocated version."
+          },
+          "loopId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "bundleDigest": {
+            "type": "string",
+            "description": "sha256 over the canonical (mode, sha256, size, path) lines. Independent of archive framing."
+          },
+          "archiveSha256": {
+            "type": "string",
+            "description": "sha256 of bundle.tar.zst - the transport identity."
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BundleManifestFile"
+            }
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "station": {
+                "type": "string"
+              },
+              "agent": {
+                "type": "string"
+              },
+              "packageVersion": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          },
+          "carriesPrompt": {
+            "type": "boolean",
+            "description": "Server-derived: true when loop.json carries an agent prompt. Gates the owner-scoped download."
+          }
+        }
+      },
+      "LoopRevision": {
+        "type": "object",
+        "required": [
+          "version",
+          "bundleName",
+          "bundleDigest",
+          "createdAt"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "bundleName": {
+            "type": "string"
+          },
+          "bundleDigest": {
+            "type": "string"
+          },
+          "archiveSha256": {
+            "type": "string"
+          },
+          "archiveBytes": {
+            "type": "integer"
+          },
+          "fileCount": {
+            "type": "integer"
+          },
+          "carriesPrompt": {
+            "type": "boolean"
+          },
+          "author": {
+            "type": "string"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "station": {
+                "type": "string",
+                "nullable": true
+              },
+              "agent": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "rolledBackFrom": {
+            "type": "integer",
+            "nullable": true
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "db",
+              "s3"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "complete",
+              "incomplete"
+            ],
+            "description": "incomplete means the row exists but its archive object does not."
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        }
+      },
+      "LoopVersionListResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "versions"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "loopId": {
+            "type": "string"
+          },
+          "bundleName": {
+            "type": "string",
+            "nullable": true
+          },
+          "pinnedVersion": {
+            "type": "integer",
+            "nullable": true
+          },
+          "latestVersion": {
+            "type": "integer",
+            "nullable": true
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoopRevision"
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "LoopVersionResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "revision"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "loopId": {
+            "type": "string"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/LoopRevision"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/BundleManifest"
+          },
+          "loop": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The bundled loop.json. The agent target's prompt is present only for a key carrying loops:bundle."
+          }
+        }
+      },
+      "LoopVersionCreatedResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "version"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "false when an identical digest was already published (idempotent re-push)."
+          },
+          "version": {
+            "type": "integer"
+          },
+          "bundleName": {
+            "type": "string"
+          },
+          "bundleDigest": {
+            "type": "string"
+          },
+          "storageKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "carriesPrompt": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LoopRollbackInput": {
+        "type": "object",
+        "required": [
+          "version"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LoopRollbackResponse": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "applied": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "rolledBackFrom": {
+            "type": "integer"
+          },
+          "runningRuns": {
+            "type": "integer"
+          },
+          "diff": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "loop": {
+            "type": "object",
+            "additionalProperties": true,
+            "nullable": true
+          }
+        }
+      },
+      "LoopPinInput": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "nullable": true,
+            "description": "null unpins and follows latest."
+          }
+        }
+      },
+      "LoopPinResponse": {
+        "type": "object",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "pinnedVersion": {
+            "type": "integer",
+            "nullable": true
+          }
+        }
+      },
+      "BundleSummary": {
+        "type": "object",
+        "required": [
+          "bundleName",
+          "loopId"
+        ],
+        "properties": {
+          "bundleName": {
+            "type": "string"
+          },
+          "loopId": {
+            "type": "string"
+          },
+          "loopName": {
+            "type": "string"
+          },
+          "latestVersion": {
+            "type": "integer"
+          },
+          "pinnedVersion": {
+            "type": "integer"
+          },
+          "bundleDigest": {
+            "type": "string"
+          },
+          "carriesPrompt": {
+            "type": "boolean"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        }
+      },
+      "BundleListResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "bundles"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "bundles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BundleSummary"
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
       }
     },
     "securitySchemes": {

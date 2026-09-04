@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { boundedExcerpt, summarizeOutput } from "./run-envelope.js";
-import type { Loop, LoopRun, RunReceipt, RunReceiptMachine, RunReceiptSummary, WriteRunReceiptInput } from "../types.js";
+import type { Loop, LoopRun, RunReceipt, RunReceiptBundle, RunReceiptMachine, RunReceiptSummary, WriteRunReceiptInput } from "../types.js";
 
 export const RUN_RECEIPT_SUMMARY_TEXT_CHARS = 4096;
 export const RUN_RECEIPT_MAX_IDS = 100;
@@ -114,6 +114,7 @@ export function normalizeRunReceipt(input: WriteRunReceiptInput, opts: Normalize
       label: "evidence_paths",
       itemMax: RUN_RECEIPT_MAX_PATH_CHARS,
     }),
+    bundle: normalizeReceiptBundle(input.bundle ?? opts.existing?.bundle ?? null),
   };
   return {
     ...normalized,
@@ -121,6 +122,23 @@ export function normalizeRunReceipt(input: WriteRunReceiptInput, opts: Normalize
     created_at: opts.existing?.created_at ?? now,
     updated_at: now,
   };
+}
+
+/**
+ * Accept a bundle stamp only when all three fields are well-formed.
+ *
+ * A partially-filled stamp would enter the receipt digest and make the receipt
+ * look like it proved something it did not; `null` is the honest answer for an
+ * unbundled loop.
+ */
+function normalizeReceiptBundle(value: RunReceiptBundle | null | undefined): RunReceiptBundle | null {
+  if (!value || typeof value !== "object") return null;
+  const name = typeof value.name === "string" ? value.name.trim() : "";
+  const digest = typeof value.digest === "string" ? value.digest.trim() : "";
+  const version = value.version;
+  if (!name || !/^sha256:[0-9a-f]{64}$/.test(digest)) return null;
+  if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 0) return null;
+  return { name: name.slice(0, 128), version, digest };
 }
 
 function targetRepo(loop: Loop | undefined): string | undefined {

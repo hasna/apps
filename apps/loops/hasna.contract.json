@@ -56,6 +56,14 @@
           "command": "bun test src/api/index.test.ts src/serve/index.test.ts",
           "status": "passed",
           "summary": "Public readiness reports stable storage, auth, and migration codes without credential details."
+        },
+        {
+          "id": "bundle-scope-negative",
+          "kind": "auth",
+          "required": true,
+          "command": "bun test src/api/bundles.test.ts src/cli/bundle.test.ts",
+          "status": "passed",
+          "summary": "Bundle routes fail closed without the loops:bundle scope, and no agent prompt bytes reach a lower-scoped caller."
         }
       ]
     },
@@ -117,7 +125,13 @@
         "healthCheckPath": "/ready",
         "requiresAlarmActions": true,
         "requiresKmsEncryptedLogs": true,
-        "requiresSecretRotation": true
+        "requiresSecretRotation": true,
+        "artifactBucketEnv": "HASNA_LOOPS_ARTIFACTS_BUCKET"
+      },
+      "bundles": {
+        "keyScheme": "loops/<tenant>/<bundle-name>/<version>/{bundle.tar.zst,manifest.json} plus a mutable loops/<tenant>/<bundle-name>/latest.json pointer",
+        "scope": "loops:bundle",
+        "note": "Immutable loop@version bundles. Version objects are never overwritten and no presigned URL is ever handed to a client: every byte is served through the API under API-key auth, because a bundle can carry an agent prompt. With no bucket configured the artifacts fall back to a local directory under the Loops data home, for installs with no object store."
       }
     },
     "client": {

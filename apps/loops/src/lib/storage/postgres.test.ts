@@ -56,6 +56,7 @@ describe("Postgres storage migrations", () => {
       "0014_loops_identity_aliases",
       "0014_loop_expires_after_runs",
       "0015_run_receipts_loop_cascade",
+      "0016_loop_revisions",
     ]);
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(migration.checksum).toBe(checksumStorageSql(migration.sql));
@@ -71,6 +72,21 @@ describe("Postgres storage migrations", () => {
     expect(combined).toContain("idx_runner_leases_active_loop_run");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS audit_events");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS run_receipts");
+    expect(combined).toContain("CREATE TABLE loop_revisions");
+    expect(combined).toContain("loop_revisions_name_version_key");
+    // The revision ledger is append-only at the PRIVILEGE level, not by
+    // convention: the runtime role must never be able to rewrite history, so a
+    // future migration adding UPDATE/DELETE here has to fail this assertion
+    // before it reaches a database.
+    const revisions = POSTGRES_STORAGE_MIGRATIONS.find((migration) => migration.id === "0016_loop_revisions")!.sql;
+    expect(revisions).toContain("GRANT SELECT, INSERT ON loop_revisions TO open_loops_runtime;");
+    expect(revisions).not.toMatch(/GRANT[^;]*UPDATE[^;]*ON loop_revisions/);
+    expect(revisions).not.toMatch(/GRANT[^;]*DELETE[^;]*ON loop_revisions/);
+    // Tenant isolation is asserted here as well as in the live-Postgres suite,
+    // so a table added without a policy cannot ship on a green unit run.
+    expect(revisions).toContain("ALTER TABLE loop_revisions ENABLE ROW LEVEL SECURITY;");
+    expect(revisions).toContain("ALTER TABLE loop_revisions FORCE ROW LEVEL SECURITY;");
+    expect(revisions).toContain("CREATE POLICY tenant_isolation ON loop_revisions");
   });
 
   test("released migration SQL is immutable — pinned checksums never change", () => {
@@ -102,6 +118,7 @@ describe("Postgres storage migrations", () => {
       "0014_loops_identity_aliases": "sha256:9e73cf54d084709bf08f4a74dc1d5900a647cd574acb958503e5b50b8122e792",
       "0014_loop_expires_after_runs": "sha256:4c60d6c900c2f3146bd20da3bc3665a0a40e1b7e145433d8944d663da57460d7",
       "0015_run_receipts_loop_cascade": "sha256:ac4ebc03cdf15383a7fd2f6ad12253cee4ddf68011b9d65c22e15d85693d3492",
+      "0016_loop_revisions": "sha256:c5ef0f1fbc0f61de7736a4af1a558c993f9d916bc0ee7623ba0d5709196d754e",
     };
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(`${migration.id} ${migration.checksum}`).toBe(`${migration.id} ${pinned[migration.id]}`);

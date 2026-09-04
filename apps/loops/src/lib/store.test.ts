@@ -2549,6 +2549,99 @@ exit 0
     }
   });
 
+  test("loop_revisions is append-only: the ledger refuses an UPDATE", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-revision-ledger-"));
+    const store = new Store(join(root, "loops.db"));
+    try {
+      const loop = store.createLoop({
+        name: "demo",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "scripts/run.sh" },
+      });
+      const revision = store.createLoopRevision({
+        loopId: loop.id,
+        bundleName: "demo",
+        bundleDigest: `sha256:${"a".repeat(64)}`,
+        archiveSha256: "b".repeat(64),
+        archiveBytes: 512,
+        storageKind: "s3",
+        storageKey: "loops/t/demo/1/bundle.tar.zst",
+        manifest: { schema: "hasna.loop.bundle-manifest.v1" },
+        loopJson: { schema: "hasna.loop.bundle.v1", id: loop.id, name: "demo" },
+        carriesPrompt: false,
+        author: "principal-test",
+      });
+      expect(revision.version).toBe(1);
+      // sqlite has no roles, so append-only is a trigger here; the Postgres
+      // mirror revokes UPDATE/DELETE from the runtime role instead. Either way
+      // "the ledger is never rewritten" is a property of the database.
+      expect(() =>
+        store["db"].query("UPDATE loop_revisions SET reason = ? WHERE loop_id = ?").run("rewritten", loop.id),
+      ).toThrow(/append-only/);
+      // A second revision allocates the next version rather than replacing one.
+      const second = store.createLoopRevision({
+        loopId: loop.id,
+        bundleName: "demo",
+        bundleDigest: `sha256:${"c".repeat(64)}`,
+        archiveSha256: "d".repeat(64),
+        archiveBytes: 600,
+        storageKind: "s3",
+        storageKey: "loops/t/demo/2/bundle.tar.zst",
+        manifest: {},
+        loopJson: { schema: "hasna.loop.bundle.v1", id: loop.id, name: "demo" },
+        carriesPrompt: false,
+        author: "principal-test",
+      });
+      expect(second.version).toBe(2);
+      expect(store.listLoopRevisions(loop.id).total).toBe(2);
+      expect(store.findLoopRevisionByDigest(loop.id, revision.bundleDigest)?.version).toBe(1);
+      expect(store.findLoopByBundleName("demo")?.id).toBe(loop.id);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a bundle name may belong to exactly one loop", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-bundle-name-"));
+    const store = new Store(join(root, "loops.db"));
+    try {
+      const first = store.createLoop({
+        name: "demo",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      const second = store.createLoop({
+        name: "demo",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      store.setLoopBundleName(first.id, "demo");
+      // Loop names are NOT unique — `loops hygiene duplicates` exists because
+      // duplicates do — but a bundle name is an object-store prefix and a CLI
+      // argument, so the second loop must be refused rather than take it over.
+      expect(() => store.setLoopBundleName(second.id, "demo")).toThrow(/already belongs to loop/);
+      expect(store.setLoopBundleName(first.id, "demo").bundleName).toBe("demo");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("pinning a version that does not exist is refused", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-bundle-pin-"));
+    const store = new Store(join(root, "loops.db"));
+    try {
+      const loop = store.createLoop({
+        name: "demo",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      expect(() => store.setLoopBundlePin(loop.id, 3)).toThrow(/no bundle version 3/);
+      expect(store.setLoopBundlePin(loop.id, null).bundlePinnedVersion).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
   test("stamps gated migrations once and records the schema user_version", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-migration-ledger-"));
     const dbFile = join(root, "loops.db");
@@ -2575,6 +2668,7 @@ exit 0
         "0014_run_defer_ceiling_and_step_process_fingerprint",
         "0015_loop_mutation_contract",
         "0016_loop_expires_after_runs",
+        "0017_loop_revisions",
       ]);
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
       // 0011/0012/0014 are additive and deliberately do NOT bump

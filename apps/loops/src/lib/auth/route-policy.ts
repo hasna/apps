@@ -42,6 +42,17 @@ export const ROUTE_POLICIES: readonly RoutePolicy[] = Object.freeze([
   policy("loops.mutate", "POST", "/v1/loops/{id}/mutations", /^\/v1\/loops\/[^/]+\/mutations$/, ["loops:write"], WRITE_ROLES, ["api_key", "service"], "write"),
   policy("loopMutations.get", "GET", "/v1/loop-mutations/{operationId}/{stepId}", /^\/v1\/loop-mutations\/[^/]+\/[^/]+$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
   policy("loops.delete", "DELETE", "/v1/loops/{id}", /^\/v1\/loops\/[^/]+$/, ["loops:delete"], ADMIN_ROLES, ["api_key", "service"], "destructive"),
+  // Bundles (hasna/apps#1724). `machine` tokens are excluded from EVERY row
+  // below, deliberately: a runner materialises through `sync --for-machine`
+  // with its own service key, and a machine token must never be able to reach
+  // a route that can return an agent prompt.
+  policy("loops.versions.list", "GET", "/v1/loops/{id}/versions", /^\/v1\/loops\/[^/]+\/versions$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
+  policy("loops.versions.create", "POST", "/v1/loops/{id}/versions", /^\/v1\/loops\/[^/]+\/versions$/, ["loops:write", "loops:bundle"], WRITE_ROLES, ["api_key", "service"], "write"),
+  policy("loops.versions.bundle", "GET", "/v1/loops/{id}/versions/{version}/bundle", /^\/v1\/loops\/[^/]+\/versions\/[^/]+\/bundle$/, ["loops:bundle"], ADMIN_ROLES, ["api_key", "service"], "read"),
+  policy("loops.versions.get", "GET", "/v1/loops/{id}/versions/{version}", /^\/v1\/loops\/[^/]+\/versions\/[^/]+$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
+  policy("loops.rollback", "POST", "/v1/loops/{id}/rollback", /^\/v1\/loops\/[^/]+\/rollback$/, ["loops:write"], ADMIN_ROLES, ["api_key", "service"], "write"),
+  policy("loops.pin", "POST", "/v1/loops/{id}/pin", /^\/v1\/loops\/[^/]+\/pin$/, ["loops:write"], WRITE_ROLES, ["api_key", "service"], "write"),
+  policy("loops.bundles.list", "GET", "/v1/bundles", /^\/v1\/bundles$/, ["loops:read"], READ_ROLES, ["api_key", "service"], "read"),
   policy("loops.archive", "POST", "/v1/loops/{id}/archive", /^\/v1\/loops\/[^/]+\/archive$/, ["loops:write"], WRITE_ROLES, ["api_key", "service"], "write"),
   policy("loops.unarchive", "POST", "/v1/loops/{id}/unarchive", /^\/v1\/loops\/[^/]+\/unarchive$/, ["loops:write"], WRITE_ROLES, ["api_key", "service"], "write"),
   policy("loops.rename", "POST", "/v1/loops/{id}/rename", /^\/v1\/loops\/[^/]+\/rename$/, ["loops:write"], WRITE_ROLES, ["api_key", "service"], "write"),

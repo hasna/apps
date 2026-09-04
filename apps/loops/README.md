@@ -1025,6 +1025,126 @@ Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr ar
 
 `loops run-now` is connection-aware. Against the local store it claims and executes the run inline (`runNow.source` is `manual`/`ad_hoc`, and the recorded run's status sets the exit code). Against the hosted API (`HASNA_LOOPS_API_URL` + `HASNA_LOOPS_API_KEY`) it schedules the loop due now on the control plane (`runNow.source: "hosted"`, exit 0 on a successful schedule) and a bound `loops-runner` claims and executes it on its next poll — the client never runs the loop's target while connected to the hosted API.
 
+## Bundles
+
+A loop lives in the database — that row is the runtime authority and always
+will be. But a loop may also carry *scripts*, and a row cannot. A **bundle** is
+the portable, versioned representation of a loop: a directory of files on disk,
+and an immutable `loop@version` artifact in object storage.
+
+```
+~/.hasna/loops/loops/<bundle-name>/
+├── loop.json            the definition                 0600  required
+├── manifest.json        per-file sha-256 + digest      0600  required
+├── scripts/             executables the target runs    0700  optional
+├── README.md            human notes                    0600  optional
+└── .loops-bundle.json   pull marker (never uploaded)   0600
+```
+
+Modes are part of the contract, not of your umask: `scripts/**` is `0700`,
+everything else is `0600`. `push` normalises anything else to those two values
+and records the normalised mode in the manifest, so a bundle's identity cannot
+change because two machines had different umasks.
+
+### Two digests
+
+- **`bundleDigest`** names the CONTENT: `sha256` over the sorted
+  `<mode> <sha256> <size> <path>` lines. It is independent of tar padding,
+  mtimes and compression level, so re-packing an unchanged tree always produces
+  the same digest — which is what makes a re-push idempotent.
+- **`archiveSha256`** names the BYTES of `bundle.tar.zst` on the wire.
+
+### Commands
+
+```bash
+loops bundle init <name> [--from-loop <idOrName>] [--template command|agent] [--force]
+loops bundle push <name> [--reason <text>] [--as <bundle-name>] [--adopt] [--dry-run]
+loops bundle pull <name> [--version <n>|latest] [--allow-dirty]
+loops bundle versions <name> [--limit <n>]
+loops bundle pin <name> <version|--none>
+loops bundle status [<name>...]                 # local drift census, no network
+loops bundle diff <name> [--version <n>]        # paths only, never contents
+loops bundle sync [<name>...] [--dry-run] [--for-machine [<id>]] [--prefer local|remote]
+loops bundle materialize [<name>...] [--all] [--limit <n>] [--dry-run]
+```
+
+`loops init`, `loops versions`, `loops pin`, `loops sync` and
+`loops materialize` are top-level aliases. `loops push <name>` and
+`loops pull <name>` dispatch to the bundle verbs **when a positional bundle name
+is supplied**; with no positional they keep their existing meaning (the
+id-preserving control-plane row backfill) and print a deprecation notice
+pointing at `loops migrate {push,pull}`.
+
+Exit codes: `0` success (or a `--dry-run` plan), `1` generic failure, `2`
+integrity refusal (digest mismatch, unsafe archive entry, a credential found in
+the tree, drift refused without `--allow-dirty`), `3` conflict (local and remote
+both moved, name taken, pin violation), `4` not found, `5` scope refusal, `78`
+credentials missing.
+
+### Versions are immutable
+
+`POST /v1/loops/{id}/versions` allocates the version inside the same transaction
+that inserts the `loop_revisions` row, then writes
+`loops/<tenant>/<name>/<version>/{bundle.tar.zst,manifest.json}` and refreshes
+the `latest.json` pointer. A version object is never overwritten. Re-pushing an
+unchanged tree returns `200 { created: false }` with the existing version rather
+than allocating a duplicate.
+
+`POST /v1/loops/{id}/rollback` is **forward-only**: it applies an earlier
+version's definition to the row and APPENDS a new revision carrying that
+version's digest and storage key, with `rolledBackFrom` set. `loop_revisions` is
+append-only at the privilege level — the runtime role has `SELECT` and `INSERT`
+and no `UPDATE` or `DELETE` — so going back is itself an event in the history.
+
+### Agent prompts
+
+`publicTarget()` strips `prompt`/`promptSource` from every agent target on read,
+and that does not change. The bundle is therefore the only round trip for an
+agent prompt, and every surface that can materialise one requires the
+**`loops:bundle`** scope: the download route, and the inline `loop` in
+`GET /v1/loops/{id}/versions/{version}`. `machine` tokens are excluded from the
+bundle routes entirely. `carriesPrompt` is derived server-side from the uploaded
+`loop.json`, so a client cannot mislabel a prompt-bearing bundle as public.
+
+No presigned URL is ever handed to a client: the server streams the object
+itself, because a presigned URL is a bearer credential for whoever holds the
+link.
+
+### Credential scan
+
+`push` runs the write-path secret scrubber over every text file in the tree and
+refuses (exit 2) if scrubbing would change any byte, naming the path and the
+byte offset — never the value. There is deliberately no `--allow-secrets`: the
+fix is to remove or externalise the file. The server repeats the scan, because
+the uploader may be an old CLI or a script.
+
+### The executor
+
+For a loop with a bundle (`bundle_name` set), and only for such a loop:
+
+1. The bundle root becomes the default cwd; an explicit `target.cwd` still wins.
+2. A relative command resolves against the bundle root, not `$PWD`. A bare name
+   with no slash still goes through PATH, so `bash`, `bun` and `gh` work. A path
+   that escapes the bundle after `realpath` fails the run with
+   `EXECUTOR_BUNDLE_ESCAPE` and spawns nothing.
+3. The tree's digest is verified before every run. Drift fails the run with
+   `BUNDLE_DRIFT`, naming the changed paths and nothing else. The only bypass is
+   `loops run-now <loop> --allow-dirty`, which applies to that one run; the
+   daemon and the runner never set it, so scheduled execution always verifies.
+4. A loop whose bundle directory is missing fails with `BUNDLE_MISSING` and is
+   NOT silently resolved through PATH.
+
+Run receipts carry `bundle: { name, version, digest }` for bundled runs, so a
+receipt answers "what code ran here?" long after the local tree has moved on.
+
+### Storage configuration
+
+`HASNA_LOOPS_ARTIFACTS_BUCKET` names the object store. With no bucket
+configured, artifacts fall back to a local directory under the Loops data home —
+which is what makes `push`/`pull`/`rollback` work for an install with no object
+store. No selector variable is introduced: the presence of the bucket name is
+the configuration.
+
 ## Health And Hygiene
 
 ```bash
