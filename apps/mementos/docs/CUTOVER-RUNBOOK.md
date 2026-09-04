@@ -132,7 +132,7 @@ PORT=19428
 
 The public listener should be behind the deployment's TLS/reverse-proxy layer;
 the built-in server is HTTP. `MEMENTOS_CORS_ORIGIN` should name the one browser
-origin allowed to use the dashboard/API.
+origin allowed to use the API.
 
 Database URL precedence is `HASNA_MEMENTOS_DATABASE_URL`, then
 `MEMENTOS_DATABASE_URL`. The postgresql backend is selected by the URL's

@@ -171,9 +171,9 @@ export function apiKeyAuthEnabled(): boolean {
  * Explicit operator opt-in for unauthenticated writes.
  *
  * The fail-closed default refuses state-changing requests when no API key is
- * configured; a local/dashboard deployment that deliberately runs without a
- * key sets `MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES=1` to restore the old
- * allow-all behaviour for mutations. Absence is never treated as consent.
+ * configured; a local deployment that deliberately runs without a key sets
+ * `MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES=1` to restore the old allow-all
+ * behaviour for mutations. Absence is never treated as consent.
  */
 function unauthenticatedWritesAllowed(): boolean {
   const raw = process.env["MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES"]?.trim().toLowerCase();

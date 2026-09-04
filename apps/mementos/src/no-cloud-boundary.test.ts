@@ -13,7 +13,7 @@ function readIfExists(path: string): string {
 function sourceFiles(dir: string): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (["node_modules", "dist", "dashboard", ".git"].includes(entry.name)) continue;
+    if (["node_modules", "dist", ".git"].includes(entry.name)) continue;
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
       files.push(...sourceFiles(fullPath));

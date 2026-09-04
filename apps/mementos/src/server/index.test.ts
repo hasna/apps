@@ -913,7 +913,7 @@ describe("GET /api/activity", () => {
 describe("path traversal prevention", () => {
   test("traversal attempt does not return /etc/passwd contents", async () => {
     // URL parser normalizes ../../ before reaching the handler.
-    // The response may be 404 (no dashboard) or 200 (SPA index.html) but must NOT be /etc/passwd.
+    // The response is 404 but must NOT be /etc/passwd.
     const res = await fetch(`${BASE}/../../etc/passwd`);
     const text = await res.text();
     // /etc/passwd always starts with "root:" — if we see that, traversal succeeded
