@@ -345,7 +345,15 @@ const HOSTED_STUCK_WORKFLOW_LIMIT = 100;
 const HOSTED_STUCK_EVENT_LIMIT = 512;
 
 async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
-  const segments = ctx.url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  // Decode before routing: a malformed segment (bad percent-encoding) must be
+  // a client error, never a crash in the shared entry (every route shares this
+  // decode, so one %zz id used to 500 all routes, DELETE included).
+  let segments: string[];
+  try {
+    segments = ctx.url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  } catch {
+    return fail("invalid_path_segment", 422);
+  }
   if (segments[0] !== "v1") return fail("not_found", 404);
   if (ctx.request.method === "GET" && segments.length === 1) return ok({ service: "loops-api", version: "v1" });
   if (ctx.request.method === "GET" && segments[1] === "status") return Response.json(apiStatus());
@@ -2372,6 +2380,69 @@ function apiError(code: string, status: number): PublicApiError {
   return new PublicApiError(code, status);
 }
 
+/**
+ * Map a {@link CodedError} to its public failure response by the stable
+ * machine-readable `.code`. The dist layout bundles api/index.ts and the
+ * storage backends (sqlite, postgres) as separate bun bundles, so each carries
+ * its own copy of the CodedError classes: a `LoopNotFoundError` thrown by the
+ * storage bundle is NOT an instance of the api bundle's class, and the
+ * `instanceof` chain in {@link errorResponse} alone turned every
+ * not-found/conflict from the storage-backed write routes (DELETE included)
+ * into a 500 `internal_error`. CodedError codes survive bundling unchanged, so
+ * keying on `.code` maps storage-sourced errors to the same 404/409/422 the
+ * api-bundle errors already returned. It is a last-resort fallback: `instanceof`
+ * still runs first so same-bundle (and forged-prototype) errors keep their
+ * existing mapping.
+ */
+function codedErrorFailure(error: unknown): Response | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  // Snapshot the primitive fields exactly once inside a guard, mirroring
+  // publicValidationDetails: a caller-controlled throwing getter must fail
+  // closed (undefined -> internal_error), never crash the response path or
+  // leak getter metadata into an error response.
+  let code: unknown;
+  let reason: unknown;
+  try {
+    const candidate = error as Record<string, unknown>;
+    code = candidate.code;
+    reason = candidate.reason;
+  } catch {
+    return undefined;
+  }
+  if (typeof code !== "string") return undefined;
+  const safeReason = typeof reason === "string" ? reason : undefined;
+  switch (code) {
+    case "LOOP_NOT_FOUND":
+      return fail("loop_not_found", 404);
+    case "LOOP_ARCHIVED":
+      return fail("loop_archived", 409);
+    case "LOOP_ADVANCEMENT_CONFLICT":
+      return fail("loop_advancement_conflict", 409);
+    case "LOOP_MUTATION_CONFLICT":
+      return safeReason ? fail(safeReason, 409) : undefined;
+    case "AMBIGUOUS_NAME":
+      return fail("ambiguous_name", 409);
+    case "RUN_FINALIZATION_CONFLICT":
+      return safeReason ? fail(safeReason, 409) : undefined;
+    case "VALIDATION_ERROR": {
+      const details = validationErrorPublicDetails(error as ValidationError);
+      return fail("validation_failed", 422, details ? { details } : undefined);
+    }
+    case "WORKFLOW_RUN_PROVENANCE_MISSING":
+      return fail("workflow_run_provenance_missing", 409);
+    case "WORKFLOW_RUN_DEFINITION_CONFLICT":
+      return fail("workflow_run_definition_conflict", 409);
+    case "WORKFLOW_RUN_HAS_LIVE_STEPS":
+      return fail("workflow_run_has_live_steps", 409);
+    case "WORKFLOW_RUN_NOT_RUNNING":
+      return fail("workflow_run_not_running", 409);
+    case "WORKFLOW_RUN_STEP_OWNERSHIP_UNVERIFIABLE":
+      return fail("workflow_run_step_ownership_unverifiable", 409);
+    default:
+      return undefined;
+  }
+}
+
 function errorResponse(error: unknown): Response {
   if (error instanceof LoopNotFoundError) return fail("loop_not_found", 404);
   if (error instanceof LoopArchivedError) return fail("loop_archived", 409);
@@ -2391,7 +2462,11 @@ function errorResponse(error: unknown): Response {
     return fail("workflow_run_step_ownership_unverifiable", 409);
   }
   if (error instanceof PublicApiError) return fail(error.code, error.status);
-  return fail("internal_error", 500);
+  // Cross-bundle fallback (codedErrorFailure): storage backends ship in their
+  // own dist bundle with their own CodedError class copies, so their errors
+  // defeat every instanceof check above. Their stable `.code` survives
+  // bundling, so match on it last.
+  return codedErrorFailure(error) ?? fail("internal_error", 500);
 }
 
 function requestIdentifier(request: Request): string {
