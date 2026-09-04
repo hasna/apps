@@ -25,7 +25,7 @@ export function registerEnvironmentSnapshotCommands(program: Command): void {
     .option("--command <command>", "Command or verification step this snapshot explains")
     .option("--output <path>", "Write snapshot JSON to a specific path")
     .option("--include-env-values", "Include nonsecret environment values; secret-like keys are still redacted")
-    .action((opts) => {
+    .action(async (opts) => {
       const globalOpts = program.opts();
       try {
         const result = recordEnvironmentSnapshot({
@@ -37,6 +37,13 @@ export function registerEnvironmentSnapshotCommands(program: Command): void {
           output_path: opts.output,
           include_env_values: Boolean(opts.includeEnvValues),
         });
+
+        if (result.run_artifact_id) {
+          // Upload the snapshot artifact at creation when an artifact bucket
+          // is configured; fail-soft keeps it local-only otherwise.
+          const { uploadRunArtifactAtCreation } = await import("../../storage/index.js");
+          await uploadRunArtifactAtCreation({ artifactId: result.run_artifact_id });
+        }
 
         if (globalOpts.json) {
           printJson(result);

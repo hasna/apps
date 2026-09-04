@@ -164,6 +164,7 @@ export type {
 export {
   downloadRunArtifactsFromS3,
   planRunArtifactsS3Sync,
+  remoteArtifactKey,
   uploadRunArtifactsToS3,
 } from "./s3-artifact-sync.js";
 export type {
@@ -175,3 +176,9 @@ export type {
   TodosRunArtifactSyncResult,
   UploadRunArtifactsToS3Options,
 } from "./s3-artifact-sync.js";
+export { uploadRunArtifactAtCreation } from "./run-artifact-creation-upload.js";
+export type {
+  RunArtifactCreationUploadReason,
+  RunArtifactCreationUploadReport,
+  UploadRunArtifactAtCreationInput,
+} from "./run-artifact-creation-upload.js";

@@ -24,6 +24,12 @@ export function registerEnvironmentSnapshotTools(server: McpServer, { shouldRegi
         try {
           const { recordEnvironmentSnapshot } = await import("../../lib/environment-snapshots.js");
           const result = recordEnvironmentSnapshot(params);
+          if (result.run_artifact_id) {
+            // Upload the snapshot artifact at creation when an artifact bucket
+            // is configured; fail-soft keeps it local-only otherwise.
+            const { uploadRunArtifactAtCreation } = await import("../../storage/index.js");
+            await uploadRunArtifactAtCreation({ artifactId: result.run_artifact_id });
+          }
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };

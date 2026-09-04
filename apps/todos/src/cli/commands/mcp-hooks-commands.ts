@@ -1161,7 +1161,7 @@ exit 0
     .option("--agent <name>", "Agent adding the artifact")
     .action(async (runId: string, path: string, opts: { type?: string; description?: string; size?: string; sha256?: string; metadata?: string; store?: boolean; requireFile?: boolean; retentionDays?: string; agent?: string }) => {
       const globalOpts = program.opts();
-      const { addTaskRunArtifact } = await import("../../db/task-runs.js");
+      const { addTaskRunArtifact, getTaskRunArtifact } = await import("../../db/task-runs.js");
       const artifact = addTaskRunArtifact({
         run_id: runId,
         path,
@@ -1174,9 +1174,15 @@ exit 0
         retention_days: opts.retentionDays !== undefined ? Number.parseInt(opts.retentionDays, 10) : undefined,
         agent_id: opts.agent || globalOpts.agent,
       });
-      if (globalOpts.json) { output(artifact, true); return; }
-      const stored = artifact.metadata["artifact_store"] ? "stored" : "metadata only";
-      console.log(chalk.green(`Recorded artifact ${artifact.path} for run ${runId.slice(0, 8)} (${stored})`));
+      // Upload the stored bytes at creation when an artifact bucket is
+      // configured; fail-soft skips the remote hop when it is not.
+      const { uploadRunArtifactAtCreation } = await import("../../storage/index.js");
+      await uploadRunArtifactAtCreation({ artifactId: artifact.id });
+      const recorded = getTaskRunArtifact(artifact.id) ?? artifact;
+      if (globalOpts.json) { output(recorded, true); return; }
+      const stored = recorded.metadata["artifact_store"] ? "stored" : "metadata only";
+      const remote = recorded.metadata["remote_artifact_store"] ? ", uploaded" : "";
+      console.log(chalk.green(`Recorded artifact ${recorded.path} for run ${runId.slice(0, 8)} (${stored}${remote})`));
     });
 
   runs

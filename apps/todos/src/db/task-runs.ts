@@ -666,6 +666,13 @@ export function addTaskRunArtifact(input: AddTaskRunArtifactInput, db?: Database
   return rowToArtifact(d.query("SELECT * FROM task_run_artifacts WHERE id = ?").get(id) as TaskRunArtifactRow);
 }
 
+/** Fetch a single run artifact row by id (fresh metadata), or null when missing. */
+export function getTaskRunArtifact(id: string, db?: Database): TaskRunArtifact | null {
+  const d = db || getDatabase();
+  const row = d.query("SELECT * FROM task_run_artifacts WHERE id = ?").get(id) as TaskRunArtifactRow | null;
+  return row ? rowToArtifact(row) : null;
+}
+
 export function verifyTaskRunArtifacts(runId: string, db?: Database): ArtifactIntegrityReport[] {
   const ledger = getTaskRunLedger(runId, db);
   return ledger.artifacts.map((artifact) => verifyStoredArtifact({

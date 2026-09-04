@@ -75,6 +75,8 @@ export {
   signAwsV4Request,
   uploadRunArtifactsToS3,
   downloadRunArtifactsFromS3,
+  uploadRunArtifactAtCreation,
+  remoteArtifactKey,
   getCanonicalTodosRdsConfig,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
@@ -138,4 +140,7 @@ export type {
   TodosStorageTable,
   TodosSyncConfig,
   UploadRunArtifactsToS3Options,
+  RunArtifactCreationUploadReason,
+  RunArtifactCreationUploadReport,
+  UploadRunArtifactAtCreationInput,
 } from "./storage/index.js";

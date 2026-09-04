@@ -44,6 +44,8 @@ import {
   postgresTodosSyncSchemaSql,
   signAwsV4Request,
   uploadRunArtifactsToS3,
+  uploadRunArtifactAtCreation,
+  remoteArtifactKey,
   type HybridTodosStorageAdapter,
   type TodosAuditStore,
   type TodosPostgresQueryClient,
@@ -818,7 +820,7 @@ describe("storage adapter contracts", () => {
     const config = loadTodosStorageConfig({
       HASNA_TODOS_DATABASE_URL: "postgres://todos@rds.example/todos",
       HASNA_TODOS_DATABASE_SCHEMA: "todos_prod",
-      HASNA_TODOS_S3_BUCKET: "hasna-xyz-opensource-todos-prod",
+      HASNA_TODOS_S3_BUCKET: "todos-artifacts-test",
       HASNA_TODOS_S3_PREFIX: "todos/",
       HASNA_TODOS_AWS_REGION: "us-east-1",
       HASNA_TODOS_SYNC_BATCH_SIZE: "1000",
@@ -835,7 +837,7 @@ describe("storage adapter contracts", () => {
       },
       objectStorage: {
         provider: "s3",
-        bucket: "hasna-xyz-opensource-todos-prod",
+        bucket: "todos-artifacts-test",
         prefix: "todos/",
         region: "us-east-1",
         forcePathStyle: false,
@@ -3098,7 +3100,7 @@ describe("storage adapter contracts", () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     const config = {
       provider: "s3" as const,
-      bucket: "hasna-xyz-opensource-todos-prod",
+      bucket: "todos-artifacts-test",
       prefix: "todos/",
       region: "us-east-1",
       endpoint: "https://s3.example.test",
@@ -3126,11 +3128,11 @@ describe("storage adapter contracts", () => {
 
     expect(buildS3ObjectKey(config, "exports/report.json")).toBe("todos/exports/report.json");
     expect(ref).toMatchObject({
-      bucket: "hasna-xyz-opensource-todos-prod",
+      bucket: "todos-artifacts-test",
       key: "todos/exports/report.json",
       etag: "\"etag\"",
     });
-    expect(requests[0]?.url).toBe("https://s3.example.test/hasna-xyz-opensource-todos-prod/todos/exports/report.json");
+    expect(requests[0]?.url).toBe("https://s3.example.test/todos-artifacts-test/todos/exports/report.json");
     expect((requests[0]?.init?.headers as Record<string, string>).authorization).toContain("AWS4-HMAC-SHA256");
     expect((requests[0]?.init?.headers as Record<string, string>)["x-amz-meta-run"]).toBe("run-1");
   });
@@ -3177,7 +3179,7 @@ describe("storage adapter contracts", () => {
       const s3 = createTodosS3ArtifactStore({
         config: {
           provider: "s3",
-          bucket: "hasna-xyz-opensource-todos-prod",
+          bucket: "todos-artifacts-test",
           prefix: "todos/",
           region: "us-east-1",
           endpoint: "https://s3.example.test",
@@ -3212,8 +3214,8 @@ describe("storage adapter contracts", () => {
       expect(uploaded).toMatchObject({ uploaded: 1, downloaded: 0, skipped: 0, errors: [] });
       expect(remote).toMatchObject({
         provider: "s3",
-        bucket: "hasna-xyz-opensource-todos-prod",
-        relative_path: localStore["relative_path"],
+        bucket: "todos-artifacts-test",
+        relative_path: `artifacts/${task.id}/${artifact.sha256}`,
         sha256: artifact.sha256,
       });
 
@@ -3238,6 +3240,205 @@ describe("storage adapter contracts", () => {
     }
   });
 
+  test("uploads a run artifact to S3 at creation when a bucket is configured", async () => {
+    const previousArtifactsDir = process.env["HASNA_TODOS_ARTIFACTS_DIR"];
+    const artifactRoot = mkdtempSync(join(tmpdir(), "todos-creation-upload-"));
+    process.env["HASNA_TODOS_ARTIFACTS_DIR"] = artifactRoot;
+    try {
+      const adapter = createLocalSqliteTodosStorageAdapter({ db });
+      const task = await adapter.tasks.create({ title: "Creation upload task" });
+      const run = startTaskRun({ task_id: task.id, title: "creation upload" }, db);
+      const sourcePath = join(artifactRoot, "evidence.log");
+      writeFileSync(sourcePath, "created then uploaded\nTOKEN=secret-token-value\n");
+      const artifact = addTaskRunArtifact({
+        run_id: run.id,
+        path: sourcePath,
+        artifact_type: "log",
+        store_content: true,
+      }, db);
+      expect(artifact.metadata["remote_artifact_store"]).toBeUndefined();
+
+      const objects = new Map<string, Uint8Array>();
+      const s3 = createTodosS3ArtifactStore({
+        config: {
+          provider: "s3",
+          bucket: "todos-artifacts-test",
+          prefix: "prod/artifacts/",
+          region: "us-east-1",
+          endpoint: "https://s3.example.test",
+          forcePathStyle: true,
+        },
+        credentials: { accessKeyId: "test-access", secretAccessKey: "test-secret" },
+        now: () => new Date("2026-06-08T12:00:00.000Z"),
+        fetch: (async (url: RequestInfo | URL, init?: RequestInit) => {
+          const href = url.toString();
+          if (init?.method === "PUT") {
+            objects.set(href, init.body instanceof Uint8Array ? init.body : Buffer.from(String(init?.body ?? "")));
+            return new Response("", { status: 200, headers: { etag: "\"etag\"" } });
+          }
+          return new Response("", { status: 404 });
+        }) as typeof fetch,
+      });
+
+      const report = await uploadRunArtifactAtCreation({
+        artifactId: artifact.id,
+        db,
+        store: s3,
+        now: () => new Date("2026-06-08T12:01:00.000Z"),
+      });
+
+      expect(report).toMatchObject({ uploaded: true, reason: "uploaded" });
+      const relativePath = `artifacts/${task.id}/${artifact.sha256}`;
+      expect(report.ref).toMatchObject({
+        provider: "s3",
+        bucket: "todos-artifacts-test",
+        relative_path: relativePath,
+        sha256: artifact.sha256,
+        size_bytes: artifact.size_bytes,
+      });
+      const store = artifact.metadata["artifact_store"] as Record<string, unknown>;
+      expect(report.ref?.key).toBe(`prod/artifacts/${relativePath}`);
+
+      const remote = getTaskRunLedger(run.id, db).artifacts[0]!.metadata["remote_artifact_store"] as Record<string, unknown>;
+      expect(remote.relative_path).toBe(relativePath);
+      expect(remote.uploaded_at).toBe("2026-06-08T12:01:00.000Z");
+
+      // The object digest equals the recorded content hash (acceptance).
+      const objectUrl = `https://s3.example.test/todos-artifacts-test/prod/artifacts/${relativePath}`;
+      const object = objects.get(objectUrl);
+      expect(object).toBeDefined();
+      expect(remote.sha256).toBe(artifact.sha256);
+      expect(Buffer.from(object!).toString("utf8")).toContain("created then uploaded");
+      expect(Buffer.from(object!).toString("utf8")).not.toContain("secret-token-value");
+
+      // A second call is idempotent: content already remote, nothing re-uploaded.
+      const before = objects.size;
+      const again = await uploadRunArtifactAtCreation({
+        artifactId: artifact.id,
+        db,
+        store: s3,
+        now: () => new Date("2026-06-08T12:02:00.000Z"),
+      });
+      expect(again).toMatchObject({ uploaded: true, reason: "already_remote" });
+      expect(objects.size).toBe(before);
+    } finally {
+      if (previousArtifactsDir === undefined) delete process.env["HASNA_TODOS_ARTIFACTS_DIR"];
+      else process.env["HASNA_TODOS_ARTIFACTS_DIR"] = previousArtifactsDir;
+      rmSync(artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps run artifacts local-only when no bucket is configured and fails softly without credentials", async () => {
+    const previousArtifactsDir = process.env["HASNA_TODOS_ARTIFACTS_DIR"];
+    const artifactRoot = mkdtempSync(join(tmpdir(), "todos-creation-local-"));
+    process.env["HASNA_TODOS_ARTIFACTS_DIR"] = artifactRoot;
+    try {
+      const adapter = createLocalSqliteTodosStorageAdapter({ db });
+      const task = await adapter.tasks.create({ title: "Local fallback task" });
+      const run = startTaskRun({ task_id: task.id, title: "local fallback" }, db);
+      const sourcePath = join(artifactRoot, "evidence.log");
+      writeFileSync(sourcePath, "stays local\n");
+      const artifact = addTaskRunArtifact({ run_id: run.id, path: sourcePath, store_content: true }, db);
+
+      // No bucket configured -> local-only fallback, no error.
+      const noBucket = await uploadRunArtifactAtCreation({
+        artifactId: artifact.id,
+        db,
+        env: {},
+      });
+      expect(noBucket).toMatchObject({ uploaded: false, reason: "s3_not_configured" });
+
+      // Bucket configured but credentials missing -> fail-soft, no throw.
+      const noCreds = await uploadRunArtifactAtCreation({
+        artifactId: artifact.id,
+        db,
+        env: { HASNA_TODOS_S3_BUCKET: "todos-artifacts-test" },
+      });
+      expect(noCreds).toMatchObject({ uploaded: false, reason: "s3_credentials_missing" });
+
+      // An unknown artifact id is reported, never thrown.
+      const missing = await uploadRunArtifactAtCreation({ artifactId: "no-such-artifact", db });
+      expect(missing).toMatchObject({ uploaded: false, reason: "artifact_not_found" });
+
+      // With a bucket configured, an injected store uploads under the remote
+      // key even when the artifact was created without env credentials.
+      const fallbackStore = createTodosS3ArtifactStore({
+        config: {
+          provider: "s3",
+          bucket: "todos-artifacts-test",
+          prefix: "todos/",
+          forcePathStyle: false,
+          endpoint: "https://s3.example.test",
+        },
+        credentials: { accessKeyId: "fb-access", secretAccessKey: "fb-secret" },
+        now: () => new Date("2026-06-08T12:00:00.000Z"),
+        fetch: (async () => new Response("", { status: 200, headers: { etag: "\"e\"" } })) as typeof fetch,
+      });
+      const viaStore = await uploadRunArtifactAtCreation({
+        artifactId: artifact.id,
+        db,
+        env: {}, // no credentials in env: the injected store is the source
+        store: fallbackStore,
+      });
+      expect(viaStore).toMatchObject({ uploaded: true, reason: "uploaded" });
+
+      const remote = getTaskRunLedger(run.id, db).artifacts[0]!.metadata["remote_artifact_store"] as Record<string, unknown>;
+      expect(remote.relative_path).toBe(remoteArtifactKey(task.id, artifact.sha256!));
+    } finally {
+      if (previousArtifactsDir === undefined) delete process.env["HASNA_TODOS_ARTIFACTS_DIR"];
+      else process.env["HASNA_TODOS_ARTIFACTS_DIR"] = previousArtifactsDir;
+      rmSync(artifactRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps the artifact row intact when the creation upload fails", async () => {
+    const previousArtifactsDir = process.env["HASNA_TODOS_ARTIFACTS_DIR"];
+    const artifactRoot = mkdtempSync(join(tmpdir(), "todos-creation-fail-"));
+    process.env["HASNA_TODOS_ARTIFACTS_DIR"] = artifactRoot;
+    try {
+      const adapter = createLocalSqliteTodosStorageAdapter({ db });
+      const task = await adapter.tasks.create({ title: "Fail soft task" });
+      const run = startTaskRun({ task_id: task.id, title: "fail soft" }, db);
+      const sourcePath = join(artifactRoot, "evidence.log");
+      writeFileSync(sourcePath, "kept anyway\n");
+      const artifact = addTaskRunArtifact({ run_id: run.id, path: sourcePath, store_content: true }, db);
+
+      const s3 = createTodosS3ArtifactStore({
+        config: {
+          provider: "s3",
+          bucket: "todos-artifacts-test",
+          prefix: "todos/",
+          forcePathStyle: false,
+          endpoint: "https://s3.example.test",
+        },
+        credentials: { accessKeyId: "test-access", secretAccessKey: "test-secret" },
+        now: () => new Date("2026-06-08T12:00:00.000Z"),
+        fetch: (async () => new Response("", { status: 500 })) as typeof fetch,
+      });
+
+      const report = await uploadRunArtifactAtCreation({ artifactId: artifact.id, db, store: s3 });
+      expect(report).toMatchObject({ uploaded: false, reason: "upload_error" });
+      expect(report.error).toContain("S3 put failed");
+      // The artifact row still exists and carries no remote reference.
+      const ledger = getTaskRunLedger(run.id, db).artifacts[0]!;
+      expect(ledger.metadata["remote_artifact_store"]).toBeUndefined();
+      expect(ledger.id).toBe(artifact.id);
+
+      // Metadata-only artifacts (store_content: false) are never uploaded.
+      const metadataOnly = addTaskRunArtifact({
+        run_id: run.id,
+        path: join(artifactRoot, "missing.log"),
+        store_content: false,
+      }, db);
+      const skipped = await uploadRunArtifactAtCreation({ artifactId: metadataOnly.id, db, store: s3 });
+      expect(skipped).toMatchObject({ uploaded: false, reason: "no_local_content" });
+    } finally {
+      if (previousArtifactsDir === undefined) delete process.env["HASNA_TODOS_ARTIFACTS_DIR"];
+      else process.env["HASNA_TODOS_ARTIFACTS_DIR"] = previousArtifactsDir;
+      rmSync(artifactRoot, { recursive: true, force: true });
+    }
+  });
+
   test("accepts fallback S3 credential env names for CLI apply mode", () => {
     expect(s3CredentialsFromEnv({
       TODOS_S3_ACCESS_KEY_ID: "fallback-access",
@@ -3248,6 +3449,28 @@ describe("storage adapter contracts", () => {
       secretAccessKey: "fallback-secret",
       sessionToken: "fallback-session",
     });
+  });
+
+  test("reads creation-time S3 credentials from canonical and fallback env names", () => {
+    const { creationCredentialsFromEnv } = require("../storage/run-artifact-creation-upload.js") as typeof import("../storage/run-artifact-creation-upload.js");
+    expect(creationCredentialsFromEnv({
+      HASNA_TODOS_S3_ACCESS_KEY_ID: "canonical-access",
+      HASNA_TODOS_S3_SECRET_ACCESS_KEY: "canonical-secret",
+      HASNA_TODOS_S3_SESSION_TOKEN: "canonical-session",
+    })).toEqual({
+      accessKeyId: "canonical-access",
+      secretAccessKey: "canonical-secret",
+      sessionToken: "canonical-session",
+    });
+    expect(creationCredentialsFromEnv({
+      TODOS_S3_ACCESS_KEY_ID: "fallback-access",
+      TODOS_S3_SECRET_ACCESS_KEY: "fallback-secret",
+    })).toEqual({
+      accessKeyId: "fallback-access",
+      secretAccessKey: "fallback-secret",
+    });
+    expect(creationCredentialsFromEnv({})).toBeNull();
+    expect(creationCredentialsFromEnv({ HASNA_TODOS_S3_ACCESS_KEY_ID: "only-a-key" })).toBeNull();
   });
 });
 
