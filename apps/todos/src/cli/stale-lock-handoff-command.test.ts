@@ -78,7 +78,7 @@ describe("todos stale-lock-handoff", () => {
 
     const result = await runCli(["--json", ...commandArgs(task.id)]);
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain('"event":"todos-local-fallback"'); // local-mode notice (incident 715712)
+    expect(result.stderr).not.toContain('"event":"todos-local-fallback"'); // local-mode notice (incident 715712)
     const payload = JSON.parse(result.stdout) as {
       receipt: {
         receipt_id: string;
@@ -105,7 +105,7 @@ describe("todos stale-lock-handoff", () => {
 
     const result = await runCli(commandArgs(task.id));
     expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain('"event":"todos-local-fallback"'); // local-mode notice (incident 715712)
+    expect(result.stderr).not.toContain('"event":"todos-local-fallback"'); // local-mode notice (incident 715712)
     expect(result.stdout).toContain(`Stale lock transferred on task ${task.id}.`);
     expect(result.stdout).toContain("holder-a @ 2020-01-01T00:00:00.000Z");
     expect(result.stdout).toContain("-> nausicaa @");

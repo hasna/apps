@@ -301,8 +301,8 @@ describe("remote link-ref authoritative readback", () => {
       "github",
     ], env);
     expect(linked.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(linked.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(linked.stderr).not.toContain('"event":"todos-local-fallback"');
 
     const found = await spawnCli(["find-ref", REF_NAME, "--json"], env);
     expect(JSON.parse(found.stdout)).toEqual([

@@ -1,8 +1,17 @@
 # Native Storage Boundary
 
-`@hasna/todos` stays local-first. A normal install uses local SQLite and local
-artifact files without network access, hosted credentials, SaaS accounts, or a
-shared cloud runtime package.
+`@hasna/todos` stays local-first where it is a local product. The MCP server,
+`todos-serve`, the native storage tooling, and the plan-artifact surface run on
+local SQLite and local artifact files without network access, hosted
+credentials, SaaS accounts, or a shared cloud runtime package.
+
+The CLI's client transport is NOT implicitly local. Since the fleet fail-closed
+ruling (2026-09-04, hasna/apps#1613), a CLI run with neither API variable
+present exits non-zero with an error naming `HASNA_TODOS_API_URL` and
+`HASNA_TODOS_API_KEY` — it never silently serves the on-box SQLite store.
+Serving local SQLite through the CLI requires the explicit opt-in
+`HASNA_TODOS_LOCAL=1` (alias `TODOS_LOCAL=1`), which is how local-only CLI
+deployments, self-hosters, and tests opt in deliberately.
 
 Remote storage is explicit and repo-native. Internal Hasna deployments and
 future SaaS wrappers should configure it through `HASNA_TODOS_*` variables and
@@ -14,8 +23,9 @@ export.
 There is no deployment-mode axis. One switch selects where data lives, with
 exactly two arms on each side of the HTTP boundary:
 
-- **Client (CLI/MCP/TUI)** — `sqlite` (the default local file) or `http` (the
-  authenticated Todos `/v1` authority). The client never opens Postgres
+- **Client (CLI/MCP/TUI)** — `sqlite` (the on-box file, reachable only under
+  the explicit local opt-in `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1`) or `http`
+  (the authenticated Todos `/v1` authority). The client never opens Postgres
   directly.
 - **Server (`todos-serve`) / native storage tooling** — `sqlite` (no database
   URL configured) or `postgres` (a `HASNA_TODOS_DATABASE_URL` is present).
@@ -27,8 +37,9 @@ authority (client). `HASNA_TODOS_DATABASE_URL` selects the Postgres backend
 is a hard error (owner directive 2026-08-15), and no deployment-mode token is
 accepted. No third arm exists.
 
-Legacy hosted API toggles are not storage selectors. They must not change the
-local CLI default.
+Legacy hosted API toggles are not storage selectors. They cannot select the
+local store and cannot rescue a run that lacks both the API pair and the local
+opt-in.
 
 ## CLI Remote HTTP Authority
 
@@ -40,8 +51,13 @@ The open CLI remote route uses only these canonical settings:
 | `HASNA_TODOS_API_KEY` | API key supplied to the authority as a bearer credential. |
 
 Both must be set to select the HTTP authority. URL set without KEY (or KEY set
-without URL) is a hard error — the CLI never falls back to the on-box SQLite
-store from a partial cloud configuration.
+without URL) is a hard error naming the missing variable — the CLI never falls
+back to the on-box SQLite store from a partial cloud configuration. With
+NEITHER set, the CLI fails closed (non-zero exit, error naming both variables
+and the opt-in) unless `HASNA_TODOS_LOCAL=1` (alias `TODOS_LOCAL=1`) explicitly
+opts into local SQLite mode. There is no default local mode and no
+`todos-local-fallback` notice path: a false-green rc 0 against the on-box store
+is impossible (the incident 715712 response was tightened by the ruling).
 
 The URL must use HTTPS, except for loopback development authorities. Userinfo,
 query strings, fragments, redirects, `/api/v1`, and other non-`<app>[//v1]`

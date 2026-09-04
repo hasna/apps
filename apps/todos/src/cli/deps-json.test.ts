@@ -44,6 +44,9 @@ async function runLocal(args: string[], root: string) {
       LANG: "C.UTF-8",
       TODOS_DB_PATH: join(root, "todos.db"),
       TODOS_AUTO_PROJECT: "false",
+      // Local SQLite is opt-in only since the fail-closed ruling (hasna/apps#1613).
+      HASNA_TODOS_LOCAL: "1",
+      TODOS_LOCAL: "1",
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -132,8 +135,8 @@ describe("deps --json (local store)", () => {
     await runLocal(["deps", c.id, "--needs", b.id], root);
 
     const res = await runLocal(["deps", "--project", project.id, "--graph", "--json"], root);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(res.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(res.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(res.exitCode).toBe(0);
     const graph = JSON.parse(res.stdout);
     expect(graph.schema_version).toBe("todos.project_dependency_graph.v1");

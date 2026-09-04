@@ -152,6 +152,10 @@ async function runLocal(args: string[], root: string) {
       LANG: "C.UTF-8",
       TODOS_DB_PATH: join(root, "todos.db"),
       TODOS_AUTO_PROJECT: "false",
+      // Fail-closed ruling (hasna/apps#1613): this env is built from scratch
+      // (no ambient spread), so the local store needs the explicit opt-in.
+      HASNA_TODOS_LOCAL: "1",
+      TODOS_LOCAL: "1",
     },
     stdout: "pipe",
     stderr: "pipe",

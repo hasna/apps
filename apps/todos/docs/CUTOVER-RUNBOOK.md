@@ -21,6 +21,7 @@ time.
 | Env var | Meaning |
 | --- | --- |
 | `HASNA_TODOS_API_URL` + `HASNA_TODOS_API_KEY` | selects the authenticated HTTP `/v1` authority (client) |
+| `HASNA_TODOS_LOCAL` (alias `TODOS_LOCAL`) | explicit opt-in for local SQLite client mode; absent API env without it fails closed (2026-09-04 ruling, hasna/apps#1613) |
 | `HASNA_TODOS_SHADOW` | `1` enables the dual-write shadow mirror (requires a DSN; SQLite stays the source of truth) |
 | `HASNA_TODOS_DATABASE_URL` | Postgres DSN for the shared store (from Secrets Manager); its presence selects the postgresql backend |
 | `HASNA_TODOS_DATABASE_SSL` | boolean, defaults to `true` |

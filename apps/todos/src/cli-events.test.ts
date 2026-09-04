@@ -10,9 +10,14 @@ let tempDir = "";
 // runner does not terminate otherwise-valid child work first.
 setDefaultTimeout(15_000);
 
-/** Local-mode todos CLI runs carry the fallback notice on stderr (incident 715712). */
+/**
+ * Explicit-opt-in local runs emit no fallback notice: the legacy
+ * `todos-local-fallback` event is gone (fail-closed ruling, hasna/apps#1613),
+ * so a local-mode stderr that still carries it means a stale binary or a
+ * regression.
+ */
 function expectLocalModeStderr(result: { stderr: string }): void {
-  expect(result.stderr).toContain('"event":"todos-local-fallback"');
+  expect(result.stderr).not.toContain('"event":"todos-local-fallback"');
 }
 
 async function runTodos(args: string[]) {

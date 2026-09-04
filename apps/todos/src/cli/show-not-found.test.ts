@@ -85,7 +85,7 @@ describe("todos show missing-task contract", () => {
     expect(human.exitCode).toBe(0);
     expect(human.stdout).toContain("Task Details:");
     expect(human.stdout).toContain("show found-task control");
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(human.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs emit no fallback notice (fail-closed ruling, hasna/apps#1613).
+    expect(human.stderr).not.toContain('"event":"todos-local-fallback"');
   }, TIMEOUT);
 });

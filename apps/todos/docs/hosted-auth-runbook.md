@@ -61,9 +61,12 @@ Related hardening worth applying in the same revision (pre-existing, not fixed h
   address, so all callers share one `TODOS_RATE_LIMIT_MAX` bucket and an anonymous
   flood can `429` authenticated `/v1` traffic.
 - The http transport is selected by `HASNA_TODOS_API_URL` + `HASNA_TODOS_API_KEY`; the
-  storage-mode variables are retired and their presence is a hard error. A hosted image
-  without the API pair routes the in-container MCP tools to the local store; with no
-  matching API URL/key most `tools/call` invocations fail with an opaque error.
+  storage-mode variables are retired and their presence is a hard error. Client
+  processes fail closed (2026-09-04 ruling, hasna/apps#1613) when the API pair is
+  absent without the explicit local opt-in `HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1`:
+  a hosted image without the pair no longer routes silently to a local store, and
+  cloud-routed `tools/call` invocations return an error naming the required env
+  rather than an opaque failure.
   **Do not "fix" that by supplying an API URL and key while `/api/*` + `/mcp` are
   anonymous** — that wires an anonymous plane into the real datastore.
 - Enable load-balancer access logs. Without them, "was this endpoint ever called?" is

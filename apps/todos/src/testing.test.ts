@@ -29,14 +29,32 @@ describe("localTodosTestEnv", () => {
     for (const key of REMOVED_TODOS_ENV_KEYS) expect(key in env).toBe(false);
   });
 
-  test("the scrubbed env cannot resolve the hosted transport", () => {
+  test("defaults the explicit local opt-in so the scrubbed env routes to SQLite", () => {
     // The point of the helper, stated as an assertion on the resolver itself rather
-    // than on the shape of the dictionary: a child handed this env routes to SQLite.
+    // than on the shape of the dictionary: a child handed this env routes to the
+    // local store. Since the fail-closed ruling (hasna/apps#1613) the resolver
+    // refuses an absent API pair WITHOUT the opt-in, so the helper must default
+    // `HASNA_TODOS_LOCAL`/`TODOS_LOCAL` on for local-intent tests.
     const env = localTodosTestEnv({
       HASNA_TODOS_API_URL: "",
       HASNA_TODOS_API_KEY: "",
     });
+    expect(env["HASNA_TODOS_LOCAL"]).toBe("1");
+    expect(env["TODOS_LOCAL"]).toBe("1");
     expect(resolveTodosCliTransport(env).transport).toBe("sqlite");
+  });
+
+  test("a test that blanks the opt-in back off exercises the fail-closed arm", () => {
+    // Local-intent defaults must not blind a fail-closed test: overrides are
+    // applied last, so blanking the opt-in hands the resolver the real
+    // "API env missing" shape and it must throw.
+    const env = localTodosTestEnv({
+      HASNA_TODOS_API_URL: "",
+      HASNA_TODOS_API_KEY: "",
+      HASNA_TODOS_LOCAL: "",
+      TODOS_LOCAL: "",
+    });
+    expect(() => resolveTodosCliTransport(env)).toThrow("REMOTE_API_CONFIG_MISSING");
   });
 
   test("still resolves http when a test opts back in explicitly", () => {
@@ -63,6 +81,9 @@ describe("applyLocalTodosTestEnv", () => {
     const restore = applyLocalTodosTestEnv({ HASNA_TODOS_DB_PATH: "/tmp/isolated.db" });
     expect(process.env["HASNA_TODOS_API_URL"]).toBe("");
     expect(process.env["HASNA_TODOS_DB_PATH"]).toBe("/tmp/isolated.db");
+    // The local-opt-in keys are touched (and defaulted on) by the apply.
+    expect(process.env["HASNA_TODOS_LOCAL"]).toBe("1");
+    expect(process.env["TODOS_LOCAL"]).toBe("1");
 
     restore();
     expect(process.env["HASNA_TODOS_API_URL"]).toBe("https://todos.example.invalid");

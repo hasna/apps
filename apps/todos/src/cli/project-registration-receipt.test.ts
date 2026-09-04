@@ -141,8 +141,8 @@ describe("project-registration receipt lookup CLI", () => {
 
     const success = await runCli(root, dbPath, requestPath);
     expect(success.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(success.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(success.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(JSON.parse(success.stdout)).toMatchObject({
       receipt: {
         receipt_id: receipt.receipt_id,

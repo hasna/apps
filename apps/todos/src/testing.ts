@@ -65,12 +65,20 @@ export const SHARED_TODOS_STORE_ENV_KEYS = [
 /**
  * Routing variables the resolver reads that select a store *kind* rather than a shared
  * destination. They are pinned rather than blanked, so they are exempt from the scrub
- * coverage assertion.
+ * coverage assertion. The local opt-in (`HASNA_TODOS_LOCAL=1`, alias `TODOS_LOCAL=1`)
+ * is the ONLY route to the on-box SQLite client mode since the 2026-09-04 fail-closed
+ * ruling (hasna/apps#1613); local-intent test envs default it on, remote-intent envs
+ * may override it back to "" to exercise the fail-closed arm.
  */
 export const LOCAL_ONLY_TODOS_ENV_KEYS = [
+  "HASNA_TODOS_LOCAL",
+  "TODOS_LOCAL",
   "HASNA_TODOS_DB_PATH",
   "TODOS_DB_PATH",
 ] as const;
+
+/** The local-intent default for the explicit local opt-in (both spellings). */
+const LOCAL_OPT_IN_DEFAULT = { HASNA_TODOS_LOCAL: "1", TODOS_LOCAL: "1" } as const;
 
 /**
  * The retired storage-mode variables. The resolver never reads them — they are
@@ -180,10 +188,15 @@ export function deliverTodosApiKeyViaDisk(env: TodosTestEnv): TodosTestEnv {
 }
 
 /**
- * `process.env` with every shared-store pointer blanked and the retired
- * storage-mode variables deleted, so the transport resolves to a local SQLite
- * file. Overrides are applied last, so a test that deliberately exercises the
- * hosted transport against a throwaway server can still opt back in explicitly.
+ * `process.env` with every shared-store pointer blanked, the retired
+ * storage-mode variables deleted, and the explicit local opt-in
+ * (`HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1`) DEFAULTED ON, so the transport
+ * resolves to the on-box SQLite file. Local SQLite is no longer a default —
+ * the resolver fails closed without the opt-in (hasna/apps#1613) — so a
+ * local-intent env must carry it; a test that deliberately exercises the
+ * hosted transport against a throwaway server, or the fail-closed arm, can
+ * override it (opt-in `""`, or the API pair) because overrides are applied
+ * last.
  *
  * Blank string, not `delete`, for the shared-store pointers: a blanked URL/key
  * is treated as absent, and there is no partial-config fallback. The retired
@@ -194,7 +207,7 @@ export function localTodosTestEnv(overrides: TodosTestEnv = {}): TodosTestEnv {
   const env: TodosTestEnv = { ...process.env };
   for (const key of SHARED_TODOS_STORE_ENV_KEYS) env[key] = "";
   for (const key of REMOVED_TODOS_ENV_KEYS) delete env[key];
-  const result = { ...env, ...overrides };
+  const result: TodosTestEnv = { ...env, ...LOCAL_OPT_IN_DEFAULT, ...overrides };
   // Disk delivery happens ONLY when the caller DELIBERATELY supplied HOME.
   // An inherited machine home must never receive a fixture credential: the
   // ordinary suite's in-process tests call this helper without a HOME
@@ -218,6 +231,7 @@ export function applyLocalTodosTestEnv(overrides: TodosTestEnv = {}): () => void
   const next = localTodosTestEnv(overrides);
   const touched = [
     ...SHARED_TODOS_STORE_ENV_KEYS,
+    ...LOCAL_ONLY_TODOS_ENV_KEYS,
     ...REMOVED_TODOS_ENV_KEYS,
     ...Object.keys(overrides),
   ];
