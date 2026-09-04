@@ -120,48 +120,6 @@ app.all("/v1/*", async (c) => {
 // outside the /v1/* auth middleware it would be unauthenticated. Only /v1/* (and
 // the unauthenticated health/version probes above) are exposed by the server.
 
-// ── Dashboard (serve static files from dashboard/dist/) ──────────────────────
-import { existsSync, readFileSync } from "node:fs";
-import { join, extname } from "node:path";
-
-const MIME: Record<string, string> = { ".html": "text/html", ".js": "application/javascript", ".css": "text/css", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon" };
-
-function findDashboardDir(): string | null {
-  // Try multiple locations: relative to script, installed package
-  const candidates = [
-    join(import.meta.dir, "../../dashboard/dist"),
-    join(import.meta.dir, "../dashboard/dist"),
-    join(import.meta.dir, "../../../dashboard/dist"),
-  ];
-  for (const dir of candidates) {
-    if (existsSync(join(dir, "index.html"))) return dir;
-  }
-  return null;
-}
-
-const dashDir = findDashboardDir();
-if (dashDir) {
-  const resolvedDashDir = require("node:path").resolve(dashDir);
-  app.get("/*", (c) => {
-    const url = new URL(c.req.url);
-    let filePath = url.pathname === "/" ? "/index.html" : url.pathname;
-    let absPath = require("node:path").resolve(join(dashDir, filePath));
-
-    // SECURITY: prevent path traversal — resolved path must stay within dashboard dir
-    if (!absPath.startsWith(resolvedDashDir)) return c.json({ error: "Forbidden" }, 403);
-
-    // If file doesn't exist, serve index.html (SPA routing)
-    if (!existsSync(absPath)) absPath = join(dashDir, "index.html");
-    if (!existsSync(absPath)) return c.json({ error: "Not found" }, 404);
-
-    const content = readFileSync(absPath);
-    const ext = extname(absPath);
-    return new Response(content, {
-      headers: { "Content-Type": MIME[ext] || "application/octet-stream" },
-    });
-  });
-}
-
 const HOST = process.env["HOST"] ?? process.env["INSTRUCTIONS_HOST"] ?? "localhost";
-console.log(`instructions-serve listening on http://${HOST}:${PORT} (backend: ${serviceBackend()})${dashDir ? " (dashboard: /)" : " (no dashboard)"}`);
+console.log(`instructions-serve listening on http://${HOST}:${PORT} (backend: ${serviceBackend()})`);
 export default { port: PORT, hostname: HOST, fetch: app.fetch };
