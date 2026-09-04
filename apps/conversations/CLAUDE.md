@@ -52,11 +52,11 @@ src/
                          Also runs directly when invoked as conversations-mcp.
 
   server/
-    serve.ts          -- Dashboard HTTP server: serves static files + JSON API routes for messages, sessions, channels, projects
-    serve.test.ts     -- Tests for dashboard API routes
+    serve.ts          -- Local HTTP server: JSON API routes for messages, sessions, channels, projects
+    serve.test.ts     -- Tests for local HTTP API routes
 ```
 
-All surfaces (CLI, MCP server, library, dashboard) call directly into `src/lib/` functions -- there is no intermediate service layer. The database module uses a singleton pattern via `getDb()`.
+All surfaces (CLI, MCP server, library, local HTTP server) call directly into `src/lib/` functions -- there is no intermediate service layer. The database module uses a singleton pattern via `getDb()`.
 
 ## Key Design Decisions
 

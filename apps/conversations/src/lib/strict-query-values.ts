@@ -88,7 +88,7 @@ export function resolveAnalyticsLimit(
 }
 
 /**
- * Shared collection parser for both cloud API and local dashboard routes.
+ * Shared collection parser for both cloud API and local HTTP routes.
  * URLSearchParams.get() preserves the absent-vs-present-empty distinction.
  */
 export function resolveCollectionQueryOptions(searchParams: Pick<URLSearchParams, "get">): CollectionQueryOptions {

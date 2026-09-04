@@ -139,49 +139,6 @@ jobs:
       - name: Build
         run: bun run build
 
-      # dashboard/ is a SECOND dependency tree with its own lockfile, and no gate
-      # above touches it: ci.yml installs the root only, and `bun run build` does
-      # not enter dashboard/. Until this step existed, that tree's first and only
-      # install happened inside `npm publish` below, via prepublishOnly — after
-      # Typecheck, Test and Build had all gone green, so the reviewed thing and
-      # the published thing were separated by a dependency resolution that no
-      # gate could see.
-      #
-      # It ran unprotected in two distinct ways, both measured on bun 1.3.14:
-      #   * unpinned — plain `bun install` on a drifted lockfile exits 0, silently
-      #     re-resolves, and rewrites bun.lock ("Saved lockfile"). With
-      #     --frozen-lockfile the same state exits 1.
-      #   * unquarantined — the release-age quarantine on a workstation comes
-      #     ENTIRELY from ~/.bunfig.toml, which does not exist on this runner.
-      #     The identical install of a 5-day-old package exits 1 with a real HOME
-      #     and exits 0 with an empty one. That is precisely why the root install
-      #     above passes --minimum-release-age explicitly rather than relying on
-      #     the environment, and the dashboard install needs the same treatment.
-      #
-      # Running it here, before the publish boundary, means the tree that ships is
-      # resolved inside the gated part of the workflow and is visible in these logs.
-      # prepublishOnly still rebuilds it, now under the same flags, so any other
-      # publish path is protected too.
-      #
-      # Note what each flag actually buys, because they are not interchangeable:
-      # --frozen-lockfile is load-bearing — it removes resolution from publish
-      # entirely. --minimum-release-age is defence in depth only; it is enforced
-      # at RESOLUTION time and does NOT re-validate versions already pinned in the
-      # lockfile (measured: a frozen install of a lock pinning a 5-day-old version
-      # exits 0). A too-new pin is caught by review of the lockfile diff, not here.
-      - name: Build dashboard with locked, quarantined dependencies
-        run: bun run build:dashboard
-
-      # `files` in package.json ships dashboard/dist/. npm silently OMITS a listed
-      # path that does not exist rather than failing, so a dashboard that never
-      # built would publish as a tarball quietly missing its web UI — an artefact
-      # defect with no error anywhere upstream. Turn that silence into a failure.
-      - name: Require the dashboard build output
-        run: |
-          set -euo pipefail
-          test -f dashboard/dist/index.html
-          echo "dashboard/dist/index.html present"
-
       # No NODE_AUTH_TOKEN, and no token of any kind. npm detects the Actions
       # OIDC environment and exchanges the id-token for a short-lived,
       # publish-scoped credential. --provenance is passed explicitly: npm

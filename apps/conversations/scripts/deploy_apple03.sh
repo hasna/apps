@@ -15,7 +15,6 @@ rsync -az --delete \
   --exclude '.build/' \
   --exclude 'dist-app/' \
   --exclude 'node_modules/' \
-  --exclude 'dashboard/node_modules/' \
   "$REPO_ROOT/" "$REMOTE_HOST:$REMOTE_PATH/"
 
 echo "==> building on $REMOTE_HOST"

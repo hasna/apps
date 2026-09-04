@@ -17,9 +17,9 @@ let package = Package(
             name: "HasnaConversationsCore",
             path: "Sources/HasnaConversationsCore"
         ),
-        // Native macOS shell (WKWebView) hosting the bundled web UI. It spawns the
-        // conversations dashboard/API server (bun) on a loopback port and points the
-        // WKWebView at it, so the web UI and the /api/* routes share one origin.
+        // Native macOS shell (WKWebView). It spawns the conversations local
+        // HTTP server (bun) on a loopback port; the bundled web UI was removed,
+        // so the server's /api/* and /health routes are the client surface.
         .executableTarget(
             name: "HasnaConversationsApp",
             dependencies: ["HasnaConversationsCore"],

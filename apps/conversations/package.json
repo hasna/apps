@@ -23,7 +23,6 @@
   "files": [
     "dist/",
     "bin/",
-    "dashboard/dist/",
     "postinstall.js",
     "LICENSE",
     "README.md"
@@ -33,7 +32,6 @@
   "scripts": {
     "clean": "rm -rf dist bin",
     "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/server/serve-entry.ts --outfile ./bin/serve.js --target bun && bun build ./src/hooks/blocker-hook.ts --outfile ./bin/hook.js --target bun && bun build ./src/lib/local-read-worker.ts --outfile ./bin/local-read-worker.js --target bun && cp ./src/inbox/inbox ./bin/inbox && chmod 755 ./bin/inbox && bun build ./src/index.ts ./src/sdk/index.ts --outdir ./dist --target bun && (tsc --emitDeclarationOnly --declaration --outDir dist || true)",
-    "build:dashboard": "cd dashboard && bun install --frozen-lockfile --minimum-release-age 604800 && bun run build",
     "test": "bun test",
     "dev": "bun run ./src/cli/index.tsx",
     "serve": "bun run ./src/server/serve-entry.ts",
@@ -45,7 +43,7 @@
     "test:incident-pg": "bun run ./src/server/incident-projection-pg.verify.ts",
     "test:outbox-timestamp-pg": "bun run ./src/server/outbox-timestamp-pg.verify.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build:dashboard && bun run build",
+    "prepublishOnly": "bun run build",
     "postinstall": "node postinstall.js",
     "prepack": "bun run build"
   },
