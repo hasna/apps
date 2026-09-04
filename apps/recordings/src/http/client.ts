@@ -15,13 +15,16 @@
 // server's internal storage engine is the server's business and is invisible
 // here. Which store is active is decided by the environment alone: the
 // presence of BOTH `HASNA_<APP>_API_URL` and `HASNA_<APP>_API_KEY` selects the
-// hosted API; any other environment reads the on-box SQLite file. A partial
-// hosted setup (one of the two variables set, the other absent) is a
-// misconfiguration and fails closed — the client must never silently drift
-// onto the wrong on-box dataset. The explicit `HASNA_<APP>_CLIENT_STORE`
-// override (`sqlite` | `http`) wins over the auto-selection, so a config that
-// sets `..._CLIENT_STORE=sqlite` keeps reading the local file even when the
-// hosted URL/key pair is present.
+// hosted API. The on-box SQLite file is NEVER a silent default: an environment
+// that sets neither variable fails closed with an error naming the required
+// variables, and the local file is read only when the explicit
+// `HASNA_<APP>_CLIENT_STORE=sqlite` override selects it. A partial hosted
+// setup (one of the two variables set, the other absent) is a misconfiguration
+// and fails closed — the client must never silently drift onto the wrong
+// on-box dataset. The explicit `HASNA_<APP>_CLIENT_STORE` override
+// (`sqlite` | `http`) wins over the auto-selection, so a config that sets
+// `..._CLIENT_STORE=sqlite` keeps reading the local file even when the hosted
+// URL/key pair is present.
 //
 // SAFETY: never logs, returns, or embeds the API key value.
 
@@ -92,7 +95,13 @@ export function toV1BaseUrl(apiUrl: string): string {
 export type TransportKind = ClientStore;
 
 export interface TransportResolution {
-  /** The store actually in use. `sqlite` whenever routing to `http` was refused. */
+  /**
+   * The store selected by this resolution: `sqlite` when the explicit
+   * `..._CLIENT_STORE=sqlite` override chose the on-box file, or when routing
+   * to `http` was refused and the resolution is misconfigured. A `sqlite`
+   * transport with `misconfigured: true` means NO store is active — callers
+   * must fail closed, never open the on-box file.
+   */
   transport: TransportKind;
   /** The store that was asked for. Differs from `transport` only when misconfigured. */
   requested: ClientStore;
@@ -109,7 +118,10 @@ export interface TransportResolution {
 // IFF both the (prefixed) API URL and the API key are present. A partial
 // hosted setup — URL without key, or key without URL — is reported as
 // misconfigured (callers hard-fail) so the client never silently drifts onto
-// the wrong on-box dataset.
+// the wrong on-box dataset. An environment that configures NOTHING is
+// misconfigured too: the on-box store is not a fallback, and the client fails
+// closed naming the required variables (only an explicit
+// `..._CLIENT_STORE=sqlite` override selects the on-box file).
 export function resolveTransport(name: string, env: Env = process.env): TransportResolution {
   const keys = envKeys(name);
   const storeHit = firstEnv(env, keys.storeKeys);
@@ -127,7 +139,7 @@ export function resolveTransport(name: string, env: Env = process.env): Transpor
     modeSource = storeHit.key;
   } else if (urlHit && keyHit) {
     // The presence of BOTH variables IS the signal to use the API. Rollback =
-    // unset either variable -> back to the on-box SQLite file.
+    // unset either variable -> no store is selected, never a silent local file.
     requested = "http";
     modeSource = "auto:api-url+api-key";
   } else if (urlHit || keyHit) {
@@ -142,13 +154,34 @@ export function resolveTransport(name: string, env: Env = process.env): Transpor
       misconfigured: true,
       warning:
         `${present} is set but ${missing} is not: the hosted API is only ` +
-        `selected when BOTH are present. Set ${missing}, or unset ${present} to ` +
-        `use the on-box store.`,
+        `selected when BOTH are present. Set ${missing}, or unset ${present} ` +
+        `and opt in to the on-box store explicitly with ${keys.storeKeys[0]}=sqlite.`,
     };
   }
 
   if (requested === "sqlite") {
-    return { transport: "sqlite", requested, modeSource, baseUrl: null, apiKeyPresent: Boolean(keyHit), misconfigured: false, warning: null };
+    if (storeHit) {
+      // Explicit on-box opt-in: the override decided it, so the local file is
+      // the active store even though nothing hosted is configured.
+      return { transport: "sqlite", requested, modeSource, baseUrl: null, apiKeyPresent: Boolean(keyHit), misconfigured: false, warning: null };
+    }
+    // Nothing is configured and nothing explicitly selected the on-box file:
+    // the on-box store is never a silent default. Fail closed so a caller
+    // (or the shared seam it consults for a credential) decides between the
+    // hosted API and an actionable error — never a local fallback.
+    return {
+      transport: "sqlite",
+      requested,
+      modeSource,
+      baseUrl: null,
+      apiKeyPresent: Boolean(keyHit),
+      misconfigured: true,
+      warning:
+        `${keys.apiUrlKeys[0]} and ${keys.apiKeyKeys[0]} are not set: the hosted ` +
+        `API is selected only when BOTH are present, and the on-box store is not ` +
+        `a fallback. Set both (or run through the '${name}' station wrapper), or ` +
+        `opt in to the on-box store explicitly with ${keys.storeKeys[0]}=sqlite.`,
+    };
   }
 
   if (!urlHit) {

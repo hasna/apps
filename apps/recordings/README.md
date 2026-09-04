@@ -440,15 +440,20 @@ directly with API-key auth via
 [`@hasna/contracts`](https://www.npmjs.com/package/@hasna/contracts).
 
 The CLI and MCP client have exactly two stores and never open Postgres — they
-read the on-box `sqlite` file, or call the server's `/v1` HTTP API. The
-presence of BOTH `HASNA_RECORDINGS_API_URL` and `HASNA_RECORDINGS_API_KEY`
-selects the API; any other environment reads the on-box file. A partial setup
-(one of the two variables set) fails closed rather than silently reading the
-wrong dataset. The explicit `HASNA_RECORDINGS_CLIENT_STORE` switch (`sqlite` |
+read the on-box `sqlite` file only when explicitly opted in, or call the
+server's `/v1` HTTP API. The presence of BOTH `HASNA_RECORDINGS_API_URL` and
+`HASNA_RECORDINGS_API_KEY` selects the API; an environment that configures
+neither FAILS CLOSED with an error naming the required variables — the on-box
+file is never a silent default and is read only through the explicit
+`HASNA_RECORDINGS_CLIENT_STORE=sqlite` override. A partial setup (one of the
+two variables set) fails closed too rather than silently reading the wrong
+dataset. The explicit `HASNA_RECORDINGS_CLIENT_STORE` switch (`sqlite` |
 `http`) wins over the auto-selection, so a configuration that sets it to
 `sqlite` keeps reading the local file even when the hosted pair is present.
-`RECORDINGS_API_KEY` is the OpenAI transcription-key override only and never
-selects client transport.
+Run the CLI through the `recordings` station wrapper (or set both variables)
+for the hosted API; run local-only workflows with the explicit
+`HASNA_RECORDINGS_CLIENT_STORE=sqlite` opt-in. `RECORDINGS_API_KEY` is the
+OpenAI transcription-key override only and never selects client transport.
 
 ```bash
 recordings-serve --port 8874          # start the API

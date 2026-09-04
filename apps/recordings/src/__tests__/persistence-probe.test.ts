@@ -58,7 +58,7 @@ function seedLocalDb(dbPath: string, rows: number): void {
 const FAKE_API_KEY = "not-a-real-key-4f2b9c8e-do-not-log";
 
 describe("describeActiveStore", () => {
-  test("reports the local SQLite path when no API env vars are set", () => {
+  test("with no API env vars it reports the legacy file AND the fail-closed refusal", () => {
     const dbPath = join(makeTempDir(), "recordings.db");
     seedLocalDb(dbPath, 3);
 
@@ -69,7 +69,12 @@ describe("describeActiveStore", () => {
     expect(description.base_url).toBeNull();
     expect(description.local_db_path).toBe(dbPath);
     expect(description.local_db_recordings).toBe(3);
-    // Rows in the on-box file are the live data when it is the store, not a divergence.
+    // The on-box file is not the live store: with no hosted env the client
+    // fails closed, and the diagnostic says so (naming the required variables
+    // and the explicit opt-in) instead of silently treating the file as active.
+    expect(description.warning).toContain("HASNA_RECORDINGS_API_URL");
+    expect(description.warning).toContain("HASNA_RECORDINGS_API_KEY");
+    expect(description.warning).toContain("HASNA_RECORDINGS_CLIENT_STORE=sqlite");
     expect(description.divergent).toBe(false);
   });
 

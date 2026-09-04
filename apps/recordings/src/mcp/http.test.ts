@@ -18,13 +18,18 @@ describe("recordings MCP HTTP transport", () => {
 
   const savedApiUrl = process.env.HASNA_RECORDINGS_API_URL;
   const savedApiKey = process.env.HASNA_RECORDINGS_API_KEY;
+  const savedClientStore = process.env.HASNA_RECORDINGS_CLIENT_STORE;
 
   beforeAll(() => {
     // The suite is hermetic by contract: a publisher's ambient hosted-store
     // configuration must not route these in-process tool calls to the hosted
-    // API. Restored in afterAll.
+    // API. The suite seeds and inspects the LOCAL database directly, so local
+    // mode is declared EXPLICITLY via the store override — the client never
+    // falls back to the on-box file when no hosted env is configured. Both
+    // restored in afterAll.
     delete process.env.HASNA_RECORDINGS_API_URL;
     delete process.env.HASNA_RECORDINGS_API_KEY;
+    process.env.HASNA_RECORDINGS_CLIENT_STORE = "sqlite";
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -47,6 +52,8 @@ describe("recordings MCP HTTP transport", () => {
     else process.env.HASNA_RECORDINGS_API_URL = savedApiUrl;
     if (savedApiKey === undefined) delete process.env.HASNA_RECORDINGS_API_KEY;
     else process.env.HASNA_RECORDINGS_API_KEY = savedApiKey;
+    if (savedClientStore === undefined) delete process.env.HASNA_RECORDINGS_CLIENT_STORE;
+    else process.env.HASNA_RECORDINGS_CLIENT_STORE = savedClientStore;
     httpServer.stop();
   });
 
