@@ -13,8 +13,8 @@
  *   explicit option, then the app namespace (HASNA_MONITOR_CONVERSATIONS_FROM),
  *   then the default "monitor".
  * - idempotency is resolved BEFORE posting, against the adapter's own effect
- *   ledger. The hosted service (conversations.hasna.xyz, a different
- *   codebase) drops caller UUIDs, mints its own, and has no
+ *   ledger. The hosted service (a different codebase) drops caller UUIDs,
+ *   mints its own, and has no
  *   /v1/messages/by-uuid route (apps/conversations CHANGELOG 0.5.25), so the
  *   server-side unique-uuid insert cannot deduplicate hosted writes. The
  *   ledger keys a delivered pointer by the stable effect key (derived from
