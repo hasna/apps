@@ -1,7 +1,7 @@
 {
   "name": "@hasna/prompts",
   "version": "0.3.38",
-  "description": "Reusable prompt library for AI agents \u2014 CLI + MCP server + REST API + web dashboard",
+  "description": "Reusable prompt library for AI agents \u2014 CLI + MCP server + REST API",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -22,20 +22,18 @@
   },
   "files": [
     "dist",
-    "dashboard/dist",
     "LICENSE",
     "README.md",
     "postinstall.mjs"
   ],
   "scripts": {
-    "clean": "rm -rf dist dashboard/dist",
-    "build": "bun run clean && cd dashboard && bun install --frozen-lockfile && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --external zod --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --external zod --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --external zod --target bun && bun build src/index.ts --outdir dist --external zod --target bun && bun build src/lib/dispatch/capture-helper.ts --outdir dist/lib/dispatch --external zod --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "clean": "rm -rf dist",
+    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --external zod --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --external zod --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --external zod --target bun && bun build src/index.ts --outdir dist --external zod --target bun && bun build src/lib/dispatch/capture-helper.ts --outdir dist/lib/dispatch --external zod --target bun && tsc --emitDeclarationOnly --outDir dist",
     "build:cli": "bun build src/cli/index.tsx --outdir dist/cli --external zod --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk",
     "build:mcp": "bun build src/mcp/index.ts --outdir dist/mcp --external zod --target bun --external @modelcontextprotocol/sdk",
     "build:server": "bun build src/server/index.ts --outdir dist/server --external zod --target bun",
     "build:lib": "bun build src/index.ts --outdir dist --external zod --target bun && tsc --emitDeclarationOnly --outDir dist",
     "build:helper": "bun build src/lib/dispatch/capture-helper.ts --outdir dist/lib/dispatch --external zod --target bun",
-    "build:dashboard": "cd dashboard && bun run build",
     "contracts:check": "bunx @hasna/contracts@0.13.4 repo-conformance .",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
@@ -59,8 +57,7 @@
     "codex",
     "gemini",
     "tui",
-    "cli",
-    "dashboard"
+    "cli"
   ],
   "publishConfig": {
     "registry": "https://registry.npmjs.org",

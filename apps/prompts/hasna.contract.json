@@ -5,7 +5,7 @@
   "class": "cli-with-store",
   "contractVersion": "v1",
   "kitVersion": "0.13.4",
-  "description": "Reusable prompt library for AI agents — CLI, MCP server, REST API, and web dashboard over a local-first prompt registry.",
+  "description": "Reusable prompt library for AI agents — CLI, MCP server, and REST API over a local-first prompt registry.",
   "bins": [
     "prompts",
     "prompts-mcp",

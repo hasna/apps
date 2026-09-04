@@ -87,13 +87,13 @@ function safeEq(a: string | undefined, b: string): boolean {
  * unauthenticated. No wildcard CORS is ever emitted.
  *
  * Browser preflights (OPTIONS) carry no data and browsers cannot attach
- * Authorization to them, so the documented dashboard workflow (a Vite dev
- * server on a loopback origin) would be dead without a carve-out: an OPTIONS
- * preflight from an allowed origin (loopback, or an exact origin listed in
- * PROMPTS_API_CORS_ORIGIN) receives CORS headers WITHOUT a bearer token, while
- * every actual data request still requires the token. Preflights from any
- * other origin, and all non-OPTIONS requests, fall through to the bearer gate
- * and fail closed (401/403/503, no CORS headers).
+ * Authorization to them, so loopback-origin browser API use (a local web
+ * tool) would be dead without a carve-out: an OPTIONS preflight from an
+ * allowed origin (loopback, or an exact origin listed in
+ * PROMPTS_API_CORS_ORIGIN) receives CORS headers WITHOUT a bearer token,
+ * while every actual data request still requires the token. Preflights from
+ * any other origin, and all non-OPTIONS requests, fall through to the bearer
+ * gate and fail closed (401/403/503, no CORS headers).
  */
 function isAllowedApiOrigin(origin: string | null): boolean {
   if (!origin) return false
@@ -146,8 +146,8 @@ async function handleFetch(req: Request): Promise<Response> {
   const authError = authenticateApiRequest(req, path)
   if (authError) return authError
 
-    // CORS preflight for an allowed browser origin (loopback dashboard or
-    // explicit PROMPTS_API_CORS_ORIGIN). Restricted CORS headers only — never
+    // CORS preflight for an allowed browser origin (loopback, or explicit
+    // PROMPTS_API_CORS_ORIGIN). Restricted CORS headers only — never
     // `Access-Control-Allow-Origin: *`.
     if (method === "OPTIONS") {
       const origin = req.headers.get("origin")
