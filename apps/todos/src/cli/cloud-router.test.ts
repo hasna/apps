@@ -15,7 +15,6 @@ import {
   resolveTodosCliTransport,
   isCloudRouting,
   resetTodosCloudClient,
-  resetTodosLocalFallbackNotice,
   cloudListTasks,
   cloudGetTask,
   cloudCreateTask,
@@ -278,9 +277,14 @@ afterEach(() => {
 });
 
 describe("todos client transport resolver (API pair, no storage modes)", () => {
-  test("no env -> local (null client, isCloudRouting false)", () => {
-    expect(getTodosCloudClient({})).toBeNull();
-    expect(isCloudRouting({})).toBe(false);
+  test("no env FAILS CLOSED; the local opt-in alone gives null client and isCloudRouting false", () => {
+    // Owner ruling (2026-09-04, hasna/apps#1613): an absent API pair WITHOUT the
+    // explicit local opt-in is a throw — the old "no env -> local default" is gone.
+    expect(() => getTodosCloudClient({})).toThrow("REMOTE_API_CONFIG_MISSING");
+    expect(() => isCloudRouting({})).toThrow("REMOTE_API_CONFIG_MISSING");
+    expect(getTodosCloudClient({ HASNA_TODOS_LOCAL: "1" })).toBeNull();
+    expect(getTodosCloudClient({ TODOS_LOCAL: "1" })).toBeNull();
+    expect(isCloudRouting({ HASNA_TODOS_LOCAL: "1" })).toBe(false);
   });
 
   test("API_URL + API_KEY -> cloud-http client at /v1", () => {
@@ -300,8 +304,9 @@ describe("todos client transport resolver (API pair, no storage modes)", () => {
 
   test("retired storage-mode variables are inert: never read, never selected", () => {
     // The removal is complete: the mode vocabulary is not read at all. A stale
-    // variable neither selects a transport nor throws — the API env pair is
-    // the sole selector.
+    // variable neither selects a transport nor throws by itself — the API env
+    // pair and the explicit local opt-in are the sole selectors. A stale
+    // variable ALONE leaves the env without either, so resolution fails closed.
     const withPair = {
       HASNA_TODOS_STORAGE_MODE: "cloud",
       HASNA_TODOS_API_URL: "https://todos.example.com",
@@ -309,11 +314,19 @@ describe("todos client transport resolver (API pair, no storage modes)", () => {
     } as never;
     expect(getTodosCloudClient(withPair)).not.toBeNull();
     expect(isCloudRouting(withPair)).toBe(true);
-    expect(resolveTodosCliTransport({ HASNA_TODOS_STORAGE_MODE: "remtoe" }).transport).toBe("sqlite");
-    expect(resolveTodosCliTransport({
+    // Stale mode values do not resurrect a selector: no pair, no opt-in, throw.
+    expect(() => resolveTodosCliTransport({ HASNA_TODOS_STORAGE_MODE: "remtoe" }))
+      .toThrow("REMOTE_API_CONFIG_MISSING");
+    expect(() => resolveTodosCliTransport({
       HASNA_TODOS_STORAGE_MODE: "local",
       TODOS_STORAGE_MODE: "remote",
-    }).transport).toBe("sqlite");
+    })).toThrow("REMOTE_API_CONFIG_MISSING");
+    // The mode vocabulary never SELECTS sqlite either: sqlite here comes from
+    // the opt-in, not from the stale "local" value.
+    expect(resolveTodosCliTransport({
+      HASNA_TODOS_STORAGE_MODE: "local",
+      HASNA_TODOS_LOCAL: "1",
+    }).source).toBe("local-opt-in");
   });
 
   test("KEY without URL refuses with the missing variable named, without local fallback", () => {
@@ -334,8 +347,20 @@ describe("todos client transport resolver (API pair, no storage modes)", () => {
   });
 
   test("a blank retired storage-mode variable is inert too", () => {
-    expect(resolveTodosCliTransport({ HASNA_TODOS_STORAGE_MODE: "   " }).transport).toBe("sqlite");
-    expect(resolveTodosCliTransport({ HASNA_TODOS_MODE: "" }).transport).toBe("sqlite");
+    // Blank or whitespace leftovers are not read, so they cannot rescue an
+    // otherwise selector-less env — which fails closed — and cannot unseat the
+    // opt-in or the API pair when those ARE present.
+    expect(() => resolveTodosCliTransport({ HASNA_TODOS_STORAGE_MODE: "   " }))
+      .toThrow("REMOTE_API_CONFIG_MISSING");
+    expect(() => resolveTodosCliTransport({ HASNA_TODOS_MODE: "" }))
+      .toThrow("REMOTE_API_CONFIG_MISSING");
+    expect(resolveTodosCliTransport({ HASNA_TODOS_STORAGE_MODE: "   ", HASNA_TODOS_LOCAL: "1" }).transport)
+      .toBe("sqlite");
+    expect(resolveTodosCliTransport({
+      HASNA_TODOS_MODE: "",
+      HASNA_TODOS_API_URL: "https://todos.example.com",
+      HASNA_TODOS_API_KEY: "fixture-key",
+    }).transport).toBe("http");
   });
 
   test.each([
@@ -408,7 +433,10 @@ describe("todos client transport resolver (API pair, no storage modes)", () => {
     })!;
     expect(authorityA.baseUrl).toBe("https://authority-a.example/v1");
     expect(authorityB.baseUrl).toBe("https://authority-b.example/v1");
-    expect(getTodosCloudClient({})).toBeNull();
+    // A selector-less env fails closed rather than returning null; the explicit
+    // local opt-in is the null-client (non-cloud) case now.
+    expect(() => getTodosCloudClient({})).toThrow("REMOTE_API_CONFIG_MISSING");
+    expect(getTodosCloudClient({ HASNA_TODOS_LOCAL: "1" })).toBeNull();
     const authorityAWithNewKey = getTodosCloudClient({
       HASNA_TODOS_API_URL: "https://authority-a.example",
       HASNA_TODOS_API_KEY: "fixture-key-a-rotated",
@@ -423,7 +451,7 @@ describe("todos client transport resolver (API pair, no storage modes)", () => {
       ["https://authority-a.example/v1/projects", "Bearer fixture-key-a-rotated"],
     ]);
 
-    expect(getTodosCloudClient({})).toBeNull();
+    expect(getTodosCloudClient({ HASNA_TODOS_LOCAL: "1" })).toBeNull();
     expect(getTodosCloudClient(CLOUD_ENV)?.baseUrl).toBe("https://todos.example.com/v1");
   });
 });
@@ -2889,38 +2917,46 @@ describe("requireTodosRemoteAuthorityEnv", () => {
   });
 });
 
-describe("local-fallback notice (incident 715712)", () => {
-  // Regression: a harness session-env re-provision dropped HASNA_TODOS_API_URL
-  // + HASNA_TODOS_API_KEY and the CLI silently served the on-box SQLite store
-  // at rc=0 — tasks appeared gone. Before serving local on the all-unset
-  // default branch, the resolver must emit one machine-readable stderr notice
-  // naming the mode switch (the same family as the merged secrets fix, PR
-  // #681 / incident 715558).
+describe("fail-closed transport resolution (owner ruling 2026-09-04, hasna/apps#1613)", () => {
+  // Regression replacing incident 715712's response: a harness session-env
+  // re-provision dropped HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY and the CLI
+  // silently served the on-box SQLite store at rc=0 — tasks appeared gone.
+  // The old mitigation emitted a one-line `todos-local-fallback` stderr notice
+  // and kept serving local at rc 0 (a false green). The ruling's response is
+  // stricter: with neither API var set and NO explicit local opt-in, the
+  // resolver THROWS and the CLI exits non-zero — there is no stderr notice to
+  // emit and no on-box store to serve.
 
-  test("all-unset emits one stderr notice naming the mode switch before serving local", () => {
-    resetTodosLocalFallbackNotice();
+  test("all-unset throws REMOTE_API_CONFIG_MISSING and emits no notice", () => {
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
-      const resolution = resolveTodosCliTransport({});
-      expect(resolution).toEqual({ transport: "sqlite", selected: false, source: "default" });
-      expect(errSpy).toHaveBeenCalledTimes(1);
-      const notice = JSON.parse(errSpy.mock.calls[0]![0] as string) as Record<string, unknown>;
-      expect(notice.event).toBe("todos-local-fallback");
-      expect(notice.notice).toContain("HASNA_TODOS_API_URL");
-      expect(notice.notice).toContain("HASNA_TODOS_API_KEY");
-      expect(notice.notice).toContain("local SQLite");
-      expect(notice.apiUrlPresent).toBe(false);
-      expect(notice.apiKeyPresent).toBe(false);
-      // Once-only per process: repeated local resolutions stay silent.
-      resolveTodosCliTransport({});
-      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(() => resolveTodosCliTransport({})).toThrow(
+        /REMOTE_API_CONFIG_MISSING: remote Todos storage requires HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY; neither is set, and local SQLite mode requires the explicit opt-in HASNA_TODOS_LOCAL=1 \(alias TODOS_LOCAL=1\) — failing closed instead of serving the local store/,
+      );
+      // No notice machinery remains: nothing is written to stderr by resolution.
+      expect(errSpy).not.toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
     }
   });
 
-  test("hosted pair selects http and emits no fallback notice", () => {
-    resetTodosLocalFallbackNotice();
+  test("the explicit local opt-in selects sqlite and emits no notice", () => {
+    const errSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const resolution = resolveTodosCliTransport({ HASNA_TODOS_LOCAL: "1" });
+      expect(resolution).toEqual({ transport: "sqlite", selected: false, source: "local-opt-in" });
+      expect(resolveTodosCliTransport({ TODOS_LOCAL: "1" })).toEqual({
+        transport: "sqlite",
+        selected: false,
+        source: "local-opt-in",
+      });
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  test("hosted pair selects http and emits no notice", () => {
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       const resolution = resolveTodosCliTransport({
@@ -2935,7 +2971,6 @@ describe("local-fallback notice (incident 715712)", () => {
   });
 
   test("partial pair still fails closed and emits no notice", () => {
-    resetTodosLocalFallbackNotice();
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(() => resolveTodosCliTransport({ HASNA_TODOS_API_URL: "https://todos.example.test" }))

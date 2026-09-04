@@ -86,8 +86,8 @@ describe("Cursor MCP registration", () => {
     const registered = await runCli(["mcp", "--register", "cursor"], fixtureRoot);
 
     expect(registered.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(registered.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(registered.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(registered.stdout).toContain("Cursor (project): registered");
     expect(readJson(configPath)).toEqual({
       projectSetting: true,
@@ -156,8 +156,8 @@ describe("Takumi MCP registration", () => {
     const registered = await runCli(["mcp", "--register", "takumi"], fixtureRoot);
 
     expect(registered.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(registered.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(registered.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(registered.stdout).not.toContain("Unknown agent");
     expect(registered.stdout).toContain("Takumi (project): registered");
     expect(readCalls(callLog)).toEqual([
@@ -167,8 +167,8 @@ describe("Takumi MCP registration", () => {
     const unregistered = await runCli(["mcp", "--unregister", "takumi"], fixtureRoot);
 
     expect(unregistered.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(unregistered.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(unregistered.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(unregistered.stdout).toContain("Takumi (project): removed todos MCP server");
     expect(readCalls(callLog)).toEqual([
       `mcp add --scope project todos -- ${fixtureRoot.mcpBinary} --stdio`,
@@ -186,8 +186,8 @@ describe("Takumi MCP registration", () => {
     );
 
     expect(registered.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(registered.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(registered.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(registered.stdout).toContain("Takumi (user): registered");
     expect(readCalls(callLog)).toEqual([
       `mcp add --scope user todos -- ${fixtureRoot.mcpBinary} --stdio`,
@@ -199,8 +199,8 @@ describe("Takumi MCP registration", () => {
     );
 
     expect(unregistered.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(unregistered.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(unregistered.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(unregistered.stdout).toContain("Takumi (user): removed todos MCP server");
     expect(readCalls(callLog)).toEqual([
       `mcp add --scope user todos -- ${fixtureRoot.mcpBinary} --stdio`,

@@ -81,7 +81,7 @@ async function runCli(args: string[], dbPath: string, extraEnv: Record<string, s
  * notice instead: the mode switch is never silent.
  */
 function expectLocalModeStderr(result: CliResult): void {
-  expect(result.stderr).toContain('"event":"todos-local-fallback"');
+  expect(result.stderr).not.toContain('"event":"todos-local-fallback"');
 }
 
 function createMinimalSourceStore(dbPath: string): void {

@@ -125,8 +125,9 @@ describe("local release notes generation", () => {
       const stderr = await new Response(proc.stderr).text();
       const exitCode = await proc.exited;
 
-      // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-      expect(stderr).toContain('"event":"todos-local-fallback"');
+      // Explicit-opt-in local runs are silent about the mode: the legacy
+      // `todos-local-fallback` notice (incident 715712) is gone.
+      expect(stderr).not.toContain('"event":"todos-local-fallback"');
       expect(exitCode).toBe(0);
       const payload = JSON.parse(stdout);
       expect(payload.scope.project_id).toBe(project.id);

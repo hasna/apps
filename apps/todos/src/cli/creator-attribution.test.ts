@@ -106,8 +106,8 @@ describe("todos comment — records who wrote it", () => {
     ]);
 
     expect(result.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(result.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(result.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(JSON.parse(result.stdout)).toMatchObject({
       task_id: task.id,
       agent_id: "brutus",
@@ -157,8 +157,8 @@ describe("todos comment — records who wrote it", () => {
 
     const shown = await runCli(["--json", "show", task.id]);
     expect(shown.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(shown.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(shown.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(JSON.parse(shown.stdout).comments).toHaveLength(0);
   });
 

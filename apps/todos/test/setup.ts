@@ -36,6 +36,15 @@
  * blank. Blank resolves to the developer's real local todos database, which is
  * a live store too — smaller blast radius than the hosted one, still not this
  * process's to write to.
+ *
+ * `applyLocalTodosTestEnv` also defaults the EXPLICIT local opt-in
+ * (`HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1`) on this process's env — required
+ * since the 2026-09-04 fail-closed ruling (hasna/apps#1613), where the
+ * resolver refuses an absent API pair without it. In-process tests inherit it
+ * directly; subprocess tests inherit it through `{...process.env}` spreads or
+ * via `localTodosTestEnv`/`localRoutingTestEnv`. A test that spawns a CLI with
+ * an env built from scratch must set the opt-in itself or it fails closed by
+ * design.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

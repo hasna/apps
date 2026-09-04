@@ -98,7 +98,9 @@ describe("environment snapshots", () => {
     expect(payload.snapshot.id).toMatch(/^env_/);
     expect(payload.output_path).toBe(output);
     expect(readEnvironmentSnapshot(output).command_env.env).toBeNull();
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(result.stderr.toString("utf8")).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs are silent about the mode: the legacy
+    // `todos-local-fallback` notice (incident 715712) is gone, so a local-mode
+    // stderr that still carries it means a stale binary or a regression.
+    expect(result.stderr.toString("utf8")).not.toContain('"event":"todos-local-fallback"');
   });
 });

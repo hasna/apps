@@ -142,8 +142,8 @@ describe("todos doctor exit-code contract (local mode)", () => {
     const result = await runCli(["doctor"], dirtyDb);
 
     expect(result.exitCode).toBe(1);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(result.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(result.stderr).not.toContain('"event":"todos-local-fallback"');
     for (const id of CONDITION_IDS) expect(result.stdout).toContain(id);
     expect(result.stdout).toContain("Referential integrity");
     expect(result.stdout).not.toContain("All clear");
@@ -152,8 +152,8 @@ describe("todos doctor exit-code contract (local mode)", () => {
   test("REGRESSION: --json carries the per-condition breakdown and an honest ok/exit_code", async () => {
     const result = await runCli(["--json", "doctor"], dirtyDb);
     expect(result.exitCode).toBe(1);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(result.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(result.stderr).not.toContain('"event":"todos-local-fallback"');
 
     const report = JSON.parse(result.stdout) as {
       ok: boolean;
@@ -182,8 +182,8 @@ describe("todos doctor exit-code contract (local mode)", () => {
   test("exits 0 on a clean store (the mirror case)", async () => {
     const result = await runCli(["doctor"], cleanDb);
     expect(result.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(result.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(result.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(result.stdout).toContain("Integrity clean");
 
     const json = await runCli(["--json", "doctor"], cleanDb);

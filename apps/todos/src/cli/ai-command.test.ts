@@ -314,6 +314,10 @@ function childEnv(
     HASNA_TODOS_API_KEY: "",
     TODOS_API_URL: "",
     TODOS_API_KEY: "",
+    // Local SQLite is opt-in only since the fail-closed ruling (hasna/apps#1613);
+    // this fixture env runs the CLI against the local store on purpose.
+    HASNA_TODOS_LOCAL: "1",
+    TODOS_LOCAL: "1",
     FAKE_AI_ARGS: JSON.stringify(args),
     FAKE_AI_CAPTURE: capturePath,
     FAKE_AI_SCENARIO: options.scenario ?? "answered",
@@ -930,8 +934,8 @@ describe("todos ai stable failure mapping", () => {
         status: "failed",
         error: { code: "runtime_invalid_result" },
       });
-      // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-      expect(run.stderr).toContain('"event":"todos-local-fallback"');
+      // Explicit-opt-in local runs emit no fallback notice (fail-closed ruling, hasna/apps#1613).
+      expect(run.stderr).not.toContain('"event":"todos-local-fallback"');
     }
 
     for (const scenario of ["event-tojson", "event-extra"]) {
@@ -949,8 +953,8 @@ describe("todos ai stable failure mapping", () => {
           error: { code: "runtime_invalid_result" },
         },
       });
-      // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-      expect(run.stderr).toContain('"event":"todos-local-fallback"');
+      // Explicit-opt-in local runs emit no fallback notice (fail-closed ruling, hasna/apps#1613).
+      expect(run.stderr).not.toContain('"event":"todos-local-fallback"');
     }
   }, 10_000);
 
@@ -969,8 +973,8 @@ describe("todos ai stable failure mapping", () => {
         error: { code: "runtime_invalid_result" },
       },
     });
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(run.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs emit no fallback notice (fail-closed ruling, hasna/apps#1613).
+    expect(run.stderr).not.toContain('"event":"todos-local-fallback"');
   }, 5_000);
 
   test("Commander usage errors honor explicit and global JSON output", async () => {
@@ -985,8 +989,8 @@ describe("todos ai stable failure mapping", () => {
         status: "failed",
         error: { code: "invalid_input" },
       });
-      // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-      expect(run.stderr).toContain('"event":"todos-local-fallback"');
+      // Explicit-opt-in local runs emit no fallback notice (fail-closed ruling, hasna/apps#1613).
+      expect(run.stderr).not.toContain('"event":"todos-local-fallback"');
     }
   }, 10_000);
 

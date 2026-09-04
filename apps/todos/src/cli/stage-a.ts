@@ -24,6 +24,13 @@ export type TodosCliCommandOwner = "diagnostic" | "remote-http" | "local-only";
  * ambient API pair. The retired storage-mode variables are never written here —
  * they are banned (owner directive 2026-08-15), and the HTTP selector is
  * HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY, which the redaction blanks.
+ *
+ * Because transport resolution now fails closed (hasna/apps#1613), blanking the
+ * pair alone would make a later `resolveTodosCliTransport()` /
+ * `getTodosCloudClient()` call THROW instead of reporting "no cloud client".
+ * The local SQLite use here is a deliberate command-level decision (a
+ * local-only command was admitted), never an implicit fallback, so the apply
+ * stamps the explicit local opt-in alongside the blanking.
  */
 export function applyTodosCliAuthorityEnvironment(
   authority: TodosCliAuthorityInitialization,
@@ -34,6 +41,11 @@ export function applyTodosCliAuthorityEnvironment(
   env.HASNA_TODOS_API_KEY = "";
   env.TODOS_API_URL = "";
   env.TODOS_API_KEY = "";
+  // Explicit local decision: resolver now returns the sqlite transport under
+  // the opt-in, and getTodosCloudClient() keeps returning null (no cloud
+  // client) instead of throwing REMOTE_API_CONFIG_MISSING.
+  env.HASNA_TODOS_LOCAL = "1";
+  env.TODOS_LOCAL = "1";
 }
 
 const REGISTERED_CANONICAL_COMMANDS = [
@@ -637,9 +649,11 @@ export function initializeTodosCliAuthority(
   try {
     resolution = resolveTodosCliTransport(env);
   } catch (error) {
-    // A partial API pair (URL without KEY, or KEY without URL) is a hard error
-    // for real commands, but DIAGNOSTIC commands must still boot so they can
-    // report the misconfiguration through their own status surface.
+    // A partial API pair (URL without KEY, or KEY without URL) — or a fully
+    // absent pair without the explicit local opt-in (fail closed, hasna/apps#1613)
+    // — is a hard error for real commands, but DIAGNOSTIC commands must still
+    // boot so they can report the misconfiguration through their own status
+    // surface.
     const invocation = parseInvocation(args);
     if (isMetadataInvocation(args, invocation)) {
       const status = getTodosRemoteAuthorityConfigStatus(env);
@@ -647,6 +661,9 @@ export function initializeTodosCliAuthority(
     }
     throw error;
   }
+  // The sqlite transport is reachable ONLY under the explicit local opt-in
+  // (HASNA_TODOS_LOCAL=1 / TODOS_LOCAL=1); a resolution with neither the pair
+  // nor the opt-in would have thrown above, never landed here.
   if (!resolution.selected) return { route: "local", v1_base_url: null };
 
   const invocation = parseInvocation(args);

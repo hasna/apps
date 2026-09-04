@@ -314,8 +314,8 @@ describe("project-registration CLI", () => {
       ["--json", "project-registration", "capability"],
     );
     expect(capabilityResult.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(capabilityResult.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(capabilityResult.stderr).not.toContain('"event":"todos-local-fallback"');
     const capability = JSON.parse(capabilityResult.stdout)
       .capability as TodosProjectRegistrationCapability;
     expect(capability).toMatchObject({
@@ -346,8 +346,8 @@ describe("project-registration CLI", () => {
       ["--json", "project-registration", "create", "--file", projectRequestPath],
     );
     expect(projectBind.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(projectBind.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(projectBind.stderr).not.toContain('"event":"todos-local-fallback"');
     const projectBindingReceipt = JSON.parse(projectBind.stdout).receipt;
     expect(projectBindingReceipt).toMatchObject({
       outcome: "accepted",
@@ -374,8 +374,8 @@ describe("project-registration CLI", () => {
       ],
     );
     expect(validationResult.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(validationResult.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(validationResult.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(JSON.parse(validationResult.stdout).validation).toMatchObject({
       valid: true,
       source_receipt_id: projectBindingReceipt.receipt_id,
@@ -404,8 +404,8 @@ describe("project-registration CLI", () => {
       ["--json", "project-registration", "create", "--file", taskListRequestPath],
     );
     expect(taskListBind.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(taskListBind.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(taskListBind.stderr).not.toContain('"event":"todos-local-fallback"');
     expect(JSON.parse(taskListBind.stdout).receipt).toMatchObject({
       outcome: "accepted",
       target_id: taskList.id,
@@ -422,8 +422,8 @@ describe("project-registration CLI", () => {
       "--all",
     ]);
     expect(listed.exitCode).toBe(0);
-    // Local-mode CLI runs carry the fallback notice on stderr (incident 715712).
-    expect(listed.stderr).toContain('"event":"todos-local-fallback"');
+    // Explicit-opt-in local runs no longer emit the legacy todos-local-fallback notice (removed by the fail-closed ruling, hasna/apps#1613): a stderr that still carries it means a stale binary or a regression.
+    expect(listed.stderr).not.toContain('"event":"todos-local-fallback"');
     const result = JSON.parse(listed.stdout);
     expect(result).toMatchObject({
       source_project_id: sourceProjectId,

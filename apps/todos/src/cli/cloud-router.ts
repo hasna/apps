@@ -1,12 +1,15 @@
 /**
  * Authenticated `/v1` routing for the Hasna Todos CLI.
  *
- * The client seam has exactly two transports: the local SQLite file (default)
- * or the hosted HTTP `/v1` authority. Selecting the http transport requires the
- * canonical API URL and API key, validates the authority before a local-capable
- * command module can run, and never falls back to SQLite. This is the repo-owned
- * REST contract; it has no dependency on a private SaaS API or database
- * connection string, and the client never opens Postgres directly.
+ * The client seam has exactly two transports: the local SQLite file or the
+ * hosted HTTP `/v1` authority. Selecting the http transport requires the
+ * canonical API URL and API key; with neither present the CLI FAILS CLOSED
+ * unless the local SQLite file is selected by the EXPLICIT opt-in
+ * (HASNA_TODOS_LOCAL=1 or TODOS_LOCAL=1) — there is no implicit default to
+ * local storage and no silent fallback. Validating the authority happens
+ * before a local-capable command module can run. This is the repo-owned REST
+ * contract; it has no dependency on a private SaaS API or database connection
+ * string, and the client never opens Postgres directly.
  */
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { randomUUID } from "node:crypto";
@@ -122,53 +125,24 @@ export interface TodosCliTransportResolution {
   /** Canonical transport the environment resolved to (`sqlite` | `http`). */
   transport: TodosCliTransport;
   selected: boolean;
-  /** What selected the transport; `default` means the on-box SQLite file. */
-  source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY" | "default";
-}
-
-/**
- * Once-only per-process guard for the local-fallback notice. A long-running
- * consumer (MCP server) must not emit a notice per request; a CLI one-shot
- * emits at most one line before its first local read.
- */
-let todosLocalFallbackNoticeEmitted = false;
-
-/** Test hook: re-arm the once-only local-fallback notice. */
-export function resetTodosLocalFallbackNotice(): void {
-  todosLocalFallbackNoticeEmitted = false;
-}
-
-/**
- * Emit one machine-readable JSON line on stderr when the transport falls back
- * to the on-box SQLite store with NO hosted intent in the environment (the
- * all-unset default branch). Incident 715712: a harness session-env
- * re-provision dropped HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY and the CLI
- * silently served the local store at rc=0 — tasks appeared gone. The notice
- * names the mode switch so a false-empty read is never silent (the same
- * family as the merged secrets fix, PR #681 / incident 715558). stdout stays
- * pure for parsers.
- */
-function emitTodosLocalFallbackNotice(env: Env): void {
-  if (todosLocalFallbackNoticeEmitted) return;
-  todosLocalFallbackNoticeEmitted = true;
-  const notice = {
-    event: "todos-local-fallback",
-    transport: "sqlite",
-    source: "default",
-    apiUrlPresent: Boolean(env.HASNA_TODOS_API_URL?.trim()),
-    apiKeyPresent: Boolean(env.HASNA_TODOS_API_KEY?.trim()),
-    notice:
-      "No hosted API config (HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY) is present; " +
-      "using local SQLite. Hosted todos are NOT visible in this output.",
-  };
-  console.error(JSON.stringify(notice));
+  /**
+   * What selected the transport: the http pair, or the explicit local opt-in
+   * (`HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1`). A resolution with neither is a
+   * throw — the client never defaults to the on-box SQLite file.
+   */
+  source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY" | "local-opt-in";
 }
 
 /**
  * Resolve the CLI transport from the environment. Retired storage-mode
  * variables are inert — never read, never mapped, never a fallback — and the
  * transport is selected by the API env pair alone: URL set without KEY (or KEY
- * set without URL) is a hard error naming the missing variable.
+ * set without URL) is a hard error naming the missing variable. When NEITHER
+ * is present the client fails closed (owner ruling 2026-09-04, hasna/apps#1613):
+ * local SQLite is served only under the explicit opt-in `HASNA_TODOS_LOCAL=1`
+ * (alias `TODOS_LOCAL=1`); without it this throws instead of silently serving
+ * the on-box store at rc 0 (the false-green incident 715712 path — the old
+ * `todos-local-fallback` stderr notice has been removed, not replaced).
  */
 export function resolveTodosCliTransport(env: Env = process.env as Env): TodosCliTransportResolution {
   const urlValue = env.HASNA_TODOS_API_URL?.trim();
@@ -182,20 +156,26 @@ export function resolveTodosCliTransport(env: Env = process.env as Env): TodosCl
   }
   if (urlValue) {
     throw new Error(
-      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY; local SQLite fallback is disabled",
+      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY; local SQLite is opt-in only (HASNA_TODOS_LOCAL=1) and is disabled by default — failing closed",
     );
   }
   if (keyValue) {
     throw new Error(
-      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite fallback is disabled",
+      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite is opt-in only (HASNA_TODOS_LOCAL=1) and is disabled by default — failing closed",
     );
   }
-  emitTodosLocalFallbackNotice(env);
-  return {
-    transport: "sqlite",
-    selected: false,
-    source: "default",
-  };
+  const localOptIn =
+    (env.HASNA_TODOS_LOCAL ?? "").trim() !== "" || (env.TODOS_LOCAL ?? "").trim() !== "";
+  if (localOptIn) {
+    return {
+      transport: "sqlite",
+      selected: false,
+      source: "local-opt-in",
+    };
+  }
+  throw new Error(
+    "REMOTE_API_CONFIG_MISSING: remote Todos storage requires HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY; neither is set, and local SQLite mode requires the explicit opt-in HASNA_TODOS_LOCAL=1 (alias TODOS_LOCAL=1) — failing closed instead of serving the local store",
+  );
 }
 
 function requestedTransport(env: Env): TodosCliTransport {
@@ -544,16 +524,20 @@ async function requiredRemoteRoute<T>(
 /**
  * Resolve the Todos HTTP storage client from the environment. Returns a ready
  * client when the API URL + API key pair selects the HTTP transport, or `null`
- * for the on-box SQLite store. A selected pair with an invalid URL always
- * throws; a partial pair (URL without KEY or KEY without URL) throws instead of
- * falling back to SQLite.
+ * for the on-box SQLite store (reachable only under the explicit local opt-in).
+ * A selected pair with an invalid URL always throws; a partial pair (URL
+ * without KEY or KEY without URL) throws; and a fully absent pair WITHOUT the
+ * local opt-in throws (fail closed, hasna/apps#1613) instead of returning null
+ * for a silent local default. Callers that are local-first by design must wrap
+ * this in a try/catch or pre-check the opt-in.
  */
 export function getTodosCloudClient(
   env: Env = process.env as Env,
   requestTimeoutMs: number = REMOTE_REQUEST_TIMEOUT_MS,
 ): HasnaStorageClient | null {
   // The selector is the API env pair: both set selects the HTTP authority, an
-  // incomplete pair is an error, and an absent pair preserves the local default.
+  // incomplete pair is an error, and an absent pair serves local SQLite only
+  // under the explicit opt-in — otherwise it throws.
   if (requestedTransport(env) !== "http") return null;
   const resolved = resolveStorageClient("todos", requireTodosRemoteAuthorityEnv(env), {
     fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),

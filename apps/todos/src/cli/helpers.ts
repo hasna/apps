@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { cloudResolveTaskRef, getTodosCloudClient, isCloudRouting } from "./cloud-router.js";
@@ -295,8 +295,20 @@ export function detectGitRoot(): string | null {
 }
 
 function isPathWithin(child: string, parent: string): boolean {
-  const normalizedChild = resolve(child);
-  const normalizedParent = resolve(parent);
+  // Compare REAL paths. On macOS the API temp dir is the symlinked
+  // /var/folders/... form while git reports the physical /private/var/folders/...
+  // path for the same directory, so a plain prefix check against the raw
+  // strings lets genuinely temp git roots through and auto-registers throwaway
+  // worktrees as projects. Linux is unaffected (tmpdir has no symlink there).
+  const real = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  const normalizedChild = real(child);
+  const normalizedParent = real(parent);
   return normalizedChild === normalizedParent || normalizedChild.startsWith(`${normalizedParent}${sep}`);
 }
 
