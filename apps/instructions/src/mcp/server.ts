@@ -2,7 +2,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { resolveConfigStore } from "../data/config-store.js";
+import { resolveConfigStore, type ConfigStore } from "../data/config-store.js";
 import { getReportedDbPath } from "../lib/app-home.js";
 import { applyConfigsWithReport } from "../lib/apply.js";
 import { findConfigsByTargetPath, findReferenceConfigsByName } from "../lib/config-target-identity.js";
@@ -90,7 +90,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: LEAN_TOOL
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args = {} } = req.params;
-  const store = resolveConfigStore();
+  // Fail closed: a tool call with no fleet API env and no explicit local opt-in
+  // (HASNA_INSTRUCTIONS_LOCAL=1) must answer as an error naming the required
+  // env, never silently serve the on-box SQLite store (owner directive
+  // 2026-09-04). Resolution sits inside the guard so the refusal is a clean
+  // tool error, not an unhandled handler rejection.
+  let store: ConfigStore;
+  try {
+    store = resolveConfigStore();
+  } catch (e) {
+    return err(e instanceof Error ? e.message : String(e));
+  }
   try {
     switch (name) {
       case "list_configs": {

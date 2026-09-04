@@ -1,12 +1,13 @@
 // Fail-loud rejection of the retired storage-mode variables.
 //
 // Deployment modes no longer exist (owner directive 2026-07-29; knowledge
-// k_ms5wv466_u0jidq). The client connects to the local SQLite store OR the
-// HTTP API selected by HASNA_INSTRUCTIONS_API_URL + HASNA_INSTRUCTIONS_API_KEY;
-// the server storage switch is `sqlite | postgresql` via
-// HASNA_INSTRUCTIONS_DATABASE_URL. Any STORAGE_MODE variable still set is an
-// error, never a hint: silently ignoring it would keep the split-brain drift
-// the mode vocabulary caused.
+// k_ms5wv466_u0jidq). The client uses the HTTP API selected by
+// HASNA_INSTRUCTIONS_API_URL + HASNA_INSTRUCTIONS_API_KEY, and fails closed
+// without it (owner directive 2026-09-04); the on-box SQLite store is opened
+// only behind the explicit opt-in HASNA_INSTRUCTIONS_LOCAL=1. The server
+// storage switch is `sqlite | postgresql` via HASNA_INSTRUCTIONS_DATABASE_URL.
+// Any STORAGE_MODE variable still set is an error, never a hint: silently
+// ignoring it would keep the split-brain drift the mode vocabulary caused.
 
 const LEGACY_STORAGE_MODE_KEYS = [
   "HASNA_INSTRUCTIONS_STORAGE_MODE",
@@ -33,8 +34,9 @@ export function assertNoLegacyStorageMode(env: NodeJS.ProcessEnv = process.env):
   if (!legacyKey) return;
   throw new Error(
     `${legacyKey} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
-      `The client uses the local SQLite store, or the HTTP API selected by ` +
-      `HASNA_INSTRUCTIONS_API_URL + HASNA_INSTRUCTIONS_API_KEY. ` +
+      `The client uses the HTTP API selected by ` +
+      `HASNA_INSTRUCTIONS_API_URL + HASNA_INSTRUCTIONS_API_KEY, or — only with the explicit ` +
+      `opt-in HASNA_INSTRUCTIONS_LOCAL=1 — the local SQLite store. ` +
       `On the server, set HASNA_INSTRUCTIONS_DATABASE_URL to select the postgresql backend, ` +
       `or leave it unset for sqlite.`,
   );

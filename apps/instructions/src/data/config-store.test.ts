@@ -3,9 +3,11 @@ import {
   CloudConfigStore,
   CloudHttpError,
   LocalConfigStore,
+  LOCAL_OPT_IN_ENV,
   formatCliError,
   isApiTransport,
   isCloudAuthError,
+  isLocalOptIn,
   resolveCloudConfig,
   resolveConfigStore,
 } from "./config-store.js";
@@ -151,6 +153,11 @@ describe("resolveCloudConfig", () => {
     expect(() => resolveCloudConfig({ HASNA_INSTRUCTIONS_API_URL: "https://x" })).toThrow();
     expect(() => resolveCloudConfig({ HASNA_INSTRUCTIONS_API_KEY: "k" })).toThrow();
   });
+  test("exactly-one-set error names the local opt-in instead of a local default", () => {
+    expect(() => resolveCloudConfig({ HASNA_INSTRUCTIONS_API_URL: "https://x" })).toThrow(
+      new RegExp(LOCAL_OPT_IN_ENV),
+    );
+  });
 });
 
 describe("retired storage-mode variables", () => {
@@ -178,14 +185,39 @@ describe("retired storage-mode variables", () => {
   });
 });
 
-describe("resolveConfigStore", () => {
-  test("local when env unset", () => {
-    expect(resolveConfigStore({})).toBeInstanceOf(LocalConfigStore);
+describe("resolveConfigStore (fail closed without fleet env, owner directive 2026-09-04)", () => {
+  test("throws naming the required env when no API env and no local opt-in", () => {
+    expect(() => resolveConfigStore({})).toThrow(/HASNA_INSTRUCTIONS_API_URL/);
+    expect(() => resolveConfigStore({})).toThrow(/HASNA_INSTRUCTIONS_API_KEY/);
+    expect(() => resolveConfigStore({})).toThrow(new RegExp(LOCAL_OPT_IN_ENV));
+    // The failure must never silently open the local store.
+    expect(() => resolveConfigStore({})).not.toBeInstanceOf(LocalConfigStore);
   });
   test("api transport when both env vars set", () => {
     const store = resolveConfigStore({
       HASNA_INSTRUCTIONS_API_URL: "https://instructions.hasna.xyz",
       HASNA_INSTRUCTIONS_API_KEY: "k",
+    });
+    expect(store).toBeInstanceOf(CloudConfigStore);
+    expect(store.mode).toBe("api");
+  });
+  test("throws when exactly one API var is set, even with the local opt-in absent", () => {
+    expect(() => resolveConfigStore({ HASNA_INSTRUCTIONS_API_URL: "https://x" })).toThrow();
+    expect(() => resolveConfigStore({ HASNA_INSTRUCTIONS_API_KEY: "k" })).toThrow();
+  });
+  test("local store only with the explicit opt-in", () => {
+    expect(isLocalOptIn({ [LOCAL_OPT_IN_ENV]: "1" })).toBe(true);
+    expect(isLocalOptIn({ [LOCAL_OPT_IN_ENV]: "0" })).toBe(false);
+    expect(isLocalOptIn({})).toBe(false);
+    const store = resolveConfigStore({ [LOCAL_OPT_IN_ENV]: "1" });
+    expect(store).toBeInstanceOf(LocalConfigStore);
+    expect(store.mode).toBe("local");
+  });
+  test("fleet env wins over a stale local opt-in (no split-brain)", () => {
+    const store = resolveConfigStore({
+      HASNA_INSTRUCTIONS_API_URL: "https://instructions.hasna.xyz",
+      HASNA_INSTRUCTIONS_API_KEY: "k",
+      [LOCAL_OPT_IN_ENV]: "1",
     });
     expect(store).toBeInstanceOf(CloudConfigStore);
     expect(store.mode).toBe("api");
@@ -591,7 +623,7 @@ describe("revoked / invalid API key handling", () => {
     expect(msg).toContain("https://instructions.hasna.xyz");
     // offers both a re-auth and a local-store fallback path
     expect(msg).toContain("export HASNA_INSTRUCTIONS_API_KEY=");
-    expect(msg).toContain("unset HASNA_INSTRUCTIONS_API_URL HASNA_INSTRUCTIONS_API_KEY");
+    expect(msg).toContain("export HASNA_INSTRUCTIONS_LOCAL=1");
   });
 
   test("formatCliError leaves non-auth errors as plain messages", () => {
@@ -617,7 +649,7 @@ describe("revoked / invalid API key handling", () => {
       expect(isCloudAuthError(err)).toBe(true);
       const shown = formatCliError(err, AUTH_ENV);
       expect(shown).toContain("authentication failed");
-      expect(shown).toContain("unset HASNA_INSTRUCTIONS_API_URL HASNA_INSTRUCTIONS_API_KEY");
+      expect(shown).toContain("export HASNA_INSTRUCTIONS_LOCAL=1");
     }
   });
 

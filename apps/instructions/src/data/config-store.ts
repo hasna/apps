@@ -4,10 +4,13 @@
 // and HASNA_INSTRUCTIONS_API_KEY are both set the app uses the HTTP `/v1` API
 // transport. In that transport ALL config/profile/snapshot/machine reads and
 // writes route to `https://<host>/v1` with a bearer key — no local SQLite, no
-// DSN on the client. With the env unset the app uses the local SQLite store
-// (LocalConfigStore), which stays fully first-class. Setting exactly one var
-// throws (no silent local drift), and any retired storage-mode variable throws
-// via `assertNoLegacyStorageMode` (deployment modes no longer exist).
+// DSN on the client. Without the API env the app FAILS CLOSED (owner directive
+// 2026-09-04): it never silently opens the local SQLite store
+// (LocalConfigStore) as a default. The local store is reachable only through
+// the explicit opt-in HASNA_INSTRUCTIONS_LOCAL=1. Setting exactly one of the
+// two API vars throws (no silent local drift), and any retired storage-mode
+// variable throws via `assertNoLegacyStorageMode` (deployment modes no longer
+// exist).
 //
 // EVERY CLI command, MCP tool, and SDK method routes through this interface.
 // No consumer may import `../db/*` or call `fetch` directly.
@@ -153,6 +156,36 @@ const API_URL_ENV = "HASNA_INSTRUCTIONS_API_URL";
 const API_KEY_ENV = "HASNA_INSTRUCTIONS_API_KEY";
 
 /**
+ * The explicit opt-in for the on-box SQLite store.
+ *
+ * Owner directive 2026-09-04: a CLI run without the fleet API env must FAIL
+ * CLOSED (non-zero exit naming the required env) and must never open the local
+ * SQLite store as a default. `HASNA_INSTRUCTIONS_LOCAL=1` is the documented
+ * opt-in that re-enables the local transport for operators who want it.
+ */
+export const LOCAL_OPT_IN_ENV = "HASNA_INSTRUCTIONS_LOCAL";
+
+/** True when the operator explicitly opted in to the local SQLite store. */
+export function isLocalOptIn(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[LOCAL_OPT_IN_ENV]?.trim() === "1";
+}
+
+/**
+ * The fail-closed error thrown when no fleet API env is set and the local
+ * store was not explicitly opted in. Actionable: names every variable the
+ * operator can set to proceed, and states that the local store is refused
+ * rather than silently opened.
+ */
+export function missingFleetEnvError(): Error {
+  return new Error(
+    `No fleet API environment configured, and no explicit local-store opt-in. ` +
+      `Set both ${API_URL_ENV} and ${API_KEY_ENV} to use the hosted Instructions ` +
+      `service, or set ${LOCAL_OPT_IN_ENV}=1 to explicitly use the on-box SQLite ` +
+      `store. Refusing to open the local store without an explicit opt-in.`,
+  );
+}
+
+/**
  * True when `err` is a cloud authentication failure — an HTTP 401/403 from the
  * `/v1` API, which is what a missing, expired, or revoked bearer key produces.
  */
@@ -164,8 +197,9 @@ export function isCloudAuthError(err: unknown): err is CloudHttpError {
  * Render an error for CLI/user display. A cloud auth failure (401/403 — e.g. a
  * revoked or invalid `HASNA_INSTRUCTIONS_API_KEY`) is rewritten into a clear,
  * actionable re-auth message so the operator is not blocked by a raw
- * `CloudHttpError`: they can rotate the key or fall back to the local store.
- * All other errors fall back to their plain message (unchanged behaviour).
+ * `CloudHttpError`: they can rotate the key or explicitly opt in to the local
+ * store (`HASNA_INSTRUCTIONS_LOCAL=1`). All other errors fall back to their
+ * plain message (unchanged behaviour).
  */
 export function formatCliError(err: unknown, env: NodeJS.ProcessEnv = process.env): string {
   if (isCloudAuthError(err)) {
@@ -180,7 +214,7 @@ export function formatCliError(err: unknown, env: NodeJS.ProcessEnv = process.en
       `  The API key in ${API_KEY_ENV} is missing, expired, or revoked${apiUrl ? ` for ${apiUrl}` : ""}.`,
       `  To continue, either:`,
       `    - set a valid key:   export ${API_KEY_ENV}=<new-key>`,
-      `    - or use the local store instead:   unset ${API_URL_ENV} ${API_KEY_ENV}`,
+      `    - or opt in to the local store explicitly:   export ${LOCAL_OPT_IN_ENV}=1`,
     ]
       .filter(Boolean)
       .join("\n");
@@ -191,7 +225,8 @@ export function formatCliError(err: unknown, env: NodeJS.ProcessEnv = process.en
 /**
  * Resolve the HTTP API config from the environment.
  * - both vars set   -> config (HTTP `/v1` API transport)
- * - neither set     -> null (local SQLite)
+ * - neither set     -> null (the caller must then fail closed or honour the
+ *   explicit local opt-in `HASNA_INSTRUCTIONS_LOCAL=1` — see resolveConfigStore)
  * - exactly one set -> throws (no silent local drift)
  */
 export function resolveCloudConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig | null {
@@ -202,8 +237,9 @@ export function resolveCloudConfig(env: NodeJS.ProcessEnv = process.env): CloudC
   if (!apiUrl || !apiKey) {
     throw new Error(
       `API mode requires BOTH ${API_URL_ENV} and ${API_KEY_ENV}; only ` +
-        `${apiUrl ? API_URL_ENV : API_KEY_ENV} is set. Set both to use the HTTP API, ` +
-        `or unset both to use the local store.`,
+        `${apiUrl ? API_URL_ENV : API_KEY_ENV} is set. Set both to use the hosted API, ` +
+        `or unset the stray variable and set ${LOCAL_OPT_IN_ENV}=1 to explicitly use ` +
+        `the local SQLite store.`,
     );
   }
   return { apiUrl, apiKey };
@@ -905,8 +941,20 @@ export class CloudConfigStore implements ConfigStore {
   }
 }
 
-/** Resolve the active store: api transport when the env is set, else local. */
+/**
+ * Resolve the single Store for the current environment — the choke point every
+ * CLI command, MCP tool, and SDK method routes through.
+ *
+ * Fail-closed (owner directive 2026-09-04): with no fleet API env the local
+ * SQLite store is NEVER opened as a silent default. The operator must either
+ * configure the hosted service (`HASNA_INSTRUCTIONS_API_URL` +
+ * `HASNA_INSTRUCTIONS_API_KEY`) or explicitly opt in to the on-box store with
+ * `HASNA_INSTRUCTIONS_LOCAL=1`. Anything else throws `missingFleetEnvError`,
+ * which the CLI turns into a non-zero exit naming the required env.
+ */
 export function resolveConfigStore(env: NodeJS.ProcessEnv = process.env): ConfigStore {
   const cloud = resolveCloudConfig(env);
-  return cloud ? new CloudConfigStore(cloud) : new LocalConfigStore();
+  if (cloud) return new CloudConfigStore(cloud);
+  if (!isLocalOptIn(env)) throw missingFleetEnvError();
+  return new LocalConfigStore();
 }
