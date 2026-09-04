@@ -22,16 +22,16 @@ afterEach(() => {
   while (scratch.length > 0) rmSync(scratch.pop()!, { recursive: true, force: true });
 });
 
-function xdgConfig(app: string, body: string): { env: Record<string, string>; path: string } {
-  const root = mkdtempSync(join(tmpdir(), "contracts-xdg-"));
+/** The ruled disk tier: `~/.hasna/<app>/config/credentials`, owner-only. */
+function credentialsFile(app: string, body: string): { env: Record<string, string>; path: string } {
+  const root = mkdtempSync(join(tmpdir(), "contracts-credentials-"));
   scratch.push(root);
-  const configRoot = join(root, "config");
-  const dir = join(configRoot, "hasna");
+  const dir = join(root, ".hasna", app, "config");
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${app}.env`);
+  const path = join(dir, "credentials");
   writeFileSync(path, body, { mode: 0o600 });
   chmodSync(path, 0o600);
-  return { env: { HOME: root, XDG_CONFIG_HOME: configRoot }, path };
+  return { env: { HOME: root }, path };
 }
 
 describe("canonical public client", () => {
@@ -80,8 +80,8 @@ describe("canonical public client", () => {
     })).toThrow(/blank/);
   });
 
-  test("reads only owner-safe XDG config and does not consult legacy data roots", () => {
-    const { env, path } = xdgConfig(
+  test("reads only the owner-safe credentials file and does not consult retired data roots", () => {
+    const { env, path } = credentialsFile(
       "demo",
       "HASNA_DEMO_API_URL=https://demo.example.test\nHASNA_DEMO_API_KEY=fixture-key\n",
     );
@@ -99,16 +99,16 @@ describe("canonical public client", () => {
 
   test("ambiguous disk aliases, duplicate declarations, and blank env keys cannot be rescued", () => {
     for (const extra of ["DEMO_API_KEY=other-key", "HASNA_DEMO_API_KEY=other-key", "DEMO_API_KEY=", "DEMO_API_URL=https://other.example.test"]) {
-      const { env } = xdgConfig("demo", `HASNA_DEMO_API_URL=https://demo.example.test\nHASNA_DEMO_API_KEY=fixture-key\n${extra}\n`);
+      const { env } = credentialsFile("demo", `HASNA_DEMO_API_URL=https://demo.example.test\nHASNA_DEMO_API_KEY=fixture-key\n${extra}\n`);
       expect(() => resolveClientTransport("demo", env)).toThrow();
     }
-    const { env } = xdgConfig("demo", "HASNA_DEMO_API_URL=https://demo.example.test\nHASNA_DEMO_API_KEY=fixture-key\n");
+    const { env } = credentialsFile("demo", "HASNA_DEMO_API_URL=https://demo.example.test\nHASNA_DEMO_API_KEY=fixture-key\n");
     expect(() => resolveClientTransport("demo", { ...env, HASNA_DEMO_API_KEY: " " })).toThrow(/blank/);
     expect(() => resolveClientTransport("demo", { ...env, HASNA_DEMO_API_URL: "https://demo.example.test\n" })).toThrow(/control/);
   });
 
   test("a changed authority never receives a rotated credential through an existing client", async () => {
-    const { env, path } = xdgConfig("demo", "HASNA_DEMO_API_URL=https://demo.example.test\nHASNA_DEMO_API_KEY=fixture-key\n");
+    const { env, path } = credentialsFile("demo", "HASNA_DEMO_API_URL=https://demo.example.test\nHASNA_DEMO_API_KEY=fixture-key\n");
     let calls = 0;
     const wired = createClientTransport("demo", env, { fetchImpl: async () => { calls++; return Response.json({}); }, retry: false });
     writeFileSync(path, "HASNA_DEMO_API_URL=https://other.example.test\nHASNA_DEMO_API_KEY=rotated-key\n", { mode: 0o600 });

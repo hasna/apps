@@ -92,8 +92,9 @@ The credential is resolved by the transport, at call time, through
 | 1 | argument | `--api-key` / `--profile` passed by the caller | Deliberate. |
 | 2 | override | `HASNA_<NAME>_API_KEY_OVERRIDE`, or the `HASNA_PROFILE` pointer | Deliberate. Nothing sets these automatically. |
 | 2.5 | pointer | `HASNA_<NAME>_API_KEY_REF` (a secrets-vault ITEM KEY) | Deliberate. Resolved through the `@hasna/secrets` SDK at request time; a vault that cannot be reached is TERMINAL, never a fall-through. |
-| 3 | **disk** | `$XDG_CONFIG_HOME/hasna/<name>.env` (default `$HOME/.config/hasna/<name>.env`) | Owner-only XDG configuration, re-read on every call. Retired `$HOME/.hasna/**` and `*-cloud.env` locations are never automatic inputs. |
-| 4 | legacy env | `HASNA_<NAME>_API_KEY` / `<NAME>_API_KEY` | Deprecated fallback, used only when the disk yields nothing. Warns once per app. |
+| 3 | **keychain** | macOS login keychain item `hasna.credentials.<name>.api-key`, account `HASNA_STATION`, else the short hostname, else `USER` | darwin only. Read fresh per call with `security find-generic-password … -w` (argv, no shell). A missing item is an absent tier; any other failure is TERMINAL. Ambient: consulted for the live `process.env`, never for a caller-built env unless a runner is injected (`credentials.keychain.run`). |
+| 4 | **disk** | `~/.hasna/<name>/config/credentials` — `HASNA_HOME` replaces `~/.hasna`; `HASNA_CONFIG_HOME` replaces the config root, giving `<HASNA_CONFIG_HOME>/<name>/credentials`; a profile reads `credentials-<profile>` beside it | Owner-only (0400/0600) regular file, re-read on every call. XDG semantics for the overrides (absolute only, blank is unset); `XDG_CONFIG_HOME` itself is not consulted. Retired `~/.hasna/fleet-env/`, `~/.hasna/cloud/`, `~/.config/hasna/` and `*-cloud.env` locations are never inputs. |
+| 5 | env | `HASNA_<NAME>_API_KEY` / `<NAME>_API_KEY` | A legitimate tier, below disk: a wrapper injecting it per process from a store is correct and re-reads on every call; when both exist, a rotated on-disk key beats a stale shell export. No notice is printed. |
 
 Rules:
 
@@ -110,24 +111,32 @@ Rules:
   dereferences a path-shaped value; a value that looks like a vault item key
   (`namespace/app/live/api_key`) is refused with a message naming
   `HASNA_<NAME>_API_KEY_REF` as the correct variable.
-- **Legacy data roots never supply live client configuration.** `$HOME/.hasna/**`
-  may be inspected only by explicit migration tooling. The transport and
-  credential resolvers consult the owner-only XDG config file and no retired
-  path.
-- **Tier 3 is re-read per request**, not cached and not resolved once when the
-  client is built — a cache is the same snapshot defect at a smaller timescale.
-  This is what makes a rotation heal in any shell, however old.
+- **Retired locations never supply live client configuration.**
+  `~/.hasna/fleet-env/`, `~/.hasna/cloud/`, `~/.config/hasna/` (and
+  `$XDG_CONFIG_HOME/hasna/`) and `*-cloud.env` files may be inspected only by
+  explicit migration tooling. The transport and credential resolvers consult
+  the Keychain, the owner-only credentials file and the process environment —
+  no retired path.
+- **Tiers 3 and 4 are re-read per request**, not cached and not resolved once
+  when the client is built — a cache is the same snapshot defect at a smaller
+  timescale. This is what makes a rotation heal in any shell, however old.
 - **Authority and credential are one request binding.** The client must observe
   a stable pair and revalidate that same reviewed pair immediately before
   dispatch. If either changes while the request is prepared, nothing is sent;
   a newly rotated key must never reach the client's previously captured URL.
-- **A credential alone never supplies authority.** A valid explicit
-  `HASNA_<NAME>_API_URL` (or short alias) and a credential from any tier are
-  both required. Missing either is a fail-closed error; a public client has no
-  SQLite or local-data selection.
-- **`HOME` comes from the same env object** the caller passes. An env with no
-  `HOME` performs no disk read, which is what keeps the behaviour hermetic and
-  test suites independent of the machine running them.
+- **The authority follows the same ladder and defaults to the fleet gateway.**
+  `HASNA_<NAME>_API_URL` (or short alias), then the Keychain
+  `hasna.credentials.<name>.api-url` item, then the credentials file; every
+  configured value must agree. With a credential from any tier and no
+  configured URL, the base URL is `https://api.hasna.com/<name>` (the client
+  appends `/v1`; `apiUrlSource` and `transportSource` report `"default"`). A
+  credential is still required: none resolving is a fail-closed error, and a
+  public client has no SQLite or local-data selection.
+- **`HOME` and `HASNA_HOME` come from the same env object** the caller passes.
+  An env with neither performs no disk read, and a caller-built env never
+  reaches the machine's Keychain unless a runner is injected — which is what
+  keeps the behaviour hermetic and test suites independent of the machine
+  running them.
 - **Authentication failures are terminal and body-redacted.** `401` and `403`
   are not retried or converted into another data path. Their response body is
   discarded before parsing because an auth boundary may echo rejected secret

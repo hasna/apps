@@ -1,13 +1,29 @@
 import { type Env } from "../env-token.js";
 import { type CredentialChainOptions, type CredentialTier, type ResolvedCredential } from "./credentials.js";
-export { appConfigDiskValue, completePointerCredential, credentialDiskSourceList, credentialDiskSources, CredentialResolutionError, explicitCredential, resolveCredential, } from "./credentials.js";
-export type { AppConfigDiskHit, CredentialChainOptions, CredentialTier, DiskCredentialSource, ResolvedCredential, } from "./credentials.js";
+export { appConfigDiskValue, completePointerCredential, credentialDiskSourceList, credentialDiskSources, CredentialResolutionError, explicitCredential, HASNA_CONFIG_HOME_ENV_KEY, HASNA_HOME_ENV_KEY, KEYCHAIN_STATION_ENV_KEY, keychainConfigValue, resolveCredential, } from "./credentials.js";
+export type { AppConfigDiskHit, CredentialChainOptions, CredentialTier, DiskCredentialSource, KeychainCommandResult, KeychainCommandRunner, KeychainItemHit, KeychainTierOptions, ResolvedCredential, } from "./credentials.js";
 export { clientTransportEnvKeys, credentialOverrideEnvKey, credentialPointerEnvKey, CREDENTIAL_PROFILE_ENV_KEY, } from "./env-keys.js";
 export type { ClientTransportEnvKeys } from "./env-keys.js";
 /**
- * Fleet API domain suffix. This published package never ships a real internal
- * hostname: override with `HASNA_FLEET_API_DOMAIN` (REQUIRED in a real
- * deployment) or set an explicit `HASNA_<NAME>_API_URL` per app. Absent both,
+ * The fleet gateway every app is served through, path-prefixed by app:
+ * `https://api.hasna.com/<app>` (the client appends `/v1`). It is the DEFAULT
+ * authority when nothing configures a URL — a key from any tier is enough to
+ * reach the fleet, and URLs never need configuring (owner directive,
+ * 2026-09-04). `HASNA_<NAME>_API_URL`, the Keychain `api-url` item, and the
+ * credentials file all override it. This is a PUBLIC hostname; the per-app
+ * origin domain behind the gateway stays unnamed here (see `fleetApiDomain`).
+ */
+export declare const DEFAULT_FLEET_GATEWAY_ORIGIN = "https://api.hasna.com";
+/** The `apiUrlSource` / `transportSource` reported when the default gateway applies. */
+export declare const DEFAULT_AUTHORITY_SOURCE = "default";
+/** `https://api.hasna.com/<app>` for a valid app slug; throws for an unsafe name. */
+export declare function defaultFleetGatewayBaseUrl(name: string): string;
+/**
+ * Fleet API domain suffix for a per-app ORIGIN hostname. This published
+ * package never ships a real origin hostname: override with
+ * `HASNA_FLEET_API_DOMAIN` or set an explicit `HASNA_<NAME>_API_URL` per app.
+ * (Clients need neither any more — `resolveClientTransport` defaults to the
+ * public gateway, `DEFAULT_FLEET_GATEWAY_ORIGIN`.) Absent both,
  * this falls back to a neutral placeholder that intentionally does not
  * resolve to any service. Blank, malformed, and suffixes that cannot form a
  * valid total hostname with the app prefix use the same deterministic
@@ -38,15 +54,16 @@ export interface ClientTransportResolution {
     /** Where the client should read/write from. */
     transport: ClientTransportKind;
     /**
-     * What selected the transport: an API URL env key NAME or the absolute PATH
-     * of the XDG app-config file that supplied the URL.
+     * What selected the transport: an API URL env key NAME, a Keychain item
+     * reference, the absolute PATH of the credentials file that supplied the
+     * URL, or `"default"` when the fleet gateway applied.
      */
     transportSource: string;
     /** `<origin>/v1` base for the server API. */
     baseUrl: string;
     /**
-     * WHERE the API URL/domain came from: an env key NAME, an absolute file PATH,
-     * `"default"` (neutral placeholder), or null.
+     * WHERE the API URL/domain came from: an env key NAME, a Keychain item
+     * reference, an absolute file PATH, `"default"` (the fleet gateway), or null.
      */
     apiUrlSource: string | null;
     /** Whether an API key is present (value never exposed). */
@@ -71,7 +88,7 @@ export interface ClientTransportResolution {
     warning: string | null;
 }
 export interface ResolveClientTransportOptions {
-    /** Tier-1 credential inputs, e.g. from `--api-key` / `--profile` flags. */
+    /** Tier-1 credential inputs (`--api-key` / `--profile`) and Keychain-tier controls. */
     credentials?: CredentialChainOptions;
 }
 /**

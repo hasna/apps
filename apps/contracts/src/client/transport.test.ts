@@ -6,6 +6,7 @@ import {
   appendQuery,
   createClientTransport,
   createHasnaHttpTransport,
+  defaultFleetGatewayBaseUrl,
   resolveClientTransport,
   toV1BaseUrl,
 } from "./transport.js";
@@ -20,14 +21,50 @@ describe("canonical client transport", () => {
     expect(CLIENT_TRANSPORTS).toEqual(["http"]);
   });
 
-  test("fails closed when authority or credential configuration is missing", () => {
+  test("fails closed when no credential resolves, with or without an authority", () => {
     expect(() => resolveClientTransport("todos", {})).toThrow(ClientTransportConfigurationError);
+    expect(() => resolveClientTransport("todos", {})).toThrow(/HASNA_TODOS_API_URL is not set and no API key.*required/);
     expect(() => resolveClientTransport("todos", { HASNA_TODOS_API_URL: validEnv.HASNA_TODOS_API_URL })).toThrow(
       ClientTransportConfigurationError,
     );
-    expect(() => resolveClientTransport("todos", { HASNA_TODOS_API_KEY: "key" })).toThrow(
-      ClientTransportConfigurationError,
+  });
+
+  test("a key from any tier with no configured URL defaults to the fleet gateway", () => {
+    const resolution = resolveClientTransport("todos", { HASNA_TODOS_API_KEY: "key" });
+    expect(resolution).toMatchObject({
+      transport: "http",
+      baseUrl: "https://api.hasna.com/todos/v1",
+      transportSource: "default",
+      apiUrlSource: "default",
+      apiKeySource: "HASNA_TODOS_API_KEY",
+      apiKeyTier: "env",
+      misconfigured: false,
+    });
+    expect(resolution.warning).toBeNull();
+    expect(defaultFleetGatewayBaseUrl("todos")).toBe("https://api.hasna.com/todos");
+    // Any configured authority — the env here — overrides the default.
+    expect(resolveClientTransport("todos", validEnv).apiUrlSource).toBe("HASNA_TODOS_API_URL");
+  });
+
+  test("the Keychain api-url item overrides the default and must agree with the env URL", () => {
+    const run = (argv: readonly string[]) =>
+      argv.includes("hasna.credentials.todos.api-url")
+        ? { status: 0, stdout: "https://pinned.example.test\n", stderr: "" }
+        : { status: 44, stdout: "", stderr: "not found" };
+    const keychain = { platform: "darwin", hostname: () => "fixture-host", run };
+    const pinned = resolveClientTransport("todos", { HASNA_TODOS_API_KEY: "key" }, { credentials: { keychain } });
+    expect(pinned.baseUrl).toBe("https://pinned.example.test/v1");
+    expect(pinned.apiUrlSource).toBe("keychain:hasna.credentials.todos.api-url@fixture-host");
+    expect(pinned.transportSource).toBe(pinned.apiUrlSource!);
+    expect(pinned.warning).toContain("No HASNA_TODOS_API_URL in the environment");
+    expect(() => resolveClientTransport("todos", validEnv, { credentials: { keychain } })).toThrow(
+      /different service authorities/,
     );
+    expect(
+      resolveClientTransport("todos", { ...validEnv, HASNA_TODOS_API_URL: "https://pinned.example.test" }, {
+        credentials: { keychain },
+      }).apiUrlSource,
+    ).toBe("HASNA_TODOS_API_URL");
   });
 
   test("defined-blank declarations are errors, never local selectors", () => {
@@ -186,7 +223,6 @@ describe("HTTP transport security and request behavior", () => {
         tier: "argument",
         source: "test",
         deliberate: true,
-        deprecated: false,
         diskCandidates: [],
         warning: null,
       }),

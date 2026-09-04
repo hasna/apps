@@ -1,6 +1,6 @@
 import type { Env } from "../env-token.js";
 /** Which link of the chain supplied the credential. */
-export type CredentialTier = "argument" | "override" | "pointer" | "profile" | "disk" | "config" | "legacy-env";
+export type CredentialTier = "argument" | "override" | "pointer" | "profile" | "keychain" | "disk" | "env";
 export interface ResolvedCredential {
     /**
      * The secret.
@@ -16,12 +16,13 @@ export interface ResolvedCredential {
      */
     readonly apiKey: string;
     readonly tier: CredentialTier;
-    /** Where it came from: an env key NAME or an absolute file path. Never a value. */
+    /**
+     * Where it came from: an env key NAME, an absolute file path, or a Keychain
+     * item reference (`keychain:<service>@<account>`). Never a value.
+     */
     readonly source: string;
     /** True for tiers an operator sets on purpose. These never fall through. */
     readonly deliberate: boolean;
-    /** True when it came from the deprecated process-environment tier. */
-    readonly deprecated: boolean;
     /**
      * When tier === "pointer", the vault ITEM KEY to resolve through the
      * @hasna/secrets SDK at request time. Never a credential value. Non-enumerable
@@ -39,16 +40,46 @@ export interface ResolvedCredential {
     /** Human-readable advisory. Never contains key material. */
     readonly warning: string | null;
 }
+/** The captured outcome of one `security` invocation. `stdout` IS the secret; it is never logged. */
+export interface KeychainCommandResult {
+    /** Exit status; null when the tool could not be started or was killed. */
+    status: number | null;
+    stdout: string;
+    stderr: string;
+}
+/** Runs `/usr/bin/security` with the given argv — no shell. Injected by tests. */
+export type KeychainCommandRunner = (argv: readonly string[]) => KeychainCommandResult;
+/** Tier 3 controls. Every field is optional; production callers pass nothing. */
+export interface KeychainTierOptions {
+    /**
+     * Whether the Keychain is consulted for a caller-built env object.
+     *
+     * The tier is AMBIENT: by default it runs only when the resolver is handed
+     * the live `process.env`, because a caller-built env is the whole world (the
+     * hermetic seam) and the machine's Keychain is outside it. `true` turns the
+     * tier on for a caller-built env; `false` turns it off even for the live
+     * environment (a CI job on a Mac runner that must never touch a login
+     * keychain). Injecting `run` implies `true`.
+     */
+    enabled?: boolean;
+    /** Defaults to `process.platform`; the tier exists only on `"darwin"`. */
+    platform?: string;
+    /**
+     * The machine's host name, used as the account when `HASNA_STATION` is
+     * unset. Only the label before the first dot is used (`hostname -s`).
+     * Defaults to `os.hostname()`.
+     */
+    hostname?: () => string;
+    /** The `security` runner. Defaults to spawning `/usr/bin/security` by argv. */
+    run?: KeychainCommandRunner;
+}
 export interface CredentialChainOptions {
     /** Tier 1: an explicit key, e.g. from `--api-key`. */
     apiKey?: string;
     /** Tier 1: an explicit profile name, e.g. from `--profile`. Beats `HASNA_PROFILE`. */
     profile?: string;
-    /**
-     * Sink for the one-line legacy-env deprecation. Defaults to a once-per-app
-     * stderr writer. Injected by tests so they never touch the real stderr.
-     */
-    onDeprecation?: (message: string) => void;
+    /** Tier 3: Keychain controls — a fake `security` runner in tests, an opt-out on CI. */
+    keychain?: KeychainTierOptions;
 }
 /**
  * A deliberate credential selection could not be honoured, or a credential
@@ -69,25 +100,29 @@ export declare class CredentialFileUnsafeError extends Error {
     readonly path: string;
     constructor(path: string, reason: string);
 }
-/** One on-disk credential source: its absolute path, its tier, and whether it is deprecated. */
+export declare const HASNA_HOME_ENV_KEY = "HASNA_HOME";
+export declare const HASNA_CONFIG_HOME_ENV_KEY = "HASNA_CONFIG_HOME";
+/** The Keychain account; absent, the short hostname is used, then `USER`. */
+export declare const KEYCHAIN_STATION_ENV_KEY = "HASNA_STATION";
+/** One on-disk credential source: its absolute path and its tier. */
 export interface DiskCredentialSource {
     path: string;
     tier: CredentialTier;
-    /** Retained in the public shape; canonical XDG sources are never deprecated. */
-    deprecated: boolean;
 }
 /**
  * All on-disk credential sources for an app, in precedence order.
  *
- * Exactly one XDG layer exists. Returns an empty list when there is no HOME to
- * anchor the default, or when the app name is not safe to place in a path.
+ * Exactly one disk layer exists: `~/.hasna/<app>/config/credentials`, or the
+ * `credentials-<profile>` file beside it. Returns an empty list when neither
+ * HOME nor HASNA_HOME anchors the root, or when the app name is not safe to
+ * place in a path.
  */
 export declare function credentialDiskSourceList(name: string, env: Env, profile?: string | null): DiskCredentialSource[];
 /**
  * The disk files that may hold an app's credential, in precedence order.
  *
- * Exactly one XDG layer exists. Exported so callers and error messages can name
- * the exact path consulted.
+ * Exactly one disk layer exists. Exported so callers and error messages can
+ * name the exact path consulted.
  */
 export declare function credentialDiskSources(name: string, env: Env): string[];
 /**
@@ -126,7 +161,7 @@ export interface AppConfigDiskHit {
     unusable?: boolean;
 }
 /**
- * Read a NON-SECRET config value from the fleet app-config file on disk.
+ * Read a NON-SECRET config value from the app's credentials file on disk.
  *
  * This is the tier that closes the gap the credential chain left open: the same
  * file already supplies the API key, and every other field in it was discarded.
@@ -172,8 +207,19 @@ export declare function explicitCredential(appName: string, apiKey: string): Res
  * not untrusted metadata that could be printed by an auth failure.
  */
 export declare function validateAndSealResolvedCredential(appName: string, credential: ResolvedCredential): ResolvedCredential;
-/** Test seam: forget which apps have already emitted their deprecation. */
-export declare function __resetCredentialDeprecationNotices(): void;
+/** A Keychain item's value and its diagnostic source. The value is never logged. */
+export interface KeychainItemHit {
+    value: string;
+    /** `keychain:<service>@<account>` — names the item, never its value. */
+    source: string;
+}
+/**
+ * The Keychain's `api-url` item for an app — the authority tier that sits
+ * beside the credential item, so a station can pin a non-default service URL
+ * without a file or an env var. Same account rules and failure semantics as
+ * the credential item.
+ */
+export declare function keychainConfigValue(name: string, env: Env, options?: KeychainTierOptions): KeychainItemHit | null;
 /**
  * Resolve an app's API key through the provider chain, at call time.
  *
