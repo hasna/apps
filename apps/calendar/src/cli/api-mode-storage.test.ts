@@ -15,6 +15,16 @@
  *  4. The package no longer ships a `postinstall` that pre-creates
  *     `~/.hasna/calendar` on every install.
  *
+ * Fail-closed without env (fleet doctrine — never a silent local fallback):
+ *
+ *  5. With NO API env configured at all, a store-backed command fails closed
+ *     (non-zero exit, error naming `HASNA_CALENDAR_API_URL`) and creates no
+ *     local database — local mode is never the default.
+ *  6. A partially configured pair (URL without key, or key without URL) fails
+ *     closed naming the missing member — never defaults to local mode.
+ *  7. `--json` mode reports the same refusal as a parseable JSON error with a
+ *     non-zero exit (never a false-green `exit 0` local fallback event).
+ *
  * NOTE: unlike `cli/index.test.ts` these tests deliberately do NOT use the
  * `cli-domain.preload.ts` fixture (which rewrites `fetch` to a LocalStore-
  * backed server and forces the api env on). We spawn the real binary against
@@ -131,6 +141,72 @@ test("db-migrate keeps its LOCAL-ONLY legacy semantics when no API env is config
     } finally {
       readback.close();
     }
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("no API env: a store-backed command fails closed and creates no local database", async () => {
+  const home = await scratchHome();
+  try {
+    const result = await runCalendar(
+      ["org-list"],
+      { HOME: home, BUN_TEST: "" }, // no HASNA_CALENDAR_API_URL / KEY
+    );
+    expect(result.exitCode).toBe(1);
+    // Actionable error names the required fleet API env — never a silent
+    // local fallback, never a false-green exit 0.
+    expect(result.stdout + result.stderr).toMatch(/HASNA_CALENDAR_API_URL is required/);
+    expect(result.stdout + result.stderr).not.toMatch(/local-fallback/);
+    // The no-env run must leave nothing under ~/.hasna at all: local SQLite
+    // (~/.hasna/calendar/calendar.db) is never opened or created by default.
+    const hasna = join(home, ".hasna");
+    expect(await exists(hasna)).toBe(false);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("no API env: --json mode fails closed with a parseable error naming the required env", async () => {
+  const home = await scratchHome();
+  try {
+    const result = await runCalendar(
+      ["--json", "org-list"],
+      { HOME: home, BUN_TEST: "" }, // no HASNA_CALENDAR_API_URL / KEY
+    );
+    expect(result.exitCode).toBe(1);
+    const payload = JSON.parse(result.stdout) as { error: string };
+    expect(payload.error).toContain("HASNA_CALENDAR_API_URL is required");
+    const hasna = join(home, ".hasna");
+    expect(await exists(hasna)).toBe(false);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("partial API env fails closed naming the missing member — never defaults to local mode", async () => {
+  const home = await scratchHome();
+  try {
+    // URL without key: the pair is incomplete, so the CLI must not open local
+    // mode or guess a credential.
+    const urlOnly = await runCalendar(
+      ["org-list"],
+      { HOME: home, BUN_TEST: "", HASNA_CALENDAR_API_URL: "https://calendar.example.test" },
+    );
+    expect(urlOnly.exitCode).toBe(1);
+    expect(urlOnly.stdout + urlOnly.stderr).toMatch(/HASNA_CALENDAR_API_KEY is required/);
+
+    // Key without URL: same refusal from the other side.
+    const keyOnly = await runCalendar(
+      ["org-list"],
+      { HOME: home, BUN_TEST: "", HASNA_CALENDAR_API_KEY: "fixture-key" },
+    );
+    expect(keyOnly.exitCode).toBe(1);
+    expect(keyOnly.stdout + keyOnly.stderr).toMatch(/HASNA_CALENDAR_API_URL is required/);
+
+    // Neither run may create local storage.
+    const hasna = join(home, ".hasna");
+    expect(await exists(hasna)).toBe(false);
   } finally {
     await rm(home, { recursive: true, force: true });
   }
