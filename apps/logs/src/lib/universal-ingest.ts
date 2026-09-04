@@ -810,15 +810,20 @@ function upsertArtifactProjection(
     ? (sanitizeSourceMapIdentifierValue(artifactIdCandidate) ??
       sourceMapFallbackIdentifier(envelope.event_id))
     : (artifactIdCandidate ?? envelope.event_id);
+  const objectKey =
+    stringAttr(envelope.attributes, "object_key") ??
+    stringAttr(body, "object_key") ??
+    stringAttr(artifact, "object_key");
   db.prepare(`
-    INSERT INTO artifacts (id, release_id, artifact_type, path, content_hash, size_bytes, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO artifacts (id, release_id, artifact_type, path, content_hash, size_bytes, object_key, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       release_id = COALESCE(artifacts.release_id, excluded.release_id),
       artifact_type = COALESCE(artifacts.artifact_type, excluded.artifact_type),
       path = COALESCE(excluded.path, artifacts.path),
       content_hash = COALESCE(excluded.content_hash, artifacts.content_hash),
       size_bytes = COALESCE(excluded.size_bytes, artifacts.size_bytes),
+      object_key = COALESCE(excluded.object_key, artifacts.object_key),
       metadata = excluded.metadata
   `).run(
     artifactId,
@@ -837,6 +842,7 @@ function upsertArtifactProjection(
     numberAttr(envelope.attributes, "size_bytes") ??
       numberAttr(body, "size_bytes") ??
       numberAttr(artifact, "size_bytes"),
+    objectKey,
     JSON.stringify(index.metadata ?? {}),
   );
 }

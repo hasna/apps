@@ -408,11 +408,13 @@ function migrate(db: Database): void {
       artifact_type TEXT,
       path TEXT,
       content_hash TEXT,
+      object_key TEXT,
       size_bytes INTEGER,
       metadata TEXT,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     )
   `);
+  ensureColumn(db, "artifacts", "object_key", "TEXT");
 
   db.run(`
     CREATE TABLE IF NOT EXISTS source_maps (

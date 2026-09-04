@@ -293,6 +293,7 @@ export const PG_MIGRATIONS: string[] = [
     artifact_type TEXT,
     path TEXT,
     content_hash TEXT,
+    object_key TEXT,
     size_bytes INTEGER,
     metadata TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text
@@ -536,4 +537,8 @@ export const PG_MIGRATIONS: string[] = [
     machine_id TEXT,
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
+
+  // Migration 11: artefacts carry the S3 object key of their uploaded bytes
+  // (upload at creation, hasna/apps#1648). Additive for pre-existing databases.
+  "ALTER TABLE artifacts ADD COLUMN IF NOT EXISTS object_key TEXT",
 ];

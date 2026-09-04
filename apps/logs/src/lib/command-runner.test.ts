@@ -1,9 +1,15 @@
 import { describe, expect, it } from "bun:test";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTestDb } from "../db/index.ts";
+import {
+  ArtifactRemote,
+  type S3ClientLike,
+} from "./artifact-remote.ts";
 import { LocalRunSink, runCommand } from "./command-runner.ts";
 import {
   getEventRecord,
@@ -1709,5 +1715,182 @@ describe("command runner", () => {
     expect(processesDump).toContain(REDACTED);
     expect(runsDump).toContain(REDACTED);
     expect(verifyEventStore(db).ok).toBe(true);
+  });
+
+  it("uploads discovered build artefacts to S3 at creation and records object_key", async () => {
+    class RecordingS3 implements S3ClientLike {
+      sent: PutObjectCommand[] = [];
+
+      async send(command: PutObjectCommand): Promise<unknown> {
+        this.sent.push(command);
+        return {};
+      }
+    }
+
+    const db = createTestDb();
+    const tempDir = mkdtempSync(join(tmpdir(), "logs-artifacts-upload-"));
+    const s3 = new RecordingS3();
+    try {
+      const result = await runCommand(new LocalRunSink(db),
+        [
+          process.execPath,
+          "-e",
+          [
+            "const fs = require('node:fs');",
+            "fs.mkdirSync('dist', { recursive: true });",
+            "fs.writeFileSync('dist/app.js', \"console.log('built');\\n\");",
+          ].join(" "),
+          "build",
+        ],
+        {
+          cwd: tempDir,
+          tee: false,
+          service: "artifact-upload-test",
+          environment: "test",
+          artifactRemote: new ArtifactRemote({
+            bucket: "logs-artifacts-test",
+            prefix: "artifacts",
+            client: s3,
+            logger: () => {},
+          }),
+        },
+      );
+
+      expect(result.exit_code).toBe(0);
+      const artifact = result.artifacts.artifacts[0];
+      expect(artifact?.path).toBe("dist/app.js");
+
+      const fileBytes = new TextEncoder().encode("console.log('built');\n");
+      const digest = createHash("sha256").update(fileBytes).digest("hex");
+      const objectKey = `artifacts/${result.run_id}/${digest}`;
+
+      expect(s3.sent).toHaveLength(1);
+      expect(s3.sent[0]?.input).toMatchObject({
+        Bucket: "logs-artifacts-test",
+        Key: objectKey,
+        ContentType: "application/javascript",
+      });
+
+      const row = db
+        .prepare("SELECT object_key, path, content_hash FROM artifacts WHERE id = ?")
+        .get(artifact?.artifact_id) as
+        | { object_key: string | null; path: string; content_hash: string | null }
+        | undefined;
+      expect(row).toBeDefined();
+      expect(row?.path).toBe("dist/app.js");
+      expect(row?.object_key).toBe(objectKey);
+      expect(row?.content_hash).toBe(digest);
+
+      const raw = readRawEvent(db, artifact?.artifact_id ?? "");
+      expect(raw?.body?.artifact).toMatchObject({
+        path: "dist/app.js",
+        object_key: objectKey,
+      });
+      expect(raw?.attributes?.object_key).toBe(objectKey);
+      expect(verifyEventStore(db).ok).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("soft-fails artefact uploads and falls back to local-path-only rows", async () => {
+    class FailingS3 implements S3ClientLike {
+      async send(): Promise<unknown> {
+        throw new Error("simulated s3 outage");
+      }
+    }
+
+    const db = createTestDb();
+    const tempDir = mkdtempSync(join(tmpdir(), "logs-artifacts-softfail-"));
+    const logged: string[] = [];
+    try {
+      const result = await runCommand(new LocalRunSink(db),
+        [
+          process.execPath,
+          "-e",
+          [
+            "const fs = require('node:fs');",
+            "fs.mkdirSync('dist', { recursive: true });",
+            "fs.writeFileSync('dist/app.js', \"console.log('built');\\n\");",
+          ].join(" "),
+          "build",
+        ],
+        {
+          cwd: tempDir,
+          tee: false,
+          service: "artifact-softfail-test",
+          environment: "test",
+          artifactRemote: new ArtifactRemote({
+            bucket: "logs-artifacts-test",
+            client: new FailingS3(),
+            logger: (message) => logged.push(message),
+          }),
+        },
+      );
+
+      expect(result.exit_code).toBe(0);
+      const artifact = result.artifacts.artifacts[0];
+      const row = db
+        .prepare("SELECT object_key, path FROM artifacts WHERE id = ?")
+        .get(artifact?.artifact_id) as
+        | { object_key: string | null; path: string }
+        | undefined;
+      expect(row?.path).toBe("dist/app.js");
+      expect(row?.object_key).toBeNull();
+      expect(logged.join(" ")).toContain("upload failed");
+      expect(verifyEventStore(db).ok).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps local-only recording when no S3 bucket is configured", async () => {
+    class RecordingS3 implements S3ClientLike {
+      sent: PutObjectCommand[] = [];
+
+      async send(command: PutObjectCommand): Promise<unknown> {
+        this.sent.push(command);
+        return {};
+      }
+    }
+
+    const db = createTestDb();
+    const tempDir = mkdtempSync(join(tmpdir(), "logs-artifacts-local-"));
+    const s3 = new RecordingS3();
+    try {
+      const result = await runCommand(new LocalRunSink(db),
+        [
+          process.execPath,
+          "-e",
+          [
+            "const fs = require('node:fs');",
+            "fs.mkdirSync('dist', { recursive: true });",
+            "fs.writeFileSync('dist/app.js', \"console.log('built');\\n\");",
+          ].join(" "),
+          "build",
+        ],
+        {
+          cwd: tempDir,
+          tee: false,
+          service: "artifact-local-test",
+          environment: "test",
+          artifactRemote: new ArtifactRemote({ client: s3, logger: () => {} }),
+        },
+      );
+
+      expect(result.exit_code).toBe(0);
+      const artifact = result.artifacts.artifacts[0];
+      const row = db
+        .prepare("SELECT object_key, path FROM artifacts WHERE id = ?")
+        .get(artifact?.artifact_id) as
+        | { object_key: string | null; path: string }
+        | undefined;
+      expect(row?.path).toBe("dist/app.js");
+      expect(row?.object_key).toBeNull();
+      expect(s3.sent).toHaveLength(0);
+      expect(verifyEventStore(db).ok).toBe(true);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
