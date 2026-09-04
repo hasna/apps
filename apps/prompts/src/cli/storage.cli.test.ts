@@ -15,7 +15,6 @@ describe("storage CLI diagnostics", () => {
         env: {
           ...process.env,
           HOME: tempHome,
-          HASNA_PROMPTS_STORAGE_MODE: "remote",
           PROMPTS_REGISTRY_POSTGRES_URL: "configured-postgres-url",
           PROMPTS_REGISTRY_S3_BUCKET: "configured-bucket",
           PROMPTS_REGISTRY_AWS_REGION: "configured-region",
@@ -28,14 +27,12 @@ describe("storage CLI diagnostics", () => {
       expect(result.stderr.toString()).toBe("")
 
       const diagnostics = JSON.parse(stdout) as {
-        requested_mode: string
         active_storage: string
         registry_state: string
         sync: { remote_mutation: boolean }
         remote: { postgres: { configured: boolean }; object_storage: { provider: string } }
       }
 
-      expect(diagnostics.requested_mode).toBe("remote")
       expect(diagnostics.active_storage).toBe("local-sqlite")
       expect(diagnostics.registry_state).toBe("remote-configured-local-fallback")
       expect(diagnostics.remote.postgres.configured).toBe(true)

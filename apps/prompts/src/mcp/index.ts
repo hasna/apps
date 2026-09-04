@@ -1119,7 +1119,7 @@ server.registerTool(
 server.registerTool(
   "prompts_storage_diagnostics",
   {
-    description: "Report prompt registry storage mode, local SQLite path, remote Postgres/S3/AWS configuration presence, and local fallback behavior without exposing configured values.",
+    description: "Report prompt registry diagnostics: local SQLite path, remote Postgres/S3/AWS configuration presence, and local fallback behavior without exposing configured values.",
     inputSchema: {},
   },
   async () => ok(getPromptRegistryDiagnostics())
