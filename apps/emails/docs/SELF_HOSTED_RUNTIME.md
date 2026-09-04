@@ -33,7 +33,7 @@ private temporary directory. This is the smoke referenced by
 
 Service configuration. The service has NO deployment mode: setting
 `EMAILS_DATABASE_URL` is what makes `emails-serve` the operator `/v1` API over your
-own PostgreSQL, and leaving it unset is what makes it the local SQLite dashboard.
+own PostgreSQL, and leaving it unset is what makes it the local SQLite dashboard API.
 `EMAILS_MODE` remains a client selector while the client families still use it;
 do not set it in the service environment.
 

@@ -42,7 +42,7 @@ errors are written to stderr.
 | `auth` | `signup`, `login`, `logout`, `whoami`, `switch-tenant`, `verify-email`, `bootstrap` |
 | `keys` | `list`, `create`, `revoke` tenant-scoped API keys. |
 | `ui` | Start the full-screen OpenTUI client. |
-| `serve` | Start the local dashboard or self-hosted service selected by mode. |
+| `serve` | Start the local dashboard API or self-hosted service selected by mode. |
 | `mcp` | Print or install MCP configuration for Claude Code, Codex, or Gemini. |
 | `remove` / `uninstall` | Remove MCP configuration from supported agent clients. |
 | `status` | Redacted health and next actions. |
@@ -89,7 +89,7 @@ The root command names are the same in both modes, but storage and capability
 checks may refuse an operation that the selected store cannot perform.
 `emails inbox attachments` (cursor-based attachment inventory) is present only
 for the self-hosted client; `emails inbox attachment <email-id>` exists in both
-modes. `emails serve` defaults to the local dashboard at `127.0.0.1:3900` in
+modes. `emails serve` defaults to the local dashboard API at `127.0.0.1:3900` in
 local mode and the self-hosted `/v1` service at `0.0.0.0:8080` in
 `self_hosted` mode.
 

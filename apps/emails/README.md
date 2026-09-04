@@ -1,6 +1,6 @@
 # @hasna/emails
 
-Open-source email infrastructure for local SQLite workflows and operator-owned self-hosted deployments, with a CLI, MCP server, library, dashboard, Resend, AWS SES, and Cloudflare-routed inbound mail.
+Open-source email infrastructure for local SQLite workflows and operator-owned self-hosted deployments, with a CLI, MCP server, library, local dashboard API, Resend, AWS SES, and Cloudflare-routed inbound mail.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
@@ -206,7 +206,7 @@ emails analytics         # email analytics
 emails doctor            # system diagnostics
 emails doctor delivery   # diagnose missing inbound mail for one address
 emails provision         # registered but intentionally NOT IMPLEMENTED
-emails serve             # SQLite dashboard or PostgreSQL /v1 service, by EMAILS_DATABASE_URL
+emails serve             # local dashboard API or PostgreSQL /v1 service, by EMAILS_DATABASE_URL
 emails mcp               # install MCP server
 emails remove            # remove MCP configuration from supported agent clients
 ```
@@ -390,16 +390,15 @@ emails-mcp            # stdio transport (default)
 `EMAILS_DATABASE_URL`: unset or blank means `sqlite`, and a PostgreSQL URL means
 `postgresql`. There is no separate server selector for this choice.
 
-- With the SQLite backend it exposes the static dashboard and its
-  unauthenticated, loopback-oriented management API under `/api/*` on
-  `127.0.0.1:3900`.
+- With the SQLite backend it exposes the unauthenticated, loopback-oriented
+  management API under `/api/*` on `127.0.0.1:3900`.
 - With the PostgreSQL backend it exposes the authenticated `/v1` service on
   `0.0.0.0:8080`; `/openapi.json` is the formal wire contract.
 - Scoped send keys remain part of the local send authorization model; there is
   no separate hosted-agent API surface in this OSS server.
 
 ```bash
-emails serve   # local dashboard on 127.0.0.1
+emails serve   # local dashboard API on 127.0.0.1
 EMAILS_ALLOW_REMOTE=1 emails serve --host 0.0.0.0  # only behind an authenticating proxy/firewall
 
 curl localhost:3900/api/providers
