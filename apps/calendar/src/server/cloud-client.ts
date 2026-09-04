@@ -2,14 +2,16 @@
  * Live Postgres query client for the @hasna/calendar cloud (A1 pure-remote)
  * service. Uses Bun's built-in SQL driver (`Bun.SQL`) so the OSS package keeps
  * ZERO cloud/database runtime dependencies — the driver is only touched when the
- * serve process opens a `/v1` (or `/ready`) connection. SSL/TLS behaviour is
- * taken verbatim from the connection string (e.g. `?sslmode=require`); we never
- * disable certificate verification.
+ * serve process opens a `/v1` (or `/ready`) connection. SSL/TLS
+ * requires sslmode=verify-full, with explicit certificate and hostname
+ * verification. Plaintext and ambiguous TLS settings are rejected.
  *
  * This is the repo-local vendoring of the @hasna/contracts storage kit's query
  * surface — a thin `{ rows }`-returning client the contracts auth `ApiKeyStore`
  * and the calendar Postgres store both consume.
  */
+
+import { validateDatabaseUrl } from "./database-config.js";
 
 export interface CloudQueryResult<T = Record<string, unknown>> {
   rows: T[];
@@ -48,6 +50,8 @@ function toRows<T>(result: unknown): T[] {
 }
 
 export interface CreateCloudQueryClientOptions {
+  /** Explicit server trust bundle (PEM), never client-side configuration. */
+  ca?: string;
   max?: number;
   idleTimeout?: number;
   connectionTimeout?: number;
@@ -57,8 +61,14 @@ export function createCalendarCloudQueryClient(
   url: string,
   options: CreateCloudQueryClientOptions = {},
 ): CalendarCloudQueryClient {
+  validateDatabaseUrl(url);
+  if (options.ca !== undefined && !options.ca.includes("-----BEGIN CERTIFICATE-----")) throw new Error("Calendar PostgreSQL CA must be a PEM certificate bundle.");
   const SQL = resolveBunSql();
   const sql = new SQL(url, {
+    // Force driver-effective settings as well as validating the DSN. In Bun
+    // 1.3.14 this resolves to sslMode=4 and rejects unauthorized certificates.
+    ssl: "verify-full",
+    tls: { rejectUnauthorized: true, serverName: new URL(url).hostname, ...(options.ca ? { ca: options.ca } : {}) },
     max: options.max ?? 5,
     idleTimeout: options.idleTimeout ?? 30,
     connectionTimeout: options.connectionTimeout ?? 15,

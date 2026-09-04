@@ -9,7 +9,7 @@ import { createOrg } from "../db/orgs.js";
 
 async function runCalendar(args: string[], dbPath: string) {
   const proc = Bun.spawn({
-    cmd: ["bun", "run", "src/cli/index.tsx", ...args],
+    cmd: ["bun", "run", "--preload", "./src/test/cli-domain.preload.ts", "src/cli/index.tsx", ...args],
     cwd: process.cwd(),
     env: {
       ...process.env,
@@ -127,7 +127,7 @@ describe("calendar CLI", () => {
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toBe("");
-      expect(JSON.parse(result.stdout)).toEqual({ error: "Org not found: missing" });
+      expect(JSON.parse(result.stdout)).toEqual({ error: "Calendar API request failed (404)." });
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }

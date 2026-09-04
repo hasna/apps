@@ -1,33 +1,29 @@
-/**
- * Hosted `/v1` service wiring for `calendar-serve`.
- *
- * Powers the versioned `/v1` API and its API-key auth. The serve process reads
- * and writes Postgres DIRECTLY through the calendar Postgres store — there is
- * no local sync/cache in the service. The data backend is selected by
- * configuration: `HASNA_CALENDAR_DATABASE_URL` (or `CALENDAR_DATABASE_URL`)
- * present means PostgreSQL, absent means SQLite. Everything here is lazy:
- * nothing touches Postgres or crypto until the first `/v1` (or `/ready`)
- * request, so the local-first CLI/MCP paths keep zero hosted dependencies.
- */
+/** PostgreSQL-only /v1 server wiring. Configuration is validated before bind;
+ * connections remain lazy and schema changes remain explicit migrations. */
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyApiKey, ApiKeyStore, type ApiKeyVerifier, type AuthQueryClient } from "@hasna/contracts/auth";
 import { createCalendarCloudQueryClient, type CalendarCloudQueryClient } from "./cloud-client.js";
 import { CalendarPgStore } from "./pg-store.js";
+import { validateDatabaseUrl, readPostgresCa } from "./database-config.js";
+export { validateDatabaseUrl } from "./database-config.js";
 
 export const CALENDAR_APP_SLUG = "calendar";
 
 /** Resolve the app-scoped database URL that selects the PostgreSQL backend. */
 function resolveHostedDatabaseUrl(env: NodeJS.ProcessEnv): string | undefined {
-  return env.HASNA_CALENDAR_DATABASE_URL || env.CALENDAR_DATABASE_URL || undefined;
+  const keys = ["HASNA_CALENDAR_DATABASE_URL", "CALENDAR_DATABASE_URL"];
+  const present = keys.filter(k => env[k] !== undefined);
+  if (!present.length) return undefined;
+  const value = env[present[0]!];
+  if (!value || value !== value.trim() || present.some(k => env[k] !== value)) throw new Error("Calendar PostgreSQL configuration is blank or conflicting.");
+  return validateDatabaseUrl(value);
 }
 
 /**
  * True when this process is configured for the PostgreSQL backend, i.e. an
- * app-scoped database URL is set. The local SQLite backend is the default;
- * there is no deployment-mode variable — the backend is a property of the
- * environment, never of a mode string.
+ * app-scoped database URL is set. Missing configuration cannot start a server.
  */
 export function hasHostedDatabase(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(resolveHostedDatabaseUrl(env));
@@ -35,13 +31,15 @@ export function hasHostedDatabase(env: NodeJS.ProcessEnv = process.env): boolean
 
 /**
  * The data backend this process uses: `postgres` when an app-scoped database
- * URL is set, `sqlite` otherwise. Reported on `/health`, `/ready` and
+ * URL is set; absent/invalid configuration throws. Reported on `/health`, `/ready` and
  * `/version`.
  */
-export type ServerBackend = "sqlite" | "postgres";
+export type ServerBackend = "postgres";
 
 export function resolveBackend(env: NodeJS.ProcessEnv = process.env): ServerBackend {
-  return hasHostedDatabase(env) ? "postgres" : "sqlite";
+  if (!hasHostedDatabase(env)) throw new Error("HASNA_CALENDAR_DATABASE_URL is required before serving Calendar traffic.");
+  readPostgresCa(env);
+  return "postgres";
 }
 
 /**
@@ -57,7 +55,7 @@ export function resolveCloudDatabaseUrl(
   options: { includeGenericDatabaseUrl?: boolean } = {},
 ): string | undefined {
   return resolveHostedDatabaseUrl(env)
-    || (options.includeGenericDatabaseUrl ? env.DATABASE_URL : undefined)
+    || (options.includeGenericDatabaseUrl && env.DATABASE_URL !== undefined ? validateDatabaseUrl(env.DATABASE_URL) : undefined)
     || undefined;
 }
 
@@ -86,7 +84,7 @@ function getClient(): CalendarCloudQueryClient {
     );
   }
   const max = Number(process.env.HASNA_CALENDAR_DB_POOL_MAX) || 6;
-  cachedClient = createCalendarCloudQueryClient(url, { max, idleTimeout: 30, connectionTimeout: 15 });
+  cachedClient = createCalendarCloudQueryClient(url, { max, idleTimeout: 30, connectionTimeout: 15, ca: readPostgresCa() });
   return cachedClient;
 }
 

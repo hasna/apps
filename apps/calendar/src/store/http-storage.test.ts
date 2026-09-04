@@ -2,21 +2,21 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { resolveClientTransport, resolveStorageClient, createHttpTransport, createStorageClient } from "./http-storage.js";
 
 describe("calendar client transport resolver (env-selection contract)", () => {
-  test("defaults to local when no env is set", () => {
+  test("fails closed when no env is set", () => {
     const r = resolveClientTransport("calendar", {});
-    expect(r.transport).toBe("local");
+    expect(r.transport).toBe("unconfigured");
     expect(r.baseUrl).toBeNull();
-    expect(r.misconfigured).toBe(false);
-    expect(r.warning).toBeNull();
+    expect(r.misconfigured).toBe(true);
+    expect(r.warning).toContain("required");
   });
 
   test("API URL + API key => http-api at /v1", () => {
     const r = resolveClientTransport("calendar", {
-      HASNA_CALENDAR_API_URL: "https://calendar.hasna.xyz",
+      HASNA_CALENDAR_API_URL: "https://calendar.example.test",
       HASNA_CALENDAR_API_KEY: "k",
     });
     expect(r.transport).toBe("http-api");
-    expect(r.baseUrl).toBe("https://calendar.hasna.xyz/v1");
+    expect(r.baseUrl).toBe("https://calendar.example.test/v1");
     expect(r.apiKeyPresent).toBe(true);
     expect(r.apiUrlSource).toBe("HASNA_CALENDAR_API_URL");
     expect(r.misconfigured).toBe(false);
@@ -32,45 +32,43 @@ describe("calendar client transport resolver (env-selection contract)", () => {
   });
 
   test("API URL WITHOUT key is misconfigured and resolveStorageClient throws (fail-closed)", () => {
-    const r = resolveClientTransport("calendar", { HASNA_CALENDAR_API_URL: "https://calendar.hasna.xyz" });
-    expect(r.transport).toBe("local");
+    const r = resolveClientTransport("calendar", { HASNA_CALENDAR_API_URL: "https://calendar.example.test" });
+    expect(r.transport).toBe("unconfigured");
     expect(r.misconfigured).toBe(true);
-    expect(r.warning).toContain("no API key");
-    expect(() => resolveStorageClient("calendar", { HASNA_CALENDAR_API_URL: "https://calendar.hasna.xyz" })).toThrow();
+    expect(r.warning).toContain("HASNA_CALENDAR_API_KEY");
+    expect(() => resolveStorageClient("calendar", { HASNA_CALENDAR_API_URL: "https://calendar.example.test" })).toThrow();
   });
 
   test("API key WITHOUT URL is misconfigured and resolveStorageClient throws (no default host)", () => {
     const r = resolveClientTransport("calendar", { HASNA_CALENDAR_API_KEY: "k" });
-    expect(r.transport).toBe("local");
+    expect(r.transport).toBe("unconfigured");
     expect(r.misconfigured).toBe(true);
-    expect(r.warning).toContain("no API URL");
+    expect(r.warning).toContain("HASNA_CALENDAR_API_URL");
     expect(() => resolveStorageClient("calendar", { HASNA_CALENDAR_API_KEY: "k" })).toThrow();
   });
 
   test("an invalid API URL is misconfigured and resolveStorageClient throws", () => {
     const r = resolveClientTransport("calendar", {
-      HASNA_CALENDAR_API_URL: "ftp://calendar.hasna.xyz",
+      HASNA_CALENDAR_API_URL: "ftp://calendar.example.test",
       HASNA_CALENDAR_API_KEY: "k",
     });
-    expect(r.transport).toBe("local");
+    expect(r.transport).toBe("unconfigured");
     expect(r.misconfigured).toBe(true);
     expect(() =>
       resolveStorageClient("calendar", {
-        HASNA_CALENDAR_API_URL: "ftp://calendar.hasna.xyz",
+        HASNA_CALENDAR_API_URL: "ftp://calendar.example.test",
         HASNA_CALENDAR_API_KEY: "k",
       }),
     ).toThrow();
   });
 
-  test("resolveStorageClient returns local client:null when unset", () => {
-    const r = resolveStorageClient("calendar", {});
-    expect(r.transport).toBe("local");
-    expect(r.client).toBeNull();
+  test("resolveStorageClient refuses absent configuration", () => {
+    expect(() => resolveStorageClient("calendar", {})).toThrow();
   });
 
   test("resolveStorageClient returns a ready client when the pair is set", () => {
     const r = resolveStorageClient("calendar", {
-      HASNA_CALENDAR_API_URL: "https://calendar.hasna.xyz",
+      HASNA_CALENDAR_API_URL: "https://calendar.example.test",
       HASNA_CALENDAR_API_KEY: "k",
     });
     expect(r.transport).toBe("http-api");
@@ -95,14 +93,14 @@ describe("calendar storage client CRUD over mock transport", () => {
   }
 
   function client() {
-    return createStorageClient("calendar", createHttpTransport({ name: "calendar", baseUrl: "https://calendar.hasna.xyz/v1", apiKey: "secret", fetchImpl: mockFetch }));
+    return createStorageClient("calendar", createHttpTransport({ name: "calendar", baseUrl: "https://calendar.example.test/v1", apiKey: "secret", fetchImpl: mockFetch }));
   }
 
   test("create sends bearer + api key + idempotency key and unwraps envelope", async () => {
     const res = await client().create<{ event: { id: string } }>("events", { title: "Standup" });
     const call = calls[0]!;
     expect(call.method).toBe("POST");
-    expect(call.url).toBe("https://calendar.hasna.xyz/v1/events");
+    expect(call.url).toBe("https://calendar.example.test/v1/events");
     expect(call.headers["authorization"]).toBe("Bearer secret");
     expect(call.headers["x-api-key"]).toBe("secret");
     expect(call.headers["idempotency-key"]).toBeTruthy();
@@ -112,12 +110,12 @@ describe("calendar storage client CRUD over mock transport", () => {
   test("list issues GET /v1/events", async () => {
     await client().list("events", { query: { limit: 5 } });
     expect(calls[0]!.method).toBe("GET");
-    expect(calls[0]!.url).toBe("https://calendar.hasna.xyz/v1/events?limit=5");
+    expect(calls[0]!.url).toBe("https://calendar.example.test/v1/events?limit=5");
   });
 
   test("get returns null on 404", async () => {
     const c = createStorageClient("calendar", createHttpTransport({
-      name: "calendar", baseUrl: "https://calendar.hasna.xyz/v1", apiKey: "s",
+      name: "calendar", baseUrl: "https://calendar.example.test/v1", apiKey: "s",
       fetchImpl: () => Promise.resolve(new Response("{}", { status: 404 })),
     }));
     expect(await c.get("events", "missing")).toBeNull();
@@ -126,6 +124,6 @@ describe("calendar storage client CRUD over mock transport", () => {
   test("delete issues DELETE /v1/events/:id", async () => {
     await client().delete("events", "e1");
     expect(calls[0]!.method).toBe("DELETE");
-    expect(calls[0]!.url).toBe("https://calendar.hasna.xyz/v1/events/e1");
+    expect(calls[0]!.url).toBe("https://calendar.example.test/v1/events/e1");
   });
 });
