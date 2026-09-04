@@ -9,7 +9,7 @@ import {
   startAgentRun,
 } from "../db/workspaces.js";
 import { closeDatabase, getDatabase, PROJECTS_DB_PATH_ENV } from "../db/database.js";
-import { resolveProjectStore, __resetProjectStore } from "../store/project-store.js";
+import { resolveProjectStore, PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore } from "../store/project-store.js";
 import { buildProjectHandoff, toAgentText } from "./project-agent-assist.js";
 import {
   PROJECT_REDACTED_VALUE,
@@ -45,6 +45,7 @@ describe("project redaction", () => {
       process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
       delete process.env["HASNA_PROJECTS_API_URL"];
       delete process.env["HASNA_PROJECTS_API_KEY"];
+      process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
       closeDatabase();
       __resetProjectStore();
     });
@@ -99,7 +100,7 @@ describe("project redaction", () => {
         project: getWorkspaceBySlug("redaction-project", db),
         events: listWorkspaceEvents(project.id, db),
         runs: listAgentRuns({ workspace_id: project.id }, db),
-        handoff: toAgentText(await buildProjectHandoff(resolveProjectStore({}), { target: "redaction-project" })),
+        handoff: toAgentText(await buildProjectHandoff(resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: "1" }), { target: "redaction-project" })),
       };
 
       const serialized = JSON.stringify(payload);

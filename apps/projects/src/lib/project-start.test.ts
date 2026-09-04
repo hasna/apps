@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { addWorkspaceLocation, createTmuxProfile, createWorkspace, getWorkspaceByPath } from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
-import { __resetProjectStore } from "../store/project-store.js";
+import { PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore } from "../store/project-store.js";
 import { HOSTED_API_ENV_KEYS } from "../testing/spawn-env.js";
 import { parseProjectStartAgent, parseProjectStartSessionPolicy, projectStartCommand, startProject } from "./project-start.js";
 
@@ -18,6 +18,10 @@ import { parseProjectStartAgent, parseProjectStartSessionPolicy, projectStartCom
 for (const key of HOSTED_API_ENV_KEYS) {
   process.env[key] = "";
 }
+// Store resolution fails closed with the hosted selectors blanked (owner ruling
+// 2026-09-04, no silent local fallback); these in-process local-store tests
+// explicitly opt in to the on-box SQLite registry.
+process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
 
 function makeDb(): Database {
   const db = new Database(":memory:");

@@ -16,7 +16,16 @@
  * the keys would let the disk tier select the real hosted backend anyway. An
  * explicitly DEFINED-but-blank URL is the seam's own "select the local store"
  * escape hatch and beats any disk pointer.
+ *
+ * The store resolution FAILS CLOSED (owner ruling 2026-09-04): with the hosted
+ * selectors blanked, a registry command would throw unless the local registry
+ * is explicitly opted into. Tests that deliberately exercise the on-box SQLite
+ * registry therefore default `HASNA_PROJECTS_LOCAL_REGISTRY=1` in the spawned
+ * environment. A test that wants to assert the fail-closed behavior overrides
+ * the key with an empty string.
  */
+import { PROJECTS_LOCAL_REGISTRY_ENV } from "../store/project-store.js";
+
 export const HOSTED_API_ENV_KEYS = [
   "HASNA_PROJECTS_API_URL",
   "HASNA_PROJECTS_API_KEY",
@@ -51,5 +60,9 @@ export function testSpawnEnv(overrides: Record<string, string> = {}): Record<str
   for (const key of HOSTED_API_ENV_KEYS) {
     if (!(key in overrides)) env[key] = "";
   }
+  // Explicit local-registry opt-in for spawned processes: store resolution
+  // fails closed without it (no silent local fallback), and these tests run
+  // the CLI against the on-box SQLite registry by default.
+  if (!(PROJECTS_LOCAL_REGISTRY_ENV in overrides)) env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
   return { ...env, ...overrides };
 }

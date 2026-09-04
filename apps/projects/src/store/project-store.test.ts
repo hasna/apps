@@ -16,14 +16,24 @@ import {
   TEST_PRODUCER_VERIFIER_NOW,
   testConversationsProducerFixture,
 } from "../lib/project-resource-link-producer-verifier.test-support.js";
-import { resolveProjectStore, __resetProjectStore } from "./project-store.js";
+import { resolveProjectStore, __resetProjectStore, PROJECTS_LOCAL_REGISTRY_ENV } from "./project-store.js";
+
+/**
+ * The explicit local-registry opt-in for fixture tests that deliberately
+ * exercise the on-box SQLite store. The client never defaults to local: these
+ * tests declare it.
+ */
+const LOCAL_REGISTRY_ENV = { [PROJECTS_LOCAL_REGISTRY_ENV]: "1" };
 
 describe("projects store resolution (client-flip)", () => {
-  test("no env -> local store", () => {
+  test("no env -> fails closed naming the required hosted API env", () => {
     __resetProjectStore();
-    const store = resolveProjectStore({});
-    expect((store as unknown as { transport?: string }).transport).toBe("local");
-    expect(store.baseUrl).toBeNull();
+    // Owner ruling 2026-09-04: without the hosted API env the client must
+    // FAIL CLOSED — non-zero with an actionable error — and must never serve
+    // the local SQLite registry as a silent default.
+    expect(() => resolveProjectStore({})).toThrow(/HASNA_PROJECTS_API_URL/);
+    expect(() => resolveProjectStore({})).toThrow(/HASNA_PROJECTS_API_KEY/);
+    expect(() => resolveProjectStore({})).toThrow(/no silent local fallback/i);
   });
 
   test("url + key -> http store", () => {
@@ -43,21 +53,33 @@ describe("projects store resolution (client-flip)", () => {
     expect(() => resolveProjectStore({ HASNA_PROJECTS_API_URL: "https://projects.example.test" })).toThrow(/no API key could be resolved/i);
   });
 
-  test("key without url -> local store (a key alone selects no server)", () => {
+  test("key without url -> never silently falls back to the local registry", () => {
     __resetProjectStore();
-    // The shared seam's contract: with no API URL in either tier the client
-    // stays on the local store and never consults credential files. A stray
-    // key routes nothing.
-    const store = resolveProjectStore({ HASNA_PROJECTS_API_KEY: "k" });
-    expect((store as unknown as { transport?: string }).transport).toBe("local");
-    expect(store.baseUrl).toBeNull();
+    // Fail closed either way: the current seam declines the HTTP transport
+    // without a URL and the app then throws naming the required URL env; a
+    // newer seam that routes a resolvable key to the fleet gateway returns an
+    // HTTP store. Neither may serve the on-box SQLite registry silently.
+    let outcome: unknown;
+    try {
+      outcome = resolveProjectStore({ HASNA_PROJECTS_API_KEY: "k" });
+    } catch (err) {
+      expect(String(err)).toMatch(/HASNA_PROJECTS_API_URL/);
+      return;
+    }
+    expect((outcome as { transport?: string }).transport).toBe("http");
   });
 
   test("legacy selector variables do not change transport", () => {
     __resetProjectStore();
     const legacySelector = ["HASNA_PROJECTS", "STORAGE", "MODE"].join("_");
-    const local = resolveProjectStore({ [legacySelector]: "legacy" });
-    expect((local as unknown as { transport?: string }).transport).toBe("local");
+    // A legacy selector alone never opens the local store either: without the
+    // explicit local opt-in the resolution fails closed.
+    expect(() => resolveProjectStore({ [legacySelector]: "legacy" })).toThrow(/HASNA_PROJECTS_API_URL/);
+    __resetProjectStore();
+    // With the explicit opt-in the legacy selector is inert and the local
+    // registry opens.
+    const opted = resolveProjectStore({ [legacySelector]: "legacy", [PROJECTS_LOCAL_REGISTRY_ENV]: "1" });
+    expect((opted as unknown as { transport?: string }).transport).toBe("local");
     __resetProjectStore();
     const hosted = resolveProjectStore({
       [legacySelector]: "local",
@@ -77,6 +99,33 @@ describe("projects store resolution (client-flip)", () => {
   });
 });
 
+describe("projects store resolution (explicit local opt-in)", () => {
+  test("HASNA_PROJECTS_LOCAL_REGISTRY=1 -> local store", () => {
+    __resetProjectStore();
+    const store = resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: "1" });
+    expect((store as unknown as { transport?: string }).transport).toBe("local");
+    expect(store.baseUrl).toBeNull();
+  });
+
+  test("the local opt-in is only honored for the exact value '1'", () => {
+    for (const value of ["", "0", "true", "yes"]) {
+      __resetProjectStore();
+      expect(() => resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: value })).toThrow(/HASNA_PROJECTS_API_URL/);
+    }
+  });
+
+  test("the hosted env wins over the local opt-in", () => {
+    __resetProjectStore();
+    const store = resolveProjectStore({
+      HASNA_PROJECTS_API_URL: "https://projects.example.test",
+      HASNA_PROJECTS_API_KEY: "k",
+      [PROJECTS_LOCAL_REGISTRY_ENV]: "1",
+    });
+    expect((store as unknown as { transport?: string }).transport).toBe("http");
+    expect(store.baseUrl).toBe("https://projects.example.test/v1");
+  });
+});
+
 describe("local Projects production producer verifier", () => {
   test("rejects a real project-A producer receipt replayed into project B", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-producer-replay-"));
@@ -90,7 +139,7 @@ describe("local Projects production producer verifier", () => {
       const projectBName = "Local Producer Project B";
       const projectBSlug = "local-producer-project-b";
       const targetId = "chn_79fa9c68937a1d020d6031dcaa3dd8d7";
-      const bootstrapStore = resolveProjectStore({});
+      const bootstrapStore = resolveProjectStore(LOCAL_REGISTRY_ENV);
       const projectB = await bootstrapStore.createProject({
         name: projectBName,
         slug: projectBSlug,
@@ -105,7 +154,7 @@ describe("local Projects production producer verifier", () => {
         projectName: "Local Producer Project A",
         projectKind: "generic",
       });
-      const store = resolveProjectStore({}, undefined, {
+      const store = resolveProjectStore(LOCAL_REGISTRY_ENV, undefined, {
         producerAuthorityOptions: projectAReceipt.authorityOptions,
         producerVerifierNow: () => TEST_PRODUCER_VERIFIER_NOW,
       });
@@ -206,7 +255,7 @@ describe("local Projects production producer verifier", () => {
       const projectName = "Local Producer Verifier";
       const projectSlug = "local-producer-verifier";
       const targetId = "chn_79fa9c68937a1d020d6031dcaa3dd8d7";
-      const bootstrapStore = resolveProjectStore({});
+      const bootstrapStore = resolveProjectStore(LOCAL_REGISTRY_ENV);
       const project = await bootstrapStore.createProject({ name: projectName, slug: projectSlug });
       __resetProjectStore();
       const fixture = testConversationsProducerFixture({
@@ -218,7 +267,7 @@ describe("local Projects production producer verifier", () => {
         projectName: project.name,
         projectKind: project.kind,
       });
-      const store = resolveProjectStore({}, undefined, {
+      const store = resolveProjectStore(LOCAL_REGISTRY_ENV, undefined, {
         producerAuthorityOptions: fixture.authorityOptions,
         producerVerifierNow: () => TEST_PRODUCER_VERIFIER_NOW,
       });
@@ -286,7 +335,7 @@ describe("local Projects production producer verifier", () => {
         max_items: 10,
         ...bounds,
       });
-      const defaultStore = resolveProjectStore({});
+      const defaultStore = resolveProjectStore(LOCAL_REGISTRY_ENV);
       await expect(defaultStore.advanceProjectResourceLinkMigration({
         project_id: project.id,
         manifest_id: planned.manifest.manifest_id,
@@ -1471,7 +1520,7 @@ describe("local store listEvents (transport parity)", () => {
     closeDatabase();
     __resetProjectStore();
     try {
-      const store = resolveProjectStore({});
+      const store = resolveProjectStore(LOCAL_REGISTRY_ENV);
       const project = await store.createProject({ name: "Local Events Parity", slug: "local-events-parity" });
       const recorded = [
         await store.recordEvent(project.id, { event_type: "note", source: "cli", metadata: { n: 1 } }),

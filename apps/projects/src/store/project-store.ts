@@ -5,9 +5,14 @@
 //   - ApiProjectStore    -> HTTP `<API_URL>/v1` + bearer key (via the shared
 //                          @hasna/contracts/client/storage seam, not a vendored copy)
 //
-// `resolveProjectStore()` picks the transport from the environment: the joint
-// presence of HASNA_PROJECTS_API_URL + HASNA_PROJECTS_API_KEY selects the HTTP
-// transport; otherwise the local transport is used. A partial pair fails closed.
+// `resolveProjectStore()` selects the transport from the environment and FAILS
+// CLOSED (owner ruling 2026-09-04): the shared seam's HTTP transport is used
+// when the hosted API URL + key pairing is configured; a resolution that would
+// otherwise fall back to the on-box SQLite registry THROWS an actionable error
+// naming HASNA_PROJECTS_API_URL / HASNA_PROJECTS_API_KEY unless the operator
+// has explicitly opted into the local registry with
+// `HASNA_PROJECTS_LOCAL_REGISTRY=1`. There is no silent local default and no
+// local-fallback path that exits 0.
 //
 // Every registry command/tool/method calls the same Store methods. Machine-local
 // runtime side effects (tmux, git, directory creation, rendering) are NOT
@@ -212,6 +217,25 @@ import type {
 
 const APP = "projects";
 const RESOURCE = "projects";
+
+/**
+ * Explicit opt-in for the on-box SQLite registry (~/.hasna/projects). The
+ * client never defaults to the local registry and never falls back to it
+ * silently: `resolveProjectStore()` throws an actionable error naming the
+ * hosted API env when the HTTP transport is not selected, and only honors the
+ * local transport when this variable is set to exactly `1` (owner ruling
+ * 2026-09-04 — no silent local storage).
+ */
+export const PROJECTS_LOCAL_REGISTRY_ENV = "HASNA_PROJECTS_LOCAL_REGISTRY";
+
+/**
+ * Canonical hosted API env keys, as policed by the shared @hasna/contracts
+ * client seam (`clientTransportEnvKeys("projects")`; the unprefixed
+ * PROJECTS_API_URL / PROJECTS_API_KEY aliases are also accepted there). Named
+ * in fail-closed errors so an operator knows exactly what to set.
+ */
+const PROJECTS_API_URL_ENV = "HASNA_PROJECTS_API_URL";
+const PROJECTS_API_KEY_ENV = "HASNA_PROJECTS_API_KEY";
 
 /** Process-environment shape accepted by the shared @hasna/contracts seam. */
 type Env = Record<string, string | undefined>;
@@ -1779,10 +1803,15 @@ export interface ResolveProjectStoreOptions {
 }
 
 /**
- * Resolve the active projects Store from the environment. Returns an
- * ApiProjectStore when the API URL and key pairing is present, else a
- * LocalProjectStore. Throws if the hosted pairing is incomplete (so callers
- * never silently read the wrong dataset).
+ * Resolve the active projects Store from the environment.
+ *
+ * FAILS CLOSED (owner ruling 2026-09-04): an ApiProjectStore is returned only
+ * when the shared seam selects the HTTP transport (hosted API URL + key
+ * pairing). Any resolution that would otherwise default to the on-box SQLite
+ * registry throws an actionable error naming HASNA_PROJECTS_API_URL and
+ * HASNA_PROJECTS_API_KEY — unless HASNA_PROJECTS_LOCAL_REGISTRY=1 was set
+ * explicitly, the ONLY way the LocalProjectStore is ever returned. The local
+ * registry is never a silent fallback.
  */
 export function resolveProjectStore(
   env: Env = process.env,
@@ -1794,25 +1823,40 @@ export function resolveProjectStore(
     && options.producerVerifierNow === undefined;
   if (cacheable && cached) return cached;
   const resolved = resolveStorageClient(APP, env, { fetchImpl });
-  const store: ProjectStore =
-    resolved.transport === "http"
-      ? new ApiProjectStore({
-        ...resolved.client,
-        transport: enrichSeamTransport(resolved.client.transport),
-      })
-      : new LocalProjectStore(
-        createProductionProjectResourceLinkProducerEvidenceVerifier({
-          authorities: productionProjectRegistrationAuthorities({
-            ...options.producerAuthorityOptions,
-            env: options.producerAuthorityOptions?.env ?? env,
-            fetch: options.producerAuthorityOptions?.fetch
-              ?? fetchImpl as typeof globalThis.fetch | undefined,
-          }),
-          now: options.producerVerifierNow,
-        }),
-      );
-  if (cacheable) cached = store;
-  return store;
+  if (resolved.transport === "http") {
+    const httpStore: ProjectStore = new ApiProjectStore({
+      ...resolved.client,
+      transport: enrichSeamTransport(resolved.client.transport),
+    });
+    if (cacheable) cached = httpStore;
+    return httpStore;
+  }
+  // The seam declined the HTTP transport. Never fall back to the on-box SQLite
+  // registry silently: the local registry is reachable ONLY through the
+  // explicit opt-in, and without it this throws so callers exit non-zero with
+  // an actionable error instead of reading a local dataset by accident.
+  if (env[PROJECTS_LOCAL_REGISTRY_ENV] !== "1") {
+    throw new Error(
+      `projects: no hosted projects API configuration — refusing to fall back to the local SQLite registry. ` +
+      `Set ${PROJECTS_API_URL_ENV} and ${PROJECTS_API_KEY_ENV} (the unprefixed ` +
+      `PROJECTS_API_URL / PROJECTS_API_KEY aliases are also accepted) to route the registry to the hosted ` +
+      `projects service, or set ${PROJECTS_LOCAL_REGISTRY_ENV}=1 to explicitly opt in to the local registry. ` +
+      `There is no silent local fallback.`,
+    );
+  }
+  const localStore: ProjectStore = new LocalProjectStore(
+    createProductionProjectResourceLinkProducerEvidenceVerifier({
+      authorities: productionProjectRegistrationAuthorities({
+        ...options.producerAuthorityOptions,
+        env: options.producerAuthorityOptions?.env ?? env,
+        fetch: options.producerAuthorityOptions?.fetch
+          ?? fetchImpl as typeof globalThis.fetch | undefined,
+      }),
+      now: options.producerVerifierNow,
+    }),
+  );
+  if (cacheable) cached = localStore;
+  return localStore;
 }
 
 /** Test/di seam: clear the process-env cached store. */

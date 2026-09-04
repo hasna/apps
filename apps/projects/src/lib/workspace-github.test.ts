@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRoot, createWorkspace, getWorkspaceBySlug, listWorkspaceEvents } from "../db/workspaces.js";
 import { closeDatabase, getDatabase, PROJECTS_DB_PATH_ENV } from "../db/database.js";
-import { resolveProjectStore, __resetProjectStore, type ProjectStore } from "../store/project-store.js";
+import { resolveProjectStore, PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore, type ProjectStore } from "../store/project-store.js";
 import {
   linkWorkspaceExternalIntegrations,
   normalizeWorkspaceIntegrations,
@@ -24,6 +24,7 @@ beforeEach(() => {
   process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
   delete process.env["HASNA_PROJECTS_API_URL"];
   delete process.env["HASNA_PROJECTS_API_KEY"];
+  process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
   closeDatabase();
   __resetProjectStore();
 });
@@ -34,7 +35,7 @@ afterEach(() => {
 });
 
 function setup(): { db: ReturnType<typeof getDatabase>; store: ProjectStore } {
-  return { db: getDatabase(), store: resolveProjectStore({}) };
+  return { db: getDatabase(), store: resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: "1" }) };
 }
 
 function git(path: string, args: string[]): string {
