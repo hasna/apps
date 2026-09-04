@@ -565,12 +565,17 @@ export {
   clearKnowledgeAuth,
   getKnowledgeApiKey,
   getKnowledgeAuth,
+  knowledgeApiKeyPrincipal,
   knowledgeAuthPath,
   knowledgeAuthStatus,
   normalizeKnowledgeApiOrigin,
+  probeKnowledgeAuth,
   resolveKnowledgeApiUrl,
   saveKnowledgeAuth,
   type KnowledgeAuthConfig,
+  type KnowledgeAuthPrincipal,
+  type KnowledgeAuthProbe,
+  type KnowledgeAuthProbeReason,
   type KnowledgeAuthStatus,
 } from './auth.js';
 export {

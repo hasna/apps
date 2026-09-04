@@ -1,5 +1,5 @@
 import { type AppWikiInitResult, type AppWikiNoteGetResult, type AppWikiNoteRecord, type AppWikiNoteWriteResult } from './app-wiki';
-import { type KnowledgeAuthStatus } from './auth';
+import { type KnowledgeAuthProbe, type KnowledgeAuthStatus } from './auth';
 import { type KnowledgePromptOptions } from './agent';
 import { type KnowledgeAgentContextPack, type KnowledgeAgentContextPackOptions } from './context-pack';
 import { type KnowledgeSyncConflictAiProposalOptions } from './conflict-agent';
@@ -441,6 +441,13 @@ export declare class KnowledgeService {
         canonicalExample?: boolean;
     }): KnowledgeSetupResult;
     authStatus(env?: Record<string, string | undefined>): KnowledgeAuthStatus;
+    /**
+     * Live authentication probe (one authenticated `/v1/notes?limit=1` request
+     * through the read-path transport). whoami/status overlay this on
+     * {@link authStatus} so a revoked key reports `authenticated: false` instead
+     * of a presence-based claim.
+     */
+    probeAuth(env?: Record<string, string | undefined>): Promise<KnowledgeAuthProbe>;
     saveAuth(input: {
         apiKey: string;
         email?: string;

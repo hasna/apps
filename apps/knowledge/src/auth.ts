@@ -1,9 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { HasnaHttpError } from '@hasna/contracts/client';
+import { ownAgentClaim, ownTenantId, parseApiKey } from '@hasna/contracts/auth';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
+  resolveKnowledgeClientTransport,
 } from './client-transport';
+import { resolveKnowledgeHttpStore } from './http-store';
 import { getDataHome } from './paths';
 
 export interface KnowledgeAuthConfig {
@@ -16,8 +20,57 @@ export interface KnowledgeAuthConfig {
   created_at: string;
 }
 
+/**
+ * The identity a knowledge API key claims, decoded from the key's own signed
+ * body. kid is the PUBLIC identifier servers and revocation lists key on —
+ * never the key value, which is excluded here by design.
+ */
+export interface KnowledgeAuthPrincipal {
+  kid: string;
+  app: string | null;
+  agent: string | null;
+  tid: string | null;
+}
+
+/**
+ * Why a live probe did not verify the credential. `unauthorized` covers every
+ * server rejection the transport can see (401/403): the key may be revoked,
+ * expired, unknown, or mis-signed — the server's deny body is deliberately
+ * never read by the transport, so the client cannot tell those apart. The
+ * surfaced kid lets an operator match the failure against the revocation list.
+ */
+export type KnowledgeAuthProbeReason =
+  | 'unauthorized'
+  | 'not_found'
+  | 'server_error'
+  | 'unreachable'
+  | 'unknown';
+
+/** Result of the live authentication probe used by `auth whoami`/`auth status`. */
+export interface KnowledgeAuthProbe {
+  /** Whether a live request was actually sent to the server. */
+  probed: boolean;
+  /** The server accepted the credential (HTTP 2xx). */
+  verified: boolean;
+  /** HTTP status the server answered with; null when no request was sent or no response arrived. */
+  status: number | null;
+  /** Why authentication failed; null when verified or not probed. */
+  reason: KnowledgeAuthProbeReason | null;
+  /** The claimed principal — the key that passed or failed. Never the key value. */
+  principal: KnowledgeAuthPrincipal | null;
+}
+
 export interface KnowledgeAuthStatus {
+  /**
+   * Credential-configuration snapshot: a key is present somewhere the client
+   * would use (env or auth file). This is NOT a live claim — a revoked key
+   * still counts as "configured". The CLI's whoami/status overlays the live
+   * probe result on top of this; library callers that need the live answer
+   * must await {@link probeKnowledgeAuth}.
+   */
   authenticated: boolean;
+  /** Alias of `authenticated`: a key is present (kept for callers that read `configured`). */
+  configured: boolean;
   source: 'env' | 'file' | 'none';
   api_url: string;
   auth_path: string;
@@ -118,6 +171,7 @@ export function knowledgeAuthStatus(
       : resolveKnowledgeApiUrl(env);
   return {
     authenticated: Boolean(key.apiKey),
+    configured: Boolean(key.apiKey),
     source: key.source,
     api_url: apiUrl,
     auth_path: knowledgeAuthPath(env),
@@ -127,4 +181,78 @@ export function knowledgeAuthStatus(
     user_id: key.source === 'file' ? auth?.user_id ?? null : null,
     api_key_present: Boolean(key.apiKey),
   };
+}
+
+/**
+ * Decode the principal a knowledge API key claims (kid/app/agent/tid). The
+ * claims are self-attested by whoever holds the token — this is identity
+ * REPORTING for diagnostics, never authentication; the HMAC signature is only
+ * verified by the server. Returns null for a malformed or non-hasna key value.
+ * The key value itself is never returned.
+ */
+export function knowledgeApiKeyPrincipal(apiKey: string): KnowledgeAuthPrincipal | null {
+  const parsed = parseApiKey(apiKey);
+  if (!parsed) return null;
+  return {
+    kid: parsed.claims.kid,
+    app: parsed.claims.app,
+    agent: ownAgentClaim(parsed.claims),
+    tid: ownTenantId(parsed.claims) ?? null,
+  };
+}
+
+/**
+ * LIVE authentication probe: one authenticated request through the exact HTTP
+ * transport the read path uses (`GET /v1/notes?limit=1`), so the answer is the
+ * same answer reads get — a revoked or invalid key that fails every read now
+ * fails whoami the same way.
+ *
+ * Never probed (reason/status null): no key configured, or no hosted API
+ * selected — in both cases there is nothing to authenticate against and no
+ * live claim is made. 401/403 is reported as `unauthorized` with the rejected
+ * key's kid surfaced, so an operator can match it against the revocation list.
+ * The endpoint and 5xx/network failures are reported distinctly so a revoked
+ * key is never confused with a down server.
+ *
+ * The probe is safe under the test network guard: it uses the same
+ * `guardedFetch` the read path uses, so it is refused (not sent) for
+ * non-loopback targets while NODE_ENV=test.
+ */
+export async function probeKnowledgeAuth(
+  env: Record<string, string | undefined> = process.env,
+): Promise<KnowledgeAuthProbe> {
+  const key = getKnowledgeApiKey(env);
+  const principal = key.apiKey ? knowledgeApiKeyPrincipal(key.apiKey) : null;
+  const notProbed: KnowledgeAuthProbe = {
+    probed: false,
+    verified: false,
+    status: null,
+    reason: null,
+    principal,
+  };
+  if (!key.apiKey) return notProbed;
+  // Authenticate only against the transport reads actually use. A key without
+  // HASNA_KNOWLEDGE_API_URL is inert — the client reads the on-box store — so
+  // whoami must not suddenly send it anywhere.
+  if (resolveKnowledgeClientTransport(env).transport !== 'http') return notProbed;
+  const store = resolveKnowledgeHttpStore(env);
+  if (!store) return { ...notProbed, probed: true, reason: 'unreachable' };
+  try {
+    await store.list({ limit: 1 });
+    return { probed: true, verified: true, status: 200, reason: null, principal };
+  } catch (error) {
+    if (error instanceof HasnaHttpError) {
+      const { status } = error;
+      const reason: KnowledgeAuthProbeReason =
+        status === 401 || status === 403
+          ? 'unauthorized'
+          : status === 404
+            ? 'not_found'
+            : status >= 500
+              ? 'server_error'
+              : 'unknown';
+      return { probed: true, verified: false, status, reason, principal };
+    }
+    return { probed: true, verified: false, status: null, reason: 'unreachable', principal };
+  }
 }
