@@ -8,8 +8,11 @@
  *   bun tooling/fleet/fleet-key.ts provision --app <app> [--manifest <ssm-name>]
  *       Run by each deploy lane AFTER a successful rollout. Verifies
  *       hasna/oss/<app>/api-key against the freshly deployed origin and mints
- *       it when it is missing or refused, so a fresh deploy never leaves a
- *       service nothing can call.
+ *       it when it is MISSING, so a fresh deploy never leaves a service nothing
+ *       can call. A key that EXISTS is never overwritten without --allow-rotate:
+ *       stations hold hand-copied Keychain copies of that one shared value, and
+ *       the `rejected` verdict is a heuristic (a keyed 403 is also what a valid
+ *       key outside the probed path's scope returns). See `planMint`.
  *
  *   bun tooling/fleet/fleet-key.ts drift [--json] [--strict] [--apps a,b]
  *       Run daily. Checks every app in tooling/fleet/hosted-apps.json and exits
@@ -32,7 +35,9 @@ import {
   mintTargetFrom,
   missingMintTargetMessage,
   partition,
+  planMint,
   renderIncidentReport,
+  rotationNotice,
   runMintTask,
   type FleetApp,
   type Io,
@@ -51,6 +56,7 @@ interface Args {
   json: boolean;
   strict: boolean;
   dryRun: boolean;
+  allowRotate: boolean;
 }
 
 function parseArgs(argv: readonly string[]): Args {
@@ -60,6 +66,7 @@ function parseArgs(argv: readonly string[]): Args {
     json: false,
     strict: false,
     dryRun: false,
+    allowRotate: false,
   };
   for (let i = 1; i < argv.length; i += 1) {
     const flag = argv[i];
@@ -100,6 +107,11 @@ function parseArgs(argv: readonly string[]): Args {
       case "--dry-run":
         args.dryRun = true;
         break;
+      case "--allow-rotate":
+        // Opt-in to REPLACING a key that already exists. Off by default: see
+        // the rotation-policy note in key-provisioning.ts.
+        args.allowRotate = true;
+        break;
       default:
         throw new Error(`unknown flag ${flag}`);
     }
@@ -110,7 +122,7 @@ function parseArgs(argv: readonly string[]): Args {
 function usage(): string {
   return [
     "usage:",
-    "  bun tooling/fleet/fleet-key.ts provision --app <app> [--manifest <ssm-name>] [--region <r>] [--dry-run]",
+    "  bun tooling/fleet/fleet-key.ts provision --app <app> [--manifest <ssm-name>] [--region <r>] [--dry-run] [--allow-rotate]",
     "  bun tooling/fleet/fleet-key.ts drift [--apps a,b] [--json] [--strict] [--region <r>]",
     "  bun tooling/fleet/fleet-key.ts apps [--json] [--source monorepo|external]",
   ].join("\n");
@@ -127,7 +139,15 @@ function findApp(registry: readonly FleetApp[], app: string): FleetApp {
   return found;
 }
 
-/** `provision`: verify, and mint when the key is missing or refused. */
+/**
+ * `provision`: verify, mint a MISSING key, and refuse to overwrite a live one
+ * unless the caller explicitly opted in.
+ *
+ * The asymmetry is the point and is argued in full on `planMint`: minting where
+ * no secret exists cannot break anything, while overwriting the one shared value
+ * that every station copied into its Keychain breaks all of them at once — on
+ * the strength of a verdict that a scope-only 403 can produce.
+ */
 async function provision(args: Args, io: Io): Promise<number> {
   if (!args.app) throw new Error("provision requires --app");
   const target = findApp(loadRegistry(), args.app);
@@ -135,17 +155,37 @@ async function provision(args: Args, io: Io): Promise<number> {
 
   let assessment = await checkApp(target, io, args.region);
   console.log(`[fleet-key] ${assessment.app}: ${assessment.state} — ${assessment.detail}`);
-  if (assessment.state === "verified" || assessment.state === "exempt") return 0;
 
-  // `unverifiable` is never a reason to mint: a probe that proved nothing must
-  // not be answered by writing a new credential over a possibly-good one.
-  if (assessment.state === "unverifiable") {
-    console.error(`[fleet-key] refusing to mint for ${target.app}: the probe proved nothing. ${assessment.detail}`);
+  const plan = planMint(assessment, { allowRotate: args.allowRotate });
+  if (plan.action === "none") return 0;
+  if (plan.action === "refuse") {
+    console.error(`[fleet-key] ${plan.reason}`);
+    await publishNotice(plan.reason);
     return 1;
   }
 
+  const rotating = plan.action === "rotate";
+
+  if (rotating) {
+    // A second, confirming probe before anything is written. One refusal can be
+    // a deploy still settling, a gateway blip or a single unlucky request; two
+    // in a row on the same key is a finding. If the second reading disagrees at
+    // all, the first one is not evidence enough to destroy a live credential.
+    const confirmation = await checkApp(target, io, args.region);
+    console.log(`[fleet-key] ${confirmation.app} confirmation probe: ${confirmation.state} — ${confirmation.detail}`);
+    if (confirmation.state !== "rejected") {
+      console.error(
+        `[fleet-key] NOT rotating ${target.keySecretId}: the confirming probe said "${confirmation.state}", ` +
+          `not "rejected". A single refusal is not evidence enough to replace a key every station holds.`,
+      );
+      return 1;
+    }
+  }
+
   if (args.dryRun) {
-    console.log(`[fleet-key] --dry-run: would mint ${target.keySecretId} for ${target.app}`);
+    console.log(
+      `[fleet-key] --dry-run: would ${rotating ? "ROTATE (overwrite)" : "mint"} ${target.keySecretId} for ${target.app}`,
+    );
     return 1;
   }
 
@@ -176,16 +216,53 @@ async function provision(args: Args, io: Io): Promise<number> {
     return 1;
   }
 
-  console.log(`[fleet-key] minting ${target.keySecretId} via ${mintTarget.taskFamily} in ${mintTarget.cluster}`);
+  console.log(
+    `[fleet-key] ${rotating ? "rotating" : "minting"} ${target.keySecretId} via ${mintTarget.taskFamily} in ${mintTarget.cluster}`,
+  );
   const exit = await runMintTask(mintTarget, io, args.region, `fleet-key-${target.app}`);
   if (exit !== 0) {
     console.error(`[fleet-key] mint task ${mintTarget.taskFamily} exited ${exit}; ${target.keySecretId} unchanged`);
     return 1;
   }
 
+  // A rotation invalidated hand-distributed copies. Say so where a human will
+  // see it — the log, the job summary, and an output the workflow republishes —
+  // because the alternative is every station discovering it as an outage.
+  if (rotating) {
+    const notice = rotationNotice(target.app);
+    console.log(notice);
+    await publishNotice(notice, { rotated: true });
+  }
+
   assessment = await checkApp(target, io, args.region);
   console.log(`[fleet-key] ${assessment.app} after mint: ${assessment.state} — ${assessment.detail}`);
   return assessment.state === "verified" || assessment.state === "exempt" ? 0 : 1;
+}
+
+/**
+ * Publish an operator-facing notice to the job summary and to GITHUB_OUTPUT.
+ *
+ * Both sinks are files, written by this process: nothing passes through a shell
+ * and nothing here carries a key value — these notices are app names, secret
+ * IDs and instructions only.
+ */
+async function publishNotice(notice: string, options: { rotated?: boolean } = {}): Promise<void> {
+  const summary = process.env.GITHUB_STEP_SUMMARY;
+  if (summary) {
+    await append(summary, `\n${"```"}\n${notice}\n${"```"}\n`);
+  }
+  const output = process.env.GITHUB_OUTPUT;
+  if (output) {
+    const delimiter = `EOF_${Math.random().toString(36).slice(2)}`;
+    await append(
+      output,
+      `${options.rotated ? "rotated=true\n" : ""}notice<<${delimiter}\n${notice}\n${delimiter}\n`,
+    );
+  }
+}
+
+async function append(file: string, text: string): Promise<void> {
+  await Bun.write(file, (await safeRead(file)) + text);
 }
 
 /** `drift`: check every registered app and report. */
@@ -221,11 +298,9 @@ async function drift(args: Args, io: Io): Promise<number> {
   // The workflow posts this verbatim; GITHUB_OUTPUT keeps it out of the shell.
   if (process.env.GITHUB_OUTPUT) {
     const delimiter = `EOF_${Math.random().toString(36).slice(2)}`;
-    await Bun.write(
+    await append(
       process.env.GITHUB_OUTPUT,
-      (await safeRead(process.env.GITHUB_OUTPUT)) +
-        `failures=${failures.length}\n` +
-        `report<<${delimiter}\n${report}\n${delimiter}\n`,
+      `failures=${failures.length}\n` + `report<<${delimiter}\n${report}\n${delimiter}\n`,
     );
   }
 
@@ -248,7 +323,12 @@ function listApps(args: Args): number {
   return 0;
 }
 
-export async function main(argv: readonly string[]): Promise<number> {
+/**
+ * Entry point. `io` is injectable so the standard-adherence suite can drive the
+ * real command path — including the decision NOT to overwrite a live key —
+ * without AWS, a network, or a workflow.
+ */
+export async function main(argv: readonly string[], io: Io = createIo()): Promise<number> {
   let args: Args;
   try {
     args = parseArgs(argv);
@@ -258,7 +338,6 @@ export async function main(argv: readonly string[]): Promise<number> {
     return 2;
   }
 
-  const io = createIo();
   try {
     switch (args.command) {
       case "provision":

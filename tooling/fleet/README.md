@@ -60,6 +60,33 @@ authenticates by request signature and has no gated route at all, so it carries
 a documented `keyCheck: "none"` exemption and is listed as EXEMPT in every
 report — its key must still exist.
 
+## Minting, and what will never be overwritten
+
+`provision` mints when the secret is **missing**. It does **not** replace a
+secret that exists and was merely refused, and that asymmetry is deliberate:
+
+| assessment | what provisioning does |
+|------------|------------------------|
+| `verified` / `exempt` | nothing |
+| `missing` | mint — no secret exists, nothing can be invalidated |
+| `rejected` | **refuse**, report, exit non-zero — unless `--allow-rotate` |
+| `unverifiable` | never touch the secret; the probe proved nothing |
+
+`hasna/oss/<app>/api-key` holds one shared client key, and stations do not read
+it live: an operator copies it by hand into the macOS Keychain
+(`hasna.credentials.<app>.api-key`). Overwriting it invalidates every station's
+copy at once, silently, until somebody re-pulls. And `rejected` is a *heuristic*
+— it is reached from a keyed 401 **or 403**, and a 403 is also what a valid key
+that simply lacks the probed path's scope returns (`loops` answers 403 on the
+default probe path). Rotating on that reading would destroy a live key to fix a
+permission that was never broken.
+
+So a refusal is loud and cheap; a wrong rotation is silent and expensive.
+`--allow-rotate` (workflow input `allow_rotate: true`) opts in, and even then
+provisioning re-probes to confirm the refusal before writing, and publishes a
+rotation notice — job summary, `::warning::` annotation, and a `rotated=true`
+step output — telling station operators their Keychain copy is now stale.
+
 ## Minting
 
 Minting needs the app's signing secret **and** its owner Postgres URL, and that
@@ -79,3 +106,39 @@ See the `TODO` on `MintTarget` in `key-provisioning.ts`.
 No key value is ever printed, written, exported or embedded in an error. Values
 move from `aws secretsmanager get-secret-value` stdout into a request header
 inside one process. Reports carry app names, HTTP statuses and verdicts only.
+
+## Rollout: what is not in this repository
+
+The checker is here; the AWS side is in `infra-live`, and until it lands both
+lanes would fail for reasons no deploy caused. Both therefore sit behind a
+**rollout switch**, off by default, that still says loudly on every run that the
+key was not checked — a disabled check that is quiet is the exact failure
+hasna/apps#1595 was filed about. Delete the switches once the prerequisites are
+real.
+
+| lane | switch | prerequisites |
+|------|--------|---------------|
+| `fleet-key-provision.yml` (5 deploy lanes) | `FLEET_KEY_PROVISION_ENABLED=true` | `<app>-prod-gha-deploy` gains `secretsmanager:GetSecretValue` on `hasna/oss/<app>/api-key`, `ecs:RunTask`/`ecs:DescribeTasks` and `iam:PassRole` for the mint task; `/hasna/deploy/<app>` carries `mint_key_task_family` |
+| `fleet-key-drift.yml` (daily) | `FLEET_KEY_DRIFT_ENABLED=true` | `fleet-key-audit-gha` exists (or `FLEET_KEY_AUDIT_ROLE` names it), read-only on `hasna/oss/*/api-key`, trusting the OIDC subject `repo:hasna/apps:ref:refs/heads/main` |
+
+The drift lane declares **no** `environment:`, unlike the deploy lanes: a
+scheduled audit that a deployment approval gate can hold is an audit that
+silently stops running, and 06:17 has nobody to approve it.
+
+### messages is not finished by this repository
+
+hasna/apps#1595 was filed for `messages`, and `messages` is the one app this
+repo cannot provision: it has **no deploy lane here**. The contracts gate in
+`apps/messages/src/server/auth.ts` reaches production only through an
+out-of-repo deploy. Sequence, in order:
+
+1. deploy a `messages` build carrying that gate, with `API_KEY_SIGNING_SECRET`
+   in the task environment (until then the origin still answers the old
+   static-key error and would refuse a contracts-minted key);
+2. mint `hasna/oss/messages/api-key` with the in-VPC `hasna-ops-mint-key-messages`
+   task;
+3. confirm `bun tooling/fleet/fleet-key.ts drift --apps messages` is green.
+
+Until 1 and 2, the daily report names `messages` every day. That is the check
+working, not the check failing — and it is why #1595's acceptance items (a) and
+(c) are ops outcomes tracked beyond the pull request that added this directory.

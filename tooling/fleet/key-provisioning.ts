@@ -554,3 +554,105 @@ export async function runMintTask(target: MintTarget, io: Io, region: string, st
   const code = Number(exit);
   return Number.isFinite(code) ? code : 1;
 }
+
+// --------------------------------------------------------------------------
+// Rotation policy — when provisioning may OVERWRITE an existing secret.
+// --------------------------------------------------------------------------
+
+/**
+ * WHY THIS IS NOT "mint whenever the probe is unhappy".
+ *
+ * `hasna/oss/<app>/api-key` holds ONE shared client key, and stations do not
+ * read it live: an operator copies it by hand into the macOS Keychain
+ * (`hasna.credentials.<app>.api-key`, see ~/.claude/rules). Overwriting that
+ * secret therefore invalidates every station's copy of it, silently, until
+ * somebody re-pulls — so an automatic overwrite is a fleet-wide outage waiting
+ * for an unlucky probe.
+ *
+ * And the `rejected` verdict is a HEURISTIC, not a proof. It is reached from a
+ * keyed 401 **or 403**, and a 403 is exactly what a perfectly valid key that
+ * merely lacks the scope of the probed path returns (`loops` answers 403 on the
+ * default probe path today). Rotating on that reading would destroy a live key
+ * to fix a permission that was never broken.
+ *
+ * So the rule is asymmetric, and deliberately so:
+ *
+ *   missing      — no secret exists, nothing can be invalidated => MINT.
+ *   rejected     — a secret exists => REFUSE, report, and leave it alone. The
+ *                  lane goes red and a human decides, unless the caller opted
+ *                  in with `--allow-rotate` (and then only after a second,
+ *                  confirming probe, and with a rotation notice published).
+ *   unverifiable — the probe proved nothing => never touch the secret.
+ *
+ * The cost of refusing is a red job on a service whose key was genuinely dead.
+ * The cost of rotating wrongly is every station losing an app at once. The
+ * first is loud and cheap; the second is silent and expensive.
+ */
+
+/** What `provision` should do about one assessment. */
+export type MintPlan =
+  /** The key is fine (or documented-exempt): do nothing, exit clean. */
+  | { action: "none"; reason: string }
+  /** No secret exists: mint one. Nothing can be invalidated. */
+  | { action: "mint"; cause: "missing" }
+  /** A secret exists and was refused, and the caller opted into replacing it. */
+  | { action: "rotate"; cause: "rejected" }
+  /** Do not write: report and exit non-zero. */
+  | { action: "refuse"; reason: string };
+
+/** The message shown when a live secret is refused and rotation was not authorised. */
+export function rotationRefusedMessage(app: string): string {
+  return [
+    `${app} has a client key (${keySecretIdFor(app)}) that the origin refused.`,
+    "NOT re-minting: that secret is the one every station copied into its Keychain, and a keyed",
+    "403 is also what a valid key lacking the probed path's scope returns — overwriting on this",
+    "reading can take the app away from every station to fix a permission that was never broken.",
+    "Decide, then act:",
+    `  - the key really is dead  -> re-run this lane with --allow-rotate (workflow input`,
+    `    allow_rotate: true), or mint by hand with the hasna-ops-mint-key-${app} task, and tell`,
+    "    station operators to re-pull the secret into their Keychain;",
+    `  - the key is fine and the probe path is not in its scope -> give ${app} a probePath naming`,
+    "    a route the fleet key IS scoped for, in tooling/fleet/hosted-apps.json.",
+  ].join("\n");
+}
+
+/** The notice published whenever an existing key is actually replaced. */
+export function rotationNotice(app: string): string {
+  return [
+    `ROTATED ${keySecretIdFor(app)}: the previous client key for ${app} was refused by the origin and`,
+    "has been replaced. Every station still holds the OLD value in its Keychain and will fail against",
+    `${app} until it is re-pulled:`,
+    `  aws secretsmanager get-secret-value --secret-id ${keySecretIdFor(app)} --region us-east-1 \\`,
+    "    --query SecretString --output text  ->  security add-generic-password -U -a <station> \\",
+    `    -s hasna.credentials.${app}.api-key -w "$value"`,
+    "(move the value process-to-process; never print, echo or write it. See hasna/apps#1595.)",
+  ].join("\n");
+}
+
+/**
+ * Decide what provisioning may do, from the assessment alone.
+ *
+ * Pure on purpose: this is the rule that protects a live credential, so it is
+ * readable and testable without AWS, a network or a workflow.
+ */
+export function planMint(assessment: KeyAssessment, options: { allowRotate?: boolean } = {}): MintPlan {
+  switch (assessment.state) {
+    case "verified":
+      return { action: "none", reason: assessment.detail };
+    case "exempt":
+      return { action: "none", reason: assessment.detail };
+    case "missing":
+      return { action: "mint", cause: "missing" };
+    case "unverifiable":
+      // A probe that proved nothing must never be answered by writing a new
+      // credential over a possibly-good one.
+      return {
+        action: "refuse",
+        reason: `refusing to mint for ${assessment.app}: the probe proved nothing. ${assessment.detail}`,
+      };
+    case "rejected":
+      return options.allowRotate
+        ? { action: "rotate", cause: "rejected" }
+        : { action: "refuse", reason: rotationRefusedMessage(assessment.app) };
+  }
+}
