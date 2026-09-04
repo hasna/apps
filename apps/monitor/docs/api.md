@@ -142,9 +142,9 @@ open. Clients should reconnect using normal EventSource behavior.
 
 ## CORS
 
-The exact local dashboard origins `http://localhost:3848` and
-`http://127.0.0.1:3848` are allowed by default. Add comma-separated exact
-origins with `HASNA_MONITOR_API_CORS_ORIGINS` or
+No browser origins are allowed by default (the removed web dashboard was the
+only default consumer; CLI/SDK clients send no Origin). Add comma-separated
+exact origins with `HASNA_MONITOR_API_CORS_ORIGINS` or
 `MONITOR_API_CORS_ORIGINS`. A configured `*` is ignored; wildcard origins are
 not enabled. Allowed preflight methods are `GET`, `POST`, `PUT`, `DELETE`, and
 `OPTIONS`.

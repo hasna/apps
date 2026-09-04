@@ -1,7 +1,7 @@
 {
   "name": "@hasna/monitor",
   "version": "0.1.29",
-  "description": "System monitoring tool for multiple computers \u2014 local, SSH, EC2",
+  "description": "System monitoring tool for multiple computers — local, SSH, EC2",
   "type": "module",
   "license": "Apache-2.0",
   "repository": {
@@ -20,8 +20,7 @@
     "monitor": "./bins/monitor.js",
     "monitor-mcp": "./bins/monitor-mcp.js",
     "monitor-daemon": "./bins/monitor-daemon.js",
-    "monitor-server": "./bins/monitor-server.js",
-    "monitor-web": "./bins/monitor-web.js"
+    "monitor-server": "./bins/monitor-server.js"
   },
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -49,8 +48,7 @@
     "lint": "bunx tsc --noEmit",
     "monitor": "bun run ./bins/monitor.ts",
     "monitor-mcp": "bun run ./bins/monitor-mcp.ts",
-    "monitor-server": "bun run ./bins/monitor-server.ts",
-    "monitor-web": "bun run ./bins/monitor-web.ts"
+    "monitor-server": "bun run ./bins/monitor-server.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.600.0",

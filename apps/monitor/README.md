@@ -17,7 +17,6 @@
 - 🚪 **Port scanner** — see which TCP/UDP ports are listening on one machine or across the fleet
 - 🔄 **Cron jobs** — schedule actions per machine with full cron syntax
 - 📨 **Fleet reports** — generate daily/weekly health summaries and deliver them via conversations or emails
-- 🌐 **Web dashboard** — dark-themed real-time gauges served at `http://localhost:3848` (like NVIDIA DGX Dashboard)
 - 🔎 **Full-text search** — search across machines, alerts, and processes
 - 🔗 **Integrations** — todos, conversations, mementos, emails
 - 💾 **SQLite by default** — zero-config persistence; optional PostgreSQL for production
@@ -45,16 +44,12 @@ After a global install, `@hasna/monitor` exposes five npm binaries:
 | `monitor-mcp` | MCP server for AI agents (stdio or HTTP) |
 | `monitor-daemon` | Background daemon for scheduled monitoring (definition cadence, workers, leases) |
 | `monitor-server` | Standalone REST API server (default port `3847`, SSE at `/api/stream`) |
-| `monitor-web` | Standalone Vite web dashboard dev server (default port `3848`) |
 
-Start the API and dashboard separately:
+Start the API standalone:
 
 ```bash
 monitor-server
 # REST API: http://localhost:3847
-
-monitor-web
-# Dashboard: http://localhost:3848
 ```
 
 Or start the API through the main CLI:
@@ -62,8 +57,6 @@ Or start the API through the main CLI:
 ```bash
 monitor serve --port 3847
 ```
-
-Override standalone bin ports with `PORT`, for example `PORT=9000 monitor-web`.
 
 ## Quick Start
 
@@ -86,8 +79,6 @@ monitor ps --filter zombies
 # Search across everything
 monitor search "high cpu"
 
-# Start the web dashboard
-monitor-web
 ```
 
 ## MCP Setup
@@ -386,22 +377,6 @@ configured/observed counts, statuses, and threshold percentages. Cloud
 identifiers such as bucket names, ARNs, hostnames, private paths, and credential
 values are intentionally excluded.
 
-## Web Dashboard
-
-```bash
-monitor-web
-# Opens: http://localhost:3848
-```
-
-The dashboard shows:
-- Real-time CPU, memory, and disk gauges per machine
-- Recent alerts with severity indicators
-- Process table with sort and filter
-- Doctor check results
-- Cron job schedule
-
-Default port is `3848`. Override it with `PORT=9000 monitor-web`.
-
 The API route, authentication, request body, query parameter, SSE, and CORS
 reference is available in [docs/api.md](docs/api.md).
 
@@ -569,8 +544,8 @@ monitor migrate
 ## Security
 
 - The REST API binds to `127.0.0.1` by default. Use `monitor serve --host 0.0.0.0` or `HASNA_MONITOR_API_HOST=0.0.0.0` only behind a trusted network or reverse proxy.
-- Mutating and diagnostic command REST routes require `Authorization: Bearer <token>` or `X-API-Key: <token>`. Set `HASNA_MONITOR_API_TOKEN` or `MONITOR_API_TOKEN` before using API routes that create/delete machines, run doctor diagnostics, kill processes, create cron jobs, or run cron jobs. The dashboard sends `VITE_MONITOR_API_TOKEN` or a browser `localStorage` value named `monitor.apiToken` when present.
-- CORS is restricted to exact trusted origins. Local dashboard origins are allowed by default; add comma-separated origins with `HASNA_MONITOR_API_CORS_ORIGINS` or `MONITOR_API_CORS_ORIGINS`.
+- Mutating and diagnostic command REST routes require `Authorization: Bearer <token>` or `X-API-Key: <token>`. Set `HASNA_MONITOR_API_TOKEN` or `MONITOR_API_TOKEN` before using API routes that create/delete machines, run doctor diagnostics, kill processes, create cron jobs, or run cron jobs.
+- CORS is restricted to exact trusted origins. Configure comma-separated origins with `HASNA_MONITOR_API_CORS_ORIGINS` or `MONITOR_API_CORS_ORIGINS`; with none configured no browser origin is allowed (API clients such as the CLI and SDK do not send Origins).
 - Process command lines are automatically redacted before being returned to AI agents — passwords, tokens, API keys, and secrets are replaced with `***`
 - See [SECURITY.md](SECURITY.md) for the security policy and responsible disclosure process
 

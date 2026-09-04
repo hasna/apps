@@ -116,6 +116,6 @@ and `custom`.
 | `completions zsh` / `completions bash` | Print a completion script. |
 | `completions install` | Install completions for the detected shell or `--shell zsh|bash`. |
 
-The standalone binaries `monitor-mcp`, `monitor-server`, and `monitor-web` are
+The standalone binaries `monitor-mcp` and `monitor-server` are
 documented in the [README](../README.md). See the [REST API reference](api.md)
 for `monitor serve` and `monitor-server` routes.

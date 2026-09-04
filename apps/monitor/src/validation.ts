@@ -237,7 +237,6 @@ export const ConfigInputSchema = z.object({
   thresholds: AlertThresholdsSchema.optional(),
   dbPath: z.string().min(1).optional(),
   apiPort: z.number().int().min(1).max(65535).optional(),
-  webPort: z.number().int().min(1).max(65535).optional(),
 });
 
 export type ConfigInput = z.infer<typeof ConfigInputSchema>;
