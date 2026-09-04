@@ -7,7 +7,10 @@ export {
   CloudConfigStore,
   CloudHttpError,
   LocalConfigStore,
+  LOCAL_OPT_IN_ENV,
   isApiTransport,
+  isLocalOptIn,
+  missingFleetEnvError,
   resolveCloudConfig,
   resolveConfigStore,
 } from "./data/config-store.js";

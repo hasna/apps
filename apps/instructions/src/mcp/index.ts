@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getPackageVersion } from "../lib/package-version.js";
+import { resolveConfigStore } from "../data/config-store.js";
 import { buildServer } from "./server.js";
 import { isStdioMode, resolveHttpPort, startMcpHttpServer } from "./http.js";
 
@@ -36,6 +37,19 @@ Options:
     );
     await proc.exited;
     process.exit(0);
+  }
+
+  // Fail closed before serving (owner directive 2026-09-04): every tool routes
+  // through the Store, so with no fleet API env and no explicit local opt-in
+  // this server must refuse to start with a non-zero exit — never silently
+  // serve the on-box SQLite store. Resolving here also constructs nothing
+  // (LocalConfigStore opens its database lazily), so no local file is created
+  // on the failure path.
+  try {
+    resolveConfigStore();
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
   }
 
   if (isStdioMode(argv)) {

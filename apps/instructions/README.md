@@ -159,11 +159,13 @@ and `API_KEY_SIGNING_SECRET` are also accepted). Client apps use
 Every CLI command, MCP tool, and SDK method routes through a single `ConfigStore`
 abstraction with two transports:
 
-- **local** — on-box SQLite (`LocalConfigStore`), fully first-class. Used when no
-  API env vars are set.
-- **api** — HTTP `/v1` + bearer key (`CloudConfigStore`).
-  Activated by setting **both** `HASNA_INSTRUCTIONS_API_URL` and
-  `HASNA_INSTRUCTIONS_API_KEY`.
+- **api** — HTTP `/v1` + bearer key (`CloudConfigStore`). Activated by setting
+  **both** `HASNA_INSTRUCTIONS_API_URL` and `HASNA_INSTRUCTIONS_API_KEY`.
+- **local** — on-box SQLite (`LocalConfigStore`), opt-in only. Running without
+  the API env FAILS CLOSED (non-zero exit naming the required env) rather than
+  silently opening the on-box store; to use the local store explicitly, set
+  `HASNA_INSTRUCTIONS_LOCAL=1`. Setting exactly one of the two API vars also
+  errors (no silent local drift).
 
 Clients never hold a database DSN. The raw Postgres connection is a server-only
 concern (`instructions-serve`), selected by `HASNA_INSTRUCTIONS_DATABASE_URL`.
