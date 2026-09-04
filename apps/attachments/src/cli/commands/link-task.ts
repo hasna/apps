@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { resolveStore } from "../../core/store";
-import { withTodosAuth } from "../../core/todos";
+import { withTodosAuth, serviceConfig } from "../../core/todos";
 
 export interface LinkTaskOptions {
   todosUrl?: string;
@@ -57,9 +57,9 @@ export async function linkAttachmentToTask(
     if (response.status === 404) {
       throw new Error(`Task not found: ${taskId}`);
     }
-    const body = await response.text().catch(() => "");
+    // Error bodies may contain credentials or private records; report status only.
     throw new Error(
-      `Failed to update task ${taskId}: HTTP ${response.status}${body ? ` — ${body}` : ""}`
+      `Failed to update task ${taskId}: HTTP ${response.status}`
     );
   }
 }
@@ -73,10 +73,10 @@ export function registerLinkTask(program: Command): void {
     .option(
       "--todos-url <url>",
       "Todos REST server base URL",
-      "http://localhost:3000"
+      undefined
     )
     .action(async (attachmentId: string, taskId: string, options: LinkTaskOptions) => {
-      const todosUrl = options.todosUrl ?? "http://localhost:3000";
+      const todosUrl = options.todosUrl ?? serviceConfig("TODOS").url;
 
       try {
         await linkAttachmentToTask(attachmentId, taskId, todosUrl);

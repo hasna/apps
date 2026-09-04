@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { MigrationLedger } from "../generated/storage-kit/migrations.js";
+import { MigrationLedger } from "../server-storage/migrations.js";
 import type { Attachment } from "../core/db.js";
 import { ATTACHMENTS_MIGRATIONS } from "./migrations.js";
 import { PgAttachmentsStore } from "./pg-store.js";
