@@ -9,7 +9,7 @@ import {
   LocalStore,
 } from "./index.js";
 import { HasnaHttpError } from "@hasna/contracts";
-import type { Agent, AgentConflictError } from "../../types/index.js";
+import type { Agent, AgentConflictError, Call } from "../../types/index.js";
 
 const CLIENT_ENV = [
   "HASNA_TELEPHONY_STORAGE_MODE",
@@ -343,5 +343,92 @@ describe("ApiStore.registerAgent (parity with LocalStore conflict semantics)", (
     const store = new ApiStore(client as never);
     const found = await store.getAgentByName("BRUTUS");
     expect(found?.id).toBe("ag-1");
+  });
+});
+
+describe("ApiStore media-copy routes (parity with LocalStore)", () => {
+  // A capturing HasnaStorageClient stub that records list + update calls: the
+  // media-copy routes must find the call row by twilio_sid DB-side and attach
+  // copy metadata via the /v1 PATCH routes the hosted PG backend serves — the
+  // review fix for the recording webhook writing on-box SQLite directly.
+  function captureMediaClient(itemsForCalls: unknown[]) {
+    const calls: { resource: string; query?: Record<string, unknown> }[] = [];
+    const updates: { resource: string; id: string; body: Record<string, unknown> }[] = [];
+    const client = {
+      name: "telephony",
+      baseUrl: "https://telephony.invalid/v1",
+      transport: {} as never,
+      async list(resource: string, options?: { query?: Record<string, unknown> }) {
+        calls.push({ resource, query: options?.query });
+        if (resource === "calls") return { items: itemsForCalls, total: itemsForCalls.length, cursor: null, raw: {} };
+        return { items: [], total: 0, cursor: null, raw: {} };
+      },
+      async get() {
+        return null;
+      },
+      async create() {
+        return {} as never;
+      },
+      async update(resource: string, id: string, body: Record<string, unknown>) {
+        updates.push({ resource, id, body });
+        return {};
+      },
+      async delete() {},
+    };
+    return { client, calls, updates };
+  }
+
+  const callRow: Call = {
+    id: "call-1",
+    direction: "inbound",
+    from_number: "+15551234567",
+    to_number: "+15559876543",
+    status: "in-progress",
+    duration: null,
+    recording_url: null,
+    object_key: null,
+    sha256: null,
+    transcription: null,
+    agent_id: null,
+    project_id: null,
+    twilio_sid: "CAmedia1",
+    metadata: {},
+    started_at: "2026-09-04T00:00:00.000Z",
+    ended_at: null,
+    created_at: "2026-09-04T00:00:00.000Z",
+  };
+
+  it("getCallByTwilioSid sends the exact twilio_sid filter to /v1/calls and returns the row", async () => {
+    const { client, calls } = captureMediaClient([callRow]);
+    const store = new ApiStore(client as never);
+    const found = await store.getCallByTwilioSid("CAmedia1");
+    const list = calls.find((c) => c.resource === "calls")!;
+    expect(list.query).toEqual({ twilio_sid: "CAmedia1" });
+    expect(found?.id).toBe("call-1");
+  });
+
+  it("getCallByTwilioSid returns null for a CallSid no call row matches", async () => {
+    const { client, calls } = captureMediaClient([]);
+    const store = new ApiStore(client as never);
+    const found = await store.getCallByTwilioSid("CAghost");
+    const list = calls.find((c) => c.resource === "calls")!;
+    expect(list.query).toEqual({ twilio_sid: "CAghost" });
+    expect(found).toBeNull();
+  });
+
+  it("updateMessageMedia PATCHes object_key/sha256 onto /v1/messages/<id>", async () => {
+    const { client, updates } = captureMediaClient([]);
+    const store = new ApiStore(client as never);
+    const media = { object_key: "telephony/media/SM1/abc.mp3", sha256: "abc" };
+    await store.updateMessageMedia("msg-1", media);
+    expect(updates).toEqual([{ resource: "messages", id: "msg-1", body: media }]);
+  });
+
+  it("updateVoicemailMedia PATCHes object_key/sha256 onto /v1/voicemails/<id>", async () => {
+    const { client, updates } = captureMediaClient([]);
+    const store = new ApiStore(client as never);
+    const media = { object_key: "telephony/media/vm1/def.mp3", sha256: "def" };
+    await store.updateVoicemailMedia("vm-1", media);
+    expect(updates).toEqual([{ resource: "voicemails", id: "vm-1", body: media }]);
   });
 });

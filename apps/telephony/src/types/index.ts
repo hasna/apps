@@ -162,6 +162,10 @@ export interface Message {
   to_number: string;
   body: string | null;
   media_url: string | null;
+  /** Bucket object key of the copied media (`media/<message_id>/<sha256>.<ext>`); null when the copy was not made. */
+  object_key: string | null;
+  /** sha256 of the copied media bytes; proves the object at `object_key`. */
+  sha256: string | null;
   status: MessageStatus;
   agent_id: string | null;
   project_id: string | null;
@@ -179,6 +183,8 @@ export interface MessageRow {
   to_number: string;
   body: string | null;
   media_url: string | null;
+  object_key: string | null;
+  sha256: string | null;
   status: string;
   agent_id: string | null;
   project_id: string | null;
@@ -213,6 +219,10 @@ export interface Call {
   status: CallStatus;
   duration: number | null;
   recording_url: string | null;
+  /** Bucket object key of the copied recording (`media/<call_id>/<sha256>.<ext>`); null when the copy was not made. */
+  object_key: string | null;
+  /** sha256 of the copied recording bytes; proves the object at `object_key`. */
+  sha256: string | null;
   transcription: string | null;
   agent_id: string | null;
   project_id: string | null;
@@ -231,6 +241,8 @@ export interface CallRow {
   status: string;
   duration: number | null;
   recording_url: string | null;
+  object_key: string | null;
+  sha256: string | null;
   transcription: string | null;
   agent_id: string | null;
   project_id: string | null;
@@ -259,6 +271,10 @@ export interface Voicemail {
   from_number: string;
   to_number: string;
   recording_url: string | null;
+  /** Bucket object key of the copied recording (`media/<call_id>/<sha256>.<ext>`); null when the copy was not made. */
+  object_key: string | null;
+  /** sha256 of the copied recording bytes; proves the object at `object_key`. */
+  sha256: string | null;
   local_path: string | null;
   transcription: string | null;
   duration: number | null;
@@ -274,6 +290,8 @@ export interface VoicemailRow {
   from_number: string;
   to_number: string;
   recording_url: string | null;
+  object_key: string | null;
+  sha256: string | null;
   local_path: string | null;
   transcription: string | null;
   duration: number | null;
@@ -434,6 +452,10 @@ export interface TelephonyConfig {
   cerebras_api_key?: string;
   webhook_base_url?: string;
   server_port?: number;
+  /** Media copy bucket (HASNA_TELEPHONY_S3_BUCKET / TELEPHONY_S3_BUCKET); no bucket = no copy. */
+  s3_bucket?: string;
+  /** Media copy object prefix (HASNA_TELEPHONY_S3_PREFIX / TELEPHONY_S3_PREFIX), default `telephony` — copies land at `<prefix>/media/<id>/<sha256>.<ext>`. */
+  s3_prefix?: string;
 }
 
 // ---------------------------------------------------------------------------
