@@ -31,6 +31,12 @@ function syntheticDatabaseUrl(): string {
 }
 
 describe("compact CLI output", () => {
+function seedChannel(channel: string, reader: string): void {
+  expect(runCli(["channel", "create", channel], "alice").exitCode).toBe(0);
+  expect(runCli(["channel", "join", channel], reader).exitCode).toBe(0);
+}
+
+
   afterAll(() => {
     try { unlinkSync(TEST_DB); } catch {}
     try { unlinkSync(`${TEST_DB}-wal`); } catch {}
@@ -38,22 +44,28 @@ describe("compact CLI output", () => {
   });
 
   test("collection reads stay bounded and exact show keeps full content", () => {
-    const content = `Compact output starts here ${"x ".repeat(140)}TAIL_ONLY_IN_VERBOSE`;
-    const send = runCli(["send", content, "--to", "bob"], "alice");
-    expect(send.exitCode).toBe(0);
+    // Recipient-addressed DMs were removed (staged behind the messages-app v1
+    // release gate); the seed lives in a channel the reader joins.
+    const channel = "compact-channel";
+    expect(runCli(["channel", "create", channel], "alice").exitCode).toBe(0);
+    expect(runCli(["channel", "join", channel], "bob").exitCode).toBe(0);
 
-    const compact = runCli(["read", "--to", "bob", "--limit", "1"], "bob");
+    const content = `Compact output starts here ${"x ".repeat(140)}TAIL_ONLY_IN_VERBOSE`;
+    const send = runCli(["send", content, "--channel", channel], "alice");
+    expect(send.exitCode, send.stderr).toBe(0);
+
+    const compact = runCli(["read", "--channel", channel, "--limit", "1"], "bob");
     expect(compact.exitCode).toBe(0);
     expect(compact.stdout).toContain("Compact output starts here");
     expect(compact.stdout).not.toContain("TAIL_ONLY_IN_VERBOSE");
     expect(compact.stdout).toContain("Use --verbose");
     expect(compact.stdout).toContain("conversations show <id>");
 
-    const verbose = runCli(["read", "--to", "bob", "--limit", "1", "--verbose"], "bob");
+    const verbose = runCli(["read", "--channel", channel, "--limit", "1", "--verbose"], "bob");
     expect(verbose.exitCode).toBe(0);
     expect(verbose.stdout).not.toContain("TAIL_ONLY_IN_VERBOSE");
 
-    const json = runCli(["read", "--to", "bob", "--limit", "1", "--json"], "bob");
+    const json = runCli(["read", "--channel", channel, "--limit", "1", "--json"], "bob");
     expect(json.exitCode).toBe(0);
     const preview = JSON.parse(json.stdout).messages[0] as { id: number; preview: string };
     expect(preview.preview).not.toContain("TAIL_ONLY_IN_VERBOSE");
@@ -69,15 +81,16 @@ describe("compact CLI output", () => {
   // in todos 2c25973b rather than the intended contract. The contract the name
   // states, "only the displayed page is marked", is unchanged and still checked.
   test("mark-read marks only the displayed compact page", () => {
-    runCli(["send", "older page message", "--to", "mark-target"], "alice");
-    runCli(["send", "newer page message", "--to", "mark-target"], "alice");
+    seedChannel("mark-channel", "mark-target");
+    runCli(["channel", "send", "mark-channel", "older page message"], "alice");
+    runCli(["channel", "send", "mark-channel", "newer page message"], "alice");
 
-    const marked = runCli(["read", "--to", "mark-target", "--limit", "1", "--mark-read"], "mark-target");
+    const marked = runCli(["read", "--channel", "mark-channel", "--limit", "1", "--mark-read"], "mark-target");
     expect(marked.exitCode).toBe(0);
     expect(marked.stdout).toContain("newer page message");
     expect(marked.stdout).not.toContain("older page message");
 
-    const unread = runCli(["read", "--to", "mark-target", "--unread", "--json"], "mark-target");
+    const unread = runCli(["read", "--channel", "mark-channel", "--unread", "--json"], "mark-target");
     expect(unread.exitCode).toBe(0);
     const messages = JSON.parse(unread.stdout).messages;
     expect(messages).toHaveLength(1);
@@ -89,36 +102,39 @@ describe("compact CLI output", () => {
     const register = runCli(["agents", "register", agent, "--session", "unread-only-session"], agent);
     expect(register.exitCode).toBe(0);
 
-    runCli(["send", "already read", "--to", agent], "alice");
-    const marked = runCli(["read", "--to", agent, "--mark-read"], agent);
+    seedChannel("unread-only-channel", agent);
+    runCli(["channel", "send", "unread-only-channel", "already read"], "alice");
+    const marked = runCli(["read", "--channel", "unread-only-channel", "--mark-read"], agent);
     expect(marked.exitCode).toBe(0);
-    runCli(["send", "still unread", "--to", agent], "alice");
+    runCli(["channel", "send", "unread-only-channel", "still unread"], "alice");
 
-    const unread = runCli(["read", "--to", agent, "--unread-only", "--json"], agent);
+    const unread = runCli(["read", "--channel", "unread-only-channel", "--unread-only", "--json"], agent);
     expect(unread.exitCode).toBe(0);
     expect(JSON.parse(unread.stdout).messages.map((message: { preview: string }) => message.preview)).toEqual(["still unread"]);
   }, 15_000);
 
   test("send exits nonzero for sensitive content without echoing the value", () => {
     const blocked = syntheticDatabaseUrl();
-    const send = runCli(["send", `blocked ${blocked}`, "--to", "blocked-target"], "alice");
+    seedChannel("blocked-channel", "blocked-target");
+    const send = runCli(["send", `blocked ${blocked}`, "--channel", "blocked-channel"], "alice");
 
     expect(send.exitCode).not.toBe(0);
     expect(send.stderr).toContain("sensitive content detected");
     expect(send.stderr).not.toContain(blocked);
 
-    const read = runCli(["read", "--to", "blocked-target", "--json"], "blocked-target");
+    const read = runCli(["read", "--channel", "blocked-channel", "--json"], "blocked-target");
     expect(read.exitCode).toBe(0);
     expect(JSON.parse(read.stdout).messages).toHaveLength(0);
   });
 
   test("send exits nonzero for sensitive metadata without echoing the value", () => {
     const blocked = syntheticDatabaseUrl();
+    seedChannel("metadata-blocked-channel", "metadata-blocked");
     const send = runCli([
       "send",
       "metadata should be checked",
-      "--to",
-      "metadata-blocked",
+      "--channel",
+      "metadata-blocked-channel",
       "--metadata",
       JSON.stringify({ dsn: blocked }),
     ], "alice");
@@ -127,16 +143,17 @@ describe("compact CLI output", () => {
     expect(send.stderr).toContain("sensitive content detected");
     expect(send.stderr).not.toContain(blocked);
 
-    const read = runCli(["read", "--to", "metadata-blocked", "--json"], "metadata-blocked");
+    const read = runCli(["read", "--channel", "metadata-blocked-channel", "--json"], "metadata-blocked");
     expect(read.exitCode).toBe(0);
     expect(JSON.parse(read.stdout).messages).toHaveLength(0);
   });
 
   test("pinned --json returns a preview page envelope", () => {
-    const send = runCli(["send", "pin me", "--to", "pin-reader"], "pin-writer");
+    seedChannel("pin-channel", "pin-reader");
+    const send = runCli(["send", "pin me", "--channel", "pin-channel"], "pin-writer");
     expect(send.exitCode).toBe(0);
 
-    const read = runCli(["read", "--to", "pin-reader", "--limit", "1", "--json"], "pin-reader");
+    const read = runCli(["read", "--channel", "pin-channel", "--limit", "1", "--json"], "pin-reader");
     expect(read.exitCode).toBe(0);
     const id = JSON.parse(read.stdout).messages[0].id as number;
 
@@ -163,7 +180,7 @@ describe("compact CLI output", () => {
   });
 
   test("send exits nonzero for truncated metadata JSON", () => {
-    const send = runCli(["send", "metadata parse check", "--to", "metadata-target", "--metadata", "{\"broken\":"], "alice");
+    const send = runCli(["send", "metadata parse check", "--channel", "metadata-target-channel", "--metadata", "{\"broken\":"], "alice");
 
     expect(send.exitCode).not.toBe(0);
     expect(send.stderr).toContain("Invalid --metadata JSON.");

@@ -386,7 +386,6 @@ export function registerMessagingTools(
       query: z.string().describe("Search query. Wrap in quotes for exact phrase: '\"BUG-005\"'"),
       channel: z.string().optional().describe("Limit to a specific channel"),
       from: z.string().optional().describe("Filter by sender"),
-      to: z.string().optional().describe("Filter by recipient"),
       since: z.string().optional().describe("ISO 8601 date — only messages after this"),
       until: z.string().optional().describe("ISO 8601 date — only messages before this"),
       sort: z.enum(["relevance", "recent"]).optional().describe("Sort order (default: relevance)"),
@@ -395,14 +394,15 @@ export function registerMessagingTools(
       verbose: z.coerce.boolean().optional().describe("Return full raw message records instead of compact previews"),
     },
   }, async (args: Record<string, any>) => {
-    const { query, channel, from, to, since, until, sort } = args;
+    // The agent-addressed recipient filter was removed (staged behind the
+    // messages-app v1 release gate) — `to` is no longer accepted.
+    const { query, channel, from, since, until, sort } = args;
     const verbose = args.verbose === true;
     const payload = verbose
       ? await await getStore().searchMessages({
           query,
           channel,
           from,
-          to,
           since,
           until,
           sort,
@@ -413,7 +413,6 @@ export function registerMessagingTools(
           query,
           channel,
           from,
-          to,
           since,
           until,
           sort,

@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import * as path from "node:path";
 import { Command } from "commander";
 import {
   formatDigestContinuationCommand,
@@ -54,7 +55,9 @@ describe("registerMessagingCommands", () => {
 
     const send = program.commands.find((c) => c.name() === "send");
     expect(send).toBeDefined();
-    expect(send?.options.some((o) => o.long === "--to")).toBe(true);
+    // Agent-addressed DMs were removed from conversations (staged behind the
+    // messages-app v1 release gate) — the --to agent-addressing verb is gone.
+    expect(send?.options.some((o) => o.long === "--to")).toBe(false);
     expect(send?.options.some((o) => o.long === "--channel")).toBe(true);
     expect(send?.options.some((o) => o.long === "--attach")).toBe(true);
     expect(send?.options.some((o) => o.long === "--attachment")).toBe(true);
@@ -134,9 +137,12 @@ describe("registerMessagingCommands", () => {
     expect(digest?.options.some((o) => o.long === "--cursor")).toBe(true);
     expect(digest?.options.some((o) => o.long === "--max-bytes")).toBe(true);
     expect(digest?.options.some((o) => o.long === "--mark-read")).toBe(true);
+    // DM-scoped digest verbs are gone (staged behind the messages-app v1 gate).
+    expect(digest?.options.some((o) => o.long === "--session")).toBe(false);
+    expect(digest?.options.some((o) => o.long === "--to")).toBe(false);
   });
 
-  test("formats digest continuation commands for channel, session, and recipient scopes", () => {
+  test("formats digest continuation commands for the channel scope", () => {
     expect(formatDigestContinuationCommand({
       channel: "engineering",
       session_id: null,
@@ -145,13 +151,15 @@ describe("registerMessagingCommands", () => {
       max_bytes: 8192,
     })).toBe("conversations digest engineering --cursor 42 --max-bytes 8192");
 
+    // DM/session scopes no longer produce a continuation command: the
+    // formatter emits the channel scope only, and the DM verbs are gone.
     expect(formatDigestContinuationCommand({
       channel: null,
       session_id: "session-123",
       to: null,
       next_cursor: 43,
       max_bytes: 4096,
-    })).toBe("conversations digest --session session-123 --cursor 43 --max-bytes 4096");
+    })).toBe("conversations digest --cursor 43 --max-bytes 4096");
 
     expect(formatDigestContinuationCommand({
       channel: null,
@@ -159,39 +167,7 @@ describe("registerMessagingCommands", () => {
       to: "agent-two",
       next_cursor: 44,
       max_bytes: 2048,
-    })).toBe("conversations digest --to agent-two --cursor 44 --max-bytes 2048");
-
-    expect(formatDigestContinuationCommand({
-      channel: null,
-      session_id: "session with spaces",
-      to: null,
-      next_cursor: 45,
-      max_bytes: 1024,
-    })).toBe("conversations digest --session 'session with spaces' --cursor 45 --max-bytes 1024");
-
-    expect(formatDigestContinuationCommand({
-      channel: null,
-      session_id: null,
-      to: "agent$(echo injected)",
-      next_cursor: 46,
-      max_bytes: 1024,
-    })).toBe("conversations digest --to 'agent$(echo injected)' --cursor 46 --max-bytes 1024");
-
-    expect(formatDigestContinuationCommand({
-      channel: null,
-      session_id: null,
-      to: "agent`echo injected`",
-      next_cursor: 47,
-      max_bytes: 1024,
-    })).toBe("conversations digest --to 'agent`echo injected`' --cursor 47 --max-bytes 1024");
-
-    expect(formatDigestContinuationCommand({
-      channel: null,
-      session_id: null,
-      to: "agent's-space",
-      next_cursor: 48,
-      max_bytes: 1024,
-    })).toBe("conversations digest --to 'agent'\\''s-space' --cursor 48 --max-bytes 1024");
+    })).toBe("conversations digest --cursor 44 --max-bytes 2048");
   });
 
   test("registers search command", () => {
@@ -293,5 +269,44 @@ describe("registerMessagingCommands", () => {
     const update = program.commands.find((c) => c.name() === "update");
     expect(update).toBeDefined();
     expect(update?.options.some((o) => o.long === "--check")).toBe(true);
+  });
+
+  // Regression for the staged DM removal (Fable ruling, todos b02a31ff):
+  // the agent-addressed DM verbs are GONE. Exercised through the real CLI in a
+  // subprocess so commander's error exit cannot kill the test runner.
+  test("DM verbs are gone: send --to, read --to, digest --session/--to are refused by the CLI", () => {
+    const cli = path.resolve(import.meta.dir, "..", "..", "..", "src", "cli", "index.tsx");
+    const refused: Array<[string, string[]]> = [
+      ["send --to", ["send", "--to", "agent-two", "hello"]],
+      ["read --to", ["read", "--to", "agent-two"]],
+      ["digest --session", ["digest", "--session", "session-123"]],
+      ["digest --to", ["digest", "--to", "agent-two"]],
+      ["search --to", ["search", "query", "--to", "agent-two"]],
+    ];
+
+    for (const [label, args] of refused) {
+      const res = Bun.spawnSync({
+        cmd: ["bun", "run", cli, ...args],
+        cwd: path.resolve(import.meta.dir, "..", "..", ".."),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = `${new TextDecoder().decode(res.stdout)}\n${new TextDecoder().decode(res.stderr)}`;
+      expect(res.exitCode, `${label} must be refused (got rc=${res.exitCode})`).not.toBe(0);
+      expect(out, `${label} must fail on the unknown option`).toContain("unknown option");
+    }
+  });
+
+  test("send refuses a channel-less message (no DM route remains)", () => {
+    const cli = path.resolve(import.meta.dir, "..", "..", "..", "src", "cli", "index.tsx");
+    const res = Bun.spawnSync({
+      cmd: ["bun", "run", cli, "send", "--from", "test-agent", "hello"],
+      cwd: path.resolve(import.meta.dir, "..", "..", ".."),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const out = `${new TextDecoder().decode(res.stdout)}\n${new TextDecoder().decode(res.stderr)}`;
+    expect(res.exitCode, `channel-less send must be refused (got rc=${res.exitCode})`).not.toBe(0);
+    expect(out).toContain("--channel");
   });
 });
