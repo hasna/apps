@@ -647,7 +647,7 @@ defaults are applied; output aliases such as `EvidenceRef` describe parsed data.
   such as todos, files, mailery, conversations, knowledge, mementos, reports,
   actions, render, contracts, or a custom provider.
 - `hasna.project_manifest.v1`: canonical agent-managed project manifest with
-  slug, classification, `.hasna/project` layout, integrations, render manifests,
+  slug, classification, `.hasna/projects` layout, integrations, render manifests,
   resource refs, and evidence refs.
 - `hasna.project_panel.v1`: compact provider output for a dashboard panel,
   including state, freshness, metrics, items, safe action refs, evidence, and an
@@ -953,7 +953,7 @@ helpers. Owning packages still own storage and behavior.
 - `knowledge` owns durable knowledge records and promotion workflows under
   `.hasna/knowledge`.
 - `files` owns artifact storage, file indexing, and dereference logic.
-- `projects` owns project folder discovery, `.hasna/project` conventions,
+- `projects` owns project folder discovery, `.hasna/projects` conventions,
   dashboard snapshot assembly, render manifest loading, and the local dashboard
   viewer. It validates project manifests, panels, snapshots, and render
   manifests with `@hasna/contracts`.

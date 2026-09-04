@@ -26,9 +26,17 @@ must not be redirected into a package-global root.
 
 | Path | Owner and purpose |
 | --- | --- |
-| `.hasna/project/**` | Project metadata defined by the project-manifest schemas. `@hasna/contracts` validates the layout; `projects` owns reading and writing it. |
 | `src/generated/storage-kit/.storage-kit-manifest.json` | Deterministic `vendor-kit` output tracked in the target repository alongside the generated storage kit. |
 | `.hasna/loops/runs/**` | OpenLoops run artifacts described by the integration contract. They are owned by OpenLoops, not by `@hasna/contracts`. |
+
+### Project manifests (owned by `projects`, not project-local)
+
+Project-manifest metadata (manifest root, dashboard render manifest, snapshots,
+evidence, private) has a single canonical convention: `projects`' per-workspace
+home store, `~/.hasna/projects/workspaces/<workspace_id>/`. Project folders must
+not contain a project-layout directory. Inside a project manifest, the layout
+fields are REQUIRED relative-path inputs to the project-manifest schemas —
+`@hasna/contracts` validates but never defaults them; `projects` supplies them.
 
 Other dotdir references are declarations or negative fixtures, not Contracts
 state. In particular, `.codewith` and other `.hasna/<app>` paths in the secure

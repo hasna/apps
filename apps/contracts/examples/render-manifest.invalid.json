@@ -5,6 +5,7 @@
   "projectId": "swiss-bank-account",
   "name": "Duplicate Defaults",
   "version": "0.1.0",
+  "manifestPath": ".hasna/projects/swiss-bank-account/dashboard.render.json",
   "views": [
     {
       "id": "dashboard",

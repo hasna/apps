@@ -12,8 +12,7 @@ export type ProjectPermissionRepairReason =
   | "backup"
   | "workspace-store"
   | "data-store"
-  | "project-report-artifact"
-  | "project-dashboard-artifact";
+  | "project-report-artifact";
 
 export interface ProjectPermissionRepairAction {
   path: string;
@@ -157,7 +156,6 @@ export function repairProjectPermissions(options: ProjectPermissionRepairOptions
       if (!project.primary_path) continue;
       if (actions.length > MAX_PROJECT_ARTIFACTS) break;
       scan(join(project.primary_path, "reports"), "project-report-artifact", true);
-      scan(join(project.primary_path, ".hasna", "project", "dashboard"), "project-dashboard-artifact", true);
     }
   }
 
@@ -198,7 +196,6 @@ function targetFileMode(mode: number, reason: ProjectPermissionRepairReason): nu
   if (
     reason === "workspace-store"
     || reason === "project-report-artifact"
-    || reason === "project-dashboard-artifact"
   ) {
     if ((mode & 0o111) !== 0) return 0o700;
   }

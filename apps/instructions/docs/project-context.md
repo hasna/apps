@@ -81,11 +81,11 @@ would hide the managed `CODEWITH.md` content.
 
 The renderer preserves all bytes outside its marker pair. It also writes:
 
-- `.hasna/project-context-manifest.json` (0600, committed last);
-- `.hasna/project-context-cache.json` (0600);
+- `.hasna/projects/project-context-manifest.json` (0600, committed last);
+- `.hasna/projects/project-context-cache.json` (0600);
 - a compatible session render manifest;
-- metadata snapshots below `.hasna/project-context-snapshots/` when replacing
-  previous managed context.
+- metadata snapshots below `.hasna/projects/project-context-snapshots/` when
+  replacing previous managed context.
 
 Generated context is capped at 4 KiB and approximately 1,000 tokens. Commands
 are removed from the end until the bounded fragment fits; core identity that

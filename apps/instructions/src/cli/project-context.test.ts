@@ -121,7 +121,7 @@ describe("project-context CLI", () => {
         "--json",
       ], `${JSON.stringify(bundle())}\n`);
       expect(result.status).toBe(0);
-      const manifest = readFileSync(join(root, ".hasna", "project-context-manifest.json"), "utf8");
+      const manifest = readFileSync(join(root, ".hasna", "projects", "project-context-manifest.json"), "utf8");
       expect(manifest).toContain("project-context-cache.json");
       expect(manifest).not.toContain("/dev/fd");
     } finally {

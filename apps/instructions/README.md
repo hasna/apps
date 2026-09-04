@@ -344,12 +344,9 @@ These profiles resolve machine variables like `{{WORKSPACE_ROOT}}`,
 `{{BUN_BIN_DIR}}`, `{{BUN_PATH}}`, and `{{PATH_PREFIX}}`, so synced configs can be
 portable across Linux and macOS arm64 machines.
 
-They also include project dashboard variables used by agent-managed project
+They also include the project channel variable used by agent-managed project
 workflows:
 
-- `{{PROJECT_DASHBOARD_DIR}}` -> `.hasna/project`
-- `{{PROJECT_DASHBOARD_RENDER_MANIFEST}}` -> `.hasna/project/dashboard/render.json`
-- `{{PROJECT_DASHBOARD_SNAPSHOTS_DIR}}` -> `.hasna/project/dashboard/snapshots`
 - `{{PROJECT_CHANNEL_PREFIX}}` -> `""` (no prefix; the channel is the normalized project slug)
 
 Existing profiles can be migrated in place without deleting or recreating them:
@@ -361,8 +358,9 @@ instructions profile update linux-arm64 \
 ```
 
 `instructions init` and `bun run seed` seed the
-`agent-managed-project-dashboard-standard` reference. It documents the standard
-`.hasna/project` layout, `projects dashboard *` commands, provider panel
+`agent-managed-project-dashboard-standard` reference. It documents the canonical
+per-workspace store layout (`~/.hasna/projects/workspaces/<workspace_id>/` — the
+only project-layout convention), `projects dashboard *` commands, provider panel
 commands, normalized project-slug channel naming, durable todos/goal workflow,
 and the rule that dashboards must show ids/statuses/evidence refs instead of raw
 private documents or secrets.

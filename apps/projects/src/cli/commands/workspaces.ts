@@ -4000,9 +4000,9 @@ function registerPermissionsCommand(program: Command): void {
 
   cmd
     .command("repair")
-    .description("Dry-run or apply private permissions for Projects registry, stores, backups, reports, and dashboard artifacts")
+    .description("Dry-run or apply private permissions for Projects registry, stores, backups, and reports")
     .option("--apply", "Apply chmod repairs; default is dry-run")
-    .option("--no-project-artifacts", "Skip registered project reports and dashboard artifacts outside HASNA_PROJECTS_HOME")
+    .option("--no-project-artifacts", "Skip registered project report artifacts outside HASNA_PROJECTS_HOME")
     .option("-j, --json", "Output JSON")
     .action((opts) => {
       try {

@@ -6894,13 +6894,13 @@ export declare const ProjectResourceLinkCollectionV1Schema: z.ZodEffects<z.ZodOb
 }>;
 export type ProjectResourceLinkCollectionV1 = z.infer<typeof ProjectResourceLinkCollectionV1Schema>;
 export declare const ProjectLayoutSchema: z.ZodObject<{
-    schemaRoot: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-    dashboardManifest: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-    snapshotsDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
+    schemaRoot: z.ZodEffects<z.ZodString, string, string>;
+    dashboardManifest: z.ZodEffects<z.ZodString, string, string>;
+    snapshotsDir: z.ZodEffects<z.ZodString, string, string>;
     documentsDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
     reportsDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-    evidenceDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-    privateDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
+    evidenceDir: z.ZodEffects<z.ZodString, string, string>;
+    privateDir: z.ZodEffects<z.ZodString, string, string>;
 }, "strict", z.ZodTypeAny, {
     schemaRoot: string;
     dashboardManifest: string;
@@ -6910,13 +6910,13 @@ export declare const ProjectLayoutSchema: z.ZodObject<{
     evidenceDir: string;
     privateDir: string;
 }, {
-    schemaRoot?: string | undefined;
-    dashboardManifest?: string | undefined;
-    snapshotsDir?: string | undefined;
+    schemaRoot: string;
+    dashboardManifest: string;
+    snapshotsDir: string;
+    evidenceDir: string;
+    privateDir: string;
     documentsDir?: string | undefined;
     reportsDir?: string | undefined;
-    evidenceDir?: string | undefined;
-    privateDir?: string | undefined;
 }>;
 export type ProjectLayout = z.infer<typeof ProjectLayoutSchema>;
 export declare const ProjectManifestSchema: z.ZodEffects<z.ZodObject<{
@@ -6954,14 +6954,14 @@ export declare const ProjectManifestSchema: z.ZodEffects<z.ZodObject<{
         accountId?: string | undefined;
         machineId?: string | undefined;
     }>>;
-    layout: z.ZodDefault<z.ZodObject<{
-        schemaRoot: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-        dashboardManifest: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-        snapshotsDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
+    layout: z.ZodObject<{
+        schemaRoot: z.ZodEffects<z.ZodString, string, string>;
+        dashboardManifest: z.ZodEffects<z.ZodString, string, string>;
+        snapshotsDir: z.ZodEffects<z.ZodString, string, string>;
         documentsDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
         reportsDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-        evidenceDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-        privateDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
+        evidenceDir: z.ZodEffects<z.ZodString, string, string>;
+        privateDir: z.ZodEffects<z.ZodString, string, string>;
     }, "strict", z.ZodTypeAny, {
         schemaRoot: string;
         dashboardManifest: string;
@@ -6971,14 +6971,14 @@ export declare const ProjectManifestSchema: z.ZodEffects<z.ZodObject<{
         evidenceDir: string;
         privateDir: string;
     }, {
-        schemaRoot?: string | undefined;
-        dashboardManifest?: string | undefined;
-        snapshotsDir?: string | undefined;
+        schemaRoot: string;
+        dashboardManifest: string;
+        snapshotsDir: string;
+        evidenceDir: string;
+        privateDir: string;
         documentsDir?: string | undefined;
         reportsDir?: string | undefined;
-        evidenceDir?: string | undefined;
-        privateDir?: string | undefined;
-    }>>;
+    }>;
     integrations: z.ZodDefault<z.ZodArray<z.ZodEffects<z.ZodObject<{
         schema: z.ZodLiteral<"hasna.integration_ref.v1">;
         id: z.ZodString;
@@ -7388,6 +7388,15 @@ export declare const ProjectManifestSchema: z.ZodEffects<z.ZodObject<{
     createdAt: string;
     slug: string;
     projectId: string;
+    layout: {
+        schemaRoot: string;
+        dashboardManifest: string;
+        snapshotsDir: string;
+        evidenceDir: string;
+        privateDir: string;
+        documentsDir?: string | undefined;
+        reportsDir?: string | undefined;
+    };
     owner?: {
         id: string;
         kind: "agent" | "human" | "service" | "model" | "workflow" | "system";
@@ -7418,15 +7427,6 @@ export declare const ProjectManifestSchema: z.ZodEffects<z.ZodObject<{
         summary?: string | undefined;
     }[] | undefined;
     classification?: "public" | "internal" | "private" | "sensitive" | undefined;
-    layout?: {
-        schemaRoot?: string | undefined;
-        dashboardManifest?: string | undefined;
-        snapshotsDir?: string | undefined;
-        documentsDir?: string | undefined;
-        reportsDir?: string | undefined;
-        evidenceDir?: string | undefined;
-        privateDir?: string | undefined;
-    } | undefined;
     integrations?: {
         id: string;
         name: string;
@@ -7566,6 +7566,15 @@ export declare const ProjectManifestSchema: z.ZodEffects<z.ZodObject<{
     createdAt: string;
     slug: string;
     projectId: string;
+    layout: {
+        schemaRoot: string;
+        dashboardManifest: string;
+        snapshotsDir: string;
+        evidenceDir: string;
+        privateDir: string;
+        documentsDir?: string | undefined;
+        reportsDir?: string | undefined;
+    };
     owner?: {
         id: string;
         kind: "agent" | "human" | "service" | "model" | "workflow" | "system";
@@ -7596,15 +7605,6 @@ export declare const ProjectManifestSchema: z.ZodEffects<z.ZodObject<{
         summary?: string | undefined;
     }[] | undefined;
     classification?: "public" | "internal" | "private" | "sensitive" | undefined;
-    layout?: {
-        schemaRoot?: string | undefined;
-        dashboardManifest?: string | undefined;
-        snapshotsDir?: string | undefined;
-        documentsDir?: string | undefined;
-        reportsDir?: string | undefined;
-        evidenceDir?: string | undefined;
-        privateDir?: string | undefined;
-    } | undefined;
     integrations?: {
         id: string;
         name: string;
@@ -8114,7 +8114,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
     projectId: z.ZodString;
     name: z.ZodString;
     version: z.ZodString;
-    manifestPath: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
+    manifestPath: z.ZodEffects<z.ZodString, string, string>;
     renderer: z.ZodDefault<z.ZodEnum<["json_render", "react_flow", "markdown", "html", "custom"]>>;
     views: z.ZodArray<z.ZodObject<{
         id: z.ZodString;
@@ -8742,6 +8742,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
     schema: "hasna.render_manifest.v1";
     createdAt: string;
     projectId: string;
+    manifestPath: string;
     views: {
         id: string;
         kind: "report" | "custom" | "document" | "dashboard" | "panel" | "canvas";
@@ -8832,7 +8833,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }[] | undefined;
-    manifestPath?: string | undefined;
     renderer?: "custom" | "json_render" | "react_flow" | "markdown" | "html" | undefined;
     theme?: Record<string, unknown> | undefined;
 }>, {
@@ -8942,6 +8942,7 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
     schema: "hasna.render_manifest.v1";
     createdAt: string;
     projectId: string;
+    manifestPath: string;
     views: {
         id: string;
         kind: "report" | "custom" | "document" | "dashboard" | "panel" | "canvas";
@@ -9032,7 +9033,6 @@ export declare const RenderManifestSchema: z.ZodEffects<z.ZodObject<{
         schemaId?: string | undefined;
         integrity?: string | undefined;
     }[] | undefined;
-    manifestPath?: string | undefined;
     renderer?: "custom" | "json_render" | "react_flow" | "markdown" | "html" | undefined;
     theme?: Record<string, unknown> | undefined;
 }>;
@@ -61487,14 +61487,14 @@ declare const CoreContractSchemaRegistry: {
             accountId?: string | undefined;
             machineId?: string | undefined;
         }>>;
-        layout: z.ZodDefault<z.ZodObject<{
-            schemaRoot: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-            dashboardManifest: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-            snapshotsDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
+        layout: z.ZodObject<{
+            schemaRoot: z.ZodEffects<z.ZodString, string, string>;
+            dashboardManifest: z.ZodEffects<z.ZodString, string, string>;
+            snapshotsDir: z.ZodEffects<z.ZodString, string, string>;
             documentsDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
             reportsDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-            evidenceDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
-            privateDir: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
+            evidenceDir: z.ZodEffects<z.ZodString, string, string>;
+            privateDir: z.ZodEffects<z.ZodString, string, string>;
         }, "strict", z.ZodTypeAny, {
             schemaRoot: string;
             dashboardManifest: string;
@@ -61504,14 +61504,14 @@ declare const CoreContractSchemaRegistry: {
             evidenceDir: string;
             privateDir: string;
         }, {
-            schemaRoot?: string | undefined;
-            dashboardManifest?: string | undefined;
-            snapshotsDir?: string | undefined;
+            schemaRoot: string;
+            dashboardManifest: string;
+            snapshotsDir: string;
+            evidenceDir: string;
+            privateDir: string;
             documentsDir?: string | undefined;
             reportsDir?: string | undefined;
-            evidenceDir?: string | undefined;
-            privateDir?: string | undefined;
-        }>>;
+        }>;
         integrations: z.ZodDefault<z.ZodArray<z.ZodEffects<z.ZodObject<{
             schema: z.ZodLiteral<"hasna.integration_ref.v1">;
             id: z.ZodString;
@@ -61921,6 +61921,15 @@ declare const CoreContractSchemaRegistry: {
         createdAt: string;
         slug: string;
         projectId: string;
+        layout: {
+            schemaRoot: string;
+            dashboardManifest: string;
+            snapshotsDir: string;
+            evidenceDir: string;
+            privateDir: string;
+            documentsDir?: string | undefined;
+            reportsDir?: string | undefined;
+        };
         owner?: {
             id: string;
             kind: "agent" | "human" | "service" | "model" | "workflow" | "system";
@@ -61951,15 +61960,6 @@ declare const CoreContractSchemaRegistry: {
             summary?: string | undefined;
         }[] | undefined;
         classification?: "public" | "internal" | "private" | "sensitive" | undefined;
-        layout?: {
-            schemaRoot?: string | undefined;
-            dashboardManifest?: string | undefined;
-            snapshotsDir?: string | undefined;
-            documentsDir?: string | undefined;
-            reportsDir?: string | undefined;
-            evidenceDir?: string | undefined;
-            privateDir?: string | undefined;
-        } | undefined;
         integrations?: {
             id: string;
             name: string;
@@ -62099,6 +62099,15 @@ declare const CoreContractSchemaRegistry: {
         createdAt: string;
         slug: string;
         projectId: string;
+        layout: {
+            schemaRoot: string;
+            dashboardManifest: string;
+            snapshotsDir: string;
+            evidenceDir: string;
+            privateDir: string;
+            documentsDir?: string | undefined;
+            reportsDir?: string | undefined;
+        };
         owner?: {
             id: string;
             kind: "agent" | "human" | "service" | "model" | "workflow" | "system";
@@ -62129,15 +62138,6 @@ declare const CoreContractSchemaRegistry: {
             summary?: string | undefined;
         }[] | undefined;
         classification?: "public" | "internal" | "private" | "sensitive" | undefined;
-        layout?: {
-            schemaRoot?: string | undefined;
-            dashboardManifest?: string | undefined;
-            snapshotsDir?: string | undefined;
-            documentsDir?: string | undefined;
-            reportsDir?: string | undefined;
-            evidenceDir?: string | undefined;
-            privateDir?: string | undefined;
-        } | undefined;
         integrations?: {
             id: string;
             name: string;
@@ -65468,7 +65468,7 @@ declare const CoreContractSchemaRegistry: {
         projectId: z.ZodString;
         name: z.ZodString;
         version: z.ZodString;
-        manifestPath: z.ZodDefault<z.ZodEffects<z.ZodString, string, string>>;
+        manifestPath: z.ZodEffects<z.ZodString, string, string>;
         renderer: z.ZodDefault<z.ZodEnum<["json_render", "react_flow", "markdown", "html", "custom"]>>;
         views: z.ZodArray<z.ZodObject<{
             id: z.ZodString;
@@ -66096,6 +66096,7 @@ declare const CoreContractSchemaRegistry: {
         schema: "hasna.render_manifest.v1";
         createdAt: string;
         projectId: string;
+        manifestPath: string;
         views: {
             id: string;
             kind: "report" | "custom" | "document" | "dashboard" | "panel" | "canvas";
@@ -66186,7 +66187,6 @@ declare const CoreContractSchemaRegistry: {
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[] | undefined;
-        manifestPath?: string | undefined;
         renderer?: "custom" | "json_render" | "react_flow" | "markdown" | "html" | undefined;
         theme?: Record<string, unknown> | undefined;
     }>, {
@@ -66296,6 +66296,7 @@ declare const CoreContractSchemaRegistry: {
         schema: "hasna.render_manifest.v1";
         createdAt: string;
         projectId: string;
+        manifestPath: string;
         views: {
             id: string;
             kind: "report" | "custom" | "document" | "dashboard" | "panel" | "canvas";
@@ -66386,7 +66387,6 @@ declare const CoreContractSchemaRegistry: {
             schemaId?: string | undefined;
             integrity?: string | undefined;
         }[] | undefined;
-        manifestPath?: string | undefined;
         renderer?: "custom" | "json_render" | "react_flow" | "markdown" | "html" | undefined;
         theme?: Record<string, unknown> | undefined;
     }>;
