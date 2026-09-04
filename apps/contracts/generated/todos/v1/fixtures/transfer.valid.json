@@ -15,9 +15,9 @@
       }
     }
   ],
-  "bundleChecksum": "2962e0c2e64cf76aad4d1b36c43f5b6d791de60d538c27f2a1eb207a98d1288f",
+  "bundleChecksum": "eae01dd4304876dbb6f160a44e2ecd1d89b0f6fcce8222d7268ffbe0921a1613",
   "bundleId": "bundle-1",
-  "contractDigest": "84ff3d0baefd1218fc2422c2fa411dd549d490197fdab6573f35c4f3bc724d40",
+  "contractDigest": "3906a27a62314858c8ee0e09f5eaa4489db6908659a4de837d03dec762ca35db",
   "contractVersion": "1.0.0",
   "createdAt": "2026-07-24T00:00:00.000Z",
   "dependencyClosure": [
