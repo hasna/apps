@@ -72,6 +72,19 @@ describe("createTaskList", () => {
     expect(list2.slug).toBe("bugs");
     expect(list1.id).not.toBe(list2.id);
   });
+
+  it("never auto-prefixes slugs: derived slug is the bare name, explicit todos- slugs stay verbatim", () => {
+    // Fleet convention (binding 2026-09-04): a repo project's task-list slug IS
+    // the bare sanitized repo/app name — no auto `todos-` prefix. Legacy
+    // `todos-*` ids stored before the prefix removal keep resolving by their
+    // stored value.
+    const derived = createTaskList({ name: "Apps Tasks" });
+    expect(derived.slug).toBe("apps-tasks");
+
+    const legacy = createTaskList({ name: "Legacy Inbox", slug: "todos-legacy-inbox" });
+    expect(legacy.slug).toBe("todos-legacy-inbox");
+    expect(getTaskListBySlug("todos-legacy-inbox")?.id).toBe(legacy.id);
+  });
 });
 
 describe("getTaskList", () => {
