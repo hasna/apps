@@ -14,7 +14,14 @@ import {
 } from "../../core/config";
 import { generatePresignedLink, generateShareLink } from "../../core/links";
 import { S3Client } from "../../core/s3";
-import { contentDispositionAttachment, createObjectKey, sanitizeFilename } from "../../core/security";
+import { contentDispositionAttachment, sanitizeFilename } from "../../core/security";
+import {
+  buildArtifactManifest,
+  canonicalBlobKey,
+  isSha256Hex,
+  manifestKey,
+  stagingKey,
+} from "../../core/artifact-keys";
 import { createObjectStore } from "../../core/object-storage";
 import {
   DIRECT_MULTIPART_PART_SIZE,
@@ -386,6 +393,7 @@ export function registerAttachmentRoutes(app: Hono): void {
         size?: number;
         upload_expiry?: string;
         tag?: string;
+        sha256?: string;
       } = {};
       try {
         body = await c.req.json();
@@ -410,7 +418,14 @@ export function registerAttachmentRoutes(app: Hono): void {
       const filename = sanitizeFilename(body.filename);
       const contentType = body.content_type ?? (mimeLookup(filename) || "application/octet-stream");
       const id = `att_${nanoid(10)}`;
-      const s3Key = createObjectKey(id, filename);
+      const clientSha256 = typeof body.sha256 === "string" && body.sha256.trim() !== "" ? body.sha256.trim().toLowerCase() : undefined;
+      if (clientSha256 !== undefined && !isSha256Hex(clientSha256)) {
+        return c.json({ error: "sha256 must be a lowercase hex sha-256 digest" }, 400);
+      }
+      // Canonical content-addressed key when the client digests its bytes up
+      // front; staging key in the compatibility namespace otherwise (rows keep
+      // whichever key was minted, so both resolve for the migration window).
+      const s3Key = clientSha256 ? canonicalBlobKey(clientSha256, filename) : stagingKey(id);
       const uploadExpiry = parseExpiryStrict(body.upload_expiry ?? "1h").milliseconds;
       if (uploadExpiry === null) {
         return c.json({ error: "Multipart upload expiry cannot be never" }, 400);
@@ -434,6 +449,7 @@ export function registerAttachmentRoutes(app: Hono): void {
           createdAt: now,
           storageBackend: "s3",
           status: "pending",
+          contentSha256: clientSha256 ?? null,
         });
       } finally {
         db.close();
@@ -536,6 +552,40 @@ export function registerAttachmentRoutes(app: Hono): void {
         await s3.delete(attachment.s3Key);
         return c.json({ error: `File too large. Maximum size is ${config.storage.maxSizeBytes} bytes.` }, 413);
       }
+      // Content-digest verification when the creating request supplied one and
+      // the assembled object carries an S3 checksum.
+      if (
+        attachment.contentSha256 &&
+        info.checksumSha256 !== undefined &&
+        info.checksumSha256 !== attachment.contentSha256
+      ) {
+        await s3.delete(attachment.s3Key);
+        return c.json(
+          { error: `Uploaded object checksum does not match the declared sha256 (${attachment.contentSha256.slice(0, 12)}…)` },
+          400,
+        );
+      }
+      // Per-row artifact manifest (S3 store): content address + provenance
+      // summary, so the bucket listing is restorable without the database.
+      await s3.upload(
+        manifestKey(attachment.id),
+        Buffer.from(
+          JSON.stringify(
+            buildArtifactManifest({
+              id: attachment.id,
+              sha256: attachment.contentSha256 ?? undefined,
+              byteSize: size,
+              contentType: info.contentType ?? attachment.contentType,
+              filename: attachment.filename,
+              createdAt: attachment.createdAt,
+              storageKey: attachment.s3Key,
+            }),
+            null,
+            2,
+          ),
+        ),
+        "application/json",
+      );
 
       const { milliseconds: expiryMs } = parseExpiryStrict(body.expiry ?? config.defaults.expiry);
       const expiresAt = expiryMs !== null ? Date.now() + expiryMs : null;

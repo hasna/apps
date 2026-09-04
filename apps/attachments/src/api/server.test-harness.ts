@@ -119,6 +119,8 @@ export const mockS3PresignUploadPart = mock(
 export const mockS3CompleteMultipartUpload = mock(async (_key: string, _uploadId: string, _parts: unknown) => {});
 export const mockS3AbortMultipart = mock(async (_key: string, _uploadId: string) => {});
 export const mockS3Head = mock(async (_key: string) => ({ contentLength: 13, contentType: "text/plain" }));
+export const mockS3Upload = mock(async (_key: string, _body: Buffer, _contentType: string) => {});
+export const mockS3Download = mock(async (_key: string) => Buffer.from("test content"));
 
 mock.module("../core/s3", () => ({
   S3Client: class MockS3Client {
@@ -130,6 +132,8 @@ mock.module("../core/s3", () => ({
     completeMultipartUpload = mockS3CompleteMultipartUpload;
     abortMultipart = mockS3AbortMultipart;
     head = mockS3Head;
+    upload = mockS3Upload;
+    download = mockS3Download;
   },
 }));
 
@@ -298,6 +302,10 @@ beforeEach(() => {
   mockS3AbortMultipart.mockImplementation(async () => {});
   mockS3Head.mockReset();
   mockS3Head.mockImplementation(async () => ({ contentLength: 13, contentType: "text/plain" }));
+  mockS3Upload.mockReset();
+  mockS3Upload.mockImplementation(async () => {});
+  mockS3Download.mockReset();
+  mockS3Download.mockImplementation(async () => Buffer.from("test content"));
   mockDbInsert.mockReset();
   mockGeneratePresignedLink.mockReset();
   mockGeneratePresignedLink.mockImplementation(

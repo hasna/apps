@@ -20,7 +20,9 @@ PostgreSQL DSNs belong only on the service.
 
 attachments-serve uses validated server-side PostgreSQL configuration.
 See [configuration](docs/configuration.md) for environment requirements,
-and [migration status](docs/canonical-migration.md) before attempting a release.
+[migration status](docs/canonical-migration.md) before attempting a release,
+and [S3 storage](docs/s3-storage.md) for the canonical object layout and the
+bucket configuration end state.
 
 Local configuration follows @hasna/paths. Existing legacy files are preserved
 untouched; there is no automatic import or migration.

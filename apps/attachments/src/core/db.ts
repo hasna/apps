@@ -20,6 +20,8 @@ export interface Attachment {
   encryptionIv?: string | null;
   encryptionTag?: string | null;
   downloads?: number;
+  /** Lowercase hex sha-256 of the stored bytes (null for pre-alignment rows). */
+  contentSha256?: string | null;
 }
 
 export interface ShareLink {
@@ -66,6 +68,7 @@ interface AttachmentRow {
   encryption_iv?: string | null;
   encryption_tag?: string | null;
   downloads?: number;
+  content_sha256?: string | null;
 }
 
 interface ShareLinkRow {
@@ -111,6 +114,7 @@ function rowToAttachment(row: AttachmentRow): Attachment {
     encryptionIv: row.encryption_iv ?? null,
     encryptionTag: row.encryption_tag ?? null,
     downloads: row.downloads ?? 0,
+    contentSha256: row.content_sha256 ?? null,
   };
 }
 
@@ -194,6 +198,7 @@ export class AttachmentsDB {
     this.addColumnIfMissing("attachments", "encryption_iv", "TEXT");
     this.addColumnIfMissing("attachments", "encryption_tag", "TEXT");
     this.addColumnIfMissing("attachments", "downloads", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumnIfMissing("attachments", "content_sha256", "TEXT");
 
     this.db.run(`
       CREATE TABLE IF NOT EXISTS share_links (
@@ -283,7 +288,8 @@ export class AttachmentsDB {
              encryption_salt = $encryption_salt,
              encryption_iv = $encryption_iv,
              encryption_tag = $encryption_tag,
-             downloads = $downloads
+             downloads = $downloads,
+             content_sha256 = $content_sha256
          WHERE id = $id`
       )
       .run({
@@ -295,6 +301,7 @@ export class AttachmentsDB {
         $encryption_iv: attachment.encryptionIv ?? null,
         $encryption_tag: attachment.encryptionTag ?? null,
         $downloads: attachment.downloads ?? 0,
+        $content_sha256: attachment.contentSha256 ?? null,
       });
   }
 

@@ -21,6 +21,11 @@ import {
 } from "../db/evidence.js";
 import { copyS3Object, deleteFromS3, getPresignedPutUrl, getPresignedUrl, headS3Object, uploadBufferToS3 } from "./s3.js";
 import { sha256Buffer, sha256File } from "./hasher.js";
+import {
+  buildEvidenceManifest,
+  buildEvidenceManifestKey,
+  buildEvidenceObjectKey,
+} from "./artifact-keys.js";
 import type {
   CreateFileAccessEventInput,
   CreateFileAssetInput,
@@ -171,6 +176,18 @@ export interface EvidenceDownloadGrant {
 export const DEFAULT_EVIDENCE_S3_BUCKET = "";
 export const DEFAULT_EVIDENCE_S3_REGION = "us-east-1";
 
+/**
+ * Evidence storage options, env-resolved.
+ *
+ * Bucket selection: `HASNA_FILES_S3_BUCKET` is the shared files bucket;
+ * `HASNA_FILES_EVIDENCE_BUCKET` (the `EVIDENCE_S3_BUCKET` alias) is the
+ * legacy dedicated-evidence bucket. Either works — evidence object keys are
+ * identical in both (`evidence/<org>/<sha256>` under the optional prefix), so
+ * the alias exists purely to keep deployments that already configured a
+ * separate bucket working, and consolidating into the shared bucket later is
+ * a copy, never a rewrite (hasna/apps#1650).
+ */
+
 export function getEvidenceStorageOptions(overrides: EvidenceStorageOptions = {}): Required<EvidenceStorageOptions> {
   const provider = overrides.provider ?? (process.env.HASNA_FILES_EVIDENCE_STORAGE as FileStorageProvider | undefined) ?? "s3";
   return {
@@ -185,33 +202,15 @@ export function getEvidenceStorageOptions(overrides: EvidenceStorageOptions = {}
   };
 }
 
-export function buildEvidenceObjectKey(input: {
-  org_id: string;
-  company_id?: string;
-  app: string;
-  kind: string;
-  asset_id: string;
-  original_name: string;
-  prefix?: string;
-  now?: Date;
-}): string {
-  const now = input.now ?? new Date();
-  const yyyy = String(now.getUTCFullYear());
-  const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
-  return [
-    trimSlashes(input.prefix ?? ""),
-    "orgs",
-    cleanSegment(input.org_id),
-    "companies",
-    cleanSegment(input.company_id ?? "_global"),
-    cleanSegment(input.app),
-    yyyy,
-    mm,
-    cleanSegment(input.kind),
-    cleanSegment(input.asset_id),
-    cleanFilename(input.original_name),
-  ].filter(Boolean).join("/");
-}
+/**
+ * Canonical content-addressed evidence object key (hasna/apps#1650):
+ * `<prefix>/evidence/<org_id>/<sha256>[.<ext>]`. Deterministic in
+ * (org, content) — a duplicate upload for the same org lands on the SAME key,
+ * so it never produces a second object. The extension is operator tooling
+ * only and never participates in addressing. Defined in src/lib/artifact-keys.ts
+ * and re-exported here to keep the public export name stable.
+ */
+export { buildEvidenceObjectKey, buildEvidenceManifestKey, isLegacyEvidenceKey } from "./artifact-keys.js";
 
 export async function createEvidenceUploadIntent(
   input: CreateEvidenceUploadInput,
@@ -249,7 +248,12 @@ export async function createEvidenceUploadIntent(
   const assetId = normalizedInput.idempotency_key
     ? deterministicEvidenceId("asset", normalizedInput.org_id, normalizedInput.app, normalizedInput.idempotency_key)
     : `asset_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  const objectKey = buildEvidenceObjectKey({ ...normalizedInput, asset_id: assetId, prefix: storage.prefix });
+  const objectKey = buildEvidenceObjectKey({
+    org_id: normalizedInput.org_id,
+    checksum: normalizedInput.checksum,
+    original_name: normalizedInput.original_name,
+    prefix: storage.prefix,
+  });
   const quarantineKey = `quarantine/${objectKey}`;
   const created = await db.createFileAsset({
     ...normalizedInput,
@@ -374,9 +378,29 @@ export async function completeEvidenceUpload(
     if (!head) throw new Error(`Uploaded object not found: ${quarantineKey}`);
     assertUploadedObjectMatches(asset, head.size, head.metadata.checksum ?? head.checksum_sha256);
     if (quarantineKey !== asset.object_key) {
-      await copyS3Object(source, quarantineKey, asset.object_key, evidenceMetadata(asset), asset.content_type);
+      // Content-addressed dedup: when the canonical object already exists with
+      // the same checksum (a duplicate upload), skip the copy — only the
+      // quarantine object is removed, so a duplicate never leaves a second
+      // object (hasna/apps#1650).
+      const finalHead = await headS3Object(source, asset.object_key);
+      const finalAlreadyMatches = finalHead !== null && sameChecksum(asset, finalHead.metadata.checksum ?? finalHead.checksum_sha256);
+      if (!finalAlreadyMatches) {
+        await copyS3Object(source, quarantineKey, asset.object_key, evidenceMetadata(asset), asset.content_type);
+      }
       await deleteFromS3(source, quarantineKey);
     }
+    // Per-asset manifest: content address + provenance summary so the bucket
+    // listing is restorable without the database.
+    const manifestBytes = Buffer.from(JSON.stringify(buildEvidenceManifest(asset, asset.object_key), null, 2));
+    await uploadBufferToS3(
+      source,
+      manifestBytes,
+      buildEvidenceManifestKey({ org_id: asset.org_id, asset_id: asset.id, prefix: storage.prefix }),
+      "application/json",
+      manifestBytes.byteLength,
+      undefined,
+      sha256Buffer(manifestBytes),
+    );
   } else {
     const sourcePath = localObjectPath(storage, quarantineKey, asset);
     if (!existsSync(sourcePath)) throw new Error(`Uploaded file not found: ${sourcePath}`);
@@ -695,9 +719,14 @@ function assertUploadedObjectMatches(asset: FileAsset, size: number, checksum?: 
 function collectObjectDiagnostics(asset: FileAsset, size: number, checksum: string | undefined, diagnostics: string[]): void {
   if (size !== asset.size) diagnostics.push(`size_mismatch:${size}:expected:${asset.size}`);
   if (!checksum) diagnostics.push("checksum_missing");
-  else if (checksum !== asset.checksum && checksum !== Buffer.from(asset.checksum, "hex").toString("base64")) {
+  else if (!sameChecksum(asset, checksum)) {
     diagnostics.push("checksum_mismatch");
   }
+}
+
+function sameChecksum(asset: FileAsset, checksum: string | undefined): boolean {
+  if (!checksum) return false;
+  return checksum === asset.checksum || checksum === Buffer.from(asset.checksum, "hex").toString("base64");
 }
 
 /**
@@ -709,14 +738,6 @@ function collectObjectDiagnostics(asset: FileAsset, size: number, checksum: stri
  */
 function localObjectPath(storage: Required<EvidenceStorageOptions>, key: string, asset?: Pick<FileAsset, "bucket">): string {
   return join(asset?.bucket ?? storage.localRoot, key);
-}
-
-function cleanSegment(value: string): string {
-  return value.trim().replace(/[^a-zA-Z0-9._=-]+/g, "-").replace(/^-+|-+$/g, "") || "_";
-}
-
-function cleanFilename(value: string): string {
-  return value.trim().replace(/[\\/]/g, "-").replace(/[^a-zA-Z0-9._ -]+/g, "-").slice(0, 160) || "file";
 }
 
 function trimSlashes(value: string): string {

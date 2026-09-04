@@ -27,7 +27,7 @@ export { listGoogleDriveProfiles, listGoogleDriveProfileStatuses, listGoogleDriv
 export { createConnectorProfileGoogleDriveClient } from "./lib/google-drive-client.js";
 export { indexS3Source, downloadFromS3, uploadToS3, uploadBufferToS3, deleteFromS3, headS3Object, createS3ClientConfig, describeS3ClientConfig } from "./lib/s3.js";
 export type { S3ClientConfigDiagnostics, S3CredentialSource } from "./lib/s3.js";
-export { createEvidenceUploadIntent, uploadEvidenceFile, completeEvidenceUpload, linkEvidenceAsset, signEvidenceDownload, verifyEvidenceAsset, buildEvidenceObjectKey, getEvidenceStorageOptions } from "./lib/evidence.js";
+export { createEvidenceUploadIntent, uploadEvidenceFile, completeEvidenceUpload, linkEvidenceAsset, signEvidenceDownload, verifyEvidenceAsset, buildEvidenceObjectKey, buildEvidenceManifestKey, isLegacyEvidenceKey, getEvidenceStorageOptions } from "./lib/evidence.js";
 export { downloadResolvedFileObject, resolveFileObject, resolvedFileObjectSummary } from "./lib/file-object.js";
 export { extractTextFromBuffer, extractTextFromFile, isExtractableTextMime } from "./lib/extraction.js";
 export { buildExtractionSnapshot, extractTextSnapshotFromBuffer, extractTextSnapshotFromFile } from "./lib/extraction-snapshot.js";
