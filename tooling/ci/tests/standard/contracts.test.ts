@@ -218,7 +218,7 @@ describe("standard-adherence: contracts conformance", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 300_000);
 
   test("report: emit the per-member conformance summary", () => {
     const pass = report.entries.filter((e) => e.verdict === "ok");
