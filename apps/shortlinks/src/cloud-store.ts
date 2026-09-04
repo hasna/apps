@@ -10,7 +10,8 @@
 //
 // There is NO DSN / Postgres / local SQLite here — the raw RDS is never touched
 // from a client. If the flip does not resolve, `fromEnv` returns null and the
-// caller uses its local store instead (unset env => local).
+// caller (resolveStore in ./client-store.ts) FAILS CLOSED unless local mode was
+// explicitly opted into — unset env is never an implicit local store.
 //
 // SAFETY: the API key lives only inside the transport; it is never logged.
 
@@ -66,8 +67,10 @@ export class CloudShortlinksStore implements Store {
   /**
    * Resolve a hosted-API store from the environment. The contracts client
    * seam (`resolveStorageClient`) decides: an explicit API URL + API key in
-   * the environment selects the hosted client, and the fleet app-config on
-   * disk is the fallback tier; otherwise the caller uses its local store.
+   * the environment selects the hosted client, and the fleet app-config /
+   * credential on disk is the accepted tier. `null` means NO hosted client
+   * resolved — the caller must then fail closed unless local mode was
+   * explicitly opted into (never a silent switch to the on-box store).
    * Throws when only one of URL/key is set in the environment tier — a
    * partially configured hosted client must fail loudly, never silently
    * drift to the local dataset.

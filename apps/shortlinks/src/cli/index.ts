@@ -59,9 +59,11 @@ function handleError(error: unknown): never {
 
 /**
  * Run `fn` with the resolved client {@link Store}. The store is the hosted-API
- * ApiStore when HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY are set,
- * otherwise the on-box LocalStore. There is no DSN/postgres client path: a
- * client never touches the raw RDS.
+ * ApiStore when HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY are set
+ * (or a fleet app-config / credential the contracts resolver accepts);
+ * otherwise the CLI FAILS CLOSED with an error naming the required env unless
+ * local mode was explicitly opted into (SHORTLINKS_LOCAL=1 or --db <path>).
+ * There is no DSN/postgres client path: a client never touches the raw RDS.
  */
 async function withRuntimeStore<T>(fn: (store: Store) => T | Promise<T>): Promise<T> {
   const store = resolveStore(process.env, { dbPath: program.opts().db });
@@ -518,7 +520,7 @@ function registerCompactEventsCommands(program: Command): void {
 
 program
   .name("shortlinks")
-  .description("Shortlink manager with custom domains, click tracking, and Cloudflare helpers — local SQLite or hosted /v1 API storage")
+  .description("Shortlink manager with custom domains, click tracking, and Cloudflare helpers — hosted /v1 API storage, or on-box SQLite with an explicit local opt-in")
   .version(getPackageVersion())
   .option("--db <path>", "SQLite database path (local backend only)")
   .option("-j, --json", "Output JSON for agents and scripts");
@@ -961,8 +963,10 @@ program
   .action(async (opts) => {
     try {
       // The redirect server reads/records through the same Store seam as every
-      // other command: LocalStore on-box, or the cloud ApiStore when the flip is
-      // on. There is no DSN path here — a client never opens the raw RDS.
+      // other command: the cloud ApiStore when the flip is on, the on-box
+      // LocalStore only under an explicit opt-in (--db / SHORTLINKS_LOCAL=1),
+      // otherwise the resolution fails closed. No DSN path here — a client
+      // never opens the raw RDS.
       const store = resolveStore(process.env, { dbPath: program.opts().db });
       const server = serveShortlinks({
         store,
