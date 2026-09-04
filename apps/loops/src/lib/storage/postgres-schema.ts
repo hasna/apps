@@ -1943,14 +1943,7 @@ ALTER TABLE loops ADD COLUMN IF NOT EXISTS expires_after_runs INTEGER;
 GRANT USAGE, CREATE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
 SET ROLE open_loops_owner;
 
--- IF EXISTS: the constraint being dropped is the UNNAMED foreign key added by
--- 0010_tenant_enforce, so its name is whatever Postgres auto-assigned. A
--- database restored (or originally built) with that key under another name -
--- pg_dump of a hand-repaired schema, a logical restore - would otherwise abort
--- this migration's whole transaction on a name mismatch. Dropping is
--- best-effort; the ADD below is what this migration is actually for, and it
--- fails loudly if a same-named constraint really is still there.
-ALTER TABLE run_receipts DROP CONSTRAINT IF EXISTS run_receipts_tenant_id_loop_id_fkey;
+ALTER TABLE run_receipts DROP CONSTRAINT run_receipts_tenant_id_loop_id_fkey;
 ALTER TABLE run_receipts ADD CONSTRAINT run_receipts_tenant_id_loop_id_fkey
   FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE CASCADE NOT VALID;
 
@@ -2033,6 +2026,95 @@ GRANT SELECT, INSERT ON loop_revisions TO open_loops_runtime;
 RESET ROLE;
 REVOKE CREATE ON SCHEMA public FROM open_loops_owner;
 GRANT USAGE ON SCHEMA public TO open_loops_owner;
+    `,
+  ),
+  // The `IF EXISTS` repair that was briefly (and wrongly) folded back into
+  // 0015 itself.
+  //
+  // 0015 shipped in @hasna/loops 0.6.3 and 0.6.5 and has been applied to the
+  // hosted database, so its bytes — and therefore its ledger checksum — are
+  // frozen forever: editing them makes `buildPlan()` throw
+  // "checksum mismatch" on every database that already ran it, which takes out
+  // `loops-serve migrate`, the readiness dryRun migrate and the boot-time
+  // tenant-enforcement dryRun migrate all at once. A repair to a released
+  // migration is a NEW migration; that is the whole reason the ledger is
+  // keyed by id.
+  //
+  // What needs repairing: 0015 drops `run_receipts_tenant_id_loop_id_fkey` by
+  // name, and that name is whatever Postgres auto-assigned to the UNNAMED
+  // foreign key added by 0010_tenant_enforce. A database restored or rebuilt
+  // by another route — a pg_dump of a hand-repaired schema, a logical restore —
+  // can carry the same foreign key under a different name, and then 0015 left
+  // the OLD key in place under its own name (its `ADD` succeeded, because the
+  // canonical name was free) and the receipts of a deleted loop still violate
+  // a non-CASCADE key.
+  //
+  // This migration is therefore name-agnostic and idempotent: it drops every
+  // foreign key on run_receipts(tenant_id, loop_id) -> loops that is NOT
+  // ON DELETE CASCADE, whatever it is called, and adds the canonical CASCADE
+  // key only if no CASCADE key is there already. On a healthy database — one
+  // where 0015 did exactly what it meant to — it finds a CASCADE key, drops
+  // nothing and adds nothing.
+  //
+  // NOT VALID for the same reason 0015 used it: 0010's $auth_function_acl$
+  // revokes EXECUTE on open_loops_current_tenant_id from every role but
+  // open_loops_runtime, so a validating ADD cannot evaluate the
+  // tenant_isolation policy under FORCE RLS.
+  migration(
+    "0017_run_receipts_loop_cascade_repair",
+    `
+GRANT USAGE, CREATE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
+SET ROLE open_loops_owner;
+
+DO $run_receipts_loop_cascade_repair$
+DECLARE
+  doomed TEXT;
+  has_cascade BOOLEAN;
+BEGIN
+  FOR doomed IN
+    SELECT con.conname
+      FROM pg_constraint con
+      JOIN pg_class child ON child.oid = con.conrelid
+      JOIN pg_class parent ON parent.oid = con.confrelid
+      JOIN pg_namespace ns ON ns.oid = child.relnamespace
+     WHERE con.contype = 'f'
+       AND ns.nspname = current_schema()
+       AND child.relname = 'run_receipts'
+       AND parent.relname = 'loops'
+       AND con.confdeltype <> 'c'
+       AND con.conkey = (
+         SELECT array_agg(att.attnum ORDER BY att.attname)
+           FROM pg_attribute att
+          WHERE att.attrelid = child.oid
+            AND att.attname IN ('tenant_id', 'loop_id')
+       )
+  LOOP
+    EXECUTE format('ALTER TABLE run_receipts DROP CONSTRAINT %I', doomed);
+  END LOOP;
+
+  SELECT EXISTS (
+    SELECT 1
+      FROM pg_constraint con
+      JOIN pg_class child ON child.oid = con.conrelid
+      JOIN pg_class parent ON parent.oid = con.confrelid
+      JOIN pg_namespace ns ON ns.oid = child.relnamespace
+     WHERE con.contype = 'f'
+       AND ns.nspname = current_schema()
+       AND child.relname = 'run_receipts'
+       AND parent.relname = 'loops'
+       AND con.confdeltype = 'c'
+  ) INTO has_cascade;
+
+  IF NOT has_cascade THEN
+    ALTER TABLE run_receipts ADD CONSTRAINT run_receipts_tenant_id_loop_id_fkey
+      FOREIGN KEY (tenant_id, loop_id) REFERENCES loops(tenant_id, id) ON DELETE CASCADE NOT VALID;
+  END IF;
+END
+$run_receipts_loop_cascade_repair$;
+
+RESET ROLE;
+REVOKE CREATE ON SCHEMA public FROM open_loops_owner, open_loops_migrator;
+GRANT USAGE ON SCHEMA public TO open_loops_owner, open_loops_migrator;
     `,
   ),
 ]);

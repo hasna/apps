@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { PostgresStorage } from "./postgres.js";
 import { LOOP_MUTATION_ADVISORY_LOCK_SQL } from "./postgres-loop-storage.js";
 import {
@@ -57,6 +58,7 @@ describe("Postgres storage migrations", () => {
       "0014_loop_expires_after_runs",
       "0015_run_receipts_loop_cascade",
       "0016_loop_revisions",
+      "0017_run_receipts_loop_cascade_repair",
     ]);
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(migration.checksum).toBe(checksumStorageSql(migration.sql));
@@ -117,14 +119,17 @@ describe("Postgres storage migrations", () => {
       "0013_loop_mutation_contract": "sha256:eb35e8d593628f2d7a2449dddf60b28e6ffc42f87ff694441262aa2794e78913",
       "0014_loops_identity_aliases": "sha256:9e73cf54d084709bf08f4a74dc1d5900a647cd574acb958503e5b50b8122e792",
       "0014_loop_expires_after_runs": "sha256:4c60d6c900c2f3146bd20da3bc3665a0a40e1b7e145433d8944d663da57460d7",
-      // Re-pinned BEFORE its first release (published @hasna/loops is 0.6.5,
-      // whose source stops at 0014; the hosted service reports the same
-      // version and no bundle capability, so no ledger anywhere has recorded
-      // 0015 yet) to make the constraint drop `IF EXISTS` — the same
-      // pre-release repin 0008-0010 had above. Once 0015 ships in a release
-      // this line is frozen like the rest.
-      "0015_run_receipts_loop_cascade": "sha256:ff6fd3f324b819a31e29cb8772895726cb8bfb5cebaff4bc0fda4cf7d239bb51",
+      // FROZEN. 0015 shipped in @hasna/loops 0.6.3 and 0.6.5 (`npm pack
+      // @hasna/loops@0.6.5` carries it in dist/lib/storage/postgres-schema.js)
+      // and the hosted service has applied it, so its ledger checksum exists on
+      // real databases and this value can never move again. A previous revision
+      // re-pinned it to ff6fd3f3… on the false premise that 0015 was unreleased;
+      // that would have thrown "checksum mismatch" out of buildPlan() on every
+      // such database, blocking `loops-serve migrate` and both boot-time dryRun
+      // migrates. The `IF EXISTS` repair it wanted lives in 0017 instead.
+      "0015_run_receipts_loop_cascade": "sha256:ac4ebc03cdf15383a7fd2f6ad12253cee4ddf68011b9d65c22e15d85693d3492",
       "0016_loop_revisions": "sha256:c5ef0f1fbc0f61de7736a4af1a558c993f9d916bc0ee7623ba0d5709196d754e",
+      "0017_run_receipts_loop_cascade_repair": "sha256:99be369ecee8da908f97761934887af3d4128ea19041fd6929b6ec5927527a29",
     };
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(`${migration.id} ${migration.checksum}`).toBe(`${migration.id} ${pinned[migration.id]}`);
@@ -145,6 +150,31 @@ describe("Postgres storage migrations", () => {
           expect(migration.sql).not.toContain("idx_workflow_work_items_machine");
         }
       }
+    }
+  });
+
+  test("the migrations/ mirror and manifest.json agree with the TypeScript source of truth", () => {
+    // The .sql files and manifest.json are a generated mirror of
+    // POSTGRES_STORAGE_MIGRATIONS (`bun run scripts/gen-migrations.ts`). They
+    // are what a reviewer reads and what an operator diffs against a database,
+    // so a schema edit that regenerates neither leaves three artefacts
+    // disagreeing about what a migration IS - which is exactly the state in
+    // which a released migration gets quietly rewritten.
+    const dir = new URL("../../../migrations/", import.meta.url).pathname;
+    const manifest = JSON.parse(readFileSync(`${dir}manifest.json`, "utf8")) as {
+      ledgerTable: string;
+      migrations: Array<{ id: string; file: string; checksum: string }>;
+    };
+    expect(manifest.ledgerTable).toBe(POSTGRES_MIGRATION_LEDGER_TABLE);
+    expect(manifest.migrations.map((entry) => entry.id)).toEqual(POSTGRES_STORAGE_MIGRATIONS.map((migration) => migration.id));
+    for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
+      const entry = manifest.migrations.find((candidate) => candidate.id === migration.id)!;
+      expect(`${migration.id} ${entry.checksum}`).toBe(`${migration.id} ${migration.checksum}`);
+      const mirrored = readFileSync(`${dir}${entry.file}`, "utf8");
+      // The header carries the checksum, and the body must be the migration's
+      // own SQL byte for byte.
+      expect(mirrored).toContain(`(checksum: ${migration.checksum})`);
+      expect(mirrored.slice(mirrored.indexOf("\n\n") + 2)).toBe(`${migration.sql}\n`);
     }
   });
 
