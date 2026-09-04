@@ -9,17 +9,31 @@ import { makeTempRoot } from "../lib/test-temp-root";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 function runCli(args: string[], env: Record<string, string | undefined> = {}) {
+  const childEnv: Record<string, string | undefined> = {
+    ...process.env,
+    HASNA_INSTRUCTIONS_API_URL: "",
+    HASNA_INSTRUCTIONS_API_KEY: "",
+    ...env,
+    NO_COLOR: "1",
+    FORCE_COLOR: "0",
+  };
+  // Store-selection hermeticity: these children must resolve the store ONLY
+  // from the env each test supplies (HOME + HASNA_CONFIGS_HOME). An ambient
+  // HASNA_INSTRUCTIONS_DB_PATH leaking from another file in the same bun test
+  // process (e.g. ":memory:", which in-process suites set around their own
+  // database) silently redirects the child store away from the seeded registry
+  // — the coverage gate then audits an empty foreign store and every
+  // plan/apply assertion reads nothing (measured: the three O15-00694 gate
+  // tests fail exactly that way under a leaked ":memory:"). Scrub the one key
+  // that redirects the store; the test that does mean to set it passes it in
+  // `env`, which wins via the spread above.
+  if (!Object.prototype.hasOwnProperty.call(env, "HASNA_INSTRUCTIONS_DB_PATH")) {
+    delete childEnv["HASNA_INSTRUCTIONS_DB_PATH"];
+  }
   return spawnSync("bun", ["src/cli/index.tsx", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      HASNA_INSTRUCTIONS_API_URL: "",
-      HASNA_INSTRUCTIONS_API_KEY: "",
-      ...env,
-      NO_COLOR: "1",
-      FORCE_COLOR: "0",
-    },
+    env: childEnv,
   });
 }
 

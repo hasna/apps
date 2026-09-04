@@ -186,4 +186,10 @@ export async function closeCloud(): Promise<void> {
   // would keep the pre-patch verifier (cloud-auth.test.ts 401 flake).
   honoMiddlewareCache.clear();
   schemaEnsured = null;
+  // The middleware cache is module state like the fields above: it closes over
+  // the signing secret and keyStatus hook in force when it was built. A later
+  // closeCloud() (e.g. another test file re-pointing the signing secret) must
+  // not leave stale middleware keyed by scope-set answering requests — that
+  // 401s every token minted under the new secret. Cleared here with the rest.
+  honoMiddlewareCache.clear();
 }
