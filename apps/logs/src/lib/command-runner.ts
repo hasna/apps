@@ -10,6 +10,7 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  statSync,
 } from "node:fs";
 import {
   basename,
@@ -21,6 +22,7 @@ import {
   sep,
 } from "node:path";
 import { XMLParser, XMLValidator } from "fast-xml-parser";
+import { ArtifactRemote } from "./artifact-remote.ts";
 import type { Store } from "../store/types.ts";
 import type { LogEntry, LogLevel, LogRow, LogSource } from "../types/index.ts";
 import { publishEventCatalogEvent } from "./event-bus.ts";
@@ -64,6 +66,8 @@ export interface CommandRunOptions {
   tee?: boolean;
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
+  /** Overrides the artefact uploader (tests). Defaults to one configured by the environment. */
+  artifactRemote?: ArtifactRemote;
 }
 
 export interface CommandRunResult {
@@ -699,6 +703,7 @@ export async function runCommand(
     artifactBaseline,
     runId,
   );
+  const artifactRemote = opts.artifactRemote ?? new ArtifactRemote();
   const safeArtifactSummary = redactValue(artifactSummary, "artifacts")
     .value as CommandRunArtifactSummary;
   const testReportSummary = discoverChangedTestReports(
@@ -852,7 +857,7 @@ export async function runCommand(
     process_tree: processTree,
   });
 
-  recordArtifactEvents(sink, {
+  await recordArtifactEvents(sink, {
     event_time: endedAt,
     run_id: runId,
     process_id: processId,
@@ -863,7 +868,7 @@ export async function runCommand(
     project_id: projectId,
     classifier,
     artifacts: artifactSummary,
-  });
+  }, cwd, artifactRemote);
 
   recordTestReportEvents(sink, {
     event_time: endedAt,
@@ -1711,7 +1716,7 @@ function recordProcessTreeEvent(
   });
 }
 
-function recordArtifactEvents(
+async function recordArtifactEvents(
   sink: RunSink,
   data: {
     event_time: string;
@@ -1725,11 +1730,14 @@ function recordArtifactEvents(
     classifier: CommandRunClassifier;
     artifacts: CommandRunArtifactSummary;
   },
-): void {
+  cwd: string,
+  artifactRemote: ArtifactRemote,
+): Promise<void> {
   if (data.artifacts.artifacts.length === 0) return;
   const source = sourceForRunType(data.classifier.run_type);
   for (const artifact of data.artifacts.artifacts) {
     const ingestTime = new Date().toISOString();
+    const objectKey = await uploadArtifactBytes(artifactRemote, data.run_id, cwd, artifact);
     const body = {
       artifact: {
         artifact_id: artifact.artifact_id,
@@ -1737,6 +1745,7 @@ function recordArtifactEvents(
         path: artifact.path,
         size_bytes: artifact.size_bytes,
         content_hash: artifact.content_hash,
+        object_key: objectKey ?? undefined,
         changed: artifact.changed,
         mtime_ms: artifact.mtime_ms,
         source_map: artifact.source_map,
@@ -1755,6 +1764,7 @@ function recordArtifactEvents(
       path: artifact.path,
       size_bytes: artifact.size_bytes,
       content_hash: artifact.content_hash,
+      object_key: objectKey ?? undefined,
       changed: artifact.changed,
       mtime_ms: artifact.mtime_ms,
       source_map: artifact.source_map,
@@ -1767,6 +1777,7 @@ function recordArtifactEvents(
       path: artifact.path,
       size_bytes: artifact.size_bytes,
       content_hash: artifact.content_hash,
+      object_key: objectKey ?? undefined,
       changed: artifact.changed,
       source_map_status: artifact.source_map?.validation_status,
       source_map_path: artifact.source_map?.source_map_path,
@@ -2026,6 +2037,53 @@ function recordTestReportEvents(
   }
 }
 
+const ARTIFACT_CONTENT_TYPES: Record<string, string> = {
+  source_map: "application/json",
+  javascript: "application/javascript",
+  stylesheet: "text/css",
+  html: "text/html",
+  json: "application/json",
+  wasm: "application/wasm",
+};
+
+function artifactContentType(artifactType: string): string {
+  return ARTIFACT_CONTENT_TYPES[artifactType] ?? "application/octet-stream";
+}
+
+/**
+ * Upload an artefact's bytes at creation, content-addressed by their own
+ * sha-256. Soft-fail end to end: a missing/changed/oversized file, a path
+ * escaping the run directory, or an S3 error all return null and recording
+ * continues with the local path only (local fallback).
+ */
+async function uploadArtifactBytes(
+  remote: ArtifactRemote,
+  runId: string,
+  cwd: string,
+  artifact: CommandRunArtifactInfo,
+): Promise<string | null> {
+  if (!remote.enabled) return null;
+  if (!artifact.content_hash || artifact.size_bytes <= 0) return null;
+  if (artifact.size_bytes > MAX_ARTIFACT_HASH_BYTES) return null;
+  const absolutePath = resolve(cwd, artifact.path);
+  if (!isPathInside(cwd, absolutePath)) return null;
+  let bytes: Uint8Array;
+  try {
+    const stat = statSync(absolutePath, { throwIfNoEntry: false });
+    if (!stat || !stat.isFile() || stat.size !== artifact.size_bytes) return null;
+    bytes = readFileSync(absolutePath);
+  } catch {
+    return null;
+  }
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  return remote.uploadBytes(
+    runId,
+    digest,
+    bytes,
+    artifactContentType(artifact.artifact_type),
+  );
+}
+
 function upsertCommandRunArtifact(
   db: Database,
   artifact: CommandRunArtifactInfo,
@@ -2045,14 +2103,17 @@ function upsertCommandRunArtifact(
     typeof metadata.size_bytes === "number"
       ? metadata.size_bytes
       : artifact.size_bytes;
+  const objectKey =
+    typeof metadata.object_key === "string" ? metadata.object_key : null;
   db.prepare(`
-    INSERT INTO artifacts (id, release_id, artifact_type, path, content_hash, size_bytes, metadata)
-    VALUES (?, NULL, ?, ?, ?, ?, ?)
+    INSERT INTO artifacts (id, release_id, artifact_type, path, content_hash, size_bytes, object_key, metadata)
+    VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       artifact_type = COALESCE(excluded.artifact_type, artifacts.artifact_type),
       path = COALESCE(excluded.path, artifacts.path),
       content_hash = COALESCE(excluded.content_hash, artifacts.content_hash),
       size_bytes = COALESCE(excluded.size_bytes, artifacts.size_bytes),
+      object_key = COALESCE(excluded.object_key, artifacts.object_key),
       metadata = excluded.metadata
   `).run(
     artifact.artifact_id,
@@ -2060,6 +2121,7 @@ function upsertCommandRunArtifact(
     artifactPath,
     contentHash,
     sizeBytes,
+    objectKey,
     JSON.stringify(metadata),
   );
 }

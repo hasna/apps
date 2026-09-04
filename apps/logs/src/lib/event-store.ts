@@ -1362,15 +1362,20 @@ function replayArtifactProjection(
     ? (sanitizeSourceMapIdentifierValue(artifactIdCandidate) ??
       sourceMapFallbackIdentifier(event.event_id))
     : (artifactIdCandidate ?? event.event_id);
+  const objectKey =
+    stringAttribute(attrs, "object_key") ??
+    stringAttribute(body, "object_key") ??
+    stringAttribute(artifact, "object_key");
   db.prepare(`
-    INSERT INTO artifacts (id, release_id, artifact_type, path, content_hash, size_bytes, metadata)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO artifacts (id, release_id, artifact_type, path, content_hash, size_bytes, object_key, metadata)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       release_id = COALESCE(artifacts.release_id, excluded.release_id),
       artifact_type = COALESCE(artifacts.artifact_type, excluded.artifact_type),
       path = COALESCE(excluded.path, artifacts.path),
       content_hash = COALESCE(excluded.content_hash, artifacts.content_hash),
       size_bytes = COALESCE(excluded.size_bytes, artifacts.size_bytes),
+      object_key = COALESCE(excluded.object_key, artifacts.object_key),
       metadata = excluded.metadata
   `).run(
     artifactId,
@@ -1389,6 +1394,7 @@ function replayArtifactProjection(
     numberAttribute(attrs, "size_bytes") ??
       numberAttribute(body, "size_bytes") ??
       numberAttribute(artifact, "size_bytes"),
+    objectKey,
     JSON.stringify(index.metadata ?? {}),
   );
 }
