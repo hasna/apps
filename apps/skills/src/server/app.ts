@@ -5,7 +5,8 @@ import { createCancelService } from "../sdk/cancel.js";
 import { GOVERNANCE_ERROR_CODES, GovernanceError } from "../sdk/governance.js";
 import { createGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
 import { ArtifactStorage } from "./artifact-storage.js";
-import { authenticateRequest } from "./auth.js";
+import { seedBundledCorpus } from "./seed-bundled.js";
+import { authenticateRequest, publicPrincipal } from "./auth.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
 import { resolveDatabaseTarget } from "./database-url.js";
 import { executeRun } from "./handlers.js";
@@ -23,6 +24,10 @@ import {
   pinMetadataField,
   pinPayload,
   readPublishedBundle,
+  listSkillVersionsPayload,
+  readSkillVersion,
+  readSkillVersionBundle,
+  skillVersionPayload,
   resolvePublishedSkill,
   revisionEtag,
   storePublishedSkill,
@@ -31,9 +36,11 @@ import {
   skillSummary,
 } from "./skills-api.js";
 import { createStore, type MemorySkillsStore } from "./store.js";
-import { SkillRevisionConflictError, StaleLeaseGenerationError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
+import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
 
 export interface SkillsServerOptions {
+  /** Overrides the artifact storage (tests inject an in-memory S3 stand-in). */
+  artifactStorage?: ArtifactStorage;
   config?: Partial<SkillsServerConfig>;
   store?: SkillsProductStore;
   /** Lifecycle ledger and ceiling reads for governance surfaces (cancellation). Defaults to the store's database. */
@@ -87,10 +94,16 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
   // dialect resolution mirrors createStore's: postgres:// URL -> Postgres, no
   // URL -> the durable SQLite file in the data directory.
   const governanceStore = options.governanceStore ?? (await createGovernanceStore(config.databaseUrl));
-  const artifactStorage = new ArtifactStorage({
+  const artifactStorage = options.artifactStorage ?? new ArtifactStorage({
     bucket: config.artifactBucket,
     prefix: config.artifactPrefix,
   });
+  // Seed the registry from the bundled corpus once per package version (hasna/apps#1630).
+  // Only on a real boot with a durable store and a bootstrap key: injected test stores skip it.
+  if (!options.store && config.bootstrapApiKey && config.seedBundledCorpus) {
+    void seedBundledCorpus({ store, artifactStorage, principal: publicPrincipal(), log: (line) => console.log(line) })
+      .catch((error) => console.error(`skills: bundled corpus seed failed: ${(error as Error).message}`));
+  }
 
   return async function fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -138,6 +151,19 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
       // revision. 409 is the contract's answer — the caller must re-read and retry
       // with the current revision — never the generic 500 a conflict would otherwise
       // read as.
+      if (error instanceof SkillVersionExistsError) {
+        return json(
+          {
+            error: error.message,
+            code: "SKILL_VERSION_EXISTS",
+            slug: error.slug,
+            version: error.version,
+            existingBundleSha256: error.existingSha256,
+            attemptedBundleSha256: error.attemptedSha256,
+          },
+          { status: 409 },
+        );
+      }
       if (error instanceof SkillRevisionConflictError) {
         return json(
           {
@@ -236,6 +262,28 @@ async function handleApiV1(
         : json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
     }
 
+    if (request.method === "GET" && id && subresource === "versions" && !childId) {
+      return json(await listSkillVersionsPayload(store, principal, id));
+    }
+    if (request.method === "GET" && id && subresource === "versions" && childId && !parts[4]) {
+      const version = await readSkillVersion(store, principal, id, childId);
+      const current = (await store.getSkill(principal, id))?.bundleSha256;
+      return json(skillVersionPayload(version, current));
+    }
+    if (request.method === "GET" && id && subresource === "versions" && childId && parts[4] === "bundle" && !parts[5]) {
+      const { version, bytes } = await readSkillVersionBundle(store, artifactStorage, principal, id, childId);
+      const headers: Record<string, string> = {
+        "Content-Type": "application/gzip",
+        "Content-Length": String(bytes.byteLength),
+        "Content-Disposition": `attachment; filename="${version.slug}-${version.version}.tar.gz"`,
+        "X-Skill-Bundle-Sha256": version.bundleSha256,
+        "X-Skill-Version": version.version,
+        ETag: `"${version.bundleSha256}"`,
+        "Cache-Control": "no-store",
+      };
+      if (config.bundleSigningKey) headers["X-Skill-Bundle-Signature"] = signBundleBytes(bytes, config.bundleSigningKey);
+      return new Response(bytes, { headers });
+    }
     if (request.method === "GET" && id && subresource === "bundle") {
       const resolved = await resolvePublishedSkill(store, artifactStorage, principal, id);
       if (resolved.kind === "tombstone") {

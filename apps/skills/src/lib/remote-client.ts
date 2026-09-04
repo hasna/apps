@@ -41,6 +41,17 @@ export class RemoteRequestError extends Error {
  * (`{ slug, pinnedAt, metadata }`). `pinnedAt`/`metadata` are server-reported
  * and may be absent.
  */
+export interface RemoteSkillVersion {
+  slug: string;
+  version: string;
+  bundleSha256: string;
+  bundleByteSize: number;
+  storageKind?: string;
+  manifest?: Record<string, unknown>;
+  createdAt: string;
+  current?: boolean;
+}
+
 export interface RemotePin {
   slug: string;
   pinnedAt?: string;
@@ -242,13 +253,33 @@ export class RemoteSkillsClient {
    * read the X-Skill-Bundle-Sha256 / X-Skill-Bundle-Signature headers, or null when the
    * instance serves no bundle for this skill (the metadata-only fallback path).
    */
-  async getBundle(slug: string): Promise<Response | null> {
-    const response = await this.request(`/api/v1/skills/${encodeURIComponent(slug)}/bundle`, { method: "GET" });
+  async getBundle(slug: string, version?: string): Promise<Response | null> {
+    const path = version
+      ? `/api/v1/skills/${encodeURIComponent(slug)}/versions/${encodeURIComponent(version)}/bundle`
+      : `/api/v1/skills/${encodeURIComponent(slug)}/bundle`;
+    const response = await this.request(path, { method: "GET" });
     if (response.status === 404) return null;
     return response;
   }
 
   /** List the pins the instance holds for this principal. */
+  /** Every published version of a slug, newest first (hasna/apps#1630). */
+  async listSkillVersions(slug: string): Promise<RemoteSkillVersion[]> {
+    const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/versions`, undefined, { domainNotFoundCodes: ["SKILL_NOT_FOUND"] });
+    if (response.status === 404) return [];
+    if (!response.ok) throw new Error(`versions request failed: ${response.status}`);
+    const body = (await response.json()) as { versions?: RemoteSkillVersion[] };
+    return Array.isArray(body.versions) ? body.versions : [];
+  }
+
+  /** One version's manifest, or null when the slug@version was never published. */
+  async getSkillVersion(slug: string, version: string): Promise<RemoteSkillVersion | null> {
+    const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/versions/${encodeURIComponent(version)}`, undefined, { domainNotFoundCodes: ["SKILL_NOT_FOUND", "SKILL_VERSION_NOT_FOUND"] });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`version request failed: ${response.status}`);
+    return (await response.json()) as RemoteSkillVersion;
+  }
+
   async listPins(): Promise<RemotePin[]> {
     const response = await this.requestNewRoute("/api/v1/pins");
     return normalizePinList(await response.json());

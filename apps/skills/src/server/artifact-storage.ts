@@ -11,21 +11,28 @@ export interface ArtifactBody {
   contentType: string;
 }
 
+/** The slice of the AWS client the storage uses; injectable so tests can stand in an in-memory bucket. */
+export interface S3ClientLike {
+  send(command: PutObjectCommand | GetObjectCommand | DeleteObjectCommand): Promise<{ Body?: unknown }>;
+}
+
 export interface ArtifactStorageOptions {
   bucket?: string;
   prefix?: string;
   region?: string;
+  /** Overrides the real S3 client (tests). Ignored when no bucket is configured. */
+  client?: S3ClientLike;
 }
 
 export class ArtifactStorage {
   private bucket?: string;
   private prefix: string;
-  private s3?: AwsS3Client;
+  private s3?: S3ClientLike;
 
   constructor(options: ArtifactStorageOptions = {}) {
     this.bucket = options.bucket;
     this.prefix = (options.prefix || "skills/artifacts").replace(/^\/+|\/+$/g, "");
-    this.s3 = this.bucket ? new AwsS3Client({ region: options.region || process.env.AWS_REGION || "us-east-1" }) : undefined;
+    this.s3 = this.bucket ? options.client ?? new AwsS3Client({ region: options.region || process.env.AWS_REGION || "us-east-1" }) : undefined;
   }
 
   get usesS3(): boolean {
@@ -203,6 +210,44 @@ export class ArtifactStorage {
 
   private keyFor(run: ServerRunRecord, relativePath: string): string {
     return this.objectKeyFor(run.orgId, run.id, relativePath);
+  }
+
+  /**
+   * Version-addressed copy of a published bundle plus its manifest (hasna/apps#1630):
+   *   <prefix>/skills/<org>/<slug>/<version>/bundle.tar.gz
+   *   <prefix>/skills/<org>/<slug>/<version>/manifest.json
+   * The content-addressed object under bundles/ stays the read path (dedupe); these keys
+   * are the durable, browsable history and are never deleted by orphan collection.
+   * Returns the placement recorded on the version row; in db mode nothing is written.
+   */
+  async putVersionObjects(
+    orgId: string,
+    slug: string,
+    version: string,
+    bytes: OwnedBytes,
+    manifest: Record<string, unknown>,
+    contentType = "application/gzip",
+  ): Promise<{ storageKind: BlobStorageKind; storageKey?: string }> {
+    if (!this.bucket || !this.s3) return { storageKind: "db" };
+    const key = this.versionKeyFor(orgId, slug, version, "bundle.tar.gz");
+    await this.s3.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: contentType }));
+    await this.s3.send(new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: this.versionKeyFor(orgId, slug, version, "manifest.json"),
+      Body: new TextEncoder().encode(JSON.stringify(manifest, null, 2)),
+      ContentType: "application/json",
+    }));
+    return { storageKind: "s3", storageKey: key };
+  }
+
+  /** Where putVersionObjects WOULD place a version, without writing: recorded on the row before the objects exist. */
+  versionPlacement(orgId: string, slug: string, version: string): { storageKind: BlobStorageKind; storageKey?: string } {
+    if (!this.bucket || !this.s3) return { storageKind: "db" };
+    return { storageKind: "s3", storageKey: this.versionKeyFor(orgId, slug, version, "bundle.tar.gz") };
+  }
+
+  versionKeyFor(orgId: string, slug: string, version: string, file: string): string {
+    return `${this.prefix}/skills/${encodeURIComponent(orgId)}/${encodeURIComponent(slug)}/${encodeURIComponent(version)}/${file}`;
   }
 
   private bundleKeyFor(orgId: string, sha256: string): string {

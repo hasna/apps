@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.2.0
+
+### Minor Changes
+
+- Versioned, immutable skill artefacts (hasna/apps#1630, workspace-remote design; interface kept minimal for the shared kit in #1631). `skills push` now sends a version manifest beside the bundle (sha256 of the bundle and of every file, byte counts, provenance: machine, agent id, CLI version, git remote and sha when inside a repo, packed_at). The server records every `name@version` in a new `skills_versions` table (migration 0006) and, when an S3 bucket is configured, stores a version-addressed copy at `<prefix>/skills/<org>/<slug>/<version>/bundle.tar.gz` plus `manifest.json` next to the content-addressed object. A version is immutable: re-publishing the same `name@version` with the same digest is idempotent, with a different digest it is refused with `409 SKILL_VERSION_EXISTS` unless `skills push --force-new-version` is given, which publishes under the next patch version. Bundles referenced by a version are never garbage-collected by a later re-publish or purge. New routes `GET /api/v1/skills/:slug/versions`, `.../versions/:version`, `.../versions/:version/bundle` (sha256 verified before serving; `X-Skill-Version` header). Existing registry routes are unchanged.
+- `skills versions <name>` lists the published versions of a skill; `skills pull name@version` restores an exact version, proving the received bytes against the digest the registry recorded for that version (a historic version carries no revision id in its marker); `skills pin name@version` fetches and verifies that exact version into the machine corpus before recording it in the project pins, and is refused without a configured instance.
+- A version-addressed object write that fails after the row is committed answers `502 VERSION_OBJECTS_WRITE_FAILED` and heals: re-running the same push re-writes the objects (identical bytes by digest), rather than returning 201 and writing nothing.
+- Version strings are validated on publish and on the version routes (`400 INVALID_VERSION`: letters, digits, `.`, `_`, `+`, `-`, no `..`, at most 128 characters). A deleted slug withholds its version bundles (`410 SKILL_DELETED`) exactly as it withholds the current one; the version list stays readable.
+- The bundled corpus is seeded into the hosted registry on boot as `slug@<package version>` (idempotent; `HASNA_SKILLS_SEED_BUNDLED_CORPUS=0` disables it), so the registry and the bucket become the source of truth instead of the package's static skill directory.
+- Bundle format stays the existing deterministic gzipped ustar (`.tar.gz`, mtime 0, sorted entries) rather than switching to zstd, so digests of already-published bundles keep their identity.
+
+### Patch Changes
+
+- `skills setup-info` reports the machine corpus directory it actually reads (`resolveCorpusRoot()`), not the package's `node_modules` skill directory (hasna/apps#1632).
+- `skills feedback` in API mode (`SKILLS_API_URL` / `HASNA_SKILLS_API_URL` set) appends to `feedback.jsonl` in the data directory instead of opening a local SQLite database; api mode is detected from the env vars or the `apiUrl` written by `skills setup --api-url` / `skills login` (hasna/apps#1613, #1632).
+
 ## 0.1.72
 
 ### Patch Changes

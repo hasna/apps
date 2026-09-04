@@ -13,6 +13,9 @@ import {
   removeSkill,
   type InstallResult,
 } from "../../lib/installer.js";
+import { getProjectConfigPath, listPinnedSkills, pinProjectSkill } from "../../lib/project-state.js";
+import { normalizeSkillName } from "../../lib/utils.js";
+import { pullSkills, splitNameVersion } from "../../lib/pull.js";
 
 export function registerInstall(parent: Command) {
   parent
@@ -139,10 +142,14 @@ async function handlePin(skills: string[], options: any) {
   if (useRemote && !remoteRegistry) remoteRegistry = await loadRemoteRegistry();
   const remoteByName = new Map((remoteRegistry ?? []).map((skill) => [skill.name, skill]));
   for (let i = 0; i < total; i++) {
+    // `name@version` pins an exact published version (hasna/apps#1630); the pin record keeps it.
+    const { name: pinName, version: pinnedVersion } = splitNameVersion(skills[i]);
     if (total > 1 && !options.json) process.stdout.write(`[${i + 1}/${total}] Pinning ${skills[i]}...`);
-    const result = useRemote
-      ? pinRemoteSkill(skills[i], remoteByName, options.overwrite)
-      : installSkill(skills[i], { overwrite: options.overwrite });
+    const result = pinnedVersion
+      ? await pinExactVersion(pinName, pinnedVersion, { useRemote, overwrite: options.overwrite })
+      : useRemote
+        ? pinRemoteSkill(pinName, remoteByName, options.overwrite)
+        : installSkill(pinName, { overwrite: options.overwrite });
     results.push(result);
     if (total > 1 && !options.json) console.log(result.success ? " done" : ` ${chalk.red("failed")}`);
   }
@@ -233,4 +240,33 @@ function handlePinsList(options: { json: boolean }) {
   }
   console.log(chalk.bold(`\nPinned skills (${pins.length}):\n`));
   for (const name of pins) console.log(`  ${chalk.cyan(name)}`);
+}
+
+/**
+ * `skills pin name@version` (hasna/apps#1630): the exact version is FETCHED, digest-verified,
+ * and written to the machine corpus before the pin is recorded, so the project pin names a
+ * version this machine actually holds. Without an instance there is nothing to fetch from,
+ * and a pin that claims a version it never saw is refused rather than written.
+ */
+export async function pinExactVersion(
+  name: string,
+  version: string,
+  options: { useRemote: boolean; overwrite: boolean; pull?: (spec: string) => Promise<{ success: boolean; version?: string; error?: string }> },
+): Promise<InstallResult> {
+  if (!options.useRemote) {
+    return { skill: name, success: false, error: `Pinning '${name}@${version}' needs a configured Skills instance to fetch that version from (skills login / SKILLS_API_URL).`, mode: "pin" };
+  }
+  const pull = options.pull ?? (async (spec: string) => (await pullSkills({ names: [spec] })).results[0] ?? { success: false, error: "pull returned no result" });
+  const pulled = await pull(`${name}@${version}`);
+  if (!pulled.success) {
+    return { skill: name, success: false, error: pulled.error ?? `could not fetch '${name}@${version}'`, mode: "pin", source: "remote" };
+  }
+  const already = new Set(listPinnedSkills());
+  const normalized = normalizeSkillName(name);
+  if (already.has(normalized) && !options.overwrite) {
+    return { skill: name, success: false, error: "Already pinned. Use --overwrite to refresh.", path: getProjectConfigPath(), mode: "pin", source: "remote", version: pulled.version ?? version };
+  }
+  const recorded = pulled.version ?? version;
+  pinProjectSkill(normalized, { version: recorded, source: "remote" });
+  return { skill: name, success: true, path: getProjectConfigPath(), mode: "pin", source: "remote", version: recorded };
 }

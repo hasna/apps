@@ -68,6 +68,26 @@ export class SkillRevisionConflictError extends Error {
   }
 }
 
+/**
+ * A publish was refused because (org, slug, version) already exists with a DIFFERENT bundle
+ * digest. Versions are immutable (hasna/apps#1630): the same digest is idempotent, a new
+ * digest needs a new version. Carries the stored digest so the client can say which.
+ */
+export class SkillVersionExistsError extends Error {
+  constructor(
+    readonly slug: string,
+    readonly version: string,
+    readonly existingSha256: string,
+    readonly attemptedSha256: string,
+  ) {
+    super(
+      `version conflict for '${slug}@${version}': already published with bundle ${existingSha256}, ` +
+        `refusing to overwrite it with ${attemptedSha256}. Publish a new version instead.`,
+    );
+    this.name = "SkillVersionExistsError";
+  }
+}
+
 export interface ApiPrincipal {
   apiKeyId: string;
   orgId: string;
@@ -227,6 +247,25 @@ export interface ServerSkillBundle {
   createdAt: string;
 }
 
+/**
+ * One immutable published version of a skill (hasna/apps#1630). The registry row is the
+ * mutable "current" pointer; these rows are the history: each (org, slug, version) exactly once,
+ * pointing at a content-addressed bundle that orphan collection must keep alive.
+ */
+export interface ServerSkillVersion {
+  orgId: string;
+  slug: string;
+  version: string;
+  bundleSha256: string;
+  bundleByteSize: number;
+  storageKind: BlobStorageKind;
+  storageKey?: string;
+  /** Files (path -> sha256), byte counts and provenance the publisher sent; never secret. */
+  manifest: Record<string, unknown>;
+  publishedByUserId?: string;
+  createdAt: string;
+}
+
 export interface PublishSkillInput {
   principal: ApiPrincipal;
   slug: string;
@@ -240,6 +279,13 @@ export interface PublishSkillInput {
   skillMd?: string;
   /** Omitted for a metadata-only publish or update. */
   bundle?: Omit<ServerSkillBundle, "orgId" | "createdAt">;
+  /**
+   * Publisher-supplied version manifest (file digests, provenance). Stored verbatim on the
+   * version row when `version` is set; ignored otherwise.
+   */
+  versionManifest?: Record<string, unknown>;
+  /** Version-addressed object key the API wrote (S3 mode); recorded on the version row. */
+  versionStorage?: { storageKind: BlobStorageKind; storageKey?: string };
   /**
    * Optimistic-concurrency guard (todos d061fcda): the revision_id (ETag) the writer
    * read. A publish against an existing, LIVE row requires the guard to name that row's
@@ -385,6 +431,9 @@ export interface SkillsProductStore {
    */
   purgeExpiredTombstones(principal: ApiPrincipal): Promise<ServerSkillRecord[]>;
   getSkillBundle(principal: ApiPrincipal, sha256: string): Promise<ServerSkillBundle | null>;
+  /** Every published version of a slug, newest first (hasna/apps#1630). */
+  listSkillVersions(principal: ApiPrincipal, slug: string): Promise<ServerSkillVersion[]>;
+  getSkillVersion(principal: ApiPrincipal, slug: string, version: string): Promise<ServerSkillVersion | null>;
 
   /*
    * Pins.

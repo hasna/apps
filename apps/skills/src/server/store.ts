@@ -11,14 +11,15 @@ import type {
   ServerRunRecord,
   ServerSkillBundle,
   ServerSkillRecord,
+  ServerSkillVersion,
   SkillsProductStore,
   StoreBackendInfo,
   UpdateSkillPatch,
 } from "./types.js";
-import { SkillRevisionConflictError, StaleLeaseGenerationError } from "./types.js";
+import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError } from "./types.js";
 import { hashApiKey, publicPrincipal } from "./auth.js";
 import { resolveDatabaseTarget, type DatabaseTarget } from "./database-url.js";
-import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle, parseJsonArray, runId } from "./rows.js";
+import { artifactId, nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle, rowToSkillVersion, parseJsonArray, runId } from "./rows.js";
 import { revisionIdOfRecord, type RevisionContent } from "../lib/revision.js";
 import { SqliteSkillsStore, type SqliteStoreOptions } from "./sqlite-store.js";
 
@@ -127,6 +128,7 @@ export class MemorySkillsStore implements SkillsProductStore {
   private idempotency = new Map<string, string>();
   private skills = new Map<string, ServerSkillRecord>();
   private bundles = new Map<string, ServerSkillBundle>();
+  private versions = new Map<string, ServerSkillVersion>();
   private pins = new Map<string, ServerPin>();
 
   constructor(apiKeys: Array<{ token: string; principal?: Partial<ApiPrincipal> }> = []) {
@@ -270,6 +272,15 @@ export class MemorySkillsStore implements SkillsProductStore {
     if (previous && !previous.tombstonedAt && input.expectedRevisionId !== previous.revisionId) {
       throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, previous.revisionId);
     }
+    // Immutable versions (hasna/apps#1630): the digest a version was first published with is
+    // the digest it keeps. Checked before any write so a refused publish leaves nothing behind.
+    const versionSha = input.bundle?.sha256 ?? previous?.bundleSha256;
+    if (input.version && versionSha) {
+      const existing = this.versions.get(versionKey(input.principal.orgId, input.slug, input.version));
+      if (existing && existing.bundleSha256 !== versionSha) {
+        throw new SkillVersionExistsError(input.slug, input.version, existing.bundleSha256, versionSha);
+      }
+    }
     if (input.bundle) {
       const bundleMapKey = skillKey(input.principal.orgId, input.bundle.sha256);
       // Overwrite rather than skip, matching the SQL backends' DO UPDATE: the digest
@@ -313,10 +324,35 @@ export class MemorySkillsStore implements SkillsProductStore {
       revisionNumber: (previous?.revisionNumber ?? 0) + 1,
     };
     this.skills.set(key, record);
+    if (input.version && versionSha && !this.versions.has(versionKey(input.principal.orgId, input.slug, input.version))) {
+      this.versions.set(versionKey(input.principal.orgId, input.slug, input.version), {
+        orgId: input.principal.orgId,
+        slug: input.slug,
+        version: input.version,
+        bundleSha256: versionSha,
+        bundleByteSize: input.bundle?.byteSize ?? previous?.bundleByteSize ?? 0,
+        storageKind: input.versionStorage?.storageKind ?? "db",
+        ...(input.versionStorage?.storageKey ? { storageKey: input.versionStorage.storageKey } : {}),
+        manifest: { ...(input.versionManifest ?? {}) },
+        ...(input.principal.userId ? { publishedByUserId: input.principal.userId } : {}),
+        createdAt: now,
+      });
+    }
     if (previous?.bundleSha256 && input.bundle && previous.bundleSha256 !== input.bundle.sha256) {
       this.collectOrphanBundle(input.principal.orgId, previous.bundleSha256);
     }
     return record;
+  }
+
+  async listSkillVersions(principal: ApiPrincipal, slug: string): Promise<ServerSkillVersion[]> {
+    return Array.from(this.versions.values())
+      .filter((v) => v.orgId === principal.orgId && v.slug === slug)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.version.localeCompare(a.version));
+  }
+
+  async getSkillVersion(principal: ApiPrincipal, slug: string, version: string): Promise<ServerSkillVersion | null> {
+    const found = this.versions.get(versionKey(principal.orgId, slug, version));
+    return found && found.orgId === principal.orgId ? found : null;
   }
 
   async listSkills(principal: ApiPrincipal): Promise<ServerSkillRecord[]> {
@@ -449,7 +485,8 @@ export class MemorySkillsStore implements SkillsProductStore {
   }
 
   private collectOrphanBundle(orgId: string, sha256: string): void {
-    const referenced = Array.from(this.skills.values()).some((skill) => skill.orgId === orgId && skill.bundleSha256 === sha256);
+    const referenced = Array.from(this.skills.values()).some((skill) => skill.orgId === orgId && skill.bundleSha256 === sha256)
+      || Array.from(this.versions.values()).some((v) => v.orgId === orgId && v.bundleSha256 === sha256);
     if (!referenced) this.bundles.delete(skillKey(orgId, sha256));
   }
 
@@ -492,6 +529,11 @@ function skillKey(orgId: string, slug: string): string {
  */
 function pinKey(orgId: string, principal: string, slug: string): string {
   return `${orgId.length}:${orgId}:${principal.length}:${principal}:${slug}`;
+}
+
+/** Composite map key for a version row, length-prefixed for the same reason pinKey is. */
+function versionKey(orgId: string, slug: string, version: string): string {
+  return `${orgId.length}:${orgId}:${slug.length}:${slug}:${version}`;
 }
 
 export class PostgresSkillsStore implements SkillsProductStore {
@@ -864,6 +906,16 @@ export class PostgresSkillsStore implements SkillsProductStore {
         throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, previousRevisionId);
       }
       const carriedSha = input.bundle?.sha256 ?? previousSha;
+      // Immutable versions (hasna/apps#1630), checked before any write.
+      if (input.version && carriedSha) {
+        const existingVersion = await tx`
+          SELECT bundle_sha256 FROM skills_versions WHERE org_id = ${orgId} AND slug = ${input.slug} AND version = ${input.version} LIMIT 1
+        `;
+        const existingSha = existingVersion[0] && typeof existingVersion[0].bundle_sha256 === "string" ? String(existingVersion[0].bundle_sha256) : null;
+        if (existingSha && existingSha !== carriedSha) {
+          throw new SkillVersionExistsError(input.slug, input.version, existingSha, carriedSha);
+        }
+      }
       // The carried size travels with the carried digest into the revision hash: the row
       // keeps its old size on a metadata-only re-publish, and a client recomputing the
       // revision id from the payload (which carries both) must get the same value.
@@ -936,11 +988,20 @@ export class PostgresSkillsStore implements SkillsProductStore {
         const currentId = current[0] && typeof current[0].revision_id === "string" ? String(current[0].revision_id) : null;
         throw new SkillRevisionConflictError(input.slug, input.expectedRevisionId, currentId);
       }
+      if (input.version && carriedSha) {
+        await tx`
+          INSERT INTO skills_versions (org_id, slug, version, bundle_sha256, bundle_byte_size, storage_kind, storage_key, manifest_json, published_by_user_id)
+          VALUES (${orgId}, ${input.slug}, ${input.version}, ${carriedSha}, ${carriedSize ?? 0}, ${input.versionStorage?.storageKind ?? "db"},
+                  ${input.versionStorage?.storageKey ?? null}, ${JSON.stringify(input.versionManifest ?? {})}::jsonb, ${input.principal.userId})
+          ON CONFLICT (org_id, slug, version) DO NOTHING
+        `;
+      }
       if (previousSha && input.bundle && previousSha !== input.bundle.sha256) {
         await tx`
           DELETE FROM skills_bundles
           WHERE org_id = ${orgId} AND sha256 = ${previousSha}
             AND NOT EXISTS (SELECT 1 FROM skills_registry WHERE org_id = ${orgId} AND bundle_sha256 = ${previousSha})
+            AND NOT EXISTS (SELECT 1 FROM skills_versions WHERE org_id = ${orgId} AND bundle_sha256 = ${previousSha})
         `;
       }
 
@@ -1066,6 +1127,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
             DELETE FROM skills_bundles
             WHERE org_id = ${principal.orgId} AND sha256 = ${record.bundleSha256}
               AND NOT EXISTS (SELECT 1 FROM skills_registry WHERE org_id = ${principal.orgId} AND bundle_sha256 = ${record.bundleSha256})
+              AND NOT EXISTS (SELECT 1 FROM skills_versions WHERE org_id = ${principal.orgId} AND bundle_sha256 = ${record.bundleSha256})
           `;
         }
         purged.push(record);
@@ -1077,6 +1139,21 @@ export class PostgresSkillsStore implements SkillsProductStore {
   async getSkillBundle(principal: ApiPrincipal, sha256: string): Promise<ServerSkillBundle | null> {
     const rows = await this.sql`SELECT * FROM skills_bundles WHERE org_id = ${principal.orgId} AND sha256 = ${sha256} LIMIT 1`;
     return rows[0] ? rowToSkillBundle(rows[0]) : null;
+  }
+
+  async listSkillVersions(principal: ApiPrincipal, slug: string): Promise<ServerSkillVersion[]> {
+    const rows = await this.sql`
+      SELECT * FROM skills_versions WHERE org_id = ${principal.orgId} AND slug = ${slug}
+      ORDER BY created_at DESC, version DESC
+    `;
+    return rows.map((row) => rowToSkillVersion(row as Record<string, unknown>));
+  }
+
+  async getSkillVersion(principal: ApiPrincipal, slug: string, version: string): Promise<ServerSkillVersion | null> {
+    const rows = await this.sql`
+      SELECT * FROM skills_versions WHERE org_id = ${principal.orgId} AND slug = ${slug} AND version = ${version} LIMIT 1
+    `;
+    return rows[0] ? rowToSkillVersion(rows[0] as Record<string, unknown>) : null;
   }
 
   /*
@@ -1167,6 +1244,7 @@ export class PostgresSkillsStore implements SkillsProductStore {
       DELETE FROM skills_bundles
       WHERE org_id = ${orgId} AND sha256 = ${sha256}
         AND NOT EXISTS (SELECT 1 FROM skills_registry WHERE org_id = ${orgId} AND bundle_sha256 = ${sha256})
+        AND NOT EXISTS (SELECT 1 FROM skills_versions WHERE org_id = ${orgId} AND bundle_sha256 = ${sha256})
     `;
   }
 }

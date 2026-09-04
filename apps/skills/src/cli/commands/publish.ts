@@ -7,7 +7,9 @@
  * otherwise decides how a skill reaches an agent once it is on a machine: this
  * command's job ends when the server has the bytes.
  */
+import { execFileSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
+import { hostname } from "os";
 import { join } from "path";
 
 import chalk from "chalk";
@@ -19,7 +21,8 @@ import {
   validatePortableSkillDirectory,
 } from "../../lib/portable-skills.js";
 import { RemoteSkillsClient, createRemoteSkillsClient } from "../../lib/remote-client.js";
-import { packSkillBundle, type PackedSkillBundle } from "../../lib/skill-bundle.js";
+import pkg from "../../../package.json" with { type: "json" };
+import { collectSkillBundleEntries, packSkillBundle, sha256Hex, type PackedSkillBundle } from "../../lib/skill-bundle.js";
 
 /**
  * Client-side ceiling on the *unpacked* sources.
@@ -36,6 +39,11 @@ export interface PushSkillOptions {
   dryRun?: boolean;
   json?: boolean;
   version?: string;
+  /**
+   * When the instance already holds this name@version with different content, publish under
+   * the next patch version instead of failing (hasna/apps#1630).
+   */
+  forceNewVersion?: boolean;
   client?: RemoteSkillsClient | null;
   /** Overrides the corpus location. Tests only. */
   rootDir?: string;
@@ -54,6 +62,10 @@ export interface PushSkillResult {
   published: boolean;
   status?: number;
   response?: unknown;
+  /** The version the instance recorded (after any --force-new-version bump). */
+  version?: string;
+  /** Per-file digests and provenance sent alongside the bundle. */
+  manifest?: SkillVersionManifest;
 }
 
 export class PushSkillError extends Error {
@@ -67,14 +79,16 @@ export function registerPublish(parent: Command) {
     .command("push")
     .argument("<name>", "Name of a skill in the local corpus (~/.hasna/skills/installed or the migrated ~/.hasna/skills/skills)")
     .option("--version <version>", "Override the version recorded on the instance")
+    .option("--force-new-version", "If name@version already exists with different content, publish as the next patch version", false)
     .option("--dry-run", "Pack and validate without uploading", false)
     .option("--json", "Output result as JSON", false)
     .description("Publish a local skill to the configured skills instance")
-    .action(async (name: string, options: { version?: string; dryRun: boolean; json: boolean }) => {
+    .action(async (name: string, options: { version?: string; forceNewVersion: boolean; dryRun: boolean; json: boolean }) => {
       try {
         const result = await pushSkill(name, {
           dryRun: options.dryRun,
           json: options.json,
+          forceNewVersion: options.forceNewVersion,
           ...(options.version ? { version: options.version } : {}),
         });
         if (options.json) {
@@ -119,6 +133,7 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
 
   const manifest = readPortableSkillManifest(skill.path, skill.name);
   const packed = packSkillBundle(skill.path, { maxUnpackedBytes: MAX_UNPACKED_BYTES });
+  const versionManifest = buildVersionManifest(skill.path, packed);
   const skillMdPath = join(skill.path, "SKILL.md");
   const skillMd = existsSync(skillMdPath) ? readFileSync(skillMdPath, "utf-8") : undefined;
 
@@ -132,6 +147,7 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
     unpackedByteSize: packed.unpackedByteSize,
     paths: packed.paths,
     published: false,
+    manifest: versionManifest,
   };
 
   if (options.dryRun) return base;
@@ -150,36 +166,28 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
   // of silently overwriting it.
   const current = await client.getSkill(skill.name);
   const ifMatch = current && typeof current.revisionId === "string" && current.revisionId ? current.revisionId : undefined;
-  const response = await client.publishSkill(
-    {
-      slug: skill.name,
-      displayName: manifest.displayName ?? skill.displayName,
-      description: manifest.description,
-      category: manifest.category ?? "Development Tools",
-      tags: manifest.tags ?? [],
-      // Absent `kind` is a doc-only publish, never a claimed `executable` (task
-      // 568efaaa / P-01641): the row's kind drives pull -> sync, and coercing an absent
-      // kind to "executable" laundered full-content skills into pointer stubs. A skill
-      // whose manifest does not declare executability is consumed as prose; runnable
-      // skills declare `kind: executable` (declaration wins).
-      kind: manifest.kind ?? "instruction",
-      version: options.version ?? manifest.version,
-      source: "custom",
-      // Declared so the server can reject a body that did not arrive intact, rather than
-      // storing a truncated tarball under a digest computed from the truncation. The
-      // contentHash is the same canonical digest — named for parity with the CI bundle
-      // manifests, so a bundle pushed by hand and one built by CI agree by construction.
-      bundleSha256: packed.sha256,
-      contentHash: packed.sha256,
-      ...(skillMd ? { skillMd } : {}),
-    },
-    packed.bytes,
-    ifMatch,
-  );
-
-  const payload = await readBody(response);
+  let version = options.version ?? manifest.version ?? "0.1.0";
+  let response = await publishOnce(client, skill, manifest, packed, skillMd, versionManifest, version, ifMatch);
+  let payload = await readBody(response);
+  // Immutable versions (hasna/apps#1630): the instance refuses to overwrite name@version with
+  // different content. With --force-new-version we retry once under the next patch version;
+  // without it we say what to do instead of guessing.
+  if (response.status === 409 && codeOf(payload) === "SKILL_VERSION_EXISTS") {
+    if (!options.forceNewVersion) {
+      throw new PushSkillError(
+        `Publishing '${skill.name}@${version}' failed: that version already exists on the instance with different content.`,
+        [
+          "code: SKILL_VERSION_EXISTS",
+          `Bump the version in skill.json, pass --version <new>, or use --force-new-version to publish as ${bumpPatch(version)}.`,
+        ],
+      );
+    }
+    version = bumpPatch(version);
+    response = await publishOnce(client, skill, manifest, packed, skillMd, versionManifest, version, ifMatch);
+    payload = await readBody(response);
+  }
   if (!response.ok) {
-    const code = typeof payload === "object" && payload && "code" in payload ? String((payload as { code: unknown }).code) : undefined;
+    const code = codeOf(payload);
     if (response.status === 409 || code === "REVISION_CONFLICT") {
       throw new PushSkillError(
         `Publishing '${skill.name}' failed: the instance serves a NEWER revision of this skill. ` +
@@ -196,7 +204,96 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
     );
   }
 
-  return { ...base, published: true, status: response.status, response: payload };
+  return { ...base, published: true, status: response.status, response: payload, version };
+}
+
+async function publishOnce(
+  client: RemoteSkillsClient,
+  skill: { name: string; displayName: string },
+  manifest: ReturnType<typeof readPortableSkillManifest>,
+  packed: PackedSkillBundle,
+  skillMd: string | undefined,
+  versionManifest: SkillVersionManifest,
+  version: string,
+  ifMatch: string | undefined,
+): Promise<Response> {
+  return client.publishSkill(
+    {
+      slug: skill.name,
+      displayName: manifest.displayName ?? skill.displayName,
+      description: manifest.description,
+      category: manifest.category ?? "Development Tools",
+      tags: manifest.tags ?? [],
+      kind: manifest.kind ?? "instruction",
+      version,
+      source: "custom",
+      bundleSha256: packed.sha256,
+      contentHash: packed.sha256,
+      versionManifest: { ...versionManifest, version },
+      ...(skillMd ? { skillMd } : {}),
+    },
+    packed.bytes,
+    ifMatch,
+  );
+}
+
+function codeOf(payload: unknown): string | undefined {
+  return typeof payload === "object" && payload && "code" in payload ? String((payload as { code: unknown }).code) : undefined;
+}
+
+/** 1.2.3 -> 1.2.4; anything non-semver gets a numeric suffix so the bump is still unique. */
+export function bumpPatch(version: string): string {
+  const match = /^(\d+)\.(\d+)\.(\d+)(.*)$/.exec(version);
+  if (!match) return `${version}.1`;
+  return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
+}
+
+export interface SkillVersionManifest {
+  files: Array<{ path: string; sha256: string; byteSize: number }>;
+  fileCount: number;
+  unpackedByteSize: number;
+  bundleSha256: string;
+  provenance: {
+    machine: string;
+    agent: string | null;
+    cliVersion: string;
+    gitRemote: string | null;
+    gitSha: string | null;
+    packedAt: string;
+  };
+}
+
+/**
+ * What travels beside the bundle as manifest.json (hasna/apps#1630): a digest per file so a
+ * pull can be checked file by file, and where the bytes came from. No secrets, no absolute
+ * paths beyond the machine name.
+ */
+export function buildVersionManifest(skillDir: string, packed: PackedSkillBundle): SkillVersionManifest {
+  // Already in the bundle's own (codepoint) order, so manifest and archive list files identically.
+  const entries = collectSkillBundleEntries(skillDir);
+  return {
+    files: entries.map((entry) => ({ path: entry.path, sha256: sha256Hex(entry.bytes), byteSize: entry.bytes.byteLength })),
+    fileCount: packed.fileCount,
+    unpackedByteSize: packed.unpackedByteSize,
+    bundleSha256: packed.sha256,
+    provenance: {
+      machine: hostname(),
+      agent: process.env.SKILLS_AGENT_ID ?? process.env.HASNA_AGENT_ID ?? process.env.AGENT_ID ?? null,
+      cliVersion: pkg.version,
+      gitRemote: gitValue(skillDir, ["remote", "get-url", "origin"]),
+      gitSha: gitValue(skillDir, ["rev-parse", "HEAD"]),
+      packedAt: new Date().toISOString(),
+    },
+  };
+}
+
+function gitValue(dir: string, args: string[]): string | null {
+  try {
+    const out = execFileSync("git", ["-C", dir, ...args], { stdio: ["ignore", "pipe", "ignore"], encoding: "utf-8" }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
 }
 
 function printHuman(result: PushSkillResult): void {

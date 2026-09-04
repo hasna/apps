@@ -7,6 +7,7 @@ import {
 } from "../../lib/registry-sync.js";
 import type { SkillRegistryProfile } from "../../lib/registry.js";
 import { pullSkills, PullSkillError, type PulledSkillResult } from "../../lib/pull.js";
+import { createRemoteSkillsClient } from "../../lib/remote-client.js";
 
 export function registerRegistry(parent: Command) {
   const registry = parent
@@ -84,7 +85,7 @@ async function handleRegistrySync(options: {
 export function registerPull(parent: Command) {
   parent
     .command("pull")
-    .argument("[names...]", "Skills to pull from the configured instance")
+    .argument("[names...]", "Skills to pull from the configured instance (name or name@version)")
     .option("--all", "Pull every skill the instance serves", false)
     .option("--for-machine", "Prepare this machine with the instance's full catalog (implies --all)", false)
     .option("--json", "Output results as JSON", false)
@@ -128,4 +129,47 @@ function printPullHuman(results: PulledSkillResult[]): void {
   }
   const ok = results.filter((result) => result.success).length;
   console.log(chalk.dim(`\n${ok}/${results.length} pulled into ~/.hasna/skills/installed`));
+}
+
+/**
+ * `skills versions <name>` — every immutable published version of a skill on the configured
+ * instance, newest first, with the one the instance currently serves marked (hasna/apps#1630).
+ */
+export function registerVersions(parent: Command) {
+  parent
+    .command("versions")
+    .argument("<name>", "Skill name on the configured instance")
+    .option("--json", "Output as JSON", false)
+    .description("List the published versions of a skill on the configured instance")
+    .action(async (name: string, options: { json: boolean }) => {
+      const client = createRemoteSkillsClient();
+      if (!client) {
+        const message = "No API key configured, so there is no instance to list versions from.";
+        if (options.json) console.log(JSON.stringify({ error: message }, null, 2));
+        else console.error(chalk.red(message));
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        const versions = await client.listSkillVersions(name.trim());
+        if (options.json) {
+          console.log(JSON.stringify({ slug: name.trim(), versions }, null, 2));
+          return;
+        }
+        if (!versions.length) {
+          console.log(chalk.dim(`No published versions of '${name}' on the configured instance.`));
+          return;
+        }
+        console.log(chalk.bold(`\nVersions of ${name}\n`));
+        for (const version of versions) {
+          const marker = version.current ? chalk.green(" (current)") : "";
+          console.log(`  ${chalk.cyan(version.version)}${marker}  ${chalk.dim(version.bundleSha256.slice(0, 12))}  ${chalk.dim(version.createdAt)}`);
+        }
+        console.log("");
+      } catch (error) {
+        if (options.json) console.log(JSON.stringify({ error: (error as Error).message }, null, 2));
+        else console.error(chalk.red((error as Error).message));
+        process.exitCode = 1;
+      }
+    });
 }

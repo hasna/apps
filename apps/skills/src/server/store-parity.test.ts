@@ -39,7 +39,12 @@ function digestOf(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-function publishInput(principal: ApiPrincipal, slug: string, marker: string, bytes?: OwnedBytes) {
+/**
+ * `version` defaults to 1.0.0. Pass a different one for a republish with different bytes
+ * (versions are immutable, hasna/apps#1630) and null for an unversioned publish, which is
+ * the only kind whose superseded bundle is still collectable.
+ */
+function publishInput(principal: ApiPrincipal, slug: string, marker: string, bytes?: OwnedBytes, version: string | null = "1.0.0") {
   return {
     principal,
     slug,
@@ -49,7 +54,7 @@ function publishInput(principal: ApiPrincipal, slug: string, marker: string, byt
     tags: [marker],
     source: "custom",
     kind: "executable" as const,
-    version: "1.0.0",
+    ...(version === null ? {} : { version }),
     skillMd: `# ${marker}\n`,
     ...(bytes
       ? { bundle: { sha256: digestOf(bytes), byteSize: bytes.byteLength, contentType: "application/gzip", storageKind: "db" as const, bytes } }
@@ -254,12 +259,13 @@ for (const backend of backends) {
       try {
         const first = bundleBytes("first");
         const second = bundleBytes("second");
-        await fixture.store.publishSkill(publishInput(fixture.principal, "evolving", "first", first));
+        // Unversioned publishes: a version row would pin the first bundle (see the next test).
+        await fixture.store.publishSkill(publishInput(fixture.principal, "evolving", "first", first, null));
         const v1 = await fixture.store.getSkill(fixture.principal, "evolving");
         expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(first))).toBeTruthy();
 
         // A guarded republish: the guard names the revision the client read.
-        await fixture.store.publishSkill({ ...publishInput(fixture.principal, "evolving", "second", second), expectedRevisionId: v1!.revisionId });
+        await fixture.store.publishSkill({ ...publishInput(fixture.principal, "evolving", "second", second, null), expectedRevisionId: v1!.revisionId });
         expect(await fixture.store.getSkill(fixture.principal, "evolving")).toMatchObject({ bundleSha256: digestOf(second) });
         expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(second))).toBeTruthy();
         // The superseded blob is gone rather than accumulating on every push.
@@ -272,12 +278,43 @@ for (const backend of backends) {
       }
     });
 
+    test("a bundle referenced by an immutable version survives the republish that supersedes it", async () => {
+      const fixture = await seeded(backend);
+      try {
+        const first = bundleBytes("v-first");
+        const second = bundleBytes("v-second");
+        await fixture.store.publishSkill(publishInput(fixture.principal, "kept", "first", first, "1.0.0"));
+        const v1 = await fixture.store.getSkill(fixture.principal, "kept");
+        // Same version, different bytes: refused, and nothing changed.
+        await expect(
+          fixture.store.publishSkill({ ...publishInput(fixture.principal, "kept", "second", second, "1.0.0"), expectedRevisionId: v1!.revisionId }),
+        ).rejects.toMatchObject({ name: "SkillVersionExistsError", slug: "kept", version: "1.0.0" });
+        expect(await fixture.store.getSkill(fixture.principal, "kept")).toMatchObject({ bundleSha256: digestOf(first), revisionId: v1!.revisionId });
+        // Same version, same bytes: idempotent.
+        await fixture.store.publishSkill({ ...publishInput(fixture.principal, "kept", "first", first, "1.0.0"), expectedRevisionId: v1!.revisionId });
+        expect(await fixture.store.listSkillVersions(fixture.principal, "kept")).toHaveLength(1);
+        // A new version supersedes the row but the old bundle stays: a version references it.
+        const v2 = await fixture.store.getSkill(fixture.principal, "kept");
+        await fixture.store.publishSkill({ ...publishInput(fixture.principal, "kept", "second", second, "1.0.1"), expectedRevisionId: v2!.revisionId });
+        expect(await fixture.store.getSkillBundle(fixture.principal, digestOf(first))).toBeTruthy();
+        expect((await fixture.store.listSkillVersions(fixture.principal, "kept")).map((v) => [v.version, v.bundleSha256])).toEqual([
+          ["1.0.1", digestOf(second)],
+          ["1.0.0", digestOf(first)],
+        ]);
+        expect(await fixture.store.getSkillVersion(fixture.principal, "kept", "1.0.0")).toMatchObject({ bundleSha256: digestOf(first), bundleByteSize: first.byteLength });
+        expect(await fixture.store.getSkillVersion(fixture.otherPrincipal, "kept", "1.0.0")).toBeNull();
+        expect(await fixture.store.listSkillVersions(fixture.otherPrincipal, "kept")).toEqual([]);
+      } finally {
+        await fixture.close();
+      }
+    });
+
     test("a bundle shared by two skills survives deleting one of them", async () => {
       const fixture = await seeded(backend);
       try {
         const shared = bundleBytes("shared");
-        await fixture.store.publishSkill(publishInput(fixture.principal, "skill-one", "shared", shared));
-        await fixture.store.publishSkill(publishInput(fixture.principal, "skill-two", "shared", shared));
+        await fixture.store.publishSkill(publishInput(fixture.principal, "skill-one", "shared", shared, null));
+        await fixture.store.publishSkill(publishInput(fixture.principal, "skill-two", "shared", shared, null));
 
         // Window 0: the purge is due immediately but runs only when invoked, so the
         // tombstone semantics stay observable in between.
@@ -489,7 +526,7 @@ for (const backend of backends) {
         const v1 = await fixture.store.getSkill(fixture.principal, "guarded");
         expect(v1!.revisionNumber).toBe(1);
 
-        const v2 = await fixture.store.publishSkill({ ...publishInput(fixture.principal, "guarded", "beta", beta), expectedRevisionId: v1!.revisionId });
+        const v2 = await fixture.store.publishSkill({ ...publishInput(fixture.principal, "guarded", "beta", beta, "1.0.1"), expectedRevisionId: v1!.revisionId });
         expect(v2.revisionId).not.toBe(v1!.revisionId);
         expect(v2.revisionNumber).toBe(2);
         expect(v2.bundleSha256).toBe(digestOf(beta));
@@ -615,7 +652,7 @@ for (const backend of backends) {
         // A zero-window delete makes the purge due immediately; the next purge drops the
         // row and collects the bundle it was the last reference to.
         const purgeableBytes = bundleBytes("purgeable");
-        await fixture.store.publishSkill(publishInput(fixture.principal, "purge-me", "alpha", purgeableBytes));
+        await fixture.store.publishSkill(publishInput(fixture.principal, "purge-me", "alpha", purgeableBytes, null));
         await fixture.store.deleteSkill(fixture.principal, "purge-me", 0);
         const purged = await fixture.store.purgeExpiredTombstones(fixture.principal);
         expect(purged.map((r) => r.slug)).toContain("purge-me");

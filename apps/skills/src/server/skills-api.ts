@@ -16,10 +16,11 @@ import { ownBytes, type OwnedBytes } from "../lib/skill-bundle.js";
 import type { SkillMeta } from "../lib/registry-types.js";
 import { mergeSkillRegistryLists } from "../lib/registry-merge.js";
 import { REVISION_ID_PATTERN } from "../lib/revision.js";
+import { isValidSkillVersion, SKILL_VERSION_RULE } from "../lib/skill-version.js";
 import type { ArtifactStorage } from "./artifact-storage.js";
 import type { SkillsServerConfig } from "./config.js";
 import { getServerSkill, getServerSkillMd, listServerSkills } from "./registry.js";
-import { SkillRevisionConflictError, type ApiPrincipal, type PublishSkillInput, type ServerPin, type ServerSkillRecord, type SkillsProductStore } from "./types.js";
+import { SkillRevisionConflictError, SkillVersionExistsError, type ApiPrincipal, type PublishSkillInput, type ServerPin, type ServerSkillRecord, type ServerSkillVersion, type SkillsProductStore } from "./types.js";
 
 /**
  * Slug grammar, matching normalizePortableSkillName() in src/lib/portable-skills.ts.
@@ -468,7 +469,8 @@ export async function storePublishedSkill(
   parsed: ParsedPublish,
   expectedRevisionId?: string,
 ): Promise<ServerSkillRecord> {
-  const superseded = (await store.getSkill(principal, parsed.input.slug))?.bundleSha256;
+  const current = await store.getSkill(principal, parsed.input.slug);
+  const superseded = current?.bundleSha256;
   let input: PublishSkillInput = {
     ...parsed.input,
     principal,
@@ -477,6 +479,19 @@ export async function storePublishedSkill(
     // row's current revision. First publishes and revives over a tombstone need no guard.
     ...(expectedRevisionId ? { expectedRevisionId } : {}),
   };
+  // The optimistic-concurrency guard is answered first, the way the stores answer it: a
+  // writer that has not read the live row (no or stale If-Match) gets REVISION_CONFLICT
+  // before anything is said about versions, so the two refusals keep their existing order.
+  if (current && !current.tombstonedAt && expectedRevisionId !== current.revisionId) {
+    throw new SkillRevisionConflictError(input.slug, expectedRevisionId, current.revisionId);
+  }
+  // Immutable versions (hasna/apps#1630): name@version with a different digest is refused
+  // BEFORE any object is written, so a refused publish leaves nothing behind in the bucket.
+  const versioned = Boolean(parsed.bundleBytes && input.bundle && input.version);
+  const existingVersion = versioned ? await store.getSkillVersion(principal, input.slug, input.version!) : null;
+  if (versioned && existingVersion && existingVersion.bundleSha256 !== input.bundle!.sha256) {
+    throw new SkillVersionExistsError(input.slug, input.version!, existingVersion.bundleSha256, input.bundle!.sha256);
+  }
   if (parsed.bundleBytes && input.bundle) {
     const placement = await artifactStorage.putBundle(
       principal.orgId,
@@ -485,6 +500,39 @@ export async function storePublishedSkill(
       input.bundle.contentType,
     );
     input = { ...input, bundle: { ...input.bundle, ...placement } };
+  }
+  // A versioned publish with bytes also gets a version-addressed copy plus manifest.json,
+  // so the history is browsable and survives the content-addressed object being collected
+  // by a later re-publish. The placement is recorded on the row now; the objects are
+  // written only AFTER the row is committed, so a publish the store refuses (a writer that
+  // raced the guard above) never touches a version key that belongs to someone else's
+  // successful publish.
+  //
+  // A re-publish of the SAME digest re-writes them rather than skipping: the bytes are
+  // identical by construction (the digest is checked above), so the PUT is idempotent, and
+  // it is what heals a row whose first object write failed after the row was committed.
+  // Without this the 502 below would be permanent - the retry would find the version row
+  // and write nothing, leaving a row pointing at a key that does not exist.
+  const writeVersionObjects = versioned && Boolean(parsed.bundleBytes) && Boolean(input.bundle);
+  let versionManifest: Record<string, unknown> | undefined;
+  if (writeVersionObjects) {
+    versionManifest = existingVersion
+      ? { ...(existingVersion.manifest ?? {}), slug: input.slug, version: input.version, bundleSha256: input.bundle!.sha256, bundleByteSize: input.bundle!.byteSize }
+      : {
+          ...(input.versionManifest ?? {}),
+          slug: input.slug,
+          version: input.version,
+          bundleSha256: input.bundle!.sha256,
+          bundleByteSize: input.bundle!.byteSize,
+          publishedAt: new Date().toISOString(),
+        };
+    if (!existingVersion) {
+      input = {
+        ...input,
+        versionManifest,
+        versionStorage: artifactStorage.versionPlacement(principal.orgId, input.slug, input.version!),
+      };
+    }
   }
   let record: ServerSkillRecord;
   try {
@@ -503,6 +551,20 @@ export async function storePublishedSkill(
   }
   if (superseded && superseded !== record.bundleSha256) {
     await discardCollectedObject(store, artifactStorage, principal, superseded);
+  }
+  if (writeVersionObjects && versionManifest && parsed.bundleBytes && input.bundle) {
+    try {
+      await artifactStorage.putVersionObjects(principal.orgId, input.slug, input.version!, parsed.bundleBytes, versionManifest, input.bundle.contentType);
+    } catch (error) {
+      // The row is committed and the content-addressed object serves reads; only the
+      // browsable copy is missing. Say so rather than pretend - and because an identical
+      // re-publish rewrites the objects, retrying the same push is what repairs it.
+      throw new SkillRequestError(
+        502,
+        "VERSION_OBJECTS_WRITE_FAILED",
+        `'${input.slug}@${input.version}' was recorded but its version-addressed objects could not be written: ${(error as Error).message}. Re-run the same push to write them.`,
+      );
+    }
   }
   return record;
 }
@@ -648,9 +710,26 @@ function buildPublishInput(manifest: Record<string, unknown>): Omit<PublishSkill
     // "official" and have the CLI-side merge treat it as the bundled corpus.
     source: publishSource(optionalString(manifest.source)),
     kind: kindValue,
-    ...(optionalString(manifest.version) ? { version: optionalString(manifest.version)! } : {}),
+    ...(publishVersionOf(manifest) ? { version: publishVersionOf(manifest)! } : {}),
     ...(skillMd ? { skillMd } : {}),
+    ...(versionManifestOf(manifest) ? { versionManifest: versionManifestOf(manifest)! } : {}),
   };
+}
+
+/**
+ * The publisher's version manifest (hasna/apps#1630): file digests, byte counts, provenance.
+ * Stored verbatim on the version row and written beside the bundle as manifest.json. Bounded
+ * so a manifest cannot smuggle a second bundle through the metadata channel.
+ */
+const MAX_VERSION_MANIFEST_BYTES = 512 * 1024;
+function versionManifestOf(manifest: Record<string, unknown>): Record<string, unknown> | null {
+  const value = manifest.versionManifest;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const text = JSON.stringify(value);
+  if (byteLength(text) > MAX_VERSION_MANIFEST_BYTES) {
+    throw new SkillRequestError(413, "VERSION_MANIFEST_TOO_LARGE", `versionManifest exceeds ${MAX_VERSION_MANIFEST_BYTES} bytes`);
+  }
+  return value as Record<string, unknown>;
 }
 
 /**
@@ -692,4 +771,101 @@ function byteLength(value: string): number {
 
 function titleize(name: string): string {
   return name.replace(/[-_]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+/**
+ * Versions surface (hasna/apps#1630).
+ *
+ * GET /api/v1/skills/:slug/versions           -> { slug, current, versions: [...] }
+ * GET /api/v1/skills/:slug/versions/:version  -> one version's manifest
+ * GET /api/v1/skills/:slug/versions/:version/bundle -> the exact bytes of that version
+ *
+ * The registry row is the "current" pointer; a version's bytes come from the
+ * content-addressed bundle store so db-mode instances serve history exactly like S3 ones.
+ */
+export function skillVersionPayload(version: ServerSkillVersion, currentSha?: string): Record<string, unknown> {
+  return {
+    slug: version.slug,
+    version: version.version,
+    bundleSha256: version.bundleSha256,
+    bundleByteSize: version.bundleByteSize,
+    storageKind: version.storageKind,
+    ...(version.storageKey ? { storageKey: version.storageKey } : {}),
+    manifest: version.manifest,
+    ...(version.publishedByUserId ? { publishedByUserId: version.publishedByUserId } : {}),
+    createdAt: version.createdAt,
+    current: currentSha !== undefined && currentSha === version.bundleSha256,
+  };
+}
+
+export async function listSkillVersionsPayload(
+  store: SkillsProductStore,
+  principal: ApiPrincipal,
+  slug: string,
+): Promise<Record<string, unknown>> {
+  assertPublishableSlug(slug);
+  const record = await store.getSkill(principal, slug);
+  const versions = await store.listSkillVersions(principal, slug);
+  if (!record && !versions.length) throw new SkillRequestError(404, "SKILL_NOT_FOUND", "skill not found");
+  const currentSha = record?.bundleSha256;
+  return {
+    slug,
+    ...(record?.version ? { currentVersion: record.version } : {}),
+    ...(currentSha ? { currentBundleSha256: currentSha } : {}),
+    versions: versions.map((version) => skillVersionPayload(version, currentSha)),
+  };
+}
+
+export async function readSkillVersion(
+  store: SkillsProductStore,
+  principal: ApiPrincipal,
+  slug: string,
+  version: string,
+): Promise<ServerSkillVersion> {
+  assertPublishableSlug(slug);
+  if (!isValidSkillVersion(version)) {
+    throw new SkillRequestError(400, "INVALID_VERSION", `version '${version.slice(0, 40)}' is not a valid skill version (${SKILL_VERSION_RULE})`);
+  }
+  const found = await store.getSkillVersion(principal, slug, version);
+  if (!found) throw new SkillRequestError(404, "SKILL_VERSION_NOT_FOUND", `no published version '${version}' of '${slug}'`);
+  return found;
+}
+
+export async function readSkillVersionBundle(
+  store: SkillsProductStore,
+  artifactStorage: ArtifactStorage,
+  principal: ApiPrincipal,
+  slug: string,
+  version: string,
+): Promise<{ version: ServerSkillVersion; bytes: OwnedBytes }> {
+  const found = await readSkillVersion(store, principal, slug, version);
+  // Deletion withholds content (todos d061fcda), historic versions included: a tombstoned
+  // slug answers 410 here exactly as /bundle does, and a purged one 404. The version rows
+  // themselves stay listable - they are the history, not the content.
+  const resolved = await resolvePublishedSkill(store, artifactStorage, principal, slug);
+  if (resolved.kind === "tombstone") throw new SkillRequestError(410, "SKILL_DELETED", `'${slug}' was deleted; its version bundles are withheld while the slug is deleted`);
+  if (resolved.kind === "absent") throw new SkillRequestError(404, "SKILL_NOT_FOUND", `'${slug}' is not published`);
+  const bundle = await store.getSkillBundle(principal, found.bundleSha256);
+  if (!bundle) throw new SkillRequestError(404, "BUNDLE_NOT_FOUND", `no stored bundle for digest ${found.bundleSha256}`);
+  const bytes = await artifactStorage.readBundle(bundle);
+  if (!bytes) throw new SkillRequestError(503, "BUNDLE_BACKEND_UNAVAILABLE", "bundle storage backend unavailable");
+  const actual = createHash("sha256").update(bytes).digest("hex");
+  if (actual !== found.bundleSha256) {
+    throw new SkillRequestError(
+      500,
+      "BUNDLE_DIGEST_DRIFT",
+      `stored bundle for '${slug}@${version}' hashes to ${actual} but was published as ${found.bundleSha256}`,
+    );
+  }
+  return { version: found, bytes };
+}
+
+/** The manifest's version, validated as a path-safe version string (hasna/apps#1630). */
+function publishVersionOf(manifest: Record<string, unknown>): string | undefined {
+  const version = optionalString(manifest.version);
+  if (version === undefined) return undefined;
+  if (!isValidSkillVersion(version)) {
+    throw new SkillRequestError(400, "INVALID_VERSION", `version '${version.slice(0, 40)}' is not a valid skill version (${SKILL_VERSION_RULE})`);
+  }
+  return version;
 }

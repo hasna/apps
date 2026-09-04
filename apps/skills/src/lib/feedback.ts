@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync } from "fs";
+import { appendFileSync, existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { Database } from "bun:sqlite";
+import { resolveApiUrl } from "./api-url.js";
 import { getDataDir } from "./config.js";
 
 export type FeedbackCategory = "bug" | "feature" | "general";
@@ -59,6 +60,16 @@ export function saveFeedback(input: FeedbackInput): FeedbackResult {
   if (!message) throw new Error("Feedback message is required");
 
   const category = input.category ?? "general";
+  // api mode (a Skills API URL + key is configured): never open a local database
+  // (hasna/apps#1613, #1632). Feedback is appended to a plain JSONL file the operator can
+  // forward; the SQLite store below is the OSS local mode only.
+  if (isApiMode()) {
+    const path = join(getDataDir(), "feedback.jsonl");
+    const dir = dirname(path);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    appendFileSync(path, JSON.stringify({ message, category, email: input.email ?? null, agent: input.agent ?? null, version: input.version ?? null, createdAt: new Date().toISOString() }) + "\n");
+    return { saved: true, category, path };
+  }
   const db = getFeedbackDb();
   try {
     db.run(
@@ -69,4 +80,18 @@ export function saveFeedback(input: FeedbackInput): FeedbackResult {
     db.close();
   }
   return { saved: true, category, path: getFeedbackDbPath() };
+}
+
+/**
+ * True when this install is pointed at a Skills instance: the env var, its HASNA_-prefixed
+ * alias, or the config file written by `skills setup --api-url` / `skills login`. The check
+ * never throws - a broken config file means local mode, not a crash in `skills feedback`.
+ */
+export function isApiMode(env: Record<string, string | undefined> = process.env): boolean {
+  if (env.HASNA_SKILLS_API_URL?.trim()) return true;
+  try {
+    return Boolean(resolveApiUrl(undefined, env));
+  } catch {
+    return Boolean(env.SKILLS_API_URL?.trim());
+  }
 }

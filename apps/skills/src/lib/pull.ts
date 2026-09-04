@@ -39,6 +39,7 @@ import {
 import { resolveCorpusRoot } from "./home-migration.js";
 import { revisionIdOf } from "./revision.js";
 import { sha256Hex, type SkillBundleEntry, unpackSkillBundle } from "./skill-bundle.js";
+import { isValidSkillVersion, SKILL_VERSION_RULE } from "./skill-version.js";
 import { resolveSigningKey, verifyBundleSignature } from "./skill-bundles.js";
 import type { SkillKind } from "./registry-types.js";
 import { REVISION_ID_PATTERN } from "./revision.js";
@@ -69,7 +70,13 @@ export interface SkillPullClient {
    * `Response` is the natural transport type here: verification reads the
    * X-Skill-Bundle-Sha256 / X-Skill-Bundle-Signature headers off it.
    */
-  getBundle(slug: string): Promise<Response | null>;
+  getBundle(slug: string, version?: string): Promise<Response | null>;
+  /**
+   * The registry's record of one published version (hasna/apps#1630), or null. Optional:
+   * an exact-version pull proves the received bytes against this digest; a client that
+   * cannot answer it falls back to the bundle's own digest header.
+   */
+  getSkillVersion?(slug: string, version: string): Promise<{ bundleSha256?: string } | null>;
 }
 
 export interface PullSkillsOptions extends PortableSkillOptions {
@@ -189,11 +196,17 @@ async function pullOne(
   corpusOptions: PortableSkillOptions,
   verify: { signingKey?: string },
 ): Promise<PulledSkillResult> {
+  // `name@version` pins the pull to one immutable published version (hasna/apps#1630);
+  // a bare name pulls whatever the instance currently serves.
+  const { name: bareName, version: requestedVersion } = splitNameVersion(rawName);
   let slug: string;
   try {
-    slug = normalizePortableSkillName(rawName);
+    slug = normalizePortableSkillName(bareName);
   } catch (error) {
     return { name: rawName, success: false, error: (error as Error).message };
+  }
+  if (requestedVersion !== undefined && !isValidSkillVersion(requestedVersion)) {
+    return { name: rawName, success: false, error: `'${requestedVersion}' is not a valid skill version (${SKILL_VERSION_RULE}).` };
   }
 
   const meta = await safeMeta(client, slug);
@@ -202,9 +215,18 @@ async function pullOne(
   // fallback for instances that serve no bundle, and cannot be verified by construction.
   let bundleResponse: Response | null;
   try {
-    bundleResponse = await client.getBundle(slug);
+    bundleResponse = await client.getBundle(slug, requestedVersion);
   } catch (error) {
     return { name: slug, success: false, error: `Failed to fetch '${slug}': ${(error as Error).message}` };
+  }
+  // An exact version either exists or it does not: the client reports a missing one as null
+  // (or a 404 from a stand-in), and there is no metadata fallback that could satisfy it.
+  if (requestedVersion && (!bundleResponse || bundleResponse.status === 404)) {
+    return {
+      name: rawName,
+      success: false,
+      error: `Version '${requestedVersion}' of '${slug}' is not published on the configured instance (run 'skills versions ${slug}' to list what exists).`,
+    };
   }
   if (bundleResponse && !bundleResponse.ok) {
     // 410 is the tombstone contract (todos d061fcda): the slug was deleted within the
@@ -231,7 +253,17 @@ async function pullOne(
   }
   if (bundleResponse) {
     try {
-      return await installVerifiedBundle(slug, bundleResponse, meta, corpusOptions, verify);
+      // Exact-version pull (hasna/apps#1630): the proof is the registry's recorded digest for
+      // that version, fetched separately from the bytes, so a swapped body fails closed.
+      let expectedSha256: string | undefined;
+      if (requestedVersion && client.getSkillVersion) {
+        const recorded = await client.getSkillVersion(slug, requestedVersion);
+        if (!recorded) {
+          return { name: rawName, success: false, error: `Version '${requestedVersion}' of '${slug}' is not published on the configured instance (run 'skills versions ${slug}' to list what exists).` };
+        }
+        expectedSha256 = typeof recorded.bundleSha256 === "string" ? recorded.bundleSha256 : undefined;
+      }
+      return await installVerifiedBundle(slug, bundleResponse, meta, corpusOptions, verify, requestedVersion ? { version: requestedVersion, expectedSha256 } : undefined);
     } catch (error) {
       if (error instanceof PullSkillError) {
         return { name: slug, success: false, error: error.message };
@@ -379,23 +411,37 @@ function installVerifiedBundle(
   meta: CorpusSkillMeta | null,
   corpusOptions: PortableSkillOptions,
   verify: { signingKey?: string },
+  exact?: { version: string; expectedSha256?: string },
 ): Promise<PulledSkillResult> {
   return response.arrayBuffer().then((buffer) => {
     const verified = verifyBundleResponseBytes(buffer, response, verify);
+    // Exact-version pull: the bytes must be the ones the registry recorded for that version.
+    if (exact?.expectedSha256 && exact.expectedSha256 !== verified.contentHash) {
+      throw new PullSkillError(
+        `Digest proof failed for '${slug}@${exact.version}': the registry records bundle ${exact.expectedSha256.slice(0, 12)}… but the received bytes hash to ${verified.contentHash.slice(0, 12)}…. Nothing was installed.`,
+      );
+    }
+    const served = str(response.headers.get("X-Skill-Version"));
+    if (exact && served && served !== exact.version) {
+      throw new PullSkillError(`Version proof failed for '${slug}': asked for '${exact.version}', the instance served '${served}'. Nothing was installed.`);
+    }
     let entries: SkillBundleEntry[];
     try {
       entries = unpackSkillBundle(verified.bytes);
     } catch (error) {
       throw new PullSkillError(`Bundle for '${slug}' could not be unpacked: ${(error as Error).message}`);
     }
-    const version = str(meta?.version) ?? versionFromEntries(entries) ?? "unknown";
+    const version = exact?.version ?? served ?? str(meta?.version) ?? versionFromEntries(entries) ?? "unknown";
     const sourceCommit = sourceCommitFromEntries(entries);
     // A declared revision must be PROVEN against the content actually received before it
     // is recorded: the id is content-addressed, so recomputing it over the served
     // metadata + the verified bundle bytes and comparing is what "pull can prove which
     // revision it installed" means. A mismatch (or an id that cannot be recomputed)
     // fails closed — nothing installed, nothing recorded.
-    const declaredRevision = verified.revisionId ?? meta?.revisionId;
+    // A historic version has no revision of its own: the row's revision identifies the CURRENT
+    // content, so for an exact-version pull the digest proof above is the proof, and no
+    // revision is recorded in the marker (a later plain pull sees an unrevisioned install).
+    const declaredRevision = exact ? undefined : verified.revisionId ?? meta?.revisionId;
     if (declaredRevision && meta?.revisionId && verified.revisionId && declaredRevision !== meta.revisionId) {
       throw new PullSkillError(
         `Revision proof failed for '${slug}': the bundle header declares '${verified.revisionId.slice(0, 12)}…' but the metadata declares '${meta.revisionId.slice(0, 12)}…'. The instance is inconsistent. Nothing was installed.`,
@@ -677,4 +723,18 @@ function dedupe(values: string[]): string[] {
 
 function str(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * Split `name@version` into its parts. A name without `@` pulls the current revision; an
+ * empty version (`name@`) is an error the caller reports. Scoped-looking names are not a
+ * concern here: skill slugs never start with `@`.
+ */
+export function splitNameVersion(raw: string): { name: string; version?: string } {
+  const trimmed = raw.trim();
+  const at = trimmed.indexOf("@");
+  if (at <= 0) return { name: trimmed };
+  const name = trimmed.slice(0, at);
+  const version = trimmed.slice(at + 1);
+  return version ? { name, version } : { name };
 }

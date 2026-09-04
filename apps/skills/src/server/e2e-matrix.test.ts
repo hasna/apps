@@ -465,11 +465,12 @@ for (const backend of backends) {
           const v1 = packRealSkill(slug, skillMarkdown(slug, "v1"));
           const v2 = packRealSkill(slug, skillMarkdown(slug, "v2"));
 
-          const manifestFor = (bytes: Uint8Array, md: string) => ({
+          // Versions are immutable (hasna/apps#1630): different bytes travel under a new version.
+          const manifestFor = (bytes: Uint8Array, md: string, version = "1.0.0") => ({
             slug,
             description: "rev",
             skillMd: md,
-            version: "1.0.0",
+            version,
             bundleSha256: sha256Of(bytes),
           });
 
@@ -486,14 +487,14 @@ for (const backend of backends) {
           // refused with the current revision named. A malformed etag is a 400
           // shape error and is covered by the server's own route tests.
           const staleEtag = `"${"a".repeat(64)}"`;
-          const stale = await client.publishSkill(manifestFor(v2.bytes, skillMarkdown(slug, "v2")), v2.bytes, staleEtag);
+          const stale = await client.publishSkill(manifestFor(v2.bytes, skillMarkdown(slug, "v2"), "1.0.1"), v2.bytes, staleEtag);
           expect(stale.status).toBe(409);
           const staleBody = (await stale.json()) as { code?: string; currentRevisionId?: string };
           expect(staleBody.code).toBe("REVISION_CONFLICT");
           expect(staleBody.currentRevisionId).toBeTruthy();
 
           // The current revision etag unlocks the write; the revision advances.
-          const guarded = await client.publishSkill(manifestFor(v2.bytes, skillMarkdown(slug, "v2")), v2.bytes, etag1);
+          const guarded = await client.publishSkill(manifestFor(v2.bytes, skillMarkdown(slug, "v2"), "1.0.1"), v2.bytes, etag1);
           expect(guarded.status).toBe(201);
           const etag2 = guarded.headers.get("etag") as string;
           expect(etag2).not.toBe(etag1);

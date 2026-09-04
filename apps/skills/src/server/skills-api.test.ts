@@ -236,7 +236,7 @@ describe("a refused publish discards the bundle object it just uploaded", () => 
     return storePublishedSkill(store, storage, PRINCIPAL, parsed, expectedRevisionId);
   }
 
-  test("a stale If-Match publish is refused and the uploaded object is discarded, leaving no row", async () => {
+  test("a stale If-Match publish is refused before any object is uploaded, leaving no row and nothing to discard", async () => {
     await withStore(async (store) => {
       const storage = new RecordingStorage();
       const first = await publishWithStorage(store, storage, { slug: "revisioned", description: "a skill" }, BUNDLE);
@@ -244,11 +244,37 @@ describe("a refused publish discards the bundle object it just uploaded", () => 
       expect(storage.deleteBundleCalls).toEqual([]);
 
       // A conflicting push: same slug, NEW bundle bytes (a digest the store has never
-      // seen), stale If-Match. The bytes were uploaded before the store refused the
-      // write, so the object must be discarded - it has no row referencing it.
+      // seen), stale If-Match. The API answers the revision guard before it touches the
+      // bucket (hasna/apps#1630), so the object is never written - there is nothing to
+      // discard and no orphan to find later.
       const conflicting = digestOf(OTHER_BUNDLE);
       await expect(
         publishWithStorage(store, storage, { slug: "revisioned", description: "a skill" }, OTHER_BUNDLE, "stale-revision"),
+      ).rejects.toThrow(SkillRevisionConflictError);
+
+      expect(storage.putBundleCalls).not.toContain(conflicting);
+      expect(storage.deleteBundleCalls).toEqual([]);
+      expect(await store.getSkillBundle(PRINCIPAL, conflicting)).toBeNull();
+    });
+  });
+
+  test("when the store refuses after the upload (a writer raced the guard), the uploaded object is discarded and no row is left", async () => {
+    await withStore(async (store) => {
+      const storage = new RecordingStorage();
+      const first = await publishWithStorage(store, storage, { slug: "revisioned", description: "a skill" }, BUNDLE);
+
+      // The API's pre-check passes (the caller names the current revision), then the
+      // store itself refuses - the shape of a concurrent writer landing in between.
+      const racing: SqliteSkillsStore = Object.create(store, {
+        publishSkill: {
+          value: async () => {
+            throw new SkillRevisionConflictError("revisioned", first.revisionId, "someone-elses-revision");
+          },
+        },
+      });
+      const conflicting = digestOf(OTHER_BUNDLE);
+      await expect(
+        publishWithStorage(racing, storage, { slug: "revisioned", description: "a skill" }, OTHER_BUNDLE, first.revisionId),
       ).rejects.toThrow(SkillRevisionConflictError);
 
       expect(storage.putBundleCalls).toContain(conflicting);
