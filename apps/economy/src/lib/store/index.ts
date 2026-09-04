@@ -10,9 +10,10 @@
 //     key. Delegates to the vendored @hasna/contracts storage client.
 //
 // `getStore()` resolves which transport to use from the client-flip env
-// (HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY / HASNA_ECONOMY_STORAGE_MODE).
-// Callers NEVER branch on mode themselves and NEVER touch sqlite or fetch
-// directly — that was the split-brain bug this module eliminates.
+// (HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY). Retired storage-mode
+// variables (HASNA_ECONOMY_STORAGE_MODE and friends) are a hard error, never a
+// selector. Callers NEVER branch on mode themselves and NEVER touch sqlite or
+// fetch directly — that was the split-brain bug this module eliminates.
 //
 // `self_hosted` and `cloud` are the SAME client code (ApiStore); only the URL and
 // key differ, and that distinction is server-side tenancy. `local` is
@@ -807,9 +808,11 @@ export class ApiStore implements EconomyStore {
 
 /**
  * Resolve the active {@link EconomyStore} for the current environment. Returns an
- * {@link ApiStore} when the client-flip contract resolves to cloud-http
- * (self_hosted/cloud), else a {@link LocalStore}. Throws if cloud was requested
- * but is misconfigured (so callers can never silently read the wrong dataset).
+ * {@link ApiStore} when the client-flip contract (HASNA_ECONOMY_API_URL +
+ * HASNA_ECONOMY_API_KEY) resolves to cloud-http, else a {@link LocalStore}; a
+ * retired `HASNA_ECONOMY_STORAGE_MODE`-family variable is a hard error. Throws
+ * if the API is configured but misconfigured (so callers can never silently
+ * read the wrong dataset).
  */
 export function getStore(env: NodeJS.ProcessEnv = process.env): EconomyStore {
   const cloud = economyCloudStorage(env)

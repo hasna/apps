@@ -15,6 +15,28 @@ describe("resolveEconomyCloudStorage", () => {
     expect(r.client).toBeNull();
   });
 
+  // Deployment modes no longer exist (owner directive 2026-07-29). A retired
+  // storage-mode variable is a hard error, never silently ignored: the station
+  // wrapper used to export HASNA_ECONOMY_STORAGE_MODE=cloud, and a CLI that
+  // accepted it quietly would keep serving the wrong dataset after the variable
+  // stops meaning anything.
+  it("throws when a retired storage-mode variable is set, even with a valid URL + key", () => {
+    for (const key of [
+      "HASNA_ECONOMY_STORAGE_MODE",
+      "HASNA_ECONOMY_MODE",
+      "ECONOMY_STORAGE_MODE",
+      "ECONOMY_MODE",
+    ] as const) {
+      expect(() =>
+        resolveEconomyCloudStorage({
+          [key]: "cloud",
+          HASNA_ECONOMY_API_URL: "https://economy.hasna.xyz",
+          HASNA_ECONOMY_API_KEY: KEY,
+        }),
+      ).toThrow(new RegExp(`${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} was removed`));
+    }
+  });
+
 
 
   it("resolves the http transport when API_URL + API_KEY are set", () => {

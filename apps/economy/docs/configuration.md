@@ -41,7 +41,9 @@ export HASNA_ECONOMY_API_URL=https://economy.example.com
 export HASNA_ECONOMY_API_KEY='...'
 ```
 
-URL plus key is itself a cloud-mode signal. You may explicitly set `HASNA_ECONOMY_STORAGE_MODE=cloud`; `self_hosted`, `remote`, and `hybrid` are accepted deprecated aliases. The resolver also accepts `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, and `ECONOMY_MODE`, plus unprefixed `ECONOMY_API_URL`/`ECONOMY_API_KEY` aliases. An existing `/v1` suffix is normalized, otherwise it is appended. Cloud mode with no key or an invalid URL fails rather than reading an unintended local dataset.
+URL plus key is the entire cloud signal: it routes CLI and MCP data operations to the HTTP API. Unprefixed `ECONOMY_API_URL`/`ECONOMY_API_KEY` aliases are accepted. An existing `/v1` suffix is normalized, otherwise it is appended. A URL without a key (or an invalid URL) fails rather than reading an unintended local dataset.
+
+Retired `*_STORAGE_MODE` / `*_MODE` variables no longer exist as selectors: `HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`, plus the accounts variants `HASNA_ACCOUNTS_*_MODE`) are a hard error on the client too — delete them and let the URL + key pair do the routing.
 
 In cloud-client mode, data commands use the HTTP API, and local auto-sync, explicit `economy sync`, and `economy billing sync` are skipped. Clients never need or use a Postgres DSN.
 
@@ -70,7 +72,7 @@ ECONOMY_DATABASE_URL
 DATABASE_URL
 ```
 
-`HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`) no longer selects a backend: the server refuses to start and prints a migration hint. Delete it and set a DSN instead. This is server-only — the CLI/MCP client still reads the mode variable described above.
+`HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`) no longer selects a backend: the server refuses to start and prints a migration hint. Delete it and set a DSN instead. The client follows the same rule — the variables are a hard error there too, and API routing comes from the URL + key pair above.
 
 Apply migrations with `economy-serve migrate`. `ECONOMY_PG_POOL_MAX` defaults to 5. A non-loopback server also requires one of `HASNA_ECONOMY_API_SIGNING_KEY`, `HASNA_API_SIGNING_KEY`, or `API_KEY_SIGNING_SECRET`; API keys are then verified by `@hasna/contracts`. The signing secret belongs only on the server.
 

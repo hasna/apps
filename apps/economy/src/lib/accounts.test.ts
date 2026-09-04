@@ -8,16 +8,17 @@ const roots: string[] = []
 const envKeys = [
   'ACCOUNTS_API_KEY',
   'ACCOUNTS_API_URL',
-  'ACCOUNTS_STORAGE_MODE',
   'ACCOUNTS_STORE_PATH',
   'CODEX_HOME',
   'ECONOMY_CODEX_ACCOUNT',
   'ECONOMY_ACCOUNT',
-  'HASNA_ACCOUNTS_MODE',
   'HASNA_ACCOUNTS_API_KEY',
   'HASNA_ACCOUNTS_API_URL',
-  'HASNA_ACCOUNTS_STORAGE_MODE',
   'HASNA_ACCOUNTS_STRICT_ROOT_COMPAT',
+  'HASNA_ACCOUNTS_STORAGE_MODE',
+  'ACCOUNTS_STORAGE_MODE',
+  'HASNA_ACCOUNTS_MODE',
+  'ACCOUNTS_MODE',
 ] as const
 const originalEnv = new Map<string, string | undefined>()
 const originalFetch = globalThis.fetch
@@ -127,10 +128,48 @@ describe('resolveAccountForAgent', () => {
     })
   })
 
-  test('propagates accounts store resolution errors', async () => {
+  test('rejects a retired storage-mode variable on the client accounts store', async () => {
     await expect(resolveAccountForAgent('codex', {
       HASNA_ACCOUNTS_STORAGE_MODE: 'cloud',
-    })).rejects.toThrow(/requires HASNA_ACCOUNTS_API_URL and HASNA_ACCOUNTS_API_KEY/)
+    })).rejects.toThrow(/HASNA_ACCOUNTS_STORAGE_MODE was removed/)
+    await expect(resolveAccountForAgent('codex', {
+      ACCOUNTS_MODE: 'local',
+    })).rejects.toThrow(/ACCOUNTS_MODE was removed/)
+  })
+
+  test('routes to the API from URL + key alone, without any mode variable', async () => {
+    const profileDir = '/hosted/profiles/codex/account004'
+    process.env['CODEX_HOME'] = profileDir
+    process.env['HASNA_ACCOUNTS_API_URL'] = 'https://accounts.example.test'
+    process.env['HASNA_ACCOUNTS_API_KEY'] = 'hasna_accounts_testkey_0001'
+    globalThis.fetch = (async (input) => {
+      const url = String(input)
+      if (url.endsWith('/v1/tools')) {
+        return Response.json({ tools: [] })
+      }
+      if (url.includes('/v1/accounts?') && url.includes('tool=codex')) {
+        return Response.json({
+          accounts: [{
+            name: 'account004',
+            tool: 'codex',
+            email: 'account004@example.com',
+            dir: profileDir,
+            createdAt: '2026-06-04T00:00:00.000Z',
+          }],
+        })
+      }
+      return Response.json({ error: 'not found' }, { status: 404 })
+    }) as typeof fetch
+
+    const account = await resolveAccountForAgent('codex')
+
+    expect(account).toEqual({
+      account_key: 'codex:account004@example.com',
+      account_tool: 'codex',
+      account_name: 'account004',
+      account_email: 'account004@example.com',
+      account_source: 'env',
+    })
   })
 
   test('falls back to the current profile for a supported tool', async () => {
