@@ -16,6 +16,7 @@ import { join } from 'path'
 import { printCompletion } from './completion.js'
 import { agentPaths } from '../../lib/paths.js'
 import { billingDriftCheck } from '../../lib/billing-diff.js'
+import { gatewayApiV1Root } from '../../lib/api-display-url.js'
 
 function fmt(usd: number): string {
   return '$' + usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -209,6 +210,15 @@ export function registerExtendedCommands(program: Command): void {
         checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
       }
       checks.push({ ok: true, msg: `storage: ${cloud ? 'self_hosted/cloud (HASNA_ECONOMY_API_URL + key)' : 'local'}` })
+
+      // The storage check announces the resolved `/v1` authority when the
+      // configured URL is the api.hasna.com gateway form, so the line
+      // identifies the app behind the shared gateway (issue #1588). Legacy and
+      // self-hosted origins keep the message above, unchanged.
+      if (cloud) {
+        const gatewayRoot = gatewayApiV1Root(process.env.HASNA_ECONOMY_API_URL ?? process.env.ECONOMY_API_URL)
+        if (gatewayRoot) checks.push({ ok: true, msg: `api: ${gatewayRoot}` })
+      }
 
       // Zero-cost tokenized-request detection and dedupe are LOCAL-DB maintenance
       // operations; the cloud serve owns dedup + pricing for its dataset, so run

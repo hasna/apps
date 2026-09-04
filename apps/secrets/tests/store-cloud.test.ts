@@ -63,6 +63,16 @@ describe("secrets Store resolver (env flip)", () => {
     } as unknown as NodeJS.ProcessEnv;
     expect(getStore(env).mode).toBe("api");
   });
+
+  it("reports the resolved /v1 authority for the api.hasna.com gateway form (issue #1588)", () => {
+    const env = {
+      HASNA_SECRETS_API_URL: "https://api.hasna.com/secrets",
+      HASNA_SECRETS_API_KEY: "hasna_secrets_test_key",
+    } as unknown as NodeJS.ProcessEnv;
+    const store = getStore(env);
+    expect(store).toBeInstanceOf(ApiStore);
+    expect(store.describe().location).toBe("https://api.hasna.com/secrets/v1");
+  });
 });
 
 describe("ApiStore route mapping", () => {

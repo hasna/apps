@@ -97,4 +97,43 @@ describe("storeStatusLocation", () => {
     expect("db_path" in location).toBe(true);
     expect("api_url" in location).toBe(false);
   });
+
+  // The gateway form `https://api.hasna.com/conversations` announces the app
+  // (and the /v1 root it resolves to), whereas every other URL is redacted to
+  // scheme/host/port (issue #1588).
+  test("the api.hasna.com gateway form is shown as its resolved /v1 root", () => {
+    const location = storeStatusLocation({
+      [URL_VAR]: "https://api.hasna.com/conversations",
+      [KEY_VAR]: FAKE_KEY,
+    });
+    expect("api_url" in location ? location.api_url : null).toBe("https://api.hasna.com/conversations/v1");
+
+    const resolved = storeStatusLocation({
+      [URL_VAR]: "https://api.hasna.com/conversations/v1",
+      [KEY_VAR]: FAKE_KEY,
+    });
+    expect("api_url" in resolved ? resolved.api_url : null).toBe("https://api.hasna.com/conversations/v1");
+  });
+
+  test("the gateway form is never shown with credential-bearing components", () => {
+    for (const raw of [
+      "https://user:pass@api.hasna.com/conversations",
+      "https://api.hasna.com/conversations?token=SYNTHQUERY",
+      "https://api.hasna.com/conversations#access_token=SYNTHFRAGMENT",
+    ]) {
+      const location = storeStatusLocation({ [URL_VAR]: raw, [KEY_VAR]: FAKE_KEY });
+      const shown = ("api_url" in location ? location.api_url : null) ?? "";
+      expect(shown).not.toContain("SYNTHQUERY");
+      expect(shown).not.toContain("SYNTHFRAGMENT");
+      expect(shown).not.toContain("user:pass");
+    }
+  });
+
+  test("legacy and self-hosted origins keep the scheme/host/port redaction", () => {
+    const legacy = storeStatusLocation({ [URL_VAR]: "https://conversations.hasna.xyz", [KEY_VAR]: FAKE_KEY });
+    expect("api_url" in legacy ? legacy.api_url : null).toBe("https://conversations.hasna.xyz");
+
+    const selfHosted = storeStatusLocation({ [URL_VAR]: RAW, [KEY_VAR]: FAKE_KEY });
+    expect("api_url" in selfHosted ? selfHosted.api_url : null).toBe("https://conv.example.invalid:8443");
+  });
 });

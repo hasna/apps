@@ -8685,6 +8685,35 @@ import { existsSync as existsSync9, mkdirSync as mkdirSync3, readFileSync as rea
 import { dirname as dirname4, join as join6 } from "path";
 import { HasnaHttpError } from "@hasna/contracts/client";
 import { ownAgentClaim, ownTenantId, parseApiKey } from "@hasna/contracts/auth";
+
+// src/api-display-url.ts
+function gatewayApiV1Root(raw) {
+  if (typeof raw !== "string")
+    return null;
+  const trimmed = raw.trim();
+  if (!trimmed)
+    return null;
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "api.hasna.com")
+    return null;
+  if (parsed.username || parsed.password || parsed.search || parsed.hash)
+    return null;
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  if (segments.length === 1 && segments[0] !== "v1") {
+    return `https://api.hasna.com/${segments[0]}/v1`;
+  }
+  if (segments.length === 2 && segments[1] === "v1") {
+    return `https://api.hasna.com/${segments[0]}/v1`;
+  }
+  return null;
+}
+
+// src/auth.ts
 var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
 function normalizeKnowledgeApiOrigin(apiUrl) {
   const url = new URL(apiUrl);
@@ -8758,7 +8787,7 @@ function knowledgeAuthStatus(env = process.env) {
     authenticated: Boolean(key.apiKey),
     configured: Boolean(key.apiKey),
     source: key.source,
-    api_url: apiUrl,
+    api_url: gatewayApiV1Root(apiUrl) ?? apiUrl,
     auth_path: knowledgeAuthPath(env),
     email: key.source === "file" ? auth?.email ?? null : null,
     org_id: key.source === "file" ? auth?.org_id ?? null : null,
