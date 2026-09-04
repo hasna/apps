@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { FeedbackClient } from "../client.js";
 import { startFeedbackServer } from "../server/index.js";
 import { SERVE_DESCRIPTION } from "../server/deprecation.js";
+import { readStorageEnv } from "../storage.paths.js";
 import { createFeedbackStore, describeFeedbackStoreRuntime, resolveFeedbackFilePath } from "../storage.js";
 import { describeTaskSinkRuntime, findBinaryOnPath } from "../tasks.js";
 import type {
@@ -56,12 +57,14 @@ export interface FeedbackApiTarget {
 }
 
 /**
- * Resolve which Hasna Feedback service a command talks to.
+ * Resolve which hosted Hasna Feedback service a command talks to.
  *
  * `FEEDBACK_API_URL` exists so a fleet can be pointed at a hosted deployment
  * once, in the environment, instead of every agent and human remembering to
- * type `--api-url` on every invocation. Without it, "we run this in the cloud"
- * silently degrades to "everyone writes to their own machine's JSONL file".
+ * type `--api-url` on every invocation. Returns null when no hosted service is
+ * configured — the caller then decides between an explicit on-box run
+ * (`FEEDBACK_LOCAL=1`) and failing closed; nothing silently opens the local
+ * store.
  */
 export function resolveApiTarget(
   options: { apiUrl?: string; token?: string },
@@ -73,10 +76,73 @@ export function resolveApiTarget(
   return token ? { apiUrl, token } : { apiUrl };
 }
 
-function maybeClient(options: { apiUrl?: string; token?: string }): FeedbackClient | null {
-  const target = resolveApiTarget(options);
-  if (!target) return null;
-  return new FeedbackClient({ baseUrl: target.apiUrl, token: target.token });
+export interface FeedbackRunTarget {
+  /**
+   * The hosted-service client when `--api-url` / `FEEDBACK_API_URL` configured
+   * a remote target; null only when the run explicitly opted into the on-box
+   * store.
+   */
+  client: FeedbackClient | null;
+  /** True only when the run explicitly opted into the on-box store. */
+  local: boolean;
+}
+
+/**
+ * Whether the on-box store was EXPLICITLY selected for this run
+ * (`HASNA_FEEDBACK_LOCAL=1` / `FEEDBACK_LOCAL=1`). Local storage is never the
+ * default: with neither a hosted service configured nor this opt-in, command
+ * verbs fail closed instead of silently writing to the machine-local store.
+ */
+export function localModeOptedIn(env: Record<string, string | undefined> = process.env): boolean {
+  const value = readStorageEnv(env, "LOCAL")?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+/**
+ * Resolve what a command verb talks to, failing closed when the environment
+ * names neither a hosted service nor an explicit on-box store.
+ *
+ * - `FEEDBACK_API_URL` (or `--api-url`, which always beats the environment)
+ *   targets the hosted Hasna Feedback service; `client` is set.
+ * - `FEEDBACK_LOCAL=1` is the ONLY way to select the on-box store.
+ * - With neither, returns null — the verb must print
+ *   {@link noConfiguredTargetError} and exit non-zero. "We run this in the
+ *   cloud" must never silently degrade to a machine-local file that reads as
+ *   green.
+ */
+export function resolveRunTarget(
+  options: { apiUrl?: string; token?: string },
+  env: Record<string, string | undefined> = process.env,
+): FeedbackRunTarget | null {
+  const api = resolveApiTarget(options, env);
+  if (api) return { client: new FeedbackClient({ baseUrl: api.apiUrl, token: api.token }), local: false };
+  if (localModeOptedIn(env)) return { client: null, local: true };
+  return null;
+}
+
+/** The actionable error for an unconfigured run. */
+export function noConfiguredTargetError(): string {
+  return (
+    "No Hasna Feedback service is configured. Set FEEDBACK_API_URL (and FEEDBACK_API_TOKEN when the " +
+    "service requires one) so feedback reaches the hosted service, or set FEEDBACK_LOCAL=1 to " +
+    "explicitly opt into the on-box store. Refusing to fall back to local storage."
+  );
+}
+
+/**
+ * Resolve the run target, or fail closed: prints {@link noConfiguredTargetError}
+ * and marks exit 1 when nothing is configured, so the verb returns without
+ * touching any store. Returns null in the fail-closed case.
+ */
+function requireTarget(
+  options: { apiUrl?: string; token?: string },
+  env: Record<string, string | undefined> = process.env,
+): FeedbackRunTarget | null {
+  const target = resolveRunTarget(options, env);
+  if (target) return target;
+  console.error(noConfiguredTargetError());
+  process.exitCode = 1;
+  return null;
 }
 
 function localStore(): FeedbackStore {
@@ -113,8 +179,17 @@ export interface FeedbackDoctorReport {
   runtime: ReturnType<typeof describeFeedbackStoreRuntime>;
   /** The wire that turns feedback into a task an executor can pick up. */
   taskSink: ReturnType<typeof describeTaskSinkRuntime>;
-  /** Which store the CLI will actually read and write with this environment. */
-  target: "local" | "remote";
+  /**
+   * Which target the CLI will actually use with this environment. "none" is
+   * the fail-closed state: no hosted service configured and no explicit
+   * on-box opt-in, so no store is opened.
+   */
+  target: "local" | "remote" | "none";
+  /**
+   * Command-target blockers: non-empty only when `target` is "none", naming
+   * what to configure so a gating health check can act on it.
+   */
+  blockers: string[];
   dataFile?: string;
   dataDirWritable: boolean | null;
   dataFileReadable: boolean | null;
@@ -127,10 +202,12 @@ export interface FeedbackDoctorReport {
 export async function buildDoctorReport(env: Record<string, string | undefined> = process.env): Promise<FeedbackDoctorReport> {
   const runtime = describeFeedbackStoreRuntime({ env });
   const apiUrl = env["FEEDBACK_API_URL"]?.trim() || null;
-  // With a remote configured, every verb talks to the service. Probing and
-  // reporting a local data file the CLI will never touch made doctor gate the
-  // wrong store.
-  const target: "local" | "remote" = apiUrl ? "remote" : "local";
+  // Fail closed when the environment names neither a hosted service nor an
+  // explicit on-box opt-in: doctor must not report a local store as the ready
+  // target of a run that should reach the hosted service, and must not create
+  // local storage while probing one.
+  const target: "local" | "remote" | "none" = apiUrl ? "remote" : localModeOptedIn(env) ? "local" : "none";
+  const blockers = target === "none" ? [noConfiguredTargetError()] : [];
   const filePath = runtime.local?.dataFile ?? resolveFeedbackFilePath({ dataDir: env["FEEDBACK_DATA_DIR"] });
   let dataDirWritable: boolean | null = null;
   let dataFileReadable: boolean | null = null;
@@ -165,13 +242,14 @@ export async function buildDoctorReport(env: Record<string, string | undefined> 
   };
   const taskSink = describeTaskSinkRuntime({ env });
   const localStorageOk =
-    target === "remote" || runtime.mode !== "local" || (dataDirWritable === true && dataFileReadable === true);
+    target !== "local" || runtime.mode !== "local" || (dataDirWritable === true && dataFileReadable === true);
   return {
-    ok: runtime.ok && localStorageOk && taskSink.ok,
+    ok: target !== "none" && runtime.ok && localStorageOk && taskSink.ok,
     version: VERSION,
     runtime,
     taskSink,
     target,
+    blockers,
     dataFile: target === "local" && runtime.mode === "local" ? filePath : undefined,
     dataDirWritable,
     dataFileReadable,
@@ -268,7 +346,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         metadata,
         context: buildContext(options),
       };
-      const client = maybeClient({ apiUrl: options.apiUrl as string | undefined, token: options.token as string | undefined });
+      const target = requireTarget({ apiUrl: options.apiUrl as string | undefined, token: options.token as string | undefined });
+      if (!target) return;
+      const client = target.client;
       const item = client ? await client.submit(input) : await localStore().createFeedback(input, { source: "cli" });
       printJson(item);
       // An open loop must be visible at the moment it opens, not discovered
@@ -296,7 +376,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--token <token>", "API bearer token")
     .action(async (options: { app?: string; status?: FeedbackStatus; tag?: string; search?: string; since?: string; until?: string; limit?: string; apiUrl?: string; token?: string }) => {
       const filter = commonFilter({ ...options, status: options.status ? parseFeedbackStatus(options.status) : undefined });
-      const client = maybeClient(options);
+      const target = requireTarget(options);
+      if (!target) return;
+      const client = target.client;
       printJson(client ? await client.list(filter) : await localStore().listFeedback(filter));
     });
 
@@ -307,7 +389,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--api-url <url>", "Remote Hasna Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (id: string, options: { apiUrl?: string; token?: string }) => {
-      const client = maybeClient(options);
+      const target = requireTarget(options);
+      if (!target) return;
+      const client = target.client;
       const item = client ? await client.get(id) : await localStore().getFeedback(id);
       if (!item) {
         console.error(`Feedback not found: ${id}`);
@@ -326,7 +410,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--token <token>", "API bearer token")
     .action(async (id: string, status: string, options: { apiUrl?: string; token?: string }) => {
       const parsedStatus = parseFeedbackStatus(status);
-      const client = maybeClient(options);
+      const target = requireTarget(options);
+      if (!target) return;
+      const client = target.client;
       const item = client ? await client.updateStatus(id, parsedStatus) : await localStore().updateFeedbackStatus(id, parsedStatus);
       if (!item) {
         console.error(`Feedback not found: ${id}`);
@@ -344,7 +430,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--api-url <url>", "Remote Hasna Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (id: string, options: { changelogRef: string; apiUrl?: string; token?: string }) => {
-      const client = maybeClient(options);
+      const target = requireTarget(options);
+      if (!target) return;
+      const client = target.client;
       if (client) {
         printJson(await client.markShipped(id, options.changelogRef));
         return;
@@ -370,14 +458,16 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--limit <n>", "Maximum number of items to process")
     .option("--retry-uncertain", "Also retry items whose previous attempt recorded no outcome (may duplicate a task)")
     .action(async (options: { limit?: string; retryUncertain?: boolean }) => {
-      // Against a remote service this would silently sync the (usually empty)
-      // local store and report all-clear, which is worse than refusing.
-      const target = resolveApiTarget({});
-      if (target) {
+      // sync-tasks is an on-box repair path. It must neither run against the
+      // hosted service nor open the local store implicitly — fail closed until
+      // the on-box store is explicitly selected.
+      const target = requireTarget({});
+      if (!target) return;
+      if (!target.local) {
         console.error(
-          "sync-tasks operates on the local store, but FEEDBACK_API_URL points at a remote service. " +
+          "sync-tasks operates on the on-box store, but FEEDBACK_API_URL points at a remote service. " +
             "Task linkage for a hosted deployment is created server-side. " +
-            "Unset FEEDBACK_API_URL to repair a local store.",
+            "Run with FEEDBACK_LOCAL=1 and without FEEDBACK_API_URL to repair an on-box store.",
         );
         process.exitCode = 1;
         return;
@@ -416,7 +506,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--api-url <url>", "Remote Hasna Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (options: { apiUrl?: string; token?: string }) => {
-      const client = maybeClient(options);
+      const target = requireTarget(options);
+      if (!target) return;
+      const client = target.client;
       printJson(client ? await client.stats() : await localStore().stats());
     });
 
@@ -435,7 +527,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--token <token>", "API bearer token")
     .action(async (options: { app?: string; status?: FeedbackStatus; tag?: string; search?: string; since?: string; until?: string; limit?: string; format: string; apiUrl?: string; token?: string }) => {
       const filter = commonFilter({ ...options, status: options.status ? parseFeedbackStatus(options.status) : undefined });
-      const client = maybeClient(options);
+      const target = requireTarget(options);
+      if (!target) return;
+      const client = target.client;
       if (options.format === "json") {
         printJson(client ? await client.list(filter) : await localStore().listFeedback(filter));
         return;

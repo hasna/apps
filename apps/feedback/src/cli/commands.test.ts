@@ -6,7 +6,7 @@
 // test carries a positive and a negative case: the command's success arm is
 // pinned against its failure arm.
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,12 +21,17 @@ interface RunResult {
 
 async function runCli(args: string[], env: Record<string, string> = {}, dataDir?: string): Promise<RunResult> {
   const resolvedDir = dataDir ?? mkdtempSync(join(tmpdir(), "feedback-cli-cmd-"));
+  // Local-store flows require the explicit opt-in since the fail-closed rule
+  // (2026-09-04): no FEEDBACK_API_URL and no FEEDBACK_LOCAL=1 means the CLI
+  // refuses instead of silently writing to the machine-local store. Tests of
+  // the fail-closed arms override FEEDBACK_LOCAL to "".
   const proc = Bun.spawn(["bun", "run", CLI, ...args], {
     env: {
       ...process.env,
       HASNA_FEEDBACK_DATA_DIR: resolvedDir,
       HASNA_FEEDBACK_STORE: "jsonl",
       FEEDBACK_TASK_SINK: "none",
+      FEEDBACK_LOCAL: "1",
       ...env,
     },
     stdout: "pipe",
@@ -235,5 +240,71 @@ describe("feedback CLI command contract", () => {
     // The item must NOT have been stored locally: the remote path was taken.
     const list = await runCli(["list", "--limit", "10"]);
     expect(JSON.parse(list.stdout)).toEqual([]);
+  });
+});
+
+describe("feedback CLI fails closed without a configured target", () => {
+  // No FEEDBACK_API_URL and no explicit FEEDBACK_LOCAL opt-in: every data verb
+  // must refuse with a non-zero exit and never open the on-box store.
+  const UNCONFIGURED = { FEEDBACK_LOCAL: "" };
+
+  test("data verbs exit 1, name the required env, and create no local store", async () => {
+    for (const args of [
+      ["submit", "must not go local", "--app", "app-cli"],
+      ["list", "--limit", "10"],
+      ["stats"],
+      ["show", "missing-id"],
+      ["export", "--format", "jsonl"],
+    ]) {
+      const dataDir = mkdtempSync(join(tmpdir(), "feedback-cli-fc-"));
+      const result = await runCli(args, { ...UNCONFIGURED, HASNA_FEEDBACK_DATA_DIR: dataDir }, dataDir);
+      expect(result.code).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("FEEDBACK_API_URL");
+      expect(result.stderr).toContain("FEEDBACK_LOCAL");
+      // Fail-closed runs must not leave a local SQLite/JSONL store behind.
+      expect(readdirSync(dataDir)).toEqual([]);
+    }
+  });
+
+  test("sync-tasks refuses to open the on-box store without the opt-in", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "feedback-cli-fc-"));
+    const result = await runCli(["sync-tasks"], { ...UNCONFIGURED, HASNA_FEEDBACK_DATA_DIR: dataDir }, dataDir);
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("FEEDBACK_API_URL");
+    expect(result.stderr).toContain("FEEDBACK_LOCAL");
+    expect(readdirSync(dataDir)).toEqual([]);
+  });
+
+  test("doctor exits 1 and reports the fail-closed none target without touching local storage", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "feedback-cli-fc-"));
+    const result = await runCli(["doctor"], { ...UNCONFIGURED, HASNA_FEEDBACK_DATA_DIR: dataDir }, dataDir);
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.stdout) as { ok: boolean; target: string; blockers: string[] };
+    expect(report.ok).toBe(false);
+    expect(report.target).toBe("none");
+    expect(report.blockers.join(" ")).toContain("FEEDBACK_API_URL");
+    expect(report.blockers.join(" ")).toContain("FEEDBACK_LOCAL");
+    expect(readdirSync(dataDir)).toEqual([]);
+  });
+
+  test("the same verbs reach the on-box store once FEEDBACK_LOCAL=1 is set", async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "feedback-cli-fc-"));
+    const submitted = await submitItem([], { HASNA_FEEDBACK_DATA_DIR: dataDir });
+    const listed = await runCli(["list", "--limit", "10"], { HASNA_FEEDBACK_DATA_DIR: dataDir }, dataDir);
+    expect(listed.code).toBe(0);
+    const items = JSON.parse(listed.stdout) as { id: string }[];
+    expect(items.map((item) => item.id)).toContain(submitted.id);
+    // sync-tasks reaches the local store (and then reports the deliberately
+    // unconfigured sink) — the fail-closed env error would say FEEDBACK_API_URL
+    // instead, so reaching the sink check proves the opt-in path ran.
+    const synced = await runCli(["sync-tasks"], { HASNA_FEEDBACK_DATA_DIR: dataDir }, dataDir);
+    expect(synced.code).toBe(1);
+    expect(synced.stderr).toContain("No task sink is configured");
+    expect(synced.stderr).not.toContain("FEEDBACK_API_URL");
+    const report = await runCli(["doctor"], { HASNA_FEEDBACK_DATA_DIR: dataDir, FEEDBACK_LOCAL: "1" }, dataDir);
+    expect(report.code).toBe(0);
+    expect((JSON.parse(report.stdout) as { target: string }).target).toBe("local");
   });
 });

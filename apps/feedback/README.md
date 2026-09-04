@@ -133,6 +133,11 @@ await store.createFeedback({
 
 ## CLI
 
+Every verb needs a target — a hosted service via `--api-url` /
+`FEEDBACK_API_URL`, or an explicit opt into the on-box store via
+`FEEDBACK_LOCAL=1` (details below); unconfigured verbs fail closed. The
+command reference:
+
 ```bash
 feedback init
 feedback doctor
@@ -149,20 +154,29 @@ feedback export --format jsonl --until 2026-12-31
 Use `--api-url` and `--token` to target a Hasna Feedback server API instead of
 the on-box store, or set `FEEDBACK_API_URL` / `FEEDBACK_API_TOKEN` once so every
 command uses that server without retyping the flags. An explicit flag always
-beats the environment. The CLI connects either to its local SQLite-backed
-package store or to the server HTTP API; it never opens PostgreSQL directly or
-creates infrastructure.
+beats the environment, and `FEEDBACK_API_URL` always wins over the on-box
+opt-in.
+
+The CLI never opens the on-box store implicitly. Running a data verb with no
+`FEEDBACK_API_URL` / `--api-url` and no explicit opt-in **fails closed**: exit
+1, an error naming the required configuration, and nothing written to disk — a
+run that was meant to reach a shared service must not silently degrade into a
+machine-local file that reads as green. To deliberately use the on-box
+SQLite-backed store, set `FEEDBACK_LOCAL=1` (`HASNA_FEEDBACK_LOCAL=1` also
+works, matching the storage configuration convention below). `feedback init`
+and `feedback serve` remain the explicitly local setup commands. The CLI never
+opens PostgreSQL directly or creates infrastructure.
 
 `feedback shipped <id> --changelog-ref <ref>` marks feedback as shipped, records the changelog-entry linkage (`changelogRef`, `shippedAt`), and emits the `feedback.triaged` notification event with disposition `shipped`. It works against both the local store and a remote API (`--api-url`/`--token`, or `FEEDBACK_API_URL`). `feedback status <id> shipped` also moves the status but records no `changelogRef` — prefer `shipped` so the link between a report and the thing that resolved it survives.
 
-`feedback doctor` exits non-zero when it reports `ok: false`, so it can gate a health check or a loop.
+`feedback doctor` exits non-zero when it reports `ok: false`, so it can gate a health check or a loop. It fails closed like every other verb: with no `FEEDBACK_API_URL` and no `FEEDBACK_LOCAL=1` it reports `"target": "none"` with a blocker naming both variables, exits non-zero, and creates no local data.
 
 ### Closing the loop: feedback → task → PR
 
 Feedback is only useful if something picks it up. On the create path, Hasna Feedback files a task in a task tracker and records the link on the feedback item as `taskRef`:
 
 ```bash
-feedback submit "Export button 500s for orgs over 10k members" --app my-app --kind bug --severity high
+FEEDBACK_LOCAL=1 feedback submit "Export button 500s for orgs over 10k members" --app my-app --kind bug --severity high
 # -> stores the feedback AND creates a task titled
 #    "[feedback:my-app] Export button 500s for orgs over 10k members"
 ```
@@ -187,7 +201,7 @@ This runs in-process rather than through an out-of-process event subscriber on p
 **Capture is never held hostage by the tracker.** The report is written to storage first, and task creation runs after it with a timeout — a tracker that is down, slow, or hung costs you a task, never a report. If filing fails, the error is recorded on the item as `taskError` (truncated to the schema bound), `submit` warns and exits non-zero, and `feedback sync-tasks` retries:
 
 ```bash
-feedback sync-tasks   # -> {"sinkConfigured":true,"created":2,"failed":0,"skipped":11,"uncertain":0,"remaining":0,"errors":[]}
+FEEDBACK_LOCAL=1 feedback sync-tasks   # -> {"sinkConfigured":true,"created":2,"failed":0,"skipped":11,"uncertain":0,"remaining":0,"errors":[]}
 ```
 
 `sync-tasks` distinguishes two kinds of unlinked feedback, because they are not equally safe to retry:
