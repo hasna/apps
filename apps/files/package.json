@@ -31,7 +31,6 @@
   },
   "files": [
     "dist",
-    "dashboard/dist",
     "docs",
     "scripts",
     "LICENSE",
@@ -39,7 +38,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun run build:sdk && bun run build:dashboard && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @aws-sdk/* --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @aws-sdk/* --external pg && bun build src/server/index.ts src/server/migrate.ts src/server/file-content-worker.ts --outdir dist/server --target bun --external @aws-sdk/* --external pg && bun build src/index.ts src/sdk/index.ts --outdir dist --target bun --external @aws-sdk/* --external pg && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
+    "build": "bun run clean && bun run build:sdk && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external @aws-sdk/* --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external @aws-sdk/* --external pg && bun build src/server/index.ts src/server/migrate.ts src/server/file-content-worker.ts --outdir dist/server --target bun --external @aws-sdk/* --external pg && bun build src/index.ts src/sdk/index.ts --outdir dist --target bun --external @aws-sdk/* --external pg && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
     "build:sdk": "bun run scripts/generate-sdk.ts",
     "build:service": "bun build src/server/index.ts src/server/migrate.ts src/server/file-content-worker.ts --outdir dist/server --target bun --external @aws-sdk/* --external pg",
     "build:cli": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk",
@@ -47,7 +46,6 @@
     "build:server": "bun build src/server/index.ts src/server/file-content-worker.ts --outdir dist/server --target bun",
     "build:lib": "bun build src/index.ts --outdir dist --target bun --external @aws-sdk/* && bun build src/lib/path.ts --outfile dist/path.js --target bun && bun build src/s3.ts --outfile dist/s3.js --target bun --external @aws-sdk/* && bun run build:types",
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
-    "build:dashboard": "cd dashboard && bun install --frozen-lockfile && bun run build",
     "prepack": "bun run build",
     "prepublishOnly": "bun run typecheck && bun test && bun run contracts:conformance && bun run clean && contracts no-cloud-scan .",
     "smoke:knowledge-installed": "bun run scripts/knowledge-installed-smoke.ts",
@@ -70,8 +68,7 @@
     "claude",
     "sqlite",
     "file-management",
-    "cli",
-    "dashboard"
+    "cli"
   ],
   "author": "hasna",
   "license": "Apache-2.0",

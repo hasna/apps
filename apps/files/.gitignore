@@ -1,6 +1,5 @@
 node_modules/
 dist/
-dashboard/dist/
 *.db
 *.db-shm
 *.db-wal
