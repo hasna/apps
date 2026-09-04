@@ -15,6 +15,7 @@
 // Nothing here prints, logs, or stores a value — only variable NAMES.
 
 import { clientTransportEnvKeys } from "../../src/store/contracts-client/transport.js";
+import { LOCAL_VAULT_OPT_IN_ENV_KEY } from "../../src/store/index.js";
 import { TEST_ISOLATION_ENV_KEY, testVaultDir } from "../../src/test-isolation.js";
 
 const APP_NAME = "secrets";
@@ -51,11 +52,22 @@ for (const key of selectorKeys) {
 // default-env child is not covered, so this cannot quietly drift back.
 process.env[TEST_ISOLATION_ENV_KEY] = "1";
 
+// The whole suite EXPLICITLY opts into the local vault (owner ruling
+// 2026-09-04): store resolution without the hosted API env pair now FAILS
+// CLOSED unless HASNA_SECRETS_LOCAL_VAULT=1 is present, and the local-store
+// tests need that opt-in. Setting it here, once per test process, covers
+// in-process `getStore()` calls and — through the explicit
+// `env: { ...process.env }` spreads every spawn uses — spawned CLI children.
+// A test that asserts the fail-closed DEFAULT deletes this key alongside the
+// hosted-vault selectors (see tests/cli-fail-closed.test.ts).
+process.env[LOCAL_VAULT_OPT_IN_ENV_KEY] = "1";
+
 // One line per run, on the runner's own stream (never a spawned CLI child's), so the
 // isolation is observable rather than assumed. Names and paths only — no values. It
 // also names the throwaway vault any test that configures nothing will land in.
 console.error(
   `[secrets] test isolation: vault confined to ${testVaultDir()}; ` +
+    `local vault opted in via ${LOCAL_VAULT_OPT_IN_ENV_KEY}=1; ` +
     (removed.length > 0
       ? `removed ${removed.length} hosted-vault selector(s) from the environment: ${removed.join(", ")}`
       : "no hosted-vault selectors were present in the environment"),

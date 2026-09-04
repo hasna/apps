@@ -746,6 +746,17 @@ The vault database lives at `<data home>/vault.db`. Key material lives in
 `<data home>/vault.key` for local-key mode or `<data home>/vault.key.enc` for
 KMS envelope-encryption mode.
 
+### Client configuration (fail-closed default)
+
+The hosted secrets API is the only default: it is selected by
+`HASNA_SECRETS_API_URL` + `HASNA_SECRETS_API_KEY`. The LOCAL vault is served
+only behind the explicit `HASNA_SECRETS_LOCAL_VAULT=1` opt-in (standalone or
+offline use, local `serve`/MCP bridges). With neither, the CLI and MCP FAIL
+CLOSED — non-zero exit with an error naming the required env — instead of
+silently serving local SQLite (owner ruling 2026-09-04). Run through the
+station wrapper (`~/.local/bin/secrets`) when API credentials are managed
+there.
+
 ## Safety Notes
 
 - `list`, `search`, `export`, and `scan` do not decrypt or print secret values

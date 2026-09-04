@@ -30,8 +30,15 @@ function fakeClient(routes: Record<string, unknown>): { client: HasnaStorageClie
 }
 
 describe("secrets Store resolver (env flip)", () => {
-  it("stays local with no cloud env", () => {
-    const store = getStore({} as NodeJS.ProcessEnv);
+  it("fails closed with no cloud env and no local opt-in (owner ruling 2026-09-04)", () => {
+    expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_API_URL/);
+    expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_API_KEY/);
+    // The explicit local opt-in is named in the error, and nothing is opened.
+    expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_LOCAL_VAULT/);
+  });
+
+  it("resolves LocalStore only under the explicit local-vault opt-in", () => {
+    const store = getStore({ HASNA_SECRETS_LOCAL_VAULT: "1" } as NodeJS.ProcessEnv);
     expect(store).toBeInstanceOf(LocalStore);
     expect(store.mode).toBe("local");
   });

@@ -786,8 +786,9 @@ export class LocalStore implements Store {
   }
 
   /**
-   * Synchronous metadata-only count of local vault secret rows. Used by the CLI's
-   * local-fallback notice to state WHAT was counted (never includes values).
+   * Synchronous metadata-only count of local vault secret rows (never includes
+   * values). Local runs reach this store only through the explicit
+   * HASNA_SECRETS_LOCAL_VAULT=1 opt-in — there is no silent fallback anymore.
    */
   countSecretsSync(): number {
     const db = this.db();

@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
-import { getStoreWithResolution, LocalStore } from "./store/index.js";
+import { getStoreWithResolution } from "./store/index.js";
 import type { Store } from "./store/types.js";
-import { clientTransportEnvKeys, type ClientTransportResolution } from "./store/contracts-client/transport.js";
 import { getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import { VERSION } from "./version.js";
 import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
@@ -111,7 +110,8 @@ Examples:
   secrets aws sync
 
 Self-hosted (api mode): set HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY to route
-all reads/writes to the cloud API. Unset them to fall back to the local vault.
+all reads/writes to the cloud API. Without them the CLI fails closed unless the
+local vault is explicitly opted into with HASNA_SECRETS_LOCAL_VAULT=1.
 `);
 }
 
@@ -259,7 +259,9 @@ Self-hosted (api mode)
     export HASNA_SECRETS_API_URL=https://secrets.your-deployment.example
     export HASNA_SECRETS_API_KEY=<bearer key from your vault>
 
-  Unset both vars to fall back to the local encrypted vault (fully reversible).
+  Without both vars the CLI FAILS CLOSED unless the local vault is explicitly
+  opted into (HASNA_SECRETS_LOCAL_VAULT=1); it never silently falls back to
+  local SQLite (owner ruling 2026-09-04).
   A raw database URL is NEVER used on the client.
 
 Safety
@@ -539,58 +541,16 @@ let _store: Store | undefined;
 function store(): Store {
   if (_store) return _store;
   try {
-    const resolved = getStoreWithResolution();
-    emitLocalFallbackNotice(resolved.store, resolved.resolution);
-    _store = resolved.store;
+    _store = getStoreWithResolution().store;
   } catch (e: any) {
-    // Misconfigured cloud mode (e.g. mode=cloud but no API key). Fail loud with a
-    // clean message instead of silently reading the wrong dataset.
+    // FAIL CLOSED (owner ruling 2026-09-04; incident 715558): no hosted API env
+    // and no explicit local-vault opt-in, or a misconfigured flip. Exit non-zero
+    // with a clean actionable message naming the required env — never a silent
+    // rc=0 local-vault read, never a `secrets-local-fallback` event.
     console.error(e?.message ?? String(e));
     process.exit(1);
   }
   return _store;
-}
-
-/**
- * When the transport falls back to the LOCAL vault WITHOUT any cloud intent in
- * the environment — no API_URL+API_KEY pair (the flip signal needs BOTH) — the
- * CLI must not report a silent rc=0 empty vault. Incident 715558 (BUG
- * b76e2d56-38bf-468e-a6f9-90ea107e1b0e): an agent in a non-systemd shell
- * misdiagnosed ALL hosted credentials as missing because the CLI read the
- * unselected local vault and said "Vault is empty."
- *
- * The emission is one machine-readable JSON line on stderr (stdout stays pure
- * for parsers), naming WHERE the read went and WHAT the local vault held:
- * the fallback path, the local secret count, and the fact that hosted secrets
- * are NOT visible. A picked store (a mode variable set) is no longer possible —
- * retired storage-mode variables are a hard error, never a selector.
- */
-function emitLocalFallbackNotice(store: Store, resolution: ClientTransportResolution): void {
-  if (resolution.transport !== "local" || resolution.misconfigured) {
-    return;
-  }
-  const keys = clientTransportEnvKeys("secrets");
-  const localVaultPath = store.describe().location;
-  const localSecretCount = store instanceof LocalStore ? store.countSecretsSync() : 0;
-  const notice = {
-    event: "secrets-local-fallback",
-    transport: "local",
-    checked: {
-      retiredModeKeys: keys.modeKeys,
-      apiUrlKeys: keys.apiUrlKeys,
-      apiKeyKeys: keys.apiKeyKeys,
-    },
-    apiUrlPresent: Boolean(resolution.apiUrlSource),
-    apiKeyPresent: resolution.apiKeyPresent,
-    localVaultPath,
-    localSecretCount,
-    hostedSecretsVisible: false,
-    notice:
-      `No hosted API config (${keys.apiUrlKeys[0]} + ${keys.apiKeyKeys[0]}) is present; ` +
-      `reading the LOCAL vault at ${localVaultPath} (${localSecretCount} secret(s)). ` +
-      "Hosted secrets are NOT visible in this output.",
-  };
-  console.error(JSON.stringify(notice));
 }
 
 switch (command) {

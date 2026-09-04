@@ -368,11 +368,18 @@ describe("installed host cold launch (Chrome path resolution)", () => {
   });
 
   test("regression: installed host under an EMPTY environment starts and answers auth-status ok", async () => {
-    // The exact cold-launch shape: only HOME is set — no PATH, no SHELL.
-    // The kernel resolves the materialized absolute node shebang; the host
-    // shells the config-embedded absolute secrets CLI with its own bin dir
-    // prepended to PATH so the CLI's `#!/usr/bin/env bun` interpreter resolves.
-    const host = HostClient.direct(installedHost, { HOME: homedir() });
+    // The exact cold-launch shape: only HOME is set — no PATH, no SHELL —
+    // plus the explicit local-vault opt-in. The kernel resolves the
+    // materialized absolute node shebang; the host shells the config-embedded
+    // absolute secrets CLI with its own bin dir prepended to PATH so the CLI's
+    // `#!/usr/bin/env bun` interpreter resolves. The vault opt-in is required
+    // since 2026-09-04: without fleet API env the CLI fails closed rather than
+    // silently serving the local vault, and this regression exercises the
+    // local transport (no API env here by construction).
+    const host = HostClient.direct(installedHost, {
+      HOME: homedir(),
+      HASNA_SECRETS_LOCAL_VAULT: "1",
+    });
     try {
       const res = (await host.send({ verb: "auth-status" })) as any;
       expect(res.ok).toBe(true);
