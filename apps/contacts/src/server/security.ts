@@ -25,7 +25,6 @@ export type ContactsScope =
   | "images:read"
   | "images:write"
   | "mcp:access"
-  | "dashboard:read"
   | "stats:read";
 
 export interface ContactsPrincipal {
