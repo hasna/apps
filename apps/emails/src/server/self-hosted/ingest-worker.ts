@@ -374,6 +374,68 @@ export function shouldDeleteIngestResult(result: IngestResult): boolean {
   return result.status === "ingested" || result.status === "duplicate" || result.status === "quarantined";
 }
 
+// ── Progress-based liveness (incident 2026-08-31) ─────────────────────────────
+// The ingest worker is a headless long-poll loop with no HTTP surface, so a
+// wedged poll (a connection that silently stops answering instead of erroring)
+// left the ECS task RUNNING but useless for days. Two guards close that gap:
+//  1. every ReceiveMessage is bounded by a deadline, so a dead connection
+//     becomes an ordinary error (logged + retried with backoff) instead of a
+//     hang;
+//  2. a tiny health endpoint reports whether a receive/ack cycle completed
+//     recently, so ECS container health checks replace a task whose loop
+//     stopped making progress — no matter where inside the batch it wedged
+//     (S3/DB calls included).
+export const INGEST_RECEIVE_DEADLINE_MS = 35_000; // > WaitTimeSeconds (20 s) + margin
+export const INGEST_PROGRESS_STALE_DEFAULT_MS = 5 * 60_000;
+export const INGEST_HEALTH_PORT_DEFAULT = 9487;
+
+/** Port for the progress-liveness endpoint; 0 disables the endpoint. */
+export function parseIngestHealthPort(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return INGEST_HEALTH_PORT_DEFAULT;
+  const n = Number(raw);
+  return Number.isFinite(n) && Number.isInteger(n) && n >= 0 && n <= 65535 ? n : 0;
+}
+
+/** How long a completed receive/ack cycle may be absent before /ready 503s. */
+export function parseIngestProgressStaleMs(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return INGEST_PROGRESS_STALE_DEFAULT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : INGEST_PROGRESS_STALE_DEFAULT_MS;
+}
+
+export interface IngestHealthServer {
+  /** Base URL of the health endpoint, including the bound port. */
+  url: string;
+  stop(): void;
+}
+
+/**
+ * Serves GET /ready on 127.0.0.1:<port> for the ingest worker's own ECS
+ * container health check. 200 while a receive/ack cycle completed within
+ * `staleMs`, 503 once progress went stale (the wedged-loop signal). Never
+ * exposes anything but the trinary ok/stale/not-found answer.
+ */
+export function startIngestProgressHealthServer(options: {
+  port: number;
+  staleMs: number;
+  lastProgressAt: () => number;
+}): IngestHealthServer {
+  const server = Bun.serve({
+    port: options.port,
+    hostname: "127.0.0.1",
+    fetch(req) {
+      const path = new URL(req.url).pathname;
+      if (path !== "/ready") return new Response("not found", { status: 404 });
+      const fresh = Date.now() - options.lastProgressAt() <= options.staleMs;
+      return new Response(fresh ? "ok" : "stale", {
+        status: fresh ? 200 : 503,
+        headers: { "Content-Type": "text/plain" },
+      });
+    },
+  });
+  return { url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
+}
+
 /**
  * Run the ingest worker loop until SIGTERM/SIGINT. Reads its wiring from the
  * environment:
@@ -382,6 +444,8 @@ export function shouldDeleteIngestResult(result: IngestResult): boolean {
  *   EMAILS_INGEST_PREFIX_DOMAIN_MAP — JSON object mapping trusted prefixes to domains
  *   AWS_REGION                 (default us-east-1)
  *   EMAILS_DATABASE_URL        (required) — self-hosted Postgres DSN
+ *   EMAILS_WORKER_HEALTH_PORT  progress-liveness endpoint port (default 9487; 0 disables)
+ *   EMAILS_WORKER_PROGRESS_STALE_MS — ms without a completed receive/ack cycle before /ready 503s
  */
 export async function runIngestWorker(options: WorkerOptions = {}): Promise<void> {
   const region = options.region ?? process.env["AWS_REGION"] ?? "us-east-1";
@@ -438,6 +502,26 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
 
   const counts = { ingested: 0, duplicate: 0, quarantined: 0, error: 0 };
   let lastReport = Date.now();
+
+  // Progress-based liveness: the long-poll receive is deadline-bounded (a dead
+  // connection must error, not hang) and a local health endpoint reports
+  // whether the loop is still completing receive/ack cycles, so ECS can
+  // replace a wedged task.
+  const healthPort = parseIngestHealthPort(process.env["EMAILS_WORKER_HEALTH_PORT"]);
+  const progressStaleMs = parseIngestProgressStaleMs(process.env["EMAILS_WORKER_PROGRESS_STALE_MS"]);
+  let lastProgressAt = Date.now();
+  let health: IngestHealthServer | null = null;
+  if (healthPort > 0) {
+    health = startIngestProgressHealthServer({
+      port: healthPort,
+      staleMs: progressStaleMs,
+      lastProgressAt: () => lastProgressAt,
+    });
+    console.log(`[ingest] progress liveness: ${health.url}/ready (stale after ${progressStaleMs} ms)`);
+  } else {
+    console.log("[ingest] progress liveness: disabled (EMAILS_WORKER_HEALTH_PORT is 0)");
+  }
+
   console.log(
     `[ingest] starting: queue=${configuredQueueUrl.split("/").pop()} region=${region} ` +
       `bucket=${configuredBucket}`,
@@ -453,6 +537,7 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
           WaitTimeSeconds: waitTimeSeconds,
           VisibilityTimeout: visibilityTimeout,
         }),
+        { abortSignal: AbortSignal.timeout(INGEST_RECEIVE_DEADLINE_MS) },
       );
       messages = out.Messages ?? [];
     } catch (err) {
@@ -460,6 +545,10 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
       await sleep(5000);
       continue;
     }
+    // A completed receive cycle is progress even with zero messages: it proves
+    // the poll loop is alive (the wedge the 2026-08-31 incident saw stops
+    // right here, with the task still 'healthy').
+    lastProgressAt = Date.now();
 
     for (const m of messages) {
       if (!running) break;
@@ -497,6 +586,7 @@ export async function runIngestWorker(options: WorkerOptions = {}): Promise<void
     `[ingest] stopped. totals ingested=${counts.ingested} duplicate=${counts.duplicate} ` +
       `quarantined=${counts.quarantined} error=${counts.error}`,
   );
+  if (health) health.stop();
   await closeSelfHostedPool();
 }
 

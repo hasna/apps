@@ -376,6 +376,12 @@ variable "sqs_visibility_timeout_seconds" {
   default     = 180
 }
 
+variable "worker_health_port" {
+  description = "Ingest worker progress-liveness endpoint port (EMAILS_WORKER_HEALTH_PORT). 0 disables the endpoint; with it enabled the worker's ECS container health check fails once no receive/ack cycle completes for EMAILS_WORKER_PROGRESS_STALE_MS."
+  type        = number
+  default     = 9487
+}
+
 variable "sqs_max_receive_count" {
   description = "Failed attempts before a message moves to the DLQ."
   type        = number
