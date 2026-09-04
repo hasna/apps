@@ -9,7 +9,11 @@
 // `HasnaStorageClient` (from @hasna/contracts) when the http transport is active,
 // or `{ active: false }` so the caller falls back to the local store. It throws (via
 // resolveStorageClient) when an API URL is set without a key (misconfigured), so a
-// client can never silently drift back to the wrong dataset.
+// client can never silently drift back to the wrong dataset. Retired
+// `*_STORAGE_MODE` / `*_MODE` variables are a hard error here too (owner
+// directive 2026-07-29): deployment modes no longer exist, the transport is
+// selected by URL + key alone, and a leftover mode variable must not be
+// silently ignored.
 //
 // SAFETY: never logs or embeds the API key — it lives only inside the transport.
 
@@ -20,6 +24,26 @@ type StorageClientOverrides = Parameters<typeof resolveStorageClient>[2];
 
 /** The economy app slug used for the HASNA_<APP>_* env lookups. */
 export const ECONOMY_APP = "economy";
+
+/** Retired client storage-mode variables — naming one in an error is the guard. */
+const RETIRED_STORAGE_MODE_KEYS = [
+  "HASNA_ECONOMY_STORAGE_MODE",
+  "HASNA_ECONOMY_MODE",
+  "ECONOMY_STORAGE_MODE",
+  "ECONOMY_MODE",
+] as const;
+
+function assertNoRetiredStorageMode(env: NodeJS.ProcessEnv): void {
+  const legacyKey = RETIRED_STORAGE_MODE_KEYS.find(
+    (key) => Object.hasOwn(env, key) && env[key] !== undefined,
+  );
+  if (!legacyKey) return;
+  throw new Error(
+    `${legacyKey} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
+      `The client uses the local SQLite store, or the HTTP API selected by ` +
+      `HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY.`,
+  );
+}
 
 export type EconomyCloudStorage =
   | {
@@ -47,6 +71,7 @@ export function resolveEconomyCloudStorage(
   env: NodeJS.ProcessEnv = process.env,
   overrides?: StorageClientOverrides,
 ): EconomyCloudStorage {
+  assertNoRetiredStorageMode(env);
   const resolved = resolveStorageClient(ECONOMY_APP, env, overrides);
   return resolved.transport === "http"
     ? { active: true, client: resolved.client }

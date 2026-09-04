@@ -18,10 +18,11 @@
  *    `ACCOUNTS_API_URL` / `ACCOUNTS_API_KEY`), bearer + `x-api-key` auth,
  *    30s timeout, 2 retries on 408/425/429/5xx with jittered backoff — the
  *    contracts 0.5.2 HTTP-transport defaults @hasna/accounts shipped with.
- *  - Storage-mode semantics: `local` forces the local transport; `cloud` /
- *    `self_hosted` require the URL+key pair (else throw); an unset mode uses
- *    the API when the pair is present; invalid modes throw; retired modes
- *    (`remote`/`hybrid`/`s3`) degrade to the pair rule.
+ *  - Transport selection is the env contract alone: the API when
+ *    `HASNA_ACCOUNTS_API_URL` + `HASNA_ACCOUNTS_API_KEY` are both present,
+ *    else the local JSON store. Deployment modes no longer exist; any retired
+ *    `*_STORAGE_MODE` / `*_MODE` variable still set is a hard error (owner
+ *    directive 2026-07-29), never a hint or a selector.
  *
  * When @hasna-internal/subscriptions is published, this file can be replaced
  * by a thin adapter over its SubscriptionsStore (same shape, new env vars).
@@ -192,8 +193,25 @@ class LocalStore implements AccountsStore {
 // accounts-serve without pulling the doomed package (or its successor) in.
 // ---------------------------------------------------------------------------
 
-const CANONICAL_MODES = new Set(['local', 'self_hosted', 'cloud'])
-const RETIRED_MODES = new Set(['remote', 'hybrid', 's3'])
+const RETIRED_STORAGE_MODE_KEYS = [
+  'HASNA_ACCOUNTS_STORAGE_MODE',
+  'ACCOUNTS_STORAGE_MODE',
+  'HASNA_ACCOUNTS_MODE',
+  'ACCOUNTS_MODE',
+] as const
+
+function assertNoRetiredStorageMode(env: NodeJS.ProcessEnv): void {
+  const legacyKey = RETIRED_STORAGE_MODE_KEYS.find(
+    (key) => Object.hasOwn(env, key) && env[key] !== undefined,
+  )
+  if (!legacyKey) return
+  throw new Error(
+    `${legacyKey} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
+      `The accounts registry uses the local JSON store, or the HTTP API selected by ` +
+      `HASNA_ACCOUNTS_API_URL + HASNA_ACCOUNTS_API_KEY.`,
+  )
+}
+
 const RETRY_STATUSES = [408, 425, 429, 500, 502, 503, 504]
 
 /** Normalize an API URL to its `<origin>/v1` base (contracts 0.5.2 semantics). */
@@ -382,28 +400,16 @@ class ApiStore implements AccountsStore {
 }
 
 /**
- * Resolve the active registry store for this process — same selection rules as
- * @hasna/accounts 0.2.23: the API when self-hosted cloud mode is configured
- * (URL + key present and mode not forced local), else the local JSON store.
+ * Resolve the active registry store for this process — the env contract alone:
+ * the API when the URL + key pair is present (never selected by a storage
+ * mode), else the local JSON store. Retired `*_STORAGE_MODE` / `*_MODE`
+ * variables are a hard error so a half-migrated deployment fails loudly
+ * instead of silently reading the wrong dataset.
  */
 export function resolveStore(env: NodeJS.ProcessEnv = process.env): AccountsStore {
+  assertNoRetiredStorageMode(env)
   const url = env.HASNA_ACCOUNTS_API_URL || env.ACCOUNTS_API_URL
   const key = env.HASNA_ACCOUNTS_API_KEY || env.ACCOUNTS_API_KEY
-  const rawMode = (env.HASNA_ACCOUNTS_STORAGE_MODE || env.ACCOUNTS_STORAGE_MODE || env.HASNA_ACCOUNTS_MODE || '').trim().toLowerCase()
-  const explicitMode = CANONICAL_MODES.has(rawMode) ? rawMode : ''
-  if (rawMode && !explicitMode && !RETIRED_MODES.has(rawMode)) {
-    throw new Error(`invalid accounts storage mode "${rawMode}"; expected local, self_hosted, or cloud`)
-  }
-  if (explicitMode === 'local') return new LocalStore()
-  if (explicitMode === 'self_hosted' || explicitMode === 'cloud') {
-    if (!url || !key) {
-      const missing = [!url ? 'HASNA_ACCOUNTS_API_URL' : '', !key ? 'HASNA_ACCOUNTS_API_KEY' : '']
-        .filter(Boolean)
-        .join(' and ')
-      throw new Error(`${explicitMode} storage mode requires ${missing}`)
-    }
-    return cloudStore(url, key)
-  }
   if (url && key) return cloudStore(url, key)
   return new LocalStore()
 }
