@@ -5,13 +5,21 @@ persistent user state. Installing or running its validation commands does not
 create a home directory.
 
 If the package gains non-authoritative user-level state in the future, it must
-use the matching XDG kind (and its standard default):
+use the canonical Hasna home layout (the 2026-09-04 home-layout ruling,
+`~/.hasna/<name>/` on every platform), with the kind as the subdirectory:
 
 ```text
-$XDG_CONFIG_HOME/hasna/contracts   (~/.config/hasna/contracts)
-$XDG_STATE_HOME/hasna/contracts    (~/.local/state/hasna/contracts)
-$XDG_CACHE_HOME/hasna/contracts    (~/.cache/hasna/contracts)
+~/.hasna/contracts/config   (HASNA_HOME replaces ~/.hasna)
+~/.hasna/contracts/state
+~/.hasna/contracts/cache
 ```
+
+XDG is never a Hasna root. `XDG_CONFIG_HOME`, `XDG_STATE_HOME` and
+`XDG_CACHE_HOME` are not consulted for any path, and `~/.config/hasna/` is a
+retired location, not a fallback. Only the explicit `HASNA_HOME` and
+`HASNA_CONFIG_HOME` overrides relocate these roots (XDG *semantics* apply to
+those two variables — absolute paths only, blank means unset — but the XDG
+variables themselves are never read).
 
 The legacy roots `~/.contracts` and `~/.open-contracts` are not operational read
 paths. The package never copies, moves, rewrites, or deletes them. There is no

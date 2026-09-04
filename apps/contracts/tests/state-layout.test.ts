@@ -62,10 +62,18 @@ describe("@hasna/contracts state layout", () => {
     if (!existsSync(policyPath)) return;
 
     const policy = readFileSync(policyPath, "utf8");
-    expect(policy).toContain("$XDG_CONFIG_HOME/hasna/contracts");
-    expect(policy).toContain("$XDG_STATE_HOME/hasna/contracts");
-    expect(policy).toContain("$XDG_CACHE_HOME/hasna/contracts");
-    expect(policy).not.toContain("~/.hasna/contracts");
+    // 2026-09-04 home-layout ruling: the canonical root is ~/.hasna/<name>/ on
+    // every platform and XDG is never a Hasna root, so the policy must describe
+    // a future state root that way and must not name an $XDG_*_HOME/hasna path.
+    expect(policy).toContain("~/.hasna/contracts/config");
+    expect(policy).toContain("~/.hasna/contracts/state");
+    expect(policy).toContain("~/.hasna/contracts/cache");
+    expect(policy).toContain("XDG is never a Hasna root");
+    for (const xdgRoot of ["$XDG_CONFIG_HOME/hasna", "$XDG_STATE_HOME/hasna", "$XDG_CACHE_HOME/hasna"]) {
+      expect(policy, `${xdgRoot} must not be described as a Hasna state root`).not.toContain(
+        `${xdgRoot}/contracts`
+      );
+    }
     for (const legacyPath of legacyGlobalPaths) {
       expect(policy).toContain(legacyPath);
     }

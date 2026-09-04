@@ -4,6 +4,22 @@
 
 ### Patch Changes
 
+- Regenerate the shipped contract artifacts so they match the `src/` renderer
+  that produced them. `generated/todos/v1/**` and `generated/deployment/v1/**`
+  are public export subpaths (`@hasna/contracts/todos/artifacts/*`,
+  `@hasna/contracts/deployment/artifacts/*`) and ship in the tarball, but the
+  copies carried since #1764 were rendered from an older `src/`: `todos:check`
+  and `deployment:check` both reported them stale, so `build` — and with it
+  `verify:release` / `prepublishOnly` — aborted. `openapi.json`,
+  `schema-bundle.json`, `contract.json`, `checksums.json`,
+  `generator-provenance.json` and the four transfer/authority fixtures are
+  rewritten from the current source; the todos `identityDigest` moves to
+  `76ae38ffac189e6044971d7ef736a6c52fe7286b2093dbb7c950054f985dd3e2` and the
+  `outputContractDigest` to
+  `84ff3d0baefd1218fc2422c2fa411dd549d490197fdab6573f35c4f3bc724d40`. Consumers
+  reading these artifacts now get a payload a reproducible build can regenerate
+  byte for byte.
+
 - cfd72cb: Fail-closed blank backend env and secure credential-file reads (todos a71e18ce):
 
   - A DEFINED-but-blank `HASNA_<NAME>_DATABASE_URL` / `<NAME>_DATABASE_URL`
