@@ -1143,6 +1143,18 @@ For a loop with a bundle (`bundle_name` set), and only for such a loop:
    executor.
 4. A loop whose bundle directory is missing fails with `BUNDLE_MISSING` and is
    NOT silently resolved through PATH.
+5. The gate is applied in `executeLoopTarget`, ahead of the goal and workflow
+   branches, so it covers all three shapes a loop can take: a plain command, a
+   loop carrying a `goal`, and a `workflow` target. It has to sit there rather
+   than in `executeLoop`, because a bundle's own `loop.json` can set `goal` on
+   the loop it is applied to — a gate that only covered the plain-command path
+   could be stepped around by the bundle it was meant to police.
+6. An ABSOLUTE `target.command` is left exactly as written, because an operator
+   who named a full path meant that file. Such a run is still gated — the tree
+   is still verified and drift still refuses — but the binary that runs came
+   from outside the bundle, while the receipt's `bundle` block attests the
+   bundle that was verified. Prefer a bundle-relative command whenever the
+   receipt is meant to answer "what code ran here?" on its own.
 
 Run receipts carry `bundle: { name, version, digest }` for bundled runs, so a
 receipt answers "what code ran here?" long after the local tree has moved on.

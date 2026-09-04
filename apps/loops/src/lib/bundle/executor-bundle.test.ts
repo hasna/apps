@@ -5,7 +5,8 @@ import { join, resolve } from "node:path";
 import { MANIFEST_FILE, MODE_DATA, MODE_SCRIPT } from "./manifest.js";
 import { refreshManifest, writeBundleSkeleton, type LoopBundleDefinition } from "./local.js";
 import { resolveBundleCommand, resolveBundleExecution } from "./executor-bundle.js";
-import type { Loop } from "../../types.js";
+import type { Loop, LoopRun } from "../../types.js";
+import type { WorkflowExecutionStore } from "../workflow-runner.js";
 
 const roots: string[] = [];
 
@@ -255,5 +256,95 @@ describe("applyBundleExecution", () => {
     if ("refusal" in decision) throw new Error(`unexpected refusal: ${decision.refusal.message}`);
     expect(decision.target).toMatchObject({ command: resolve(dir, "scripts/run.sh"), cwd: dir });
     expect(decision.bundle).toMatchObject({ name: "demo" });
+  });
+});
+
+describe("executeLoopTarget applies the gate before the goal and workflow branches", () => {
+  /**
+   * Every production entry point - the daemon, the scheduler, the remote
+   * runner - calls `executeLoopTarget`, and it used to branch to `runGoal` or
+   * to the workflow machinery BEFORE reaching `executeLoop`, the only place
+   * the digest gate lived. A bundled loop that carried a `goal` therefore ran
+   * whatever was in `scripts/` on every tick with no verification at all, and
+   * `applyDefinitionToLoop` writes `goal` onto a loop straight out of the
+   * bundle's own loop.json - so a pushed bundle could move its own loop into
+   * the ungated path.
+   *
+   * The store throws on every call: a refusal that touched it would mean the
+   * gate ran too late to stop the work.
+   */
+  const refusingStore = new Proxy({} as WorkflowExecutionStore, {
+    get(_target, property) {
+      return () => {
+        throw new Error(`the gate let execution reach the store: ${String(property)}`);
+      };
+    },
+  });
+
+  function loopRun(): LoopRun {
+    return {
+      id: "lr_1",
+      loopId: "lp_1",
+      loopName: "demo",
+      scheduledFor: "2026-09-04T00:00:00.000Z",
+      attempt: 1,
+      status: "running",
+      createdAt: "2026-09-04T00:00:00.000Z",
+      updatedAt: "2026-09-04T00:00:00.000Z",
+    };
+  }
+
+  test("a drifted bundled loop carrying a goal refuses instead of running the goal", async () => {
+    const { env, dir } = bundleFixture();
+    writeFileSync(join(dir, "scripts", "run.sh"), SCRIPT_AFTER, { mode: MODE_SCRIPT });
+    const { executeLoopTarget } = await import("../workflow-runner.js");
+    const withGoal: Loop = { ...bundledLoop(), goal: { objective: "drain the queue" } };
+    const result = await executeLoopTarget(refusingStore, withGoal, loopRun(), { env });
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("BUNDLE_DRIFT");
+  });
+
+  test("a drifted bundled loop with a workflow target refuses before the workflow is loaded", async () => {
+    const { env, dir } = bundleFixture();
+    writeFileSync(join(dir, "scripts", "run.sh"), SCRIPT_AFTER, { mode: MODE_SCRIPT });
+    const { executeLoopTarget } = await import("../workflow-runner.js");
+    const asWorkflow = { ...bundledLoop(), target: { type: "workflow", workflowId: "wf_1" } } as unknown as Loop;
+    const result = await executeLoopTarget(refusingStore, asWorkflow, loopRun(), { env });
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("BUNDLE_DRIFT");
+  });
+
+  test("a missing bundle refuses on the goal path rather than resolving through PATH", async () => {
+    const { env } = bundleFixture();
+    const { executeLoopTarget } = await import("../workflow-runner.js");
+    const absent: Loop = { ...bundledLoop(), bundleName: "gone", goal: { objective: "drain the queue" } };
+    const result = await executeLoopTarget(refusingStore, absent, loopRun(), { env });
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("BUNDLE_MISSING");
+  });
+
+  test("a clean bundled loop passes the gate and hands the goal path the in-bundle target", async () => {
+    const { env, dir } = bundleFixture();
+    const { executeLoopTarget } = await import("../workflow-runner.js");
+    const { applyBundleExecution } = await import("../executor.js");
+    const withGoal: Loop = { ...bundledLoop(), goal: { objective: "drain the queue" } };
+
+    // What the gate hands the goal branch: the command resolved against the
+    // BUNDLE ROOT, not $PWD, plus the bundle block the receipt is stamped with.
+    // Passing `runGoal` the raw stored target would resolve `scripts/run.sh`
+    // against the daemon's working directory instead.
+    const decision = applyBundleExecution(withGoal, { env });
+    if ("refusal" in decision) throw new Error(`unexpected refusal: ${decision.refusal.message}`);
+    expect(decision.target).toMatchObject({ command: resolve(dir, "scripts/run.sh"), cwd: dir });
+    expect(decision.bundle).toMatchObject({ name: "demo" });
+
+    // And the gate does not stand in the way of a clean tree: this run fails
+    // for an unrelated reason (no goal model is configured in the test env),
+    // never with a bundle refusal.
+    const outcome = await executeLoopTarget({} as WorkflowExecutionStore, withGoal, loopRun(), { env }).then(
+      (result) => result.error ?? "",
+      (thrown) => String(thrown),
+    );
+    expect(outcome).not.toContain("BUNDLE_");
   });
 });
