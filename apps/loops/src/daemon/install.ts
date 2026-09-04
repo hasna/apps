@@ -79,6 +79,7 @@ Restart=always
 RestartSec=5
 ${systemdEnvironmentLine("PATH", pathEnv)}
 ${systemdEnvironmentLine("LOOPS_DATA_DIR", dataDirPath)}
+${systemdEnvironmentLine("HASNA_LOOPS_CONNECTION", "file")}
 
 [Install]
 WantedBy=default.target
@@ -118,6 +119,7 @@ ${args.map((arg) => `    <string>${xmlEscape(arg)}</string>`).join("\n")}
   <dict>
     <key>PATH</key><string>${xmlEscape(pathEnv)}</string>
     <key>LOOPS_DATA_DIR</key><string>${xmlEscape(dataDirPath)}</string>
+    <key>HASNA_LOOPS_CONNECTION</key><string>file</string>
   </dict>
   <key>StandardOutPath</key><string>${xmlEscape(daemonLogPath())}</string>
   <key>StandardErrorPath</key><string>${xmlEscape(daemonLogPath())}</string>

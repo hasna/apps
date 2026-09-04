@@ -13,12 +13,21 @@ function cleanEnv(overrides: Record<string, string>): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) env[key] = value;
   }
-  return {
+  const merged = {
     ...env,
     HASNA_LOOPS_API_URL: "",
     HASNA_LOOPS_API_KEY: "",
+    // Blanked so a developer's own connection selection never leaks in; local
+    // (no API env) spawns get the explicit file opt-in re-added below.
+    HASNA_LOOPS_CONNECTION: "",
     ...overrides,
   };
+  if (!merged.HASNA_LOOPS_CONNECTION?.trim() && !merged.HASNA_LOOPS_API_URL?.trim() && !merged.HASNA_LOOPS_API_KEY?.trim()) {
+    // No API env: this spawn runs against the local file store, which requires
+    // the explicit opt-in (fail-closed policy).
+    merged.HASNA_LOOPS_CONNECTION = "file";
+  }
+  return merged;
 }
 
 function textPayload(result: Awaited<ReturnType<Client["callTool"]>>): unknown {

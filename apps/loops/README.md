@@ -31,11 +31,17 @@ resolved through `@hasna/paths` to the XDG data home once the store is migrated
 there or `HASNA_DATA_HOME` is set, or `$LOOPS_DATA_DIR/loops.db` when the
 exact-app override is set) or PostgreSQL
 (explicitly configured on `loops-serve` via `HASNA_LOOPS_DATABASE_URL`).
-Clients connect either to the local file (`connection=file`, the default) or to
-a control-plane HTTP API (`connection=api`, selected by `HASNA_LOOPS_API_URL`
-plus `HASNA_LOOPS_API_KEY`). The former `HASNA_LOOPS_STORAGE_MODE` variable is
-deleted; unset `HASNA_LOOPS_API_URL`/`HASNA_LOOPS_API_KEY` to revert a flipped
-client.
+Clients connect either to the local file (`connection=file`) or to a
+control-plane HTTP API (`connection=api`, selected by `HASNA_LOOPS_API_URL`
+plus `HASNA_LOOPS_API_KEY`). Neither is a default: an invocation with no API
+env and no explicit selection FAILS CLOSED with a non-zero exit and an error
+naming the required variables — the client never silently serves the local
+SQLite file when the API env is missing. The file connection is an EXPLICIT
+opt-in (`HASNA_LOOPS_CONNECTION=file`); the API connection requires both
+variables (`HASNA_LOOPS_CONNECTION=api` additionally enforces that). Setting
+`HASNA_LOOPS_CONNECTION=file` alongside the API variables is a contradiction
+and is rejected. The former `HASNA_LOOPS_STORAGE_MODE` variable is deleted and
+rejected if present.
 
 The public `@hasna/loops` package owns the local runtime, the Postgres storage
 adapter, the control-plane API contract, tenant authentication and

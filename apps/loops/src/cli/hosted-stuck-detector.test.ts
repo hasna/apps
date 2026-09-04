@@ -19,15 +19,22 @@ async function runCli(
   args: string[],
   env: Record<string, string>,
 ): Promise<CliResult> {
+  const merged = {
+    ...process.env,
+    HOME: dataDir,
+    LOOPS_DATA_DIR: dataDir,
+    HASNA_LOOPS_API_URL: "",
+    HASNA_LOOPS_API_KEY: "",
+    HASNA_LOOPS_CONNECTION: "",
+    ...env,
+  };
+  if (!merged.HASNA_LOOPS_CONNECTION?.trim() && !merged.HASNA_LOOPS_API_URL?.trim() && !merged.HASNA_LOOPS_API_KEY?.trim()) {
+    // No API env: this spawn runs against the local file store, which requires
+    // the explicit opt-in (fail-closed policy).
+    merged.HASNA_LOOPS_CONNECTION = "file";
+  }
   const child = Bun.spawn([process.execPath, cliPath, ...args], {
-    env: {
-      ...process.env,
-      HOME: dataDir,
-      LOOPS_DATA_DIR: dataDir,
-      HASNA_LOOPS_API_URL: "",
-      HASNA_LOOPS_API_KEY: "",
-      ...env,
-    },
+    env: merged,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",

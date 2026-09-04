@@ -37,15 +37,22 @@ The client (CLI, SDK, MCP) has exactly two connections:
 
 | Connection | Selection | Notes |
 | --- | --- | --- |
-| `file` | Default. The local SQLite file | Authoritative local scheduling and daemon execution |
+| `file` | `HASNA_LOOPS_CONNECTION=file` (explicit opt-in) | The local SQLite file; authoritative local scheduling and daemon execution |
 | `api` | `HASNA_LOOPS_API_URL` plus `HASNA_LOOPS_API_KEY` | The control-plane HTTP API at `<API_URL>/v1` with a bearer key |
 
-Setting both `HASNA_LOOPS_API_URL` and `HASNA_LOOPS_API_KEY` flips the client
-to the control-plane API; unsetting them reverts it to the local file
-connection. There is no mode variable in this decision. A database URL never
-changes client authority: the standalone `loops` CLI never mutates a remote
-database by itself, and remote execution flows through the configured
-control-plane API and runner protocol.
+No connection is a default. Setting both `HASNA_LOOPS_API_URL` and
+`HASNA_LOOPS_API_KEY` flips the client to the control-plane API; running
+against the on-box file store requires the explicit `HASNA_LOOPS_CONNECTION=file`
+opt-in (values `file` | `api`). An invocation with neither the API variables
+nor an explicit selection FAILS CLOSED: non-zero exit with an actionable error
+naming the required env — the client never silently serves the local SQLite
+file when the API env is missing. `HASNA_LOOPS_CONNECTION=file` alongside the
+API variables is a contradiction and is rejected, `HASNA_LOOPS_CONNECTION=api`
+still requires both API variables, and any other value is a hard error. There
+is no mode variable in this decision. A database URL never changes client
+authority: the standalone `loops` CLI never mutates a remote database by
+itself, and remote execution flows through the configured control-plane API
+and runner protocol.
 
 Tokens are represented only as presence signals in status output. URL
 credentials, query strings, and fragments are not returned in status output.
@@ -57,7 +64,7 @@ status output is intentionally compact; JSON uses these field names:
 
 - `storage`: the server-side storage backend, `sqlite` or `postgresql`.
 - `connection`: the client connection, `file` or `api`.
-- `connectionSource`: the env var or default that selected the connection.
+- `connectionSource`: the env var that selected the connection (`HASNA_LOOPS_CONNECTION` or the API variables); there is no unset default.
 - `localStore.role`: `authoritative` on the file connection, `spool`
   on the API connection.
 - `controlPlane.configured`: true only when the API connection has enough

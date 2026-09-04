@@ -59,10 +59,12 @@ export interface LoopsClientOptions {
   /**
    * Inject an on-box sqlite {@link Store} (mainly for tests and in-process local
    * runtimes). When provided, both data and local-runtime operations run against
-   * it. When omitted, the data store is resolved from the client-flip env via
-   * {@link getStore} — the local sqlite store OR the hosted `/v1` API when
-   * HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY are set — so every data method
-   * routes through the one Store abstraction.
+   * it. When omitted, the data store is resolved from the connection env via
+   * {@link getStore} — the hosted `/v1` API when HASNA_LOOPS_API_URL and
+   * HASNA_LOOPS_API_KEY are set, or the local sqlite store when
+   * HASNA_LOOPS_CONNECTION=file is set explicitly. With neither, construction
+   * fails closed (no silent local fallback). Every data method routes through
+   * the one Store abstraction.
    */
   store?: Store;
   /**

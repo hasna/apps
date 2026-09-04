@@ -65,6 +65,7 @@ import {
   type LoopsMigrationPlan,
 } from "../lib/migration.js";
 import { resolveRuntimeConfig } from "../lib/runtime-config.js";
+import { requireConfiguredConnection } from "../lib/cloud/resolve.js";
 import { buildStorageConnectionReport, storageConnectionReportLine, type StorageConnectionReport } from "../lib/runtime-status.js";
 import {
   buildDuplicateOverlapReport,
@@ -310,7 +311,7 @@ function assertLocalOnlyCommand(command: string): void {
   if (isCloudStore()) {
     throw new ValidationError(
       `'loops ${command}' operates on this machine's local runtime and is not available while flipped to the hosted Loops API. ` +
-        `Unset HASNA_LOOPS_API_URL/HASNA_LOOPS_API_KEY to use the local file store and run it here.`,
+        `Set HASNA_LOOPS_CONNECTION=file to explicitly use the local file store and run it here.`,
     );
   }
 }
@@ -403,6 +404,10 @@ function printStorageConnectionReport(report: StorageConnectionReport, opts: { j
 
 function statusCommand() {
   return (opts: { json?: boolean } = {}) => {
+    // Fail closed when neither the hosted API env nor the explicit local opt-in
+    // is configured, so an unconfigured invocation exits non-zero with guidance
+    // instead of reporting a file connection that no data command would use.
+    requireConfiguredConnection("loops");
     printStorageConnectionReport(buildStorageConnectionReport(resolveRuntimeConfig()), opts);
   };
 }

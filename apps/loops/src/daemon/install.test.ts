@@ -56,6 +56,7 @@ describe("installStartup", () => {
       expect(service).toContain("WantedBy=default.target");
       expect(service).toContain(`WorkingDirectory=${env.dataDir}`);
       expect(service).toContain(`Environment="LOOPS_DATA_DIR=${env.dataDir}"`);
+      expect(service).toContain(`Environment="HASNA_LOOPS_CONNECTION=file"`);
       expect(service).toContain('Environment="PATH=');
     } finally {
       env.restore();
@@ -81,6 +82,7 @@ describe("installStartup", () => {
       expect(plist).toContain("<string>/opt/a&amp;b/&lt;cli&gt;.js</string>");
       expect(plist).not.toContain("<string>/opt/a&b/<cli>.js</string>");
       expect(plist).toContain(`<key>LOOPS_DATA_DIR</key><string>${env.dataDir}</string>`);
+      expect(plist).toContain("<key>HASNA_LOOPS_CONNECTION</key><string>file</string>");
       expect(plist).toContain(`<key>WorkingDirectory</key><string>${env.dataDir}</string>`);
       expect(result.instructions.some((line) => line.includes("launchctl bootstrap gui/$(id -u)"))).toBe(true);
       expect(result.instructions.some((line) => line.includes("launchctl bootout gui/$(id -u)"))).toBe(true);

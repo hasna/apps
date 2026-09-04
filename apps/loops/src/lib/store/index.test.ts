@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createLoopsApiServer } from "../../api/index.js";
 import { createSqliteLoopStorage } from "../storage/sqlite.js";
 import { createHasnaStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
@@ -25,10 +28,53 @@ function apiStoreForServer(port: number): ApiStore {
   return new ApiStore(createHasnaStorageClient("loops", transport), baseUrl);
 }
 
+/** Run `fn` with LOOPS_DATA_DIR pointing at a throwaway dir, so a LocalStore opened by the resolver writes only there. */
+function withTempDataDir(fn: () => void): void {
+  const oldDataDir = process.env.LOOPS_DATA_DIR;
+  const dir = mkdtempSync(join(tmpdir(), "loops-store-test-"));
+  process.env.LOOPS_DATA_DIR = dir;
+  try {
+    fn();
+  } finally {
+    if (oldDataDir === undefined) delete process.env.LOOPS_DATA_DIR;
+    else process.env.LOOPS_DATA_DIR = oldDataDir;
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe("getStore resolver", () => {
-  test("returns LocalStore when no API vars are set", () => {
-    expect(getStore({})).toBeInstanceOf(LocalStore);
-    expect(isCloudStore({})).toBe(false);
+  test("fails closed when no connection is configured (no silent local fallback)", () => {
+    expect(() => getStore({})).toThrow(
+      /no loops client connection is configured: set HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY to connect to the hosted loops API/,
+    );
+    expect(() => isCloudStore({})).toThrow(/no loops client connection is configured/);
+    // The failure happens before any store opens: no db is created anywhere.
+    expect(() => getStore({ HASNA_LOOPS_CONNECTION: "api" })).toThrow(
+      /HASNA_LOOPS_CONNECTION=api requires both HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY/,
+    );
+    expect(() => getStore({ HASNA_LOOPS_CONNECTION: "sqlite" })).toThrow(
+      "HASNA_LOOPS_CONNECTION must be 'file' or 'api'; got \"sqlite\".",
+    );
+  });
+
+  test("opens the LocalStore only through the explicit file opt-in", () => {
+    withTempDataDir(() => {
+      const store = getStore({ HASNA_LOOPS_CONNECTION: "file" });
+      expect(store).toBeInstanceOf(LocalStore);
+      expect(store.transport).toBe("file");
+      expect(isCloudStore({ HASNA_LOOPS_CONNECTION: "file" })).toBe(false);
+      store.close();
+    });
+  });
+
+  test("rejects the file opt-in alongside API vars as a contradiction", () => {
+    expect(() =>
+      getStore({
+        HASNA_LOOPS_CONNECTION: "file",
+        HASNA_LOOPS_API_URL: "https://loops.example.test",
+        HASNA_LOOPS_API_KEY: "k",
+      }),
+    ).toThrow(/HASNA_LOOPS_CONNECTION=file conflicts with HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY/);
   });
 
   test("returns ApiStore when both API vars are set", () => {
