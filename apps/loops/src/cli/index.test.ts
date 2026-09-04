@@ -1966,18 +1966,17 @@ describe("loops CLI", () => {
     });
   });
 
-  test("create command stores an OpenMachines assignment", () => {
+  test("create command with a machine pin fails loudly (machines deleted)", () => {
+    // @hasna/machines was deleted (owner directive, 2026-09-03); machine-pinned
+    // creates fail loudly and store nothing instead of persisting an
+    // unclaimable NULL pin (same contract as the pinned-name case above).
     const dataDir = freshDataDir("loops-cli-machine-");
     const create = runCli(dataDir, ["--json", "create", "command", "machine-local", "--at", futureAt(), "--cmd", "true", "--machine", "local"]);
-    expect(create.status).toBe(0);
-    const value = JSON.parse(create.stdout);
-    expect(value.machine.id).toBeTruthy();
-    expect(value.machine.local).toBe(true);
+    expect(create.status).not.toBe(0);
+    expect(create.stderr + create.stdout).toContain("@hasna/machines has been deleted");
 
-    const show = runCli(dataDir, ["--json", "show", "machine-local"]);
-    expect(show.status).toBe(0);
-    const shown = JSON.parse(show.stdout);
-    expect(shown.machine.id).toBe(value.machine.id);
+    const listed = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout) as Array<{ name: string }>;
+    expect(listed.map((loop) => loop.name)).not.toContain("machine-local");
   });
 
   test("create agent requires and persists auditable advisory restriction metadata", () => {

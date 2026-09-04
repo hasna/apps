@@ -53,7 +53,11 @@ describe("doctor", () => {
       expect(check(report, "data-dir")?.status).toBe("ok");
       expect(check(report, "data-dir")?.detail).toBe(dataDir);
       expect(check(report, "bun")?.status).toBe("ok");
-      expect(check(report, "machines")?.status).toBe("ok");
+      // @hasna/machines was deleted (2026-09-03); the doctor check degrades to a
+      // warn whose detail names the deletion verdict, never an ok with an
+      // empty topology.
+      expect(check(report, "machines")?.status).toBe("warn");
+      expect(check(report, "machines")?.detail).toContain("@hasna/machines has been deleted");
       expect(check(report, "daemon")?.status).toBe("ok");
       expect(check(report, "daemon")?.message).toBe("daemon is not running");
       expect(check(report, "loop-runs")?.status).toBe("ok");
