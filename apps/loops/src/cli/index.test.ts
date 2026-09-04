@@ -10681,7 +10681,7 @@ describe("local-only guards under a cloud-flipped client", () => {
   } as const;
   const FLIP_MESSAGE = "not available while flipped to the hosted Loops API";
 
-  test("route admission, drain, live UI, run-now, and tick fail loudly when flipped", () => {
+  test("route admission, drain, live UI, and tick fail loudly when flipped", () => {
     const dataDir = freshDataDir("loops-cli-cloud-guard-");
     for (const args of [
       ["routes", "create", "todos-task"],
@@ -10689,7 +10689,6 @@ describe("local-only guards under a cloud-flipped client", () => {
       ["events", "handle", "todos-task"],
       ["events", "drain", "todos-task"],
       ["ui"],
-      ["run-now", "anything"],
       ["tick"],
     ]) {
       const result = runCli(dataDir, args, undefined, CLOUD_ENV);
@@ -10699,6 +10698,19 @@ describe("local-only guards under a cloud-flipped client", () => {
       expect(result.stdout).not.toContain("do-not-print-this-key");
       expect(result.stderr).not.toContain("do-not-print-this-key");
     }
+  });
+
+  test("run-now routes to the hosted API when flipped instead of refusing as local-only (1fb09589)", () => {
+    // run-now is connection-aware: flipped to the hosted API it schedules the
+    // loop through the control plane, never the local sqlite island. Against an
+    // unreachable control plane it fails closed with a hosted-route error — NOT
+    // the local-only refusal — and never leaks the bearer key.
+    const dataDir = freshDataDir("loops-cli-cloud-run-now-");
+    const result = runCli(dataDir, ["--json", "run-now", "anything"], undefined, CLOUD_ENV);
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain(FLIP_MESSAGE);
+    expect(result.stdout).not.toContain("do-not-print-this-key");
+    expect(result.stderr).not.toContain("do-not-print-this-key");
   });
 
   test("route preview (dry-run) is store-free, so it is NOT blocked when flipped", () => {
