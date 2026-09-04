@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { unlinkSync, mkdtempSync, rmSync } from "fs";
+import { existsSync, unlinkSync, mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -170,5 +170,67 @@ describe("identity-unset error branch honours the --json contract", () => {
     const asJson = runUndeclared(["agents", "list", "--json"]);
     expect(asJson.exitCode).toBe(0);
     expect(() => JSON.parse(asJson.stdout.trim())).not.toThrow();
+  });
+});
+
+/**
+ * The fail-closed branch: a CLI run with NO API env and NO explicit store path
+ * must refuse — exit 1, an error naming the required variables — instead of
+ * silently serving the on-box SQLite store at its default ~/.hasna path (owner
+ * ruling 2026-09-04). These spawns declare no store variable at all and use a
+ * throwaway HOME so the refusal cannot fall back to the developer's real data.
+ */
+describe("no API env fails closed under the --json contract", () => {
+  const HOME_DIR = mkdtempSync(join(tmpdir(), "conversations-json-noenv-"));
+
+  afterAll(() => {
+    try { rmSync(HOME_DIR, { recursive: true, force: true }); } catch { /* ok */ }
+  });
+
+  function runWithoutStoreEnv(args: string[]) {
+    const env: Record<string, string> = { ...process.env } as Record<string, string>;
+    for (const key of Object.keys(env)) {
+      if (key === "CONVERSATIONS_API_URL"
+        || key === "CONVERSATIONS_API_KEY"
+        || key === "CONVERSATIONS_DB_PATH"
+        || key.startsWith("HASNA_CONVERSATIONS_")) delete env[key];
+    }
+    env.HOME = HOME_DIR;
+    env.USERPROFILE = HOME_DIR;
+    env.CONVERSATIONS_AGENT_ID = "tester";
+    env.FORCE_COLOR = "0";
+    const result = Bun.spawnSync({ cmd: [...CLI, ...args], cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" });
+    return {
+      exitCode: result.exitCode,
+      stdout: new TextDecoder().decode(result.stdout),
+      stderr: new TextDecoder().decode(result.stderr),
+    };
+  }
+
+  test("a data command with no API env and no store path exits 1 with a JSON error naming both required vars", () => {
+    const res = runWithoutStoreEnv(["channel", "list", "--json"]);
+    expect(res.exitCode).toBe(1);
+    let parsed: any;
+    expect(() => { parsed = JSON.parse(res.stdout.trim()); }).not.toThrow();
+    expect(parsed.code).toBe("CONVERSATIONS_STORE_CONFIG");
+    expect(parsed.error).toContain("HASNA_CONVERSATIONS_API_URL");
+    expect(parsed.error).toContain("HASNA_CONVERSATIONS_API_KEY");
+    // The message must point at the explicit local opt-in, never offer a silent default.
+    expect(parsed.error).toContain("HASNA_CONVERSATIONS_DB_PATH");
+  });
+
+  test("the same refusal without --json is human-readable on stderr and never exit 0", () => {
+    const res = runWithoutStoreEnv(["channel", "list"]);
+    expect(res.exitCode).toBe(1);
+    expect(res.stdout.trim()).toBe("");
+    expect(res.stderr).toContain("HASNA_CONVERSATIONS_API_URL");
+    expect(res.stderr).toContain("HASNA_CONVERSATIONS_API_KEY");
+  });
+
+  test("the refusal creates no local database in the data root", () => {
+    const res = runWithoutStoreEnv(["channel", "list"]);
+    expect(res.exitCode).toBe(1);
+    expect(existsSync(join(HOME_DIR, ".hasna", "conversations", "messages.db"))).toBe(false);
+    expect(existsSync(join(HOME_DIR, ".hasna", "conversations", "messages.db-wal"))).toBe(false);
   });
 });

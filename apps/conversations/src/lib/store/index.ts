@@ -14,9 +14,12 @@
 // `getStore()` resolves which transport to use from the API env pair
 // (HASNA_CONVERSATIONS_API_URL + HASNA_CONVERSATIONS_API_KEY): both variables
 // set selects the HTTP API, an incomplete pair is an error that names the
-// missing variable, and neither set selects the on-box SQLite store (owner
-// directive 2026-07-29; knowledge k_ms5wv466_u0jidq). Callers NEVER branch on
-// the transport themselves and NEVER touch sqlite or fetch directly — that was
+// missing variable, and NEITHER set is an error naming BOTH variables — the
+// on-box SQLite store is served only when an explicit store path
+// (HASNA_CONVERSATIONS_DB_PATH / CONVERSATIONS_DB_PATH) asks for it by name
+// (owner ruling 2026-09-04, fail-closed campaign; supersedes the 2026-07-29
+// "neither set -> local default" directive). Callers NEVER branch on the
+// transport themselves and NEVER touch sqlite or fetch directly — that was
 // the split-brain bug this module eliminates.
 //
 // `local` is first-class and fully functional; the server backend switch
@@ -89,11 +92,17 @@ type Async<F extends (...args: never[]) => unknown> = (
 // flag. An agent reading that concludes the messages were never sent. It is the
 // same failure that got MCPs banned on this fleet (~/.claude/rules/no-mcps.md).
 //
-// The rule that prevents it: AMBIGUOUS CONFIGURATION IS AN ERROR, NOT A DEFAULT.
-// When the API is expected and cannot be built, refuse — naming the missing variable
-// — rather than answering from a different dataset. An explicit, unambiguous local
-// configuration stays fully supported; the bug was the silent downgrade, not local
-// storage.
+// The rule that prevents it: ANY configuration that does not unambiguously select
+// the API is an error, and local storage is NEVER a default. When the API is
+// expected and cannot be built, refuse — naming the missing variable — rather than
+// answering from a different dataset. When NO API configuration is present at all
+// (a CLI run outside the station wrapper, which exports the API pair into every
+// fleet process), refuse just the same, naming BOTH variables: serving the on-box
+// SQLite store from ~/.hasna/conversations in that state is the same wrong-answer
+// failure with the env missing instead of half-set (owner ruling 2026-09-04). An
+// explicit local configuration — a HASNA_CONVERSATIONS_DB_PATH /
+// CONVERSATIONS_DB_PATH store path — stays fully supported; the bug was local as
+// the DEFAULT, not local storage.
 //
 // This guard lives in the APP-OWNED layer on purpose. `src/lib/contracts-client/*`
 // is a byte-faithful vendored copy of @hasna/contracts and is periodically
@@ -134,10 +143,16 @@ function firstSet(env: Env, keys: readonly string[]): { key: string; value: stri
   return null;
 }
 
-/** Suffix telling the operator how to ask for local explicitly. */
+/**
+ * Suffix telling the operator how to ask for local explicitly.
+ *
+ * Local is opt-in ONLY: since 2026-09-04 an env with no store path refuses
+ * (nothing configured is an error, never the local default), so "unset the API
+ * variables" can no longer reach local — only a named store path can.
+ */
 const LOCAL_ESCAPE_HATCH =
-  `If you meant to use the on-box SQLite store, set ${DB_PATH_KEYS[0]} to a local database file ` +
-  `(or unset ${ENV_KEYS.apiUrlKeys[0]} and ${ENV_KEYS.apiKeyKeys[0]}).`;
+  `If you meant to use the on-box SQLite store, set ${DB_PATH_KEYS[0]} to a local database ` +
+  `file — local mode is opt-in only, it is never the default.`;
 
 /**
  * Throw unless `env` unambiguously selects exactly one store.
@@ -175,7 +190,20 @@ export function assertUnambiguousStoreEnv(env: Env = process.env): void {
     );
   }
 
-  // 3. Nothing configured: the documented single-operator default is local SQLite.
+  // 3. NOTHING CONFIGURED IS AN ERROR, NOT THE LOCAL DEFAULT (owner ruling
+  //    2026-09-04). A CLI that reaches this state is running without its API env
+  //    — outside the station wrapper, which exports the pair into every fleet
+  //    process. Answering from the on-box SQLite store (~/.hasna/conversations
+  //    by default) would present a different, stale dataset as the fleet's, with
+  //    exit 0 and no signal. Refuse and name the required variables; local is
+  //    reachable only through the explicit store path in step 1.
+  throw new ConversationsStoreConfigError(
+    `No API configuration is present: ${ENV_KEYS.apiUrlKeys[0]} and ${ENV_KEYS.apiKeyKeys[0]} ` +
+      `are not set, so the cloud store cannot be reached. Refusing to serve the on-box SQLite ` +
+      `store in their place, because it holds a different dataset. Set ` +
+      `${ENV_KEYS.apiUrlKeys[0]} and ${ENV_KEYS.apiKeyKeys[0]} to reach the cloud store. ` +
+      `${LOCAL_ESCAPE_HATCH}`,
+  );
 }
 
 /**
@@ -206,13 +234,14 @@ function assertUsableApiUrl(urlHit: { key: string; value: string } | null): void
 
 /**
  * Return an env in which the API transport is selected when the API url + key are
- * present, and the local store otherwise. Never a DSN on the client. A
- * command-level SQLite DB path is treated as an explicit local override, so local
- * CLI test/dev commands cannot accidentally write to the API when API credentials
- * are exported globally.
+ * present. Never a DSN on the client. A command-level SQLite DB path is the ONLY
+ * way to select the local store — an explicit local override, so local CLI
+ * test/dev commands cannot accidentally write to the API when API credentials are
+ * exported globally.
  *
  * Throws {@link ConversationsStoreConfigError} when the env does not unambiguously
- * select one store, so no caller can drift onto the wrong dataset.
+ * select one store — including when NOTHING is configured — so no caller can
+ * drift onto the wrong dataset or open local SQLite as a default.
  */
 export function conversationsCloudEnv(env: Env = process.env): Env {
   assertUnambiguousStoreEnv(env);
@@ -226,8 +255,9 @@ export function conversationsCloudEnv(env: Env = process.env): Env {
     for (const key of ENV_KEYS.apiKeyKeys) delete local[key];
     return local;
   }
-  // API pair present, or nothing: hand the env through unchanged. The vendored
-  // resolver infers the HTTP transport from the url + key pair on its own.
+  // API pair present (nothing else survives the guard above): hand the env
+  // through unchanged. The vendored resolver infers the HTTP transport from the
+  // url + key pair on its own.
   return env;
 }
 
@@ -276,6 +306,12 @@ export function resolveConversationsCloud(env: Env = process.env): HasnaStorageC
  * breaks a real caller if it throws — `admin-redaction.ts` calls it bare to pick
  * a branch, and a suite in this repository deliberately exports cloud
  * credentials so that bare call resolves true.
+ *
+ * Since 2026-09-04 the answer "false" is reachable ONLY under an explicit local
+ * store path: an env with nothing configured throws `ConversationsStoreConfigError`
+ * here (via `assertUnambiguousStoreEnv`) rather than reporting "local" — a caller
+ * that branches on `false` to serve the on-box SQLite store must never reach it
+ * from a configuration that merely forgot the API env.
  */
 export function isCloudStore(env: Env = process.env): boolean {
   return resolveCloudClientUnguarded(env) !== null;
@@ -791,13 +827,16 @@ export function resetStoreForTests(): void {
  * 1. `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH` set → LOCAL. A
  *    command-level SQLite path is the narrowest, most specific signal, so local
  *    dev and test commands cannot write to the API when fleet credentials are
- *    exported globally.
- * 2. Both API URL and API key set → API. This pair IS the fleet flip signal;
- *    removing both reverts to local.
+ *    exported globally. This is the ONLY way local is selected — it is an
+ *    explicit opt-in, never a default (owner ruling 2026-09-04).
+ * 2. Both API URL and API key set → API. This pair IS the fleet flip signal.
  * 3. Exactly ONE of API URL / API key set → ERROR naming the missing variable.
  *    Half an API configuration is ambiguous, and answering it from the on-box
  *    SQLite store means serving a different dataset with no signal.
- * 4. Nothing configured → LOCAL. The documented single-operator default.
+ * 4. Nothing configured → ERROR naming BOTH variables. Local used to be the
+ *    documented default here; it is now the exact failure the fail-closed
+ *    ruling removes — a CLI without its API env must refuse with exit code 1,
+ *    never answer from ~/.hasna/conversations SQLite.
  *
  * An API URL that cannot be parsed is an ERROR wherever the API is expected, never
  * a quiet fall-back. No error message ever contains a credential value — only

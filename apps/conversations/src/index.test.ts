@@ -32,8 +32,8 @@ describe("public API exports", () => {
     expect((index as Record<string, unknown>).startPolling).toBeUndefined();
   });
 
-  test("every read/write goes through a Store instance", () => {
-    const store = index.getStore({});
+  test("every read/write goes through a Store instance under an explicit store env", () => {
+    const store = index.getStore({ HASNA_CONVERSATIONS_DB_PATH: "/tmp/conversations-index-test.db" });
     expect(store.transport).toBe("local");
     expect(typeof store.sendMessage).toBe("function");
     expect(typeof store.readMessages).toBe("function");
@@ -43,5 +43,12 @@ describe("public API exports", () => {
     expect(typeof store.createProject).toBe("function");
     expect(typeof store.createTask).toBe("function");
     expect(typeof store.acquireLock).toBe("function");
+  });
+
+  test("an env with no API credentials and no store path fails closed", () => {
+    // Fail-closed ruling 2026-09-04: the SDK must refuse — naming the required
+    // env vars — rather than bind to the on-box SQLite store at its default path.
+    expect(() => index.getStore({})).toThrow("HASNA_CONVERSATIONS_API_URL");
+    expect(() => index.getStore({})).toThrow("HASNA_CONVERSATIONS_API_KEY");
   });
 });

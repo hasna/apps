@@ -160,12 +160,21 @@ describe("store divergence — a half-configured cloud client refuses instead of
   });
 });
 
-describe("store divergence — legitimate local use is untouched", () => {
-  test("an unconfigured client still reads its local store without error", async () => {
+describe("store divergence — legitimate local use is explicit opt-in only", () => {
+  // THE 2026-09-04 FAIL-CLOSED FLIP. An unconfigured client previously fell back
+  // to the local store at the default ~/.hasna path and exited 0 — a CLI run
+  // without its API env presented a different, stale dataset as the fleet's with
+  // no signal. It now refuses, naming the required variables, and no local
+  // database is opened.
+  test("an unconfigured client refuses instead of reading its local store", async () => {
     const { exitCode, result, stderr } = await probe("count", "", {});
 
-    expect(exitCode, stderr).toBe(0);
-    expect(result.transport).toBe("local");
+    expect(exitCode, stderr).not.toBe(0);
+    expect(result.refused).toBe(true);
+    expect(result.name).toBe("ConversationsStoreConfigError");
+    expect(result.message).toContain("HASNA_CONVERSATIONS_API_URL");
+    expect(result.message).toContain("HASNA_CONVERSATIONS_API_KEY");
+    expect(result.channels).toBeUndefined();
   });
 
   test("an explicit local DB path still wins over exported cloud credentials", async () => {

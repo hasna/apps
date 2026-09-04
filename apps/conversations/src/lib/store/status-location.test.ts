@@ -92,10 +92,13 @@ describe("storeStatusLocation", () => {
     }
   });
 
-  test("nothing configured at all reports the SQLite connection", () => {
-    const location = storeStatusLocation({});
-    expect("db_path" in location).toBe(true);
-    expect("api_url" in location).toBe(false);
+  test("nothing configured at all refuses instead of reporting a SQLite connection", () => {
+    // Fail-closed (2026-09-04): an env without the API pair and without an
+    // explicit store path must not announce the on-box SQLite file — a status
+    // that reported `db_path` here would read as "local connection" for a CLI
+    // that merely forgot its API env.
+    expect(() => storeStatusLocation({})).toThrow(/HASNA_CONVERSATIONS_API_URL/);
+    expect(() => storeStatusLocation({})).toThrow(/HASNA_CONVERSATIONS_API_KEY/);
   });
 
   // The gateway form `https://api.hasna.com/conversations` announces the app
