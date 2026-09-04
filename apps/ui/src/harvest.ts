@@ -9,16 +9,36 @@ import { dirname, join, relative, sep } from "node:path";
 import { resolveContentDir, uriToContentFile } from "./content.ts";
 import { McpHttpClient } from "./mcp-client.ts";
 
+/**
+ * The slice of the MCP client the harvest uses.
+ *
+ * Named so a test can supply its own client through `createClient` below. The
+ * alternative - `mock.module("../src/mcp-client.ts", ...)` - replaces the module for the
+ * WHOLE test process and is never undone, so every later file that imports the real client
+ * silently got the fake one instead (it resolved every call and issued no request), which
+ * is what broke tests/mcp-client.test.ts whenever it ran after tests/harvest.test.ts.
+ */
+export interface HarvestMcpClient {
+  initialize(): Promise<void>;
+  listTools(): Promise<{ name: string }[]>;
+  callToolText(name: string, args: { uri: string }): Promise<string>;
+}
+
+export type HarvestClientFactory = (opts: { url: string; token?: string }) => HarvestMcpClient;
+
 const ROOT = "uidotsh://ui";
 const URI_RE = /uidotsh:\/\/[A-Za-z0-9._\/-]+/g;
 
-export async function harvest(opts: { contentDir?: string; url?: string; token?: string } = {}): Promise<void> {
+export async function harvest(
+  opts: { contentDir?: string; url?: string; token?: string; createClient?: HarvestClientFactory } = {},
+): Promise<void> {
   const contentDir = resolveContentDir(opts.contentDir);
   const url = opts.url ?? process.env.UIDOTSH_MCP_URL;
   const token = opts.token ?? process.env.UIDOTSH_TOKEN;
   if (!url) throw new Error("UIDOTSH_MCP_URL not set");
 
-  const client = new McpHttpClient({ url: `${url}?agent=ui-local`, token });
+  const createClient: HarvestClientFactory = opts.createClient ?? ((o) => new McpHttpClient(o));
+  const client = createClient({ url: `${url}?agent=ui-local`, ...(token ? { token } : {}) });
   await client.initialize();
   const tools = await client.listTools();
   const fetchTool = tools.find((t) => /fetch/.test(t.name))?.name ?? "uidotsh_fetch";

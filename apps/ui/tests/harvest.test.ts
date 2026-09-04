@@ -1,10 +1,13 @@
 // Harvest BFS and failure behavior, driven by a scripted McpHttpClient.
 //
 // The harvester talks to the ui.sh MCP over HTTP; these tests never touch the
-// network. mock.module replaces the McpHttpClient module with a fake that
-// returns scripted initialize/listTools/callToolText responses, so the BFS
-// traversal, URI normalization, index writing, and per-URI failure handling
-// are exercised deterministically.
+// network: the fake client is passed in through harvest's `createClient`, so the BFS
+// traversal, URI normalization, index writing, and per-URI failure handling are exercised
+// deterministically WITHOUT replacing the module for the rest of the test process.
+//
+// It used to use `mock.module("../src/mcp-client.ts", ...)`, which is process-wide and
+// permanent: tests/mcp-client.test.ts then imported the fake instead of the real client and
+// failed with "Received length: 0" whenever it ran after this file.
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -20,7 +23,7 @@ class FakeMcpClient {
   constructor(readonly opts: { url: string; token?: string }) {}
 
   async initialize(): Promise<void> {}
-  async listTools(): Promise<unknown[]> {
+  async listTools(): Promise<{ name: string }[]> {
     return [{ name: "uidotsh_fetch" }];
   }
   async callToolText(name: string, args: { uri: string }): Promise<string> {
@@ -32,9 +35,10 @@ class FakeMcpClient {
   }
 }
 
-mock.module("../src/mcp-client.ts", () => ({ McpHttpClient: FakeMcpClient }));
+import { harvest } from "../src/harvest.ts";
 
-const { harvest } = await import("../src/harvest.ts");
+/** Every harvest() in this file gets the scripted client; nothing global is touched. */
+const createClient = (opts: { url: string; token?: string }) => new FakeMcpClient(opts);
 
 function callsFor(uri: string): number {
   return FakeMcpClient.calls.filter((c) => c.uri === uri).length;
@@ -80,7 +84,7 @@ describe("harvest BFS traversal", () => {
         "uidotsh://ui/componentize": "componentize body",
       };
 
-      await harvest({ contentDir: dir, url: "http://mcp.example.invalid" });
+      await harvest({ contentDir: dir, url: "http://mcp.example.invalid", createClient });
 
       // Every scripted URI visited exactly once — the repeated reference, the
       // punctuation-suffixed reference, and the already-seen back-reference
@@ -99,7 +103,7 @@ describe("harvest BFS traversal", () => {
         "uidotsh://ui": "root body\nsee uidotsh://ui/ideas",
         "uidotsh://ui/ideas": "ideas body",
       };
-      await harvest({ contentDir: dir, url: "http://mcp.example.invalid" });
+      await harvest({ contentDir: dir, url: "http://mcp.example.invalid", createClient });
       const index = (await Bun.file(join(dir, "index.json")).json()) as Record<string, string>;
       expect(index).toEqual({
         "uidotsh://ui": "ui.md",
@@ -123,7 +127,7 @@ describe("harvest BFS traversal", () => {
       const originalWarn = console.warn;
       console.warn = warn as typeof console.warn;
       try {
-        await harvest({ contentDir: dir, url: "http://mcp.example.invalid" });
+        await harvest({ contentDir: dir, url: "http://mcp.example.invalid", createClient });
       } finally {
         console.warn = originalWarn;
       }
@@ -141,7 +145,7 @@ describe("harvest BFS traversal", () => {
     await withTempDir(async (dir) => {
       delete process.env.UIDOTSH_MCP_URL;
       delete process.env.UIDOTSH_TOKEN;
-      await expect(harvest({ contentDir: dir })).rejects.toThrow("UIDOTSH_MCP_URL not set");
+      await expect(harvest({ contentDir: dir, createClient })).rejects.toThrow("UIDOTSH_MCP_URL not set");
     });
   });
 
@@ -150,7 +154,7 @@ describe("harvest BFS traversal", () => {
       FakeMcpClient.script = {
         "uidotsh://ui": "root body",
       };
-      await harvest({ contentDir: dir, url: "http://mcp.example.invalid", token: "tok" });
+      await harvest({ contentDir: dir, url: "http://mcp.example.invalid", token: "tok", createClient });
       expect(FakeMcpClient.calls.length).toBe(1);
       const index = (await Bun.file(join(dir, "index.json")).json()) as Record<string, string>;
       expect(index["uidotsh://ui"]).toBe("ui.md");
