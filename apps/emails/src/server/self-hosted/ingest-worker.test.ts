@@ -3,9 +3,13 @@ import { createHash } from "node:crypto";
 import {
   INGEST_RECEIVE_DEADLINE_MS,
   attachmentRepairResultSucceeded,
+  createIngestWorkerStatus,
   deriveKeyPathRecipients,
+  evaluateIngestLiveness,
   finalizeInboundProvenanceAudit,
   finalizeAttachmentRepairCanary,
+  formatQueueAgeAlarmEvent,
+  ingestProgressBody,
   ingestS3Object,
   inboundProvenanceAuditSucceeded,
   parseInboundPrefixDomainMap,
@@ -15,12 +19,18 @@ import {
   redactedAttachmentRepairReport,
   parseIngestHealthPort,
   parseIngestProgressStaleMs,
+  parseIngestQueueAgeAlarmSeconds,
+  parseIngestQueueAgePollSeconds,
+  sampleQueueAgeOnce,
   shouldDeleteIngestResult,
+  shouldEmitQueueAgeAlarm,
   startIngestProgressHealthServer,
   validateAttachmentRepairCanaryOptions,
   validateInboundProvenanceAuditOptions,
   validateIngestWorkerConfig,
   type IngestDeps,
+  type IngestLivenessOptions,
+  type IngestWorkerStatus,
 } from "./ingest-worker.js";
 import type { InboundSourceProvenance, MessageInput, MessageRecord } from "./store.js";
 
@@ -790,5 +800,246 @@ describe("ingest worker progress liveness", () => {
         health.stop();
       }
     });
+  });
+});
+
+describe("ingest worker queue-age alarm hook and queue-aware liveness", () => {
+  const T0 = 1_752_340_000_000;
+
+  const STALE_MS = 300_000;
+
+  function staleLiveness(queueState?: IngestLivenessOptions["queueState"]): IngestLivenessOptions {
+    return {
+      staleMs: STALE_MS,
+      lastProgressAt: () => T0 - 600_000,
+      queueState,
+    };
+  }
+
+  function freshQueueState(visible: number, sampleAtMs = T0 - 5_000): IngestLivenessOptions["queueState"] {
+    return {
+      lastSampleAt: () => sampleAtMs,
+      visible: () => visible,
+      sampleStaleAfterMs: 180_000,
+    };
+  }
+
+  it("reports starting until the first receive cycle completes", () => {
+    const decision = evaluateIngestLiveness({ staleMs: STALE_MS, lastProgressAt: () => 0 }, T0);
+    expect(decision.ok).toBe(false);
+    expect(decision.reason).toBe("starting");
+    expect(decision.progressAgeSeconds).toBeNull();
+  });
+
+  it("reports current while the poll loop keeps completing receive cycles", () => {
+    const options = {
+      staleMs: STALE_MS,
+      lastProgressAt: () => T0 - 3_000,
+      queueState: freshQueueState(42), // even with work present, fresh progress is healthy
+    };
+    const decision = evaluateIngestLiveness(options, T0);
+    expect(decision.ok).toBe(true);
+    expect(decision.reason).toBe("current");
+    expect(decision.progressAgeSeconds).toBe(3);
+  });
+
+  it("fails progress-only liveness once stale (the milestone /ready contract)", () => {
+    const decision = evaluateIngestLiveness({ staleMs: STALE_MS, lastProgressAt: () => T0 - 600_000 }, T0);
+    expect(decision.ok).toBe(false);
+    expect(decision.reason).toBe("stale");
+  });
+
+  it("fails when the poll loop stalls while the queue is non-empty", () => {
+    const decision = evaluateIngestLiveness(staleLiveness(freshQueueState(42)), T0);
+    expect(decision.ok).toBe(false);
+    expect(decision.reason).toBe("stale_with_work");
+    expect(decision.progressAgeSeconds).toBe(600);
+  });
+
+  it("stays healthy when the loop stalls while the queue is provably empty", () => {
+    const decision = evaluateIngestLiveness(staleLiveness(freshQueueState(0)), T0);
+    expect(decision.ok).toBe(true);
+    expect(decision.reason).toBe("stale_idle");
+  });
+
+  it("fails closed when the queue state is unknown or the sample is stale", () => {
+    const neverSampled = staleLiveness({ lastSampleAt: () => null, visible: () => null, sampleStaleAfterMs: 180_000 });
+    expect(evaluateIngestLiveness(neverSampled, T0).reason).toBe("queue_state_unknown");
+
+    const staleSample = staleLiveness(freshQueueState(3, T0 - 900_000));
+    const decision = evaluateIngestLiveness(staleSample, T0);
+    expect(decision.ok).toBe(false);
+    expect(decision.reason).toBe("queue_state_unknown");
+    expect(decision.queueStateAgeSeconds).toBe(900);
+  });
+
+  it("exposes progress age through the /health body without credentials", () => {
+    const status = createIngestWorkerStatus(T0);
+    status.lastCycleMs = T0 - 600_000;
+    status.cycles = 12;
+    status.counts.ingested = 7;
+    status.lastQueueSampleMs = T0 - 5_000;
+    status.queueVisible = 42;
+    status.oldestMessageAgeSeconds = 600;
+
+    const decision = evaluateIngestLiveness(staleLiveness(freshQueueState(42)), T0);
+    const body = ingestProgressBody(
+      {
+        staleMs: STALE_MS,
+        lastProgressAt: () => status.lastCycleMs ?? 0,
+        status,
+        queueState: {
+          lastSampleAt: () => status.lastQueueSampleMs,
+          visible: () => status.queueVisible,
+          sampleStaleAfterMs: 180_000,
+        },
+        queueAgeAlarmThresholdSeconds: 900,
+      },
+      decision,
+    );
+    expect(body.ok).toBe(false);
+    expect(body.service).toBe("ingest-worker");
+    expect(body.status).toBe("stale_with_work");
+    expect(body.progress).toMatchObject({ last_cycle_age_seconds: 600, cycles: 12, ingested: 7 });
+    expect(body.queue).toMatchObject({ visible: 42, oldest_age_seconds: 600 });
+    expect(body.thresholds).toEqual({
+      liveness_ms: 300_000,
+      queue_sample_stale_ms: 180_000,
+      queue_age_alarm_seconds: 900,
+    });
+    expect(JSON.stringify(body)).not.toMatch(/https?:\/\/|arn:|access[_-]?key|secret|token/i);
+  });
+
+  it("serves /ready and /health consistently for a wedged and a current worker", async () => {
+    const status = createIngestWorkerStatus();
+    const health = startIngestProgressHealthServer({
+      port: 0,
+      staleMs: STALE_MS,
+      lastProgressAt: () => status.lastCycleMs ?? 0,
+      status,
+      queueState: {
+        lastSampleAt: () => status.lastQueueSampleMs,
+        visible: () => status.queueVisible,
+        sampleStaleAfterMs: 180_000,
+      },
+      queueAgeAlarmThresholdSeconds: 900,
+    });
+    try {
+      // Starting: no cycle yet — /ready 503, /health 503 with starting status.
+      const startingReady = await fetch(`${health.url}/ready`);
+      expect(startingReady.status).toBe(503);
+      const startingHealth = await fetch(`${health.url}/health`);
+      expect(startingHealth.status).toBe(503);
+      expect(((await startingHealth.json()) as { status: string }).status).toBe("starting");
+
+      // Wedged with work: stale progress + non-empty queue.
+      status.lastCycleMs = Date.now() - 600_000;
+      status.lastQueueSampleMs = Date.now();
+      status.queueVisible = 3;
+      const wedgedReady = await fetch(`${health.url}/ready`);
+      expect(wedgedReady.status).toBe(503);
+      expect(await wedgedReady.text()).toBe("stale");
+
+      // A fresh cycle returns 200 on both endpoints even while work waits.
+      status.lastCycleMs = Date.now();
+      const currentReady = await fetch(`${health.url}/ready`);
+      expect(currentReady.status).toBe(200);
+      expect(await currentReady.text()).toBe("ok");
+      const currentHealth = await fetch(`${health.url}/health`);
+      expect(currentHealth.status).toBe(200);
+      const body = (await currentHealth.json()) as { ok: boolean; progress: { last_cycle_age_seconds: number } };
+      expect(body.ok).toBe(true);
+      expect(body.progress.last_cycle_age_seconds).toBeLessThanOrEqual(3);
+
+      const other = await fetch(`${health.url}/other`);
+      expect(other.status).toBe(404);
+    } finally {
+      health.stop();
+    }
+  });
+
+  it("emits a queue-age alarm event only when the oldest message crosses the threshold", () => {
+    expect(shouldEmitQueueAgeAlarm(null, 900)).toBe(false);
+    expect(shouldEmitQueueAgeAlarm(899, 900)).toBe(false);
+    expect(shouldEmitQueueAgeAlarm(900, 900)).toBe(true);
+    expect(shouldEmitQueueAgeAlarm(2_730, 900)).toBe(true);
+    const line = formatQueueAgeAlarmEvent({ ageSeconds: 2_730, thresholdSeconds: 900, visible: 42 });
+    expect(line).toContain("[ingest] queue-age-alarm");
+    expect(line).toContain("event=queue_age_exceeded");
+    expect(line).toContain("age_seconds=2730");
+    expect(line).toContain("threshold_seconds=900");
+    expect(line).toContain("visible=42");
+  });
+
+  it("updates queue state from each sample pass and survives fetch failures", async () => {
+    const status = createIngestWorkerStatus(T0);
+    const emitted: string[] = [];
+    let failNext = false;
+
+    await sampleQueueAgeOnce(
+      {
+        fetchAttributes: async () => {
+          if (failNext) throw new Error("connection reset");
+          return {
+            ApproximateAgeOfOldestMessage: "340",
+            ApproximateNumberOfMessagesVisible: "17",
+          };
+        },
+      },
+      status,
+      900,
+      (line) => emitted.push(line),
+      T0 + 1_000,
+    );
+    expect(status.oldestMessageAgeSeconds).toBe(340);
+    expect(status.queueVisible).toBe(17);
+    expect(status.lastQueueSampleMs).toBe(T0 + 1_000);
+    expect(status.queueSampleFailures).toBe(0);
+    expect(emitted).toEqual([]);
+
+    // Crossing the 15-minute threshold emits exactly one alarm event.
+    await sampleQueueAgeOnce(
+      {
+        fetchAttributes: async () => ({
+          ApproximateAgeOfOldestMessage: "2000",
+          ApproximateNumberOfMessagesVisible: "5",
+        }),
+      },
+      status,
+      900,
+      (line) => emitted.push(line),
+      T0 + 2_000,
+    );
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toContain("age_seconds=2000");
+
+    // A failed fetch is recorded, never thrown, and the last good state stays.
+    failNext = true;
+    await expect(
+      sampleQueueAgeOnce(
+        { fetchAttributes: async () => { throw new Error("connection reset"); } },
+        status,
+        900,
+        (line) => emitted.push(line),
+        T0 + 3_000,
+      ),
+    ).resolves.toBeUndefined();
+    expect(status.queueSampleFailures).toBe(1);
+    expect(status.oldestMessageAgeSeconds).toBe(2000);
+    expect(status.queueVisible).toBe(5);
+  });
+
+  it("applies sane defaults and falls back to them on garbage queue-age settings", () => {
+    expect(parseIngestQueueAgeAlarmSeconds(undefined)).toBe(900);
+    expect(parseIngestQueueAgeAlarmSeconds("")).toBe(900);
+    expect(parseIngestQueueAgeAlarmSeconds("600")).toBe(600);
+    expect(parseIngestQueueAgeAlarmSeconds("soon")).toBe(900);
+    expect(parseIngestQueueAgeAlarmSeconds("0")).toBe(900);
+
+    expect(parseIngestQueueAgePollSeconds(undefined)).toBe(60);
+    expect(parseIngestQueueAgePollSeconds("")).toBe(60);
+    expect(parseIngestQueueAgePollSeconds("120")).toBe(120);
+    expect(parseIngestQueueAgePollSeconds("1.5")).toBe(1);
+    expect(parseIngestQueueAgePollSeconds("-1")).toBe(60);
   });
 });

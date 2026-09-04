@@ -382,6 +382,28 @@ variable "worker_health_port" {
   default     = 9487
 }
 
+variable "ingest_queue_age_alarm_threshold_seconds" {
+  description = "Oldest queued message age (seconds) that trips the inbound queue-age alarm (EMAILS_INGEST_QUEUE_AGE_ALARM_SECONDS). 900 = 15 minutes."
+  type        = number
+  default     = 900
+
+  validation {
+    condition     = var.ingest_queue_age_alarm_threshold_seconds >= 60
+    error_message = "ingest_queue_age_alarm_threshold_seconds must be at least 60 seconds."
+  }
+}
+
+variable "ingest_queue_age_poll_seconds" {
+  description = "How often the ingest worker samples SQS queue age (EMAILS_INGEST_QUEUE_AGE_POLL_SECONDS)."
+  type        = number
+  default     = 60
+
+  validation {
+    condition     = var.ingest_queue_age_poll_seconds >= 10
+    error_message = "ingest_queue_age_poll_seconds must be at least 10 seconds."
+  }
+}
+
 variable "sqs_max_receive_count" {
   description = "Failed attempts before a message moves to the DLQ."
   type        = number

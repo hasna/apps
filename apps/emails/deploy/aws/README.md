@@ -408,6 +408,33 @@ inbound_object_retention_days     = 30
 worker_desired_count              = 1
 ```
 
+### 7.1 Worker liveness, queue-age alarm, and queue retention
+
+The inbound drain is a single long-polling ECS task, so a wedged poll loop
+used to be invisible for days (2026-08-31 incident). The module ships three
+layers against that failure:
+
+- **Progress-based liveness.** The worker exposes `GET /ready` on the loopback
+  port `worker_health_port` (default `9487`). ECS container health checks probe
+  it: the endpoint returns 503 once no receive/ack cycle has completed for
+  `EMAILS_WORKER_PROGRESS_STALE_MS` (default 5 minutes) while the queue is
+  non-empty, and the service replaces the task. Its same-server `GET /health`
+  counterpart exposes the diagnostics as JSON (progress age, queue state,
+  thresholds) for operators.
+- **Queue-age alarm hook.** Independently of the poll loop, the worker samples
+  SQS queue age every `ingest_queue_age_poll_seconds` (default 60) and emits a
+  `[ingest] queue-age-alarm` log line once the oldest message reaches
+  `ingest_queue_age_alarm_threshold_seconds` (default 900 = 15 minutes). The
+  module also arms the `inbound_age` CloudWatch alarm on SQS
+  `ApproximateAgeOfOldestMessage` at the same threshold, routed to
+  `alarm_notification_topic_arn`.
+- **14-day retention.** Both the inbound queue and its DLQ default to
+  `sqs_message_retention_seconds = 1209600` (the 14-day SQS maximum), so an
+  undrained queue decays slowly and a wedged worker cannot silently destroy
+  mail. Message deletion on success is the worker's ack pass; the queue-age
+  sampling scheduled pass watches the drain, and the DLQ alarm fires when a
+  message exhausts its receive attempts.
+
 Terraform creates a rule set and store-and-notify rule but never activates the
 account-global receipt rule set. Before manual activation:
 

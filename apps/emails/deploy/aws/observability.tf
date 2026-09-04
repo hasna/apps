@@ -34,14 +34,14 @@ resource "aws_cloudwatch_metric_alarm" "database_storage" {
 
 resource "aws_cloudwatch_metric_alarm" "inbound_age" {
   alarm_name          = "${var.name}-inbound-oldest-message"
-  alarm_description   = "Inbound mail has waited on the queue for more than five minutes."
+  alarm_description   = "Inbound mail has waited on the queue beyond the ingest queue-age alarm threshold; the drain may be wedged."
   namespace           = "AWS/SQS"
   metric_name         = "ApproximateAgeOfOldestMessage"
   statistic           = "Maximum"
   period              = 60
   evaluation_periods  = 5
   comparison_operator = "GreaterThanThreshold"
-  threshold           = 300
+  threshold           = var.ingest_queue_age_alarm_threshold_seconds
   treat_missing_data  = "notBreaching"
 
   dimensions    = { QueueName = aws_sqs_queue.inbound.name }
