@@ -10,7 +10,13 @@
 #
 # Nothing here needs glibc: the service is bun + pure-JS dependencies (pg, @aws-sdk,
 # @modelcontextprotocol/sdk, ink); bun:sqlite ships inside bun's own musl build.
-ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:efc5e42c7bedc1661ab0b7272c74c3ebf794f054297f530a62055f2d1a0eb662
+# Pinned to the multi-arch image INDEX (application/vnd.oci.image.index.v1+json), not to one
+# platform's manifest: this lane builds native linux/arm64, and a digest of the amd64 manifest
+# (efc5e42c…, the one apps/todos pins for its amd64 build) pulls the wrong architecture and
+# dies on the first RUN with "exec format error". Index 5acc90a9… resolves to
+#   linux/amd64 efc5e42c7bedc1661ab0b7272c74c3ebf794f054297f530a62055f2d1a0eb662
+#   linux/arm64 3c9ab1a521c82144dff537125695017a0480d3a13088fba7e012cfae0f63146f
+ARG BUN_IMAGE=oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0
 ARG OPENSSL_VERSION=3.5.8-r0
 
 FROM ${BUN_IMAGE} AS base
