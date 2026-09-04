@@ -1,86 +1,104 @@
-import { afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import {
-  adoptResolverHome,
-  connectorsHome,
-  effectiveHome,
-  exactConnectorsHome,
-  legacyHomeDir,
-  resolverHome,
-} from "./paths.js";
+import { join, resolve } from "node:path";
+import { dataDir } from "@hasna/contracts/paths";
 
-// Isolate the resolver to a throwaway HOME so the assertions never depend on
-// whether this machine already has a migrated store under the real home.
-const testHome = mkdtempSync(join(tmpdir(), `connectors-home-test-`));
-const savedHome = process.env.HOME;
-process.env.HOME = testHome;
+import { connectorsHome, effectiveHome, exactConnectorsHome, legacyHomeDir, resolverHome } from "./paths.js";
 
-const ENV_KEYS = ["HASNA_CONNECTORS_DIR", "HASNA_DATA_HOME"] as const;
-const previous = new Map<string, string | undefined>();
+const ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "HASNA_DATA_HOME",
+  "HASNA_CACHE_HOME",
+  "HASNA_CONFIG_HOME",
+  "HASNA_STATE_HOME",
+  "HASNA_CONNECTORS_DIR",
+] as const;
 
-beforeEach(() => {
+let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
+let tempHome: string | null = null;
+const cleanups: string[] = [];
+
+afterEach(() => {
   for (const key of ENV_KEYS) {
-    previous.set(key, process.env[key]);
-    delete process.env[key];
-  }
-  // Remove any resolver-home store a prior test may have planted.
-  rmSync(join(resolverHome(), "connectors.db"), { force: true });
-});
-
-afterAll(() => {
-  process.env.HOME = savedHome;
-  for (const key of ENV_KEYS) {
-    const value = previous.get(key);
+    const value = saved[key];
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  rmSync(testHome, { recursive: true, force: true });
+  saved = {};
+  for (const dir of cleanups.splice(0)) rmSync(dir, { recursive: true, force: true });
+  if (tempHome !== null) {
+    rmSync(tempHome, { recursive: true, force: true });
+    tempHome = null;
+  }
 });
 
-describe("connectors path resolution", () => {
-  it("defaults to ~/.hasna/connectors until the XDG store exists or HASNA_DATA_HOME is set", () => {
-    expect(legacyHomeDir()).toBe(join(effectiveHome(), ".hasna", "connectors"));
-    expect(resolverHome()).toBe(join(effectiveHome(), ".local", "share", "hasna", "connectors"));
-    expect(adoptResolverHome(resolverHome())).toBe(false);
-    expect(connectorsHome()).toBe(legacyHomeDir());
+function isolateHome(): string {
+  if (tempHome !== null) throw new Error("isolateHome called twice without afterEach");
+  for (const key of ENV_KEYS) {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  }
+  tempHome = mkdtempSync(join(tmpdir(), "connectors-paths-"));
+  process.env.HOME = tempHome;
+  delete process.env.USERPROFILE;
+  return tempHome;
+}
+
+describe("connectors path resolution (single resolver in @hasna/contracts, ruling #1668)", () => {
+  test("home resolves HOME first", () => {
+    const home = isolateHome();
+    expect(effectiveHome()).toBe(home);
   });
 
-  it("adopts the resolver home when HASNA_DATA_HOME is set", () => {
-    const dataHome = join(testHome, "xdg-data");
-    process.env["HASNA_DATA_HOME"] = dataHome;
-    expect(adoptResolverHome(resolverHome())).toBe(true);
-    expect(connectorsHome()).toBe(join(dataHome, "connectors"));
+  test("the resolver home is the contracts resolver root for this machine", () => {
+    const home = isolateHome();
+    expect(resolverHome()).toBe(dataDir({ app: "connectors", home, env: process.env }));
   });
 
-  it("adopts the resolver home once the store has been migrated there", () => {
-    const resolved = resolverHome();
-    mkdirSync(resolved, { recursive: true });
-    writeFileSync(join(resolved, "connectors.db"), "");
-    expect(adoptResolverHome(resolverHome())).toBe(true);
-    expect(connectorsHome()).toBe(resolved);
+  test("on macOS the resolver (and therefore the effective) home is ~/.hasna/connectors", () => {
+    const home = isolateHome();
+    const mac = dataDir({ app: "connectors", home, platform: "darwin", env: process.env });
+    expect(mac).toBe(join(home, ".hasna", "connectors"));
+    expect(resolverHome()).toBe(mac);
+    expect(connectorsHome()).toBe(mac);
   });
 
-  it("lets the exact-app HASNA_CONNECTORS_DIR override win over the resolver", () => {
-    process.env["HASNA_DATA_HOME"] = join(testHome, "xdg-data");
-    process.env["HASNA_CONNECTORS_DIR"] = "/tmp/conn-home";
-    expect(exactConnectorsHome()).toBe("/tmp/conn-home");
-    expect(connectorsHome()).toBe("/tmp/conn-home");
+  test("on Linux the resolver home is the XDG data root", () => {
+    const home = isolateHome();
+    expect(dataDir({ app: "connectors", home, platform: "linux", env: process.env })).toBe(
+      join(home, ".local", "share", "hasna", "connectors"),
+    );
   });
 
-  it("treats blank or whitespace-only HASNA_CONNECTORS_DIR as unset", () => {
-    process.env["HASNA_CONNECTORS_DIR"] = "";
-    expect(exactConnectorsHome()).toBeUndefined();
-    expect(connectorsHome()).toBe(legacyHomeDir());
-    process.env["HASNA_CONNECTORS_DIR"] = "   ";
-    expect(exactConnectorsHome()).toBeUndefined();
-    expect(connectorsHome()).toBe(legacyHomeDir());
+  test("the effective connectors home is the resolver home; the pre-ruling legacy root is spelled under ~/.hasna/connectors", () => {
+    const home = isolateHome();
+    expect(connectorsHome()).toBe(dataDir({ app: "connectors", home, env: process.env }));
+    expect(legacyHomeDir()).toBe(join(home, ".hasna", "connectors"));
   });
 
-  it("trims valid HASNA_CONNECTORS_DIR values", () => {
-    process.env["HASNA_CONNECTORS_DIR"] = "  /tmp/conn-home  ";
-    expect(exactConnectorsHome()).toBe("/tmp/conn-home");
-    expect(connectorsHome()).toBe("/tmp/conn-home");
+  test("HASNA_DATA_HOME kind override moves the connectors home (app segment kept)", () => {
+    isolateHome();
+    const base = mkdtempSync(join(tmpdir(), "connectors-data-home-")); cleanups.push(base);
+    process.env.HASNA_DATA_HOME = base;
+    expect(connectorsHome()).toBe(join(base, "connectors"));
+  });
+
+  test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the connectors home", () => {
+    const home = isolateHome();
+    const cache = mkdtempSync(join(tmpdir(), "connectors-cache-home-")); cleanups.push(cache);
+    process.env.HASNA_CACHE_HOME = cache;
+    expect(connectorsHome()).toBe(dataDir({ app: "connectors", home, env: process.env }));
+  });
+
+  test("HASNA_CONNECTORS_DIR exact override wins over the kind override and the resolver home", () => {
+    isolateHome();
+    const override = mkdtempSync(join(tmpdir(), "connectors-hasna-dir-")); cleanups.push(override);
+    const base = mkdtempSync(join(tmpdir(), "connectors-data-home2-")); cleanups.push(base);
+    process.env.HASNA_DATA_HOME = base; // would move the resolver home, but the override must win
+    process.env.HASNA_CONNECTORS_DIR = override;
+    expect(exactConnectorsHome()).toBe(override);
+    expect(connectorsHome()).toBe(resolve(override));
   });
 });

@@ -31,11 +31,18 @@ import {
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { dataDir as resolverDataDir } from \"@hasna/contracts/paths\";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
 import { getDbPath, migrateLegacyDataDir } from "./database.js";
 import { getConfigPath, loadConfig, migrateLegacyConfig, saveConfig } from "../lib/config.js";
+
+/**
+ * The resolver-derived canonical root for an env (matching the code under
+ * test), used so the assertions hold on every platform.
+ */
+function canonical(env: Record<string, string | undefined>, ...parts: string[]): string {
+  return join(resolverDataDir({ app: "domains", home: env.HOME!, env }), ...parts);
+}
 import {
-  adoptResolverHome,
   appHome,
   exactAppOverride,
   getDefaultConfigPath,
@@ -146,8 +153,8 @@ describe("canonical config root", () => {
     const env = fakeHomeEnv();
     try {
       saveConfig({ default_registrar: "godaddy" }, env);
-      const canonical = canonical(env, "config.json");
-      expect(existsSync(canonical)).toBe(true);
+      const canonicalConfigPath = canonical(env, "config.json");
+      expect(existsSync(canonicalConfigPath)).toBe(true);
       expect(loadConfig(env).default_registrar).toBe("godaddy");
     } finally {
       rmHome(env);
@@ -339,33 +346,27 @@ describe("@hasna/paths resolver adoption — legacy default must never become in
     }
   });
 
-  test("adoptResolverHome is true only for the data-kind override or a migrated store", () => {
+  test("non-data kind overrides never move the data root; the data-kind override does", () => {
     const env = fakeHomeEnv();
-    const resolved = join(env.HOME, ".local", "share", "hasna", "domains");
     try {
-      // No override, no store -> legacy default stays.
-      expect(adoptResolverHome(resolved, env)).toBe(false);
-      // Non-data HASNA_*_HOME kinds alone must NOT move the data home.
-      expect(adoptResolverHome(resolved, { ...env, HASNA_CACHE_HOME: "/tmp/cache" })).toBe(false);
-      expect(adoptResolverHome(resolved, { ...env, HASNA_CONFIG_HOME: "/tmp/config" })).toBe(false);
-      // Data-kind override adopts even before a store exists.
-      expect(adoptResolverHome(resolved, { ...env, HASNA_DATA_HOME: "/tmp/data" })).toBe(true);
-      // A migrated store at the resolver home adopts without any override.
-      mkdirSync(resolved, { recursive: true });
-      writeFileSync(join(resolved, "domains.db"), "");
-      expect(adoptResolverHome(resolved, env)).toBe(true);
-      expect(adoptResolverHome(resolved, { ...env, HASNA_CACHE_HOME: "/tmp/cache" })).toBe(true);
+      expect(appHome({ ...env, HASNA_CACHE_HOME: "/tmp/cache" })).toBe(canonical(env));
+      expect(appHome({ ...env, HASNA_CONFIG_HOME: "/tmp/config" })).toBe(canonical(env));
+      expect(getDbPath({ ...env, HASNA_CACHE_HOME: "/tmp/cache" })).toBe(canonical(env, "domains.db"));
+      const dataEnv = { ...env, HASNA_DATA_HOME: "/tmp/data" };
+      expect(resolverHome(dataEnv)).toBe(join("/tmp/data", "domains"));
+      expect(appHome(dataEnv)).toBe(join("/tmp/data", "domains"));
     } finally {
       rmHome(env);
     }
   });
 
-  test("a migrated store at the resolver home adopts it for the db and config paths", () => {
+  test("a store at the resolver home is served there (no adoption gate — the resolver root IS the convention)", () => {
     const env = fakeHomeEnv();
     try {
-      const resolved = join(env.HOME, ".local", "share", "hasna", "domains");
+      const resolved = canonical(env);
       mkdirSync(resolved, { recursive: true });
       writeFileSync(join(resolved, "domains.db"), "");
+      expect(resolverHome(env)).toBe(resolved);
       expect(appHome(env)).toBe(resolved);
       expect(getDbPath(env)).toBe(join(resolved, "domains.db"));
       expect(getConfigPath(env)).toBe(join(resolved, "config.json"));

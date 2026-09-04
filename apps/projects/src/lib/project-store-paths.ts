@@ -38,6 +38,8 @@ export function legacyHomeDir(): string {
 }
 
 export function getProjectsHome(): string {
+  const configured = process.env[PROJECTS_HOME_ENV]?.trim();
+  if (configured) return resolve(configured);
   return resolve(resolverHome());
 }
 export function projectWorkspaceStorePath(workspaceId: string): string {

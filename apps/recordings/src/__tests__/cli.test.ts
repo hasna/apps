@@ -13,6 +13,12 @@ import {
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { homedir } from "os";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
+
+function recordingsDataRoot(): string {
+  return resolverDataDir({ app: "recordings", home: process.env["HOME"] || homedir() });
+}
 import {
   createInstallerEnvironment,
   resolveInstallBunExecutable,

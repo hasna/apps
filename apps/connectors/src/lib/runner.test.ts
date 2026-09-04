@@ -1,6 +1,8 @@
 import { afterEach, describe, mock, test, expect } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
+import { homedir } from "node:os";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
 import { connectorsHome } from "./paths.js";
 import {
   getConnectorCliPath,
