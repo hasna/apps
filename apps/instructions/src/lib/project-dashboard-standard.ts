@@ -110,3 +110,6 @@ export async function ensureProjectDashboardStandardConfig(store: ConfigStore = 
     return await store.createConfig(input);
   }
 }
+
+// CI attribution probe (hasna/apps#1641): comment-only touch so turbo marks
+// @hasna/instructions affected and runs its suite on Linux against pristine main.
