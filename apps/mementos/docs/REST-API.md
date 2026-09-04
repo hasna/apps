@@ -16,8 +16,7 @@ busy, the server probes successive ports and prints the selected one.
 
 The request body ceiling is 1 MiB. CORS defaults to
 `http://localhost:19428`; set `MEMENTOS_CORS_ORIGIN` to the one allowed browser
-origin. When `dashboard/dist` is present, non-API GET/HEAD requests serve the
-dashboard with an SPA fallback.
+origin.
 
 ## Prefixes and contract
 

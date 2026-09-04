@@ -30,7 +30,6 @@
   },
   "files": [
     "dist",
-    "dashboard/dist",
     "Dockerfile.package",
     "docker-entrypoint.sh",
     "bun.lock",

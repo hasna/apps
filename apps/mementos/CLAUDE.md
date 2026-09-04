@@ -187,5 +187,4 @@ src/
   lib/          search (FTS5+fuzzy), extractor, injection, retention, sync
   types/        TypeScript interfaces
 sdk/            @hasna/mementos-sdk — zero-dep fetch client
-dashboard/      React+Vite web UI
 ```
