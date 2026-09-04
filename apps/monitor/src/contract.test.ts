@@ -103,7 +103,7 @@ const CONFORMANCE_REPORT = [
   "fail hasna.service_contract.v1 monitor (cli-with-store) .",
   "  pass manifest_valid: hasna.contract.json valid for monitor (cli-with-store)",
   "  pass bins_allowlisted: bins allowlisted: monitor, monitor-mcp, monitor-daemon",
-  "  fail bins_match_package: in package.json but undeclared: monitor-server, monitor-web",
+  "  fail bins_match_package: in package.json but undeclared: monitor-server",
   "  pass surface_matrix: API, SDK, MCP, and CLI are declared or explicitly waived",
   "  pass surface_bindings: declared surface bins and SDK exports match package.json",
   "  pass storage_capabilities: sqlite declared; postgresql explicitly waived",
@@ -127,7 +127,7 @@ describe("parseConformanceReport", () => {
       {
         status: "fail",
         check: "bins_match_package",
-        detail: "in package.json but undeclared: monitor-server, monitor-web",
+        detail: "in package.json but undeclared: monitor-server",
       },
       {
         status: "pass",
@@ -161,7 +161,7 @@ describe("conformanceBaselineIssues", () => {
 
   it("records the accepted failure in the manifest, so the deferral is not implicit", () => {
     expect(baselineFailures(manifest)).toEqual([
-      { check: "bins_match_package", detail: "in package.json but undeclared: monitor-server, monitor-web" },
+      { check: "bins_match_package", detail: "in package.json but undeclared: monitor-server" },
     ]);
   });
 
@@ -173,9 +173,9 @@ describe("conformanceBaselineIssues", () => {
   });
 
   it("rejects a baselined failure whose detail drifted", () => {
-    const report = CONFORMANCE_REPORT.replace("monitor-server, monitor-web", "monitor-server, monitor-web, monitor-new");
+    const report = CONFORMANCE_REPORT.replace("undeclared: monitor-server", "undeclared: monitor-server, monitor-new");
     expect(conformanceBaselineIssues(manifest, report)).toEqual([
-      'conformance check "bins_match_package" now reports "in package.json but undeclared: monitor-server, monitor-web, monitor-new", but the baseline pins "in package.json but undeclared: monitor-server, monitor-web"',
+      'conformance check "bins_match_package" now reports "in package.json but undeclared: monitor-server, monitor-new", but the baseline pins "in package.json but undeclared: monitor-server"',
     ]);
   });
 
@@ -267,9 +267,9 @@ describe("MON-V2-14 contracts conformance", () => {
     expect(sdkSurfaceIssues(manifest, pkg)).toEqual([]);
   });
 
-  it("keeps the conformance baseline to exactly the two pending owner-blocked bin renames", () => {
+  it("keeps the conformance baseline to exactly the pending owner-blocked bin rename", () => {
     expect(baselineFailures(manifest)).toEqual([
-      { check: "bins_match_package", detail: "in package.json but undeclared: monitor-server, monitor-web" },
+      { check: "bins_match_package", detail: "in package.json but undeclared: monitor-server" },
     ]);
   });
 

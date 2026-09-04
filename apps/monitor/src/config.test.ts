@@ -301,16 +301,6 @@ describe("loadConfig()", () => {
     expect(config.apiPort).toBe(3847);
   });
 
-  it("has webPort field", () => {
-    const config = loadConfig();
-    expect(typeof config.webPort).toBe("number");
-  });
-
-  it("webPort defaults to 3848", () => {
-    const config = loadConfig();
-    expect(config.webPort).toBe(3848);
-  });
-
   it("has thresholds object", () => {
     const config = loadConfig();
     expect(typeof config.thresholds).toBe("object");
@@ -400,7 +390,6 @@ describe("saveConfig() + loadConfig() round-trip", () => {
     saveConfig(modified);
     const reloaded = loadConfig();
     expect(reloaded.apiPort).toBe(modified.apiPort);
-    expect(reloaded.webPort).toBe(modified.webPort);
     expect(reloaded.machines.length).toBe(modified.machines.length);
   });
 

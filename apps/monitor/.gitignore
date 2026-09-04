@@ -12,5 +12,3 @@ bun.lockb
 *.log
 coverage/
 .turbo/
-dashboard/node_modules/
-dashboard/dist/

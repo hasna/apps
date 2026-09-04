@@ -83,8 +83,6 @@ export interface MonitorConfig {
   dbPath?: string;
   /** API server port. Default: 3847 */
   apiPort?: number;
-  /** Web dashboard port. Default: 3848 */
-  webPort?: number;
   /** Integration settings for open-* ecosystem */
   integrations?: IntegrationsConfig;
 }
@@ -223,7 +221,6 @@ function defaultConfig(): MonitorConfig {
     },
     dbPath: getDefaultDbPath(),
     apiPort: 3847,
-    webPort: 3848,
   };
 }
 

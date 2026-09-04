@@ -517,15 +517,20 @@ describe("OPTIONS preflight", () => {
 
   it("returns an exact allowed origin instead of wildcard CORS", async () => {
     const origin = "http://localhost:3848";
-    const res = await fetch(`${BASE}/health`, {
-      method: "OPTIONS",
-      headers: {
-        Origin: origin,
-        "Access-Control-Request-Method": "GET",
-      },
-    });
-    expect(res.status).toBe(204);
-    expect(res.headers.get("access-control-allow-origin")).toBe(origin);
+    process.env["HASNA_MONITOR_API_CORS_ORIGINS"] = origin;
+    try {
+      const res = await fetch(`${BASE}/health`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: origin,
+          "Access-Control-Request-Method": "GET",
+        },
+      });
+      expect(res.status).toBe(204);
+      expect(res.headers.get("access-control-allow-origin")).toBe(origin);
+    } finally {
+      delete process.env["HASNA_MONITOR_API_CORS_ORIGINS"];
+    }
   });
 
   it("rejects untrusted CORS origins", async () => {
