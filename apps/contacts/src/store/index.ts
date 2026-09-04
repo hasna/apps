@@ -17,31 +17,8 @@
  * to `src/server` (+ an ECS redeploy) is the only way to enable them in the
  * cloud; there is deliberately no per-command local fallback.
  */
-import type { ContactsStorageStatus } from "../db/storage.js";
-import type * as contactsDb from "../db/contacts.js";
-import type * as companiesDb from "../db/companies.js";
-import type * as tagsDb from "../db/tags.js";
-import type * as groupsDb from "../db/groups.js";
-import type * as relationshipsDb from "../db/relationships.js";
-import type * as activityDb from "../db/activity.js";
-import type * as vendorCommsDb from "../db/vendor-comms.js";
-import type * as contactTasksDb from "../db/contact-tasks.js";
-import type * as applicationsDb from "../db/applications.js";
-import type * as orgMembersDb from "../db/org-members.js";
-import type * as dealsDb from "../db/deals.js";
-import type * as eventsDb from "../db/events.js";
-import type * as jobHistoryDb from "../db/job-history.js";
-import type * as learningsDb from "../db/learnings.js";
-import type * as identityDb from "../db/identity.js";
-import type * as freshnessDb from "../db/freshness.js";
-import type * as orgChartDb from "../db/org-chart.js";
-import type * as documentsDb from "../db/documents.js";
-import type * as healthDb from "../db/health.js";
-import type * as audiencesDb from "../db/audiences.js";
-import type * as statsLib from "../lib/stats.js";
-import type * as meetingCaptureLib from "../lib/meeting-capture.js";
-import type * as contextLib from "../lib/context.js";
-import type * as mailerySyncLib from "../lib/mailery-sync.js";
+import type { ContactsStorageStatus } from "../types/store-dto.js";
+import type * as Dto from "../types/store-dto.js";
 import { resolveContactsStorageClient, type StorageClient, type QueryParams } from "../cloud/http-storage.js";
 import type {
   ContactProjectMembershipListResult,
@@ -52,30 +29,30 @@ import type {
 } from "../types/project-memberships.js";
 
 // ── Convenience shorthands for input / result types (track the db layer) ──
-type CreateContactInput = Parameters<typeof contactsDb.createContact>[0];
-type UpdateContactInput = Parameters<typeof contactsDb.updateContact>[1];
-type ContactListOptions = Parameters<typeof contactsDb.listContacts>[0];
-type ContactListResult = Awaited<ReturnType<typeof contactsDb.listContacts>>;
-type Contact = ReturnType<typeof contactsDb.getContact>;
-type CreateEmailInput = Parameters<typeof contactsDb.addEmailToContact>[1];
-type CreatePhoneInput = Parameters<typeof contactsDb.addPhoneToContact>[1];
+type CreateContactInput = Dto.contactsCreateContactInput0;
+type UpdateContactInput = Dto.contactsUpdateContactInput1;
+type ContactListOptions = Dto.contactsListContactsInput0;
+type ContactListResult = Awaited<Dto.contactsListContactsResult>;
+type Contact = Dto.contactsGetContactResult;
+type CreateEmailInput = Dto.contactsAddEmailToContactInput1;
+type CreatePhoneInput = Dto.contactsAddPhoneToContactInput1;
 
-type CreateCompanyInput = Parameters<typeof companiesDb.createCompany>[0];
-type UpdateCompanyInput = Parameters<typeof companiesDb.updateCompany>[1];
-type CompanyListOptions = Parameters<typeof companiesDb.listCompanies>[0];
-type CompanyListResult = Awaited<ReturnType<typeof companiesDb.listCompanies>>;
+type CreateCompanyInput = Dto.companiesCreateCompanyInput0;
+type UpdateCompanyInput = Dto.companiesUpdateCompanyInput1;
+type CompanyListOptions = Dto.companiesListCompaniesInput0;
+type CompanyListResult = Awaited<Dto.companiesListCompaniesResult>;
 
-type CreateTagInput = Parameters<typeof tagsDb.createTag>[0];
+type CreateTagInput = Dto.tagsCreateTagInput0;
 
-type CreateGroupInput = Parameters<typeof groupsDb.createGroup>[1];
-type UpdateGroupInput = Parameters<typeof groupsDb.updateGroup>[2];
+type CreateGroupInput = Dto.groupsCreateGroupInput1;
+type UpdateGroupInput = Dto.groupsUpdateGroupInput2;
 
-type CreateRelationshipInput = Parameters<typeof relationshipsDb.createRelationship>[0];
-type ListRelationshipsOptions = Parameters<typeof relationshipsDb.listRelationships>[0];
-type CreateCompanyRelationshipInput = Parameters<typeof relationshipsDb.createCompanyRelationship>[0];
-type ListCompanyRelationshipsOptions = Parameters<typeof relationshipsDb.listCompanyRelationships>[0];
+type CreateRelationshipInput = Dto.relationshipsCreateRelationshipInput0;
+type ListRelationshipsOptions = Dto.relationshipsListRelationshipsInput0;
+type CreateCompanyRelationshipInput = Dto.relationshipsCreateCompanyRelationshipInput0;
+type ListCompanyRelationshipsOptions = Dto.relationshipsListCompanyRelationshipsInput0;
 
-type ListActivityOptions = Parameters<typeof activityDb.listActivity>[0];
+type ListActivityOptions = Dto.activityListActivityInput0;
 
 export interface ContactsStats {
   contacts: number;
@@ -214,43 +191,43 @@ export interface Store {
   listFollowupDueContacts(onOrBefore: string): Promise<Array<{ id: string; display_name: string; follow_up_at: string }>>;
 
   // Vendor communications
-  logVendorCommunication(input: Parameters<typeof vendorCommsDb.logVendorCommunication>[0]): Promise<unknown>;
-  listVendorCommunications(companyId: string, opts?: Parameters<typeof vendorCommsDb.listVendorCommunications>[1]): Promise<unknown[]>;
+  logVendorCommunication(input: Dto.vendorCommsLogVendorCommunicationInput0): Promise<unknown>;
+  listVendorCommunications(companyId: string, opts?: Dto.vendorCommsListVendorCommunicationsInput1): Promise<unknown[]>;
   listMissingInvoices(): Promise<unknown[]>;
   listPendingFollowUps(): Promise<unknown[]>;
   markFollowUpDone(id: string): Promise<unknown>;
 
   // Contact tasks
-  createContactTask(input: Parameters<typeof contactTasksDb.createContactTask>[0]): Promise<unknown>;
-  listContactTasks(opts?: Parameters<typeof contactTasksDb.listContactTasks>[0]): Promise<unknown[]>;
-  updateContactTask(id: string, input: Parameters<typeof contactTasksDb.updateContactTask>[1]): Promise<unknown>;
+  createContactTask(input: Dto.contactTasksCreateContactTaskInput0): Promise<unknown>;
+  listContactTasks(opts?: Dto.contactTasksListContactTasksInput0): Promise<unknown[]>;
+  updateContactTask(id: string, input: Dto.contactTasksUpdateContactTaskInput1): Promise<unknown>;
   deleteContactTask(id: string): Promise<void>;
   listOverdueTasks(): Promise<unknown[]>;
   checkEscalations(): Promise<unknown[]>;
 
   // Applications
-  createApplication(input: Parameters<typeof applicationsDb.createApplication>[0]): Promise<unknown>;
-  listApplications(opts?: Parameters<typeof applicationsDb.listApplications>[0]): Promise<unknown[]>;
-  updateApplication(id: string, input: Parameters<typeof applicationsDb.updateApplication>[1]): Promise<unknown>;
+  createApplication(input: Dto.applicationsCreateApplicationInput0): Promise<unknown>;
+  listApplications(opts?: Dto.applicationsListApplicationsInput0): Promise<unknown[]>;
+  updateApplication(id: string, input: Dto.applicationsUpdateApplicationInput1): Promise<unknown>;
   listFollowUpDueApplications(): Promise<unknown[]>;
 
   // Org members
-  addOrgMember(input: Parameters<typeof orgMembersDb.addOrgMember>[0]): Promise<unknown>;
+  addOrgMember(input: Dto.orgMembersAddOrgMemberInput0): Promise<unknown>;
   listOrgMembers(companyId: string): Promise<unknown[]>;
-  updateOrgMember(id: string, input: Parameters<typeof orgMembersDb.updateOrgMember>[1]): Promise<unknown>;
+  updateOrgMember(id: string, input: Dto.orgMembersUpdateOrgMemberInput1): Promise<unknown>;
   removeOrgMember(id: string): Promise<void>;
   listOrgMembersForContact(contactId: string): Promise<unknown[]>;
 
   // Deals
-  createDeal(input: Parameters<typeof dealsDb.createDeal>[0]): Promise<unknown>;
+  createDeal(input: Dto.dealsCreateDealInput0): Promise<unknown>;
   getDeal(id: string): Promise<unknown | null>;
-  listDeals(opts?: Parameters<typeof dealsDb.listDeals>[0]): Promise<unknown[]>;
-  updateDeal(id: string, input: Parameters<typeof dealsDb.updateDeal>[1]): Promise<unknown | null>;
+  listDeals(opts?: Dto.dealsListDealsInput0): Promise<unknown[]>;
+  updateDeal(id: string, input: Dto.dealsUpdateDealInput1): Promise<unknown | null>;
   deleteDeal(id: string): Promise<void>;
 
   // Events
-  logEvent(input: Parameters<typeof eventsDb.logEvent>[0]): Promise<unknown>;
-  listEvents(opts?: Parameters<typeof eventsDb.listEvents>[0]): Promise<unknown[]>;
+  logEvent(input: Dto.eventsLogEventInput0): Promise<unknown>;
+  listEvents(opts?: Dto.eventsListEventsInput0): Promise<unknown[]>;
   deleteEvent(id: string): Promise<void>;
 
   // Field history
@@ -258,13 +235,13 @@ export interface Store {
   getContactAt(contactId: string, timestamp: string): Promise<Record<string, string>>;
 
   // Job history
-  addJobEntry(contactId: string, input: Parameters<typeof jobHistoryDb.addJobEntry>[1]): Promise<unknown>;
+  addJobEntry(contactId: string, input: Dto.jobHistoryAddJobEntryInput1): Promise<unknown>;
   getJobHistory(contactId: string): Promise<unknown[]>;
 
   // Learnings
-  saveLearning(contactId: string, input: Parameters<typeof learningsDb.saveLearning>[1]): Promise<unknown>;
-  getLearnings(contactId: string, opts?: Parameters<typeof learningsDb.getLearnings>[1]): Promise<Array<{ confidence: number; type: string; content: string }>>;
-  searchLearnings(query: string, opts?: Parameters<typeof learningsDb.searchLearnings>[1]): Promise<Array<{ contact_id: string; type: string; confidence: number; content: string }>>;
+  saveLearning(contactId: string, input: Dto.learningsSaveLearningInput1): Promise<unknown>;
+  getLearnings(contactId: string, opts?: Dto.learningsGetLearningsInput1): Promise<Array<{ confidence: number; type: string; content: string }>>;
+  searchLearnings(query: string, opts?: Dto.learningsSearchLearningsInput1): Promise<Array<{ contact_id: string; type: string; confidence: number; content: string }>>;
   confirmLearning(learningId: string, agentName: string): Promise<void>;
   getStaleLearnings(daysOld: number, minConfidence: number): Promise<unknown[]>;
   runLearningMaintenance(): Promise<{ decayed_count: number; potential_contradictions: unknown[] }>;
@@ -283,7 +260,7 @@ export interface Store {
   detectCoolingRelationships(): Promise<Array<{ display_name: string; days_since: number }>>;
 
   // Identity resolution
-  resolveContactIdentity(partial: Parameters<typeof identityDb.resolveByPartial>[0]): Promise<Array<{ contact: { display_name: string; job_title?: string }; confidence_score: number; match_reasons: string[] }>>;
+  resolveContactIdentity(partial: Dto.identityResolveByPartialInput0): Promise<Array<{ contact: { display_name: string; job_title?: string }; confidence_score: number; match_reasons: string[] }>>;
   addContactIdentity(contactId: string, system: string, externalId: string, externalUrl?: string, confidence?: "verified" | "inferred"): Promise<unknown>;
   getContactIdentities(contactId: string): Promise<unknown[]>;
 
@@ -299,14 +276,14 @@ export interface Store {
   recomputeSignals(): Promise<{ updated: number }>;
 
   // Freshness
-  getFreshnessScore(contactId: string): Promise<ReturnType<typeof freshnessDb.getFreshnessScore>>;
+  getFreshnessScore(contactId: string): Promise<Dto.freshnessGetFreshnessScoreResult>;
   getStaleContacts(threshold: number): Promise<Array<{ contact_id: string; display_name: string; score: number }>>;
   markFieldVerified(contactId: string, fieldName: string, source?: string): Promise<void>;
 
   // Org chart / deal teams
-  addOrgChartEdge(companyId: string, contactAId: string, contactBId: string, edgeType: Parameters<typeof orgChartDb.addOrgChartEdge>[3], inferred?: boolean): Promise<unknown>;
+  addOrgChartEdge(companyId: string, contactAId: string, contactBId: string, edgeType: Dto.orgChartAddOrgChartEdgeInput3, inferred?: boolean): Promise<unknown>;
   listOrgChart(companyId: string): Promise<Array<{ contact_a_name: string; contact_b_name: string; edge_type: string }>>;
-  setDealContactRole(dealId: string, contactId: string, accountRole: Parameters<typeof orgChartDb.setDealContactRole>[2]): Promise<unknown>;
+  setDealContactRole(dealId: string, contactId: string, accountRole: Dto.orgChartSetDealContactRoleInput2): Promise<unknown>;
   getDealTeam(dealId: string): Promise<Array<{ display_name: string; account_role: string; job_title?: string }>>;
   getCoverageGaps(companyId: string): Promise<unknown>;
 
@@ -314,41 +291,41 @@ export interface Store {
   getRecentContactEvents(since?: string, eventTypes?: string[]): Promise<unknown[]>;
 
   // Documents (encrypted vault)
-  addDocument(input: Parameters<typeof documentsDb.addDocument>[0]): Promise<unknown>;
+  addDocument(input: Dto.documentsAddDocumentInput0): Promise<unknown>;
   getDocument(id: string): Promise<unknown>;
   listDocuments(contactId: string): Promise<Array<{ doc_type: string; label?: string | null; has_file: boolean; expires_at?: string | null; created_at: string }>>;
   deleteDocument(id: string): Promise<void>;
   getDocumentFilePath(id: string): Promise<string | null>;
 
   // Health
-  setHealthData(contactId: string, input: Parameters<typeof healthDb.setHealthData>[1]): Promise<unknown>;
-  getHealthData(contactId: string): Promise<ReturnType<typeof healthDb.getHealthData>>;
+  setHealthData(contactId: string, input: Dto.healthSetHealthDataInput1): Promise<unknown>;
+  getHealthData(contactId: string): Promise<Dto.healthGetHealthDataResult>;
   deleteHealthData(contactId: string): Promise<void>;
 
   // Audiences / consent / suppression
-  createAudience(input: Parameters<typeof audiencesDb.createAudience>[0]): Promise<{ id: string; audience_id: string }>;
-  getAudience(idOrSlug: string): Promise<ReturnType<typeof audiencesDb.getAudience>>;
+  createAudience(input: Dto.audiencesCreateAudienceInput0): Promise<{ id: string; audience_id: string }>;
+  getAudience(idOrSlug: string): Promise<Dto.audiencesGetAudienceResult>;
   listAudiences(): Promise<Array<{ audience_id: string; name: string; match: string; consent_policy: string; predicates: unknown[]; suppression_synced_at?: string | null }>>;
-  updateAudience(idOrSlug: string, input: Parameters<typeof audiencesDb.updateAudience>[1]): Promise<unknown>;
+  updateAudience(idOrSlug: string, input: Dto.audiencesUpdateAudienceInput1): Promise<unknown>;
   deleteAudience(idOrSlug: string): Promise<void>;
-  resolveAudience(idOrSlug: string, channel: Parameters<typeof audiencesDb.resolveAudience>[1]): Promise<ReturnType<typeof audiencesDb.resolveAudience>>;
-  setContactConsent(contactId: string, channel: Parameters<typeof audiencesDb.setContactConsent>[1], status: Parameters<typeof audiencesDb.setContactConsent>[2], source?: string): Promise<{ channel: string; status: string }>;
+  resolveAudience(idOrSlug: string, channel: Dto.audiencesResolveAudienceInput1): Promise<Dto.audiencesResolveAudienceResult>;
+  setContactConsent(contactId: string, channel: Dto.audiencesSetContactConsentInput1, status: Dto.audiencesSetContactConsentInput2, source?: string): Promise<{ channel: string; status: string }>;
   listContactConsent(contactId: string): Promise<Array<{ channel: string; status: string; source?: string | null; updated_at: string }>>;
-  suppressAddress(input: Parameters<typeof audiencesDb.suppressAddress>[0]): Promise<{ address: string; channel: string }>;
-  unsuppressAddress(channel: Parameters<typeof audiencesDb.unsuppressAddress>[0], address: string): Promise<void>;
-  listSuppressions(opts?: Parameters<typeof audiencesDb.listSuppressions>[0]): Promise<Array<{ address: string; channel: string; reason?: string | null; synced_at?: string | null }>>;
-  syncSuppressions(dryRun?: boolean): Promise<Awaited<ReturnType<typeof mailerySyncLib.syncSuppressions>>>;
+  suppressAddress(input: Dto.audiencesSuppressAddressInput0): Promise<{ address: string; channel: string }>;
+  unsuppressAddress(channel: Dto.audiencesUnsuppressAddressInput0, address: string): Promise<void>;
+  listSuppressions(opts?: Dto.audiencesListSuppressionsInput0): Promise<Array<{ address: string; channel: string; reason?: string | null; synced_at?: string | null }>>;
+  syncSuppressions(dryRun?: boolean): Promise<Awaited<Dto.mailerySyncSyncSuppressionsResult>>;
 
   // Context / briefs / stats (lib layer, db-backed)
   generateBrief(contactId: string): Promise<string>;
   getContactCard(contactId: string): Promise<object>;
   getContactBrief(contactId: string, taskContext?: string): Promise<object>;
-  assembleContext(contactIds: string[], format: Parameters<typeof contextLib.assembleContext>[1]): Promise<object>;
+  assembleContext(contactIds: string[], format: Dto.contextAssembleContextInput1): Promise<object>;
   getUpcomingItems(days: number): Promise<unknown[]>;
-  getNetworkStats(): Promise<ReturnType<typeof statsLib.getNetworkStats>>;
+  getNetworkStats(): Promise<Dto.statsGetNetworkStatsResult>;
   listContactAudit(): Promise<unknown[]>;
   getContactTimeline(contactId: string, limit: number): Promise<Array<{ type: string; date?: string | null; title: string; body?: string | null }>>;
-  ingestMeetingParticipants(input: Parameters<typeof meetingCaptureLib.ingestMeetingParticipants>[0]): Promise<{ created: number; updated: number; contact_ids: string[] }>;
+  ingestMeetingParticipants(input: Dto.meetingCaptureIngestMeetingParticipantsInput0): Promise<{ created: number; updated: number; contact_ids: string[] }>;
 
   // Images (on-box filesystem)
   saveImage(entityId: string, source: string, options?: { format?: string }): Promise<string>;
@@ -369,7 +346,7 @@ export interface Store {
   saveFeedback(message: string, email: string | null, category: string, version: string): Promise<void>;
 
   // There are no on-box client tables. Connection status is exposed separately.
-  storageStatus(): Promise<ContactsStorageStatus | null>;
+  storageStatus(): Promise<null>;
 
   // Webhooks (local delivery registry — reads only; delivery stays in caller)
   listActiveWebhooks(): Promise<Array<{ id: string; event_type: string; url: string; secret?: string | null }>>;
@@ -616,49 +593,49 @@ class ApiStore implements Store {
   async listContactsNotContactedSince(days: number, limit: number) { return (pick<Array<{ id: string; display_name: string; last_contacted_at: string | null }>>(await this.g("/not-contacted", { days, limit }), "contacts") ?? []); }
   async listFollowupDueContacts(onOrBefore: string) { return (pick<Array<{ id: string; display_name: string; follow_up_at: string }>>(await this.g("/followup-due-contacts", { on_or_before: onOrBefore }), "contacts") ?? []); }
 
-  async logVendorCommunication(input: Parameters<typeof vendorCommsDb.logVendorCommunication>[0]) { return pick(await this.post("/vendor-comms", input), "communication"); }
-  async listVendorCommunications(companyId: string, opts: Parameters<typeof vendorCommsDb.listVendorCommunications>[1] = {}) { return (pick<unknown[]>(await this.g("/vendor-comms", { company_id: companyId, ...stripUndefined(opts as Record<string, unknown>) } as QueryParams), "communications") ?? []); }
+  async logVendorCommunication(input: Dto.vendorCommsLogVendorCommunicationInput0) { return pick(await this.post("/vendor-comms", input), "communication"); }
+  async listVendorCommunications(companyId: string, opts: Dto.vendorCommsListVendorCommunicationsInput1 = {}) { return (pick<unknown[]>(await this.g("/vendor-comms", { company_id: companyId, ...stripUndefined(opts as Record<string, unknown>) } as QueryParams), "communications") ?? []); }
   async listMissingInvoices() { return (pick<unknown[]>(await this.g("/vendor-comms/missing-invoices"), "communications") ?? []); }
   async listPendingFollowUps() { return (pick<unknown[]>(await this.g("/vendor-comms/pending-follow-ups"), "communications") ?? []); }
   async markFollowUpDone(id: string) { return pick(await this.post(`/vendor-comms/${this.enc(id)}/mark-done`), "communication"); }
 
-  async createContactTask(input: Parameters<typeof contactTasksDb.createContactTask>[0]) { return pick(await this.post("/tasks", input), "task"); }
-  async listContactTasks(opts: Parameters<typeof contactTasksDb.listContactTasks>[0] = {}) { return (pick<unknown[]>(await this.g("/tasks", stripUndefined(opts as Record<string, unknown>) as QueryParams), "tasks") ?? []); }
-  async updateContactTask(id: string, input: Parameters<typeof contactTasksDb.updateContactTask>[1]) { return pick(await this.patch(`/tasks/${this.enc(id)}`, input), "task"); }
+  async createContactTask(input: Dto.contactTasksCreateContactTaskInput0) { return pick(await this.post("/tasks", input), "task"); }
+  async listContactTasks(opts: Dto.contactTasksListContactTasksInput0 = {}) { return (pick<unknown[]>(await this.g("/tasks", stripUndefined(opts as Record<string, unknown>) as QueryParams), "tasks") ?? []); }
+  async updateContactTask(id: string, input: Dto.contactTasksUpdateContactTaskInput1) { return pick(await this.patch(`/tasks/${this.enc(id)}`, input), "task"); }
   async deleteContactTask(id: string) { await this.del(`/tasks/${this.enc(id)}`); }
   async listOverdueTasks() { return (pick<unknown[]>(await this.g("/tasks/overdue"), "tasks") ?? []); }
   async checkEscalations() { return (pick<unknown[]>(await this.g("/tasks/escalations"), "escalations") ?? []); }
 
-  async createApplication(input: Parameters<typeof applicationsDb.createApplication>[0]) { return pick(await this.post("/applications", input), "application"); }
-  async listApplications(opts: Parameters<typeof applicationsDb.listApplications>[0] = {}) { return (pick<unknown[]>(await this.g("/applications", stripUndefined(opts as Record<string, unknown>) as QueryParams), "applications") ?? []); }
-  async updateApplication(id: string, input: Parameters<typeof applicationsDb.updateApplication>[1]) { return pick(await this.patch(`/applications/${this.enc(id)}`, input), "application"); }
+  async createApplication(input: Dto.applicationsCreateApplicationInput0) { return pick(await this.post("/applications", input), "application"); }
+  async listApplications(opts: Dto.applicationsListApplicationsInput0 = {}) { return (pick<unknown[]>(await this.g("/applications", stripUndefined(opts as Record<string, unknown>) as QueryParams), "applications") ?? []); }
+  async updateApplication(id: string, input: Dto.applicationsUpdateApplicationInput1) { return pick(await this.patch(`/applications/${this.enc(id)}`, input), "application"); }
   async listFollowUpDueApplications() { return (pick<unknown[]>(await this.g("/applications/follow-up-due"), "applications") ?? []); }
 
-  async addOrgMember(input: Parameters<typeof orgMembersDb.addOrgMember>[0]) { return pick(await this.post("/org-members", input), "org_member"); }
+  async addOrgMember(input: Dto.orgMembersAddOrgMemberInput0) { return pick(await this.post("/org-members", input), "org_member"); }
   async listOrgMembers(companyId: string) { return (pick<unknown[]>(await this.g("/org-members", { company_id: companyId }), "org_members") ?? []); }
-  async updateOrgMember(id: string, input: Parameters<typeof orgMembersDb.updateOrgMember>[1]) { return pick(await this.patch(`/org-members/${this.enc(id)}`, input), "org_member"); }
+  async updateOrgMember(id: string, input: Dto.orgMembersUpdateOrgMemberInput1) { return pick(await this.patch(`/org-members/${this.enc(id)}`, input), "org_member"); }
   async removeOrgMember(id: string) { await this.del(`/org-members/${this.enc(id)}`); }
   async listOrgMembersForContact(contactId: string) { return (pick<unknown[]>(await this.g("/org-members", { contact_id: contactId }), "org_members") ?? []); }
 
-  async createDeal(input: Parameters<typeof dealsDb.createDeal>[0]) { return pick(await this.post("/deals", input), "deal"); }
+  async createDeal(input: Dto.dealsCreateDealInput0) { return pick(await this.post("/deals", input), "deal"); }
   async getDeal(id: string) { return pick(await this.gMaybe(`/deals/${this.enc(id)}`), "deal") ?? null; }
-  async listDeals(opts: Parameters<typeof dealsDb.listDeals>[0] = {}) { return (pick<unknown[]>(await this.g("/deals", stripUndefined(opts as Record<string, unknown>) as QueryParams), "deals") ?? []); }
-  async updateDeal(id: string, input: Parameters<typeof dealsDb.updateDeal>[1]) { return pick(await this.patch(`/deals/${this.enc(id)}`, input), "deal") ?? null; }
+  async listDeals(opts: Dto.dealsListDealsInput0 = {}) { return (pick<unknown[]>(await this.g("/deals", stripUndefined(opts as Record<string, unknown>) as QueryParams), "deals") ?? []); }
+  async updateDeal(id: string, input: Dto.dealsUpdateDealInput1) { return pick(await this.patch(`/deals/${this.enc(id)}`, input), "deal") ?? null; }
   async deleteDeal(id: string) { await this.del(`/deals/${this.enc(id)}`); }
 
-  async logEvent(input: Parameters<typeof eventsDb.logEvent>[0]) { return pick(await this.post("/events", input), "event"); }
-  async listEvents(opts: Parameters<typeof eventsDb.listEvents>[0] = {}) { return (pick<unknown[]>(await this.g("/events", stripUndefined(opts as Record<string, unknown>) as QueryParams), "events") ?? []); }
+  async logEvent(input: Dto.eventsLogEventInput0) { return pick(await this.post("/events", input), "event"); }
+  async listEvents(opts: Dto.eventsListEventsInput0 = {}) { return (pick<unknown[]>(await this.g("/events", stripUndefined(opts as Record<string, unknown>) as QueryParams), "events") ?? []); }
   async deleteEvent(id: string) { await this.del(`/events/${this.enc(id)}`); }
 
   async getFieldHistory(contactId: string, fieldName?: string) { return (pick<unknown[]>(await this.g(`/contacts/${this.enc(contactId)}/field-history`, fieldName ? { field_name: fieldName } : undefined), "history") ?? []); }
   async getContactAt(contactId: string, timestamp: string) { return (pick<Record<string, string>>(await this.g(`/contacts/${this.enc(contactId)}/field-at`, { timestamp }), "fields") ?? {}); }
 
-  async addJobEntry(contactId: string, input: Parameters<typeof jobHistoryDb.addJobEntry>[1]) { return pick(await this.post(`/contacts/${this.enc(contactId)}/job-history`, input), "job"); }
+  async addJobEntry(contactId: string, input: Dto.jobHistoryAddJobEntryInput1) { return pick(await this.post(`/contacts/${this.enc(contactId)}/job-history`, input), "job"); }
   async getJobHistory(contactId: string) { return (pick<unknown[]>(await this.g(`/contacts/${this.enc(contactId)}/job-history`), "job_history") ?? []); }
 
-  async saveLearning(contactId: string, input: Parameters<typeof learningsDb.saveLearning>[1]) { return pick(await this.post(`/contacts/${this.enc(contactId)}/learnings`, input), "learning"); }
-  async getLearnings(contactId: string, opts: Parameters<typeof learningsDb.getLearnings>[1] = {}) { return (pick<Array<{ confidence: number; type: string; content: string }>>(await this.g(`/contacts/${this.enc(contactId)}/learnings`, stripUndefined(opts as Record<string, unknown>) as QueryParams), "learnings") ?? []); }
-  async searchLearnings(query: string, opts: Parameters<typeof learningsDb.searchLearnings>[1] = {}) { return (pick<Array<{ contact_id: string; type: string; confidence: number; content: string }>>(await this.g("/learnings/search", { q: query, ...stripUndefined(opts as Record<string, unknown>) } as QueryParams), "learnings") ?? []); }
+  async saveLearning(contactId: string, input: Dto.learningsSaveLearningInput1) { return pick(await this.post(`/contacts/${this.enc(contactId)}/learnings`, input), "learning"); }
+  async getLearnings(contactId: string, opts: Dto.learningsGetLearningsInput1 = {}) { return (pick<Array<{ confidence: number; type: string; content: string }>>(await this.g(`/contacts/${this.enc(contactId)}/learnings`, stripUndefined(opts as Record<string, unknown>) as QueryParams), "learnings") ?? []); }
+  async searchLearnings(query: string, opts: Dto.learningsSearchLearningsInput1 = {}) { return (pick<Array<{ contact_id: string; type: string; confidence: number; content: string }>>(await this.g("/learnings/search", { q: query, ...stripUndefined(opts as Record<string, unknown>) } as QueryParams), "learnings") ?? []); }
   async confirmLearning(learningId: string) { await this.post(`/learnings/${this.enc(learningId)}/confirm`); }
   async getStaleLearnings(daysOld: number, minConfidence: number) { return (pick<unknown[]>(await this.g("/learnings/stale", { days_old: daysOld, min_confidence: minConfidence }), "learnings") ?? []); }
   async runLearningMaintenance() { const r = await this.post("/learnings/maintenance") as { decayed_count?: number; potential_contradictions?: unknown[] }; return { decayed_count: Number(r?.decayed_count ?? 0), potential_contradictions: r?.potential_contradictions ?? [] }; }
@@ -674,7 +651,7 @@ class ApiStore implements Store {
   async findConnectionsAtCompany(companyId: string) { return (pick<unknown[]>(await this.g(`/graph/company/${this.enc(companyId)}`), "connections") ?? []); }
   async detectCoolingRelationships() { return (pick<Array<{ display_name: string; days_since: number }>>(await this.g("/graph/cooling"), "cooling") ?? []); }
 
-  async resolveContactIdentity(partial: Parameters<typeof identityDb.resolveByPartial>[0]) { return (pick<Array<{ contact: { display_name: string; job_title?: string }; confidence_score: number; match_reasons: string[] }>>(await this.post("/identity/resolve", partial), "matches") ?? []); }
+  async resolveContactIdentity(partial: Dto.identityResolveByPartialInput0) { return (pick<Array<{ contact: { display_name: string; job_title?: string }; confidence_score: number; match_reasons: string[] }>>(await this.post("/identity/resolve", partial), "matches") ?? []); }
   async addContactIdentity(contactId: string, system: string, externalId: string, externalUrl?: string, confidence: "verified" | "inferred" = "inferred") { return pick(await this.post("/identity", { contact_id: contactId, system, external_id: externalId, external_url: externalUrl, confidence }), "identity"); }
   async getContactIdentities(contactId: string) { return (pick<unknown[]>(await this.g("/identity", { contact_id: contactId }), "identities") ?? []); }
 
@@ -691,9 +668,9 @@ class ApiStore implements Store {
   async getStaleContacts(threshold: number) { return (pick<Array<{ contact_id: string; display_name: string; score: number }>>(await this.g("/freshness/stale", { threshold }), "contacts") ?? []); }
   async markFieldVerified(contactId: string, fieldName: string, source?: string) { await this.post("/freshness/verify", { contact_id: contactId, field_name: fieldName, source }); }
 
-  async addOrgChartEdge(companyId: string, contactAId: string, contactBId: string, edgeType: Parameters<typeof orgChartDb.addOrgChartEdge>[3], inferred = false) { return pick(await this.post("/org-chart", { company_id: companyId, contact_a_id: contactAId, contact_b_id: contactBId, edge_type: edgeType, inferred }), "edge"); }
+  async addOrgChartEdge(companyId: string, contactAId: string, contactBId: string, edgeType: Dto.orgChartAddOrgChartEdgeInput3, inferred = false) { return pick(await this.post("/org-chart", { company_id: companyId, contact_a_id: contactAId, contact_b_id: contactBId, edge_type: edgeType, inferred }), "edge"); }
   async listOrgChart(companyId: string) { return (pick<Array<{ contact_a_name: string; contact_b_name: string; edge_type: string }>>(await this.g("/org-chart", { company_id: companyId }), "edges") ?? []); }
-  async setDealContactRole(dealId: string, contactId: string, accountRole: Parameters<typeof orgChartDb.setDealContactRole>[2]) { return pick(await this.post(`/deals/${this.enc(dealId)}/roles`, { contact_id: contactId, account_role: accountRole }), "role"); }
+  async setDealContactRole(dealId: string, contactId: string, accountRole: Dto.orgChartSetDealContactRoleInput2) { return pick(await this.post(`/deals/${this.enc(dealId)}/roles`, { contact_id: contactId, account_role: accountRole }), "role"); }
   async getDealTeam(dealId: string) { return (pick<Array<{ display_name: string; account_role: string; job_title?: string }>>(await this.g(`/deals/${this.enc(dealId)}/team`), "team") ?? []); }
   async getCoverageGaps(companyId: string) { return pick(await this.g(`/org-chart/coverage/${this.enc(companyId)}`), "coverage"); }
 
@@ -710,23 +687,23 @@ class ApiStore implements Store {
   async getHealthData(): Promise<never> { return unavailable("getHealthData"); }
   async deleteHealthData(): Promise<never> { return unavailable("deleteHealthData"); }
 
-  async createAudience(input: Parameters<typeof audiencesDb.createAudience>[0]) { return pick(await this.post("/audiences", input), "audience") as never; }
+  async createAudience(input: Dto.audiencesCreateAudienceInput0) { return pick(await this.post("/audiences", input), "audience") as never; }
   async getAudience(idOrSlug: string) { return pick(await this.g(`/audiences/${this.enc(idOrSlug)}`), "audience") as never; }
   async listAudiences() { return (pick<Array<{ audience_id: string; name: string; match: string; consent_policy: string; predicates: unknown[]; suppression_synced_at?: string | null }>>(await this.g("/audiences"), "audiences") ?? []); }
-  async updateAudience(idOrSlug: string, input: Parameters<typeof audiencesDb.updateAudience>[1]) { return pick(await this.patch(`/audiences/${this.enc(idOrSlug)}`, input), "audience"); }
+  async updateAudience(idOrSlug: string, input: Dto.audiencesUpdateAudienceInput1) { return pick(await this.patch(`/audiences/${this.enc(idOrSlug)}`, input), "audience"); }
   async deleteAudience(idOrSlug: string) { await this.del(`/audiences/${this.enc(idOrSlug)}`); }
-  async resolveAudience(idOrSlug: string, channel: Parameters<typeof audiencesDb.resolveAudience>[1]) { return pick(await this.g(`/audiences/${this.enc(idOrSlug)}/resolve`, { channel }), "resolution") as never; }
-  async setContactConsent(contactId: string, channel: Parameters<typeof audiencesDb.setContactConsent>[1], status: Parameters<typeof audiencesDb.setContactConsent>[2], source?: string) { return pick(await this.post("/consent", { contact_id: contactId, channel, status, source }), "consent") as never; }
+  async resolveAudience(idOrSlug: string, channel: Dto.audiencesResolveAudienceInput1) { return pick(await this.g(`/audiences/${this.enc(idOrSlug)}/resolve`, { channel }), "resolution") as never; }
+  async setContactConsent(contactId: string, channel: Dto.audiencesSetContactConsentInput1, status: Dto.audiencesSetContactConsentInput2, source?: string) { return pick(await this.post("/consent", { contact_id: contactId, channel, status, source }), "consent") as never; }
   async listContactConsent(contactId: string) { return (pick<Array<{ channel: string; status: string; source?: string | null; updated_at: string }>>(await this.g("/consent", { contact_id: contactId }), "consent") ?? []); }
-  async suppressAddress(input: Parameters<typeof audiencesDb.suppressAddress>[0]) { return pick(await this.post("/suppressions", input), "suppression") as never; }
-  async unsuppressAddress(channel: Parameters<typeof audiencesDb.unsuppressAddress>[0], address: string) { await this.del("/suppressions", { channel: channel as unknown as string, address }); }
-  async listSuppressions(opts: Parameters<typeof audiencesDb.listSuppressions>[0] = {}) { return (pick<Array<{ address: string; channel: string; reason?: string | null; synced_at?: string | null }>>(await this.g("/suppressions", stripUndefined(opts as Record<string, unknown>) as QueryParams), "suppressions") ?? []); }
+  async suppressAddress(input: Dto.audiencesSuppressAddressInput0) { return pick(await this.post("/suppressions", input), "suppression") as never; }
+  async unsuppressAddress(channel: Dto.audiencesUnsuppressAddressInput0, address: string) { await this.del("/suppressions", { channel: channel as unknown as string, address }); }
+  async listSuppressions(opts: Dto.audiencesListSuppressionsInput0 = {}) { return (pick<Array<{ address: string; channel: string; reason?: string | null; synced_at?: string | null }>>(await this.g("/suppressions", stripUndefined(opts as Record<string, unknown>) as QueryParams), "suppressions") ?? []); }
   async syncSuppressions(): Promise<never> { return unavailable("syncSuppressions"); }
 
   async generateBrief(contactId: string) { const r = await this.g(`/contacts/${this.enc(contactId)}/brief-text`) as { text?: string }; return String(r?.text ?? ""); }
   async getContactCard(contactId: string) { return pick(await this.g(`/contacts/${this.enc(contactId)}/card`), "card") as object; }
   async getContactBrief(contactId: string, taskContext?: string) { return pick(await this.g(`/contacts/${this.enc(contactId)}/brief`, taskContext ? { context: taskContext } : undefined), "brief") as object; }
-  async assembleContext(contactIds: string[], format: Parameters<typeof contextLib.assembleContext>[1]) { return pick(await this.post("/assemble-context", { contact_ids: contactIds, format }), "context") as object; }
+  async assembleContext(contactIds: string[], format: Dto.contextAssembleContextInput1) { return pick(await this.post("/assemble-context", { contact_ids: contactIds, format }), "context") as object; }
   async getUpcomingItems(days: number) { return (pick<unknown[]>(await this.g("/upcoming", { days }), "items") ?? []); }
   async getNetworkStats() { return pick(await this.g("/network-stats"), "stats") as never; }
   async listContactAudit() { return (pick<unknown[]>(await this.g("/contact-audit"), "audit") ?? []); }
@@ -773,5 +750,5 @@ export function resetStoreCache(): void {
   cached = undefined;
 }
 
-// Storage-status shape returned by `Store.storageStatus()` (on-box table rows).
-export type { ContactsStorageStatus, StorageTableStatus } from "../db/storage.js";
+// Public status is null: the HTTPS client does not expose local table diagnostics.
+export type { ContactsStorageStatus, StorageTableStatus } from "../types/store-dto.js";
