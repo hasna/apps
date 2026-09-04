@@ -6,11 +6,11 @@ import { fileURLToPath } from "node:url";
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // bun.lock is intentionally NOT scanned: it is a dev-only lockfile that is never
-// shipped (package.json `files` ships dist + dashboard/dist only) and it records
-// transitive *devDependencies* of build-time file: deps (e.g. a linked local
-// package's dev-only @hasna/cloud). The client-facing dependency surface is
-// validated via package.json (direct runtime deps) below, which stays free of
-// retired cloud packages.
+// shipped (package.json `files` ships dist only) and it records transitive
+// *devDependencies* of build-time file: deps (e.g. a linked local package's
+// dev-only @hasna/cloud). The client-facing dependency surface is validated via
+// package.json (direct runtime deps) below, which stays free of retired cloud
+// packages.
 const explicitFiles = ["package.json", "README.md"];
 
 const scannedRoots = ["docs", "src"];

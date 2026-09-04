@@ -1,9 +1,5 @@
 #!/usr/bin/env bun
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
-import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
 import { getDb } from "../db/index.ts";
 import { resolveServerDataBackend } from "../generated/storage-kit/backend.ts";
@@ -52,8 +48,6 @@ if (hasOption(["--local-open"])) process.env.HASNA_LOGS_LOCAL_OPEN = "1";
 const PORT = Number(
   portArg ?? process.env.LOGS_PORT ?? process.env.PORT ?? 3460,
 );
-const serverDir = dirname(fileURLToPath(import.meta.url));
-
 // The serve selects its backend from the environment: HASNA_LOGS_DATABASE_URL
 // (or LOGS_DATABASE_URL) present -> a stateless API in front of PostgreSQL —
 // no SQLite, no scheduler, API-key auth. Otherwise it serves the local SQLite
@@ -64,7 +58,6 @@ const databaseBackend =
 function buildLocalServe() {
   const db = getDb();
   const app = new Hono();
-  const dashboardRoot = resolveDashboardRoot();
 
   app.use(
     "*",
@@ -109,20 +102,11 @@ function buildLocalServe() {
   app.get("/ready", (c) =>
     c.json({ status: "ok", version: PACKAGE_VERSION }),
   );
-  app.get("/dashboard", (c) => c.redirect("/dashboard/"));
-  app.use(
-    "/dashboard/*",
-    serveStatic({
-      root: dashboardRoot,
-      rewriteRequestPath: (p) => p.replace(/^\/dashboard/, ""),
-    }),
-  );
   app.get("/", (c) =>
     c.json({
       service: "@hasna/logs",
       port: PORT,
       status: "ok",
-      dashboard: `http://localhost:${PORT}/dashboard/`,
     }),
   );
 
@@ -151,14 +135,3 @@ function buildLocalServe() {
 const serveExport = databaseBackend ? buildCloudServe(PORT) : buildLocalServe();
 
 export default serveExport;
-
-function resolveDashboardRoot(): string {
-  const cwdDashboardRoot = resolve(process.cwd(), "dashboard/dist");
-  const candidates = [
-    cwdDashboardRoot,
-    resolve(serverDir, "../../dashboard/dist"),
-  ];
-  return (
-    candidates.find((candidate) => existsSync(candidate)) ?? cwdDashboardRoot
-  );
-}

@@ -25,8 +25,7 @@
     "logs-serve": "./dist/server/index.js"
   },
   "files": [
-    "dist",
-    "dashboard/dist"
+    "dist"
   ],
   "scripts": {
     "build": "bun run build:js && bun run build:types",
@@ -34,12 +33,9 @@
     "generate:sdk": "bun scripts/generate-sdk-api.ts",
     "kit:check": "contracts vendor-kit --check",
     "build:types": "tsc -p tsconfig.build.json --emitDeclarationOnly && rm -rf dist/.sdk-types && tsc -p sdk/tsconfig.json --emitDeclarationOnly --declaration --rootDir sdk/src --outDir dist/.sdk-types && cp dist/.sdk-types/*.d.ts dist/ && rm -rf dist/.sdk-types",
-    "build:dashboard": "cd dashboard && bun run build",
-    "build:all": "bun run build:dashboard && bun run build",
     "dev": "bun run src/server/index.ts",
     "test": "bun test",
     "test:coverage": "bun test --coverage",
-    "validate:dashboard-stream": "bun scripts/dashboard-stream-validation-lab.ts",
     "validate:browser-runtime": "bun scripts/browser-runtime-validation-lab.ts",
     "validate:browser-spool": "bun scripts/browser-spool-validation-lab.ts",
     "validate:logger-packages": "bun scripts/logger-package-validation-lab.ts",

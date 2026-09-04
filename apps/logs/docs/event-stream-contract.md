@@ -81,15 +81,12 @@ logs watch --server http://127.0.0.1:3460 --token "$HASNA_LOGS_API_TOKEN" --type
 
 Local watch uses SQLite `rowid` as the cursor and prints `last_event_id_unknown` to stderr when a requested cursor is missing. Remote watch uses `/api/events/stream?event_name=event` and sends both `last_event_id` and `Last-Event-ID` on reconnect.
 
-## Dashboard Consumer
+## Programmatic Consumer
 
-Dashboard live tail consumes:
-
-```text
-/api/events/stream?event_name=event
-```
-
-It uses a fetch-backed SSE reader instead of native `EventSource` so token-secured dashboards can send `Authorization: Bearer <token>` without putting tokens in URLs. The dashboard token control stores the token in browser session storage, shared dashboard API calls attach the same header, the live tail stores the last seen event id, closes the stream while paused, and reconnects with `last_event_id` on resume.
+Agents connect through `logs watch --server`, the SDK, or MCP (below). Browser
+consumers use `/api/events/stream?event_name=event` with a fetch-backed SSE
+reader that can send `Authorization: Bearer <token>` without putting tokens in
+URLs; the stream resumes with `last_event_id` after drops.
 
 ## MCP Consumer
 
@@ -111,7 +108,6 @@ Semantics:
 This contract has first-pass unit/integration coverage and a bounded real-server validation harness:
 
 - `bun run validate:streams -- --keep` retained `/tmp/open-logs-stream-load-q2aFBk/stream-load-validation-report.json`, proving direct generic SSE live delivery, `Last-Event-ID` buffer-miss SQLite catch-up, forced slow-subscriber `subscriber_queue_overflow`, bounded multi-consumer API SSE fanout with 8 consumers receiving 80 burst events each, remote CLI watch, local CLI watch, MCP `event_watch` over stdio with raw envelopes, missing-cursor overflow, and `doctor segments` with 141 checked raw events and 0 unindexed raw events.
-- `bun run validate:dashboard-stream -- --keep` retained `/tmp/open-logs-dashboard-stream-lab-f1Ji0B/dashboard-stream-validation-report.json`, proving the built dashboard in Chromium blocks the stream without a token, sends `Authorization` on fetch-backed SSE after token entry, renders live event-catalog records, enters the dashboard paused state, resumes with query `last_event_id`, catches up an event written while paused, receives a post-resume live event, and leaves raw segment plus SQLite doctor evidence with 0 unindexed raw events on both the source server and extracted npm package server paths.
 
 This is still not final-gate evidence.
 
@@ -120,5 +116,4 @@ Still required:
 - Long-running reconnect validation.
 - Larger high-rate multi-consumer stream validation beyond the bounded 8-consumer/80-event fanout.
 - MCP polling loops under larger concurrent writes.
-- Broader browser/dashboard onboarding, reconnect-after-drop, and long-running reconnect-state UX beyond the first real-browser manual-token and pause/resume proof.
 - Cross-process and multi-machine validation.

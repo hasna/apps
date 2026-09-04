@@ -1,7 +1,5 @@
 node_modules
 dist
 .git
-dashboard/node_modules
-dashboard/dist
 **/*.test.ts
 .dockerignore
