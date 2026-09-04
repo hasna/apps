@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 /**
- * Dashboard API server.
- * Serves the built dashboard static files and API routes.
+ * Local HTTP + MCP server.
+ * Serves JSON API routes backed by the active Store.
  *
  * Usage:
- *   conversations dashboard          # Start dashboard server
+ *   conversations-serve          # Start the API server (PostgreSQL backend)
+ *   bun run src/server/serve.ts  # Start the local HTTP server
  */
 
 // Every data read goes through getStore(). Importing the sync helpers from
@@ -24,8 +25,6 @@ import {
 } from "../lib/strict-query-values.js";
 import { handleMcpRequest, healthPayload } from "../mcp/http.js";
 import { buildServer } from "../mcp/index.js";
-import { join, resolve, sep } from "path";
-import { existsSync } from "fs";
 
 function securityHeaders(base?: HeadersInit): Headers {
   const headers = new Headers(base);
@@ -194,27 +193,8 @@ function isSameOrigin(req: Request): boolean {
   return origin === new URL(req.url).origin;
 }
 
-function resolveDashboardDist(): string | null {
-  const configuredDist = process.env.CONVERSATIONS_DASHBOARD_DIST?.trim();
-  const candidates = [
-    configuredDist,
-    join(import.meta.dir, "../../dashboard/dist"), // source: src/server/serve.ts
-    join(import.meta.dir, "../dashboard/dist"), // bundled CLI: bin/index.js
-    join(process.cwd(), "dashboard/dist"), // local repo fallback
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  for (const candidate of candidates) {
-    const resolved = resolve(candidate);
-    if (existsSync(join(resolved, "index.html"))) {
-      return resolved;
-    }
-  }
-
-  return null;
-}
-
 /**
- * Turn a store CONFIGURATION refusal into a 503 the dashboard can render.
+ * Turn a store CONFIGURATION refusal into a 503 the client can render.
  *
  * `getStore()` already refuses to guess when the environment is half-configured —
  * an API URL with no key (see
@@ -238,7 +218,7 @@ function resolveDashboardDist(): string | null {
  * Measured on the built bundle before this was added — `GET /api/channels`
  * answered 503 while `POST /api/messages` answered 400 with the identical
  * message. Fail-closed held either way (neither served local data), but the
- * status code is what a dashboard renders and what a monitor keys on, so the two
+ * status code is what a client renders and what a monitor keys on, so the two
  * must not disagree.
  *
  * Rethrowing hands it to {@link withStoreErrorBoundary} instead of giving every
@@ -267,7 +247,6 @@ function withStoreErrorBoundary(
 export function startDashboardServer(port = 0, host?: string) {
   const resolvedPort = normalizePort(port, 0);
   const resolvedHost = normalizeHost(host ?? process.env.CONVERSATIONS_DASHBOARD_HOST);
-  const dashboardDist = resolveDashboardDist();
 
   const server = Bun.serve({
     port: resolvedPort,
@@ -735,31 +714,6 @@ export function startDashboardServer(port = 0, host?: string) {
         }
       }
 
-      // ---- Static files (dashboard) ----
-      if (dashboardDist) {
-        const baseDir = resolve(dashboardDist);
-        const safePath = (path === "/" ? "index.html" : path.replace(/^\/+/, ""));
-        const filePath = resolve(baseDir, safePath);
-        if (!filePath.startsWith(baseDir + sep)) {
-          return new Response("Not Found", { status: 404 });
-        }
-
-        let file = Bun.file(filePath);
-        if (await file.exists()) {
-          const headers = securityHeaders();
-          if (file.type) headers.set("Content-Type", file.type);
-          return new Response(file, { headers });
-        }
-
-        // SPA fallback
-        file = Bun.file(join(dashboardDist, "index.html"));
-        if (await file.exists()) {
-          const headers = securityHeaders();
-          if (file.type) headers.set("Content-Type", file.type);
-          return new Response(file, { headers });
-        }
-      }
-
       return new Response("Not Found", {
         status: 404,
         headers: securityHeaders({ "Content-Type": "text/plain; charset=utf-8" }),
@@ -767,7 +721,7 @@ export function startDashboardServer(port = 0, host?: string) {
     }),
   });
 
-  console.log(`Dashboard running at http://localhost:${server.port}`);
+  console.log(`Conversations server running at http://localhost:${server.port}`);
   return server;
 }
 

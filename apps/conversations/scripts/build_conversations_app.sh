@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build "Hasna Conversations" — the WKWebView macOS shell hosting the web UI + bundled
-# dashboard/API server — and assemble a launchable .app bundle.
+# Build "Hasna Conversations" — the native macOS shell with a bundled local HTTP/MCP
+# server — and assemble a launchable .app bundle.
 # Run ON a macOS 26 Mac (Swift 6, Command Line Tools; no Xcode required).
 set -euo pipefail
 
@@ -36,16 +36,11 @@ mkdir -p "$MACOS_DIR" "$PAYLOAD"
 cp "$BUILT_BINARY" "$MACOS_DIR/$EXEC_NAME"
 chmod +x "$MACOS_DIR/$EXEC_NAME"
 
-# Bundle the server payload: web UI + TypeScript source + deps.
+# Bundle the server payload: TypeScript source + deps.
 echo "==> Bundling server payload -> Resources/app"
-cp -R "$REPO_ROOT/web" "$PAYLOAD/web"
 cp -R "$REPO_ROOT/src" "$PAYLOAD/src"
 cp "$REPO_ROOT/package.json" "$PAYLOAD/package.json"
 [[ -f "$REPO_ROOT/tsconfig.json" ]] && cp "$REPO_ROOT/tsconfig.json" "$PAYLOAD/tsconfig.json"
-if [[ -d "$REPO_ROOT/dashboard/dist" ]]; then
-  mkdir -p "$PAYLOAD/dashboard"
-  cp -R "$REPO_ROOT/dashboard/dist" "$PAYLOAD/dashboard/dist"
-fi
 
 # node_modules is required at runtime (bun:sqlite is builtin; pg / mcp-sdk / zod are not).
 echo "==> Bundling node_modules -> Resources/app/node_modules"

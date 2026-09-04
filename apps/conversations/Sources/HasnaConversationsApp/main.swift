@@ -1,13 +1,11 @@
-// Hasna Conversations — native macOS shell hosting the bundled web UI in a WKWebView.
+// Hasna Conversations — native macOS shell.
 //
-// The UI itself lives in `web/` (copied into the app bundle at
-// Contents/Resources/app/web) and is served — together with the /api/* routes — by the
-// conversations dashboard server (Contents/Resources/app/src/server/serve.ts, run with
-// bun). This shell:
-//   1. spawns that server on a free 127.0.0.1 port,
-//   2. waits for /health, then opens a hidden-titlebar window and loads it,
-//   3. tags the document with `native` + injects window.__BOOT__ before page JS runs,
-//   4. supervises the child server and tears it down on quit.
+// The bundled browser UI (web/ and dashboard/) was removed; the shell spawns the
+// local HTTP server (Contents/Resources/app/src/server/serve.ts, run with bun),
+// which exposes the /api/* routes backed by the active Store. This shell:
+//   1. spawns that server on a free 127.0.0.1 port for the in-app client,
+//   2. waits for /health,
+//   3. supervises the child server and tears it down on quit.
 import AppKit
 import WebKit
 import Foundation
@@ -122,7 +120,6 @@ final class Backend: @unchecked Sendable {
         var env = storeEnv
         env["PORT"] = String(port)
         env["CONVERSATIONS_DASHBOARD_HOST"] = "127.0.0.1"
-        env["CONVERSATIONS_DASHBOARD_DIST"] = appDir.appendingPathComponent("web").path
         env["CONVERSATIONS_AGENT_ID"] = resolveAgentId()
         // Never let the app inherit an MCP-HTTP toggle that would bind a fixed port.
         env.removeValue(forKey: "MCP_HTTP")

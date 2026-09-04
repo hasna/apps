@@ -4,37 +4,27 @@ import { sendMessage } from "../lib/messages";
 import { createChannel, joinChannel } from "../lib/channels";
 import { createProject } from "../lib/projects";
 import { closeDb } from "../lib/db";
-import { mkdirSync, rmSync, unlinkSync, writeFileSync } from "fs";
+import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { pinStoreToDb, restoreStoreEnv } from "../lib/store/isolated-test-env.js";
 
 const TEST_DB = join(tmpdir(), `conversations-test-server-${Date.now()}.db`);
-const TEST_DASHBOARD_DIST = join(tmpdir(), `conversations-test-dashboard-dist-${Date.now()}`);
 let server: ReturnType<typeof startDashboardServer>;
 
 beforeAll(() => {
   pinStoreToDb(TEST_DB);
-  process.env.CONVERSATIONS_DASHBOARD_DIST = TEST_DASHBOARD_DIST;
-  mkdirSync(TEST_DASHBOARD_DIST, { recursive: true });
-  writeFileSync(
-    join(TEST_DASHBOARD_DIST, "index.html"),
-    "<!doctype html><html><body><div id=\"root\">Conversations Dashboard</div></body></html>",
-    "utf-8"
-  );
   closeDb();
   server = startDashboardServer(0);
 });
 
 afterAll(() => {
   server?.stop();
-  delete process.env.CONVERSATIONS_DASHBOARD_DIST;
   closeDb();
   restoreStoreEnv();
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
-  rmSync(TEST_DASHBOARD_DIST, { recursive: true, force: true });
 });
 
 const base = () => `http://localhost:${server.port}`;
@@ -745,22 +735,6 @@ describe("API /api/version", () => {
         process.env.CONVERSATIONS_REGISTRY_TIMEOUT_MS = originalTimeout;
       }
     }
-  });
-});
-
-describe("Static files", () => {
-  test("serves dashboard root from configured dist", async () => {
-    const res = await fetch(`${base()}/`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/html");
-    await expect(res.text()).resolves.toContain("Conversations Dashboard");
-  });
-
-  test("unknown paths return HTML via SPA fallback", async () => {
-    const res = await fetch(`${base()}/some/random/path`);
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("text/html");
-    await expect(res.text()).resolves.toContain("Conversations Dashboard");
   });
 });
 

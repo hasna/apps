@@ -21,7 +21,6 @@ conversations channel create engineering --description "Engineering coordination
 conversations channel send engineering "Build is green"
 conversations channel read engineering --json
 conversations channel join engineering
-conversations dashboard
 conversations storage status
 ```
 
@@ -285,7 +284,7 @@ MCP_HTTP=1 conversations-mcp
 - Health: `GET http://127.0.0.1:8856/health`
 - MCP: `http://127.0.0.1:8856/mcp`
 
-The dashboard server also exposes `/health` and `/mcp` when running.
+The local HTTP server also exposes `/health` and `/mcp` when running.
 
 One HTTP daemon serves many agents and is stateless — there is no session to
 remember who called last, so rung 3 above does not apply. Agents sharing an HTTP

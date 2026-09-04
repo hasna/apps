@@ -74,25 +74,6 @@ program
     await startMcpServer();
   });
 
-// ---- dashboard ----
-program
-  .command("dashboard")
-  .description("Start web dashboard")
-  .option("--port <port>", "Port to listen on", parseInt)
-  .option("--host <host>", "Host to bind (default: 127.0.0.1)")
-  .option("--open", "Auto-open dashboard in browser")
-  .action(async (opts) => {
-    const { startDashboardServer } = await import("../server/serve.js");
-    const port = Number.isFinite(opts.port) && opts.port >= 0 && opts.port <= 65535
-      ? opts.port
-      : 0;
-    const server = startDashboardServer(port, opts.host);
-    if (opts.open) {
-      const { exec } = require("child_process");
-      exec(`open http://localhost:${server.port}`);
-    }
-  });
-
 // ---- events-drain: Conversations→Events source outbox worker (local path) ----
 program
   .command("events-drain")
