@@ -98,11 +98,7 @@ const API_CORS_ORIGINS_ENV_NAMES = [
   "HASNA_MONITOR_API_CORS_ORIGINS",
   "MONITOR_API_CORS_ORIGINS",
 ] as const;
-const DEFAULT_CORS_ORIGINS = [
-  "http://localhost:3848",
-  "http://127.0.0.1:3848",
-  "http://[::1]:3848",
-];
+const DEFAULT_CORS_ORIGINS: string[] = [];
 
 function json(data: unknown, status = 200, headers: HeadersInit = {}): Response {
   return new Response(JSON.stringify(data), {

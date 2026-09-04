@@ -14,9 +14,17 @@
     "rootDir": ".",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./src/*"
+      ]
     }
   },
-  "include": ["src/**/*", "bins/**/*"],
-  "exclude": ["node_modules", "dist", "dashboard"]
+  "include": [
+    "src/**/*",
+    "bins/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
 }

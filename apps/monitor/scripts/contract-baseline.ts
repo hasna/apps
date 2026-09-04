@@ -3,14 +3,14 @@
  * Holds `contracts repo-conformance` — the authority on conformance — to an
  * explicit baseline.
  *
- * `bun run contract-check` exits 1 today, because two published bins
- * (monitor-server, monitor-web) fall outside the contract bin allowlist and
- * dropping them is a breaking change that needs an owner decision. Recording
- * that under metadata.contractAlignment.pendingBinRenames documents the
- * deferral, but the kit ignores repo-invented metadata, so on its own the
- * deferral just means the authoritative command is never run: `contract-gate`
- * checks this repo's own wiring and is deliberately weaker at exactly the point
- * where conformance fails.
+ * `bun run contract-check` exits 1 today, because one published bin
+ * (monitor-server) falls outside the contract bin allowlist and dropping it
+ * is a breaking change that needs an owner decision. Recording that under
+ * metadata.contractAlignment.pendingBinRenames documents the deferral, but
+ * the kit ignores repo-invented metadata, so on its own the deferral just
+ * means the authoritative command is never run: `contract-gate` checks this
+ * repo's own wiring and is deliberately weaker at exactly the point where
+ * conformance fails.
  *
  * This gate closes that hole. It runs the authority, and passes only when the
  * set of failing checks is *exactly* the baseline declared in the manifest. A new

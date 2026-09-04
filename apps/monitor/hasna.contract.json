@@ -77,11 +77,11 @@
     },
     "contractAlignment": {
       "conformanceBaseline": {
-        "reason": "The two pending bin renames below are owner-blocked breaking changes, so `bun run contract-check` still fails one check. This baseline is what `bun run contract-baseline` holds the authority to in CI: exactly these failures pass, anything else — a new failure, a changed detail, or a baseline entry that stops failing — breaks the build. Remove an entry as soon as its cause is resolved.",
+        "reason": "The pending bin rename below is an owner-blocked breaking change, so `bun run contract-check` still fails one check. This baseline is what `bun run contract-baseline` holds the authority to in CI: exactly these failures pass, anything else — a new failure, a changed detail, or a baseline entry that stops failing — breaks the build. Remove an entry as soon as its cause is resolved.",
         "failures": [
           {
             "check": "bins_match_package",
-            "detail": "in package.json but undeclared: monitor-server, monitor-web"
+            "detail": "in package.json but undeclared: monitor-server"
           }
         ]
       },
@@ -90,11 +90,6 @@
           "bin": "monitor-server",
           "replacement": "monitor serve",
           "reason": "Ships in package.json bin but falls outside the contract bin allowlist, so it cannot be declared above. The allowlisted equivalent already exists as the `monitor serve` subcommand; dropping the standalone bin is a breaking change to a published package and needs an owner decision."
-        },
-        {
-          "bin": "monitor-web",
-          "replacement": "monitor web (subcommand not implemented yet)",
-          "reason": "Ships in package.json bin but falls outside the contract bin allowlist, and no allowlisted bin name fits a dashboard dev server. Replacing it needs a new `monitor web` subcommand plus an owner decision on the breaking change."
         }
       ]
     }
