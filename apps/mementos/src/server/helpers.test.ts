@@ -5,9 +5,7 @@ import {
   readJson,
   authenticateRequest,
   getSearchParams,
-  resolveDashboardDir,
   CORS_HEADERS,
-  MIME_TYPES,
 } from "./helpers.js";
 
 describe("json", () => {
@@ -144,19 +142,6 @@ describe("getSearchParams", () => {
   });
 });
 
-describe("resolveDashboardDir", () => {
-  test("returns a string path", () => {
-    const dir = resolveDashboardDir();
-    expect(typeof dir).toBe("string");
-    expect(dir).toContain("dashboard");
-  });
-
-  test("ends with dashboard/dist", () => {
-    const dir = resolveDashboardDir();
-    expect(dir.endsWith("dashboard/dist")).toBe(true);
-  });
-});
-
 describe("CORS_HEADERS", () => {
   test("has allow-origin", () => {
     expect(CORS_HEADERS["Access-Control-Allow-Origin"]).toBeTruthy();
@@ -167,17 +152,5 @@ describe("CORS_HEADERS", () => {
     expect(CORS_HEADERS["Access-Control-Allow-Methods"]).toContain("POST");
     expect(CORS_HEADERS["Access-Control-Allow-Methods"]).toContain("DELETE");
     expect(CORS_HEADERS["Access-Control-Allow-Methods"]).toContain("OPTIONS");
-  });
-});
-
-describe("MIME_TYPES", () => {
-  test("has common mime types", () => {
-    expect(MIME_TYPES[".html"]).toContain("text/html");
-    expect(MIME_TYPES[".js"]).toContain("javascript");
-    expect(MIME_TYPES[".json"]).toContain("application/json");
-    expect(MIME_TYPES[".css"]).toContain("text/css");
-    expect(MIME_TYPES[".svg"]).toContain("image/svg+xml");
-    expect(MIME_TYPES[".png"]).toContain("image/png");
-    expect(MIME_TYPES[".ico"]).toContain("image/x-icon");
   });
 });

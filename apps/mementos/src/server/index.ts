@@ -4,9 +4,7 @@
  * Usage: mementos-serve [--port 19428]
  */
 
-import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, resolve, sep } from "node:path";
 import { getActiveProfile, listProfiles, getDbPath } from "../lib/config.js";
 import { getDatabase } from "../db/database.js";
 import { getPrimaryMachineStartupWarning } from "../db/machines.js";
@@ -21,7 +19,7 @@ import { getMemoryStats } from "../db/analytics.js";
 // a direct RDS Postgres connection (CLAUDE.md §2). Opt in before any DB access.
 markServerContext();
 import { matchRoute } from "./router.js";
-import { CORS_HEADERS, getCorsHeaders, getAllowedOrigins, checkOriginOrHost, json, errorResponse, resolveDashboardDir, serveStaticFile, describeConstraintViolation } from "./helpers.js";
+import { CORS_HEADERS, getCorsHeaders, getAllowedOrigins, checkOriginOrHost, json, errorResponse, describeConstraintViolation } from "./helpers.js";
 import { checkApiKey, isAuthenticated } from "./auth.js";
 
 function pkgVersion(): string {
@@ -256,8 +254,8 @@ export function startServer(port: number): void {
         const originGate = checkOriginOrHost(req, req.method, isAuthenticated(req));
         if (originGate) return originGate;
       } else {
-        // Non-API surfaces (dashboard static files) keep the pre-auth
-        // Host/Origin allowlist for state-changing methods.
+        // Non-API surfaces keep the pre-auth Host/Origin allowlist for
+        // state-changing methods.
         const originGate = checkOriginOrHost(req, req.method);
         if (originGate) return originGate;
       }
@@ -324,22 +322,6 @@ export function startServer(port: number): void {
         // API routes always return JSON 404
         if (isApi || isV1) {
           return errorResponse("Not found", 404);
-        }
-        // Serve dashboard static files for non-API routes
-        const dashDir = resolveDashboardDir();
-        if (existsSync(dashDir) && (req.method === "GET" || req.method === "HEAD")) {
-          if (pathname !== "/") {
-            // Path traversal guard: resolved path must stay within dashDir
-            const resolvedDash = resolve(dashDir) + sep;
-            const requestedPath = resolve(join(dashDir, pathname));
-            if (requestedPath.startsWith(resolvedDash)) {
-              const staticRes = serveStaticFile(requestedPath);
-              if (staticRes) return staticRes;
-            }
-          }
-          // SPA fallback — serve index.html
-          const indexRes = serveStaticFile(join(dashDir, "index.html"));
-          if (indexRes) return indexRes;
         }
         return errorResponse("Not found", 404);
       }

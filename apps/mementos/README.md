@@ -24,7 +24,7 @@ The package installs three binaries:
 | --- | --- |
 | `mementos` | Memory, agent, project, graph, session, and maintenance CLI |
 | `mementos-mcp` | MCP server; Streamable HTTP by default, stdio on request |
-| `mementos-serve` | REST API and dashboard server |
+| `mementos-serve` | REST API server |
 
 ## Quick start
 

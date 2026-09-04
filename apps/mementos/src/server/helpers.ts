@@ -1,7 +1,3 @@
-import { existsSync } from "node:fs";
-import { dirname, extname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
 // ============================================================================
 // CORS headers
 // ============================================================================
@@ -29,8 +25,9 @@ export function isStateChangingMethod(method: string): boolean {
  *
  * `MEMENTOS_CORS_ORIGIN` accepts a comma-separated list; each entry may be a
  * full origin (`http://localhost:19428`) or a bare `host[:port]`. The default
- * is the local dashboard origin. An empty value yields an empty allowlist,
- * which fails closed (no origin or host is allowed to mutate state).
+ * is the mementos server's own origin. An empty value yields an empty
+ * allowlist, which fails closed (no origin or host is allowed to mutate
+ * state).
  */
 export function getAllowedOrigins(): string[] {
   const raw = process.env["MEMENTOS_CORS_ORIGIN"] ?? "http://localhost:19428";
@@ -108,22 +105,6 @@ export function checkWriteOriginOrHost(req: Request, authenticated = false): Res
   // Neither Origin nor Host (a malformed request) — fail closed.
   return json({ error: "Forbidden. Missing Origin or Host header." }, 403);
 }
-
-// ============================================================================
-// MIME types
-// ============================================================================
-
-export const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "application/javascript",
-  ".css": "text/css",
-  ".json": "application/json",
-  ".svg": "image/svg+xml",
-  ".png": "image/png",
-  ".ico": "image/x-icon",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2",
-};
 
 // ============================================================================
 // Response helpers
@@ -230,35 +211,4 @@ export function getSearchParams(url: URL): Record<string, string> {
     params[k] = v;
   });
   return params;
-}
-
-// ============================================================================
-// Dashboard static file helpers
-// ============================================================================
-
-export function resolveDashboardDir(): string {
-  const candidates: string[] = [];
-  try {
-    const scriptDir = dirname(fileURLToPath(import.meta.url));
-    candidates.push(join(scriptDir, "..", "dashboard", "dist"));
-    candidates.push(join(scriptDir, "..", "..", "dashboard", "dist"));
-  } catch { /* ignore */ }
-  if (process.argv[1]) {
-    const mainDir = dirname(process.argv[1]);
-    candidates.push(join(mainDir, "..", "dashboard", "dist"));
-    candidates.push(join(mainDir, "..", "..", "dashboard", "dist"));
-  }
-  candidates.push(join(process.cwd(), "dashboard", "dist"));
-  for (const c of candidates) {
-    if (existsSync(c)) return c;
-  }
-  return join(process.cwd(), "dashboard", "dist");
-}
-
-export function serveStaticFile(filePath: string): Response | null {
-  if (!existsSync(filePath)) return null;
-  const ct = MIME_TYPES[extname(filePath)] || "application/octet-stream";
-  return new Response(Bun.file(filePath), {
-    headers: { "Content-Type": ct },
-  });
 }
