@@ -1,0 +1,5 @@
+---
+"@hasna/calendar": patch
+---
+
+Fleet storage doctrine (hasna/apps#1613, docs/fleet-local-storage.md): in api mode the calendar CLI now creates, opens, and migrates NO local database. The package `postinstall` that pre-created `~/.hasna/calendar` (and `templates/`) on every install is removed, so installing the package on a station leaves no local storage behind when `HASNA_CALENDAR_API_URL` is configured. `calendar db-migrate` (the only CLI path into the legacy SQLite layer) is now LOCAL-ONLY: it refuses to run in api mode before the SQLite layer is even loaded (lazy import), keeping the legacy one-time migration semantics intact when no API URL/key is configured. New behavior locks: `src/cli/api-mode-storage.test.ts` asserts the api-mode refusal, the fail-closed no-local-fallback behavior on network failure, the still-working local-only legacy migration, and the absence of a storage-creating postinstall.

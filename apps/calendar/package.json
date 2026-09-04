@@ -27,8 +27,8 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/mcp/bin.js && chmod +x dist/mcp/bin.js && bun build src/server/index.ts --outdir dist/server --target bun --external zod && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
-    "build:server": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/mcp/bin.js && chmod +x dist/mcp/bin.js && bun build src/server/index.ts --outdir dist/server --target bun --external zod && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun",
+    "build": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --splitting && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/mcp/bin.js && chmod +x dist/mcp/bin.js && bun build src/server/index.ts --outdir dist/server --target bun --external zod && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build:server": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --splitting && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/mcp/bin.js && chmod +x dist/mcp/bin.js && bun build src/server/index.ts --outdir dist/server --target bun --external zod && printf '#!/usr/bin/env bun\\nimport \"./index.js\";\\n' > dist/server/bin.js && chmod +x dist/server/bin.js && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts --outdir dist --target bun",
     "migrate": "bun run src/server/index.ts migrate",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "typecheck": "tsc --noEmit",
@@ -37,7 +37,6 @@
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/calendar $HOME/.hasna/calendar/templates 2>/dev/null || true",
     "prepack": "bun run build"
   },
   "keywords": [

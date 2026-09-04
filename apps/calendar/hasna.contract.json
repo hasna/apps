@@ -4,7 +4,7 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.14.2",
-  "description": "Partial Calendar domain migration: authenticated explicit HTTPS clients and PostgreSQL-only server. Embedded Events/channel/replay and explicit legacy db-migrate remain unresolved local integrations; not whole-package remote-only.",
+  "description": "Partial Calendar domain migration: authenticated explicit HTTPS clients and PostgreSQL-only server. Embedded Events/channel/replay remain unresolved local integrations; explicit legacy db-migrate is LOCAL-ONLY and refused in api mode (no local database is created when HASNA_CALENDAR_API_URL is set).",
   "bins": [
     "calendar",
     "calendar-mcp",
@@ -90,8 +90,7 @@
     "migration": {
       "status": "partial",
       "unresolved": [
-        "embedded Events/channel/replay",
-        "explicit db-migrate"
+        "embedded Events/channel/replay"
       ],
       "sharedCanonicalContracts": "unpublished"
     }
