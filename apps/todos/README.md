@@ -1588,7 +1588,7 @@ refuses to start unless one of the following is true:
 
 | Configuration | Result |
 | --- | --- |
-| `TODOS_API_KEY=<key>` (or `--api-key <key>`) | `/api/*` + `/mcp` require the key |
+| `HASNA_TODOS_SERVER_API_KEY=<key>` (or `--api-key <key>`) | `/api/*` + `/mcp` require the key |
 | at least one `todos api-keys create` key exists | `/api/*` + `/mcp` require a key |
 | `--allow-anonymous` **and** a loopback bind | anonymous, loopback peers only (local dev) |
 | a cloud `DATABASE_URL` is configured (hosted `/v1` deployment) | `/api/*` + `/mcp` are **not served**; `/v1` stays authenticated |
@@ -1596,7 +1596,7 @@ refuses to start unless one of the following is true:
 
 ```bash
 todos api-keys create "My app"          # then send x-api-key / Authorization: Bearer
-TODOS_API_KEY=<key> todos-serve --host 0.0.0.0
+HASNA_TODOS_SERVER_API_KEY=<key> todos-serve --host 0.0.0.0
 todos serve --allow-anonymous           # local dev only; refused for a non-loopback --host
 ```
 
@@ -1604,15 +1604,22 @@ todos serve --allow-anonymous           # local dev only; refused for a non-loop
 bind host, and even when enabled it only serves requests whose transport peer is
 itself loopback — so it can never publish an anonymous task read/write plane
 off-box. `todos-mcp --http` sets it implicitly because that transport is pinned to
-`127.0.0.1`; set `TODOS_API_KEY` (and send it from your MCP client) to require a
-credential there too.
+`127.0.0.1`; set `HASNA_TODOS_SERVER_API_KEY` (and send it from your MCP client)
+to require a credential there too.
 
 Pass the generated key from your app as `x-api-key` or `Authorization: Bearer`.
 
-`TODOS_API_KEY` here is the **server's** own key — the credential `todos-serve`
-demands from its callers. It is not how a client finds a key: that is the
-resolver documented under [Credentials and Service Authority](#credentials-and-service-authority),
-and `HASNA_TODOS_API_KEY` is its canonical environment name.
+`HASNA_TODOS_SERVER_API_KEY` is the **server's** own variable — the credential
+`todos-serve` demands from its callers. It is deliberately NOT one of the client
+credential names: `HASNA_TODOS_API_KEY` is how a client finds a key (the resolver
+documented under [Credentials and Service Authority](#credentials-and-service-authority)),
+and a fleet client key exported on a workstation must never silently become the
+local server's accepted key — one name cannot play both roles on opposite sides
+of the same trust boundary. `todos serve` prints one line at startup naming which
+variable supplied its accepted key. For one release the client names
+(`HASNA_TODOS_API_KEY` / `TODOS_API_KEY`) are still accepted as a documented
+fallback so an env written before 2026-09-05 keeps working; the startup line
+flags the deprecated spelling so operators can move the value.
 
 Always-on / hosted deployments should use the versioned `/v1` API, which
 authenticates independently against the cloud key store. `/health`, `/ready`,

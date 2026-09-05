@@ -69,6 +69,12 @@ export const SHARED_TODOS_STORE_ENV_KEYS = [
   "HASNA_TODOS_API_SIGNING_KEY",
   "TODOS_API_URL",
   "TODOS_API_KEY",
+  // The key `todos serve` / `todos-serve` ACCEPTS has its own variable since
+  // 2026-09-05 (the two API_KEY names above are only its deprecated fallback).
+  // A server credential exported for the operator's own server must not leak
+  // into a fixture subprocess either — it would flip the auth posture to
+  // `enforce` and break every "unconfigured" refusal test.
+  "HASNA_TODOS_SERVER_API_KEY",
   // The @hasna/contracts deliberate tiers, which outrank everything below them.
   // An inherited HASNA_PROFILE is the nastiest of the three: it names WHICH
   // identity to use, is never resolved around, and so turns an otherwise local

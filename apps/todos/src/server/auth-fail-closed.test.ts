@@ -110,7 +110,7 @@ describe("unconfigured server fails closed", () => {
       // Pre-fix this process stays up and serves /api/* + /mcp anonymously.
       expect(exitCode).not.toBeNull();
       expect(exitCode).not.toBe(0);
-      expect(stderr).toContain("TODOS_API_KEY");
+      expect(stderr).toContain("HASNA_TODOS_SERVER_API_KEY");
       expect(stderr).toContain("refusing to start");
 
       // And nothing is listening, so the anonymous plane does not exist at all.
