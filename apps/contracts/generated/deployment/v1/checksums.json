@@ -15,8 +15,8 @@
     "fixtures/product-projection.valid.json": "830dd826540ee9b13a00d2add27cb0b76bc339434b9136ecc3af8185c2166e73",
     "fixtures/provider-receipt.valid.json": "69e4788c8a0f3464b7398401ae17af674ba36668f25d9802f6555cd6368abdc8",
     "fixtures/verified-source-candidate.valid.json": "2bbe702f74c0caf3ee22399b7a1e734b39f5d122e9ea9ad791ad822eb5ba8f46",
-    "schema-bundle.json": "52a5593cbf77a9c4209de10425f56bcde01530ee57891c619ff8ef48ecc6dade"
+    "schema-bundle.json": "a8331982ffca51d0afb09f2196ff6e5035fb4608692338082cab3beea0786f1a"
   },
-  "manifestDigest": "7bffe387d2ccaace03c1077f875387f0b895390f79b662cee223104b677f898d",
+  "manifestDigest": "a3bb71e7e63458ec9c700ae66e72d059b29f79f9c8c7e4801faab725f2b80e9c",
   "schema": "hasna.deployment.artifact_checksums.v1"
 }
