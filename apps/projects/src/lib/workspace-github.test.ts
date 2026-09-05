@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRoot, createWorkspace, getWorkspaceBySlug, listWorkspaceEvents } from "../db/workspaces.js";
 import { closeDatabase, getDatabase, PROJECTS_DB_PATH_ENV } from "../db/database.js";
-import { resolveProjectStore, PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore, type ProjectStore } from "../store/project-store.js";
+import { resolveProjectStore, __resetProjectStore, type ProjectStore } from "../store/project-store.js";
 import {
   linkWorkspaceExternalIntegrations,
   normalizeWorkspaceIntegrations,
@@ -15,16 +15,15 @@ import {
   planWorkspaceGitHubPublish,
   syncWorkspaceGitHubRoots,
 } from "./workspace-github.js";
+import { silenceHostedApiEnv } from "../testing/spawn-env.js";
 
 // The GitHub services now route every registry read/write through the active
 // ProjectStore. These tests drive the LocalProjectStore backed by a fresh
 // global in-memory sqlite (HASNA_PROJECTS_DB_PATH=:memory:) so fixtures created
 // via the db helpers and the store observe the same rows.
 beforeEach(() => {
+  silenceHostedApiEnv();
   process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
-  delete process.env["HASNA_PROJECTS_API_URL"];
-  delete process.env["HASNA_PROJECTS_API_KEY"];
-  process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
   closeDatabase();
   __resetProjectStore();
 });
@@ -35,7 +34,7 @@ afterEach(() => {
 });
 
 function setup(): { db: ReturnType<typeof getDatabase>; store: ProjectStore } {
-  return { db: getDatabase(), store: resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: "1" }) };
+  return { db: getDatabase(), store: resolveProjectStore({}) };
 }
 
 function git(path: string, args: string[]): string {

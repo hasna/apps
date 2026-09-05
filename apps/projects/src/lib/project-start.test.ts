@@ -5,23 +5,15 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { addWorkspaceLocation, createTmuxProfile, createWorkspace, getWorkspaceByPath } from "../db/workspaces.js";
 import { runMigrations } from "../db/schema.js";
-import { PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore } from "../store/project-store.js";
-import { HOSTED_API_ENV_KEYS } from "../testing/spawn-env.js";
+import { __resetProjectStore } from "../store/project-store.js";
+import { silenceHostedApiEnv } from "../testing/spawn-env.js";
 import { parseProjectStartAgent, parseProjectStartSessionPolicy, projectStartCommand, startProject } from "./project-start.js";
 
-// Isolate the shared @hasna/contracts seam's disk tier, mirroring testSpawnEnv():
-// when the environment is silent the seam reads fleet app-config files on disk
-// (e.g. ~/.hasna/cloud/projects.env) and selects the hosted transport, routing
-// these in-process local-store tests at the real hosted registry. An explicitly
-// DEFINED-but-blank URL is the seam's own "select the local store" escape hatch
-// and beats any disk pointer.
-for (const key of HOSTED_API_ENV_KEYS) {
-  process.env[key] = "";
-}
-// Store resolution fails closed with the hosted selectors blanked (owner ruling
-// 2026-09-04, no silent local fallback); these in-process local-store tests
-// explicitly opt in to the on-box SQLite registry.
-process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
+// Silence every tier of the shared @hasna/contracts credential resolver, so an
+// operator's env, login Keychain, or ~/.hasna credentials file cannot route
+// these in-process local-registry tests at the real fleet. With all five tiers
+// silent the store takes the unhosted OSS path onto the on-box SQLite registry.
+silenceHostedApiEnv();
 
 function makeDb(): Database {
   const db = new Database(":memory:");

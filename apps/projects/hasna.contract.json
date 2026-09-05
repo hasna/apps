@@ -3,7 +3,7 @@
   "name": "projects",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.2",
+  "kitVersion": "1.0.1",
   "description": "High-level project/workspace management: CLI, MCP server, HTTP API (projects-serve), and typed SDK. The server uses SQLite by default and PostgreSQL when HASNA_PROJECTS_DATABASE_URL is configured; the serve process reads and writes the selected backend directly.",
   "bins": [
     "projects",

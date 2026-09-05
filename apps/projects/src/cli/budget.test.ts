@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { testSpawnEnv } from "../testing/spawn-env.js";
+import { testSpawnEnv, withoutUnhostedNotice } from "../testing/spawn-env.js";
 
 function runProjects(args: string[], env: Record<string, string> = {}) {
   return Bun.spawnSync({
@@ -14,7 +14,10 @@ function runProjects(args: string[], env: Record<string, string> = {}) {
 }
 
 function text(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("utf-8");
+  // The unhosted-mode notice is a required, deliberate line; it is not part of
+  // what any command under test writes, so it is stripped here and asserted
+  // directly where it IS the subject.
+  return withoutUnhostedNotice(Buffer.from(bytes).toString("utf-8"));
 }
 
 const CLI_PROCESS_TEST_TIMEOUT_MS = 30_000;

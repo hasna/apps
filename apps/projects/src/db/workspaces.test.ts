@@ -50,7 +50,7 @@ import {
 import { doctorWorkspace } from "../lib/workspace-doctor.js";
 import { builtInWorkspaceRecipes, ensureBuiltInWorkspaceRecipes } from "../lib/workspace-defaults.js";
 import { closeDatabase, getDatabase, PROJECTS_DB_PATH_ENV } from "./database.js";
-import { resolveProjectStore, PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore } from "../store/project-store.js";
+import { resolveProjectStore, __resetProjectStore } from "../store/project-store.js";
 import { importRegisteredRoots, importWorkspace, planWorkspaceImport } from "../lib/workspace-import.js";
 import { cleanupWorkspaceCreation, executeWorkspaceCreation, planWorkspaceCreation } from "../lib/workspace-plan.js";
 import { applyWorkspaceTmuxProfile, prepareWorkspaceDirectory, tmuxProfileToSpec, workspaceMarkerPath } from "../lib/workspace-runtime.js";
@@ -1014,7 +1014,7 @@ describe("workspace domain services", () => {
       delete process.env["HASNA_PROJECTS_API_KEY"];
       closeDatabase();
       __resetProjectStore();
-      const store = resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: "1" });
+      const store = resolveProjectStore({});
       const rejectedImport = await importWorkspace(store, importPath, {
         metadata: {
           business_area: "finance",
@@ -1482,7 +1482,7 @@ describe("workspace domain services", () => {
     closeDatabase();
     __resetProjectStore();
     const db = getDatabase();
-    const store = resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: "1" });
+    const store = resolveProjectStore({});
     const rootDir = tmpDir();
     const childDir = join(rootDir, "tooling");
     mkdirSync(childDir);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
+import { withoutUnhostedNotice } from "../testing/spawn-env.js";
 
 describe("installed Conversations producer authority compatibility", () => {
   test("accepts canonical forward/inverse receipts and rejects cross-project reuse", async () => {
@@ -19,7 +20,7 @@ describe("installed Conversations producer authority compatibility", () => {
       child.exited,
     ]);
 
-    expect(stderr).toBe("");
+    expect(withoutUnhostedNotice(stderr)).toBe("");
     expect(exitCode).toBe(0);
     expect(stdout).toContain(
       "INSTALLED_AUTHORITY_FORWARD=projects.production-producer-authority-readback.v1",

@@ -5,14 +5,39 @@
 //   - ApiProjectStore    -> HTTP `<API_URL>/v1` + bearer key (via the shared
 //                          @hasna/contracts/client/storage seam, not a vendored copy)
 //
-// `resolveProjectStore()` selects the transport from the environment and FAILS
-// CLOSED (owner ruling 2026-09-04): the shared seam's HTTP transport is used
-// when the hosted API URL + key pairing is configured; a resolution that would
-// otherwise fall back to the on-box SQLite registry THROWS an actionable error
-// naming HASNA_PROJECTS_API_URL / HASNA_PROJECTS_API_KEY unless the operator
-// has explicitly opted into the local registry with
-// `HASNA_PROJECTS_LOCAL_REGISTRY=1`. There is no silent local default and no
-// local-fallback path that exits 0.
+// `resolveProjectStore()` routes on the CREDENTIAL AND THE AUTHORITY ONLY —
+// there is no mode switch, no `*_STORAGE_MODE`, and no local-registry opt-in
+// (owner rulings 2026-09-04, hasna/apps#1720/#1668/#1690). The whole decision
+// is the @hasna/contracts client resolver's five-tier ladder, resolved fresh on
+// every call:
+//
+//   1. an explicit argument            — a caller-supplied key
+//   2. a deliberate env pointer        — HASNA_PROJECTS_API_KEY_OVERRIDE,
+//                                        HASNA_PROFILE, HASNA_PROJECTS_API_KEY_REF
+//   3. the macOS Keychain              — hasna.credentials.projects.api-key,
+//                                        account HASNA_STATION -> hostname -s -> USER
+//   4. disk, read at call time         — ~/.hasna/projects/config/credentials
+//                                        (0400/0600; HASNA_HOME / HASNA_CONFIG_HOME
+//                                        override the roots; XDG is never read)
+//   5. HASNA_PROJECTS_API_KEY in the env — a legitimate tier, below disk, no notice
+//
+// The authority follows the same ladder (HASNA_PROJECTS_API_URL, the Keychain
+// `api-url` item, the credentials file) and defaults to the path-prefixed fleet
+// gateway `https://api.hasna.com/projects` once a credential resolves — URLs
+// never need configuring. The unprefixed PROJECTS_API_URL / PROJECTS_API_KEY
+// names remain accepted by the seam as a documented silent alias; the canonical
+// HASNA_PROJECTS_* names always work and win.
+//
+// THE TWO OUTCOMES:
+//   - Anything selects the hosted service (a credential from any tier, or an
+//     authority declared anywhere) -> the HTTP store. A declared authority with
+//     NO resolvable credential FAILS LOUD: the caller exits non-zero with the
+//     seam's message naming every place it looked. There is no silent local
+//     fallback and no local-fallback event.
+//   - NOTHING configures the fleet at all — no URL in the env, the Keychain or
+//     the credentials file, and no credential from any tier -> unhosted OSS
+//     mode on the on-box SQLite registry, which projects supports by design.
+//     It says so on stderr, once, in one line; it is never silent.
 //
 // Every registry command/tool/method calls the same Store methods. Machine-local
 // runtime side effects (tmux, git, directory creation, rendering) are NOT
@@ -87,7 +112,14 @@ import {
   resolveStorageClient,
   type HasnaStorageClient,
 } from "@hasna/contracts/client/storage";
+import {
+  clientTransportEnvKeys,
+  credentialDiskSources,
+  type CredentialChainOptions,
+} from "@hasna/contracts/client";
+import { unconfiguredForHostedUse } from "../lib/client-configuration.js";
 import type { HasnaHttpTransport, HasnaRequestOptions, QueryParams } from "@hasna/contracts/client";
+import { getDbPath } from "../db/database.js";
 import { basename } from "node:path";
 import {
   isProjectDirectory,
@@ -217,25 +249,6 @@ import type {
 
 const APP = "projects";
 const RESOURCE = "projects";
-
-/**
- * Explicit opt-in for the on-box SQLite registry (~/.hasna/projects). The
- * client never defaults to the local registry and never falls back to it
- * silently: `resolveProjectStore()` throws an actionable error naming the
- * hosted API env when the HTTP transport is not selected, and only honors the
- * local transport when this variable is set to exactly `1` (owner ruling
- * 2026-09-04 — no silent local storage).
- */
-export const PROJECTS_LOCAL_REGISTRY_ENV = "HASNA_PROJECTS_LOCAL_REGISTRY";
-
-/**
- * Canonical hosted API env keys, as policed by the shared @hasna/contracts
- * client seam (`clientTransportEnvKeys("projects")`; the unprefixed
- * PROJECTS_API_URL / PROJECTS_API_KEY aliases are also accepted there). Named
- * in fail-closed errors so an operator knows exactly what to set.
- */
-const PROJECTS_API_URL_ENV = "HASNA_PROJECTS_API_URL";
-const PROJECTS_API_KEY_ENV = "HASNA_PROJECTS_API_KEY";
 
 /** Process-environment shape accepted by the shared @hasna/contracts seam. */
 type Env = Record<string, string | undefined>;
@@ -1800,18 +1813,48 @@ function enrichSeamTransport(transport: HasnaHttpTransport): HasnaHttpTransport 
 export interface ResolveProjectStoreOptions {
   producerAuthorityOptions?: ProductionProjectRegistrationAuthorityOptions;
   producerVerifierNow?: () => string;
+  /** Tier-1/Tier-3 controls handed to the shared resolver (a key, a profile, a fake Keychain runner). */
+  credentials?: CredentialChainOptions;
+  /** Where the one-line unhosted-mode notice goes. Defaults to stderr. */
+  notify?: (line: string) => void;
+}
+
+/** One line, once per process, naming every place the resolver looked. */
+let announcedUnhostedMode = false;
+
+function announceUnhostedMode(env: Env, notify: (line: string) => void): void {
+  if (announcedUnhostedMode) return;
+  announcedUnhostedMode = true;
+  const keys = clientTransportEnvKeys(APP);
+  const diskPaths = credentialDiskSources(APP, env);
+  const disk = diskPaths.length > 0 ? diskPaths.join(" or ") : "no credentials file (no HOME)";
+  notify(
+    `projects: local mode — nothing configures the hosted registry ` +
+    `(no ${keys.apiUrlKeys[0]}, no Keychain item hasna.credentials.${APP}.api-key, no ${disk}, ` +
+    `no ${keys.apiKeyKeys[0]}); reading and writing the on-box SQLite registry at ${getDbPath()}.`,
+  );
+}
+
+/** Test seam: forget that the unhosted-mode line was already printed. */
+export function __resetUnhostedModeNotice(): void {
+  announcedUnhostedMode = false;
 }
 
 /**
- * Resolve the active projects Store from the environment.
+ * Resolve the active projects Store.
  *
- * FAILS CLOSED (owner ruling 2026-09-04): an ApiProjectStore is returned only
- * when the shared seam selects the HTTP transport (hosted API URL + key
- * pairing). Any resolution that would otherwise default to the on-box SQLite
- * registry throws an actionable error naming HASNA_PROJECTS_API_URL and
- * HASNA_PROJECTS_API_KEY — unless HASNA_PROJECTS_LOCAL_REGISTRY=1 was set
- * explicitly, the ONLY way the LocalProjectStore is ever returned. The local
- * registry is never a silent fallback.
+ * ROUTES ON URL + KEY ONLY (owner rulings 2026-09-04, hasna/apps#1720): the
+ * shared @hasna/contracts resolver decides, there is no mode switch, and there
+ * is no local-registry opt-in. A credential from any tier — argument, env
+ * pointer, Keychain, `~/.hasna/projects/config/credentials`, or a plain
+ * `HASNA_PROJECTS_API_KEY` — selects the hosted store against the configured
+ * authority or, by default, `https://api.hasna.com/projects`.
+ *
+ * A station that declares an authority but resolves no credential FAILS LOUD:
+ * the seam's error propagates, the caller exits non-zero, no local store is
+ * opened and no local-fallback event is written. Only a completely silent
+ * environment reaches the on-box registry — the unhosted OSS mode projects
+ * supports by design — and it says so in one line on stderr.
  */
 export function resolveProjectStore(
   env: Env = process.env,
@@ -1820,29 +1863,34 @@ export function resolveProjectStore(
 ): ProjectStore {
   const cacheable = env === process.env
     && options.producerAuthorityOptions === undefined
-    && options.producerVerifierNow === undefined;
+    && options.producerVerifierNow === undefined
+    && options.credentials === undefined
+    && options.notify === undefined;
   if (cacheable && cached) return cached;
-  const resolved = resolveStorageClient(APP, env, { fetchImpl });
-  if (resolved.transport === "http") {
+  // Only the RESOLUTION is guarded. A failure building the store around a
+  // successfully resolved client is a defect, not a configuration question, and
+  // must not be caught here.
+  let resolved: ReturnType<typeof resolveStorageClient> | null = null;
+  try {
+    resolved = resolveStorageClient(APP, env, {
+      fetchImpl,
+      ...(options.credentials ? { credentials: options.credentials } : {}),
+    });
+  } catch (error) {
+    // The seam refused to build a client. That is the LOUD outcome unless the
+    // environment configures nothing at all, in which case this app's unhosted
+    // OSS mode is the deliberate answer — never a rescue for a broken or
+    // half-configured hosted setup, and never silent.
+    if (!unconfiguredForHostedUse(APP, env, options.credentials)) throw error;
+    announceUnhostedMode(env, options.notify ?? ((line: string) => console.error(line)));
+  }
+  if (resolved) {
     const httpStore: ProjectStore = new ApiProjectStore({
       ...resolved.client,
       transport: enrichSeamTransport(resolved.client.transport),
     });
     if (cacheable) cached = httpStore;
     return httpStore;
-  }
-  // The seam declined the HTTP transport. Never fall back to the on-box SQLite
-  // registry silently: the local registry is reachable ONLY through the
-  // explicit opt-in, and without it this throws so callers exit non-zero with
-  // an actionable error instead of reading a local dataset by accident.
-  if (env[PROJECTS_LOCAL_REGISTRY_ENV] !== "1") {
-    throw new Error(
-      `projects: no hosted projects API configuration — refusing to fall back to the local SQLite registry. ` +
-      `Set ${PROJECTS_API_URL_ENV} and ${PROJECTS_API_KEY_ENV} (the unprefixed ` +
-      `PROJECTS_API_URL / PROJECTS_API_KEY aliases are also accepted) to route the registry to the hosted ` +
-      `projects service, or set ${PROJECTS_LOCAL_REGISTRY_ENV}=1 to explicitly opt in to the local registry. ` +
-      `There is no silent local fallback.`,
-    );
   }
   const localStore: ProjectStore = new LocalProjectStore(
     createProductionProjectResourceLinkProducerEvidenceVerifier({

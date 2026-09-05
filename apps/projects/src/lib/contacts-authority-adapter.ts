@@ -185,14 +185,13 @@ export function createContactsProjectMembershipAuthorityFromEnv(
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>,
 ): ContactsHttpProjectMembershipAuthority {
   // The Contacts pairing resolves through the shared client seam, never by
-  // hand: the seam covers both HASNA_CONTACTS_* and CONTACTS_* prefixes, plus
-  // the fleet app-config file on disk, and fails closed when an API URL
-  // selects HTTP without a resolvable key.
+  // hand: the seam owns the five-tier credential ladder (argument, env pointer,
+  // Keychain, ~/.hasna/contacts/config/credentials, plain env), the matching
+  // authority ladder, and the default fleet gateway. It THROWS on a declared
+  // authority with no resolvable key, so this function has no fail-closed
+  // branch of its own to keep in sync.
   const resolution = resolveClientTransport("contacts", env as Env);
-  if (resolution.misconfigured) {
-    throw new Error(resolution.warning ?? `Client for 'contacts' is misconfigured for the hosted API.`);
-  }
-  const credential = resolution.apiKeyPresent ? resolveCredential("contacts", env as Env) : null;
+  const credential = resolveCredential("contacts", env as Env);
   const serviceInstance = env.HASNA_CONTACTS_SERVICE_INSTANCE ?? env.CONTACTS_SERVICE_INSTANCE;
   return new ContactsHttpProjectMembershipAuthority({
     baseUrl: required(resolution.baseUrl ?? undefined, "HASNA_CONTACTS_API_URL (or CONTACTS_API_URL)"),

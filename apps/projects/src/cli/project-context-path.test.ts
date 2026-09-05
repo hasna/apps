@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { testSpawnEnv } from "../testing/spawn-env.js";
+import { testSpawnEnv, withoutUnhostedNotice } from "../testing/spawn-env.js";
 
 const CLI_PATH = join(import.meta.dir, "index.ts");
 
@@ -26,7 +26,10 @@ async function runProjects(args: string[], env: Record<string, string>) {
 }
 
 function text(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("utf-8");
+  // The unhosted-mode notice is a required, deliberate line; it is not part of
+  // what any command under test writes, so it is stripped here and asserted
+  // directly where it IS the subject.
+  return withoutUnhostedNotice(Buffer.from(bytes).toString("utf-8"));
 }
 
 describe("projects context canonical path resolution", () => {
@@ -75,10 +78,11 @@ describe("projects context canonical path resolution", () => {
     const env = {
       HASNA_PROJECTS_HOME: root,
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${server.port}`,
-      // Deliberate loopback credential via the seam's override tier: the
-      // shared contracts seam reads HASNA_PROJECTS_API_KEY_OVERRIDE before the
-      // disk file and never emits the legacy-env deprecation warning to stderr.
-      HASNA_PROJECTS_API_KEY_OVERRIDE: "not-a-secret",
+      // Loopback credential through the canonical plain env tier. Tier 5 of the
+      // shared @hasna/contracts ladder is LEGITIMATE and silent: with the
+      // Keychain and disk tiers hushed by testSpawnEnv() it resolves cleanly
+      // and prints nothing, so stderr-clean assertions hold.
+      HASNA_PROJECTS_API_KEY: "not-a-secret",
     };
 
     try {

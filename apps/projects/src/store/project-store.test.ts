@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HasnaHttpError } from "@hasna/contracts/client";
@@ -16,27 +16,83 @@ import {
   TEST_PRODUCER_VERIFIER_NOW,
   testConversationsProducerFixture,
 } from "../lib/project-resource-link-producer-verifier.test-support.js";
-import { resolveProjectStore, __resetProjectStore, PROJECTS_LOCAL_REGISTRY_ENV } from "./project-store.js";
+import {
+  resolveProjectStore,
+  __resetProjectStore,
+  __resetUnhostedModeNotice,
+} from "./project-store.js";
 
 /**
- * The explicit local-registry opt-in for fixture tests that deliberately
- * exercise the on-box SQLite store. The client never defaults to local: these
- * tests declare it.
+ * A caller-built env is HERMETIC in the shared @hasna/contracts seam: it never
+ * reaches the machine's Keychain and, with no HOME/HASNA_HOME in it, reads no
+ * credentials file either. So an empty object is a station where nothing at all
+ * configures the fleet — the one input that selects the on-box registry.
  */
-const LOCAL_REGISTRY_ENV = { [PROJECTS_LOCAL_REGISTRY_ENV]: "1" };
+const UNHOSTED_ENV: Record<string, string | undefined> = {};
 
-describe("projects store resolution (client-flip)", () => {
-  test("no env -> fails closed naming the required hosted API env", () => {
+/** Swallow the one-line unhosted-mode notice in fixtures that expect local. */
+const quiet = { notify: () => {} } as const;
+
+function localFixtureStore() {
+  return resolveProjectStore(UNHOSTED_ENV, undefined, quiet);
+}
+
+/** A `security find-generic-password` stand-in over a fixed item table. */
+function fakeKeychain(items: Record<string, string>) {
+  const calls: string[][] = [];
+  const run = (argv: readonly string[]) => {
+    calls.push([...argv]);
+    const service = argv[argv.indexOf("-s") + 1] ?? "";
+    const value = items[service];
+    // 44 is errSecItemNotFound — an absent tier, not a failure.
+    if (value === undefined) return { status: 44, stdout: "", stderr: "" };
+    return { status: 0, stdout: `${value}\n`, stderr: "" };
+  };
+  return { calls, options: { keychain: { platform: "darwin", enabled: true, run } } };
+}
+
+describe("projects store resolution (five-tier contracts resolver)", () => {
+  test("nothing configured -> unhosted OSS mode on the on-box registry, announced in one line", () => {
     __resetProjectStore();
-    // Owner ruling 2026-09-04: without the hosted API env the client must
-    // FAIL CLOSED — non-zero with an actionable error — and must never serve
-    // the local SQLite registry as a silent default.
-    expect(() => resolveProjectStore({})).toThrow(/HASNA_PROJECTS_API_URL/);
-    expect(() => resolveProjectStore({})).toThrow(/HASNA_PROJECTS_API_KEY/);
-    expect(() => resolveProjectStore({})).toThrow(/no silent local fallback/i);
+    __resetUnhostedModeNotice();
+    const lines: string[] = [];
+    const store = resolveProjectStore(UNHOSTED_ENV, undefined, { notify: (line) => lines.push(line) });
+    expect((store as unknown as { transport?: string }).transport).toBe("local");
+    expect(store.baseUrl).toBeNull();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!).toContain("projects: local mode");
+    expect(lines[0]!).toContain("HASNA_PROJECTS_API_URL");
+    expect(lines[0]!).toContain("hasna.credentials.projects.api-key");
   });
 
-  test("url + key -> http store", () => {
+  test("the unhosted notice is printed once per process, not once per resolution", () => {
+    __resetProjectStore();
+    __resetUnhostedModeNotice();
+    const lines: string[] = [];
+    const notify = (line: string) => lines.push(line);
+    resolveProjectStore(UNHOSTED_ENV, undefined, { notify });
+    __resetProjectStore();
+    resolveProjectStore(UNHOSTED_ENV, undefined, { notify });
+    expect(lines).toHaveLength(1);
+  });
+
+  test("tier 5 alone (plain HASNA_PROJECTS_API_KEY) -> hosted on the default fleet gateway", () => {
+    __resetProjectStore();
+    // URLs never need configuring: a key from any tier is enough to reach the
+    // path-prefixed gateway, and the client appends /v1.
+    const store = resolveProjectStore({ HASNA_PROJECTS_API_KEY: "k" });
+    expect((store as unknown as { transport?: string }).transport).toBe("http");
+    expect(store.baseUrl).toBe("https://api.hasna.com/projects/v1");
+  });
+
+  test("the unprefixed PROJECTS_API_KEY alias still resolves, silently", () => {
+    __resetProjectStore();
+    const store = resolveProjectStore({ PROJECTS_API_KEY: "k" });
+    expect((store as unknown as { transport?: string }).transport).toBe("http");
+    expect(store.baseUrl).toBe("https://api.hasna.com/projects/v1");
+  });
+
+  test("url + key -> http store on the configured authority", () => {
     __resetProjectStore();
     const store = resolveProjectStore({
       HASNA_PROJECTS_API_URL: "https://projects.example.test",
@@ -46,40 +102,105 @@ describe("projects store resolution (client-flip)", () => {
     expect(store.baseUrl).toBe("https://projects.example.test/v1");
   });
 
-  test("url without key -> throws instead of silently using local", () => {
+  test("a declared authority with no resolvable key throws instead of using local", () => {
     __resetProjectStore();
-    // The shared @hasna/contracts seam owns this fail-closed contract now: a
-    // URL that selects the HTTP server with no resolvable key throws.
-    expect(() => resolveProjectStore({ HASNA_PROJECTS_API_URL: "https://projects.example.test" })).toThrow(/no API key could be resolved/i);
+    expect(() => resolveProjectStore({ HASNA_PROJECTS_API_URL: "https://projects.example.test" }))
+      .toThrow(/no API key could be resolved/i);
+    __resetProjectStore();
+    expect(() => resolveProjectStore({ HASNA_PROJECTS_API_URL: "https://projects.example.test" }))
+      .toThrow(/never fall back to SQLite/i);
   });
 
-  test("key without url -> never silently falls back to the local registry", () => {
+  test("tier 3: the Keychain supplies the key and the authority", () => {
     __resetProjectStore();
-    // Fail closed either way: the current seam declines the HTTP transport
-    // without a URL and the app then throws naming the required URL env; a
-    // newer seam that routes a resolvable key to the fleet gateway returns an
-    // HTTP store. Neither may serve the on-box SQLite registry silently.
-    let outcome: unknown;
+    const keychain = fakeKeychain({
+      "hasna.credentials.projects.api-key": "keychain-key",
+      "hasna.credentials.projects.api-url": "https://projects.keychain.test",
+    });
+    const store = resolveProjectStore(
+      { HASNA_STATION: "station-fixture" },
+      undefined,
+      { credentials: keychain.options },
+    );
+    expect((store as unknown as { transport?: string }).transport).toBe("http");
+    expect(store.baseUrl).toBe("https://projects.keychain.test/v1");
+    expect(keychain.calls.some((argv) => argv.includes("station-fixture"))).toBe(true);
+  });
+
+  test("tier 3 outranks tier 5: a Keychain key beats a stale env export", () => {
+    __resetProjectStore();
+    const keychain = fakeKeychain({ "hasna.credentials.projects.api-key": "fresh" });
+    const store = resolveProjectStore(
+      { HASNA_STATION: "station-fixture", HASNA_PROJECTS_API_KEY: "stale" },
+      undefined,
+      { credentials: keychain.options },
+    );
+    // The value never leaves the seam; the observable proof is that the store
+    // resolved hosted against the default gateway with the Keychain consulted.
+    expect((store as unknown as { transport?: string }).transport).toBe("http");
+    expect(keychain.calls.length).toBeGreaterThan(0);
+  });
+
+  test("tier 4: ~/.hasna/projects/config/credentials selects hosted and opens no local db", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-disk-credential-"));
+    const dbPath = join(root, "never-created.db");
+    const configDir = join(root, "hasna", "projects", "config");
+    mkdirSync(configDir, { recursive: true });
+    const file = join(configDir, "credentials");
+    writeFileSync(file, "HASNA_PROJECTS_API_URL=https://projects.disk.test\nHASNA_PROJECTS_API_KEY=disk-key\n");
+    chmodSync(file, 0o600);
     try {
-      outcome = resolveProjectStore({ HASNA_PROJECTS_API_KEY: "k" });
-    } catch (err) {
-      expect(String(err)).toMatch(/HASNA_PROJECTS_API_URL/);
-      return;
+      __resetProjectStore();
+      const store = resolveProjectStore({
+        HASNA_HOME: join(root, "hasna"),
+        HASNA_PROJECTS_DB_PATH: dbPath,
+      });
+      expect((store as unknown as { transport?: string }).transport).toBe("http");
+      expect(store.baseUrl).toBe("https://projects.disk.test/v1");
+      expect(existsSync(dbPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
-    expect((outcome as { transport?: string }).transport).toBe("http");
   });
 
-  test("legacy selector variables do not change transport", () => {
+  test("a world-readable credentials file fails loud rather than falling through to local", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-disk-credential-mode-"));
+    const configDir = join(root, "hasna", "projects", "config");
+    mkdirSync(configDir, { recursive: true });
+    const file = join(configDir, "credentials");
+    writeFileSync(file, "HASNA_PROJECTS_API_KEY=disk-key\n");
+    chmodSync(file, 0o644);
+    try {
+      __resetProjectStore();
+      expect(() => resolveProjectStore({ HASNA_HOME: join(root, "hasna") }))
+        .toThrow(/0400 or 0600/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("retired locations are never inputs", () => {
     __resetProjectStore();
+    __resetUnhostedModeNotice();
+    const lines: string[] = [];
+    // A fleet-env/cloud/XDG pointer is not a credential source any more: this
+    // station still resolves as completely unconfigured.
+    const store = resolveProjectStore(
+      { XDG_CONFIG_HOME: "/tmp/xdg-should-be-ignored" },
+      undefined,
+      { notify: (line) => lines.push(line) },
+    );
+    expect((store as unknown as { transport?: string }).transport).toBe("local");
+    expect(lines).toHaveLength(1);
+  });
+
+  test("a legacy *_STORAGE_MODE selector is inert — routing is URL + key only", () => {
     const legacySelector = ["HASNA_PROJECTS", "STORAGE", "MODE"].join("_");
-    // A legacy selector alone never opens the local store either: without the
-    // explicit local opt-in the resolution fails closed.
-    expect(() => resolveProjectStore({ [legacySelector]: "legacy" })).toThrow(/HASNA_PROJECTS_API_URL/);
     __resetProjectStore();
-    // With the explicit opt-in the legacy selector is inert and the local
-    // registry opens.
-    const opted = resolveProjectStore({ [legacySelector]: "legacy", [PROJECTS_LOCAL_REGISTRY_ENV]: "1" });
-    expect((opted as unknown as { transport?: string }).transport).toBe("local");
+    __resetUnhostedModeNotice();
+    const lines: string[] = [];
+    const local = resolveProjectStore({ [legacySelector]: "api" }, undefined, { notify: (l) => lines.push(l) });
+    expect((local as unknown as { transport?: string }).transport).toBe("local");
     __resetProjectStore();
     const hosted = resolveProjectStore({
       [legacySelector]: "local",
@@ -99,33 +220,6 @@ describe("projects store resolution (client-flip)", () => {
   });
 });
 
-describe("projects store resolution (explicit local opt-in)", () => {
-  test("HASNA_PROJECTS_LOCAL_REGISTRY=1 -> local store", () => {
-    __resetProjectStore();
-    const store = resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: "1" });
-    expect((store as unknown as { transport?: string }).transport).toBe("local");
-    expect(store.baseUrl).toBeNull();
-  });
-
-  test("the local opt-in is only honored for the exact value '1'", () => {
-    for (const value of ["", "0", "true", "yes"]) {
-      __resetProjectStore();
-      expect(() => resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: value })).toThrow(/HASNA_PROJECTS_API_URL/);
-    }
-  });
-
-  test("the hosted env wins over the local opt-in", () => {
-    __resetProjectStore();
-    const store = resolveProjectStore({
-      HASNA_PROJECTS_API_URL: "https://projects.example.test",
-      HASNA_PROJECTS_API_KEY: "k",
-      [PROJECTS_LOCAL_REGISTRY_ENV]: "1",
-    });
-    expect((store as unknown as { transport?: string }).transport).toBe("http");
-    expect(store.baseUrl).toBe("https://projects.example.test/v1");
-  });
-});
-
 describe("local Projects production producer verifier", () => {
   test("rejects a real project-A producer receipt replayed into project B", async () => {
     const root = mkdtempSync(join(tmpdir(), "projects-producer-replay-"));
@@ -139,7 +233,7 @@ describe("local Projects production producer verifier", () => {
       const projectBName = "Local Producer Project B";
       const projectBSlug = "local-producer-project-b";
       const targetId = "chn_79fa9c68937a1d020d6031dcaa3dd8d7";
-      const bootstrapStore = resolveProjectStore(LOCAL_REGISTRY_ENV);
+      const bootstrapStore = localFixtureStore();
       const projectB = await bootstrapStore.createProject({
         name: projectBName,
         slug: projectBSlug,
@@ -154,7 +248,8 @@ describe("local Projects production producer verifier", () => {
         projectName: "Local Producer Project A",
         projectKind: "generic",
       });
-      const store = resolveProjectStore(LOCAL_REGISTRY_ENV, undefined, {
+      const store = resolveProjectStore(UNHOSTED_ENV, undefined, {
+        ...quiet,
         producerAuthorityOptions: projectAReceipt.authorityOptions,
         producerVerifierNow: () => TEST_PRODUCER_VERIFIER_NOW,
       });
@@ -255,7 +350,7 @@ describe("local Projects production producer verifier", () => {
       const projectName = "Local Producer Verifier";
       const projectSlug = "local-producer-verifier";
       const targetId = "chn_79fa9c68937a1d020d6031dcaa3dd8d7";
-      const bootstrapStore = resolveProjectStore(LOCAL_REGISTRY_ENV);
+      const bootstrapStore = localFixtureStore();
       const project = await bootstrapStore.createProject({ name: projectName, slug: projectSlug });
       __resetProjectStore();
       const fixture = testConversationsProducerFixture({
@@ -267,7 +362,8 @@ describe("local Projects production producer verifier", () => {
         projectName: project.name,
         projectKind: project.kind,
       });
-      const store = resolveProjectStore(LOCAL_REGISTRY_ENV, undefined, {
+      const store = resolveProjectStore(UNHOSTED_ENV, undefined, {
+        ...quiet,
         producerAuthorityOptions: fixture.authorityOptions,
         producerVerifierNow: () => TEST_PRODUCER_VERIFIER_NOW,
       });
@@ -335,7 +431,7 @@ describe("local Projects production producer verifier", () => {
         max_items: 10,
         ...bounds,
       });
-      const defaultStore = resolveProjectStore(LOCAL_REGISTRY_ENV);
+      const defaultStore = localFixtureStore();
       await expect(defaultStore.advanceProjectResourceLinkMigration({
         project_id: project.id,
         manifest_id: planned.manifest.manifest_id,
@@ -1520,7 +1616,7 @@ describe("local store listEvents (transport parity)", () => {
     closeDatabase();
     __resetProjectStore();
     try {
-      const store = resolveProjectStore(LOCAL_REGISTRY_ENV);
+      const store = localFixtureStore();
       const project = await store.createProject({ name: "Local Events Parity", slug: "local-events-parity" });
       const recorded = [
         await store.recordEvent(project.id, { event_type: "note", source: "cli", metadata: { n: 1 } }),

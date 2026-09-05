@@ -290,17 +290,11 @@ board:
 }
 ```
 
-Hosted-backend support uses the same connection rule as Storage Sync. When
-`HASNA_PROJECTS_API_URL` and `HASNA_PROJECTS_API_KEY` are both set, all
-registry reads and writes go to the hosted API instead; this does not move
-per-project canvases, data records, loop links, or asset files out of
-`$HASNA_PROJECTS_HOME/data/<workspace_id>/`. Setting only one API variable
-fails closed, and running with NO API variable fails closed too (owner ruling
-2026-09-04): the client never silently falls back to the local SQLite registry
-and never opens it by default. The on-box registry
-(`HASNA_PROJECTS_DB_PATH` or `~/.hasna/projects/projects.db`) is used only
-after an explicit opt-in — set `HASNA_PROJECTS_LOCAL_REGISTRY=1`.
-See the Storage Sync section and
+Hosted-backend support uses the same connection rule as Credentials and
+Connection below: any resolved credential routes all registry reads and writes
+to the hosted API. This does not move per-project canvases, data records, loop
+links, or asset files out of `$HASNA_PROJECTS_HOME/data/<workspace_id>/`. See
+the Credentials and Connection section and
 `docs/hosted-backend-readiness-contract.md` for the connection contract.
 
 `projects dashboard *` is the Projects-owned viewer surface for agent-managed
@@ -352,47 +346,88 @@ maximum of 200. Use `--limit`, `--no-prs`, `--no-tasks`, `--no-tmux`, and
 `--timeout-ms` to keep routing scans fast in large workspaces or offline
 contexts.
 
-## Storage Sync
+## Credentials and Connection
 
-Projects reads and writes either the hosted HTTP API or the local SQLite
-registry. The client selects the connection from API URL and API key presence
-and FAILS CLOSED when neither is configured (owner ruling 2026-09-04): there
-is no silent local fallback.
+Projects resolves its credential and its service URL through ONE resolver — the
+`@hasna/contracts` client seam that every hosted Hasna CLI uses. The CLI, the
+MCP server and the `./sdk` export all answer "which key, from where, against
+which service" identically, and the answer is recomputed on every call, so a
+rotated key is picked up without restarting a shell.
 
-Set both variables to route all registry reads and writes to the hosted API:
+### The five credential tiers, in precedence order
+
+| # | Tier | Where it comes from |
+| --- | --- | --- |
+| 1 | argument | an explicit key or profile passed to `createProjectsClientFromEnv()` / `resolveProjectStore()` |
+| 2 | deliberate env pointer | `HASNA_PROJECTS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_PROJECTS_API_KEY_REF` (a secrets-vault ITEM KEY, never a value) |
+| 3 | macOS Keychain | generic-password item `hasna.credentials.projects.api-key`, account `HASNA_STATION`, else `hostname -s`, else `USER` |
+| 4 | disk | `~/.hasna/projects/config/credentials`, mode 0400 or 0600, read at call time |
+| 5 | process env | `HASNA_PROJECTS_API_KEY` |
+
+Tier 5 is legitimate, not deprecated, and prints no notice. It sits BELOW disk
+on purpose: a station wrapper that injects the key into one child process is
+correct, while a shell `export` goes stale at the next rotation — so when both
+exist, the file on disk wins and the rotation heals immediately.
+
+Tiers 1 and 2 are DELIBERATE: if the identity they name cannot be honoured the
+command fails rather than authenticating as somebody else.
+
+`HASNA_HOME` replaces the `~/.hasna` root and `HASNA_CONFIG_HOME` replaces the
+config root (giving `<HASNA_CONFIG_HOME>/projects/credentials`). XDG variables
+are never read. The retired locations `~/.hasna/fleet-env/`, `~/.hasna/cloud/`,
+`~/.config/hasna/` and any `*-cloud.env` are not inputs.
+
+### The service URL
+
+The authority follows the same ladder and is optional:
+
+1. `HASNA_PROJECTS_API_URL`
+2. the Keychain `api-url` item (`hasna.credentials.projects.api-url`)
+3. the credentials file
+4. the default fleet gateway `https://api.hasna.com/projects`
+
+The client appends `/v1`. URLs never need configuring: a key from any tier is
+enough to reach the fleet. When two sources disagree the command refuses rather
+than sending a credential written for one authority to another.
+
+The unprefixed `PROJECTS_API_URL` / `PROJECTS_API_KEY` names are still accepted
+as a silent alias for one release; the canonical `HASNA_PROJECTS_*` names always
+work and win when both are set.
 
 ```bash
-export HASNA_PROJECTS_API_URL="<base URL of the projects server>"  # /v1 is appended
+# Nothing else is needed — the gateway is the default authority.
 export HASNA_PROJECTS_API_KEY="<API key with projects:read and projects:write>"
+
+# Or keep it out of the environment entirely:
+security add-generic-password -U -a "$(hostname -s)" \
+  -s hasna.credentials.projects.api-key -w '<key>'
+
+# Or on disk, owner-only:
+install -m 600 /dev/null ~/.hasna/projects/config/credentials
+printf 'HASNA_PROJECTS_API_KEY=%s\n' '<key>' > ~/.hasna/projects/config/credentials
 ```
 
-The client has one local connection and one HTTP connection. The HTTP
-connection is selected only when `HASNA_PROJECTS_API_URL` and
-`HASNA_PROJECTS_API_KEY` are both present. The unprefixed keys
-`PROJECTS_API_URL` and `PROJECTS_API_KEY` are accepted as aliases.
+### Hosted or unhosted — routed on URL and key only
 
-On the HTTP connection every registry command goes to `<API_URL>/v1` with the
-API key as a bearer token. The client carries only the API key — never a
-database DSN — and the key value is never logged, returned, or embedded in
-output.
+There is no mode switch. No `*_STORAGE_MODE`, no `HASNA_PROJECTS_LOCAL_REGISTRY`,
+no flag, no blank API URL.
 
-Configuration is fail-closed. Setting only one of the API URL and API key
-refuses to route, and commands hard-fail instead of silently reading the local
-dataset. Setting neither also hard-fails: registry commands exit non-zero with
-an error naming `HASNA_PROJECTS_API_URL` / `HASNA_PROJECTS_API_KEY`, and the
-on-box SQLite registry is never opened as a default.
+- **A credential resolves** → hosted. Every registry command goes to
+  `<authority>/v1` with the key as a bearer token. The client carries only the
+  API key — never a database DSN — and the value is never logged, returned, or
+  embedded in output.
+- **An authority is declared but no credential resolves** → the command FAILS
+  LOUD: non-zero exit, an error naming every place the resolver looked, no local
+  SQLite store opened and no local-fallback event.
+- **Nothing configures the fleet at all** → unhosted OSS mode on the on-box
+  SQLite registry (`HASNA_PROJECTS_DB_PATH`, else `~/.hasna/projects/projects.db`),
+  which Projects supports by design. It is never silent: exactly one line goes to
+  stderr saying it is local and naming the database it opened.
 
-The local registry is available ONLY through an explicit opt-in. Set
-`HASNA_PROJECTS_LOCAL_REGISTRY=1` to deliberately run the client against the
-on-box SQLite registry at `HASNA_PROJECTS_DB_PATH` (or
-`~/.hasna/projects/projects.db`); when the hosted API variables are present
-they take precedence. No other path — no flag, no legacy `*_STORAGE_MODE`
-selector, no blank API URL — opens the local registry.
-
-The HTTP connection moves the global project registry only. Machine-local side
+The hosted connection moves the global project registry only. Machine-local side
 effects (tmux sessions, git operations, directory creation, rendering) and
-per-project data stay on-box either way: canvases, data records, loop links,
-and asset files live in `$HASNA_PROJECTS_HOME/data/<workspace_id>/`.
+per-project data stay on-box either way: canvases, data records, loop links, and
+asset files live in `$HASNA_PROJECTS_HOME/data/<workspace_id>/`.
 
 The server side of the hosted connection is `projects-serve`. It runs against PostgreSQL and
 requires `HASNA_PROJECTS_DATABASE_URL` (or `PROJECTS_DATABASE_URL` /
@@ -592,7 +627,9 @@ The typed client is generated from the serve OpenAPI (`bun run sdk:generate`):
 ```ts
 import { ProjectsClient, createProjectsClientFromEnv } from "@hasna/projects/sdk";
 
-// Hosted connection: PROJECTS_API_URL + PROJECTS_API_KEY (never a DSN)
+// Credential and authority come from the five-tier @hasna/contracts resolver
+// (never a DSN). With no credential in any tier this THROWS — the SDK has no
+// local fallback.
 const projects = createProjectsClientFromEnv();
 const created = await projects.createProject({ name: "My Project", tags: ["demo"] });
 const list = await projects.listProjects({ tag: "demo" });

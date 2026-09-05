@@ -1,55 +1,68 @@
 /**
  * Test-only helper: build the environment for a spawned `projects` CLI/MCP
- * process.
+ * process (and the in-process equivalent).
  *
- * Tests inherit `process.env`, and operator machines routinely export hosted
- * API selectors for Projects and its Todos, Mementos, and Conversations
+ * Tests inherit `process.env`, and operator machines routinely hold live
+ * credentials for Projects and its Todos, Mementos, and Conversations
  * authorities. Inheriting those turns local tests into runs against the *real*
- * backends, which both masks local-store regressions and creates real rows as a
+ * fleet, which both masks local-store regressions and creates real rows as a
  * side effect of `bun test`.
  *
- * So: blank the hosted API selectors from the inherited environment unless the
- * test explicitly opts into the hosted backend by passing them in `overrides`.
- * Blanking (rather than deleting) is load-bearing: the shared
- * @hasna/contracts seam reads the fleet app-config files on disk (e.g.
- * `~/.hasna/cloud/projects.env`) when the environment is silent, so deleting
- * the keys would let the disk tier select the real hosted backend anyway. An
- * explicitly DEFINED-but-blank URL is the seam's own "select the local store"
- * escape hatch and beats any disk pointer.
+ * Since the client moved onto the shared @hasna/contracts credential resolver,
+ * a hermetic environment means silencing all five tiers, not just the env one.
+ * Blanking a variable is no longer an escape hatch — a DEFINED-but-blank API
+ * URL is a configuration error the seam refuses — so this helper:
  *
- * The store resolution FAILS CLOSED (owner ruling 2026-09-04): with the hosted
- * selectors blanked, a registry command would throw unless the local registry
- * is explicitly opted into. Tests that deliberately exercise the on-box SQLite
- * registry therefore default `HASNA_PROJECTS_LOCAL_REGISTRY=1` in the spawned
- * environment. A test that wants to assert the fail-closed behavior overrides
- * the key with an empty string.
+ *   - DELETES the canonical and aliased API URL/key names, and the deliberate
+ *     override / vault-pointer / profile selectors, for projects and for every
+ *     authority a projects command may reach;
+ *   - points `HASNA_HOME` at a path under the system temp dir that this suite
+ *     never creates, so the disk tier (`~/.hasna/<app>/config/credentials`)
+ *     resolves nothing for ANY app;
+ *   - sets `HASNA_STATION` to an account with no Keychain items, so the macOS
+ *     Keychain tier finds nothing (`security` exits 44) instead of picking up
+ *     the developer's own station credentials.
+ *
+ * With every tier silent, `resolveProjectStore()` takes the unhosted OSS path
+ * and drives the on-box SQLite registry — which is what these tests exercise.
+ * A test that wants the hosted path passes the API env in `overrides`; a test
+ * that wants the LOUD half-configured failure passes only the URL.
  */
-import { PROJECTS_LOCAL_REGISTRY_ENV } from "../store/project-store.js";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-export const HOSTED_API_ENV_KEYS = [
-  "HASNA_PROJECTS_API_URL",
-  "HASNA_PROJECTS_API_KEY",
-  "PROJECTS_API_URL",
-  "PROJECTS_API_KEY",
-  "HASNA_TODOS_API_URL",
-  "HASNA_TODOS_API_KEY",
-  "HASNA_TODOS_DB_PATH",
-  "TODOS_API_URL",
-  "TODOS_API_KEY",
-  "TODOS_DB_PATH",
-  "HASNA_MEMENTOS_API_URL",
-  "HASNA_MEMENTOS_API_KEY",
-  "HASNA_MEMENTOS_DB_PATH",
-  "MEMENTOS_API_URL",
-  "MEMENTOS_API_KEY",
-  "MEMENTOS_DB_PATH",
-  "HASNA_CONVERSATIONS_API_URL",
-  "HASNA_CONVERSATIONS_API_KEY",
-  "HASNA_CONVERSATIONS_DB_PATH",
-  "CONVERSATIONS_API_URL",
-  "CONVERSATIONS_API_KEY",
-  "CONVERSATIONS_DB_PATH",
-] as const;
+/** Every app a projects command may resolve a client for. */
+const CLIENT_APPS = ["PROJECTS", "TODOS", "MEMENTOS", "CONVERSATIONS", "CONTACTS"] as const;
+
+/**
+ * The OTHER apps' local stores. Projects' own `HASNA_PROJECTS_DB_PATH` is
+ * deliberately NOT here: it is how a fixture pins its temp registry.
+ */
+const AUTHORITY_APPS = ["TODOS", "MEMENTOS", "CONVERSATIONS"] as const;
+
+/** The credential/authority env names dropped from the inherited environment. */
+export const HOSTED_API_ENV_KEYS: readonly string[] = [
+  ...CLIENT_APPS.flatMap((app) => [
+    `HASNA_${app}_API_URL`,
+    `HASNA_${app}_API_KEY`,
+    `HASNA_${app}_API_KEY_OVERRIDE`,
+    `HASNA_${app}_API_KEY_REF`,
+    `${app}_API_URL`,
+    `${app}_API_KEY`,
+  ]),
+  ...AUTHORITY_APPS.flatMap((app) => [`HASNA_${app}_DB_PATH`, `${app}_DB_PATH`]),
+  "HASNA_PROFILE",
+];
+
+/**
+ * A `~/.hasna` root this suite never creates. The credential file tier reads
+ * `<HASNA_HOME>/<app>/config/credentials`; a missing path is simply an absent
+ * tier, so nothing has to be created or cleaned up.
+ */
+export const TEST_HASNA_HOME = join(tmpdir(), "hasna-projects-tests-no-credentials");
+
+/** A Keychain account with no `hasna.credentials.*` items on any machine. */
+export const TEST_KEYCHAIN_STATION = "hasna-projects-tests-no-keychain";
 
 export function testSpawnEnv(overrides: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};
@@ -58,11 +71,41 @@ export function testSpawnEnv(overrides: Record<string, string> = {}): Record<str
     env[key] = value;
   }
   for (const key of HOSTED_API_ENV_KEYS) {
-    if (!(key in overrides)) env[key] = "";
+    if (!(key in overrides)) delete env[key];
   }
-  // Explicit local-registry opt-in for spawned processes: store resolution
-  // fails closed without it (no silent local fallback), and these tests run
-  // the CLI against the on-box SQLite registry by default.
-  if (!(PROJECTS_LOCAL_REGISTRY_ENV in overrides)) env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
+  if (!("HASNA_HOME" in overrides)) env["HASNA_HOME"] = TEST_HASNA_HOME;
+  if (!("HASNA_CONFIG_HOME" in overrides)) delete env["HASNA_CONFIG_HOME"];
+  if (!("HASNA_STATION" in overrides)) env["HASNA_STATION"] = TEST_KEYCHAIN_STATION;
   return { ...env, ...overrides };
+}
+
+/**
+ * Apply the same silencing to the CURRENT process environment.
+ *
+ * In-process suites resolve the store from `process.env`, so they need the
+ * identical treatment; callers snapshot and restore around their own lifecycle.
+ */
+export function silenceHostedApiEnv(env: NodeJS.ProcessEnv = process.env): void {
+  for (const key of HOSTED_API_ENV_KEYS) delete env[key];
+  delete env["HASNA_CONFIG_HOME"];
+  env["HASNA_HOME"] = TEST_HASNA_HOME;
+  env["HASNA_STATION"] = TEST_KEYCHAIN_STATION;
+}
+
+/**
+ * The prefix of the one line unhosted mode prints on stderr.
+ *
+ * Local (OSS) mode is never silent — the owner ruling requires exactly one
+ * line saying so — but that line is noise for every OTHER stderr assertion.
+ * Suites therefore strip it with {@link withoutUnhostedNotice} and assert its
+ * presence explicitly where the notice itself is the subject.
+ */
+export const UNHOSTED_MODE_NOTICE_PREFIX = "projects: local mode";
+
+/** Drop the unhosted-mode notice line(s) from a captured stderr. */
+export function withoutUnhostedNotice(stderr: string): string {
+  return stderr
+    .split("\n")
+    .filter((line) => !line.startsWith(UNHOSTED_MODE_NOTICE_PREFIX))
+    .join("\n");
 }
