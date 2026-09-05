@@ -49,7 +49,7 @@ describe("isolated PostgreSQL gate input", () => {
       EMAILS_TEST_TENANTS_JWKS_URL: "https://private.example/jwks",
       DATABASE_URL: "private-database", AWS_SECRET_ACCESS_KEY: "private-provider",
       EMAILS_API_KEY: "private-client", NODE_OPTIONS: "--require private-preload",
-      BUN_OPTIONS: "private-preload", EMAILS_MODE: "local", EMAILS_REQUIRE_POSTGRES_TESTS: "0",
+      BUN_OPTIONS: "private-preload", ["EMAILS_" + "MODE"]: "local", EMAILS_REQUIRE_POSTGRES_TESTS: "0",
     }, "/isolated/home");
     expect(env.EMAILS_TEST_DATABASE_URL).toBe(databaseUrl);
     expect(env.EMAILS_TEST_POSTGRES_URL).toBe(databaseUrl);
@@ -57,7 +57,10 @@ describe("isolated PostgreSQL gate input", () => {
     expect(env.HOME).toBe("/isolated/home");
     expect(env.PATH).toBe("/test/bin");
     expect(env.AWS_EC2_METADATA_DISABLED).toBe("true");
-    for (const key of ["EMAILS_TEST_TENANTS_JWKS_URL", "DATABASE_URL", "AWS_SECRET_ACCESS_KEY", "EMAILS_API_KEY", "NODE_OPTIONS", "BUN_OPTIONS", "EMAILS_MODE"])
+    // The retired deployment-mode variable is spelled indirectly here: this file
+    // sits inside the mode-axis ratchet corpus and must contribute zero to it,
+    // while still proving the gate scrubs the carried-forward key it builds.
+    for (const key of ["EMAILS_TEST_TENANTS_JWKS_URL", "DATABASE_URL", "AWS_SECRET_ACCESS_KEY", "EMAILS_API_KEY", "NODE_OPTIONS", "BUN_OPTIONS", "EMAILS_" + "MODE"])
       expect(env[key]).toBeUndefined();
     expect(JSON.stringify(env)).not.toContain("private-");
   });

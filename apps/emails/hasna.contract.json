@@ -72,7 +72,7 @@
     "sqlitePath": "~/.hasna/emails/emails.db",
     "pgTestGate": {
       "envVar": "EMAILS_TEST_DATABASE_URL",
-      "command": "bun test"
+      "command": "bun run test:postgres"
     }
   },
   "metadata": {

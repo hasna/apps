@@ -61,6 +61,7 @@
     "test": "bash scripts/run-hermetic-tests.sh shared",
     "test:shared": "bash scripts/run-hermetic-tests.sh shared",
     "test:hermetic": "bash scripts/run-hermetic-tests.sh isolated",
+    "test:postgres": "bun --no-env-file scripts/live-postgres-test.mjs",
     "deployment:policy": "bun scripts/deployment-workflow-policy.mjs",
     "no-cloud:source": "bun test src/no-cloud-boundary.test.ts src/no-cloud-artifact-scan.test.ts",
     "no-cloud:pack": "bun scripts/no-cloud-artifact-scan.mjs",
