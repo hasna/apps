@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- 6ff3828: Resolve credentials through the shared `@hasna/contracts` client ladder
+  (hasna/apps#1720, #1668, #1690, #1613, #1599).
+
+  - The CLI, MCP server and `./sdk` export all resolve the credential through one
+    seam (`lib/fleet-credentials.ts` → `@hasna/contracts/client`, pinned to 1.0.1):
+    an explicit argument, then a deliberate env pointer
+    (`HASNA_SKILLS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_SKILLS_API_KEY_REF`),
+    then the macOS Keychain item `hasna.credentials.skills.api-key`, then
+    `~/.hasna/skills/config/credentials` (0400/0600, `HASNA_HOME` /
+    `HASNA_CONFIG_HOME` overrides, XDG never), then `HASNA_SKILLS_API_KEY`.
+    Resolved fresh on every call, so a rotated key is picked up without restarting
+    a long-lived MCP server.
+  - The service address follows the same ladder — `HASNA_SKILLS_API_URL`, the
+    Keychain `api-url` item, the credentials file — and defaults to the fleet
+    gateway `https://api.hasna.com/skills` once a credential has resolved. The
+    unprefixed `SKILLS_API_URL` / `SKILLS_API_KEY` spellings remain accepted as
+    documented silent aliases for one release; `SKILL_API_KEY` (singular) is gone.
+  - **Fails closed.** An authority configured with no credential now exits
+    non-zero with one line naming every tier that was consulted, instead of
+    quietly answering from the bundled corpus. Local mode remains available when
+    neither a credential nor a URL resolves — Skills ships its corpus — and says so
+    once per process, on stderr, in one line.
+  - `skills auth login` now writes `~/.hasna/skills/config/credentials` (the tier
+    the whole fleet reads) with the display identity beside it in `identity.json`;
+    `auth.json` in the data directory and `~/.skills/auth.json` are retired and no
+    longer read. `skills auth whoami` reports which tier supplied the key, and
+    `skills auth logout` says when a credential still resolves from elsewhere.
+  - `skills setup-info` reports where the install stands: mode, the resolved API
+    URL and what decided it, the tier and SOURCE of the key (an env key name, a
+    Keychain item reference, or a path — never a value), and the credentials
+    file's permission bits.
+  - `apiUrl` is retired as a config key: `skills setup --api-url <origin>` writes
+    the credentials file instead (the address is per-user, so `--global` is
+    accepted and ignored), and `skills config unset apiUrl` clears it.
+
+### Patch Changes
+
+- c736f83: Ship the canonical `skills-serve` server bin (same entrypoint as `bin/server.js`); `skills-server` stays installed as a one-release deprecated alias. Part of the fleet bin-naming wave (hasna/apps#1602).
+- 0699828: Fix two ways the new `@hasna/contracts` credential path could not reach the
+  fleet (follow-up to hasna/apps#1780, umbrella #1720).
+
+  - **Every remote read on the default authority 404'd.** `buildSkillsApiUrl()`
+    treated a base URL whose path ends in `/skills` as one that already names the
+    collection and appended nothing. On the fleet gateway the trailing `/skills`
+    is the app _path prefix_ (`https://api.hasna.com/skills`), so `/api/v1` was
+    never added and every request collapsed onto the gateway app root — which
+    answers 404. A correctly credentialled install could not run `skills list`
+    at all, on the plain merge path as well as `--remote`. The collection segment
+    is now only stripped when the API prefix precedes it (`.../api/v1/skills`),
+    so this composes the same URL `RemoteSkillsClient` does from the same origin.
+  - **A vault pointer no longer degrades to the local corpus.**
+    `HASNA_SKILLS_API_KEY_REF` resolves to a credential whose value still has to
+    be fetched from the secrets vault; the empty placeholder was being published
+    as the resolved key, so a configured install sent `Authorization: Bearer `
+    on some paths and, on the read path, was mistaken for "no credential" and
+    silently answered from the bundled corpus with a zero exit. The pointer is
+    now completed through the vault on each send (`resolveSkillsApiKey`), and a
+    pointer that cannot be completed exits non-zero — configuring a credential is
+    never less safe than configuring none. `resolveSkillsFleet()` reports
+    `apiKey: null` plus the pointer instead of a blank key, and no tier can
+    produce a hosted resolution with an empty key any more.
+  - **`HASNA_PROFILE` failures are structured refusals again.** A profile with no
+    entry raised `@hasna/contracts`' own `CredentialResolutionError` straight
+    through the helpers that exist to turn a refusal into data, so `--json`
+    commands and MCP tools saw an unhandled exception. It is translated to
+    `SkillsFleetCredentialError` (`code: "MISSING_API_CREDENTIAL"`) like every
+    other refusal.
+
 ## 0.2.1
 
 ### Patch Changes
@@ -107,9 +179,6 @@
 - 6a14cc8c4: Dockerfile bun base aligned to 1.3.14 (lockfile-compatible).
 - fda23181a: Corpus-free server image (drop COPY skills).
 - a12b85fa9: The 9 fleet agent-workflow skills moved to the private per-station store (`fleet-package-rollout`, `goal-plan-coordination`, `inbox`, `inbox-monitor`, `merge-pr`, `skill-goal-execute`, `skill-login`, `skill-project-create`, `skill-publish`) per owner ruling 2026-08-15. They are for internal fleet use only and now live in `hasna-internal/fleet-resources`, which hydrates each station's skill cache (`~/.hasna/skills/skills/`); the public repo keeps only the OSS executable corpus under `skills/` and a pointer README under `agent-skills/`. The sync/registry code paths that serve agent-workflow skills remain, reading them from the machine-local cache rather than the repository.
-- Updated dependencies [b630c48]
-  - @hasna/events@0.1.16
-
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]

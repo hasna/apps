@@ -299,7 +299,17 @@ describe("TypedActionWorker", () => {
       const timed = await worker.run("typed.worker.demo@1.0.0", { timeoutMs: 1, leaseMs: 15, onSettled: () => { settled = true; } });
       expect(timed.status).toBe("running");
       expect(store.requireRun(timed.runId).status).toBe("running");
-      await Bun.sleep(70);
+      // The 1ms caller timeout must not report false success: the 40ms action
+      // is still in flight when run() returns, and the run only settles once
+      // the worker actually finishes and persists the terminal receipt. Wait
+      // for that settlement instead of sleeping a fixed 70ms — under CI load
+      // the action's sleep can overshoot the window (measured flake, #1796),
+      // and a poll keeps failing exactly when it should: a run that never
+      // settles (deadline) or settles as anything but succeeded still reds.
+      const deadline = Date.now() + 4_000;
+      while (!settled && Date.now() < deadline) {
+        await Bun.sleep(10);
+      }
       expect(store.requireRun(timed.runId).status).toBe("succeeded");
       expect(settled).toBe(true);
     } finally {

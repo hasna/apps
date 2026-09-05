@@ -1,13 +1,40 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- ac63731: Resolve the client credential and the service authority through the shared `@hasna/contracts` client seam (pinned to 1.0.1) instead of this package's own env reads, for the CLI, the MCP server and the `./sdk` export alike. Precedence, re-read on every call: explicit `--api-key`/`--profile`, then the deliberate pointers `HASNA_KNOWLEDGE_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_KNOWLEDGE_API_KEY_REF`, then the macOS Keychain item `hasna.credentials.knowledge.api-key` (account `HASNA_STATION`, else `hostname -s`, else `$USER`), then `~/.hasna/knowledge/config/credentials` (0400/0600, `HASNA_HOME`/`HASNA_CONFIG_HOME` aware), then `HASNA_KNOWLEDGE_API_KEY` — a legitimate tier, below disk, with no deprecation notice, so a rotated on-disk key beats a stale shell export. The authority ladder is `HASNA_KNOWLEDGE_API_URL` → the Keychain `api-url` item → the credentials file → `https://api.hasna.com/knowledge`: a key from any tier now reaches the fleet with no URL configured.
+
+  Routing is decided by what resolves, not by a mode switch. `HASNA_KNOWLEDGE_LOCAL` is retired — accepted, ignored and reported as ignored for one release, then deleted — and the `*_MODE` / `*_STORAGE_MODE` ratchet still refuses stale selectors loudly. A configured authority whose credential does not resolve exits non-zero naming every place that was consulted, and never falls back to the on-box store. With nothing configured anywhere the OSS on-box store still applies, and now announces itself once on stderr rather than being a silent state. `knowledge transport` reports the deciding tier and source (a name, a Keychain item reference or a path — never a value).
+
+  `knowledge auth login` still writes `~/.hasna/knowledge/auth.json`, but that file is now a documented LEGACY fallback consulted only when the shared chain finds nothing; move credentials to the Keychain item or the credentials file. `auth status`/`whoami` gained `source_ref` and `tier`, `source` can now report `keychain`, and the default API URL is the fleet gateway rather than `https://knowledge.md`.
+
+### Patch Changes
+
+- 0e98db2: `knowledge auth whoami` (and `auth status`) answer the live question — "can this
+  credential read the API right now?" — instead of reporting on env presence.
+  The configured snapshot is overlaid with a one-request probe through the read
+  transport, so a key that is present in the environment but rejected by the
+  server reports `authenticated: false` with the server's reason, HTTP status and
+  the failing key's kid. A negative verdict is also a NON-ZERO exit with
+  `ok: false`, in `--json` and human output alike, so `knowledge auth whoami` is
+  usable as a station health gate: a revoked key no longer passes `set -e`,
+  `$?`, or `--json | jq -e .ok`.
+
+  Fixes hasna/apps#1587 (a revoked fleet key passed `whoami` while failing every
+  read with 401). The probe landed in #1594 and the exit code in #1761; this
+  release is the first one that carries either to npm — @hasna/knowledge 0.2.116
+  on the registry still answers a bogus key with
+  `{"ok":true,"authenticated":true}`, so stations must upgrade to get the fix.
+
+- da6056f: Switch @hasna/knowledge local path reads/writes through the in-package resolver (XDG/macOS home layout). The legacy `~/.hasna/knowledge` home (with the `HASNA_KNOWLEDGE_HOME` exact-app override) stays the effective home until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The resolver covers the global store home, the project-scoped `projects/<key>` sub-root, and the auth store default; the per-app override `HASNA_KNOWLEDGE_AUTH_DIR` is unchanged. The wave-wide resolver dependency (`@hasna/paths@0.1.0`) was deleted 2026-09-03 (hasna/apps#1535); the resolver is now implemented locally in-package.
+
 ## 0.2.116
 
 ### Patch Changes
 
 - Resolve @hasna/knowledge local path reads/writes through the @hasna/paths resolver (XDG/macOS home layout, hotfixes plan 0f49f56a task P3.3). The legacy `~/.hasna/knowledge` home stays the effective home until the store is migrated to the XDG data home or `HASNA_DATA_HOME` is set; `HASNA_KNOWLEDGE_HOME` remains the exact-app override. Covers the global store home, the project-scoped `projects/<key>` sub-root, and the auth store default.
-- Updated dependencies
-  - @hasna/paths@0.1.0
-
 ## 0.2.115
 
 ### Patch Changes
