@@ -13,10 +13,11 @@
 import {
   createHasnaHttpTransport,
   HasnaHttpError,
+  type CredentialProvider,
   type HasnaHttpTransport,
   type HasnaRequestOptions,
   type QueryParams,
-} from "../store/contracts-client/transport.js";
+} from "../store/client.js";
 
 export interface Status { "status": string; "version": string; "mode": string }
 
@@ -65,8 +66,16 @@ export interface UserInput { "id": string; "name": string; "type"?: "human" | "a
 export interface SecretsClientOptions {
   /** Base URL origin, e.g. process.env.APP_API_URL (`https://secrets.your-deployment.example`). */
   baseUrl: string;
-  /** API key, e.g. process.env.APP_API_KEY. Sent as Bearer + x-api-key. */
-  apiKey?: string;
+  /**
+   * API key, sent as Bearer + x-api-key.
+   *
+   * Prefer a {@link CredentialProvider} — the shared transport calls it fresh
+   * for every request, so a long-lived client picks up a key rotation (and the
+   * `HASNA_SECRETS_API_KEY_REF` pointer tier) without being rebuilt. A plain
+   * string is still accepted and is treated as a deliberate, explicit
+   * credential. `createSecretsClientFromEnv` passes a provider.
+   */
+  apiKey?: string | CredentialProvider;
   /** Custom fetch (defaults to global fetch). */
   fetch?: typeof fetch;
   /** Extra headers merged into every request. */

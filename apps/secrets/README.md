@@ -746,16 +746,59 @@ The vault database lives at `<data home>/vault.db`. Key material lives in
 `<data home>/vault.key` for local-key mode or `<data home>/vault.key.enc` for
 KMS envelope-encryption mode.
 
-### Client configuration (fail-closed default)
+### Credentials (five tiers)
 
-The hosted secrets API is the only default: it is selected by
-`HASNA_SECRETS_API_URL` + `HASNA_SECRETS_API_KEY`. The LOCAL vault is served
-only behind the explicit `HASNA_SECRETS_LOCAL_VAULT=1` opt-in (standalone or
-offline use, local `serve`/MCP bridges). With neither, the CLI and MCP FAIL
-CLOSED — non-zero exit with an error naming the required env — instead of
-silently serving local SQLite (owner ruling 2026-09-04). Run through the
-station wrapper (`~/.local/bin/secrets`) when API credentials are managed
-there.
+The CLI, the MCP server and the SDK all resolve their credential and their API
+base URL through the **`@hasna/contracts` client resolver** — one implementation,
+shared by every hosted Hasna app, re-read **fresh on every call** so a key
+rotation heals immediately in a shell that is older than the rotation.
+
+Precedence, highest first:
+
+| # | Tier | Where |
+| --- | --- | --- |
+| 1 | **argument** | an explicit `apiKey` / `profile` passed in code (`createSecretsClientFromEnv(env, { credentials: { apiKey } })`) |
+| 2 | **env pointer** | `HASNA_SECRETS_API_KEY_OVERRIDE` (a key you set on purpose), `HASNA_PROFILE` (selects `credentials-<profile>` on disk), `HASNA_SECRETS_API_KEY_REF` (a vault item key, resolved at request time) |
+| 3 | **macOS Keychain** (darwin only) | generic-password item `hasna.credentials.secrets.api-key`, account `HASNA_STATION`, else the short hostname, else `$USER` |
+| 4 | **disk** | `~/.hasna/secrets/config/credentials`, owner-only `0400`/`0600`. `HASNA_HOME` replaces `~/.hasna`; `HASNA_CONFIG_HOME` replaces the config root (`<HASNA_CONFIG_HOME>/secrets/credentials`). XDG is never consulted. |
+| 5 | **environment** | `HASNA_SECRETS_API_KEY` — a legitimate tier, not a deprecated one. It sits *below* disk so a rotated file beats a stale `export`. |
+
+A deliberate tier (1 and 2) never falls through to another identity: if the key
+it names is revoked, the run fails rather than silently authenticating as
+someone else.
+
+**API base URL** follows the same ladder — `HASNA_SECRETS_API_URL`, then the
+Keychain `api-url` item, then the credentials file — and otherwise **defaults to
+the fleet gateway `https://api.hasna.com/secrets`** (the client appends `/v1`).
+A key from any tier is enough; URLs never need configuring. Configured
+authorities must agree with each other.
+
+```bash
+# Store the key once, in the Keychain, and nothing else needs configuring:
+security add-generic-password -U -a "$(hostname -s)" \
+  -s hasna.credentials.secrets.api-key -w "$KEY"
+secrets list                       # -> https://api.hasna.com/secrets/v1
+
+# Or a 0600 credentials file:
+install -m 700 -d ~/.hasna/secrets/config
+printf 'HASNA_SECRETS_API_KEY="%s"\n' "$KEY" > ~/.hasna/secrets/config/credentials
+chmod 600 ~/.hasna/secrets/config/credentials
+```
+
+**With NO credential from any tier the CLI and MCP FAIL CLOSED** — non-zero exit
+with an error naming every tier that was consulted — instead of silently serving
+local SQLite (owner ruling 2026-09-04). The LOCAL vault is served only behind the
+explicit `HASNA_SECRETS_LOCAL_VAULT=1` opt-in (standalone or offline use, local
+`serve`/MCP bridges), which prints one line on stderr saying the run is local.
+The opt-in yields to a credential: a station that holds a hosted key stays
+hosted.
+
+Retired and inert, never read: `~/.hasna/fleet-env`, `~/.hasna/cloud`,
+`~/.config/hasna`, `$XDG_CONFIG_HOME`, and every `*_MODE` / `*_STORAGE_MODE`
+variable — the transport is decided by the credential and the authority alone.
+`SECRETS_API_URL` / `SECRETS_API_KEY` remain accepted as a **silent alias for one
+release**; the canonical `HASNA_SECRETS_*` names are the supported spelling and
+no longer shadowed by them.
 
 ## Safety Notes
 
@@ -774,9 +817,11 @@ there.
 A test process cannot reach a real vault. This is enforced by the code, not by
 convention, because convention already failed: the suite wrote fixtures into a
 hosted production vault on four separate runs, because a machine's shell
-environment exports `HASNA_SECRETS_API_URL` / `_API_KEY` (and, before the
-deployment-modes removal, a `HASNA_SECRETS_STORAGE_MODE` that is now a hard
-error) and `getStore()` reads them.
+environment exports `HASNA_SECRETS_API_URL` / `_API_KEY` and `getStore()` reads
+them. Since the package adopted the shared resolver there are two more AMBIENT
+tiers to neutralize — the macOS Keychain and `~/.hasna/secrets/config/credentials`
+— so the preload redirects both at a throwaway location rather than trusting
+them to be absent.
 
 ```bash
 bun test
@@ -788,7 +833,7 @@ What holds, and where:
 | --- | --- |
 | A test process may only reach a **loopback** vault. Any other host throws `SecretsTestIsolationError`. | `src/test-isolation.ts`, applied at the one HTTP egress point (`createHasnaHttpTransport`) and at ambient-env store resolution (`getStore()`). |
 | A test that configures nothing still never opens the operator's `~/.hasna/secrets` vault or key. It gets a throwaway per-process one. | `src/db.ts`, `src/crypto.ts` |
-| The hosted-vault selectors are stripped from the environment before any test file runs. | `bunfig.toml` → `tests/setup/isolate-vault.ts` |
+| The hosted-vault selectors are stripped from the environment, and the Keychain and disk credential tiers are redirected at a throwaway location (`HASNA_HOME`, `HASNA_CONFIG_HOME`, a `HASNA_STATION` account no item exists under), before any test file runs. | `bunfig.toml` → `tests/setup/isolate-vault.ts` |
 
 Notes:
 
@@ -833,8 +878,8 @@ typed SDK. Four surfaces cover the same core:
   `secrets:write`.
 - **`@hasna/secrets`** — the typed, dependency-free SDK package root generated
   from the serve OpenAPI. The compatibility subpath `@hasna/secrets/sdk`
-  exports the same API. Client `self_hosted` mode uses `SECRETS_API_URL` +
-  `SECRETS_API_KEY` (never a DSN).
+  exports the same API. The client resolves its credential and base URL through
+  the shared [`@hasna/contracts` resolver](#credentials-five-tiers) — never a DSN.
 
 Storage is **PURE REMOTE (Amendment A1)** in cloud mode: `secrets-serve` reads
 and writes the shared Postgres directly (no cache, no local mirror). Secret and
@@ -861,7 +906,8 @@ log, and no client-side setting recovers the difference — see
 
 ```ts
 import { createSecretsClientFromEnv, type SecretInput } from "@hasna/secrets";
-const client = createSecretsClientFromEnv(); // SECRETS_API_URL + SECRETS_API_KEY
+// Credential + base URL come from the five-tier resolver; throws if none resolves.
+const client = createSecretsClientFromEnv();
 const input: SecretInput = {
   key: "example/service/dev/api_key",
   value: process.env.EXAMPLE_SERVICE_API_KEY!,

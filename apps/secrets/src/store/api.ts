@@ -9,7 +9,7 @@
 // api mode. The API key lives only inside the transport and is never logged,
 // returned, or embedded in any value produced here.
 
-import type { HasnaStorageClient } from "./contracts-client/index.js";
+import type { HasnaStorageClient } from "./client.js";
 import { gatewayApiV1Root } from "../api-display-url.js";
 import { assertValidSecretPath } from "../hasna-xyz-paths.js";
 import { computeCounts, matchVaultItemsForUrl } from "./local.js";

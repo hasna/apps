@@ -1,15 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-// Owner ruling 2026-09-04 (fail-closed campaign): a fleet CLI run WITHOUT its
-// API env prefix must FAIL CLOSED — non-zero exit + an actionable error naming
-// the required env (HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY). It must
-// NEVER silently serve the local SQLite vault, never emit a
-// `secrets-local-fallback` event with exit 0, never default to local mode.
-// Local mode survives only behind the explicit HASNA_SECRETS_LOCAL_VAULT=1
-// opt-in.
+// Owner ruling 2026-09-04 (fail-closed campaign): a fleet CLI run with NO
+// credential from ANY resolver tier must FAIL CLOSED — non-zero exit + an
+// actionable error naming what was consulted (the Keychain item, the
+// credentials file, HASNA_SECRETS_API_KEY) and the way out. It must NEVER
+// silently serve the local SQLite vault, never emit a `secrets-local-fallback`
+// event with exit 0, never default to local mode. Local mode survives only
+// behind the explicit HASNA_SECRETS_LOCAL_VAULT=1 opt-in, and says so in one
+// line.
+//
+// Since #1720 the credential chain has two AMBIENT tiers above the environment
+// — the macOS Keychain and ~/.hasna/secrets/config/credentials — so deleting
+// env variables is no longer enough to make a child credential-free. The env
+// helper below redirects both at a throwaway location instead (an account no
+// Keychain item exists under, and an empty HASNA_HOME), which is what makes
+// this test deterministic on a station that DOES hold a hosted key.
 //
 // Regression: incident 715558 (BUG b76e2d56-38bf-468e-a6f9-90ea107e1b0e). An
 // agent in a shell without the hosted env previously got a silent rc=0 local
@@ -45,6 +53,9 @@ function env(extra: Record<string, string> = {}): Record<string, string> {
     "SECRETS_MODE",
     "HASNA_SECRETS_DB_PATH",
     "HASNA_SECRETS_LOCAL_VAULT",
+    "HASNA_SECRETS_API_KEY_OVERRIDE",
+    "HASNA_SECRETS_API_KEY_REF",
+    "HASNA_PROFILE",
   ]) {
     delete base[key];
   }
@@ -52,6 +63,12 @@ function env(extra: Record<string, string> = {}): Record<string, string> {
     ...base,
     OPEN_SECRETS_DB: join(testDir, "vault.db"),
     HASNA_SECRETS_KEY_DIR: join(testDir, "keys"),
+    // The two ambient tiers, aimed at nothing: an empty ~/.hasna root and a
+    // Keychain ACCOUNT no item is stored under (a missing item is an absent
+    // tier, so the lookup simply falls through).
+    HASNA_HOME: join(testDir, "hasna-home"),
+    HASNA_CONFIG_HOME: join(testDir, "hasna-home", "config"),
+    HASNA_STATION: `hasna-secrets-fail-closed-${process.pid}`,
     NO_COLOR: "1",
     ...extra,
   };
@@ -78,9 +95,11 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     const res = runSecrets(["list"], { HASNA_SECRETS_DB_PATH: localDb });
 
     expect(res.exitCode).not.toBe(0);
-    // Actionable error naming the required env.
+    // Actionable error naming every tier that was consulted.
     expect(res.stderr).toContain("HASNA_SECRETS_API_URL");
     expect(res.stderr).toContain("HASNA_SECRETS_API_KEY");
+    expect(res.stderr).toContain("Keychain");
+    expect(res.stderr).toContain("credentials");
     // The explicit opt-in is named, so a local-only operator knows the way out.
     expect(res.stderr).toContain("HASNA_SECRETS_LOCAL_VAULT");
     // The old false-green shapes are gone.
@@ -112,9 +131,12 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     const res = runSecrets(["list"], { HASNA_SECRETS_LOCAL_VAULT: "1" });
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain("1 secret(s)");
-    // An opted-in local run is a normal local run — no fallback event, no notice.
+    // An opted-in local run says, in ONE line on stderr, that it is local — the
+    // ruling's replacement for the old silent fallback. stdout stays clean, so
+    // `--json` consumers are unaffected.
+    expect(res.stderr).toContain("local vault mode");
     expect(res.stderr).not.toContain("secrets-local-fallback");
-    expect(res.stderr).not.toContain("Hosted secrets are NOT visible");
+    expect(set.stdout).not.toContain("local vault mode");
   });
 
   it("leaves utility surfaces available without any env", () => {
@@ -139,18 +161,43 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     expect(res.stdout).not.toContain("Vault is empty.");
   });
 
-  it("rejects a retired storage-mode variable instead of treating it as a local selector", () => {
-    // Deployment modes no longer exist (owner directive 2026-07-29). The old
-    // "explicitly selected local store" input (HASNA_SECRETS_STORAGE_MODE=local)
-    // is a hard error that names the variable, never a selector — the local
-    // vault is chosen with HASNA_SECRETS_LOCAL_VAULT=1, not with mode vars.
+  it("treats a retired storage-mode variable as inert, not as a local selector", () => {
+    // Deployment modes no longer exist (owner directive 2026-07-29, reaffirmed
+    // by #1720: route on URL + key only). HASNA_SECRETS_STORAGE_MODE=local is
+    // not a way to reach the local vault and not a mode: with no credential the
+    // run still fails closed, and the way out is still the explicit opt-in.
     const res = runSecrets(["list"], {
       HASNA_SECRETS_STORAGE_MODE: "local",
     });
 
     expect(res.exitCode).not.toBe(0);
-    expect(res.stderr).toContain("HASNA_SECRETS_STORAGE_MODE was removed");
+    expect(res.stderr).toContain("HASNA_SECRETS_LOCAL_VAULT");
     expect(res.stderr).not.toContain("secrets-local-fallback");
+    expect(existsSync(join(testDir, "vault.db"))).toBe(false);
+  });
+
+  it("resolves the credential from a 0600 ~/.hasna/secrets/config/credentials file", () => {
+    // The disk tier, end to end through the CLI: nothing in the environment
+    // carries a key, and the run still reaches the hosted vault (loopback here,
+    // so the request fails loudly at connect time rather than reading local
+    // data). What is proven is the ROUTE — no local db file is created.
+    const hasnaHome = join(testDir, "credential-home");
+    const configDir = join(hasnaHome, "secrets", "config");
+    mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(configDir, "credentials"),
+      'HASNA_SECRETS_API_URL="http://127.0.0.1:1"\nHASNA_SECRETS_API_KEY="hasna_secrets_fixture_key"\n',
+      { mode: 0o600 },
+    );
+
+    // HASNA_CONFIG_HOME is cleared so HASNA_HOME anchors the default layout
+    // (`<HASNA_HOME>/<app>/config/credentials`); a blank override is unset.
+    const res = runSecrets(["list"], { HASNA_HOME: hasnaHome, HASNA_CONFIG_HOME: "" });
+
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr).not.toContain("HASNA_SECRETS_LOCAL_VAULT");
+    expect(res.stdout).not.toContain("Vault is empty.");
+    expect(existsSync(join(testDir, "vault.db"))).toBe(false);
   });
 
   it("emits no fallback event when cloud is configured — the fail-closed path stays loud", () => {

@@ -121,10 +121,13 @@ describe("CLI copy — value-safety invariant", () => {
     const copy = await runCli(["copy", FIXTURE_KEY, FIXTURE_DEST, "--json"]);
     expect(copy.exitCode).toBe(0);
     // A local run is an explicit opt-in now (owner ruling 2026-09-04): there is
-    // no `secrets-local-fallback` event anymore, and nothing else may appear on
-    // stderr — stdout stays the only JSON surface.
+    // no `secrets-local-fallback` event anymore. Exactly ONE line may appear on
+    // stderr — the notice that says the run is local — and stdout stays the only
+    // JSON surface.
     expect(copy.stderr).not.toContain('"event":"secrets-local-fallback"');
-    expect(copy.stderr.trim()).toBe("");
+    const stderrLines = copy.stderr.trim().split("\n").filter((line) => line.trim() !== "");
+    expect(stderrLines.length).toBeLessThanOrEqual(1);
+    for (const line of stderrLines) expect(line).toContain("local vault mode");
     expect(copy.stdout).not.toContain(FIXTURE_VALUE);
     const parsed = JSON.parse(copy.stdout);
     expect(parsed.old_key).toBe(FIXTURE_KEY);

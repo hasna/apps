@@ -109,12 +109,34 @@ function localEnv(vaultDir: string, binDir: string, appendPath = true): Record<s
   const env: Record<string, string> = { ...process.env } as Record<string, string>;
   delete env.HASNA_SECRETS_API_URL;
   delete env.HASNA_SECRETS_API_KEY;
+  delete env.HASNA_SECRETS_API_KEY_OVERRIDE;
+  delete env.HASNA_SECRETS_API_KEY_REF;
+  delete env.HASNA_PROFILE;
   delete env.HASNA_SECRETS_STORAGE_MODE;
   delete env.HASNA_SECRETS_TEST_ISOLATION;
   delete env.OPEN_SECRETS_DB;
   env.HASNA_SECRETS_DB_PATH = join(vaultDir, "vault.db");
+  // The credential chain has two AMBIENT tiers above the environment (#1720):
+  // the macOS Keychain and ~/.hasna/secrets/config/credentials. Deleting
+  // variables does not make them absent on a station that holds a live key, so
+  // both anchors point at this temp vault dir instead.
+  Object.assign(env, ambientTierRedirect(vaultDir));
   env.PATH = appendPath ? `${binDir}:${env.PATH ?? ""}` : binDir;
   return env;
+}
+
+/**
+ * Aim the two ambient credential tiers at a throwaway location: an empty
+ * `~/.hasna` root, and a Keychain ACCOUNT no generic-password item is stored
+ * under (a missing item is an absent tier, so the lookup falls through).
+ */
+function ambientTierRedirect(vaultDir: string): Record<string, string> {
+  const hasnaHome = join(vaultDir, "hasna-home");
+  return {
+    HASNA_HOME: hasnaHome,
+    HASNA_CONFIG_HOME: join(hasnaHome, "config"),
+    HASNA_STATION: `hasna-secrets-ext-test-${process.pid}`,
+  };
 }
 
 class HostClient {
@@ -379,6 +401,7 @@ describe("installed host cold launch (Chrome path resolution)", () => {
     const host = HostClient.direct(installedHost, {
       HOME: homedir(),
       HASNA_SECRETS_LOCAL_VAULT: "1",
+      ...ambientTierRedirect(vaultDir),
     });
     try {
       const res = (await host.send({ verb: "auth-status" })) as any;

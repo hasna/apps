@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import type { HasnaStorageClient } from "../src/store/contracts-client/index.js";
+import type { HasnaStorageClient } from "../src/store/client.js";
 import { ApiStore, getStore, LocalStore, SecretDecryptionError } from "../src/store/index.js";
 import { VersionConflictError, VersionNotFoundError } from "../src/store/types.js";
 
@@ -33,7 +33,8 @@ describe("secrets Store resolver (env flip)", () => {
   it("fails closed with no cloud env and no local opt-in (owner ruling 2026-09-04)", () => {
     expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_API_URL/);
     expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_API_KEY/);
-    // The explicit local opt-in is named in the error, and nothing is opened.
+    // Every tier the resolver consulted is named, and so is the local opt-in.
+    expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/Keychain/);
     expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_LOCAL_VAULT/);
   });
 
@@ -54,13 +55,18 @@ describe("secrets Store resolver (env flip)", () => {
     expect(store.describe().location).toBe("https://secrets.hasna.xyz");
   });
 
-  it("rejects a retired storage-mode variable even with a valid URL + key pair", () => {
+  it("ignores a retired storage-mode variable entirely — the transport is URL + key", () => {
+    // Deployment modes no longer exist (owner directive 2026-07-29, reaffirmed
+    // by the #1720 adoption). A retired `*_MODE` variable is not a selector and
+    // not an error surface of this package any more: it is inert, and routing is
+    // decided by the resolved credential and authority alone.
     const env = {
       HASNA_SECRETS_STORAGE_MODE: "self_hosted",
+      HASNA_SECRETS_MODE: "local",
       HASNA_SECRETS_API_URL: "https://secrets.hasna.xyz",
       HASNA_SECRETS_API_KEY: "hasna_secrets_test_key",
     } as unknown as NodeJS.ProcessEnv;
-    expect(() => getStore(env)).toThrow("HASNA_SECRETS_STORAGE_MODE was removed");
+    expect(getStore(env).mode).toBe("api");
   });
 
   it("infers api from API_URL + API_KEY alone (fleet env-flip)", () => {
