@@ -64,7 +64,6 @@ import {
   cloudResolveTaskRef,
   cloudListProjectResources,
   cloudValidatePriorRegistrationAdoption,
-  requireTodosRemoteAuthorityEnv,
 } from "./cloud-router.js";
 
 const CLOUD_ENV = {
@@ -329,13 +328,16 @@ describe("todos client transport resolver (API pair, no storage modes)", () => {
     }).source).toBe("local-opt-in");
   });
 
-  test("KEY without URL refuses with the missing variable named, without local fallback", () => {
-    expect(() => getTodosCloudClient({
+  test("KEY without URL resolves the fleet gateway — no second variable required", () => {
+    // Before the adoption this was a refusal: both halves of the pair were
+    // mandatory, so every station carried a URL variable whose only correct
+    // value was the one the client can compose itself. A credential is now
+    // sufficient, and `TODOS_URL` — never a Todos authority name — stays inert.
+    const client = getTodosCloudClient({
       HASNA_TODOS_API_KEY: "fixture-key",
       TODOS_URL: "https://todos.md",
-    } as never)).toThrow(
-      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL",
-    );
+    } as never);
+    expect(client!.baseUrl).toBe("https://api.hasna.com/todos/v1");
   });
 
   test("URL without KEY reports the exact missing API key without local fallback", () => {
@@ -2870,50 +2872,42 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
   });
 });
 
-describe("requireTodosRemoteAuthorityEnv", () => {
-  test("no longer stamps any storage-mode variable", () => {
-    const env = requireTodosRemoteAuthorityEnv(CLOUD_ENV);
+describe("the authority env is no longer rewritten before the resolver", () => {
+  // `requireTodosRemoteAuthorityEnv` is GONE. It existed to hand the contracts
+  // resolver a pre-normalised copy of the environment — the `/v1` suffix
+  // stripped off the URL, the API key trimmed — back when this module resolved
+  // the pair itself and then passed the result on. The resolver does all of
+  // that now (hasna/apps#1720), so a second normalisation pass is a second
+  // place the rules can drift. These cases assert the behaviour it used to
+  // provide, through the surface that provides it today.
 
-    expect("HASNA_TODOS_STORAGE_MODE" in env).toBe(false);
-    expect("TODOS_STORAGE_MODE" in env).toBe(false);
-  });
-
-  test("leaves the URL rewrite and the key trim untouched", () => {
-    // The `/v1` suffix must be stripped back off (the status object appends it
-    // and the client re-appends it, so a doubled suffix would point the CLI at
-    // /v1/v1), and the key must still be trimmed.
-    const env = requireTodosRemoteAuthorityEnv({
-      ...CLOUD_ENV,
+  test("a /v1 URL is not versioned twice, and a padded key still authenticates", () => {
+    const status = getTodosRemoteAuthorityConfigStatus({
+      HASNA_TODOS_API_URL: "https://todos.example.com/v1",
       HASNA_TODOS_API_KEY: `  ${CLOUD_ENV.HASNA_TODOS_API_KEY}  `,
     });
-
-    expect(env.HASNA_TODOS_API_URL).toBe("https://todos.example.com");
-    expect(env.HASNA_TODOS_API_URL).not.toMatch(/\/v1$/);
-    expect(env.HASNA_TODOS_API_KEY).toBe(CLOUD_ENV.HASNA_TODOS_API_KEY);
+    expect(status.ok).toBe(true);
+    expect(status.v1_base_url).toBe("https://todos.example.com/v1");
   });
 
-  test("still refuses a half-configured authority", () => {
-    // The no-local-fallback guarantee is unchanged: a partial API pair is a
-    // hard error naming the missing variable.
+  test("a half-configured authority is still a hard error naming the missing variable", () => {
     expect(() =>
-      requireTodosRemoteAuthorityEnv({
-        HASNA_TODOS_API_URL: "https://todos.example.com",
-      }),
+      resolveTodosCliTransport({ HASNA_TODOS_API_URL: "https://todos.example.com" }),
     ).toThrow(/REMOTE_API_KEY_MISSING/);
-    // A retired storage-mode variable is inert: the partial API pair still
-    // refuses, naming the missing variable, never the stale fragment.
+    // A retired storage-mode variable is inert: the missing credential is what
+    // the message names, never the stale fragment.
     expect(() =>
-      requireTodosRemoteAuthorityEnv({
+      resolveTodosCliTransport({
         HASNA_TODOS_STORAGE_MODE: "cloud",
         HASNA_TODOS_API_URL: "https://todos.example.com",
       }),
     ).toThrow(/REMOTE_API_KEY_MISSING/);
   });
 
-  test("passes every other variable through unchanged", () => {
-    const env = requireTodosRemoteAuthorityEnv({ ...CLOUD_ENV, UNRELATED_VAR: "kept" });
-
-    expect(env.UNRELATED_VAR).toBe("kept");
+  test("unrelated variables are neither read nor required", () => {
+    const status = getTodosRemoteAuthorityConfigStatus({ ...CLOUD_ENV, UNRELATED_VAR: "kept" });
+    expect(status.ok).toBe(true);
+    expect(status.v1_base_url).toBe("https://todos.example.com/v1");
   });
 });
 
@@ -2930,8 +2924,15 @@ describe("fail-closed transport resolution (owner ruling 2026-09-04, hasna/apps#
   test("all-unset throws REMOTE_API_CONFIG_MISSING and emits no notice", () => {
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
+      // The message names EVERY tier that was consulted — Keychain item, then
+      // credential file, then environment — because "no credential" without
+      // "and here is where one goes" is what sends an operator to the docs.
+      expect(() => resolveTodosCliTransport({})).toThrow(/REMOTE_API_CONFIG_MISSING/);
+      expect(() => resolveTodosCliTransport({})).toThrow(/hasna\.credentials\.todos\.api-key/);
+      expect(() => resolveTodosCliTransport({})).toThrow(/~\/\.hasna\/todos\/config\/credentials/);
+      expect(() => resolveTodosCliTransport({})).toThrow(/HASNA_TODOS_API_KEY/);
       expect(() => resolveTodosCliTransport({})).toThrow(
-        /REMOTE_API_CONFIG_MISSING: remote Todos storage requires HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY; neither is set, and local SQLite mode requires the explicit opt-in HASNA_TODOS_LOCAL=1 \(alias TODOS_LOCAL=1\) — failing closed instead of serving the local store/,
+        /local SQLite is opt-in only \(HASNA_TODOS_LOCAL=1, alias TODOS_LOCAL=1\) and is disabled by default — failing closed instead of serving the local store/,
       );
       // No notice machinery remains: nothing is written to stderr by resolution.
       expect(errSpy).not.toHaveBeenCalled();
@@ -2944,11 +2945,17 @@ describe("fail-closed transport resolution (owner ruling 2026-09-04, hasna/apps#
     const errSpy = spyOn(console, "error").mockImplementation(() => {});
     try {
       const resolution = resolveTodosCliTransport({ HASNA_TODOS_LOCAL: "1" });
-      expect(resolution).toEqual({ transport: "sqlite", selected: false, source: "local-opt-in" });
+      expect(resolution).toEqual({
+        transport: "sqlite",
+        selected: false,
+        source: "local-opt-in",
+        authority: null,
+      });
       expect(resolveTodosCliTransport({ TODOS_LOCAL: "1" })).toEqual({
         transport: "sqlite",
         selected: false,
         source: "local-opt-in",
+        authority: null,
       });
       expect(errSpy).not.toHaveBeenCalled();
     } finally {
@@ -2975,8 +2982,11 @@ describe("fail-closed transport resolution (owner ruling 2026-09-04, hasna/apps#
     try {
       expect(() => resolveTodosCliTransport({ HASNA_TODOS_API_URL: "https://todos.example.test" }))
         .toThrow("REMOTE_API_KEY_MISSING");
-      expect(() => resolveTodosCliTransport({ HASNA_TODOS_API_KEY: "fixture-key" }))
-        .toThrow("REMOTE_API_URL_MISSING");
+      // A key with no URL is NOT partial any more: the fleet gateway is the
+      // default authority once a credential resolves, so the only genuinely
+      // half-configured shape left is a URL with nothing to authenticate it.
+      expect(resolveTodosCliTransport({ HASNA_TODOS_API_KEY: "fixture-key" }).authority)
+        .toMatchObject({ baseUrl: "https://api.hasna.com/todos/v1", apiUrlSource: "default" });
       expect(errSpy).not.toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();

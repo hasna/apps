@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { TodosClient } from "./client.js";
-import { resetConfig, updateConfig } from "../lib/config.js";
+import { resetConfig } from "../lib/config.js";
 import { getJsonContract, validateJsonContract } from "../json-contracts.js";
 
 const originalHome = process.env["HOME"];
@@ -48,39 +48,99 @@ describe("TodosClient local API config", () => {
     expect(client.apiKey).toBeNull();
   });
 
-  test("ignores hosted remote env vars by default", () => {
-    process.env["TODOS_API_URL"] = "https://todos.example/api/";
-    process.env["TODOS_MODE"] = "remote";
-    process.env["TODOS_API_KEY"] = "env-token";
-
-    const client = new TodosClient();
-
-    expect(client.baseUrl).toBe("http://localhost:19427");
-    expect(client.apiKey).toBe("env-token");
+  test("a resolved credential routes at the configured authority, not localhost", () => {
+    // The behaviour this replaces: the legacy `TODOS_API_URL` was IGNORED and a
+    // legacy key name was the only one read, so an operator with a real hosted
+    // configuration silently got the localhost default with a live credential
+    // attached. Now the @hasna/contracts chain decides both halves together.
+    process.env["HASNA_TODOS_API_URL"] = "https://todos.example";
+    process.env["HASNA_TODOS_API_KEY"] = "env-token";
+    try {
+      const client = new TodosClient();
+      expect(client.baseUrl).toBe("https://todos.example");
+      expect(client.apiKey).toBe("env-token");
+    } finally {
+      delete process.env["HASNA_TODOS_API_URL"];
+      delete process.env["HASNA_TODOS_API_KEY"];
+    }
   });
 
-  test("uses local config apiUrl and apiKey when env is absent", async () => {
-    updateConfig({ apiUrl: "http://127.0.0.1:19427/", apiKey: "config-token" });
+  test("a credential with no authority resolves the fleet gateway", () => {
+    process.env["HASNA_TODOS_API_KEY"] = "env-token";
+    try {
+      const client = new TodosClient();
+      // `/v1` is stripped because this client composes `/api/...` and `/v1/...`
+      // itself; exactly one version segment must survive.
+      expect(client.baseUrl).toBe("https://api.hasna.com/todos");
+      expect(client.apiKey).toBe("env-token");
+    } finally {
+      delete process.env["HASNA_TODOS_API_KEY"];
+    }
+  });
+
+  test("the legacy unprefixed key name still works, as a silent fallback", () => {
+    process.env["TODOS_API_KEY"] = "legacy-token";
+    try {
+      const client = new TodosClient();
+      expect(client.apiKey).toBe("legacy-token");
+    } finally {
+      delete process.env["TODOS_API_KEY"];
+    }
+  });
+
+  test("a credential in ~/.hasna/todos/config/credentials outranks the environment", async () => {
+    // The disk tier the CLI and the SDK now share. It sits ABOVE the process
+    // env deliberately: a rotation written to disk must beat a stale export in
+    // an old shell without waiting for that shell to cycle.
+    const file = join(fakeHome, ".hasna", "todos", "config", "credentials");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "HASNA_TODOS_API_KEY=disk-token\nHASNA_TODOS_API_URL=https://disk.todos.example\n", { mode: 0o600 });
+    chmodSync(file, 0o600);
+    process.env["HASNA_TODOS_API_KEY"] = "env-token";
     let observedHeaders: HeadersInit | undefined;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       observedHeaders = init?.headers;
       return new Response(JSON.stringify([]), { status: 200 });
     }) as typeof fetch;
-
-    const client = new TodosClient();
-    await client.tasks.list();
-
-    expect(client.baseUrl).toBe("http://127.0.0.1:19427");
-    expect(client.apiKey).toBe("config-token");
-    expect((observedHeaders as Record<string, string>)["x-api-key"]).toBe("config-token");
+    try {
+      const client = new TodosClient();
+      await client.tasks.list();
+      expect(client.baseUrl).toBe("https://disk.todos.example");
+      expect(client.apiKey).toBe("disk-token");
+      expect((observedHeaders as Record<string, string>)["x-api-key"]).toBe("disk-token");
+    } finally {
+      delete process.env["HASNA_TODOS_API_KEY"];
+    }
   });
 
-  test("constructor options override local env/config", () => {
-    process.env["TODOS_API_URL"] = "https://env.todos.example";
-    process.env["TODOS_API_KEY"] = "env-token";
-    const client = new TodosClient({ baseUrl: "http://localhost:19428/", apiKey: "option-token" });
-    expect(client.baseUrl).toBe("http://localhost:19428");
-    expect(client.apiKey).toBe("option-token");
+  test("a group-readable credential file is refused, never read around", () => {
+    const file = join(fakeHome, ".hasna", "todos", "config", "credentials");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "HASNA_TODOS_API_KEY=disk-token\n");
+    chmodSync(file, 0o644);
+    // A lower tier IS available here, which is the point: an unsafe file must
+    // not be quietly stepped over in favour of the environment. Falling through
+    // would authenticate as a different principal than the file names, and the
+    // operator would never learn their credential file is unreadable.
+    process.env["HASNA_TODOS_API_KEY"] = "env-token";
+    try {
+      expect(() => new TodosClient()).toThrow(/Refusing unsafe credential/);
+    } finally {
+      delete process.env["HASNA_TODOS_API_KEY"];
+    }
+  });
+
+  test("constructor options are tier 1 and outrank every resolved tier", () => {
+    process.env["HASNA_TODOS_API_URL"] = "https://env.todos.example";
+    process.env["HASNA_TODOS_API_KEY"] = "env-token";
+    try {
+      const client = new TodosClient({ baseUrl: "http://localhost:19428/", apiKey: "option-token" });
+      expect(client.baseUrl).toBe("http://localhost:19428");
+      expect(client.apiKey).toBe("option-token");
+    } finally {
+      delete process.env["HASNA_TODOS_API_URL"];
+      delete process.env["HASNA_TODOS_API_KEY"];
+    }
   });
 
   // M8: a 4-byte JSON body (`true`) must parse to the value, not be dropped.

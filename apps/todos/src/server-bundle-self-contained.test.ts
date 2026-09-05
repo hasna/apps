@@ -261,6 +261,37 @@ describe("server bundle is self-contained in the runner image", () => {
     expect(output).toContain("refusing to start");
   });
 
+/**
+ * The throwing `@hasna/contracts` stub the positive controls plant in the
+ * runner's own node_modules.
+ *
+ * Every name the bundle can import must exist as a NAMED EXPORT here, even
+ * though the module throws on evaluation. A bare `throw` is not enough: an ESM
+ * import of a name the module does not export is a LINK-time SyntaxError that
+ * fires before any module body runs, so the control would fail with
+ * "Export named 'x' not found" instead of the RUNNER_STUB message it asserts —
+ * red for the right reason but unreadable, and indistinguishable from a real
+ * regression. Keep this list in step with what the runtime imports from
+ * @hasna/contracts and its subpaths.
+ */
+const RUNNER_STUB_SOURCE = [
+  'const stub = () => { throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image"); };',
+  "export const verifyApiKey = stub;",
+  "export const ApiKeyStore = class {};",
+  "export const resolveStorageClient = stub;",
+  "export const createHasnaStorageClient = stub;",
+  "export const resolveClientTransport = stub;",
+  "export const createClientTransport = stub;",
+  "export const resolveCredential = stub;",
+  "export const clientTransportEnvKeys = stub;",
+  "export const credentialOverrideEnvKey = stub;",
+  "export const credentialPointerEnvKey = stub;",
+  'export const CREDENTIAL_PROFILE_ENV_KEY = "HASNA_PROFILE";',
+  "export class ClientTransportConfigurationError extends Error {}",
+  "export class CredentialResolutionError extends Error {}",
+  'throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image");',
+].join("\n") + "\n";
+
   test("POSITIVE CONTROL: an externalized bundle cannot boot in that filesystem", () => {
     const outDir = serverFixtureRoot("todos-boot-external-");
     build(outDir, EXTERNALIZE_CONTRACTS);
@@ -287,12 +318,7 @@ describe("server bundle is self-contained in the runner image", () => {
     );
     writeFileSync(
       join(app, "node_modules", "@hasna", "contracts", "index.js"),
-      [
-        'export const verifyApiKey = () => { throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image"); };',
-        'export const ApiKeyStore = class {};',
-        'export const resolveStorageClient = () => { throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image"); };',
-        'throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image");',
-      ].join("\n") + "\n",
+      RUNNER_STUB_SOURCE,
     );
 
     const output = bootStderr(app, cache, home, {}, ["migrate"]);
@@ -334,12 +360,7 @@ describe("server bundle is self-contained in the runner image", () => {
     );
     writeFileSync(
       join(app, "node_modules", "@hasna", "contracts", "index.js"),
-      [
-        'export const verifyApiKey = () => { throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image"); };',
-        'export const ApiKeyStore = class {};',
-        'export const resolveStorageClient = () => { throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image"); };',
-        'throw new Error("RUNNER_STUB: @hasna/contracts must not resolve in the runner image");',
-      ].join("\n") + "\n",
+      RUNNER_STUB_SOURCE,
     );
 
     const output = bootStderr(app, cache, home, { unreachableRegistry: true }, ["migrate"]);

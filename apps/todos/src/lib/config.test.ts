@@ -8,7 +8,7 @@ import {
   getTaskPrefixConfig,
   getAgentPoolForProject,
   getCompletionGuardConfig,
-  getLocalApiConfig,
+  loadConfig,
   normalizeApiUrl,
   resetConfig,
   updateConfig,
@@ -207,49 +207,21 @@ describe("local API config", () => {
     expect(normalizeApiUrl("   ")).toBeNull();
   });
 
-  it("has no local API URL by default", () => {
-    resetConfig();
-    updateConfig({ apiUrl: undefined, apiKey: undefined });
-    const config = getLocalApiConfig({
-      HOME: testHomeDir,
-      PATH: process.env["PATH"] || "",
-    } as NodeJS.ProcessEnv);
-    expect(config.apiUrl).toBeNull();
-  });
-
-  it("uses config apiUrl for the local server without deleting local config", () => {
-    updateConfig({ apiUrl: "http://localhost:19427/", apiKey: "config-key" });
-    const config = getLocalApiConfig({
-      HOME: testHomeDir,
-      PATH: process.env["PATH"] || "",
-    } as NodeJS.ProcessEnv);
-    expect(config.apiUrl).toBe("http://localhost:19427");
-    expect(config.apiKey).toBe("config-key");
-    expect(config.source.apiUrl).toBe("config");
-  });
-
-  it("lets local env vars override config values", () => {
-    const config = getLocalApiConfig({
-      HOME: testHomeDir,
-      PATH: process.env["PATH"] || "",
-      TODOS_URL: "http://127.0.0.1:19427//",
-      TODOS_API_KEY: "env-key",
-    } as NodeJS.ProcessEnv);
-    expect(config.apiUrl).toBe("http://127.0.0.1:19427");
-    expect(config.apiKey).toBe("env-key");
-    expect(config.source.apiUrl).toBe("TODOS_URL");
-    expect(config.source.apiKey).toBe("TODOS_API_KEY");
-  });
-
-  it("ignores hosted remote environment variables", () => {
-    updateConfig({ apiUrl: undefined, apiKey: undefined });
-    const config = getLocalApiConfig({
-      HOME: testHomeDir,
-      PATH: process.env["PATH"] || "",
-      TODOS_API_URL: "https://env.todos.example//",
-      TODOS_MODE: "remote",
-    } as NodeJS.ProcessEnv);
-    expect(config.apiUrl).toBeNull();
-    expect(config.source.apiUrl).toBe("none");
+  it("keeps no credential and no authority in config.json", () => {
+    // `getLocalApiConfig()` is gone with the fields it read (hasna/apps#1720).
+    // It was this package's private credential chain: an `apiKey` stored in
+    // ~/.todos/config.json — a file with ordinary permissions that unrelated
+    // `todos config` writes rewrite wholesale — plus non-canonical env names
+    // that outranked HASNA_TODOS_API_KEY for the SDK. The credential now comes
+    // from the @hasna/contracts chain, whose disk tier refuses a file that is
+    // not owner-only 0400/0600, and the authority from that same chain.
+    //
+    // Asserted structurally rather than by "the function is not exported": a
+    // future refactor could reintroduce the FIELDS without the function and
+    // reopen exactly the same hole.
+    updateConfig({ sync_agents: ["a"] });
+    const stored = loadConfig() as Record<string, unknown>;
+    expect("apiKey" in stored).toBe(false);
+    expect("apiUrl" in stored).toBe(false);
   });
 });

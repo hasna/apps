@@ -11,6 +11,12 @@
  * contract; it has no dependency on a private SaaS API or database connection
  * string, and the client never opens Postgres directly.
  */
+import {
+  clientTransportEnvKeys,
+  resolveClientTransport,
+  type ClientTransportResolution,
+  type ResolveClientTransportOptions,
+} from "@hasna/contracts/client";
 import { resolveStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { randomUUID } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
@@ -59,6 +65,12 @@ import {
   assertTodosPriorRegistrationAdoptionValidationEnvelope,
 } from "../project-registration/adoption-validation.js";
 import { assertTodosProjectResourcePage } from "../project-registration/page-validation.js";
+import {
+  TODOS_LOCAL_OPT_IN_ENV_KEYS,
+  isTodosLocalOptIn,
+  selectsTodosLocalStore,
+  todosResolverEnv,
+} from "../lib/local-opt-in.js";
 
 type Env = Record<string, string | undefined>;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -68,14 +80,60 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * 2026-07-29, knowledge k_ms3e6v41_zbe7m8): the local SQLite file or the hosted
  * HTTP `/v1` authority. The client never opens Postgres directly.
  *
- * The transport is selected by the API env pair and nothing else (owner
- * directive 2026-08-15: storage modes are no longer allowed): both
- * HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY set selects the HTTP authority, an
- * incomplete pair is a hard error, and neither set selects the on-box SQLite
- * file. Any retired storage-mode variable is rejected by the fail-loud ratchet
- * below — never accepted, never mapped, never used as a fallback.
+ * CREDENTIALS ARE NOT RESOLVED HERE ANY MORE. Since the 2026-09-04 adoption
+ * ruling (hasna/apps#1720, and #1668 / #1690 / #1613 / #1599) every hosted
+ * Hasna CLI resolves its credential and its service authority through the ONE
+ * resolver in `@hasna/contracts/client`, so this module contributes no tier of
+ * its own. The chain, resolved fresh on every call:
+ *
+ *   1. an explicit argument      — `credentials.apiKey` / `credentials.profile`
+ *   2. a deliberate env pointer  — `HASNA_TODOS_API_KEY_OVERRIDE`, `HASNA_PROFILE`,
+ *                                  `HASNA_TODOS_API_KEY_REF`
+ *   3. the macOS Keychain        — generic-password `hasna.credentials.todos.api-key`,
+ *                                  account `HASNA_STATION`, else `hostname -s`, else `USER`
+ *   4. disk                      — `~/.hasna/todos/config/credentials`, owner-only
+ *                                  0400/0600 (`HASNA_HOME` / `HASNA_CONFIG_HOME` move the root)
+ *   5. `HASNA_TODOS_API_KEY`     — a legitimate tier below disk, no deprecation notice
+ *
+ * and the authority follows `HASNA_TODOS_API_URL`, then the Keychain `api-url`
+ * item, then the credentials file, and finally defaults to the fleet gateway
+ * `https://api.hasna.com/todos` (the client appends `/v1`). The legacy
+ * unprefixed `TODOS_*` spellings survive only as the resolver's silent alias
+ * fallback for one release; the canonical `HASNA_TODOS_*` names are the
+ * documented ones and are what every message here names.
+ *
+ * Retired locations — `~/.hasna/fleet-env/`, `~/.hasna/cloud/`,
+ * `~/.config/hasna/` — are inputs nowhere, and no `*_MODE` / `*_STORAGE_MODE`
+ * variable is read: the transport is decided by what RESOLVES, never by a mode
+ * word.
+ *
+ * FAIL LOUD. Hosted mode with no credential exits non-zero with one clear line;
+ * there is no SQLite fallback and no local-fallback event. The on-box SQLite
+ * file is reachable ONLY through the deliberate unhosted opt-in
+ * `HASNA_TODOS_LOCAL=1` (alias `TODOS_LOCAL=1`).
+ *
+ * THE OPT-IN IS ANSWERED SECOND, AND THAT ORDER IS LOAD-BEARING IN BOTH
+ * DIRECTIONS. An environment that CONFIGURES a Todos authority or credential
+ * outranks the opt-in: a run with the API pair set goes hosted (and a
+ * half-configured pair fails loudly) rather than quietly serving a different
+ * dataset because a stale `HASNA_TODOS_LOCAL` was lying around. But when the
+ * environment configures nothing, the opt-in is answered WITHOUT calling the
+ * resolver at all — no Keychain item and no credential file is read — and that
+ * is what lets `@hasna/todos/testing` still promise that a scrubbed test
+ * environment physically cannot reach the shared store, now that a credential
+ * can arrive from somewhere an env dictionary cannot blank.
  */
 export type TodosCliTransport = "sqlite" | "http";
+
+export { TODOS_LOCAL_OPT_IN_ENV_KEYS, isTodosLocalOptIn };
+
+/** Tier-1 credential inputs and Keychain-tier controls, forwarded verbatim. */
+export type TodosCredentialOptions = NonNullable<ResolveClientTransportOptions["credentials"]>;
+
+export interface TodosClientResolveOptions {
+  /** `--api-key` / `--profile`, and the injectable `security` runner tests use. */
+  credentials?: TodosCredentialOptions;
+}
 
 const COMPLETION_EVIDENCE_FIELDS = [
   "attachment_ids",
@@ -116,6 +174,12 @@ export interface TodosRemoteAuthorityConfigStatus {
   transport: string;
   api_url_configured: boolean;
   api_key_configured: boolean;
+  /** WHERE the authority came from: an env key NAME, a Keychain item reference, a file PATH, or "default". */
+  api_url_source: string | null;
+  /** WHERE the credential came from: an env key NAME, a Keychain item reference, or a file PATH. Never a value. */
+  api_key_source: string | null;
+  /** Which tier of the @hasna/contracts chain supplied the credential. */
+  api_key_tier: string | null;
   v1_base_url: string | null;
   issues: string[];
   local_fallback: false;
@@ -126,209 +190,183 @@ export interface TodosCliTransportResolution {
   transport: TodosCliTransport;
   selected: boolean;
   /**
-   * What selected the transport: the http pair, or the explicit local opt-in
-   * (`HASNA_TODOS_LOCAL=1` / `TODOS_LOCAL=1`). A resolution with neither is a
-   * throw — the client never defaults to the on-box SQLite file.
+   * What selected the transport: `"local-opt-in"` for the deliberate unhosted
+   * store, else `"<api key source>+<api url source>"` as the contracts resolver
+   * reported them (env key NAMES, a Keychain item reference, a file path, or
+   * `"default"` for the fleet gateway). Never a credential value.
    */
-  source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY" | "local-opt-in";
+  source: string;
+  /** The contracts resolution for the http transport; null for sqlite. It never carries the key. */
+  authority: ClientTransportResolution | null;
 }
 
 /**
- * Resolve the CLI transport from the environment. Retired storage-mode
- * variables are inert — never read, never mapped, never a fallback — and the
- * transport is selected by the API env pair alone: URL set without KEY (or KEY
- * set without URL) is a hard error naming the missing variable. When NEITHER
- * is present the client fails closed (owner ruling 2026-09-04, hasna/apps#1613):
- * local SQLite is served only under the explicit opt-in `HASNA_TODOS_LOCAL=1`
- * (alias `TODOS_LOCAL=1`); without it this throws instead of silently serving
- * the on-box store at rc 0 (the false-green incident 715712 path — the old
- * `todos-local-fallback` stderr notice has been removed, not replaced).
+ * The gateway addresses every app as `https://api.hasna.com/<app>/v1`, and the
+ * app origins answer at `<origin>/v1`. Those are the only two shapes a Todos
+ * authority can have, so a resolved `/v1` base whose prefix is neither empty
+ * nor a single non-reserved app segment is a misconfiguration — `/api/v1`,
+ * `…/todos/v1/v1` and `…/v1/tasks` all reach a route that does not exist and
+ * would otherwise surface as an opaque 404 on the first real request.
+ *
+ * `@hasna/contracts` validates the scheme, authority, userinfo, query, fragment
+ * and loopback-http rules; this is the one Todos-specific rule left, and it is
+ * applied to the RESOLVED base so it covers every tier, not just the env one.
  */
-export function resolveTodosCliTransport(env: Env = process.env as Env): TodosCliTransportResolution {
-  const urlValue = env.HASNA_TODOS_API_URL?.trim();
-  const keyValue = env.HASNA_TODOS_API_KEY?.trim();
-  if (urlValue && keyValue) {
-    return {
-      transport: "http",
-      selected: true,
-      source: "HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY",
-    };
-  }
-  if (urlValue) {
+function assertTodosAuthorityShape(v1BaseUrl: string): void {
+  const url = new URL(v1BaseUrl);
+  const segments = url.pathname.split("/").filter(Boolean);
+  const prefix = segments.slice(0, -1); // the trailing "v1" is guaranteed by toV1BaseUrl
+  const reserved = new Set(["api", "v1"]);
+  const shapeOk =
+    prefix.length === 0 || (prefix.length === 1 && !reserved.has(prefix[0]!.toLowerCase()));
+  if (!shapeOk) {
     throw new Error(
-      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY; local SQLite is opt-in only (HASNA_TODOS_LOCAL=1) and is disabled by default — failing closed",
-    );
-  }
-  if (keyValue) {
-    throw new Error(
-      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite is opt-in only (HASNA_TODOS_LOCAL=1) and is disabled by default — failing closed",
-    );
-  }
-  const localOptIn =
-    (env.HASNA_TODOS_LOCAL ?? "").trim() !== "" || (env.TODOS_LOCAL ?? "").trim() !== "";
-  if (localOptIn) {
-    return {
-      transport: "sqlite",
-      selected: false,
-      source: "local-opt-in",
-    };
-  }
-  throw new Error(
-    "REMOTE_API_CONFIG_MISSING: remote Todos storage requires HASNA_TODOS_API_URL and HASNA_TODOS_API_KEY; neither is set, and local SQLite mode requires the explicit opt-in HASNA_TODOS_LOCAL=1 (alias TODOS_LOCAL=1) — failing closed instead of serving the local store",
-  );
-}
-
-function requestedTransport(env: Env): TodosCliTransport {
-  return resolveTodosCliTransport(env).transport;
-}
-
-function normalizeRemoteAuthorityUrl(value: string | undefined): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) return null;
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an absolute http(s) URL; local SQLite fallback is disabled",
-    );
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an absolute http(s) URL; local SQLite fallback is disabled",
-    );
-  }
-  if (url.username || url.password) {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must not contain userinfo; local SQLite fallback is disabled",
-    );
-  }
-  if (url.search || url.hash) {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must not contain a query or fragment; local SQLite fallback is disabled",
-    );
-  }
-  const path = url.pathname.replace(/\/+$/, "");
-  // The fleet gateway addresses every app as https://api.hasna.com/<app>/v1
-  // (the gateway worker strips the /<app> segment and forwards to the app
-  // origin), and every other fleet CLI accepts the bare gateway URL
-  // https://api.hasna.com/<app> and appends /v1 itself. Accept the authority
-  // root, the exact /v1 root, the bare <app> root, and <app>/v1 — and keep
-  // rejecting the generic /api/v1 shape this error message has always named,
-  // any deeper path the gateway cannot address, and any path that would
-  // double the /v1 suffix.
-  const segments = path.split("/").filter(Boolean);
-  const reservedGatewaySegments = new Set(["api", "v1"]);
-  const isRoot = path === "";
-  const isV1Root = segments.length === 1 && segments[0] === "v1";
-  const isAppRoot = segments.length === 1 && !reservedGatewaySegments.has(segments[0]!.toLowerCase());
-  const isAppV1Root =
-    segments.length === 2 && segments[1] === "v1" && !reservedGatewaySegments.has(segments[0]!.toLowerCase());
-  if (!isRoot && !isV1Root && !isAppRoot && !isAppV1Root) {
-    throw new Error(
-      "REMOTE_API_URL_INVALID: HASNA_TODOS_API_URL must be an authority root, /v1, or <app>[/v1], not /api/v1 or another path; " +
+      "REMOTE_API_URL_INVALID: the resolved Todos authority " +
+        `${v1BaseUrl} must be an authority root, /v1, or <app>[/v1], not /api/v1 or another path; ` +
         "local SQLite fallback is disabled",
     );
   }
-  const hostname = url.hostname.toLowerCase();
-  const loopback = hostname === "localhost" || hostname === "::1" || hostname === "[::1]" || /^127(?:\.\d{1,3}){3}$/.test(hostname);
-  if (url.protocol === "http:" && !loopback) {
+}
+
+/**
+ * Re-throw a `@hasna/contracts` resolution failure as the Todos CLI's own
+ * fail-closed diagnostic, preserving the resolver's message (which names every
+ * tier it consulted) behind the stable `REMOTE_API_*` code callers match on.
+ * Nothing here ever returns a client or a local store: every arm throws.
+ */
+function rethrowAuthorityFailure(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  const name = error instanceof Error ? error.name : "";
+  if (name === "CredentialResolutionError" || name === "CredentialFileUnsafeError") {
     throw new Error(
-      "REMOTE_API_URL_INVALID: plaintext HTTP is allowed only for loopback Todos authorities; local SQLite fallback is disabled",
+      `REMOTE_API_CREDENTIAL_INVALID: ${message} There is no local fallback: ` +
+        "local SQLite is opt-in only (HASNA_TODOS_LOCAL=1) and is disabled by default — failing closed",
+      { cause: error },
     );
   }
-  // Return the canonical authority root WITHOUT the /v1 suffix: the status
-  // object appends `/v1` and the contracts client re-appends it, so a gateway
-  // path prefix must survive normalization or the requests would lose it
-  // (https://api.hasna.com/todos/v1 normalizes to https://api.hasna.com/todos,
-  // and then back to …/todos/v1 downstream — never to …/v1).
-  const rootPath = isV1Root || isAppV1Root ? path.slice(0, -"/v1".length) : path;
-  return rootPath ? `${url.origin}${rootPath}` : url.origin;
+  if (/no API key could be resolved/.test(message)) {
+    if (/is not set and no API key could be resolved/.test(message)) {
+      throw new Error(
+        "REMOTE_API_CONFIG_MISSING: no Todos credential resolved from the Keychain item " +
+          `hasna.credentials.todos.api-key, ~/.hasna/todos/config/credentials, or HASNA_TODOS_API_KEY. ${message} ` +
+          "There is no local fallback: local SQLite is opt-in only (HASNA_TODOS_LOCAL=1, alias TODOS_LOCAL=1) " +
+          "and is disabled by default — failing closed instead of serving the local store",
+        { cause: error },
+      );
+    }
+    throw new Error(
+      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY, the Keychain item " +
+        `hasna.credentials.todos.api-key, or ~/.hasna/todos/config/credentials. ${message} ` +
+        "There is no local fallback: local SQLite is opt-in only (HASNA_TODOS_LOCAL=1) and is disabled by default — failing closed",
+      { cause: error },
+    );
+  }
+  throw new Error(
+    `REMOTE_API_URL_INVALID: ${message} local SQLite fallback is disabled`,
+    { cause: error },
+  );
+}
+
+/**
+ * Resolve the CLI transport. The deliberate unhosted opt-in is answered first
+ * and WITHOUT consulting the resolver; otherwise `@hasna/contracts` resolves
+ * the credential and the authority, and any failure to do so is a throw — the
+ * client never defaults to the on-box SQLite file (owner ruling 2026-09-04,
+ * hasna/apps#1613: the old `todos-local-fallback` stderr notice and the silent
+ * rc-0 local read it papered over are both gone, not replaced).
+ */
+export function resolveTodosCliTransport(
+  env: Env = process.env as Env,
+  options: TodosClientResolveOptions = {},
+): TodosCliTransportResolution {
+  if (selectsTodosLocalStore(env)) {
+    return { transport: "sqlite", selected: false, source: "local-opt-in", authority: null };
+  }
+  let authority: ClientTransportResolution;
+  try {
+    authority = resolveClientTransport(
+      "todos",
+      todosResolverEnv(env),
+      options.credentials ? { credentials: options.credentials } : {},
+    );
+  } catch (error) {
+    rethrowAuthorityFailure(error);
+  }
+  assertTodosAuthorityShape(authority.baseUrl);
+  return {
+    transport: "http",
+    selected: true,
+    source: `${authority.apiKeySource ?? authority.apiKeyTier}+${authority.apiUrlSource ?? "default"}`,
+    authority,
+  };
+}
+
+function requestedTransport(env: Env, options: TodosClientResolveOptions): TodosCliTransport {
+  return resolveTodosCliTransport(env, options).transport;
 }
 
 export function getTodosRemoteAuthorityConfigStatus(
   env: Env = process.env as Env,
+  options: TodosClientResolveOptions = {},
 ): TodosRemoteAuthorityConfigStatus {
   let resolution: TodosCliTransportResolution;
   try {
-    resolution = resolveTodosCliTransport(env);
+    resolution = resolveTodosCliTransport(env, options);
   } catch (error) {
     const issue = error instanceof Error ? error.message : String(error);
+    // A refused configuration still has to SAY WHICH HALF it has. The flags are
+    // read from the environment alone here, deliberately: the resolver already
+    // refused, so re-running its Keychain and filesystem tiers to decorate a
+    // failure would spend the machine's credential stores on a diagnostic — and
+    // the message already names every tier it consulted.
+    const envKeys = clientTransportEnvKeys("todos");
+    const declared = (keys: readonly string[]) => keys.some((key) => (env[key] ?? "").trim() !== "");
     return {
       selected: true,
       ok: false,
       transport: "invalid",
-      api_url_configured: Boolean(env.HASNA_TODOS_API_URL?.trim()),
-      api_key_configured: Boolean(env.HASNA_TODOS_API_KEY?.trim()),
+      api_url_configured: declared(envKeys.apiUrlKeys),
+      api_key_configured: declared(envKeys.apiKeyKeys),
+      api_url_source: null,
+      api_key_source: null,
+      api_key_tier: null,
       v1_base_url: null,
       issues: [issue],
       local_fallback: false,
     };
   }
-  const { transport, selected } = resolution;
-  if (!selected) {
+  if (!resolution.selected) {
     return {
       selected: false,
       ok: true,
-      transport,
+      transport: resolution.transport,
       api_url_configured: false,
       api_key_configured: false,
+      api_url_source: null,
+      api_key_source: null,
+      api_key_tier: null,
       v1_base_url: null,
       issues: [],
       local_fallback: false,
     };
   }
 
-  const issues: string[] = [];
-  let apiUrl: string | null = null;
-  try {
-    apiUrl = normalizeRemoteAuthorityUrl(env.HASNA_TODOS_API_URL);
-  } catch (error) {
-    issues.push(error instanceof Error ? error.message : String(error));
-  }
-  const apiKeyConfigured = Boolean(env.HASNA_TODOS_API_KEY?.trim());
-  if (!apiUrl && issues.length === 0) {
-    issues.push(
-      "REMOTE_API_URL_MISSING: remote Todos storage requires HASNA_TODOS_API_URL; local SQLite fallback is disabled",
-    );
-  }
-  if (!apiKeyConfigured) {
-    issues.push(
-      "REMOTE_API_KEY_MISSING: remote Todos storage requires HASNA_TODOS_API_KEY; local SQLite fallback is disabled",
-    );
-  }
-
+  const authority = resolution.authority!;
   return {
     selected: true,
-    ok: issues.length === 0,
-    transport,
-    api_url_configured: apiUrl !== null,
-    api_key_configured: apiKeyConfigured,
-    v1_base_url: apiUrl ? `${apiUrl}/v1` : null,
-    issues,
+    ok: true,
+    transport: resolution.transport,
+    // The default fleet gateway is a resolved authority, not a configured one:
+    // an operator reading this line must be able to tell "I pointed this at a
+    // URL" apart from "the gateway default applied".
+    api_url_configured: authority.apiUrlSource !== null && authority.apiUrlSource !== "default",
+    api_key_configured: authority.apiKeyPresent,
+    api_url_source: authority.apiUrlSource,
+    api_key_source: authority.apiKeySource,
+    api_key_tier: authority.apiKeyTier,
+    v1_base_url: authority.baseUrl,
+    issues: [],
     local_fallback: false,
-  };
-}
-
-/**
- * The env handed to the contracts resolver once the authority is known good.
- *
- * The storage-mode stamp is GONE (owner directive 2026-08-15): the contracts
- * resolver selects the HTTP transport from the API URL + API key pair alone,
- * exactly like the other fleet CLIs. This function only rewrites the URL to the
- * `/v1`-less authority root (the status object appends `/v1`; the client
- * re-appends it, so it must not be doubled) and trims the API key.
- *
- * Exported so the derivation is directly testable, rather than only
- * observable through a constructed HTTP client.
- */
-export function requireTodosRemoteAuthorityEnv(env: Env): Env {
-  const status = getTodosRemoteAuthorityConfigStatus(env);
-  if (!status.ok) throw new Error(status.issues[0]);
-  return {
-    ...env,
-    HASNA_TODOS_API_URL: status.v1_base_url!.replace(/\/v1$/, ""),
-    HASNA_TODOS_API_KEY: env.HASNA_TODOS_API_KEY!.trim(),
   };
 }
 
@@ -522,28 +560,31 @@ async function requiredRemoteRoute<T>(
 }
 
 /**
- * Resolve the Todos HTTP storage client from the environment. Returns a ready
- * client when the API URL + API key pair selects the HTTP transport, or `null`
- * for the on-box SQLite store (reachable only under the explicit local opt-in).
- * A selected pair with an invalid URL always throws; a partial pair (URL
- * without KEY or KEY without URL) throws; and a fully absent pair WITHOUT the
- * local opt-in throws (fail closed, hasna/apps#1613) instead of returning null
- * for a silent local default. Callers that are local-first by design must wrap
- * this in a try/catch or pre-check the opt-in.
+ * Resolve the Todos HTTP storage client. Returns a ready client when the
+ * @hasna/contracts chain resolves a credential (and, with it, an authority —
+ * the fleet gateway when nothing configures one), or `null` for the on-box
+ * SQLite store, which is reachable ONLY under the deliberate unhosted opt-in.
+ * Every other outcome THROWS: no credential, an unusable credential file, or
+ * an authority the Todos routes cannot live under. There is no silent local
+ * default and no local-fallback event (fail closed, hasna/apps#1613). Callers
+ * that are local-first by design must pre-check {@link isTodosLocalOptIn} or
+ * wrap this in a try/catch.
  */
 export function getTodosCloudClient(
   env: Env = process.env as Env,
   requestTimeoutMs: number = REMOTE_REQUEST_TIMEOUT_MS,
+  options: TodosClientResolveOptions = {},
 ): HasnaStorageClient | null {
-  // The selector is the API env pair: both set selects the HTTP authority, an
-  // incomplete pair is an error, and an absent pair serves local SQLite only
-  // under the explicit opt-in — otherwise it throws.
-  if (requestedTransport(env) !== "http") return null;
-  const resolved = resolveStorageClient("todos", requireTodosRemoteAuthorityEnv(env), {
+  // Resolving first is what makes the throw arms reachable: the unhosted
+  // opt-in is the only path that returns null, and anything the contracts
+  // chain refuses has already thrown by the time we get here.
+  if (requestedTransport(env, options) !== "http") return null;
+  const resolved = resolveStorageClient("todos", todosResolverEnv(env), {
     fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
     // Align the transport's own per-request timer with the CLI's bounded
     // request budget so no request can outlive the deadline (task 9b050845).
     timeoutMs: requestTimeoutMs,
+    ...(options.credentials ? { credentials: options.credentials } : {}),
   });
   // `cloud-http` is the pinned @hasna/contracts generation's transport name;
   // `http` is the post-removal generation's. Both mean "authenticated /v1".

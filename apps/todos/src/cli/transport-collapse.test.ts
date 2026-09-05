@@ -1,13 +1,18 @@
 /**
- * Client transport resolution after the deployment-mode removal and the
- * 2026-09-04 fail-closed ruling (hasna/apps#1613): the OSS client seam has
- * exactly TWO implementations — a local SQLite file or the hosted HTTP `/v1`
- * authority. The transport is selected by the API env pair
- * (HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY) and the explicit local opt-in
- * (HASNA_TODOS_LOCAL=1 / TODOS_LOCAL=1) and nothing else: an incomplete API
- * pair refuses, and a fully absent pair WITHOUT the opt-in FAILS CLOSED
- * instead of silently serving the on-box store. Retired storage-mode
- * variables are inert — never read, never a fallback.
+ * Client transport resolution after the deployment-mode removal, the 2026-09-04
+ * fail-closed ruling (hasna/apps#1613) and the @hasna/contracts credential
+ * adoption (hasna/apps#1720): the OSS client seam has exactly TWO
+ * implementations — a local SQLite file or the hosted HTTP `/v1` authority.
+ *
+ * These cases hand the resolver a CALLER-BUILT env dictionary, which is the
+ * hermetic seam: the Keychain tier is ambient (it runs only for the live
+ * `process.env`, or when a runner is injected) and the disk tier is anchored on
+ * `HOME`, which these dictionaries do not set. So what is under test here is
+ * exactly the env-tier behaviour plus the fleet-gateway default; the Keychain
+ * and credentials-file tiers have their own suite in
+ * `credential-resolution.test.ts`.
+ *
+ * Retired storage-mode variables are inert — never read, never a fallback.
  */
 import { describe, expect, test } from "bun:test";
 import { getTodosRemoteAuthorityConfigStatus, resolveTodosCliTransport } from "./cloud-router.js";
@@ -62,7 +67,16 @@ describe("client transport resolution (sqlite|http, no storage modes)", () => {
     const resolution = resolveTodosCliTransport(HTTP_ENV);
     expect(resolution.transport).toBe("http");
     expect(resolution.selected).toBe(true);
-    expect(resolution.source).toBe("HASNA_TODOS_API_URL+HASNA_TODOS_API_KEY");
+    // `source` now reports what the contracts resolver actually used — the
+    // credential source then the authority source — so an operator reading a
+    // status line can tell an env key from a Keychain item from a file path.
+    expect(resolution.source).toBe("HASNA_TODOS_API_KEY+HASNA_TODOS_API_URL");
+    expect(resolution.authority).toMatchObject({
+      baseUrl: "https://todos.example.test/v1",
+      apiKeyTier: "env",
+      apiKeySource: "HASNA_TODOS_API_KEY",
+      apiUrlSource: "HASNA_TODOS_API_URL",
+    });
   });
 
   test("URL without KEY is a hard error — never sqlite fallback", () => {
@@ -72,32 +86,49 @@ describe("client transport resolution (sqlite|http, no storage modes)", () => {
     expect(() =>
       resolveTodosCliTransport({ HASNA_TODOS_API_URL: "https://todos.example.test" }),
     ).toThrow(/local SQLite is opt-in only/);
+    // The diagnostic names every tier that was consulted, not just the env one,
+    // so an operator is told WHERE to put the key rather than only that it is
+    // missing.
+    expect(() =>
+      resolveTodosCliTransport({ HASNA_TODOS_API_URL: "https://todos.example.test" }),
+    ).toThrow(/hasna\.credentials\.todos\.api-key/);
+    expect(() =>
+      resolveTodosCliTransport({ HASNA_TODOS_API_URL: "https://todos.example.test" }),
+    ).toThrow(/~\/\.hasna\/todos\/config\/credentials/);
   });
 
-  test("KEY without URL is a hard error — never sqlite fallback", () => {
-    expect(() =>
-      resolveTodosCliTransport({ HASNA_TODOS_API_KEY: "fixture-key" }),
-    ).toThrow("REMOTE_API_URL_MISSING");
-    expect(() =>
-      resolveTodosCliTransport({ HASNA_TODOS_API_KEY: "fixture-key" }),
-    ).toThrow(/local SQLite is opt-in only/);
+  test("a KEY with no URL resolves the fleet gateway — a URL is no longer required", () => {
+    // The 2026-09-04 ruling gave every hosted app a DEFAULT authority: a
+    // credential is sufficient, and https://api.hasna.com/todos applies. The
+    // old REMOTE_API_URL_MISSING arm for this shape is gone deliberately —
+    // requiring the URL is what made every station carry a second variable
+    // whose only correct value was the one the client could compose itself.
+    const resolution = resolveTodosCliTransport({ HASNA_TODOS_API_KEY: "fixture-key" });
+    expect(resolution.transport).toBe("http");
+    expect(resolution.authority).toMatchObject({
+      baseUrl: "https://api.hasna.com/todos/v1",
+      apiUrlSource: "default",
+    });
   });
 
-  test("a partial API pair fails closed even when the local opt-in is set", () => {
-    // The pair, once partially present, is authoritative: a dangling URL or key
-    // names the missing sibling rather than quietly degrading to local SQLite.
+  test("a configured environment outranks the local opt-in, and a partial one still refuses", () => {
+    // The opt-in answers "the environment configured nothing, and I want the
+    // on-box store". It does not mean "ignore the authority I just configured":
+    // a dangling URL names the missing credential rather than quietly degrading
+    // to local SQLite, and a complete configuration routes to the authority.
     expect(() =>
       resolveTodosCliTransport({
         HASNA_TODOS_API_URL: "https://todos.example.test",
         HASNA_TODOS_LOCAL: "1",
       }),
     ).toThrow("REMOTE_API_KEY_MISSING");
-    expect(() =>
-      resolveTodosCliTransport({
-        HASNA_TODOS_API_KEY: "fixture-key",
-        TODOS_LOCAL: "1",
-      }),
-    ).toThrow("REMOTE_API_URL_MISSING");
+    expect(
+      resolveTodosCliTransport({ ...HTTP_ENV, TODOS_LOCAL: "1" }).transport,
+    ).toBe("http");
+    // A key alone is a complete configuration now, so it too outranks the opt-in.
+    expect(
+      resolveTodosCliTransport({ HASNA_TODOS_API_KEY: "fixture-key", TODOS_LOCAL: "1" }).transport,
+    ).toBe("http");
   });
 
   test.each([
@@ -138,9 +169,15 @@ describe("client transport resolution (sqlite|http, no storage modes)", () => {
     const missingKey = getTodosRemoteAuthorityConfigStatus({ HASNA_TODOS_API_URL: "https://todos.example.test" });
     expect(missingKey.ok).toBe(false);
     expect(missingKey.issues.join(" ")).toContain("REMOTE_API_KEY_MISSING");
-    const missingUrl = getTodosRemoteAuthorityConfigStatus({ HASNA_TODOS_API_KEY: "fixture-key" });
-    expect(missingUrl.ok).toBe(false);
-    expect(missingUrl.issues.join(" ")).toContain("REMOTE_API_URL_MISSING");
+    // A key with no URL is NOT a refusal any more: the fleet gateway is the
+    // default authority, and the status says which source decided.
+    const gatewayDefault = getTodosRemoteAuthorityConfigStatus({ HASNA_TODOS_API_KEY: "fixture-key" });
+    expect(gatewayDefault.ok).toBe(true);
+    expect(gatewayDefault.v1_base_url).toBe("https://api.hasna.com/todos/v1");
+    expect(gatewayDefault.api_url_source).toBe("default");
+    expect(gatewayDefault.api_url_configured).toBe(false);
+    expect(gatewayDefault.api_key_source).toBe("HASNA_TODOS_API_KEY");
+    expect(gatewayDefault.api_key_tier).toBe("env");
   });
 
   test("authority status names the fail-closed refusal when the pair is absent without the opt-in", () => {

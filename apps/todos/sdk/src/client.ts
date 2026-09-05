@@ -4,6 +4,16 @@ import type {
   TodosClientOptions,
 } from "./types.js";
 
+/** First non-blank value among the given env names, canonical name first. */
+function env(...names: string[]): string | undefined {
+  if (typeof process === "undefined") return undefined;
+  for (const name of names) {
+    const value = process.env[name];
+    if (value !== undefined && value.trim() !== "") return value.trim();
+  }
+  return undefined;
+}
+
 /**
  * Universal client for @hasna/todos REST API.
  * Works with any AI agent framework — Claude, Codex, Gemini, or custom.
@@ -16,11 +26,22 @@ export class TodosClient {
   private apiKey: string | null = null;
 
   constructor(options: TodosClientOptions = {}) {
-    const localEnvUrl = typeof process !== "undefined" ? process.env["TODOS_URL"] : undefined;
-    this.baseUrl = (options.baseUrl || localEnvUrl || "http://localhost:19427").replace(/\/+$/, "");
+    // The CANONICAL fleet names win; `TODOS_URL` / `TODOS_API_KEY` remain a
+    // silent, documented fallback for one release (2026-09-04 ruling,
+    // hasna/apps#1720). Before this, the legacy names were the ONLY names here,
+    // so an operator who exported the canonical `HASNA_TODOS_API_URL` /
+    // `HASNA_TODOS_API_KEY` pair — the pair every other surface documents —
+    // silently got the localhost default and no credential.
+    //
+    // This package is deliberately dependency-free (it ships to browsers and to
+    // non-bun runtimes), so it reads the names directly rather than importing
+    // the @hasna/contracts chain. It is therefore the ENV TIER ONLY: the
+    // Keychain and `~/.hasna/todos/config/credentials` tiers live in
+    // `@hasna/todos/sdk`, which is the surface to use on a workstation.
+    this.baseUrl = (options.baseUrl || env("HASNA_TODOS_API_URL", "TODOS_API_URL", "TODOS_URL")
+      || "http://localhost:19427").replace(/\/+$/, "");
     if (options.agentName) this.agentName = options.agentName;
-    const envApiKey = typeof process !== "undefined" ? process.env["TODOS_API_KEY"] : undefined;
-    this.apiKey = options.apiKey || envApiKey || null;
+    this.apiKey = options.apiKey || env("HASNA_TODOS_API_KEY", "TODOS_API_KEY") || null;
   }
 
   // ── Agent Identity ──────────────────────────────────────────────────────

@@ -1824,7 +1824,6 @@ export {
   loadConfig,
   updateConfig,
   getCompletionGuardConfig,
-  getLocalApiConfig,
   normalizeApiUrl,
 } from "./lib/config.js";
 export type {
@@ -1832,7 +1831,6 @@ export type {
   AgentConfig,
   AgentRunAdapterConfig,
   CompletionGuardConfig,
-  LocalApiConfig,
   LocalEncryptionAlgorithm,
   LocalEncryptionKdf,
   LocalEncryptionProfileConfig,

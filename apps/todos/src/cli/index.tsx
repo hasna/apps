@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { getPackageVersion } from "../lib/package-version.js";
 import {
+  announceTodosCliLocalMode,
   applyTodosCliAuthorityEnvironment,
   applyTodosCliHelpVisibility,
   getUnavailableTodosCliRemoteMetadataCommand,
@@ -200,6 +201,9 @@ let authority: TodosCliAuthorityInitialization;
 try {
   authority = initializeTodosCliAuthority();
   applyTodosCliAuthorityEnvironment(authority);
+  // Say it out loud: a local run must never be mistakable for a hosted one with
+  // an empty store (hasna/apps#1720).
+  announceTodosCliLocalMode(authority);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);

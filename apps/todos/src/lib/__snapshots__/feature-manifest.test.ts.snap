@@ -123,7 +123,9 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
     "TODOS_DB_PATH",
     "TODOS_AUTO_PROJECT",
     "TODOS_PROFILE",
-    "TODOS_URL",
+    "HASNA_TODOS_API_URL",
+    "HASNA_TODOS_API_KEY",
+    "HASNA_TODOS_LOCAL",
     "TODOS_MACHINE_ID",
     "TODOS_ENCRYPTION_KEY",
     "JSON_OUTPUT",
@@ -166,7 +168,7 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
   "schema_version": "todos.feature_manifest.v1",
   "summary": {
     "cli_command_count": 162,
-    "env_var_count": 7,
+    "env_var_count": 9,
     "feature_area_count": 6,
     "mcp_tool_count": 320,
     "profile_count": 6,
@@ -185,7 +187,7 @@ Summary:
   CLI commands:  162
   MCP tools:     320 (8 in active profile)
   Profiles:      6
-  Env vars:      7
+  Env vars:      9
 
 Feature areas:
   - Task workflow: Create, claim, start, complete, and fail tasks with agent coordination.

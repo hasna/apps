@@ -11,6 +11,67 @@ Universal task management for AI coding agents - CLI + MCP server + interactive 
 bun install -g @hasna/todos
 ```
 
+## Credentials and Service Authority
+
+The CLI, the MCP server and the `./sdk` client all resolve their credential
+through one resolver — the client chain in `@hasna/contracts` — so there is
+exactly one place to put a key and exactly one precedence to learn. Resolution
+happens **on every call**, never once at process start, so rotating a key heals
+a long-running shell or MCP server without restarting it.
+
+**Credential, highest to lowest:**
+
+| # | Tier | Where |
+| --- | --- | --- |
+| 1 | explicit argument | `--api-key` / `--profile` (and `apiKey` on `new TodosClient({...})`) |
+| 2 | deliberate env pointer | `HASNA_TODOS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_TODOS_API_KEY_REF` (a secrets-vault item key, never a value) |
+| 3 | macOS Keychain | generic password `hasna.credentials.todos.api-key`, account `HASNA_STATION` → `hostname -s` → `USER` |
+| 4 | disk | `~/.hasna/todos/config/credentials`, owner-only `0400`/`0600` |
+| 5 | environment | `HASNA_TODOS_API_KEY` |
+
+Tiers 1 and 2 are *deliberate*: if one is set and cannot be honoured, the run
+fails — it never quietly authenticates as a different principal. Tier 5 is a
+first-class tier, not a deprecated one (a wrapper that injects the key per
+process is correct), and it sits **below** disk so a rotated on-disk key beats a
+stale `export` in an old shell. Nothing is read from `~/.hasna/fleet-env`,
+`~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME`, or `~/.todos/config.json`.
+
+**Service authority**, same shape:
+
+`HASNA_TODOS_API_URL` → the Keychain `hasna.credentials.todos.api-url` item →
+`~/.hasna/todos/config/credentials` → the fleet gateway
+`https://api.hasna.com/todos`. Configure the URL only to point somewhere else;
+the client appends `/v1` itself, and sources that disagree are refused rather
+than silently preferred. `HASNA_HOME` and `HASNA_CONFIG_HOME` move the disk
+root; the older unprefixed spellings of these two variables (without the
+`HASNA_` prefix) still work as a silent fallback for one release, but the
+`HASNA_TODOS_*` names are canonical and are what every diagnostic names.
+
+The credentials file is a plain env file, and its permissions are enforced — a
+group- or world-readable one is refused rather than read:
+
+```bash
+install -m 700 -d ~/.hasna/todos/config
+printf 'HASNA_TODOS_API_KEY=%s\n' "$KEY" > ~/.hasna/todos/config/credentials
+chmod 600 ~/.hasna/todos/config/credentials
+```
+
+**Hosted mode fails closed.** With no credential the CLI exits non-zero and says
+which tiers it consulted. It never falls back to the local SQLite store, because
+serving local rows while authentication is broken prints healthy output for a
+broken system.
+
+**Local mode is deliberate, and it says so.** `@hasna/todos` is usable entirely
+offline against an on-box SQLite store — set `HASNA_TODOS_LOCAL=1` (alias
+`TODOS_LOCAL=1`). It is honoured only when the environment configures no
+authority and no credential, it is answered *before* the resolver runs (so no
+Keychain item and no credential file is read), and every local run prints one
+line on stderr saying it is local.
+
+```bash
+todos storage status --json    # which tier supplied the key, and which URL applied
+```
+
 ## CLI Usage
 
 ```bash
@@ -1521,8 +1582,12 @@ off-box. `todos-mcp --http` sets it implicitly because that transport is pinned 
 `127.0.0.1`; set `TODOS_API_KEY` (and send it from your MCP client) to require a
 credential there too.
 
-Pass the generated key from your app as `x-api-key` or set `TODOS_API_KEY` for
-the SDK client.
+Pass the generated key from your app as `x-api-key` or `Authorization: Bearer`.
+
+`TODOS_API_KEY` here is the **server's** own key — the credential `todos-serve`
+demands from its callers. It is not how a client finds a key: that is the
+resolver documented under [Credentials and Service Authority](#credentials-and-service-authority),
+and `HASNA_TODOS_API_KEY` is its canonical environment name.
 
 Always-on / hosted deployments should use the versioned `/v1` API, which
 authenticates independently against the cloud key store. `/health`, `/ready`,
