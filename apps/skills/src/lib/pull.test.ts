@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { pullSkills, PullSkillError, type SkillPullClient, BUNDLE_DIGEST_HEADER, BUNDLE_SIGNATURE_HEADER, BUNDLE_REVISION_ID_HEADER, BUNDLE_REVISION_NUMBER_HEADER, installBundleAtomically, verifyBundleResponseBytes, PULL_MARKER_FILE } from "./pull.js";
 import { getPortableSkillsRoot } from "./portable-skills.js";
 import { clearRegistryCache, loadRegistryProfile } from "./registry.js";
-import { MissingApiUrlError } from "./api-url.js";
 import { revisionIdOf } from "./revision.js";
 import { packSkillBundle, sha256Hex, unpackSkillBundle } from "./skill-bundle.js";
 import { signBundleBytes } from "./skill-bundles.js";
@@ -295,14 +294,17 @@ describe("pullSkills", () => {
     ).rejects.toBeInstanceOf(PullSkillError);
   });
 
-  test("fails closed with MissingApiUrlError when no instance origin is configured", async () => {
-    // A key is present but no origin: the client must refuse to invent a host.
+  test("fails closed when an origin is configured but no credential resolves", async () => {
+    // The shared ladder refuses to hand back an authority it has no key for, so
+    // a pull cannot quietly become a no-op against the local corpus. (A key
+    // WITHOUT an origin is no longer a failure at all — it reaches the fleet
+    // gateway; see fleet-credentials.test.ts.)
     const savedUrl = process.env.SKILLS_API_URL;
     const savedKey = process.env.SKILLS_API_KEY;
-    delete process.env.SKILLS_API_URL;
-    process.env.SKILLS_API_KEY = "dummy-key-not-a-secret-for-fail-closed-test";
+    process.env.SKILLS_API_URL = "https://skills.internal.example";
+    delete process.env.SKILLS_API_KEY;
     try {
-      await expect(pullSkills({ names: ["pulled-runbook"] })).rejects.toBeInstanceOf(MissingApiUrlError);
+      await expect(pullSkills({ names: ["pulled-runbook"] })).rejects.toThrow(/no API key resolved/);
     } finally {
       if (savedUrl === undefined) delete process.env.SKILLS_API_URL;
       else process.env.SKILLS_API_URL = savedUrl;

@@ -362,7 +362,10 @@ must not race to migrate a shared database.
 
 `HASNA_SKILLS_DATABASE_URL` and `DATABASE_URL` are server-only. CLI, MCP, and SDK
 clients never read them and never open a database connection: a client reaches the
-cloud only through `SKILLS_API_URL` plus an API key. The repo-native storage sync
+cloud only through the authority the shared @hasna/contracts ladder resolves
+(`HASNA_SKILLS_API_URL`, the macOS Keychain `api-url` item,
+`~/.hasna/skills/config/credentials`, then the fleet gateway) plus the API key it
+resolves alongside. The repo-native storage sync
 (`src/lib/native-storage.ts`) is the deliberate exception — an operator tool, not an
 API client path.
 

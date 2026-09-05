@@ -161,6 +161,31 @@ export {
 } from "./lib/tool-primitives.js";
 
 export {
+  MissingSkillsFleetError,
+  SkillsFleetCredentialError,
+  SKILLS_API_KEY_ENV,
+  SKILLS_API_KEY_ENV_KEYS,
+  SKILLS_API_URL_ENV,
+  SKILLS_API_URL_ENV_KEYS,
+  SKILLS_APP,
+  configuredSkillsApiUrl,
+  noticeLocalSkillsMode,
+  normalizeSkillsApiOrigin,
+  requireSkillsApiOrigin,
+  requireSkillsFleet,
+  resolveSkillsApiOrigin,
+  resolveSkillsFleet,
+  skillsCredentialFilePath,
+  skillsCredentialFiles,
+  skillsCredentialOrReason,
+  type HostedSkillsFleet,
+  type LocalSkillsFleet,
+  type SkillsFleet,
+  type SkillsFleetErrorCode,
+  type SkillsFleetOptions,
+} from "./lib/fleet-credentials.js";
+
+export {
   RemoteSkillsClient,
   createRemoteSkillsClient,
   RemoteRouteUnsupportedError,

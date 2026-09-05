@@ -19,8 +19,8 @@ service without making the OSS core depend on one deployment.
 - Do not prompt a user to choose a deployment variant. There is one product and
   one deployment story: you run it. Setup asks for an API origin, or for nothing.
 - In non-interactive and CI contexts, do not silently phone home. Talking to a
-  server requires an explicitly configured origin (`SKILLS_API_URL` or the
-  `apiUrl` config key) and `SKILLS_API_KEY`.
+  server requires a credential the shared ladder can resolve; with none, nothing
+  is sent and the CLI says it is running locally.
 - Do not introduce names for deployment variants. Running on this machine is not
   a mode; it is the absence of a configured API origin. Keep domains in
   configurable API URLs.
@@ -39,8 +39,8 @@ Good OSS commands:
 - `runs status`, `exports download` — the remote-client run subcommands; they
   require API access
 - `list`/`ls`, `search`/`s`, `categories`, `tags` — the browse surface; the
-  default read path is folder UNION cloud. Whenever an API origin
-  (`SKILLS_API_URL` or the `apiUrl` config key) and a credential are configured,
+  default read path is folder UNION cloud. Whenever the shared ladder resolves a
+  credential (and therefore an authority),
   `getBrowseRegistry()` (`src/cli/commands/list.ts`) merges the authenticated
   remote registry into the local corpus through `mergeRemoteRegistry()`
   (`src/lib/remote-registry.ts`); an unconfigured or auth-missing install keeps

@@ -53,7 +53,30 @@ const RETIRED_ENV_SUFFIXES = ["_STORAGE_MODE", "_DEPLOYMENT_MODE", "_CLOUD_MODE"
  * the concept survived and only some spellings of it are wrong.
  */
 export const RETIRED_CONFIG_KEYS: Readonly<Record<string, string>> = {
-  mode: "apiUrl",
+  mode: "a configured API origin",
+  apiUrl: "skills setup --api-url <origin>",
+};
+
+/**
+ * What each retired key's replacement means, so the refusal explains the change
+ * instead of only naming a successor.
+ *
+ * `apiUrl` is retired for a different reason than `mode`: it was not a label
+ * about the deployment, it was a SIXTH place to keep the service address, in a
+ * file only this app reads. The fleet ladder (owner ruling 2026-09-04,
+ * hasna/apps#1720) is `HASNA_SKILLS_API_URL`, the macOS Keychain `api-url` item,
+ * `~/.hasna/skills/config/credentials`, then the fleet gateway — shared with
+ * every other Hasna CLI through @hasna/contracts. `skills setup --api-url`
+ * still exists and writes the credentials file.
+ */
+const RETIRED_CONFIG_KEY_REASONS: Readonly<Record<string, string>> = {
+  mode:
+    "Deployment modes were removed: a Skills client either resolves a credential " +
+    "or it does not, and that is the whole of it.",
+  apiUrl:
+    "The service address is no longer kept in this app's config file: it is read from " +
+    "HASNA_SKILLS_API_URL, then the macOS Keychain item hasna.credentials.skills.api-url, " +
+    "then ~/.hasna/skills/config/credentials, then the fleet gateway.",
 };
 
 /** Thrown when configuration names a setting the deployment-mode removal deleted. */
@@ -149,10 +172,8 @@ export function assertNoRetiredConfigKeys(
     throw new RetiredSettingError(
       key,
       `${source}: "${key}" is no longer a configuration key. ` +
-        "Deployment modes were removed: a Skills client either has an API origin " +
-        "configured or it does not, and that is the whole of it. " +
-        `Use "${replacement}" instead (skills config set ${replacement} <origin>), and ` +
-        `remove the old key with: skills config unset ${key}. ` +
+        `${RETIRED_CONFIG_KEY_REASONS[key] ?? ""} ` +
+        `Use ${replacement} instead, and remove the old key with: skills config unset ${key}. ` +
         "Refused rather than ignored, because silently dropping it would leave an " +
         "operator believing they had pointed this install at a server.",
     );

@@ -4,7 +4,7 @@
  * data directory and no SQLite file appears.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveFeedback } from "./feedback.js";
@@ -54,14 +54,26 @@ describe("saveFeedback in api mode", () => {
   });
 });
 
-describe("saveFeedback api mode via the config file", () => {
-  test("an apiUrl written by `skills setup --api-url` selects api mode with no env var set", () => {
+describe("saveFeedback api mode via the credentials file", () => {
+  test("a credential written by `skills auth login` selects api mode with no env var set", () => {
+    // The URL is not required: a resolved credential reaches the fleet gateway,
+    // and that is what makes this station hosted.
     delete process.env.SKILLS_API_URL;
     delete process.env.HASNA_SKILLS_API_URL;
-    writeFileSync(join(dataDir, "config.json"), JSON.stringify({ apiUrl: "https://skills.example.test" }));
-    const result = saveFeedback({ message: "from a configured station" });
-    expect(result.path).toBe(join(dataDir, "feedback.jsonl"));
-    expect(existsSync(join(dataDir, "feedback.jsonl"))).toBe(true);
-    expect(readdirSync(dataDir).filter((name) => name.endsWith(".db"))).toEqual([]);
+    const home = mkdtempSync(join(tmpdir(), "skills-feedback-home-"));
+    const previousHome = process.env.HASNA_HOME;
+    try {
+      process.env.HASNA_HOME = home;
+      mkdirSync(join(home, "skills", "config"), { recursive: true });
+      writeFileSync(join(home, "skills", "config", "credentials"), "HASNA_SKILLS_API_KEY=sk_feedback_test_only\n", { mode: 0o600 });
+      const result = saveFeedback({ message: "from a keyed station" });
+      expect(result.path).toBe(join(dataDir, "feedback.jsonl"));
+      expect(existsSync(join(dataDir, "feedback.jsonl"))).toBe(true);
+      expect(readdirSync(dataDir).filter((name) => name.endsWith(".db"))).toEqual([]);
+    } finally {
+      if (previousHome === undefined) delete process.env.HASNA_HOME;
+      else process.env.HASNA_HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });

@@ -24,6 +24,7 @@ import {
   APPROVED_CODE_HOSTS,
   DYNAMIC_HOST_SITES,
   TEMPLATE_HOST_FILES,
+  FLEET_GATEWAY_HOST,
   VENDOR_CONTROLLED_DOMAINS,
   VENDOR_HOST_URL_EXCEPTIONS,
   checkEntryPointCoverage,
@@ -64,19 +65,19 @@ const CLIENT_ENDPOINT_RESOLVERS: ReadonlyArray<{
     name: "resolveApiUrl",
     module: "src/lib/api-url.ts",
     kind: "closed",
-    resolve: (env) => resolveApiUrl({}, env),
+    resolve: (env) => resolveApiUrl(env),
   },
   {
     name: "getConfiguredApiUrl",
     module: "src/lib/remote-registry.ts",
     kind: "closed",
-    resolve: (env) => getConfiguredApiUrl({}, env),
+    resolve: (env) => getConfiguredApiUrl(env),
   },
   {
     name: "requireApiUrl",
     module: "src/lib/api-url.ts",
     kind: "loud",
-    resolve: (env) => requireApiUrl("Auth", {}, env),
+    resolve: (env) => requireApiUrl("Auth", env),
   },
 ];
 
@@ -186,12 +187,34 @@ describe("R1 — unconfigured client produces no endpoint", () => {
   });
 
   test("a configured URL is still honoured — the guard bans defaults, not endpoints", () => {
-    const configured = { SKILLS_API_URL: "https://skills.internal.example/api/v1/" };
-    expect(resolveApiUrl({}, configured)).toBe("https://skills.internal.example/api/v1");
-    expect(requireApiUrl("Auth", {}, configured)).toBe("https://skills.internal.example/api/v1");
-    expect(resolveApiUrl({ apiUrl: "https://from-config.example" }, {})).toBe(
-      "https://from-config.example",
+    // A credential is part of "configured" now: the shared ladder refuses to
+    // hand back an authority it has no key for, so the pair is what a resolver
+    // honours (see fleet-credentials.test.ts for the ladder itself).
+    const configured = {
+      HASNA_SKILLS_API_URL: "https://skills.internal.example/api/v1/",
+      HASNA_SKILLS_API_KEY: "sk_boundary_test_only",
+    };
+    expect(resolveApiUrl(configured)).toBe("https://skills.internal.example");
+    expect(requireApiUrl("Auth", configured)).toBe("https://skills.internal.example");
+    expect(getConfiguredApiUrl(configured)).toBe("https://skills.internal.example");
+  });
+
+  test("an authority with no credential fails loudly instead of reading local data", () => {
+    // The false green the 2026-09-04 ruling removes: an operator pointed this CLI
+    // at an instance, the key went missing, and every read answered from the
+    // bundled corpus as though nothing were wrong.
+    const urlOnly = { HASNA_SKILLS_API_URL: "https://skills.internal.example" };
+    expect(() => resolveApiUrl(urlOnly)).toThrow(/no API key resolved/);
+    expect(() => getConfiguredApiUrl(urlOnly)).toThrow(/no API key resolved/);
+  });
+
+  test("a credential with no URL reaches the fleet gateway, and only then", () => {
+    // The one place a vendor host may be named: with a credential in hand. R1 is
+    // a rule about UNCONFIGURED installs, and this install is configured.
+    expect(resolveApiUrl({ HASNA_SKILLS_API_KEY: "sk_boundary_test_only" })).toBe(
+      `https://${FLEET_GATEWAY_HOST}/skills`,
     );
+    expect(resolveApiUrl(emptyEnv())).toBeUndefined();
   });
 
   test("the CLI's own auth command reaches no host when nothing is configured", async () => {
@@ -270,9 +293,17 @@ describe("R1 — the published package names no unapproved host", () => {
     // The documented exceptions are exact URLs, never bare domains, so an
     // endpoint on an excepted domain is still a failure.
     for (const exception of VENDOR_HOST_URL_EXCEPTIONS) {
-      expect(exception.url).toMatch(/^https?:\/\/[^\s]+\/[^\s]+/);
+      expect(exception.url).toMatch(/^https:\/\/[^\s/]+(?:\/[^\s]*)?$/);
       expect(exception.reason.length).toBeGreaterThan(20);
-      expect(isVendorControlledHost(exception.url.split("/")[2] ?? "")).toBe(true);
+      const host = exception.url.split("/")[2] ?? "";
+      expect(isVendorControlledHost(host)).toBe(true);
+      // An exception with no path is an ORIGIN, and only the fleet gateway may be
+      // excepted at its origin: that constant is what the shared client actually
+      // holds, and the app slug after it is a runtime value. Every other vendor
+      // host still has to name an exact endpoint, so `https://skills.md` can
+      // never be smuggled back in as a bare host.
+      const path = (exception.url.split("/").slice(3).join("/") ?? "").replace(/\/+$/, "");
+      if (path === "") expect(host).toBe(FLEET_GATEWAY_HOST);
     }
   });
 

@@ -40,8 +40,9 @@ wrapper-specific product flows into upstream.
 These improvements belong in `hasna/skills` because agents benefit from them
 even without the private SaaS:
 
-- Remote registry support: keep `SKILLS_API_URL` and config-driven API URL
-  support generic, tested, and optional.
+- Remote registry support: keep the shared credential ladder's API URL support
+  (`HASNA_SKILLS_API_URL`, Keychain, credentials file, gateway) generic, tested,
+  and optional.
 - Project pinning: keep `.skills/project.json` as preferences only and keep
   source/manifest/agent-folder copy paths disabled.
 - Validation: keep `parseSkillFrontmatter`, `validateSkillDirectory`, and

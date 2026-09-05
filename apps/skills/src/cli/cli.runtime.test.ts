@@ -10,6 +10,7 @@ import {
   SLOW_TEST_TIMEOUT,
   runCli,
   runCliInCwd,
+  stderrWithoutLocalNotice,
 } from "./cli.test-utils";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -47,8 +48,12 @@ afterAll(() => rmSyncTop(FIXTURE_HOME, { recursive: true, force: true }));
 
 describe("CLI runtime and misc commands", () => {
   describe("setup", () => {
-    test("stores the API URL it was given in project config", async () => {
-      const { mkdtempSync, rmSync, readFileSync } = require("fs");
+    test("stores the API URL it was given in the shared credentials file", async () => {
+      // The service address moved out of this app's config (owner ruling
+      // 2026-09-04, hasna/apps#1720) and into `~/.hasna/skills/config/credentials`,
+      // the tier every Hasna CLI reads. An API base is normalized to the origin
+      // the client dials, so pasting the URL from an error message is safe.
+      const { mkdtempSync, rmSync, readFileSync, existsSync, statSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-api-url-"));
@@ -58,12 +63,16 @@ describe("CLI runtime and misc commands", () => {
           tmpDir,
           { HOME: tmpDir },
         );
-        expect(exitCode).toBe(0);
+        expect(exitCode).not.toBe(0); // an authority with no credential is loud
         const data = JSON.parse(stdout);
-        expect(data).toMatchObject({ apiUrl: "https://skills.example.com/api/v1", scope: "project" });
+        expect(data).toMatchObject({ saved: "https://skills.example.com" });
+        expect(data.error).toContain("no API key resolved");
         expect(data.next).toContain("skills auth login");
-        const config = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf8"));
-        expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
+
+        const credentials = join(tmpDir, ".hasna", "skills", "config", "credentials");
+        expect(readFileSync(credentials, "utf8")).toContain("HASNA_SKILLS_API_URL=https://skills.example.com");
+        expect(statSync(credentials).mode & 0o077).toBe(0);
+        expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -78,34 +87,36 @@ describe("CLI runtime and misc commands", () => {
         const { stdout, exitCode } = await runCliInCwd(["setup", "--json"], tmpDir, { HOME: tmpDir });
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
-        expect(data).toMatchObject({ apiUrl: null, scope: "project" });
+        expect(data).toMatchObject({ apiUrl: null, saved: null, authenticated: false });
         expect(data.next).toContain("skills list");
-        expect(data.config.apiUrl).toBeUndefined();
-        expect(data.saved).toBeNull();
         // The claim is that nothing is written at all, not that whatever was
-        // written happens to lack an apiUrl.
+        // written happens to lack a URL.
         expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
+        expect(existsSync(join(tmpDir, ".hasna", "skills", "config", "credentials"))).toBe(false);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
     });
 
-    test("saves the API URL to the global config with --global", async () => {
+    test("--global is accepted and changes nothing: the authority is per-user", async () => {
+      // A service address that differs per working directory is not something the
+      // shared ladder can express, so there is one place for it and the old flag
+      // is kept only so existing scripts do not break.
       const { mkdtempSync, rmSync, existsSync, readFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-global-"));
       try {
-        const { stdout, exitCode } = await runCliInCwd(
+        const { stdout } = await runCliInCwd(
           ["setup", "--api-url", "https://skills.example.com", "--global", "--json"],
           tmpDir,
           { HOME: tmpDir },
         );
-        expect(exitCode).toBe(0);
-        expect(JSON.parse(stdout)).toMatchObject({ apiUrl: "https://skills.example.com", scope: "global" });
+        expect(JSON.parse(stdout)).toMatchObject({ saved: "https://skills.example.com" });
         expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
-        const global = JSON.parse(readFileSync(join(tmpDir, ".hasna", "skills", "config.json"), "utf8"));
-        expect(global.apiUrl).toBe("https://skills.example.com");
+        expect(existsSync(join(tmpDir, ".hasna", "skills", "config.json"))).toBe(false);
+        expect(readFileSync(join(tmpDir, ".hasna", "skills", "config", "credentials"), "utf8"))
+          .toContain("HASNA_SKILLS_API_URL=https://skills.example.com");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -152,26 +163,36 @@ describe("CLI runtime and misc commands", () => {
       }
     });
 
-    test("reports an inherited API URL as inherited, not as a write it just made", async () => {
-      // apiUrl in the global scope, `setup` invoked for the project scope: the
-      // effective origin is the global one, and `saved` must stay null rather
-      // than let the command claim it wrote to the project.
-      const { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } = require("fs");
+    test("reports the authority in effect and its source, not the write it just made", async () => {
+      // The credential comes from the stored file, the authority from the
+      // environment. Reporting only what this invocation wrote would hide where
+      // the CLI is actually pointed; reporting only the effective value would
+      // claim a write that never happened. Both facts are printed, and `source`
+      // names which rung answered.
+      const { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
       const tmpDir = mkdtempSync(join(tmpdir(), "cli-setup-inherited-"));
       try {
-        mkdirSync(join(tmpDir, ".hasna", "skills"), { recursive: true });
+        mkdirSync(join(tmpDir, ".hasna", "skills", "config"), { recursive: true });
         writeFileSync(
-          join(tmpDir, ".hasna", "skills", "config.json"),
-          JSON.stringify({ apiUrl: "https://global.example.com" }),
+          join(tmpDir, ".hasna", "skills", "config", "credentials"),
+          "HASNA_SKILLS_API_KEY=sk_setup_test_only\n",
+          { mode: 0o600 },
         );
-        const { stdout, exitCode } = await runCliInCwd(["setup", "--json"], tmpDir, { HOME: tmpDir });
+        const { stdout, exitCode } = await runCliInCwd(["setup", "--json"], tmpDir, {
+          HOME: tmpDir,
+          HASNA_SKILLS_API_URL: "https://from-the-environment.example",
+        });
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
-        expect(data.apiUrl).toBe("https://global.example.com");
+        expect(data.apiUrl).toBe("https://from-the-environment.example");
+        expect(data.source).toBe("HASNA_SKILLS_API_URL");
         expect(data.saved).toBeNull();
-        expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
+        expect(data.authenticated).toBe(true);
+        // Untouched by a read-only invocation.
+        expect(readFileSync(join(tmpDir, ".hasna", "skills", "config", "credentials"), "utf8").trim())
+          .toBe("HASNA_SKILLS_API_KEY=sk_setup_test_only");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -189,7 +210,7 @@ describe("CLI runtime and misc commands", () => {
         await runCliInCwd(["setup", "--api-url", "https://skills.example.com", "--json"], tmpDir, { HOME: tmpDir });
         const unset = await runCliInCwd(["config", "unset", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
         expect(unset.exitCode).toBe(0);
-        expect(JSON.parse(unset.stdout)).toMatchObject({ key: "apiUrl", removed: true, scope: "project" });
+        expect(JSON.parse(unset.stdout)).toMatchObject({ key: "apiUrl", removed: true });
 
         const after = await runCliInCwd(["setup", "--json"], tmpDir, { HOME: tmpDir });
         expect(JSON.parse(after.stdout)).toMatchObject({ apiUrl: null, saved: null });
@@ -205,7 +226,9 @@ describe("CLI runtime and misc commands", () => {
     test("prints no first-run onboarding nudge on a normal command", async () => {
       // The nudge existed only to force a mode choice. It is deleted, and the
       // replacement for its three tests is this: a fresh HOME running a normal
-      // command must emit nothing on stderr.
+      // command emits nothing on stderr beyond the one local-mode line the
+      // credential ruling requires — which demands no choice and asks no
+      // question, and is stripped here so an unexpected warning still fails.
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
@@ -215,7 +238,8 @@ describe("CLI runtime and misc commands", () => {
         expect(result.exitCode).toBe(0);
         expect(result.stderr).not.toContain("No Skills setup found");
         expect(result.stderr).not.toContain("skills setup");
-        expect(result.stderr.trim()).toBe("");
+        expect(result.stderr).toContain("skills: local mode");
+        expect(stderrWithoutLocalNotice(result.stderr)).toBe("");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -232,9 +256,9 @@ describe("CLI runtime and misc commands", () => {
           expect(result.exitCode).not.toBe(0);
           const error = JSON.parse(result.stdout).error;
           expect(error).toContain("no longer a configuration key");
-          // Names the replacement, not just the rejection. "Unknown config key"
-          // reads as a typo and gets retyped.
-          expect(error).toContain("apiUrl");
+          // Names the fix, not just the rejection. "Unknown config key" reads as
+          // a typo and gets retyped.
+          expect(error).toContain("config unset mode");
         }
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
@@ -259,7 +283,7 @@ describe("CLI runtime and misc commands", () => {
         // One actionable line on stderr, not a stack trace: the sentence that says
         // what to do must not be buried under bundler frames.
         expect(refused.stderr).toContain("no longer a configuration key");
-        expect(refused.stderr).toContain("apiUrl");
+        expect(refused.stderr).toContain("config unset mode");
         expect(refused.stderr).not.toContain("at assertNoRetiredConfigKeys");
 
         // The fix the message advertises has to work, or the refusal is a dead end
@@ -523,8 +547,11 @@ describe("CLI runtime and misc commands", () => {
       return schedules.schedules[0].lastRunStatus;
     }
 
-    const NO_ROUTING_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME, SKILLS_API_URL: "", SKILLS_API_KEY: "" };
-    const ORIGIN_ONLY_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME, SKILLS_API_URL: "https://skills.example.com", SKILLS_API_KEY: "" };
+    // Blank is not "unset": the shared ladder refuses a declared-but-empty
+    // credential rather than falling through to another tier, so these fixtures
+    // leave the variables out entirely (the CLI test env strips any ambient ones).
+    const NO_ROUTING_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME };
+    const ORIGIN_ONLY_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME, SKILLS_API_URL: "https://skills.example.com" };
     const FULL_ROUTING_ENV = { HASNA_SKILLS_DIR: FIXTURE_HOME, SKILLS_API_URL: "https://skills.example.com", SKILLS_API_KEY: "sk_schedule_fixture" };
 
     test("server-owned skill scheduled without origin or credential fails closed and never runs locally", async () => {
@@ -700,7 +727,7 @@ describe("CLI runtime and misc commands", () => {
           "--json",
         ], tmpDir, { HOME: tmpDir });
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderrWithoutLocalNotice(stderr)).toBe("");
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({ saved: true, category: "bug" });
         expect(data.path).toContain(".hasna/skills/skills.db");

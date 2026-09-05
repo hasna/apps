@@ -13,6 +13,8 @@ import { getSkillRequirements, getSkillDependencyStatus } from "../../lib/skilli
 import { getInstallMeta, getInstalledSkills, getSkillPath, getAgentSkillsDir, AGENT_TARGETS, AGENT_LABELS } from "../../lib/installer.js";
 import { censusHomeDrift } from "../../lib/home-census.js";
 import { resolveCorpusRoot } from "../../lib/home-migration.js";
+import { credentialFileMode, getAuthFilePath } from "../../lib/auth-store.js";
+import { resolveSkillsFleet } from "../../lib/fleet-credentials.js";
 
 export function registerDiagnostic(parent: Command) {
   // Doctor
@@ -197,19 +199,90 @@ function handleWhoami(options: { json: boolean }) {
   // The machine corpus (where pull writes and push reads), not the package's own
   // node_modules folder, which is what this line reported before (hasna/apps#1632).
   const skillsDir = resolveCorpusRoot();
+  const credential = describeCredentialState();
   if (options.json) {
-    console.log(JSON.stringify({ version: pkg.version, installedCount: installed.length, installed, agents: agentConfigs, skillsDir, cwd: process.cwd() }, null, 2));
+    console.log(JSON.stringify({ version: pkg.version, installedCount: installed.length, installed, agents: agentConfigs, skillsDir, cwd: process.cwd(), credential }, null, 2));
     return;
   }
   console.log(chalk.bold(`\nskills v${pkg.version}\n`));
   console.log(`${chalk.dim("Working directory:")} ${process.cwd()}`);
   console.log(`${chalk.dim("Corpus directory:")}  ${skillsDir}`);
+  console.log(`${chalk.dim("Mode:")}             ${credential.mode}`);
+  if (credential.apiUrl) console.log(`${chalk.dim("API:")}              ${credential.apiUrl} (${credential.apiUrlSource})`);
+  if (credential.apiKeySource) console.log(`${chalk.dim("Credential:")}       ${credential.apiKeySource}`);
+  if (credential.error) console.log(chalk.red(`${chalk.dim("Credential:")}       ${credential.error}`));
   console.log();
   if (!installed.length) console.log(chalk.dim("No pinned skills in current project"));
   else { console.log(chalk.bold(`Pinned skills (${installed.length}):`)); for (const name of installed) console.log(`  ${chalk.cyan(name)}`); }
   console.log();
   console.log(chalk.bold("Agent configurations:"));
   for (const cfg of agentConfigs) console.log(cfg.exists ? `  ${chalk.green("\u2713")} ${cfg.agent} \u2014 ${cfg.skillCount} skill(s) at ${cfg.path}` : `  ${chalk.dim("\u2717")} ${cfg.agent} \u2014 not configured`);
+}
+
+/**
+ * Where this install stands on the fleet credential ladder — the SOURCES only.
+ *
+ * Never a key value: an env key NAME, a Keychain item reference or an absolute
+ * path is what an operator needs to tell a stale export from a rotated file, and
+ * it is the most this may print. `credentialFileMode` is reported so a file the
+ * shared resolver would REFUSE (anything but 0400/0600) is visible here rather
+ * than only at the moment a command fails.
+ */
+function describeCredentialState(): {
+  mode: "hosted" | "local" | "misconfigured";
+  apiUrl: string | null;
+  apiUrlSource: string | null;
+  apiKeySource: string | null;
+  apiKeyTier: string | null;
+  credentialsFile: string | null;
+  credentialsFileMode: string | null;
+  error: string | null;
+} {
+  let credentialsFile: string | null = null;
+  let mode: string | null = null;
+  try {
+    credentialsFile = getAuthFilePath();
+    const bits = credentialFileMode();
+    mode = bits === null ? null : `0${bits.toString(8).padStart(3, "0")}`;
+  } catch {
+    // No HOME: there is no credentials file to describe.
+  }
+  try {
+    const fleet = resolveSkillsFleet();
+    if (fleet.mode === "hosted") {
+      return {
+        mode: "hosted",
+        apiUrl: fleet.apiOrigin,
+        apiUrlSource: fleet.apiUrlSource,
+        apiKeySource: fleet.apiKeySource,
+        apiKeyTier: fleet.apiKeyTier,
+        credentialsFile,
+        credentialsFileMode: mode,
+        error: null,
+      };
+    }
+    return {
+      mode: "local",
+      apiUrl: null,
+      apiUrlSource: null,
+      apiKeySource: null,
+      apiKeyTier: null,
+      credentialsFile,
+      credentialsFileMode: mode,
+      error: null,
+    };
+  } catch (error) {
+    return {
+      mode: "misconfigured",
+      apiUrl: null,
+      apiUrlSource: null,
+      apiKeySource: null,
+      apiKeyTier: null,
+      credentialsFile,
+      credentialsFileMode: mode,
+      error: (error as Error).message,
+    };
+  }
 }
 
 function handleOutdated(options: { json: boolean }) {

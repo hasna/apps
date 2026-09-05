@@ -10,7 +10,7 @@ useDefaultTestTimeout();
 
 describe("CLI server auth", () => {
 
-  test("auth whoami accepts SKILLS_API_KEY without storing or exposing the key", async () => {
+  test("auth whoami accepts an env credential without storing or exposing the key", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-api-key-"));
     const seenAuthHeaders: Array<string | null> = [];
     const server = Bun.serve({
@@ -42,7 +42,9 @@ describe("CLI server auth", () => {
       const data = JSON.parse(result.stdout);
       expect(data).toMatchObject({
         status: "authenticated",
-        authSource: "env",
+        // The SOURCE, by name: an operator debugging a stale export needs to see
+        // which rung of the ladder answered, never the value.
+        authSource: "SKILLS_API_KEY",
         email: "env@example.com",
         organization: "env-org",
         organizationName: "Env Org",
@@ -50,7 +52,7 @@ describe("CLI server auth", () => {
       });
       expect(result.stdout).not.toContain("sk_env_whoami");
       expect(seenAuthHeaders).toEqual(["Bearer sk_env_whoami"]);
-      expect(existsSync(join(tmpDir, ".hasna", "skills", "auth.json"))).toBe(false);
+      expect(existsSync(join(tmpDir, ".hasna", "skills", "config", "credentials"))).toBe(false);
     } finally {
       server.stop(true);
       rmSync(tmpDir, { recursive: true, force: true });
@@ -93,30 +95,90 @@ describe("CLI server auth", () => {
       expect(result.stdout).not.toContain(apiKey);
       expect(seenAuthHeaders).toEqual([`Bearer ${apiKey}`]);
 
-      const authPath = join(tmpDir, ".hasna", "skills", "auth.json");
-      expect(JSON.parse(readFileSync(authPath, "utf8"))).toMatchObject({
-        apiKey,
+      // Stored in the shared credentials file the whole fleet reads, owner-only,
+      // with the display identity beside it rather than inside it.
+      const credentialsPath = join(tmpDir, ".hasna", "skills", "config", "credentials");
+      expect(readFileSync(credentialsPath, "utf8")).toContain(`HASNA_SKILLS_API_KEY=${apiKey}`);
+      expect(statSync(credentialsPath).mode & 0o077).toBe(0);
+      const identityPath = join(tmpDir, ".hasna", "skills", "config", "identity.json");
+      expect(JSON.parse(readFileSync(identityPath, "utf8"))).toMatchObject({
         email: "key@example.com",
         orgSlug: "key-org",
       });
-      expect(statSync(authPath).mode & 0o077).toBe(0);
+      expect(readFileSync(identityPath, "utf8")).not.toContain(apiKey);
     } finally {
       server.stop(true);
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  test("auth whoami env auth does not fall back to stale stored identity", async () => {
-    const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-env-overrides-store-"));
-    const authDir = join(tmpDir, ".hasna", "skills");
-    mkdirSync(authDir, { recursive: true, mode: 0o700 });
-    writeFileSync(join(authDir, "auth.json"), JSON.stringify({
-      apiKey: "stored_fixture_key",
+  test("the credentials file outranks a stale export, and identity follows the key that was used", async () => {
+    // The inversion the shared ladder exists for: a shell that outlived a key
+    // rotation holds a stale `export`, while the file on disk is current. Disk
+    // therefore beats env — and the recorded identity is shown only because the
+    // key in effect is the one this CLI stored.
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-disk-over-env-"));
+    const configDir = join(tmpDir, ".hasna", "skills", "config");
+    mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(configDir, "credentials"), "HASNA_SKILLS_API_KEY=stored_fixture_key\n", { mode: 0o600 });
+    writeFileSync(join(configDir, "identity.json"), JSON.stringify({
       email: "stored@example.com",
       orgId: "org_stored",
       orgSlug: "stored-org",
       userId: "user_stored",
-    }));
+    }), { mode: 0o600 });
+
+    const server = Bun.serve({
+      port: 0,
+      fetch: async (req) => {
+        const url = new URL(req.url);
+        if (url.pathname === "/api/auth/whoami" && req.method === "GET") {
+          expect(req.headers.get("authorization")).toBe("Bearer stored_fixture_key");
+          return Response.json({
+            user: { role: "member" },
+            organization: { name: "Stored Org" },
+          });
+        }
+
+        return Response.json({ error: `missing route ${req.method} ${url.pathname}` }, { status: 404 });
+      },
+    });
+
+    try {
+      const result = await runCliInCwd(["auth", "whoami", "--json"], tmpDir, {
+        HOME: tmpDir,
+        SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
+        SKILLS_API_KEY: "stale_exported_key",
+      });
+      expect(result.exitCode).toBe(0);
+      const data = JSON.parse(result.stdout);
+      expect(data).toMatchObject({
+        status: "authenticated",
+        authSource: join(configDir, "credentials"),
+        role: "member",
+        organizationName: "Stored Org",
+        email: "stored@example.com",
+      });
+      // Never a value, from any tier.
+      expect(result.stdout).not.toContain("stored_fixture_key");
+      expect(result.stdout).not.toContain("stale_exported_key");
+    } finally {
+      server.stop(true);
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("an env credential never borrows the stored identity of a different key", async () => {
+    // identity.json describes the credential THIS CLI wrote. With that credential
+    // gone and a key coming from the environment, showing the recorded email
+    // would attribute one principal's session to another's account.
+    const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-env-no-stale-identity-"));
+    const configDir = join(tmpDir, ".hasna", "skills", "config");
+    mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(configDir, "identity.json"), JSON.stringify({
+      email: "stored@example.com",
+      orgSlug: "stored-org",
+    }), { mode: 0o600 });
 
     const server = Bun.serve({
       port: 0,
@@ -124,10 +186,7 @@ describe("CLI server auth", () => {
         const url = new URL(req.url);
         if (url.pathname === "/api/auth/whoami" && req.method === "GET") {
           expect(req.headers.get("authorization")).toBe("Bearer env_fixture_key");
-          return Response.json({
-            user: { role: "member" },
-            organization: { name: "Env Org" },
-          });
+          return Response.json({ user: { role: "member" }, organization: { name: "Env Org" } });
         }
 
         return Response.json({ error: `missing route ${req.method} ${url.pathname}` }, { status: 404 });
@@ -144,13 +203,12 @@ describe("CLI server auth", () => {
       const data = JSON.parse(result.stdout);
       expect(data).toMatchObject({
         status: "authenticated",
-        authSource: "env",
+        authSource: "SKILLS_API_KEY",
         role: "member",
         organizationName: "Env Org",
       });
       expect(result.stdout).not.toContain("stored@example.com");
       expect(result.stdout).not.toContain("stored-org");
-      expect(result.stdout).not.toContain("stored_fixture_key");
       expect(result.stdout).not.toContain("env_fixture_key");
     } finally {
       server.stop(true);
@@ -211,11 +269,11 @@ describe("CLI server auth", () => {
         organization: "user",
       });
 
-      const authPath = join(tmpDir, ".hasna", "skills", "auth.json");
-      expect(existsSync(authPath)).toBe(true);
-      expect(statSync(authPath).mode & 0o077).toBe(0);
-      expect(JSON.parse(readFileSync(authPath, "utf8"))).toMatchObject({
-        apiKey: "sk_device_login",
+      const credentialsPath = join(tmpDir, ".hasna", "skills", "config", "credentials");
+      expect(existsSync(credentialsPath)).toBe(true);
+      expect(statSync(credentialsPath).mode & 0o077).toBe(0);
+      expect(readFileSync(credentialsPath, "utf8")).toContain("HASNA_SKILLS_API_KEY=sk_device_login");
+      expect(JSON.parse(readFileSync(join(tmpDir, ".hasna", "skills", "config", "identity.json"), "utf8"))).toMatchObject({
         email: "user@example.com",
         orgSlug: "user",
       });
@@ -346,7 +404,7 @@ describe("CLI server auth", () => {
     }
   });
 
-  test("reported endpoints never echo credentials embedded in the API URL (issue #24)", async () => {
+  test("an API URL carrying embedded credentials is refused, and never echoed (issue #24)", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-endpoint-redaction-"));
     const server = Bun.serve({
       port: 0,
@@ -363,8 +421,11 @@ describe("CLI server auth", () => {
         SKILLS_API_URL: credentialedApiUrl.toString(),
       });
 
+      // The shared authority validator refuses userinfo outright — a URL that
+      // carries a password is a credential in a place nothing redacts. Refusing
+      // is stronger than redacting it in one message, and no request is sent.
       expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toContain(`POST http://127.0.0.1:${server.port}/api/auth/login`);
+      expect(result.stderr).toContain("credentials");
       expect(result.stderr).not.toContain("pw-not-real");
       expect(result.stderr).not.toContain("apiuser");
       expect(result.stdout).not.toContain("pw-not-real");

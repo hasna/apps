@@ -1001,6 +1001,7 @@
       "dependencies": {
         "@aws-sdk/client-ecs": "^3.1079.0",
         "@aws-sdk/client-s3": "^3.1079.0",
+        "@hasna/contracts": "1.0.1",
         "@hasna/events": "0.1.16",
         "@modelcontextprotocol/sdk": "^1.26.0",
         "chalk": "^5.3.0",

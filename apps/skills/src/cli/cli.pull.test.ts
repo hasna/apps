@@ -5,9 +5,12 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
-// A clean $HOME (no auth.json) plus empty credential env is an unconfigured install: the
-// point of these tests is that `skills pull` fails closed instead of inventing a host.
-const UNCONFIGURED = { SKILLS_API_URL: "", SKILLS_API_KEY: "", SKILL_API_KEY: "" };
+// A clean $HOME with no credentials file, and no credential variables: the CLI test
+// env strips every fleet variable and blinds the Keychain tier, so this really is an
+// unconfigured install. The point of these tests is that `skills pull` fails closed
+// instead of inventing a host. (Blank values are NOT how you express "unset": the
+// shared ladder refuses a declared-but-empty credential.)
+const UNCONFIGURED = {};
 
 describe("skills pull (CLI)", () => {
   test("--help documents the command and its flags", async () => {
@@ -23,17 +26,18 @@ describe("skills pull (CLI)", () => {
     expect(exitCode).toBe(1);
     // No credential -> named, actionable error; never a silent success or a guessed host.
     expect(stderr).toContain("No API key configured");
-    expect(stderr).toContain("SKILLS_API_URL");
+    expect(stderr).toContain("HASNA_SKILLS_API_KEY");
   });
 
-  test("fails closed with a MissingApiUrl message when a key exists but no origin does", async () => {
+  test("fails closed when an origin is configured but no credential resolves", async () => {
     const { stderr, exitCode } = await runCli(["pull", "some-skill"], {
-      SKILLS_API_URL: "",
-      SKILLS_API_KEY: "sk_test_key",
+      SKILLS_API_URL: "https://skills.internal.example",
     });
     expect(exitCode).toBe(1);
-    // The fail-closed guarantee: with a key but no origin, refuse rather than pick a host.
-    expect(stderr).toContain("requires a Skills API URL");
+    // Never the local corpus: an authority with no key is a loud failure that
+    // names every rung the ladder looked at.
+    expect(stderr).toContain("no API key resolved");
+    expect(stderr).toContain("skills auth login");
     expect(stderr.toLowerCase()).not.toContain("localhost");
   });
 

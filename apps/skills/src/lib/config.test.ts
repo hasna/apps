@@ -92,16 +92,16 @@ describe("config", () => {
         defaultAgent: "gemini",
         defaultScope: "project",
         format: "csv",
-        apiUrl: "https://skills.example.com/api/v1/",
         extensionsDir: "/srv/hasna/private-skill-extensions",
       }));
       const config = loadConfig();
       expect(config.defaultAgent).toBe("gemini");
       expect(config.defaultScope).toBe("project");
       expect(config.format).toBe("csv");
-      expect(config.apiUrl).toBe("https://skills.example.com/api/v1");
       expect(config.extensionsDir).toBe("/srv/hasna/private-skill-extensions");
-      expect(Object.keys(config).sort()).toEqual(["apiUrl", "defaultAgent", "defaultScope", "extensionsDir", "format"]);
+      // apiUrl is deliberately absent: the service address is not this app's
+      // config any more, it is the shared fleet ladder's.
+      expect(Object.keys(config).sort()).toEqual(["defaultAgent", "defaultScope", "extensionsDir", "format"]);
     });
 
     test("refuses a legacy mode key instead of dropping it in silence", () => {
@@ -124,7 +124,6 @@ describe("config", () => {
       // Actionable: which file, which key, what replaces it, and how to remove it.
       expect(message).toContain(join(tmpDir, "skills.config.json"));
       expect(message).toContain("mode");
-      expect(message).toContain("apiUrl");
       expect(message).toContain("config unset mode");
     });
 
@@ -148,7 +147,7 @@ describe("config", () => {
           message = (err as Error).message;
         }
         expect(message).toContain(globalPath);
-        expect(message).toContain("apiUrl");
+        expect(message).toContain("config unset mode");
       } finally {
         rmSync(globalPath, { force: true });
       }
@@ -174,36 +173,47 @@ describe("config", () => {
       expect(loadConfig()).toEqual({});
     });
 
-    test("ignores invalid apiUrl values", () => {
-      writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ apiUrl: "not a url" }));
-      const config = loadConfig();
-      expect(config.apiUrl).toBeUndefined();
+    test("refuses a retired apiUrl key instead of dropping it in silence", () => {
+      // apiUrl is retired for the same reason mode was: it named a decision that
+      // now lives elsewhere (the shared fleet ladder), and a key that is merely
+      // unread leaves an operator believing they pointed this install somewhere.
+      writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ apiUrl: "https://skills.example.com" }));
+      let error: unknown;
+      try {
+        loadConfig();
+      } catch (err) {
+        error = err;
+      }
+      expect((error as Error | undefined)?.name).toBe("RetiredSettingError");
+      const message = (error as Error).message;
+      expect(message).toContain("HASNA_SKILLS_API_URL");
+      expect(message).toContain("skills setup --api-url");
+      expect(message).toContain("config unset apiUrl");
     });
   });
 
   describe("loadConfigReadOnly (write-free legacy precedence)", () => {
     test("legacy-only HOME: reads the legacy ~/.skillsrc as the global config", () => {
       withTempHome((home) => {
-        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: "https://legacy.example.test" }));
+        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ defaultAgent: "codex" }));
         const config = loadConfigReadOnly();
-        expect(config.apiUrl).toBe("https://legacy.example.test");
+        expect(config.defaultAgent).toBe("codex");
       });
     });
 
     test("canonical config.json present: the global config is the canonical file alone — never field-merged with a stale legacy origin", () => {
       // The write path copies ~/.skillsrc into config.json only when config.json is
-      // absent. When a canonical config exists but omits apiUrl, the read-only path
-      // must NOT inherit a legacy origin: the client sends its stored credential as
-      // Authorization: Bearer to the resolved origin, so a stale legacy origin would
-      // diverge from the real path on a credential-bearing decision.
+      // absent. When a canonical config exists but omits a key, the read-only path
+      // must NOT inherit the legacy file's value for it: the two paths would then
+      // disagree about the effective configuration.
       withTempHome((home) => {
         const appDir = join(home, ".hasna", "skills");
         mkdirSync(appDir, { recursive: true });
         writeFileSync(join(appDir, "config.json"), JSON.stringify({ defaultAgent: "codex" }));
-        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: "https://legacy.example.test" }));
+        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ format: "csv" }));
         const config = loadConfigReadOnly();
         expect(config.defaultAgent).toBe("codex");
-        expect(config.apiUrl).toBeUndefined();
+        expect(config.format).toBeUndefined();
       });
     });
 
@@ -218,9 +228,9 @@ describe("config", () => {
       process.env[DATA_DIR_ENV] = overrideDir;
       process.env["HOME"] = home;
       try {
-        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: "https://legacy.example.test" }));
+        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ format: "csv" }));
         const config = loadConfigReadOnly();
-        expect(config.apiUrl).toBeUndefined();
+        expect(config.format).toBeUndefined();
       } finally {
         if (previousOverride === undefined) delete process.env[DATA_DIR_ENV];
         else process.env[DATA_DIR_ENV] = previousOverride;
@@ -233,10 +243,10 @@ describe("config", () => {
 
     test("project config still wins over the global read-only config", () => {
       withTempHome((home) => {
-        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: "https://legacy.example.test" }));
-        writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ apiUrl: "https://project.example.test" }));
+        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ defaultAgent: "codex" }));
+        writeFileSync(join(tmpDir, "skills.config.json"), JSON.stringify({ defaultAgent: "gemini" }));
         const config = loadConfigReadOnly();
-        expect(config.apiUrl).toBe("https://project.example.test");
+        expect(config.defaultAgent).toBe("gemini");
       });
     });
   });
@@ -358,13 +368,13 @@ describe("config", () => {
       //
       // The message deliberately no longer reads "Unknown config key". That was
       // true and useless: it reads as a typo when the real answer is that the
-      // concept was deleted and apiUrl carries the decision now. An operator who
-      // is only told their key is unknown retypes it.
+      // concept was deleted and the configuration itself carries the decision
+      // now. An operator who is only told their key is unknown retypes it.
       for (const value of ["local", "self-hosted", "selfhosted", "hosted", "skills.md", "offline", "remote", "cloud"]) {
         expect(() => saveConfig("mode", value, "project")).toThrow(
           /"mode" is no longer a configuration key/,
         );
-        expect(() => saveConfig("mode", value, "project")).toThrow(/apiUrl/);
+        expect(() => saveConfig("mode", value, "project")).toThrow(/config unset mode/);
       }
       // An invented key still gets the plain unknown-key error, so the retired-key
       // path is doing something specific rather than swallowing every bad key.
@@ -383,7 +393,9 @@ describe("config", () => {
       // on an unrelated future key such as modelDefault.
       const keys = message.split("Valid keys: ")[1].split(", ");
       expect(keys).not.toContain("mode");
-      expect(keys).toContain("apiUrl");
+      // The service address is not a config key any more either.
+      expect(keys).not.toContain("apiUrl");
+      expect(keys).toContain("extensionsDir");
     });
 
     test("does not rewrite an operator's file behind their back to remove a retired key", () => {
@@ -400,11 +412,11 @@ describe("config", () => {
     });
 
     test("unsetConfig removes a key and reports whether one was there", () => {
-      saveConfig("apiUrl", "https://skills.example.com", "project");
-      expect(loadConfig().apiUrl).toBe("https://skills.example.com");
-      expect(unsetConfig("apiUrl", "project")).toBe(true);
-      expect(loadConfig().apiUrl).toBeUndefined();
-      expect(unsetConfig("apiUrl", "project")).toBe(false);
+      saveConfig("format", "json", "project");
+      expect(loadConfig().format).toBe("json");
+      expect(unsetConfig("format", "project")).toBe(true);
+      expect(loadConfig().format).toBeUndefined();
+      expect(unsetConfig("format", "project")).toBe(false);
       expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(true);
       expect(() => unsetConfig("nonsenseKey", "project")).toThrow("Unknown config key: nonsenseKey");
     });
@@ -425,10 +437,13 @@ describe("config", () => {
       expect(unsetConfig("mode", "project")).toBe(false);
     });
 
-    test("saves apiUrl after URL validation", () => {
-      saveConfig("apiUrl", "https://skills.example.com/api/v1/", "project");
-      const content = JSON.parse(readFileSync(join(tmpDir, "skills.config.json"), "utf-8"));
-      expect(content.apiUrl).toBe("https://skills.example.com/api/v1");
+    test("refuses to write the retired apiUrl key, naming what replaced it", () => {
+      // `skills setup --api-url` still exists; it writes the credentials file the
+      // shared ladder reads, not this app's config.
+      expect(() => saveConfig("apiUrl", "https://skills.example.com/api/v1/", "project")).toThrow(
+        /"apiUrl" is no longer a configuration key/,
+      );
+      expect(existsSync(join(tmpDir, "skills.config.json"))).toBe(false);
     });
 
     test("saves extensionsDir to global config", () => {
@@ -440,10 +455,6 @@ describe("config", () => {
 
     test("throws on empty extensionsDir", () => {
       expect(() => saveConfig("extensionsDir", "   ", "global")).toThrow("Expected a non-empty path");
-    });
-
-    test("throws on invalid apiUrl", () => {
-      expect(() => saveConfig("apiUrl", "file:///tmp/skills")).toThrow("Expected an http(s) URL");
     });
 
     test("overwrites existing malformed file", () => {

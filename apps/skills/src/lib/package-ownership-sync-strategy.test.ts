@@ -72,7 +72,7 @@ describe("package ownership and sync strategy", () => {
       "must not fall back to bundled local execution",
       "OSS package may expose public contracts for server-executed skills",
       "must not expose private provider routing",
-      "`SKILLS_API_KEY` authenticates the user to a Skills API",
+      "`HASNA_SKILLS_API_KEY` authenticates the user to a Skills API",
       "provider keys such as",
       "`OPENAI_API_KEY`",
       "skill-specific local credentials",

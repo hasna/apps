@@ -48,8 +48,8 @@ describe("@hasna/skills product brief", () => {
   // justified shipping that host as the unconfigured default. The brief must now
   // describe the endpoint as operator-supplied configuration with no default.
   test("describes the API endpoint as operator-supplied with no shipped default", () => {
-    expect(brief).toContain("no default endpoint");
-    expect(brief).toContain("SKILLS_API_URL");
-    expect(brief).toMatch(/unconfigured install never sends credentials/);
+    expect(brief).toContain("no endpoint of its own");
+    expect(brief).toContain("HASNA_SKILLS_API_URL");
+    expect(brief).toMatch(/install with no credential never sends/);
   });
 });

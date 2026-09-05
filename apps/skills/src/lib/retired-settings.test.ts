@@ -147,7 +147,6 @@ describe("retired deployment-mode settings", () => {
       expect(error).toBeInstanceOf(RetiredSettingError);
       const message = (error as Error).message;
       expect(message).toContain("/tmp/skills.config.json");
-      expect(message).toContain("apiUrl");
       expect(message).toContain("config unset mode");
       expect((error as RetiredSettingError).setting).toBe("mode");
     });
@@ -162,7 +161,7 @@ describe("retired deployment-mode settings", () => {
 
     test("passes a configuration with no retired key through", () => {
       expect(() =>
-        assertNoRetiredConfigKeys({ apiUrl: "https://example.com", format: "json" }, "config.json"),
+        assertNoRetiredConfigKeys({ extensionsDir: "/srv/extensions", format: "json" }, "config.json"),
       ).not.toThrow();
     });
 

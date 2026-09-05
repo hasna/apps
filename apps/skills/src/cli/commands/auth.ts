@@ -1,7 +1,8 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
-import { getAuthConfig, saveAuthConfig, clearAuthConfig, getApiUrl, getAuthFilePath } from "../../lib/auth-store.js";
+import { getAuthConfig, getAuthIdentity, saveAuthConfig, clearAuthConfig, getApiUrl, getAuthFilePath } from "../../lib/auth-store.js";
+import { resolveSkillsFleet, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
 const DEFAULT_DEVICE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
@@ -148,15 +149,25 @@ function writeCommandError(err: unknown, fallback: string, json?: boolean): void
   console.error(chalk.red(showStatus ? `${message} (HTTP ${status})` : message));
   if (payload.endpoint) console.error(chalk.dim(`Endpoint: ${payload.endpoint}`));
   if (status !== undefined && CONFIG_HINT_STATUSES.has(status)) {
-    console.error(chalk.dim(`Hint: check SKILLS_API_URL (currently ${payload.apiUrl}) or run: skills setup`));
+    console.error(chalk.dim(`Hint: check ${SKILLS_API_URL_ENV} (currently ${payload.apiUrl}) or run: skills setup`));
   }
   process.exitCode = 1;
 }
 
-function envApiKey(): string | null {
-  const key = process.env.SKILLS_API_KEY || process.env.SKILL_API_KEY;
-  const trimmed = key?.trim();
-  return trimmed || null;
+/**
+ * Which rung of the fleet ladder supplied the credential in effect.
+ *
+ * Reported, never re-resolved: `whoami` shows the operator where the key it just
+ * used came from — an env key NAME, a Keychain item reference, or a file path —
+ * so a stale export and a rotated file are told apart at a glance. Never a value.
+ */
+function credentialSource(): string | null {
+  try {
+    const fleet = resolveSkillsFleet();
+    return fleet.mode === "hosted" ? fleet.apiKeySource : null;
+  } catch {
+    return null;
+  }
 }
 
 function stringField(value: unknown): string | undefined {
@@ -168,9 +179,9 @@ function recordField(value: unknown): Record<string, unknown> | undefined {
 }
 
 function authIdentityPayload(
-  authSource: "stored" | "env",
+  authSource: string,
   live: unknown,
-  cached?: ReturnType<typeof getAuthConfig>,
+  cached?: { email?: string; orgId?: string; orgSlug?: string; userId?: string } | null,
   offline = false,
 ): Record<string, unknown> {
   const root = recordField(live) ?? {};
@@ -202,7 +213,7 @@ function printWhoami(payload: Record<string, unknown>): void {
   if (payload.organization) console.log(chalk.bold("Org:    ") + payload.organization);
   if (payload.role) console.log(chalk.bold("Role:   ") + payload.role);
   if (payload.organizationName) console.log(chalk.bold("Name:   ") + payload.organizationName);
-  if (payload.authSource === "env") console.log(chalk.dim("Auth:   SKILLS_API_KEY"));
+  if (payload.authSource) console.log(chalk.dim(`Auth:   ${payload.authSource}`));
   if (payload.offline) console.log(chalk.dim("(offline — showing cached info)"));
 }
 
@@ -264,8 +275,8 @@ function printLoginSuccess(loginResult: any, json: boolean) {
   console.log(chalk.green(`\n✓ Signed in as ${loginResult.user.email}`));
   console.log(chalk.dim(`  Organization: ${loginResult.organization.name}`));
   if (loginResult.firstLogin) {
-    // getAuthFilePath() so the message names the file actually written when
-    // $HASNA_SKILLS_DIR relocates the app folder.
+    // The real path, not an assumed one: HASNA_HOME / HASNA_CONFIG_HOME relocate
+    // the credentials file the shared ladder reads.
     console.log(chalk.dim(`  API key saved to ${getAuthFilePath()}`));
   }
 }
@@ -567,8 +578,19 @@ export function registerAuth(parent: Command) {
         console.log(chalk.dim("Not signed in"));
         return;
       }
-      clearAuthConfig();
-      console.log(chalk.green(`✓ Signed out (was ${existing.email})`));
+      const { stillResolves } = clearAuthConfig();
+      console.log(chalk.green(`✓ Signed out${existing.email ? ` (was ${existing.email})` : ""}`));
+      if (stillResolves) {
+        // Only the file this command owns was cleared. Saying "signed out" while
+        // a key still resolves from the environment or the machine's Keychain
+        // would be a lie the next command exposes.
+        console.log(
+          chalk.yellow(
+            `A Skills credential still resolves from ${credentialSource() ?? "another source"}; ` +
+              `clear it there to finish signing out.`,
+          ),
+        );
+      }
     });
 
   auth
@@ -576,30 +598,42 @@ export function registerAuth(parent: Command) {
     .description("Show current account info")
     .option("--json", "Output as JSON", false)
     .action(async (options: { json?: boolean }) => {
-      const envKey = envApiKey();
-      const config = getAuthConfig();
-      const apiKey = envKey ?? config?.apiKey;
-      if (!apiKey) {
-        const payload = { status: "unauthenticated", error: "Not signed in. Run: skills auth login" };
+      let fleet: ReturnType<typeof resolveSkillsFleet>;
+      try {
+        fleet = resolveSkillsFleet();
+      } catch (err) {
+        writeCommandError(err, "Failed to resolve the Skills credential", options.json);
+        return;
+      }
+      if (fleet.mode !== "hosted") {
+        const payload = {
+          status: "unauthenticated",
+          error: `Not signed in. Run: skills auth login, or set ${SKILLS_API_KEY_ENV}`,
+        };
         if (options.json) console.log(JSON.stringify(payload, null, 2));
         else console.log(chalk.dim(payload.error));
         return;
       }
 
-      const authSource = envKey ? "env" : "stored";
+      // The recorded identity belongs to the credential THIS CLI stored. When the
+      // key in effect came from anywhere else — an env var, the Keychain, an
+      // override — that identity describes a different principal, and showing it
+      // would attribute one key's session to another key's account.
+      const cached = fleet.apiKeyTier === "disk" ? getAuthIdentity() : null;
+      const authSource = fleet.apiKeySource;
       try {
         const res = await apiRequest("/api/auth/whoami", {
-          headers: { Authorization: `Bearer ${apiKey}` },
+          headers: { Authorization: `Bearer ${fleet.apiKey}` },
         });
-        const payload = authIdentityPayload(authSource, res, envKey ? null : config);
+        const payload = authIdentityPayload(authSource, res, cached);
         if (options.json) {
           console.log(JSON.stringify(payload, null, 2));
         } else {
           printWhoami(payload);
         }
       } catch (err) {
-        if (config && !envKey) {
-          const payload = authIdentityPayload("stored", {}, config, true);
+        if (cached && Object.keys(cached).length > 0) {
+          const payload = authIdentityPayload(authSource, {}, cached, true);
           if (options.json) console.log(JSON.stringify(payload, null, 2));
           else printWhoami(payload);
           return;

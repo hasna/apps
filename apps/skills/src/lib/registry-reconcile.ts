@@ -418,7 +418,7 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
   if (!client) {
     throw new ReconcileRegistryError(
       "No API key configured, so there is nowhere to sync to.",
-      ["Run `skills login`, or set SKILLS_API_KEY and SKILLS_API_URL for this instance."],
+      ["Run `skills auth login`, or set HASNA_SKILLS_API_KEY (and HASNA_SKILLS_API_URL for your own instance)."],
     );
   }
 
@@ -454,7 +454,7 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
       : typeof remoteRowsPayload;
     throw new ReconcileRegistryError(
       `Registry listing failed: expected an array of skills, got ${shape}.`,
-      ["Check SKILLS_API_URL and the stored credential; a failed listing must not be read as an empty registry."],
+      ["Check HASNA_SKILLS_API_URL and the resolved credential; a failed listing must not be read as an empty registry."],
     );
   }
   const remotes = new Map<string, RemoteSkill>();

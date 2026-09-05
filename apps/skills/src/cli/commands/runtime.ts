@@ -13,7 +13,9 @@ import {
   ARTICLE_GENERATION_SLUG,
   validateBlogArticleRunOptions,
 } from "../../lib/blog-article.js";
-import { loadConfig, saveConfig, type ConfigScope } from "../../lib/config.js";
+import { loadConfig } from "../../lib/config.js";
+import { saveApiUrl } from "../../lib/auth-store.js";
+import { normalizeSkillsApiOrigin, resolveSkillsFleet, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../sdk/runs.js";
 import {
   completeSkillRun,
@@ -124,7 +126,7 @@ export function registerRuntime(parent: Command) {
     .command("setup")
     .description("Point this CLI at a Skills API server, or register agent integrations")
     .option("--api-url <url>", "Skills API origin to send remote work to")
-    .option("--global", "Save the API origin globally instead of in this project", false)
+    .option("--global", "Accepted for compatibility; the API origin is always per-user", false)
     .option("--json", "Output setup result as JSON", false)
     .action(async (options: SetupCommandOptions) => handleSetup(options));
 
@@ -175,6 +177,7 @@ export function registerRuntime(parent: Command) {
 
 interface SetupCommandOptions {
   apiUrl?: string;
+  /** Accepted and ignored: the fleet authority is per-user, never per-project. */
   global: boolean;
   json: boolean;
 }
@@ -184,24 +187,31 @@ interface SetupCommandOptions {
  * should send remote work to.
  *
  * There is no mode to pick. Running skills on this machine is not a mode, it is
- * what happens when no API origin is configured, so setup never has to be run
- * to get there and this command never writes a URL the operator did not supply.
- * (Clearing one already written is `skills config unset apiUrl`.)
+ * what happens when no credential resolves, so setup never has to be run to get
+ * there and this command never writes a URL the operator did not supply.
+ *
+ * WHERE IT WRITES, and why that changed: `~/.hasna/skills/config/credentials`,
+ * the shared fleet ladder's disk tier (owner ruling 2026-09-04, hasna/apps#1720)
+ * — the same file `skills auth login` writes the key into, and the same file
+ * every other Hasna CLI reads for its own app. It used to be this app's
+ * `config.json`, project-scoped, which no other tool could see and which the
+ * shared resolver does not read; `--global` is therefore accepted and ignored,
+ * because a service address that differs per working directory is not a thing
+ * the fleet ladder can express.
  *
  * Note the two separate facts in the output. `saved` is what this invocation
- * wrote, and only this invocation; `apiUrl` is the origin in effect after the
- * merge of global and project config. They differ whenever an origin is
- * inherited from a wider scope, and reporting only the second one would have
- * this command claim a write it never performed.
+ * wrote, and only this invocation; `apiUrl` is the authority in effect
+ * afterwards, which may come from the environment or the Keychain and outrank
+ * what was just written. Reporting only the second would have this command claim
+ * a write it never performed; reporting only the first would hide an override.
  */
 async function handleSetup(options: SetupCommandOptions) {
-  const scope: ConfigScope = options.global ? "global" : "project";
   // An absent flag means "tell me where I stand". A present but empty flag is
   // an unset variable in a script (`--api-url "$SKILLS_URL"`), which must fail
   // loudly rather than report success while pointing nowhere.
   if (options.apiUrl !== undefined && !options.apiUrl.trim()) {
     const error = "Invalid value '' for --api-url. Expected an http(s) URL";
-    if (options.json) console.log(JSON.stringify({ saved: null, scope, error }, null, 2));
+    if (options.json) console.log(JSON.stringify({ saved: null, error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;
     return;
@@ -213,51 +223,99 @@ async function handleSetup(options: SetupCommandOptions) {
   }
 
   let saved: string | null = null;
+  let credentialsFile: string | null = null;
   if (requested) {
     try {
-      saveConfig("apiUrl", requested, scope);
-      saved = loadConfig().apiUrl ?? requested;
+      const normalized = normalizeSkillsApiOrigin(requireHttpUrl(requested));
+      credentialsFile = saveApiUrl(normalized);
+      saved = normalized;
     } catch (err) {
       const error = (err as Error).message;
-      if (options.json) console.log(JSON.stringify({ saved: null, requested, scope, error }, null, 2));
+      if (options.json) console.log(JSON.stringify({ saved: null, requested, error }, null, 2));
       else console.error(chalk.red(error));
       process.exitCode = 1;
       return;
     }
   }
 
-  const config = loadConfig();
-  const configured = config.apiUrl ?? null;
-  const next = configured
-    ? ["skills auth login", "skills list --remote"]
-    : ["skills list", "skills run <skill>"];
+  // Read the ladder back rather than echoing what was written: an env override
+  // or a Keychain item outranks the file, and an operator who cannot see that
+  // debugs the wrong thing.
+  let configured: string | null = null;
+  let source: string | null = null;
+  let authenticated = false;
+  let error: string | null = null;
+  try {
+    const fleet = resolveSkillsFleet();
+    if (fleet.mode === "hosted") {
+      configured = fleet.apiOrigin;
+      source = fleet.apiUrlSource;
+      authenticated = true;
+    }
+  } catch (err) {
+    // A configured authority with no credential is a real failure, and setup is
+    // exactly where an operator should see it.
+    error = (err as Error).message;
+    configured = saved;
+  }
+
+  const next = error
+    ? ["skills auth login"]
+    : configured
+      ? ["skills auth login", "skills list --remote"]
+      : ["skills list", "skills run <skill>"];
   const payload = {
     apiUrl: configured,
+    source,
     saved,
-    scope,
-    config,
+    credentialsFile,
+    authenticated,
+    ...(error ? { error } : {}),
+    config: loadConfig(),
     next,
   };
 
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
+    if (error) process.exitCode = 1;
+    return;
+  }
+
+  if (error) {
+    if (saved) console.log(chalk.green(`Skills API set to ${saved}`));
+    console.error(chalk.red(error));
+    process.exitCode = 1;
     return;
   }
 
   if (saved) {
     console.log(chalk.green(`Skills API set to ${saved}`));
-    console.log(chalk.dim(`  Scope: ${scope}`));
+    if (credentialsFile) console.log(chalk.dim(`  Saved in: ${credentialsFile}`));
     console.log(chalk.dim("  Next: skills auth login"));
   } else if (configured) {
     console.log(chalk.green(`Skills API already configured: ${configured}`));
+    console.log(chalk.dim(`  Source: ${source}`));
     console.log(chalk.dim("  Change it with: skills setup --api-url <url>"));
-    console.log(chalk.dim("  Clear it with:  skills config unset apiUrl"));
-    console.log(chalk.dim("  Next: skills auth login"));
+    console.log(chalk.dim(`  Clear it with:  skills config unset apiUrl (or unset ${SKILLS_API_URL_ENV})`));
   } else {
     console.log(chalk.green("No Skills API configured; skills run on this machine."));
     console.log(chalk.dim("  Point at a server with: skills setup --api-url <url>"));
     console.log(chalk.dim("  Next: skills list"));
   }
+}
+
+/** Reject anything that is not an http(s) URL before it reaches the credentials file. */
+function requireHttpUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`Invalid value '${value}' for --api-url. Expected an http(s) URL`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Invalid value '${value}' for --api-url. Expected an http(s) URL`);
+  }
+  return value.replace(/\/+$/, "");
 }
 
 function promptLine(question: string): Promise<string> {
@@ -474,10 +532,10 @@ function handleRunsShow(runId: string, options: { json: boolean }) {
 }
 
 async function handleRunsStatus(runId: string, options: { json: boolean }) {
-  const { getApiKey } = await import("../../lib/auth-store.js");
-  const apiKey = getApiKey();
+  const { skillsCredentialOrReason } = await import("../../lib/fleet-credentials.js");
+  const { apiKey, reason } = skillsCredentialOrReason();
   if (!apiKey) {
-    const error = "Remote run status requires API access. Run: skills auth login";
+    const error = reason ?? "Remote run status requires API access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;
@@ -563,10 +621,10 @@ async function handleExportsOpen(runId: string, options: { json: boolean }) {
 }
 
 async function handleExportsDownload(runId: string, options: { json: boolean }) {
-  const { getApiKey } = await import("../../lib/auth-store.js");
-  const apiKey = getApiKey();
+  const { skillsCredentialOrReason } = await import("../../lib/fleet-credentials.js");
+  const { apiKey, reason } = skillsCredentialOrReason();
   if (!apiKey) {
-    const error = "Remote artifact downloads require API access. Run: skills auth login";
+    const error = reason ?? "Remote artifact downloads require API access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ error }, null, 2));
     else console.error(chalk.red(error));
     process.exitCode = 1;

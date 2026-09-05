@@ -88,9 +88,41 @@ export const APPROVED_CODE_HOSTS: readonly { domain: string; reason: string }[] 
 ];
 
 /**
+ * The public fleet gateway's host.
+ *
+ * Every Hasna CLI reaches its service through one gateway origin, path-prefixed
+ * by app, and since the credential-ladder ruling of 2026-09-04 (hasna/apps#1720,
+ * #1668) that address is the DEFAULT authority in the shared @hasna/contracts
+ * client — so the string ships inside the bundle, on a domain this policy calls
+ * vendor-controlled. It is listed in VENDOR_HOST_URL_EXCEPTIONS below.
+ *
+ * R1 IS NOT WEAKENED BY THIS, because R1 was never about the hostname. It says
+ * an UNCONFIGURED install must not produce a URL, and that still holds exactly:
+ * the shared resolver composes the gateway only AFTER a credential has resolved
+ * (an argument, an env pointer, the macOS Keychain, the credentials file, or
+ * the API-key variable). With no credential there is no URL — which is what
+ * `unconfigured-client-boundary.test.ts` asserts, against the resolvers rather
+ * than against a hostname, so that test needed no weakening either.
+ *
+ * The exception is scoped to exact strings on this one host. Every other
+ * endpoint on a vendor domain still fails, including other paths on this one.
+ *
+ * Typed as `string` rather than left to inference on purpose: a literal type
+ * would print the host into the emitted `.d.ts`, which ships, and the packed
+ * vendor-domain scan reads shipped bytes without caring that they are types.
+ */
+export const FLEET_GATEWAY_HOST: string = "api.hasna.com";
+
+/**
  * Exact URLs that may appear despite being on a vendor domain. Matched on the
  * full URL, never on the domain, so a real endpoint on the same domain still
  * fails. Keep minimal and justified.
+ *
+ * An entry whose path is empty is allowed ONLY for {@link FLEET_GATEWAY_HOST}:
+ * the shared client holds the gateway ORIGIN as a constant and appends the app
+ * slug at runtime, so the origin and its one-slash folded form are the literals
+ * that actually appear in the bundles. Every other vendor host must name an
+ * exact endpoint, so a bare vendor origin can never be excepted.
  */
 export const VENDOR_HOST_URL_EXCEPTIONS: readonly { url: string; reason: string }[] = [
   {
@@ -98,6 +130,27 @@ export const VENDOR_HOST_URL_EXCEPTIONS: readonly { url: string; reason: string 
     reason:
       "Stable `$schema` namespace identifier for the portable skill format. It is an " +
       "identity string compared by value and never fetched, so it is not an endpoint.",
+  },
+  {
+    url: "https://api.hasna.com",
+    reason:
+      "DEFAULT_FLEET_GATEWAY_ORIGIN in the bundled @hasna/contracts client: the fleet " +
+      "gateway origin, applied as the authority only once a credential has resolved. " +
+      "An install with no credential still produces no URL at all.",
+  },
+  {
+    url: "https://api.hasna.com/",
+    reason:
+      "The same constant as folded by the code scanner where the client composes " +
+      "`${DEFAULT_FLEET_GATEWAY_ORIGIN}/${app}` — the app slug is a runtime value, so the " +
+      "certifiable prefix is the origin plus one slash. Same endpoint, same justification.",
+  },
+  {
+    url: "https://api.hasna.com/skills",
+    reason:
+      "The composed default authority for this app, named in the README and in " +
+      "documentation so an operator can see where an unconfigured-but-credentialled " +
+      "CLI connects. The client appends /api/v1 to it.",
   },
 ];
 

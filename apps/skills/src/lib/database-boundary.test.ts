@@ -110,6 +110,6 @@ describe("database boundary contract", () => {
   test("the API-first boundaries doc keeps the no-direct-database clause", () => {
     const doc = readFileSync(join(repoRoot, "docs", "architecture", "api-first-boundaries.md"), "utf8");
     expect(doc).toContain("never open a database connection");
-    expect(doc).toContain("SKILLS_API_URL");
+    expect(doc).toContain("the authority and\ncredential the shared ladder resolves");
   });
 });

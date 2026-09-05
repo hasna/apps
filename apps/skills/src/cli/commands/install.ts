@@ -32,7 +32,7 @@ export function registerInstall(parent: Command) {
     .option("--json", "Output results as JSON", false)
     .option("--dry-run", "Print what would happen without actually pinning", false)
     .option("--category <category>", "Pin all skills in a category (case-insensitive)")
-    .option("--remote", "Pin skills from the remote registry configured by SKILLS_API_URL or config apiUrl (implied for name@version pins)", false)
+    .option("--remote", "Pin skills from the remote registry (the resolved Skills credential; HASNA_SKILLS_API_URL for your own instance). Implied for name@version pins", false)
     .description("Pin skills in .skills/project.json without copying source")
     .action((skills: string[], options) => {
       void handlePin(skills, options).catch(handlePinError);
@@ -262,7 +262,7 @@ export async function pinExactVersion(
     return {
       skill: name,
       success: false,
-      error: `Pinning '${name}@${version}' needs a configured Skills instance: an exact version only exists on an instance, so the fetch is implied for name@version pins (skills login / SKILLS_API_URL).`,
+      error: `Pinning '${name}@${version}' needs a configured Skills instance: an exact version only exists on an instance, so the fetch is implied for name@version pins (skills auth login, or HASNA_SKILLS_API_URL for your own instance).`,
       mode: "pin",
     };
   }

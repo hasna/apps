@@ -103,8 +103,12 @@ export function getSkillRequirements(name: string): SkillRequirements | null {
         envVars.delete(envVar);
       }
     }
+    // The canonical fleet name. The unprefixed SKILLS_API_KEY alias still works
+    // (the shared ladder accepts it), but what a hosted skill DOCUMENTS is the
+    // name that will not be retired.
     envVars.delete("SKILL_API_KEY");
-    envVars.add("SKILLS_API_KEY");
+    envVars.delete("SKILLS_API_KEY");
+    envVars.add("HASNA_SKILLS_API_KEY");
   }
 
   // Extract system deps
@@ -573,7 +577,7 @@ function docsDeclareHostedRuntime(skillPath: string, text: string): boolean {
 
   for (const sourceFile of sourceFiles) {
     const source = readIfExists(sourceFile);
-    if (source && /requiredEnvVars\s*:\s*\[\s*["']SKILL_API_KEY["']\s*\]/.test(source)) {
+    if (source && /requiredEnvVars\s*:\s*\[\s*["'](?:HASNA_SKILLS_API_KEY|SKILLS?_API_KEY)["']\s*\]/.test(source)) {
       return true;
     }
   }

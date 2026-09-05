@@ -83,15 +83,19 @@ export function saveFeedback(input: FeedbackInput): FeedbackResult {
 }
 
 /**
- * True when this install is pointed at a Skills instance: the env var, its HASNA_-prefixed
- * alias, or the config file written by `skills setup --api-url` / `skills login`. The check
- * never throws - a broken config file means local mode, not a crash in `skills feedback`.
+ * True when this install talks to a Skills instance — i.e. a credential resolves
+ * on the shared fleet ladder (lib/fleet-credentials.ts).
+ *
+ * The check never throws: `skills feedback` must not crash because the ladder is
+ * half-configured. A configured authority with no credential is treated as
+ * api mode here on purpose — the operator meant to be hosted, so feedback goes
+ * to the forwardable JSONL file rather than opening a local database that the
+ * hosted install has no business creating.
  */
 export function isApiMode(env: Record<string, string | undefined> = process.env): boolean {
-  if (env.HASNA_SKILLS_API_URL?.trim()) return true;
   try {
-    return Boolean(resolveApiUrl(undefined, env));
+    return Boolean(resolveApiUrl(env));
   } catch {
-    return Boolean(env.SKILLS_API_URL?.trim());
+    return true;
   }
 }

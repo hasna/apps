@@ -348,7 +348,7 @@ describe("skills push", () => {
       expect(error).toBeInstanceOf(PushSkillError);
       expect(error.message).toMatch(/No API key configured/);
       // Actionable, not just a refusal.
-      expect((error as PushSkillError).detail?.join(" ")).toMatch(/skills login/);
+      expect((error as PushSkillError).detail?.join(" ")).toMatch(/skills auth login/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

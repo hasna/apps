@@ -60,6 +60,7 @@ describe("CLI tags and brief output", () => {
       try {
         const { stdout, exitCode } = await runCli(["tags", "--remote", "--json"], {
           SKILLS_API_URL: `http://localhost:${server.port}`,
+          SKILLS_API_KEY: "fixture-remote-read",
         });
         expect(exitCode).toBe(0);
         // Merged, so the instance's tags are added to the bundled corpus's rather than

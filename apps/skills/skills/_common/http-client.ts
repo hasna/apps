@@ -8,10 +8,10 @@
 // No default endpoint. An unconfigured install has no instance to talk to, and
 // guessing one would send this skill's payload and API key to a host the
 // operator never chose.
-const SKILL_API_URL = process.env.SKILLS_API_URL || process.env.SKILL_API_URL || "";
+const SKILL_API_URL = process.env.HASNA_SKILLS_API_URL || process.env.SKILLS_API_URL || "";
 
 const MISSING_API_URL_MESSAGE =
-  "Set SKILLS_API_URL to the origin of the Skills instance you run, " +
+  "Set HASNA_SKILLS_API_URL to the origin of the Skills instance you run, " +
   "or run `skills setup --api-url <origin>`";
 
 export interface SkillRequest {
@@ -40,7 +40,7 @@ export async function executeSkill(request: SkillRequest): Promise<SkillResponse
   if (!SKILL_API_URL) {
     return {
       success: false,
-      error: "Missing SKILLS_API_URL",
+      error: "Missing HASNA_SKILLS_API_URL",
       details: MISSING_API_URL_MESSAGE,
     };
   }
@@ -48,12 +48,12 @@ export async function executeSkill(request: SkillRequest): Promise<SkillResponse
   const url = `${SKILL_API_URL}/${skill}/`;
 
   // Get API key from environment
-  const apiKey = process.env.SKILLS_API_KEY || process.env.SKILL_API_KEY;
+  const apiKey = process.env.HASNA_SKILLS_API_KEY || process.env.SKILLS_API_KEY;
   if (!apiKey) {
     return {
       success: false,
-      error: "Missing SKILLS_API_KEY",
-      details: "Set SKILLS_API_KEY environment variable or run `skills auth login`"
+      error: "Missing HASNA_SKILLS_API_KEY",
+      details: "Set HASNA_SKILLS_API_KEY environment variable or run `skills auth login`"
     };
   }
 
