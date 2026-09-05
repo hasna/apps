@@ -5,7 +5,7 @@
     },
     "capabilityManifestDigest": "3b489bd0e76516f2c3979bcd42b506812580252a864bf7b3a984cc188ec54805",
     "contractVersion": "1.0.0",
-    "generatorIdentityDigest": "fc3cdd5745dda2036fe525593a86995caeedaa67bd36edf5ae7c5160b308bab2",
+    "generatorIdentityDigest": "76ae38ffac189e6044971d7ef736a6c52fe7286b2093dbb7c950054f985dd3e2",
     "invariantRegistryDigest": "1e8a1bdd3acc19e59b46653f626347986a50e26c778e94c63bf0e140e5a57332",
     "manifestDigest": "bdc14b6741c4bb8341d63128b33e727e0ddfe00ef6e2a8909455dac768a48fae",
     "manifestVersion": "1",
@@ -47,7 +47,7 @@
     "publicSubpath": "@hasna/contracts/todos",
     "rootExported": false,
     "schema": "hasna.todos.contract.v1",
-    "schemaBundleDigest": "448c22ffaacaa242f131e192bbe9cd69e7b6d2567eff83bc20d5ce500e5a3d5d"
+    "schemaBundleDigest": "b76e7fcfc885e994f6b7b26251c6ed89adaa71a1baf3e9f495b893bd823da6e7"
   },
-  "digest": "3906a27a62314858c8ee0e09f5eaa4489db6908659a4de837d03dec762ca35db"
+  "digest": "84ff3d0baefd1218fc2422c2fa411dd549d490197fdab6573f35c4f3bc724d40"
 }
