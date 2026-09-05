@@ -39,8 +39,9 @@ or execution scheduling.
 ## Database Boundary
 
 `HASNA_SKILLS_DATABASE_URL` and `DATABASE_URL` are server-only. CLI, MCP, and SDK
-clients reach hosted state only through the Skills HTTP API (`SKILLS_API_URL` plus
-an API key) and never open a database connection — not Postgres, not SQLite.
+clients reach hosted state only through the Skills HTTP API (the authority and
+credential the shared ladder resolves) and never open a database connection —
+not Postgres, not SQLite.
 Schema and migrations are backend-owned layers; a client that built a database
 connection from the environment would duplicate them and would hold credentials
 the boundary says only the server holds.

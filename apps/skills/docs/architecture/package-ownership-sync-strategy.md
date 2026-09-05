@@ -66,7 +66,7 @@ The OSS package must not expose private provider routing, worker code,
 moderation internals, private prompts, model selection, server credentials,
 queues, storage credentials, or protected server-side implementation source.
 
-`SKILLS_API_KEY` authenticates the user to a Skills API. It is not a
+`HASNA_SKILLS_API_KEY` authenticates the user to a Skills API. It is not a
 model-provider key and must be documented separately from provider keys such as
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or other
 skill-specific local credentials.

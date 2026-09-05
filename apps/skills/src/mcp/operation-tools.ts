@@ -374,10 +374,16 @@ export function registerOperationTools(server: McpServer): void {
       detail: z.boolean().optional(),
     },
   }, async ({ run_id, detail }) => {
-    const { getApiKey } = await import("../lib/auth-store.js");
-    const apiKey = getApiKey();
+    const { skillsCredentialOrReason } = await import("../lib/fleet-credentials.js");
+    const { apiKey, reason } = skillsCredentialOrReason();
     if (!apiKey) {
-      return mcpError("AUTH_REQUIRED", "Remote run status requires API access. Run: skills auth login", ["skills auth login"]);
+      // A configured authority with no credential carries the ladder's own
+      // message. It is still a refusal — this tool never answers locally.
+      return mcpError(
+        "AUTH_REQUIRED",
+        reason ?? "Remote run status requires API access. Run: skills auth login",
+        ["skills auth login"],
+      );
     }
 
     const localRun = findSkillRun(run_id);

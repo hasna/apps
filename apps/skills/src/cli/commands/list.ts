@@ -42,7 +42,7 @@ export function registerBrowse(parent: Command) {
     .option("-t, --tags <tags>", "Filter by comma-separated tags (OR logic, case-insensitive)")
     .option("--tag <tags>", "Filter by comma-separated tags (alias for --tags)")
     .option("--all", "Show the full skill registry instead of the default basic set", false)
-    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
+    .option("--remote", "Use the remote registry (the resolved Skills credential; HASNA_SKILLS_API_URL for your own instance)", false)
     .option("--json", "Output as JSON", false)
     .option("--brief", "One line per skill: name \u2014 description [category]", false)
     .option("--format <format>", "Output format: compact (names only) or csv (name,category,price,description)")
@@ -64,7 +64,7 @@ export function registerBrowse(parent: Command) {
     .option("-c, --category <category>", "Filter results by category")
     .option("-t, --tags <tags>", "Filter results by comma-separated tags (OR logic, case-insensitive)")
     .option("--all", "Search the full skill registry instead of the default basic set", false)
-    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
+    .option("--remote", "Use the remote registry (the resolved Skills credential; HASNA_SKILLS_API_URL for your own instance)", false)
     .option("--limit <n>", "Maximum rows to print for human output (default: 20, use 0 or all for every row)")
     .option("--cursor <n>", "Numeric offset for human-output pagination", "0")
     .option("--verbose", "Show longer descriptions and tags in human output", false)
@@ -77,7 +77,7 @@ export function registerBrowse(parent: Command) {
   parent
     .command("categories")
     .option("--json", "Output as JSON", false)
-    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
+    .option("--remote", "Use the remote registry (the resolved Skills credential; HASNA_SKILLS_API_URL for your own instance)", false)
     .description("List all categories")
     .action((options: { json: boolean; remote: boolean }) => {
       return handleCategories(options).catch(handleBrowseError);
@@ -87,7 +87,7 @@ export function registerBrowse(parent: Command) {
   parent
     .command("tags")
     .option("--json", "Output as JSON", false)
-    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
+    .option("--remote", "Use the remote registry (the resolved Skills credential; HASNA_SKILLS_API_URL for your own instance)", false)
     .option("--limit <n>", "Maximum rows to print for human output (default: 80, use 0 or all for every row)")
     .option("--cursor <n>", "Numeric offset for human-output pagination", "0")
     .description("List all unique tags with counts")
@@ -147,7 +147,7 @@ async function writeJson(value: unknown, space?: number) {
  * The registry a browsing command should show.
  *
  * The default read path is folder UNION cloud: whenever the install is pointed
- * at a hosted instance (SKILLS_API_URL or config apiUrl) and holds a
+ * at a hosted instance (a resolved credential, and HASNA_SKILLS_API_URL for your own instance) and holds a
  * credential, the authenticated remote registry joins the local listing even
  * without `--remote`. Unconfigured or auth-missing installs keep today's exact
  * local output (fail-closed R1 — see mergeRemoteRegistry()).

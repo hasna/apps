@@ -24,29 +24,29 @@ import { effectiveHome, getDataRoot, hasOperatorOverride } from "./app-home.js";
 export { DATA_DIR_ENV } from "./app-home.js";
 
 /**
- * There is no deployment "mode" key.
+ * There is no deployment "mode" key, and no service address here either.
  *
  * Skills has one deployment story: you run it. Whether this CLI talks to a
- * server is not a product variant, it is one fact — whether an API origin is
- * configured (apiUrl here, or $SKILLS_API_URL). Nothing else may be derived
- * from a declared label, because a label can disagree with the configuration
- * it claims to describe.
+ * server is not a product variant, it is one fact — whether a fleet credential
+ * resolves. Nothing may be derived from a declared label, because a label can
+ * disagree with the configuration it claims to describe.
  *
- * One caveat, true at the time of writing and tracked separately: getApiUrl()
- * in auth-store.ts still falls back to a built-in origin when neither is set,
- * so "no origin configured" is not yet the same as "sends nothing anywhere" on
- * the auth path. Removing that fallback belongs to the no-vendor-defaults work,
- * not here; remote-registry.ts already fails closed and is the model.
+ * `apiUrl` used to live here as a sixth URL tier of this package's own. It is
+ * retired (owner ruling 2026-09-04, hasna/apps#1720): the authority ladder is
+ * `HASNA_SKILLS_API_URL` → the Keychain `api-url` item →
+ * `~/.hasna/skills/config/credentials` → the fleet gateway, and it belongs to
+ * @hasna/contracts so every Hasna CLI resolves it identically.
+ * `skills setup --api-url <origin>` still writes it — into the credentials file.
  *
- * Configs written by older versions may still carry a "mode" key on disk. That is
- * refused rather than ignored - see lib/retired-settings.ts for why silence is
- * the worse of the two failures - and `skills config unset mode` removes it.
+ * Configs written by older versions may still carry a "mode" or "apiUrl" key on
+ * disk. Those are refused rather than ignored — see lib/retired-settings.ts for
+ * why silence is the worse of the two failures — and `skills config unset <key>`
+ * removes them.
  */
 export interface SkillsConfig {
   defaultAgent?: "claude" | "codex" | "gemini" | "pi" | "opencode" | "all";
   defaultScope?: "global" | "project";
   format?: "compact" | "json" | "csv";
-  apiUrl?: string;
   extensionsDir?: string;
 }
 
@@ -56,7 +56,7 @@ const ENUM_KEYS: Partial<Record<keyof SkillsConfig, string[]>> = {
   format: ["compact", "json", "csv"],
 };
 
-const STRING_KEYS = ["apiUrl", "extensionsDir"] as const satisfies readonly (keyof SkillsConfig)[];
+const STRING_KEYS = ["extensionsDir"] as const satisfies readonly (keyof SkillsConfig)[];
 
 function validKeys(): string[] {
   return [...Object.keys(ENUM_KEYS), ...STRING_KEYS];
@@ -92,16 +92,6 @@ function normalizeConfigValue(key: keyof SkillsConfig, value: unknown): string |
 
   const allowed = allowedValues(key);
   if (allowed) return allowed.includes(value) ? value : undefined;
-
-  if (key === "apiUrl") {
-    try {
-      const url = new URL(value);
-      if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-      return value.replace(/\/+$/, "");
-    } catch {
-      return undefined;
-    }
-  }
 
   if (key === "extensionsDir") return value.trim() ? value : undefined;
 
@@ -246,9 +236,8 @@ export function getConfigPathReadOnly(scope: ConfigScope): string {
  * This mirrors that FILE-LEVEL precedence, never field-level merging: canonical
  * config.json, when present, is the whole global config; legacy ~/.skillsrc is read
  * only in the exact situation the write path would copy it (no canonical file, no
- * override). Field-level merging would inherit a stale legacy origin beneath a
- * canonical config that omits apiUrl — and the client sends its stored credential to
- * whatever origin resolves, so divergence from the write path is credential-bearing.
+ * override). Field-level merging would inherit stale legacy values beneath a
+ * canonical config that omits them, so the two paths must agree exactly.
  */
 export function loadConfigReadOnly(): SkillsConfig {
   const canonicalConfigPath = getConfigPathReadOnly("global");
@@ -341,7 +330,7 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
     throw new Error(
       allowed
         ? `Invalid value '${value}' for ${key}. Allowed: ${allowed.join(", ")}`
-        : `Invalid value '${value}' for ${key}. Expected ${key === "apiUrl" ? "an http(s) URL" : "a non-empty path"}`
+        : `Invalid value '${value}' for ${key}. Expected a non-empty path`
     );
   }
 
@@ -378,10 +367,9 @@ export function saveConfig(key: string, value: string, scope: ConfigScope = "pro
 /**
  * Remove a single config key from the specified scope.
  *
- * This is the counterpart that makes "no deployment mode" workable. Running on
- * this machine is the absence of a configured apiUrl, so there has to be a way
- * to get back to that state; previously the only way to express the intent was
- * to set mode=local, and that key is gone.
+ * This is also how a retired key written by an older version is removed: a file
+ * carrying one is refused by every read, so refusing to unset it would leave an
+ * operator with a config every command rejects and no supported repair.
  *
  * Returns whether the key was actually present, so callers can distinguish
  * "removed" from "there was nothing to remove" instead of guessing.

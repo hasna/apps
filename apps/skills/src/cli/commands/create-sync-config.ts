@@ -8,6 +8,7 @@ import { join } from "path";
 import { homedir } from "os";
 import type { Command } from "commander";
 import { loadConfig, saveConfig, unsetConfig, getConfigPath } from "../../lib/config.js";
+import { readStoredApiUrl, saveApiUrl } from "../../lib/auth-store.js";
 import { getPortableSkillsRoot } from "../../lib/portable-skills.js";
 import { clearRegistryCache } from "../../lib/registry.js";
 import {
@@ -72,6 +73,20 @@ export function registerCreateSync(parent: Command) {
     .action((key: string, options: { global: boolean; json: boolean }) => {
       const scope = options.global ? "global" : "project";
       try {
+        // `apiUrl` is retired as a config key but the service address it named
+        // still exists — in the credentials file the fleet ladder reads. The
+        // documented way to get back to running on this machine has to keep
+        // working, so this clears the real location as well as the stale key.
+        if (key === "apiUrl") {
+          const hadStored = Boolean(readStoredApiUrl());
+          if (hadStored) saveApiUrl(null);
+          const removedStaleKey = unsetConfig(key, scope);
+          const removed = hadStored || removedStaleKey;
+          if (options.json) console.log(JSON.stringify({ key, removed, scope, path: getConfigPath(scope) }));
+          else if (removed) console.log(chalk.green(`Unset ${key}`));
+          else console.log(chalk.dim(`${key} was not set`));
+          return;
+        }
         const removed = unsetConfig(key, scope);
         if (options.json) console.log(JSON.stringify({ key, removed, scope, path: getConfigPath(scope) }));
         else if (removed) console.log(chalk.green(`Unset ${key} (${scope})`));

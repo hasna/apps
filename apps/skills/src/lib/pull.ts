@@ -21,9 +21,10 @@
  * marker. Instances that serve no bundle fall back to the historical SKILL.md+metadata
  * path, which cannot be verified and records that fact in the marker.
  *
- * Fail-closed: with no instance origin configured, client construction throws
- * MissingApiUrlError (via getApiUrl() -> requireApiUrl()) rather than inventing a host.
- * There is deliberately no vendor default and no localhost fallback.
+ * Fail-closed, in the shared ladder's two shapes: with NOTHING configured there is
+ * no client and this refuses with an actionable PullSkillError; with an authority
+ * configured but no credential the ladder itself throws, so a pull can never quietly
+ * become a no-op against a local corpus.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -155,14 +156,14 @@ export interface VerifiedBundle {
 }
 
 export async function pullSkills(options: PullSkillsOptions = {}): Promise<PullSkillsResult> {
-  // createRemoteSkillsClient() returns null when no API key is present, and throws
-  // MissingApiUrlError when a key exists but no origin does — so the fail-closed
-  // behaviour is inherited here rather than re-implemented.
+  // createRemoteSkillsClient() returns null only when NOTHING is configured; a
+  // configured authority with no credential throws from the shared ladder — so the
+  // fail-closed behaviour is inherited here rather than re-implemented.
   const client = options.client !== undefined ? options.client : createRemoteSkillsClient();
   if (!client) {
     throw new PullSkillError(
       "No API key configured, so there is no instance to pull from.",
-      ["Run `skills login`, or set SKILLS_API_KEY and SKILLS_API_URL for this instance."],
+      ["Run `skills auth login`, or set HASNA_SKILLS_API_KEY (and HASNA_SKILLS_API_URL for your own instance)."],
     );
   }
 

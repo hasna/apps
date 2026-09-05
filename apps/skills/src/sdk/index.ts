@@ -9,7 +9,33 @@
  * implementation with the interface as the contract; nothing here duplicates
  * business logic. The SaaS control plane imports this package directly and
  * never spawns the server binaries.
+ *
+ * The client credential seam is re-exported too, so an SDK consumer resolves the
+ * Skills authority and credential exactly the way the CLI and the MCP server do
+ * — the shared @hasna/contracts ladder — instead of reading an environment
+ * variable of its own. See lib/fleet-credentials.ts.
  */
+export {
+  MissingSkillsFleetError,
+  SkillsFleetCredentialError,
+  SKILLS_API_KEY_ENV,
+  SKILLS_API_URL_ENV,
+  SKILLS_APP,
+  configuredSkillsApiUrl,
+  noticeLocalSkillsMode,
+  normalizeSkillsApiOrigin,
+  requireSkillsApiOrigin,
+  requireSkillsFleet,
+  resolveSkillsApiOrigin,
+  resolveSkillsFleet,
+  skillsCredentialFilePath,
+  skillsCredentialFiles,
+  skillsCredentialOrReason,
+  type HostedSkillsFleet,
+  type LocalSkillsFleet,
+  type SkillsFleet,
+  type SkillsFleetOptions,
+} from "../lib/fleet-credentials.js";
 export * from "./server.js";
 export * from "./registry.js";
 export * from "./runs.js";

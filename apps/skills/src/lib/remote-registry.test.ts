@@ -31,14 +31,31 @@ describe("remote registry", () => {
     expect(buildSkillsApiUrl("http://localhost:3505/api")).toBe("http://localhost:3505/api/skills");
   });
 
-  test("uses SKILLS_API_URL before config apiUrl", () => {
-    process.env.SKILLS_API_URL = "https://env.example.com/api/v1";
-    expect(getConfiguredApiUrl({ apiUrl: "https://config.example.com/api/v1" })).toBe("https://env.example.com/api/v1");
+  test("reads the authority from the fleet ladder, not from this app's config", () => {
+    // The env alias and the canonical name both work, and the API base an
+    // operator pastes is normalized to the origin the client dials.
+    expect(
+      getConfiguredApiUrl({
+        SKILLS_API_URL: "https://env.example.com/api/v1",
+        SKILLS_API_KEY: "fixture-registry",
+      }),
+    ).toBe("https://env.example.com");
+    expect(
+      getConfiguredApiUrl({
+        HASNA_SKILLS_API_URL: "https://canonical.example.com/api/v1/",
+        HASNA_SKILLS_API_KEY: "fixture-registry",
+      }),
+    ).toBe("https://canonical.example.com");
   });
 
-  test("falls back to config apiUrl", () => {
-    delete process.env.SKILLS_API_URL;
-    expect(getConfiguredApiUrl({ apiUrl: "https://config.example.com/api/v1/" })).toBe("https://config.example.com/api/v1");
+  test("a credential with no authority resolves the fleet gateway", () => {
+    expect(getConfiguredApiUrl({ HASNA_SKILLS_API_KEY: "fixture-registry" })).toBe(
+      "https://api.hasna.com/skills",
+    );
+  });
+
+  test("nothing configured resolves nothing — the read path stays local", () => {
+    expect(getConfiguredApiUrl({})).toBeUndefined();
   });
 
   test("parses remote array payload", () => {
@@ -346,14 +363,12 @@ describe("remote registry", () => {
       expect(fetched).toBe(false);
     });
 
-    test("returns the local list unchanged when auth is missing and never fetches or throws", async () => {
-      process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
-      // authToken: null exercises the auth-missing branch deterministically;
-      // the getApiKey() env-driven path is covered hermetically by the CLI
-      // subprocess test in cli.discovery.test.ts (the in-process auth-store
-      // module cache is shared across test files and not isolatable here).
+    test("an explicit null token still returns the local list, and never fetches", async () => {
+      // An explicit `authToken: null` is a caller saying "unauthenticated read",
+      // not a missing configuration — it stays the local list.
       let fetched = false;
       const result = await mergeRemoteRegistry(localFixture, {
+        apiUrl: "https://skills.example.com/api/v1",
         authToken: null,
         fetchImpl: async () => {
           fetched = true;
@@ -361,6 +376,23 @@ describe("remote registry", () => {
         },
       });
       expect(result).toEqual(localFixture);
+      expect(fetched).toBe(false);
+    });
+
+    test("an authority with no credential throws instead of serving the local half", async () => {
+      // The false green removed by the 2026-09-04 ruling: an operator pointed
+      // this CLI at an instance, the key went missing, and the merge answered
+      // from the bundled corpus as though the instance had nothing to add.
+      process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
+      let fetched = false;
+      await expect(
+        mergeRemoteRegistry(localFixture, {
+          fetchImpl: async () => {
+            fetched = true;
+            throw new Error("must not fetch without a credential");
+          },
+        }),
+      ).rejects.toThrow(/no API key resolved/);
       expect(fetched).toBe(false);
     });
 

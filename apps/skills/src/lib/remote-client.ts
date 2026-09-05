@@ -1,6 +1,5 @@
-import { getApiKey as getStoredApiKey, getApiKeyReadOnly, getApiUrl } from "./auth-store.js";
-import { MissingApiUrlError, resolveApiUrl } from "./api-url.js";
-import { loadConfigReadOnly } from "./config.js";
+import { getApiUrl } from "./auth-store.js";
+import { resolveSkillsFleet } from "./fleet-credentials.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 
 /**
@@ -443,27 +442,32 @@ function normalizeUpdatedSincePage(payload: unknown): UpdatedSincePage {
   return { skills, nextCursor };
 }
 
-export function createRemoteSkillsClient(): RemoteSkillsClient | null {
-  const apiKey = getStoredApiKey();
-  if (!apiKey) return null;
-  return new RemoteSkillsClient(apiKey);
+/**
+ * The client for the configured instance, or null when this install runs on
+ * this machine (no credential and no authority).
+ *
+ * A configured authority with no credential does NOT return null: the shared
+ * ladder throws, so the caller fails loudly instead of quietly reading the
+ * bundled corpus while authentication is unconfigured.
+ */
+export function createRemoteSkillsClient(
+  env: Record<string, string | undefined> = process.env,
+): RemoteSkillsClient | null {
+  const fleet = resolveSkillsFleet(env);
+  if (fleet.mode !== "hosted") return null;
+  return new RemoteSkillsClient(fleet.apiKey, fleet.apiOrigin);
 }
 
 /**
  * Write-free client resolution for read-only paths (e.g. `sync --dry-run`).
  *
- * createRemoteSkillsClient() resolves the stored credential through
- * getAuthFilePath() and the stored origin through loadConfig() — both route
- * through getDataDir(), which WRITES (mkdirs the app dir, merges legacy ~/.skills
- * content, copies the legacy config). A dry run must resolve the same client a
- * real run would without performing any of that: the credential and the origin
- * are read from the same files at the same computed paths, and the MissingApiUrl
- * failure mode is preserved (a key with no origin still fails loudly).
+ * Identical to createRemoteSkillsClient() now that resolution is the shared
+ * ladder, which reads the Keychain and the credentials file per call and writes
+ * nothing. Kept as a separate name so read-only callers keep reading as
+ * read-only, and so the distinction survives if a write ever creeps back in.
  */
-export function createRemoteSkillsClientReadOnly(): RemoteSkillsClient | null {
-  const apiKey = getApiKeyReadOnly();
-  if (!apiKey) return null;
-  const apiUrl = resolveApiUrl(loadConfigReadOnly(), process.env);
-  if (!apiUrl) throw new MissingApiUrlError("the cloud group's sync verb (--dry-run)");
-  return new RemoteSkillsClient(apiKey, apiUrl);
+export function createRemoteSkillsClientReadOnly(
+  env: Record<string, string | undefined> = process.env,
+): RemoteSkillsClient | null {
+  return createRemoteSkillsClient(env);
 }

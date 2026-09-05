@@ -483,20 +483,19 @@ describe("reconcileRegistry", () => {
     }
   });
 
-  test("a stored-auth dry run resolves the client write-free: no app dir, no legacy merge, no config copy", async () => {
-    // Fresh HOME holding ONLY legacy content. The normal client resolver reads the
-    // stored credential through getAuthFilePath() and the stored API origin through
-    // loadConfig() — both route through getDataDir(), which WRITES: it mkdirs the app
-    // dir, merges legacy ~/.skills content and copies ~/.skillsrc as config.json. The
-    // dry run must resolve the same client against the same files without any of that
-    // (review P1: client resolution ran unconditionally before the read-only corpus
-    // branch, so a stored-auth `sync --dry-run` still wrote ~/.hasna/skills).
+  test("a stored-credential dry run resolves the client write-free: no app dir, no legacy merge, no config copy", async () => {
+    // Fresh HOME holding ONLY the shared credentials file. Client resolution used to
+    // read the stored credential through getAuthFilePath() and the origin through
+    // loadConfig() — both routed through getDataDir(), which WRITES: it mkdirs the
+    // app dir, merges legacy ~/.skills content and copies ~/.skillsrc as config.json.
+    // A dry run must resolve the same client against the same files without any of
+    // that (review P1: client resolution ran unconditionally before the read-only
+    // corpus branch, so a stored-auth `sync --dry-run` still wrote ~/.hasna/skills).
     //
-    // The ORIGIN comes from the legacy ~/.skillsrc, not from the environment: the
-    // write-free resolution must read the legacy config file directly, exactly as the
-    // write path's migration would fold it into config.json (successor review P1: the
-    // read-only path threw MissingApiUrlError on a legacy-only HOME when no API env
-    // variable was set).
+    // Both the credential and the ORIGIN come from `~/.hasna/skills/config/credentials`
+    // — the shared @hasna/contracts disk tier — with no API environment variable set,
+    // so this is also the regression test for the ladder's disk tier being read
+    // without touching this app's data directory at all.
     const home = mkdtempSync(join(tmpdir(), "skills-reconcile-home-"));
     const legacyDir = join(home, ".skills");
     mkdirSync(legacyDir, { recursive: true });
@@ -505,19 +504,17 @@ describe("reconcileRegistry", () => {
     const previousHome = process.env.HOME;
     const previousSkillsDir = process.env.HASNA_SKILLS_DIR;
     const previousApiKey = process.env.SKILLS_API_KEY;
-    const previousApiKeyAlt = process.env.SKILL_API_KEY;
     const previousApiUrl = process.env.SKILLS_API_URL;
     process.env.HOME = home;
     delete process.env.HASNA_SKILLS_DIR;
     delete process.env.SKILLS_API_KEY;
-    delete process.env.SKILL_API_KEY;
     delete process.env.SKILLS_API_URL;
     try {
       // A minimal stub instance answering only the listing. A real in-process skills
       // server merges the machine's own local registry into its listing
       // (listMergedSkills -> loadRegistry -> getDataDir), which would write the app
       // dir as a fixture artifact of the server, not of the dry-run client path this
-      // P1 names. The stub isolates the client path: resolve stored auth + origin,
+      // P1 names. The stub isolates the client path: resolve the credential + origin,
       // enumerate, plan — and write nothing.
       const server = Bun.serve({
         port: 0,
@@ -530,23 +527,27 @@ describe("reconcileRegistry", () => {
         },
       });
       try {
-        // The origin is stored in the LEGACY config file only; no API environment
-        // variable is set. No injected client: the dry run must resolve one itself,
-        // reading the legacy files write-free.
-        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ apiUrl: `http://127.0.0.1:${server.port}` }));
+        const credentialsDir = join(home, ".hasna", "skills", "config");
+        mkdirSync(credentialsDir, { recursive: true });
+        writeFileSync(
+          join(credentialsDir, "credentials"),
+          `HASNA_SKILLS_API_URL=http://127.0.0.1:${server.port}\nHASNA_SKILLS_API_KEY=${SYNC_AUTH}\n`,
+          { mode: 0o600 },
+        );
         const local = makeCorpus({});
         const result = await reconcileRegistry({ rootDir: local, dryRun: true });
 
         expect(result.dryRun).toBe(true);
-        // Positive control: the write-free resolution found the stored legacy
-        // credential and the legacy-config origin — the plan enumerated the registry
-        // rather than failing on a missing credential or origin.
+        // Positive control: the write-free resolution found the stored credential and
+        // origin — the plan enumerated the registry rather than failing on a missing
+        // credential.
         expect(result.summary.remote).toBe(0);
 
-        // The dry run must not have created the canonical app dir, merged the legacy
-        // tree, or copied the legacy config — the writes getDataDir() performs on any
-        // call. Asserted while the home still exists (before the cleanup below).
-        expect(existsSync(join(home, ".hasna", "skills"))).toBe(false);
+        // The dry run must not have populated the app dir, merged the legacy tree, or
+        // copied the legacy config — the writes getDataDir() performs on any call.
+        // (`~/.hasna/skills/config/` exists because this test wrote the credential
+        // there; nothing else may.)
+        expect(readdirSync(join(home, ".hasna", "skills"))).toEqual(["config"]);
         expect(readdirSync(legacyDir)).toEqual(["auth.json"]);
       } finally {
         server.stop(true);
@@ -557,8 +558,6 @@ describe("reconcileRegistry", () => {
       else process.env.HASNA_SKILLS_DIR = previousSkillsDir;
       if (previousApiKey === undefined) delete process.env.SKILLS_API_KEY;
       else process.env.SKILLS_API_KEY = previousApiKey;
-      if (previousApiKeyAlt === undefined) delete process.env.SKILL_API_KEY;
-      else process.env.SKILL_API_KEY = previousApiKeyAlt;
       if (previousApiUrl === undefined) delete process.env.SKILLS_API_URL;
       else process.env.SKILLS_API_URL = previousApiUrl;
       rmSync(home, { recursive: true, force: true });

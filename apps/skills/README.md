@@ -19,11 +19,12 @@ Requires [Bun](https://bun.sh/) 1.0+.
 # Browse skills interactively
 skills
 
-# Point the CLI at a Skills API server for server-owned (premium) skill runs
-skills setup --api-url https://skills.example.com
-skills auth login --api-key "$SKILLS_API_KEY"
+# Sign in. With a credential and no URL, the CLI talks to the fleet gateway;
+# point it at your own instance first if you run one.
+skills setup --api-url https://skills.example.com   # only for your own instance
+skills auth login --api-key "$HASNA_SKILLS_API_KEY"
 
-# With no API URL configured, skills simply run on this machine
+# With no credential and no URL, skills simply run on this machine
 skills list
 
 # Optionally pin a skill preference in this project
@@ -54,21 +55,16 @@ create local run metadata, and then expose status and artifact commands. They
 do not fall back to bundled local execution when auth is missing or the server
 runtime is unavailable.
 
-Routing is config-driven and local is the default: a run is sent to the API
-only when an origin is configured (`apiUrl` or `$SKILLS_API_URL`), a credential
-is present (`SKILLS_API_KEY` or the auth store), and the skill carries the
-server-owned marker. Every other skill runs on this machine, whether or not an
-API is configured. No skill in the OSS catalog is server-owned today; the
+Routing is credential-driven and local is the default: a run is sent to the API
+only when a credential resolves (see **Credentials** below) and the skill carries
+the server-owned marker. Every other skill runs on this machine, whether or not
+a credential exists. No skill in the OSS catalog is server-owned today; the
 marker arrives with skills synced from a Skills API deployment. A server-owned
-skill run without the origin or the credential fails closed with an error
-naming the missing setup — it never silently runs locally.
-
-Use `SKILLS_API_KEY` or `skills auth login --api-key` for server-side
-execution:
+skill run without a credential fails closed with an error naming the missing
+setup — it never silently runs locally.
 
 ```bash
-skills setup --api-url https://skills.example.com
-skills auth login --api-key "$SKILLS_API_KEY"
+skills auth login --api-key "$HASNA_SKILLS_API_KEY"
 skills run <server-owned-skill> --brief "minimal geometric owl mark"
 skills runs status <run-id>
 skills exports download <run-id>
@@ -78,10 +74,60 @@ Browser/device-code and email-code login commands are retained for compatible
 deployments. A Skills deployment can bootstrap with a provisioned API key via
 `skills auth login --api-key`.
 
-`SKILLS_API_KEY` is the Skills API credential. It is not a provider
+`HASNA_SKILLS_API_KEY` is the Skills API credential. It is not a provider
 credential. Provider keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or
 `GEMINI_API_KEY` remain supported only for free/local OSS skills whose
 requirements explicitly document local provider use.
+
+## Credentials
+
+The credential and the service address are resolved by the shared client in
+[`@hasna/contracts`](https://www.npmjs.com/package/@hasna/contracts), the same
+ladder every Hasna CLI uses. Nothing here is resolved twice, and this package
+keeps no credential store of its own.
+
+**The credential, in precedence order, resolved fresh on every call:**
+
+| # | Tier | Where |
+|---|------|-------|
+| 1 | Explicit argument | `--api-key`, `--profile` |
+| 2 | Deliberate env pointer | `HASNA_SKILLS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_SKILLS_API_KEY_REF` (a secrets-vault item key, never a value) |
+| 3 | macOS Keychain | generic-password item `hasna.credentials.skills.api-key`, account `$HASNA_STATION`, else `hostname -s`, else `$USER` |
+| 4 | Disk | `~/.hasna/skills/config/credentials` (mode 0400/0600; `HASNA_HOME` and `HASNA_CONFIG_HOME` relocate it; XDG is never consulted) |
+| 5 | Environment | `HASNA_SKILLS_API_KEY` — a legitimate tier, and deliberately *below* disk |
+
+Tier 5 sits below disk on purpose. A wrapper that injects `HASNA_SKILLS_API_KEY`
+into one child process re-reads its store every time and cannot go stale; a shell
+`export` can, and after a key rotation the file on disk is the correct one.
+
+`skills auth login` writes tier 4. A tier an operator set on purpose (1 and 2)
+never falls through to another identity: if it cannot be honoured, the command
+fails rather than acting as a different principal.
+
+**The service address, in the same shape:**
+
+`HASNA_SKILLS_API_URL` → the Keychain item `hasna.credentials.skills.api-url` →
+`~/.hasna/skills/config/credentials` → the fleet gateway
+`https://api.hasna.com/skills`. The gateway default applies only once a
+credential has resolved, so an install with no credential names no host at all.
+`skills setup --api-url <origin>` writes the credentials file; the address is
+per-user, never per-project.
+
+The unprefixed `SKILLS_API_KEY` and `SKILLS_API_URL` spellings are still accepted
+as silent aliases one rung below the canonical names, for one release. Use the
+`HASNA_`-prefixed names. `SKILL_API_KEY` (singular) is no longer read at all.
+
+**Three outcomes, and no fourth:**
+
+- a credential resolves → **hosted**, against the configured URL or the gateway;
+- no credential but a URL is configured → **loud failure**, exit non-zero. There
+  is no local fallback: answering from the bundled corpus while authentication is
+  unconfigured is a false green;
+- neither → **local**. Skills ships its corpus, so running on this machine is a
+  real mode; it prints one line on stderr saying so.
+
+`~/.hasna/skills/auth.json`, `~/.skills/auth.json`, `~/.hasna/fleet-env/`,
+`~/.hasna/cloud/` and `~/.config/hasna/` are retired and are not read.
 
 ## CLI Commands
 
@@ -122,7 +168,7 @@ requirements explicitly document local provider use.
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
 | `skills config set <key> <value>` | | Set default agent, scope, output format, or API origin |
-| `skills config unset <key>` | | Remove a configuration value (`skills config unset apiUrl` returns to running on this machine) |
+| `skills config unset <key>` | | Remove a configuration value (`skills config unset apiUrl` clears the stored service address and returns to running on this machine) |
 | `skills new <name>` | `scaffold` | Scaffold a portable skill under `~/.hasna/skills/installed/<name>` |
 | `skills port <path>` | `add` | Import an existing skill folder into the portable standard |
 | `skills create <name>` | | Scaffold a new custom skill directory |
@@ -146,7 +192,7 @@ requirements explicitly document local provider use.
 - `--brief` — One-line format
 - `--limit <n>` — Cap human rows where supported; use `--limit all` or `--limit 0` for every row
 - `--cursor <n>` — Continue human-output pagination from a numeric offset
-- `--remote` — Read browse/search data from `SKILLS_API_URL` or `config apiUrl`
+- `--remote` — Read browse/search data from the configured Skills instance (see **Credentials**)
 - `--dry-run` — Preview without applying changes
 - `--verbose` — Debug logging globally; richer human discovery rows where supported
 - `--no-color` — Disable ANSI colors
@@ -206,15 +252,16 @@ Stable command shapes:
 ## Remote Registry
 
 The npm package ships no bundled skill corpus. Discovery reads the local corpus
-cache (`~/.hasna/skills/installed`, filled by `skills pull`) and, when an API
-base URL is set, the server's registry. This is not a mode you select: pointing
-browse/search commands at a server's registry is one fact, an API base URL being
-set. To set it:
+cache (`~/.hasna/skills/installed`, filled by `skills pull`) and, when a
+credential resolves, the server's registry. This is not a mode you select:
+whether browse/search commands read a server's registry is one fact, whether a
+credential resolves (see [Credentials](#credentials)). To point at your own
+instance:
 
 ```bash
-export SKILLS_API_URL=https://your-server.example
-# or persist it:
-skills config set apiUrl https://your-server.example
+export HASNA_SKILLS_API_URL=https://your-server.example
+# or persist it in the credentials file the shared ladder reads:
+skills setup --api-url https://your-server.example
 # and to stop using it:
 skills config unset apiUrl
 
@@ -228,8 +275,9 @@ If the URL is an origin such as `https://your-server.example`, the CLI requests
 `/api/v1/skills`. If it already ends in `/api` or `/api/v1`, the CLI appends
 `/skills`.
 
-Authenticated registry listing and premium server-side execution use
-`SKILLS_API_KEY` or the credential saved by `skills auth login --api-key`.
+Authenticated registry listing and premium server-side execution use whichever
+credential the ladder resolves — most often the one saved by
+`skills auth login --api-key`.
 
 The typed `RemoteSkillsClient` also exposes pin, tag, and cursor-based
 incremental-sync methods (`listPins`/`pin`/`unpin`, `listTags`/`skillsByTag`,
@@ -307,8 +355,8 @@ skills mcp --register all       # Register with all supported agents
 ## Skills API
 
 ```bash
-skills setup --api-url https://skills.example.com
-skills auth login --api-key "$SKILLS_API_KEY"
+skills setup --api-url https://skills.example.com   # only for your own instance
+skills auth login --api-key "$HASNA_SKILLS_API_KEY"
 skills billing status
 ```
 
@@ -372,8 +420,8 @@ SQLite file, so it stays usable as a deploy gate.
 
 `HASNA_SKILLS_DATABASE_URL` and `DATABASE_URL` are server-only. CLI, MCP, and SDK
 clients never read them and never open a database connection: a client reaches
-the cloud only through `SKILLS_API_URL` plus an API key (the `apiKey` stored by
-`skills auth`, or `SKILLS_API_KEY`). The one exception is the repo-native storage
+the cloud only through the resolved API URL plus the resolved API key (see
+[Credentials](#credentials)). The one exception is the repo-native storage
 sync under [Storage Boundary](#storage-boundary), an operator tool that
 intentionally reads the same variables.
 

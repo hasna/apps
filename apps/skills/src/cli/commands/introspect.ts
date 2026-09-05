@@ -29,7 +29,7 @@ export function registerIntrospect(parent: Command) {
     .argument("<skill>", "Skill name")
     .option("--json", "Output as JSON", false)
     .option("--brief", "Single line: name \u2014 description [category] (tags: ...)", false)
-    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
+    .option("--remote", "Use the remote registry (the resolved Skills credential; HASNA_SKILLS_API_URL for your own instance)", false)
     .description("Show details about a specific skill")
     .action((name: string, options: { json: boolean; brief: boolean; remote: boolean }) => {
       return handleInfo(name, options).catch(async (error) => {
@@ -45,7 +45,7 @@ export function registerIntrospect(parent: Command) {
     .argument("<skill>", "Skill name")
     .option("--json", "Output as JSON", false)
     .option("--brief", "Single line: name — description [category] (tags: ...)", false)
-    .option("--remote", "Use remote registry from SKILLS_API_URL or config apiUrl", false)
+    .option("--remote", "Use the remote registry (the resolved Skills credential; HASNA_SKILLS_API_URL for your own instance)", false)
     .description("Show details about a specific skill")
     .action((name: string, options: { json: boolean; brief: boolean; remote: boolean }) => {
       return handleInfo(name, options).catch(async (error) => {

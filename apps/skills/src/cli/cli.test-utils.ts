@@ -36,6 +36,9 @@ export const CLEAN_CLI_HOME = mkdtempSync(join(tmpdir(), "skills-cli-home-"));
 // exercise the override can still pass one explicitly - same explicit-over-ambient
 // rule the resolver itself follows.
 function testEnv(env: Record<string, string>): Record<string, string> {
+  // withoutDataDirOverrideEnv() also strips every fleet credential variable and
+  // blinds the Keychain tier (see test-preload.ts): a child CLI must resolve the
+  // same "runs on this machine" state on a developer's Mac as on CI.
   return {
     ...withoutDataDirOverrideEnv({ ...process.env }),
     HOME: CLEAN_CLI_HOME,

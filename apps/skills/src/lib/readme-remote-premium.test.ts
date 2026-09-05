@@ -24,7 +24,7 @@ describe("README premium server-side onboarding", () => {
 
   test("separates Skills API auth from local provider keys", () => {
     for (const phrase of [
-      "`SKILLS_API_KEY` is the Skills API credential",
+      "`HASNA_SKILLS_API_KEY` is the Skills API credential",
       "It is not a provider",
       "`OPENAI_API_KEY`",
       "free/local OSS skills",

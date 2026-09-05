@@ -87,22 +87,21 @@ describe("API-first boundary contract", () => {
       expect(JSON.stringify(merged)).toBe(JSON.stringify(LOCAL_ONLY_FIXTURE));
     });
 
-    test("an origin without a credential keeps the exact local registry and never throws", async () => {
+    test("an origin without a credential fails closed instead of serving the local half", async () => {
+      // Owner ruling 2026-09-04 (hasna/apps#1720): hosted with no credential is
+      // LOUD. Returning the local registry here was a false green — the caller
+      // was pointed at an instance and got a healthy-looking answer that had
+      // never been near it. There is no module cache to work around any more:
+      // the ladder re-resolves per call, so the env-only path is asserted
+      // directly.
       process.env.SKILLS_API_URL = "https://skills.example.com/api/v1";
-      // authToken: null exercises the auth-missing branch deterministically.
-      // The getApiKey() env-driven path cannot be asserted in-process: the
-      // auth-store module cache is shared across the test process and is
-      // primed by auth-store.test.ts, so a later read would not reflect the
-      // env alone. That path is covered hermetically by the CLI subprocess
-      // test in cli.discovery.test.ts ("keeps the default local list when an
-      // origin is set but no credential exists").
-      const merged = await mergeRemoteRegistry(LOCAL_ONLY_FIXTURE, {
-        authToken: null,
-        fetchImpl: async () => {
-          throw new Error("must not fetch without a credential");
-        },
-      });
-      expect(merged).toEqual(LOCAL_ONLY_FIXTURE);
+      await expect(
+        mergeRemoteRegistry(LOCAL_ONLY_FIXTURE, {
+          fetchImpl: async () => {
+            throw new Error("must not fetch without a credential");
+          },
+        }),
+      ).rejects.toThrow(/no API key resolved/);
     });
 
     test("a rejected authenticated read surfaces a clear error, never a silent empty", async () => {

@@ -60,13 +60,19 @@ describe("CLI discovery", () => {
         expect(empty.exitCode).toBe(0);
         expect(JSON.parse(empty.stdout)).toEqual({});
 
-        const set = await runCliInCwd(["config", "set", "apiUrl", "https://example.com/api/v1/", "--json"], tmpDir, { HOME: tmpDir });
+        const set = await runCliInCwd(["config", "set", "format", "json", "--json"], tmpDir, { HOME: tmpDir });
         expect(set.exitCode).toBe(0);
         const setData = JSON.parse(set.stdout);
-        expect(setData).toMatchObject({ key: "apiUrl", value: "https://example.com/api/v1", scope: "project" });
+        expect(setData).toMatchObject({ key: "format", value: "json", scope: "project" });
 
-        const get = await runCliInCwd(["config", "get", "apiUrl", "--json"], tmpDir, { HOME: tmpDir });
-        expect(JSON.parse(get.stdout)).toMatchObject({ key: "apiUrl", value: "https://example.com/api/v1", set: true });
+        const get = await runCliInCwd(["config", "get", "format", "--json"], tmpDir, { HOME: tmpDir });
+        expect(JSON.parse(get.stdout)).toMatchObject({ key: "format", value: "json", set: true });
+
+        // The service address is not a config key any more: it lives in the
+        // shared credentials file, written by `skills setup --api-url`.
+        const refused = await runCliInCwd(["config", "set", "apiUrl", "https://example.com", "--json"], tmpDir, { HOME: tmpDir });
+        expect(refused.exitCode).not.toBe(0);
+        expect(JSON.parse(refused.stdout).error).toContain("skills setup --api-url");
 
         const paths = await runCliInCwd(["config", "path", "--json"], tmpDir, { HOME: tmpDir });
         const pathData = JSON.parse(paths.stdout);
@@ -198,6 +204,7 @@ describe("CLI discovery", () => {
       try {
         const { stdout, exitCode } = await runCli(["categories", "--remote", "--json"], {
           SKILLS_API_URL: `http://localhost:${server.port}`,
+          SKILLS_API_KEY: "fixture-remote-read",
         });
         expect(exitCode).toBe(0);
         // Merged: the instance's categories appear ALONGSIDE the bundled ones rather than
@@ -325,6 +332,7 @@ describe("CLI discovery", () => {
       try {
         const { stdout, exitCode } = await runCli(["list", "--remote", "--json"], {
           SKILLS_API_URL: `http://localhost:${server.port}`,
+          SKILLS_API_KEY: "fixture-remote-read",
         });
         const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);
@@ -418,11 +426,12 @@ describe("CLI discovery", () => {
       expect(data.every((skill: any) => skill.source !== "remote")).toBe(true);
     }, SLOW_TEST_TIMEOUT);
 
-    test("keeps the default local list when an origin is set but no credential exists", async () => {
-      // T5 fail-closed: an origin without a credential must not change the
-      // default output at all, must not throw, and must not even attempt the
-      // request. Hermetic via a fresh subprocess with a clean home — the
-      // in-process auth-store module cache cannot leak in here.
+    test("an origin with no credential fails closed instead of quietly listing the local half", async () => {
+      // Owner ruling 2026-09-04 (hasna/apps#1720): this used to print the local
+      // listing and exit 0 — a healthy-looking answer that had never been near
+      // the instance the operator pointed at. It now exits non-zero, naming the
+      // ladder, and still sends no request. Hermetic via a fresh subprocess with
+      // a clean home.
       let requests = 0;
       const server = Bun.serve({
         port: 0,
@@ -433,13 +442,13 @@ describe("CLI discovery", () => {
       });
 
       try {
-        const { stdout, exitCode } = await runCli(["list", "--all", "--json"], {
+        const { stdout, stderr, exitCode } = await runCli(["list", "--all", "--json"], {
           SKILLS_API_URL: `http://localhost:${server.port}`,
         });
-        expect(exitCode).toBe(0);
-        const data = JSON.parse(stdout);
-        expect(data.length).toBe(EXPECTED_ALL_SKILL_COUNT);
-        expect(data.every((skill: any) => skill.source !== "remote")).toBe(true);
+        expect(exitCode).not.toBe(0);
+        expect(stderr).toContain("no API key resolved");
+        expect(stderr).toContain("skills auth login");
+        expect(stdout).not.toContain("should-not-appear");
         expect(requests).toBe(0);
       } finally {
         server.stop(true);
@@ -636,6 +645,7 @@ describe("CLI discovery", () => {
       try {
         const { stdout, exitCode } = await runCli(["search", "transcribe", "--remote", "--json"], {
           SKILLS_API_URL: `http://localhost:${server.port}`,
+          SKILLS_API_KEY: "fixture-remote-read",
         });
         const data = JSON.parse(stdout);
         expect(exitCode).toBe(0);

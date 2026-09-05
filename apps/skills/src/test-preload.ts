@@ -132,6 +132,49 @@ const baseline = join(tmpdir(), "hasna-skills-test-baseline");
 mkdirSync(baseline, { recursive: true });
 process.env[DATA_DIR_ENV] = baseline;
 
+/**
+ * Every environment variable the shared fleet credential ladder reads.
+ *
+ * The ladder (lib/fleet-credentials.ts -> @hasna/contracts/client) is ambient by
+ * design: it reads the real environment, the real `~/.hasna/skills/config/credentials`
+ * and, on macOS, the real login Keychain. That is correct for the product and
+ * fatal for a test suite — a developer machine with a working `skills`
+ * credential would run half this suite in hosted mode while CI (Linux, no
+ * Keychain, no credential) runs it locally, and the two would disagree about
+ * everything from `skills list` to the R1 boundary assertions.
+ */
+export const FLEET_CREDENTIAL_ENV_VARS = [
+  "HASNA_SKILLS_API_KEY",
+  "SKILLS_API_KEY",
+  "SKILLS_API_KEY_OVERRIDE",
+  "HASNA_SKILLS_API_KEY_OVERRIDE",
+  "HASNA_SKILLS_API_KEY_REF",
+  "HASNA_SKILLS_API_URL",
+  "SKILLS_API_URL",
+  "HASNA_PROFILE",
+  "HASNA_HOME",
+  "HASNA_CONFIG_HOME",
+] as const;
+
+/**
+ * The Keychain account the ladder looks an item up under. Pointed at a name no
+ * item can have, so tier 3 is simply ABSENT rather than mocked — which is the
+ * state a Linux CI runner is in, and the state every assertion here assumes.
+ * A test that wants the tier passes its own `keychain: { run }` fake.
+ */
+export const NO_KEYCHAIN_ACCOUNT = "skills-suite-no-such-keychain-account";
+
+/** Strip every fleet credential variable from an env object and blind the Keychain. */
+export function withoutFleetCredentialEnv<T extends Record<string, string | undefined>>(env: T): T {
+  const copy = { ...env } as Record<string, string | undefined>;
+  for (const key of FLEET_CREDENTIAL_ENV_VARS) delete copy[key];
+  copy["HASNA_STATION"] = NO_KEYCHAIN_ACCOUNT;
+  return copy as T;
+}
+
+for (const key of FLEET_CREDENTIAL_ENV_VARS) delete process.env[key];
+process.env["HASNA_STATION"] = NO_KEYCHAIN_ACCOUNT;
+
 let current: string | null = null;
 
 beforeEach(() => {
@@ -199,5 +242,5 @@ export function withoutDataDirOverrideEnv(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
   const { [DATA_DIR_ENV]: _dropped, ...rest } = env;
-  return rest;
+  return withoutFleetCredentialEnv(rest);
 }

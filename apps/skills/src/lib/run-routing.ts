@@ -8,9 +8,11 @@
  *
  * A skill run is REMOTE only when all three hold:
  *
- *   1. an origin is configured (config `apiUrl` or `$SKILLS_API_URL`);
- *   2. a credential is present (`$SKILLS_API_KEY` / `$SKILL_API_KEY` or the
- *      auth store written by `skills auth login`);
+ *   1. a credential resolves on the fleet ladder (an argument, an env pointer,
+ *      the macOS Keychain, `~/.hasna/skills/config/credentials`, or
+ *      `$HASNA_SKILLS_API_KEY`) — see lib/fleet-credentials.ts;
+ *   2. an authority follows from it (`$HASNA_SKILLS_API_URL`, the Keychain
+ *      `api-url` item, the credentials file, else the fleet gateway);
  *   3. the skill carries the server-owned marker from its published contract
  *      (`skills.runtime: "hosted"` or `skills.source: "remote" |
  *      "private-hosted"` in the skill's `package.json` — see
@@ -30,8 +32,7 @@
  */
 
 import type { SkillMeta } from "./registry-types.js";
-import { resolveApiUrl } from "./api-url.js";
-import { getApiKey } from "./auth-store.js";
+import { resolveSkillsFleet, SkillsFleetCredentialError } from "./fleet-credentials.js";
 
 export type RunRoutingErrorCode = "REMOTE_REQUIRES_ORIGIN" | "REMOTE_REQUIRES_CREDENTIAL";
 
@@ -65,7 +66,7 @@ export function resolveRunRouting(
       code: "REMOTE_REQUIRES_ORIGIN",
       error:
         `${skill.name} is a server-owned skill. Point the CLI at a Skills API: ` +
-        `skills setup --api-url <url> (or export SKILLS_API_URL)`,
+        `skills setup --api-url <url> (or export HASNA_SKILLS_API_URL)`,
     };
   }
   if (!apiKey) {
@@ -86,6 +87,25 @@ export function resolveRunRouting(
  */
 export function resolveConfiguredRunRouting(
   skill: Pick<SkillMeta, "name" | "serverOwned">,
+  env: Record<string, string | undefined> = process.env,
 ): RunRouting {
-  return resolveRunRouting(skill, getApiKey(), resolveApiUrl());
+  let fleet;
+  try {
+    fleet = resolveSkillsFleet(env);
+  } catch (error) {
+    // An authority with no credential. The shared ladder is right to throw — the
+    // alternative is running a server-owned skill locally — but a scheduled run
+    // reports per-skill results, so the refusal is carried as this resolver's own
+    // structured error rather than as an exception that aborts the whole batch.
+    // A local route is never produced here.
+    if (!(error instanceof SkillsFleetCredentialError) && (error as Error)?.name !== "SkillsFleetCredentialError") {
+      throw error;
+    }
+    return {
+      route: "error",
+      code: "REMOTE_REQUIRES_CREDENTIAL",
+      error: `${skill.name} is a server-owned skill. ${(error as Error).message}`,
+    };
+  }
+  return resolveRunRouting(skill, fleet.apiKey, fleet.apiOrigin ?? undefined);
 }

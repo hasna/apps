@@ -15,8 +15,10 @@ without a hosted API.
 
 ### Remote Registry
 
-Remote registry mode is opt-in through `SKILLS_API_URL`, project/global config
-`apiUrl`, or explicit `RemoteRegistryOptions.apiUrl`.
+The remote registry is reached whenever the shared credential ladder resolves a
+credential (`HASNA_SKILLS_API_KEY`, the macOS Keychain, or
+`~/.hasna/skills/config/credentials`), or when a caller passes an explicit
+`RemoteRegistryOptions.apiUrl`.
 
 The reusable remote helpers are:
 

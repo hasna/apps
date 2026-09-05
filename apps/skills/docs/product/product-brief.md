@@ -6,10 +6,13 @@ compatible API for server-executed skills, while local-only usage remains
 available without requiring an API account or source-copy installs.
 
 The open package can optionally talk to a Skills API for server-executed skills.
-It ships with no default endpoint: the operator names their own instance through
-`SKILLS_API_URL` or `skills setup --api-url <origin>`. That
-API path is explicit configuration, not a dependency of local-only use, and an
-unconfigured install never sends credentials anywhere.
+It ships with no endpoint of its own: the authority comes from the shared
+@hasna/contracts client ladder — `HASNA_SKILLS_API_URL`, the macOS Keychain
+`api-url` item, `~/.hasna/skills/config/credentials`, then the fleet gateway once
+a credential has resolved. An operator naming their own instance writes it with
+`skills setup --api-url <origin>`. That API path is explicit configuration, not a
+dependency of local-only use, and an install with no credential never sends
+anything anywhere.
 
 ## Target Users
 

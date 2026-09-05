@@ -1,15 +1,16 @@
 /**
  * Remote registry client.
  *
- * Local registry behavior remains the default. These helpers are opt-in and
- * read from SKILLS_API_URL or config.apiUrl so services can expose
- * a compatible registry API without hard-coding deployment details upstream.
+ * Local registry behavior remains the default. These helpers are opt-in: the
+ * authority and the credential both come from the shared fleet ladder
+ * (lib/fleet-credentials.ts), so a service can expose a compatible registry API
+ * without this package hard-coding anything about where it is deployed.
  */
 
 import { z } from "zod";
 import { resolveApiUrl } from "./api-url.js";
 import { getApiKey } from "./auth-store.js";
-import { loadConfig, type SkillsConfig } from "./config.js";
+import { SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "./fleet-credentials.js";
 import { sanitizePublicDiscoveryText } from "./discovery.js";
 import { mergeSkillRegistryLists } from "./registry-merge.js";
 import type { SkillMeta } from "./registry.js";
@@ -68,13 +69,12 @@ export interface RemoteRegistryOptions {
 }
 
 export function getConfiguredApiUrl(
-  config: SkillsConfig = loadConfig(),
   env: Record<string, string | undefined> = process.env,
 ): string | undefined {
-  // Read paths fail closed: no configuration means no remote registry, never a
+  // Read paths fail closed: no credential means no remote registry, never a
   // fallback host. Resolution lives in one place so auth/write paths and read
   // paths cannot drift apart again.
-  return resolveApiUrl(config, env);
+  return resolveApiUrl(env);
 }
 
 export function buildSkillsApiUrl(apiUrl: string, endpoint = "/skills"): string {
@@ -210,7 +210,7 @@ async function fetchRemoteJson(url: string, options: RemoteRegistryOptions): Pro
 export async function loadRemoteRegistry(options: RemoteRegistryOptions = {}): Promise<SkillMeta[]> {
   const apiUrl = options.apiUrl || getConfiguredApiUrl();
   if (!apiUrl) {
-    throw new Error("Remote registry requires SKILLS_API_URL or config apiUrl");
+    throw new Error(`Remote registry requires a Skills credential (${SKILLS_API_KEY_ENV}, the Keychain item, or ~/.hasna/skills/config/credentials) and, for your own instance, ${SKILLS_API_URL_ENV}`);
   }
 
   const url = buildSkillsApiUrl(apiUrl, options.endpoint);
@@ -225,12 +225,14 @@ export async function loadRemoteRegistry(options: RemoteRegistryOptions = {}): P
  * origin sees the folder UNION cloud in the plain `list`/`search` path, while
  * every other install keeps today's exact local behavior.
  *
- *   - No origin configured  -> the local list is returned unchanged and no
- *     request is attempted. An unconfigured install must stay byte-identical
- *     to the pre-merge output.
- *   - Origin configured but no credential -> the local list is returned
- *     unchanged and nothing throws. Auth-missing must never crash a read.
- *   - Origin + credential -> the remote registry is fetched and merged under
+ *   - Nothing configured (no credential, no authority) -> the local list is
+ *     returned unchanged and no request is attempted. An install running on
+ *     this machine must stay byte-identical to the pre-merge output.
+ *   - An authority configured with NO credential -> this throws, from the
+ *     shared ladder. It used to return the local half silently, which is the
+ *     false green the 2026-09-04 ruling removes: an operator who pointed this
+ *     CLI at an instance and lost the key was shown a healthy local listing.
+ *   - Credential (+ authority, else the fleet gateway) -> the remote registry is fetched and merged under
  *     the precedence in registry-merge.ts (custom > extension > private >
  *     private-hosted > remote > upstream > official), remote rows tagged
  *     `source: "remote"`.
@@ -257,7 +259,7 @@ export async function mergeRemoteRegistry(
 export async function loadRemoteSkill(name: string, options: RemoteRegistryOptions = {}): Promise<SkillMeta> {
   const apiUrl = options.apiUrl || getConfiguredApiUrl();
   if (!apiUrl) {
-    throw new Error("Remote registry requires SKILLS_API_URL or config apiUrl");
+    throw new Error(`Remote registry requires a Skills credential (${SKILLS_API_KEY_ENV}, the Keychain item, or ~/.hasna/skills/config/credentials) and, for your own instance, ${SKILLS_API_URL_ENV}`);
   }
 
   const slug = encodeURIComponent(name);
