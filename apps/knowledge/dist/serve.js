@@ -5698,7 +5698,7 @@ function resolveVersion() {
   }
 }
 function resolveSigningSecret(env = process.env) {
-  const secret = env.HASNA_KNOWLEDGE_API_SIGNING_KEY ?? env.API_KEY_SIGNING_SECRET ?? env.HASNA_API_SIGNING_KEY;
+  const secret = env.HASNA_KNOWLEDGE_API_SIGNING_KEY?.trim() || env.API_KEY_SIGNING_SECRET?.trim() || env.HASNA_API_SIGNING_KEY?.trim();
   if (!secret) {
     throw new Error("knowledge-serve requires an API signing secret: set HASNA_KNOWLEDGE_API_SIGNING_KEY " + "(or API_KEY_SIGNING_SECRET / HASNA_API_SIGNING_KEY).");
   }

@@ -217,8 +217,8 @@ export async function verifyIncidentProjectionPg(argv: string[] = []): Promise<n
 
   const ownerConnectionString = process.env.HASNA_CONVERSATIONS_DATABASE_URL_OWNER
     || process.env.CONVERSATIONS_DATABASE_URL_OWNER!;
-  const signingSecret = process.env.HASNA_CONVERSATIONS_API_SIGNING_KEY
-    || process.env.HASNA_API_SIGNING_KEY!;
+  const signingSecret = process.env.HASNA_CONVERSATIONS_API_SIGNING_KEY?.trim()
+    || process.env.HASNA_API_SIGNING_KEY!.trim();
   const schemaName = `incident_pg_verify_${randomUUID().replace(/-/g, "")}`;
   const schemaConnectionString = appendSearchPath(ownerConnectionString, schemaName);
 

@@ -22570,7 +22570,7 @@ function viewWindow(view) {
 }
 function toBuffer(secret) {
   if (typeof secret === "string")
-    return Buffer.from(secret, "utf8");
+    return Buffer.from(secret.trim(), "utf8");
   if (ArrayBuffer.isView(secret)) {
     const [store, byteOffset, byteLength] = viewWindow(secret);
     return Buffer.from(store, byteOffset, byteLength);
@@ -24628,7 +24628,7 @@ async function runIssueKey(options, deps) {
   }
   const secretEnvName = signingSecretEnvName(app, optSigningSecretEnv);
   const fallbackName = optSigningSecretEnv ? undefined : "HASNA_API_SIGNING_KEY";
-  const signingSecret = env[secretEnvName] ?? (fallbackName ? env[fallbackName] : undefined);
+  const signingSecret = (env[secretEnvName] ?? (fallbackName ? env[fallbackName] : undefined))?.trim();
   if (!signingSecret) {
     const tried = fallbackName ? `${secretEnvName} (or ${fallbackName})` : secretEnvName;
     deps.report({ json }, `No signing secret found. Set the ${tried} env var (openssl rand -hex 32).`, {
@@ -28168,7 +28168,7 @@ function createContractsProgram() {
   program2.command("verify-write").description("Cheaper than rendering a stored body: compare byte length and SHA-256; prevents appended capability content from reaching output").argument("<target>", "Exact object ID requested from the fetch command").argument("[command...]", "The fetch command to run after --; it must return one JSON object").requiredOption("--authored <file>", "File containing the exact payload the caller authored").option("--id-path <path>", "Dotted path to the fetched object's ID", "id").option("--content-path <path>", "Dotted path to the fetched stored content", "body").option("-j, --json", "Output metadata-only JSON").action((target, command, options) => {
     process.exitCode = runVerifyWriteCli(target, command ?? [], options);
   });
-  program2.command("issue-key").description("Mint an API key: disclose it once, or deliver it silently to an exact Hasna Secrets reference").requiredOption("--app <app>", "App slug the key authenticates (e.g. todos)").option("--agent <agent>", "Issued-to agent/subject (informational)").option("--tid <tenant>", "Tenant/organization the key acts for (UUID, ULID, slug, or prefixed id). Omit for an untenanted key").option("--scopes <csv>", "Comma-separated scopes, e.g. 'todos:read,todos:write' or 'todos:*'").option("--ttl-days <days>", "Days until expiry (default 90)").option("--no-expiry", "Mint a non-expiring key").option("--bootstrap", "Mint a bootstrap admin key (scopes default to '<app>:*', agent 'bootstrap')").option("--signing-secret-env <name>", "Env var holding the HMAC signing secret (default HASNA_<APP>_API_SIGNING_KEY, then HASNA_API_SIGNING_KEY)").option("--database-url-env <name>", "Env var holding the Postgres URL for the record store (default HASNA_<APP>_DATABASE_URL)").option("--table <name>", "api-keys table name (default api_keys)").option("--secrets-ref <template>", "Deliver without plaintext output; template must contain separate {agent} and {kid} path segments").option("--issuance-id <id>", "Stable key id for idempotent retry with --secrets-ref").option("--no-store", "Do not persist the hashed record (print secret + hash only)").option("-j, --json", "Output JSON").action(async (options) => {
+  program2.command("issue-key").description("Mint an API key: disclose it once, or deliver it silently to an exact Hasna Secrets reference").requiredOption("--app <app>", "App slug the key authenticates (e.g. todos)").option("--agent <agent>", "Issued-to agent/subject (informational)").option("--tid <tenant>", "Tenant/organization the key acts for (UUID, ULID, slug, or prefixed id). Omit for an untenanted key").option("--scopes <csv>", "Comma-separated scopes, e.g. 'todos:read,todos:write' or 'todos:*'").option("--ttl-days <days>", "Days until expiry (default 90)").option("--no-expiry", "Mint a non-expiring key").option("--bootstrap", "Mint a bootstrap admin key (scopes default to '<app>:*', agent 'bootstrap')").option("--signing-secret-env <name>", "Env var holding the HMAC signing secret (default HASNA_<APP>_API_SIGNING_KEY, then HASNA_API_SIGNING_KEY); the value is normalized (whitespace-trimmed) before signing, so a stored secret carrying a trailing newline signs identically to one without").option("--database-url-env <name>", "Env var holding the Postgres URL for the record store (default HASNA_<APP>_DATABASE_URL)").option("--table <name>", "api-keys table name (default api_keys)").option("--secrets-ref <template>", "Deliver without plaintext output; template must contain separate {agent} and {kid} path segments").option("--issuance-id <id>", "Stable key id for idempotent retry with --secrets-ref").option("--no-store", "Do not persist the hashed record (print secret + hash only)").option("-j, --json", "Output JSON").action(async (options) => {
     await runIssueKey(options, { report: reportCliError });
   });
   return program2;

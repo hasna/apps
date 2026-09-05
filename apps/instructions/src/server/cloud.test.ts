@@ -68,6 +68,16 @@ describe("resolveSigningSecret", () => {
   test("returns undefined when no signing secret is configured", () => {
     expect(resolveSigningSecret({})).toBeUndefined();
   });
+
+  test("trims a trailing newline from a stored signing secret (hasna/apps#1543)", () => {
+    // The fleet stores api-key-signing-secret values with a trailing newline
+    // (64 hex chars + '\n'); the server verify path must key the HMAC with the
+    // same bytes issue-key signs with, so every candidate is trimmed at read.
+    const stored = "a1".repeat(32) + "\n";
+    expect(resolveSigningSecret({ HASNA_INSTRUCTIONS_API_SIGNING_KEY: stored })).toBe(stored.trim());
+    expect(resolveSigningSecret({ HASNA_API_SIGNING_KEY: stored })).toBe(stored.trim());
+    expect(resolveSigningSecret({ API_KEY_SIGNING_SECRET: stored })).toBe(stored.trim());
+  });
 });
 
 describe("isPostgresBackendEnabled", () => {

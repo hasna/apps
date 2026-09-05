@@ -16256,7 +16256,7 @@ function viewWindow(view) {
 }
 function toBuffer(secret) {
   if (typeof secret === "string")
-    return Buffer.from(secret, "utf8");
+    return Buffer.from(secret.trim(), "utf8");
   if (ArrayBuffer.isView(secret)) {
     const [store, byteOffset, byteLength] = viewWindow(secret);
     return Buffer.from(store, byteOffset, byteLength);

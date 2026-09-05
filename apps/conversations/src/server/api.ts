@@ -152,9 +152,9 @@ function assertNoSensitiveOptionalText(value: string | undefined, context: strin
 
 function signingSecret(): string {
   const secret =
-    process.env.HASNA_CONVERSATIONS_API_SIGNING_KEY ||
-    process.env.HASNA_API_SIGNING_KEY ||
-    process.env.API_KEY_SIGNING_SECRET;
+    process.env.HASNA_CONVERSATIONS_API_SIGNING_KEY?.trim() ||
+    process.env.HASNA_API_SIGNING_KEY?.trim() ||
+    process.env.API_KEY_SIGNING_SECRET?.trim();
   if (!secret) {
     throw new Error(
       "Missing API signing secret. Set HASNA_CONVERSATIONS_API_SIGNING_KEY (or HASNA_API_SIGNING_KEY).",

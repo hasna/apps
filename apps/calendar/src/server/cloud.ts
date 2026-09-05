@@ -62,9 +62,9 @@ export function resolveCloudDatabaseUrl(
 /** Resolve the HMAC signing secret used to verify API keys. */
 export function resolveSigningSecret(env: NodeJS.ProcessEnv = process.env): string | undefined {
   return (
-    env.HASNA_CALENDAR_API_SIGNING_KEY ||
-    env.HASNA_API_SIGNING_KEY ||
-    env.API_KEY_SIGNING_SECRET ||
+    env.HASNA_CALENDAR_API_SIGNING_KEY?.trim() ||
+    env.HASNA_API_SIGNING_KEY?.trim() ||
+    env.API_KEY_SIGNING_SECRET?.trim() ||
     undefined
   );
 }

@@ -497,7 +497,15 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
 
   const secretEnvName = signingSecretEnvName(app, optSigningSecretEnv);
   const fallbackName = optSigningSecretEnv ? undefined : "HASNA_API_SIGNING_KEY";
-  const signingSecret = env[secretEnvName] ?? (fallbackName ? env[fallbackName] : undefined);
+  // The signing secret is NORMALIZED here, at the env boundary, before it ever
+  // reaches the crypto layer. The fleet provisioning pipeline stores
+  // `api-key-signing-secret` values that carry a trailing newline (64 hex
+  // characters plus '\n'), and every fleet server trims at its env read;
+  // `issue-key` must key the HMAC with the same bytes the servers verify with,
+  // so the raw value is trimmed here too. The crypto layer additionally
+  // normalizes string secrets (see `toBuffer` in src/auth/keys.ts), so raw and
+  // trimmed values agree even if one layer is bypassed — defense in depth.
+  const signingSecret = (env[secretEnvName] ?? (fallbackName ? env[fallbackName] : undefined))?.trim();
   if (!signingSecret) {
     const tried = fallbackName ? `${secretEnvName} (or ${fallbackName})` : secretEnvName;
     deps.report({ json }, `No signing secret found. Set the ${tried} env var (openssl rand -hex 32).`, {
