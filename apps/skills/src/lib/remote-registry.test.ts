@@ -31,6 +31,39 @@ describe("remote registry", () => {
     expect(buildSkillsApiUrl("http://localhost:3505/api")).toBe("http://localhost:3505/api/skills");
   });
 
+  test("the default fleet authority is an app PREFIX, not a collection base", () => {
+    // The gateway serves every app under https://api.hasna.com/<app>, so the
+    // trailing `/skills` there is a path prefix. Read as "the base already names
+    // the collection", the endpoint was never appended and every remote read
+    // collapsed onto the gateway app root — a 404 — so a correctly credentialled
+    // install on the default authority could not run `skills list` at all.
+    expect(buildSkillsApiUrl("https://api.hasna.com/skills")).toBe(
+      "https://api.hasna.com/skills/api/v1/skills",
+    );
+    expect(buildSkillsApiUrl("https://api.hasna.com/skills", "/skills/demo")).toBe(
+      "https://api.hasna.com/skills/api/v1/skills/demo",
+    );
+  });
+
+  test("composes the same URL RemoteSkillsClient does, from the same origin", () => {
+    // The two composition sites are handed the same origin by the same
+    // resolver; when they disagree, one of them 404s and the other does not.
+    for (const origin of ["https://api.hasna.com/skills", "https://skills.example.com", "http://localhost:3505"]) {
+      expect(buildSkillsApiUrl(origin)).toBe(`${origin}/api/v1/skills`);
+      expect(buildSkillsApiUrl(origin, "/skills/demo")).toBe(`${origin}/api/v1/skills/demo`);
+    }
+  });
+
+  test("a pasted collection base is still not doubled up", () => {
+    expect(buildSkillsApiUrl("https://skills.example.com/api/v1/skills")).toBe(
+      "https://skills.example.com/api/v1/skills",
+    );
+    expect(buildSkillsApiUrl("https://skills.example.com/api/v1/skills", "/skills/demo")).toBe(
+      "https://skills.example.com/api/v1/skills/demo",
+    );
+  });
+
+
   test("reads the authority from the fleet ladder, not from this app's config", () => {
     // The env alias and the canonical name both work, and the API base an
     // operator pastes is normalized to the origin the client dials.

@@ -77,26 +77,39 @@ export function getConfiguredApiUrl(
   return resolveApiUrl(env);
 }
 
+/**
+ * Compose one Skills API request URL from an authority and an endpoint.
+ *
+ * The Skills server serves its API under `/api/v1`, so a bare authority gets
+ * `/api/v1` appended — the SAME composition `RemoteSkillsClient` performs
+ * (`${origin}/api/v1/...`). The two sites must agree: they are handed the same
+ * origin by the same resolver.
+ *
+ * A trailing `/skills` is only stripped when the API prefix precedes it
+ * (`.../api/skills`, `.../api/v1/skills`), i.e. when an operator pasted the
+ * full collection base that this package's own error messages print. A BARE
+ * trailing `/skills` is NOT a collection: the default fleet authority is
+ * `https://api.hasna.com/skills`, where `/skills` is the gateway's per-app PATH
+ * PREFIX. Treating that as "the base already names the collection" collapsed
+ * every remote read onto the gateway app root — which answers 404 — so a
+ * correctly credentialled install on the default authority could not run
+ * `skills list` at all, on the plain merge path as well as `--remote`.
+ */
 export function buildSkillsApiUrl(apiUrl: string, endpoint = "/skills"): string {
   const url = new URL(apiUrl);
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
   const pathname = url.pathname.replace(/\/+$/, "");
 
-  if (pathname.endsWith("/skills")) {
-    if (cleanEndpoint === "/skills") {
-      url.pathname = pathname;
-    } else {
-      url.pathname = `${pathname.slice(0, -"/skills".length)}${cleanEndpoint}` || cleanEndpoint;
-    }
+  const apiBase = /\/api(?:\/v1)?\/skills$/.test(pathname)
+    ? pathname.slice(0, -"/skills".length)
+    : pathname;
+
+  if (/\/api(?:\/v1)?$/.test(apiBase)) {
+    url.pathname = `${apiBase}${cleanEndpoint}`;
     return url.toString();
   }
 
-  if (pathname.endsWith("/api") || pathname.endsWith("/api/v1")) {
-    url.pathname = `${pathname}${cleanEndpoint}`;
-    return url.toString();
-  }
-
-  url.pathname = `${pathname}/api/v1${cleanEndpoint}`.replace(/\/{2,}/g, "/");
+  url.pathname = `${apiBase}/api/v1${cleanEndpoint}`.replace(/\/{2,}/g, "/");
   return url.toString();
 }
 
