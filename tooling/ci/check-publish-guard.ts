@@ -4,9 +4,10 @@
  *
  * For every member package, dry-run `npm pack` and scan the resulting file
  * list for internal-infra strings: `*.hasna.xyz`, ARNs, 12-digit AWS account
- * ids, the private-scope markers, and the internal platform account id. A
- * public npm package that carries any of these leaks Hasna's internal estate
- * into the open.
+ * ids, the private-scope markers, the internal platform account id, and local
+ * filesystem paths from an out-of-root build. A public npm package that
+ * carries any of these leaks Hasna's internal estate — or an author's machine
+ * layout and username — into the open.
  *
  * Usage:
  *   bun tooling/ci/check-publish-guard.ts [--root <dir>]
@@ -72,6 +73,53 @@ const INTERNAL_PATTERNS: Array<{ name: string; re: RegExp; contentRe?: RegExp }>
   { name: "internal-apps", re: /internal[-]apps/ },
   { name: "hasna-internal-scope", re: /@hasna[-]internal/ },
   { name: "internal-platform-account", re: new RegExp("7898" + "77399345") },
+  // A LOCAL FILESYSTEM PATH in packed content leaks the author's directory
+  // layout (and local username where the path includes one), and makes the
+  // bundle non-reproducible — the same source built from a different checkout
+  // location produces different bytes. Measured shipped in the live
+  // @hasna/contracts@1.0.0 tarball: 62 bundler banner comments in dist/index.js
+  // plus more in the other dist bundles, all of the shape an out-of-root build
+  // produces (introduced by #1708; the #1744 in-root rebuild restored the
+  // canonical `../../node_modules/...` form). Two detector shapes:
+  //
+  // (1) Deep relative escapes — `../../../../../../../Workspace/50-repositories/
+  //     hasna/apps/node_modules/...` (7+ levels, exiting the checkout into the
+  //     author's directory layout before reaching the dependency store). Entry
+  //     names cannot fire this detector: npm pack entry names are always clean
+  //     relative paths (`..` segments are normalized out of the manifest). The
+  //     content form drops the two measured benign classes in committed source
+  //     and bundles — an escape run that lands DIRECTLY on the hoisted
+  //     dependency store (`../../../../../../node_modules/hono/...`, connectors'
+  //     per-connector server bundles) or on an in-repo source dir
+  //     (`../../../../src/lib/runner.js`, connectors' gmail test import). Both
+  //     stay inside the repo, carry no author identity and rebuild identically
+  //     from any checkout; a run that lands anywhere else — an author
+  //     directory — fires. The exemption lookaheads are preceded by a
+  //     maximal-run guard `(?!\.\.\/)`: without it, regex backtracking matches
+  //     only 4 of a 6-deep run, leaving `../` before the exempted landing and
+  //     firing on the benign shape anyway.
+  { name: "local-relative-escape", re: /(?:\.\.\/){4,}/, contentRe: /(?:\.\.\/){4,}(?!\.\.\/)(?!node_modules\/)(?!src\/)/ },
+  // (2) Absolute author-home paths — `/Users/<name>/`, `/home/<name>/`,
+  //     `C:\Users\<name>\`. The strict form carries all three shapes (inert in
+  //     the name scan: entry names are clean relative paths and no member ships
+  //     a `home`/`Users` directory segment, so a `/<name>/` continuation can
+  //     only be machine-injected). The content form fires ONLY on the Windows
+  //     shape: measured across all 43 members' packable content, arming the
+  //     unix shapes in content turns the guard red on today's tree — eleven
+  //     members deliberately author real `/Users/...` and `/home/...` paths
+  //     into SHIPPED docs, examples, config defaults and tests (@hasna/contracts
+  //     DEPLOYMENT_CONTROL_PLANE_CONTRACT.md and provider-live-mode examples,
+  //     monitor's `--workspace` CLI defaults, hooks' python fallback paths,
+  //     bridge's example config, dispatch/events/projects/todos READMEs), which
+  //     are byte-indistinguishable from a machine-injected leak — no contentRe
+  //     refinement can keep them silent without gutting the detector. Those
+  //     authored paths are deliberate content that must be sanitized out of the
+  //     tarballs first (follow-up hygiene); the machine-injection class does not
+  //     wait on them — this toolchain's bundler banners are RELATIVE (the #1708
+  //     leak carried no home directory at all), so the relative-escape detector
+  //     above catches it. Windows home paths have zero measured occurrences in
+  //     any member's packable content and stay armed.
+  { name: "local-home-path", re: /\/(Users|home)\/[A-Za-z0-9._-]+[/]|C:[/\\]{1,2}Users[/\\]/i, contentRe: /C:[/\\]{1,2}Users[/\\]/i },
 ];
 
 function memberPackages(root: string): string[] {
@@ -98,12 +146,13 @@ function scanNames(names: string[]): Array<{ name: string; pattern: string }> {
 
 // Entry-name scanning alone is not enough: a generated bundle or dashboard
 // asset whose NAME is clean can still carry `*.hasna.xyz`, ARNs, AWS account
-// ids or internal-scope strings in its BYTES. `packFileNames` runs `npm pack
-// --dry-run --json`, which executes the member's `prepack` — so the packed
-// files exist on disk, post-build, when this runs. Read each packed path and
-// scan its text with the same pattern set, keeping the filename checks as an
-// additional control. Binary and oversize files cannot be scanned textually;
-// they are counted and reported rather than silently dropped.
+// ids, internal-scope strings or local filesystem paths in its BYTES.
+// `packFileNames` runs `npm pack --dry-run --json`, which executes the
+// member's `prepack` — so the packed files exist on disk, post-build, when
+// this runs. Read each packed path and scan its text with the same pattern
+// set, keeping the filename checks as an additional control. Binary and
+// oversize files cannot be scanned textually; they are counted and reported
+// rather than silently dropped.
 const MAX_CONTENT_BYTES = 4 * 1024 * 1024;
 
 function scanContents(
@@ -585,6 +634,70 @@ function selfTest(): number {
     check(
       "placeholder ARN/domain templates in CONTENT stay SILENT (rc=0, no violation)",
       template.rc === 0 && !templateOut.includes("PUBLISH-GUARD VIOLATION"),
+    );
+
+    // Local-filesystem-path checks (issue #1774). The exact #1708 defect
+    // shape — a bundler banner comment escaping the checkout into the
+    // author's directory layout — and a Windows absolute home path must
+    // FIRE; both land in a content scan through the same run() path the
+    // guard uses.
+    const localPathRoot = path.join(root, "local-path-root");
+    fs.mkdirSync(localPathRoot, { recursive: true });
+    fixturePackage(
+      path.join(localPathRoot, "apps"),
+      "self-test-local-path",
+      ["notes.txt"],
+      false,
+      {
+        "notes.txt":
+          `// ${"../".repeat(7)}Workspace/50-repositories/hasna/apps/node_modules/.bun/zod@3.25.76/index.js\n` +
+          `const cache = "C:\\\\Users\\\\alice\\\\AppData\\\\Local\\\\x";\n`,
+      },
+    );
+    const localPath = capture(() => run(localPathRoot));
+    const localPathOut = localPath.lines.join("\n");
+    check(
+      "deep relative-escape into an author directory in CONTENT FIRES (rc=1, pattern named)",
+      localPath.rc === 1 &&
+        localPathOut.includes("PUBLISH-GUARD VIOLATION") &&
+        localPathOut.includes("notes.txt") &&
+        localPathOut.includes("local-relative-escape"),
+    );
+    check(
+      "Windows absolute home path in CONTENT FIRES (rc=1, pattern named)",
+      localPath.rc === 1 &&
+        localPathOut.includes("PUBLISH-GUARD VIOLATION") &&
+        localPathOut.includes("notes.txt") &&
+        localPathOut.includes("local-home-path"),
+    );
+
+    // Two-sided negative control for the same class: the canonical in-root
+    // bundle banner (2 escapes), an escape run landing directly on the
+    // hoisted dependency store (connectors' committed shape), an in-repo
+    // source import (connectors' gmail test shape) and deliberately authored
+    // unix home paths in docs content (the measured eleven-member class) all
+    // stay SILENT — no false positive on today's packable content.
+    const cleanLocalRoot = path.join(root, "clean-local-root");
+    fs.mkdirSync(cleanLocalRoot, { recursive: true });
+    fixturePackage(
+      path.join(cleanLocalRoot, "apps"),
+      "self-test-clean-local",
+      ["notes.txt"],
+      false,
+      {
+        "notes.txt":
+          `// ../../node_modules/.bun/zod@3.25.76/index.js\n` +
+          `// ../../../../../../node_modules/hono/dist/request.js\n` +
+          `import { run } from "../../../../src/lib/runner.js";\n` +
+          `const home = "/home/hasna/workspace";\n` +
+          `const users = "/Users/hasna/.hasna/cache";\n`,
+      },
+    );
+    const cleanLocal = capture(() => run(cleanLocalRoot));
+    const cleanLocalOut = cleanLocal.lines.join("\n");
+    check(
+      "canonical banners, dep-store/source escape runs and authored unix home paths in CONTENT stay SILENT (rc=0, no violation)",
+      cleanLocal.rc === 0 && !cleanLocalOut.includes("PUBLISH-GUARD VIOLATION"),
     );
 
     // Pack-order checks (row 312913f1). The guard packs every member by
