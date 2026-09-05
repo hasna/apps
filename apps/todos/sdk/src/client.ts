@@ -15,6 +15,48 @@ function env(...names: string[]): string | undefined {
 }
 
 /**
+ * The authority names this client reads, canonical first.
+ *
+ * `TODOS_API_URL` and `TODOS_URL` are the package's LEGACY spellings, kept as a
+ * silent fallback for ONE release under the 2026-09-04 ruling (hasna/apps#1720)
+ * — which permits that only for a package that documents them, so they are
+ * documented in README.md under "Configuration". The canonical
+ * `HASNA_TODOS_API_URL` wins whenever it is set.
+ */
+export const TODOS_API_URL_ENV_KEYS = ["HASNA_TODOS_API_URL", "TODOS_API_URL", "TODOS_URL"] as const;
+
+/** The credential names this client reads, canonical first. Same one-release rule as above. */
+export const TODOS_API_KEY_ENV_KEYS = ["HASNA_TODOS_API_KEY", "TODOS_API_KEY"] as const;
+
+/** The unhosted `todos-serve` a workstation runs. Never a hosted authority. */
+export const TODOS_LOCAL_SERVE_URL = "http://localhost:19427";
+
+let localModeAnnounced = false;
+
+/** Reset the once-per-process local-mode notice. Test seam only. */
+export function __resetTodosLocalModeNotice(): void {
+  localModeAnnounced = false;
+}
+
+/**
+ * Say — once per process, on stderr — that this client is local, not fleet.
+ *
+ * Guarded on `process` because this package ships to browsers and to non-bun
+ * runtimes; where there is no stderr the notice is simply skipped rather than
+ * throwing on the way to a working client.
+ */
+function announceLocalMode(): void {
+  if (localModeAnnounced) return;
+  localModeAnnounced = true;
+  const line =
+    `todos-sdk: LOCAL mode — no ${TODOS_API_URL_ENV_KEYS[0]} and no ${TODOS_API_KEY_ENV_KEYS[0]} resolved; ` +
+    `reading and writing the local todos-serve at ${TODOS_LOCAL_SERVE_URL}, not the hosted fleet. ` +
+    `Set ${TODOS_API_URL_ENV_KEYS[0]} and ${TODOS_API_KEY_ENV_KEYS[0]} to go hosted, or use the ` +
+    `@hasna/todos "./sdk" export, which also reads the Keychain and ~/.hasna/todos/config/credentials.`;
+  if (typeof process !== "undefined" && process.stderr?.write) process.stderr.write(`${line}\n`);
+}
+
+/**
  * Universal client for @hasna/todos REST API.
  * Works with any AI agent framework — Claude, Codex, Gemini, or custom.
  * Zero dependencies beyond fetch.
@@ -38,10 +80,17 @@ export class TodosClient {
     // the @hasna/contracts chain. It is therefore the ENV TIER ONLY: the
     // Keychain and `~/.hasna/todos/config/credentials` tiers live in
     // `@hasna/todos/sdk`, which is the surface to use on a workstation.
-    this.baseUrl = (options.baseUrl || env("HASNA_TODOS_API_URL", "TODOS_API_URL", "TODOS_URL")
-      || "http://localhost:19427").replace(/\/+$/, "");
+    const configuredUrl = options.baseUrl || env(...TODOS_API_URL_ENV_KEYS);
+    this.baseUrl = (configuredUrl || TODOS_LOCAL_SERVE_URL).replace(/\/+$/, "");
     if (options.agentName) this.agentName = options.agentName;
-    this.apiKey = options.apiKey || env("HASNA_TODOS_API_KEY", "TODOS_API_KEY") || null;
+    this.apiKey = options.apiKey || env(...TODOS_API_KEY_ENV_KEYS) || null;
+    // LOCAL MODE SAYS SO (2026-09-04 ruling, hasna/apps#1720). Nothing named an
+    // authority and nothing named a credential, so this client is talking to a
+    // `todos-serve` on this box rather than the fleet. That is a real product
+    // mode for this package, not a degradation — but a client silently reading
+    // an empty local store while the operator believes it is on the fleet is
+    // the false green the ruling exists to end, so it is announced once.
+    if (!configuredUrl && !this.apiKey) announceLocalMode();
   }
 
   // ── Agent Identity ──────────────────────────────────────────────────────
