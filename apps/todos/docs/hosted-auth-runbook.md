@@ -3,6 +3,15 @@
 Applies from `@hasna/todos` **0.13.0**. Read this before redeploying a hosted
 deployment or upgrading a machine that runs `todos serve` / `todos-mcp --http`.
 
+> **Server credential naming (2026-09-05).** The env var that configures this
+> static credential is `HASNA_TODOS_SERVER_API_KEY` — the server's own
+> variable, separate from the client credential names. The older
+> `TODOS_API_KEY` references below mean the same credential; `TODOS_API_KEY`
+> and the client name `HASNA_TODOS_API_KEY` are accepted as a documented
+> one-release fallback so existing secret mappings and exports keep working,
+> while `todos serve` prints one line at startup naming the variable that
+> actually supplied its accepted key.
+
 ## What changed
 
 `checkAuth` used to fail **open**: with no `TODOS_API_KEY` and no stored API key it
@@ -21,7 +30,7 @@ The unconfigured case now **denies**. The posture is resolved once at startup
 
 | Configuration | Posture | `/api/*` + `/mcp` | `/v1` | `/health` `/ready` `/version` `/openapi.json` |
 | --- | --- | --- | --- | --- |
-| `TODOS_API_KEY` set, or ≥1 stored key | `enforce` | credential required | authenticated | public |
+| `HASNA_TODOS_SERVER_API_KEY` set, or ≥1 stored key | `enforce` | credential required | authenticated | public |
 | a remote database URL is configured, no local key | `local-plane-disabled` | `404 LOCAL_PLANE_DISABLED` | authenticated | public |
 | loopback bind + explicit `--allow-anonymous` | `anonymous-loopback` | anonymous, loopback peers only | authenticated | public |
 | anything else | **refuses to start** (exit 1) | — | — | — |
@@ -34,11 +43,11 @@ transport peer address is loopback (the check deliberately ignores
 ## Hosted deployment — deploy steps
 
 A hosted deployment normally configures a remote database URL and the API-key signing
-secret, and does **not** set `TODOS_API_KEY`. Such a deployment resolves
+secret, and does **not** set `HASNA_TODOS_SERVER_API_KEY`. Such a deployment resolves
 `local-plane-disabled` after this change:
 
 - `/v1` keeps working unchanged — it authenticates itself against the remote API-key
-  store and never used `TODOS_API_KEY`.
+  store and never used the static server credential.
 - `/health` and `/ready` keep working — both are handled **before** the auth check, so
   load-balancer target-group health checks and the container `HEALTHCHECK` are
   unaffected.
@@ -49,8 +58,8 @@ hosted deployment must keep serving `/api/*` or `/mcp`:
 
 1. Mint a key and store it in your secret store; reference it by item name only, never
    by value.
-2. Add it to the container as a **secret** reference mapped to `TODOS_API_KEY` — not as
-   a plain environment value.
+2. Add it to the container as a **secret** reference mapped to
+   `HASNA_TODOS_SERVER_API_KEY` — not as a plain environment value.
 3. Roll a new revision of the service definition and deploy it.
 4. Give every legitimate caller the key as `x-api-key` / `Authorization: Bearer`.
 
@@ -78,11 +87,11 @@ Related hardening worth applying in the same revision (pre-existing, not fixed h
 | --- | --- | --- |
 | CLI / SDK against `/v1` with an API key | `/v1` with a key | unchanged — `/v1` was never affected |
 | `todos-mcp` (stdio, the default for MCP clients) | local SQLite, no HTTP | unchanged |
-| `todos-mcp --http` (loopback `127.0.0.1`) | anonymous | unchanged — the transport is loopback-pinned and opts in implicitly; set `TODOS_API_KEY` and send it from the client to enforce auth |
+| `todos-mcp --http` (loopback `127.0.0.1`) | anonymous | unchanged — the transport is loopback-pinned and opts in implicitly; set `HASNA_TODOS_SERVER_API_KEY` and send it from the client to enforce auth |
 | `todos serve` / `todos-serve`, no key, loopback | anonymous | **breaking** — add `--allow-anonymous` (or `TODOS_ALLOW_ANONYMOUS=1`), or mint a key with `todos api-keys create "<name>"` |
-| `todos serve --host 0.0.0.0`, no key | anonymous, off-box | **refuses to start** — set `TODOS_API_KEY` |
+| `todos serve --host 0.0.0.0`, no key | anonymous, off-box | **refuses to start** — set `HASNA_TODOS_SERVER_API_KEY` |
 | Load-balancer / container health checks (`/ready`) | public | unchanged (pre-auth) |
-| Hosted `/mcp`, hosted `/api/*` | anonymous | `404 LOCAL_PLANE_DISABLED` unless `TODOS_API_KEY` is provisioned |
+| Hosted `/mcp`, hosted `/api/*` | anonymous | `404 LOCAL_PLANE_DISABLED` unless `HASNA_TODOS_SERVER_API_KEY` is provisioned |
 
 Audit the callers you actually have before deploying: every MCP client entry and
 automation script that drives the local stdio binary or the loopback HTTP transport is

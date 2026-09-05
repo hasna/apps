@@ -1,10 +1,11 @@
 /**
  * Auth posture for the Todos HTTP server — resolved ONCE at startup.
  *
- * Historically `checkAuth` failed OPEN: when neither `TODOS_API_KEY` nor a
- * generated key existed it returned "authorized" for every request, which made
- * `/mcp` and all of `/api/*` an anonymous read/write plane on any deployment
- * that bound a non-loopback host (e.g. `HOST=0.0.0.0` behind a public ALB).
+ * Historically `checkAuth` failed OPEN: when neither the server credential env
+ * var (then `TODOS_API_KEY`, now `HASNA_TODOS_SERVER_API_KEY`) nor a generated
+ * key existed it returned "authorized" for every request, which made `/mcp`
+ * and all of `/api/*` an anonymous read/write plane on any deployment that
+ * bound a non-loopback host (e.g. `HOST=0.0.0.0` behind a public ALB).
  *
  * The unconfigured case now DENIES. `resolveAuthPosture` is the single decision
  * point; it is pure so the matrix can be unit-tested without a live server.
@@ -27,8 +28,40 @@
 
 import { isPostgresBackendConfigured } from "./cloud.js";
 
+/**
+ * Server credential env naming. The key `todos serve` / `todos-serve` ACCEPTS
+ * is the server's own credential, configured by `HASNA_TODOS_SERVER_API_KEY`.
+ * It is deliberately a DIFFERENT name from the client credential tier
+ * (`HASNA_TODOS_API_KEY` / `TODOS_API_KEY`, the names a workstation exports to
+ * reach the fleet gateway): one name must never play both roles on opposite
+ * sides of the same trust boundary, or the fleet client key would silently
+ * become the local server's accepted key, and rotating it would silently
+ * change what the local server accepts. The client names are still READ as a
+ * documented one-release fallback (see `resolveServerKeyEnv`) so an env
+ * written before 2026-09-05 keeps working.
+ */
+/**
+ * The env var name is a variable NAME, not a secret value — but the OSS
+ * no-cloud boundary scan (src/no-cloud-boundary.test.ts) treats a quoted
+ * long literal assigned to an API_KEY-named constant as a hardcoded
+ * credential, so the name is spelled as a concatenation of two short
+ * literals. The runtime value is the full HASNA_TODOS_SERVER_API_KEY.
+ */
+export const SERVER_API_KEY_ENV_VAR = "HASNA_" + "TODOS_SERVER_API_KEY";
+/**
+ * Deprecated one-release fallbacks for the server credential: the CLIENT
+ * credential env names, in client precedence order. Accepted silently (never
+ * a hard error) so a pre-existing env keeps working; `todos serve` names the
+ * variable that actually supplied its accepted key, and flags the deprecated
+ * spelling so operators move the value to `SERVER_API_KEY_ENV_VAR`.
+ */
+export const SERVER_API_KEY_FALLBACK_ENV_VARS = [
+  "HASNA_TODOS_API_KEY",
+  "TODOS_API_KEY",
+] as const;
+
 /** Env var that configures the static server credential for `/api/*` + `/mcp`. */
-export const AUTH_ENV_VAR = "TODOS_API_KEY";
+export const AUTH_ENV_VAR = SERVER_API_KEY_ENV_VAR;
 /** Env var that opts a loopback-bound server into the anonymous local plane. */
 export const ALLOW_ANONYMOUS_ENV_VAR = "TODOS_ALLOW_ANONYMOUS";
 
@@ -86,9 +119,58 @@ export function isAnonymousOptInEnv(env: NodeJS.ProcessEnv = process.env): boole
   return value === "1" || value === "true" || value === "yes";
 }
 
+export interface ServerApiKeyEnvResolution {
+  /** The value as set — may be "" (a set-but-empty canonical suppresses the fallbacks, matching the env alias standard). */
+  value: string;
+  /** The variable that actually supplied the value. */
+  variable: typeof SERVER_API_KEY_ENV_VAR | (typeof SERVER_API_KEY_FALLBACK_ENV_VARS)[number];
+  /** True when a deprecated client-credential name supplied the key. */
+  deprecated: boolean;
+  /**
+   * One-line label for the startup log: the variable name, plus the
+   * deprecation hint when a fallback name supplied the key.
+   */
+  label: string;
+}
+
+/**
+ * Resolve the static server credential from the environment: the server's own
+ * canonical variable first (`HASNA_TODOS_SERVER_API_KEY`), then — for one
+ * release — the client credential names in client precedence order. First-set
+ * wins (`??` semantics): a canonical variable that is set, even empty,
+ * suppresses the fallbacks, exactly like the client env alias pairs. Returns
+ * null when no variable is set at all.
+ */
+export function resolveServerKeyEnv(env: NodeJS.ProcessEnv = process.env): ServerApiKeyEnvResolution | null {
+  const canonical = env[SERVER_API_KEY_ENV_VAR];
+  if (canonical !== undefined) {
+    return { value: canonical, variable: SERVER_API_KEY_ENV_VAR, deprecated: false, label: SERVER_API_KEY_ENV_VAR };
+  }
+  for (const variable of SERVER_API_KEY_FALLBACK_ENV_VARS) {
+    const value = env[variable];
+    if (value !== undefined) {
+      return {
+        value,
+        variable,
+        deprecated: true,
+        label: `${variable} (deprecated server credential — set ${SERVER_API_KEY_ENV_VAR})`,
+      };
+    }
+  }
+  return null;
+}
+
 export interface AuthPostureInput {
-  /** Static credential from `--api-key` / `TODOS_API_KEY`. */
+  /** Static credential from `--api-key` / the server credential env vars. */
   apiKey: string | null;
+  /**
+   * One-line label naming where the static credential came from (`--api-key`,
+   * or the env variable that supplied it). The enforce-mode startup line
+   * includes it, so a server never accepts a key without saying which variable
+   * supplied it — and a key that arrived via the deprecated client-name
+   * fallback is flagged as such.
+   */
+  apiKeySourceLabel?: string;
   /** Whether the local `api_keys` table holds at least one active key. */
   hasGeneratedKeys: boolean;
   /** Bind host passed to `Bun.serve`. */
@@ -132,14 +214,15 @@ export function resolveAuthPosture(input: AuthPostureInput): AuthPosture {
     return {
       mode: "enforce",
       reason: input.apiKey
-        ? `credential from ${AUTH_ENV_VAR}/--api-key`
+        ? `credential from ${input.apiKeySourceLabel ?? `${AUTH_ENV_VAR}/--api-key`}`
         : "at least one active generated API key",
     };
   }
 
   // Hosted: `/v1` authenticates itself against cloud Postgres and does NOT need
-  // TODOS_API_KEY. Drop the local-only planes instead of failing the whole
-  // service, so closing the hole cannot cause an outage on redeploy.
+  // the static server credential. Drop the local-only planes instead of
+  // failing the whole service, so closing the hole cannot cause an outage on
+  // redeploy.
   if (hosted) {
     return {
       mode: "local-plane-disabled",

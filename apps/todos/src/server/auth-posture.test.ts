@@ -8,6 +8,9 @@ import {
   isLoopbackAddress,
   isLoopbackHost,
   resolveAuthPosture,
+  resolveServerKeyEnv,
+  SERVER_API_KEY_ENV_VAR,
+  SERVER_API_KEY_FALLBACK_ENV_VARS,
 } from "./auth-posture.js";
 
 const base = { apiKey: null, hasGeneratedKeys: false, host: "127.0.0.1", allowAnonymous: false, hosted: false };
@@ -136,5 +139,77 @@ describe("resolveAuthPosture", () => {
     expect(describeAuthPosture({ mode: "local-plane-disabled", reason: "r" })).toContain(AUTH_ENV_VAR);
     expect(describeAuthPosture({ mode: "anonymous-loopback", reason: "r" })).toContain(AUTH_ENV_VAR);
     expect(describeAuthPosture({ mode: "enforce", reason: "r" })).toContain("ENFORCED");
+  });
+
+  it("the enforce reason names the env variable that supplied the static key", () => {
+    const posture = resolveAuthPosture({
+      ...base,
+      apiKey: "k",
+      apiKeySourceLabel: SERVER_API_KEY_ENV_VAR,
+    });
+    expect(posture.mode).toBe("enforce");
+    expect(posture.reason).toContain(SERVER_API_KEY_ENV_VAR);
+  });
+
+  it("the enforce reason flags a key that arrived via a deprecated fallback name", () => {
+    const posture = resolveAuthPosture({
+      ...base,
+      apiKey: "k",
+      apiKeySourceLabel: "TODOS_API_KEY (deprecated server credential — set HASNA_TODOS_SERVER_API_KEY)",
+    });
+    expect(posture.reason).toContain("TODOS_API_KEY");
+    expect(posture.reason).toContain("deprecated");
+    expect(posture.reason).toContain(SERVER_API_KEY_ENV_VAR);
+  });
+
+  it("the enforce reason falls back to naming the env var/--api-key when no label is given", () => {
+    const posture = resolveAuthPosture({ ...base, apiKey: "k" });
+    expect(posture.reason).toContain(AUTH_ENV_VAR);
+  });
+});
+
+describe("resolveServerKeyEnv", () => {
+  it("prefers the server's own canonical variable over the client credential names", () => {
+    const resolution = resolveServerKeyEnv({
+      [SERVER_API_KEY_ENV_VAR]: "server-key",
+      HASNA_TODOS_API_KEY: "client-canonical",
+      TODOS_API_KEY: "client-legacy",
+    });
+    expect(resolution).not.toBeNull();
+    expect(resolution!.value).toBe("server-key");
+    expect(resolution!.variable).toBe(SERVER_API_KEY_ENV_VAR);
+    expect(resolution!.deprecated).toBe(false);
+    expect(resolution!.label).toBe(SERVER_API_KEY_ENV_VAR);
+  });
+
+  it("falls back to the client canonical name, then the client legacy name", () => {
+    const canonicalClient = resolveServerKeyEnv({
+      HASNA_TODOS_API_KEY: "client-canonical",
+      TODOS_API_KEY: "client-legacy",
+    });
+    expect(canonicalClient!.variable).toBe(SERVER_API_KEY_FALLBACK_ENV_VARS[0]);
+    expect(canonicalClient!.deprecated).toBe(true);
+    expect(canonicalClient!.label).toContain(SERVER_API_KEY_ENV_VAR);
+
+    const legacyClient = resolveServerKeyEnv({ TODOS_API_KEY: "client-legacy" });
+    expect(legacyClient!.variable).toBe(SERVER_API_KEY_FALLBACK_ENV_VARS[1]);
+    expect(legacyClient!.value).toBe("client-legacy");
+    expect(legacyClient!.deprecated).toBe(true);
+  });
+
+  it("a set-but-empty canonical variable suppresses the fallbacks (`??` semantics)", () => {
+    const resolution = resolveServerKeyEnv({
+      [SERVER_API_KEY_ENV_VAR]: "",
+      TODOS_API_KEY: "client-legacy",
+    });
+    expect(resolution).not.toBeNull();
+    expect(resolution!.value).toBe("");
+    expect(resolution!.variable).toBe(SERVER_API_KEY_ENV_VAR);
+    expect(resolution!.deprecated).toBe(false);
+  });
+
+  it("returns null when no server credential variable is set", () => {
+    expect(resolveServerKeyEnv({})).toBeNull();
+    expect(resolveServerKeyEnv({ HASNA_TODOS_PROFILE: "x" })).toBeNull();
   });
 });

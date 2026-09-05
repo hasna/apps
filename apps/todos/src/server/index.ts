@@ -45,7 +45,11 @@ Options:
   -h, --help        display help for command
 
 Environment:
-  TODOS_API_KEY=<key>      Require this API key for API requests`);
+  HASNA_TODOS_SERVER_API_KEY=<key>   Require this API key for API requests.
+                                     The client credential names (HASNA_TODOS_API_KEY
+                                     / TODOS_API_KEY) are accepted as a documented
+                                     fallback for one release; the startup line names
+                                     the variable that supplied the key.`);
 }
 
 function parsePort(): number {

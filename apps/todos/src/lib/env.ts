@@ -6,6 +6,11 @@
  * Never a silent rename. (HASNA_TODOS_DB_PATH / TODOS_DB_PATH were already
  * aliased at the read site in query-commands.ts and are not duplicated here.)
  *
+ * This surface is the CLIENT-side configuration. The key a `todos serve`
+ * server ACCEPTS is deliberately NOT here: it has its own variable,
+ * HASNA_TODOS_SERVER_API_KEY, resolved in src/server/auth-posture.ts so the
+ * client credential names can never double as the server's accepted key.
+ *
  * Reads are lazy (function calls) so callers that set process.env at runtime
  * observe the values they set. Canonical wins when both are set; never set
  * both with different values.
@@ -14,7 +19,6 @@ const alias = (canonical: string, legacy: string): string | undefined =>
   process.env[canonical] ?? process.env[legacy];
 
 export const env = {
-  apiKey: (): string | undefined => alias("HASNA_TODOS_API_KEY", "TODOS_API_KEY"),
   profile: (): string | undefined => alias("HASNA_TODOS_PROFILE", "TODOS_PROFILE"),
   toolGroups: (): string | undefined => alias("HASNA_TODOS_TOOL_GROUPS", "TODOS_TOOL_GROUPS"),
   machineId: (): string | undefined => alias("HASNA_TODOS_MACHINE_ID", "TODOS_MACHINE_ID"),

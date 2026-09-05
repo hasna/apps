@@ -7,7 +7,6 @@ import { env } from "./env.js";
  * the empty-string semantics of the shared `??` helper.
  */
 const CASES: Array<{ read: () => string | undefined; canonical: string; legacy: string }> = [
-  { read: () => env.apiKey(), canonical: "HASNA_TODOS_API_KEY", legacy: "TODOS_API_KEY" },
   { read: () => env.profile(), canonical: "HASNA_TODOS_PROFILE", legacy: "TODOS_PROFILE" },
   { read: () => env.toolGroups(), canonical: "HASNA_TODOS_TOOL_GROUPS", legacy: "TODOS_TOOL_GROUPS" },
   { read: () => env.machineId(), canonical: "HASNA_TODOS_MACHINE_ID", legacy: "TODOS_MACHINE_ID" },

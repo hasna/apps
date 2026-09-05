@@ -12,6 +12,7 @@ import {
   isAnonymousOptInEnv,
   isLoopbackAddress,
   resolveAuthPosture,
+  resolveServerKeyEnv,
   type AuthPosture,
 } from "./auth-posture.js";
 import type { Task } from "../types/index.js";
@@ -192,7 +193,14 @@ export interface StartServerOptions {
 }
 
 export async function startServer(port: number, options?: StartServerOptions): Promise<void> {
-  const apiKey = options?.apiKey || env.apiKey() || null;
+  // Accepted-key source, highest first: an explicit --api-key, then the server
+  // credential env var (HASNA_TODOS_SERVER_API_KEY), then — for one release —
+  // the client credential env names. The server must never read the CLIENT
+  // tier as its own key without saying so: resolveServerKeyEnv reports which
+  // variable supplied it, and the posture line below names it.
+  const envServerKey = resolveServerKeyEnv();
+  const cliApiKey = options?.apiKey || null;
+  const apiKey = cliApiKey || envServerKey?.value || null;
 
   // Initialize database
   const db = getDatabase();
@@ -203,6 +211,7 @@ export async function startServer(port: number, options?: StartServerOptions): P
   // remaining option would be to expose /api/* + /mcp off-box.
   const authPosture = resolveAuthPosture({
     apiKey,
+    apiKeySourceLabel: cliApiKey ? "--api-key" : envServerKey?.label,
     hasGeneratedKeys: hasActiveApiKeys(),
     host: options?.host,
     allowAnonymous: options?.allowAnonymous === true || isAnonymousOptInEnv(),
