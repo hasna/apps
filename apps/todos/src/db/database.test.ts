@@ -22,6 +22,10 @@ afterEach(() => {
 });
 
 describe("global database path", () => {
+  // Heavy fs+sqlite work under a fresh HOME; bun's 5s default cap flakes
+  // under load at the end of the full-suite CI sweep (observed 5144ms overrun).
+  // Heavy fs+sqlite work under a fresh HOME; bun's 5s default cap flakes under
+  // load at the end of the full-suite CI sweep (observed 5144ms overrun vs 5000ms).
   it("uses ~/.hasna/todos/todos.db when no global database exists", () => {
     closeDatabase();
     resetDatabase();
@@ -52,7 +56,7 @@ describe("global database path", () => {
       rmSync(tmp, { recursive: true, force: true });
       resetDatabase();
     }
-  });
+  }, 20_000);
 
   it("uses ~/.hasna/todos/todos.db even when a legacy ~/.todos/todos.db exists", () => {
     closeDatabase();
@@ -87,7 +91,7 @@ describe("global database path", () => {
       rmSync(tmp, { recursive: true, force: true });
       resetDatabase();
     }
-  });
+  }, 20_000);
 
   it("uses nearest project .hasna/todos/todos.db instead of the global database", () => {
     closeDatabase();
