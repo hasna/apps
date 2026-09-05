@@ -241,6 +241,29 @@ describe("local API config", () => {
     expect(config.source.apiKey).toBe("TODOS_API_KEY");
   });
 
+  it("prefers the canonical HASNA_TODOS_API_KEY env var over the legacy name", () => {
+    updateConfig({ apiUrl: undefined, apiKey: undefined });
+    const config = getLocalApiConfig({
+      HOME: testHomeDir,
+      PATH: process.env["PATH"] || "",
+      HASNA_TODOS_API_KEY: "canonical-key",
+      TODOS_API_KEY: "legacy-key",
+    } as NodeJS.ProcessEnv);
+    expect(config.apiKey).toBe("canonical-key");
+    expect(config.source.apiKey).toBe("HASNA_TODOS_API_KEY");
+  });
+
+  it("reads the canonical HASNA_TODOS_API_KEY when the legacy name is unset", () => {
+    updateConfig({ apiUrl: undefined, apiKey: undefined });
+    const config = getLocalApiConfig({
+      HOME: testHomeDir,
+      PATH: process.env["PATH"] || "",
+      HASNA_TODOS_API_KEY: "canonical-key",
+    } as NodeJS.ProcessEnv);
+    expect(config.apiKey).toBe("canonical-key");
+    expect(config.source.apiKey).toBe("HASNA_TODOS_API_KEY");
+  });
+
   it("ignores hosted remote environment variables", () => {
     updateConfig({ apiUrl: undefined, apiKey: undefined });
     const config = getLocalApiConfig({

@@ -546,6 +546,43 @@ describe("Todos AI control and update_task tools", () => {
     )).toContain("update_task");
   });
 
+  test("an injected env map fully shadows the ambient profile env", async () => {
+    const adapter = {
+      source: "sqlite" as const,
+      getTask: async () => null,
+      listTasks: async () => [],
+      listProjects: async () => [],
+      listPlans: async () => [],
+      updateTask: async () => {
+        throw new Error("not called");
+      },
+    };
+    const savedCanonical = process.env["HASNA_TODOS_PROFILE"];
+    const savedLegacy = process.env["TODOS_PROFILE"];
+    process.env["HASNA_TODOS_PROFILE"] = "full";
+    try {
+      const profileNames = async (env: Record<string, string | undefined>) =>
+        (await toolsFrom(createTodosAiToolSource({
+          env,
+          adapter,
+          workspacePermission: () => true,
+        }), writeRequest("plan", "deny"))).map((candidate) => candidate.name);
+
+      // A supplied env map without a profile key must NOT fall through to the
+      // ambient HASNA_TODOS_PROFILE=full; profile resolution stays "minimal".
+      expect(await profileNames({})).not.toContain("update_task");
+      // A canonical profile key inside the supplied map wins over the ambient env.
+      expect(await profileNames({ HASNA_TODOS_PROFILE: "agent_safe" })).toContain("update_task");
+      // The legacy profile key inside the supplied map is still honored.
+      expect(await profileNames({ TODOS_PROFILE: "agent_safe" })).toContain("update_task");
+    } finally {
+      if (savedCanonical === undefined) delete process.env["HASNA_TODOS_PROFILE"];
+      else process.env["HASNA_TODOS_PROFILE"] = savedCanonical;
+      if (savedLegacy === undefined) delete process.env["TODOS_PROFILE"];
+      else process.env["TODOS_PROFILE"] = savedLegacy;
+    }
+  });
+
   test("plan mode returns an exact bounded proposal and never writes", async () => {
     scratch = mkdtempSync(join(tmpdir(), "todos-ai-tools-plan-"));
     const db = getDatabase(join(scratch, "todos.db"));

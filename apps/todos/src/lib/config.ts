@@ -461,7 +461,7 @@ export interface LocalApiConfig {
   apiKey: string | null;
   source: {
     apiUrl: "TODOS_URL" | "config" | "none";
-    apiKey: "TODOS_API_KEY" | "config" | "none";
+    apiKey: "HASNA_TODOS_API_KEY" | "TODOS_API_KEY" | "config" | "none";
   };
 }
 
@@ -471,14 +471,16 @@ export function getLocalApiConfig(env: NodeJS.ProcessEnv = process.env): LocalAp
   const configApiUrl = normalizeApiUrl(config.apiUrl);
   const apiUrl = envApiUrl ?? configApiUrl;
 
-  const apiKey = env["TODOS_API_KEY"] || config.apiKey || null;
+  const envApiKey = env["HASNA_TODOS_API_KEY"] ?? env["TODOS_API_KEY"];
+
+  const apiKey = envApiKey || config.apiKey || null;
 
   return {
     apiUrl,
     apiKey,
     source: {
       apiUrl: envApiUrl ? "TODOS_URL" : configApiUrl ? "config" : "none",
-      apiKey: env["TODOS_API_KEY"] ? "TODOS_API_KEY" : config.apiKey ? "config" : "none",
+      apiKey: env["HASNA_TODOS_API_KEY"] ? "HASNA_TODOS_API_KEY" : env["TODOS_API_KEY"] ? "TODOS_API_KEY" : config.apiKey ? "config" : "none",
     },
   };
 }

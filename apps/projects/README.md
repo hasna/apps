@@ -80,7 +80,7 @@ projects dashboard render my-app --json
 projects dashboard validate my-app --json
 PROJECTS_DASHBOARD_TOKEN="<token>" projects dashboard serve my-app --host 0.0.0.0 --port 3344
 projects reports serve --port 3345
-PROJECTS_REPORTS_TOKEN="<token>" projects reports serve --host 0.0.0.0 --port 3345
+HASNA_PROJECTS_REPORTS_TOKEN="<token>" projects reports serve --host 0.0.0.0 --port 3345   # legacy PROJECTS_REPORTS_TOKEN still accepted
 projects loops link my-app daily-check --name "Daily Check" --role maintenance
 projects loops list my-app --json
 projects import /path/to/existing --json
@@ -322,7 +322,8 @@ shell commands.
 
 `projects reports serve` serves registered project report files from each
 project `reports/` directory. It binds to `127.0.0.1` by default. Binding
-reports to a non-loopback host requires `--token`, `PROJECTS_REPORTS_TOKEN`, or
+reports to a non-loopback host requires `--token`, `HASNA_PROJECTS_REPORTS_TOKEN`
+(legacy `PROJECTS_REPORTS_TOKEN` still accepted), or
 an explicit `--trust-network` choice; token mode uses an HTTP-only same-origin
 cookie or `Authorization: Bearer` header and does not accept tokens in URLs.
 

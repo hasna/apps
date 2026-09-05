@@ -8,6 +8,7 @@ import type { Database } from "bun:sqlite";
 import { getDatabase } from "../db/database.js";
 import { getOrCreateLocalMachine, listMachines, resetMachineId } from "../db/machines.js";
 import { listAgents } from "../db/agents.js";
+import { env } from "./env.js";
 import { listProjects } from "../db/projects.js";
 import { getStaleTasks } from "../db/tasks.js";
 import type { Machine } from "../types/index.js";
@@ -184,8 +185,10 @@ export function buildMachineTopologyReport(db?: Database): MachineTopologyReport
 export function getReachableHostnames(): string[] {
   const names = new Set<string>();
   names.add(hostname());
-  if (process.env["TODOS_MACHINE_NAME"]) names.add(process.env["TODOS_MACHINE_NAME"]);
-  if (process.env["TODOS_MACHINE_ID"]) names.add(process.env["TODOS_MACHINE_ID"]);
+  const machineName = env.machineName();
+  if (machineName) names.add(machineName);
+  const machineId = env.machineId();
+  if (machineId) names.add(machineId);
   return [...names];
 }
 

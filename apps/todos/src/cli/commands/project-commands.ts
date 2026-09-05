@@ -17,6 +17,7 @@ import { getPlan, resolvePlanRefDetailed } from "../../db/plans.js";
 import { getTask } from "../../db/tasks.js";
 import { getTodosCloudClient, cloudAddComment, cloudAddPlanComment, cloudApplyProjectTaskListEnsure, cloudCreateProject, cloudDeleteProject, cloudListProjects, cloudListTasks, cloudPlanProjectTaskListEnsure, cloudResolvePlan, cloudResolveProject, cloudResolveProjectRef, cloudRollbackProjectTaskListEnsure, cloudUpdateProject, cloudAddDependency, cloudRemoveDependency, cloudGetDependencies, cloudGetTaskRelations, cloudRenameProject } from "../cloud-router.js";
 import { resolveWritableIdentity } from "../../lib/creator-identity.js";
+import { env } from "../../lib/env.js";
 import {
   buildProjectDependencyGraph,
   buildTaskDependencyEdges,
@@ -1707,7 +1708,7 @@ function resolveTaskListForAgent(agent: string, explicit?: string, projectTaskLi
   if (explicit) return explicit;
   const normalized = agent.trim().toLowerCase();
   if (normalized === "claude" || normalized === "claude-code" || normalized === "claude_code") {
-    return process.env["TODOS_CLAUDE_TASK_LIST"]
+    return env.claudeTaskList()
       || process.env["CLAUDE_CODE_TASK_LIST_ID"]
       || process.env["CLAUDE_CODE_SESSION_ID"]
       || getAgentTaskListId(normalized)
@@ -1716,7 +1717,7 @@ function resolveTaskListForAgent(agent: string, explicit?: string, projectTaskLi
   }
   const key = `TODOS_${normalized.toUpperCase()}_TASK_LIST`;
   return process.env[key]
-    || process.env["TODOS_TASK_LIST_ID"]
+    || env.taskListId()
     || getAgentTaskListId(normalized)
     || "default";
 }

@@ -229,7 +229,7 @@ export function createTodosAiToolSource(
 ): TodosAiRuntimeToolSource {
   const adapter = resolveAdapter(options);
   const configuredProfile = options.env
-    ? options.env["TODOS_PROFILE"] ?? env.profile()
+    ? options.env["HASNA_TODOS_PROFILE"] ?? options.env["TODOS_PROFILE"]
     : env.profile();
   const profile = options.accessProfile ??
     resolveAccessProfile(configuredProfile ?? "minimal");

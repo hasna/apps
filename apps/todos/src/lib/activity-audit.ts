@@ -6,6 +6,7 @@
 import { hostname } from "node:os";
 import type { Database } from "bun:sqlite";
 import { getDatabase, now, uuid } from "../db/database.js";
+import { env } from "./env.js";
 import { redactText, redactExportRecord } from "./secret-redaction.js";
 import { sanitizePreWriteText, sanitizePreWriteValue } from "./prewrite-secrets.js";
 
@@ -73,7 +74,7 @@ export interface ActivityExportBundle {
 }
 
 function getMachineId(): string {
-  return process.env["TODOS_MACHINE_ID"] || hostname();
+  return env.machineId() || hostname();
 }
 
 function rowToActivity(row: Record<string, unknown>): ActivityRecord {

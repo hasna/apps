@@ -5,6 +5,7 @@ import { getProject } from "../db/projects.js";
 import { getTaskList, getTaskListBySlug } from "../db/task-lists.js";
 import type { Project } from "../types/index.js";
 import type { Task } from "../types/index.js";
+import { env } from "./env.js";
 import {
   classifyProjectKind,
   inferRootProjectId,
@@ -134,7 +135,7 @@ function taskEventMetadata(task: Task): Record<string, unknown> {
 }
 
 function readMachineLocalPath(project: Project): string | null {
-  const machineId = process.env["TODOS_MACHINE_ID"];
+  const machineId = env.machineId();
   if (!machineId) return null;
   try {
     const row = getDatabase()

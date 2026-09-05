@@ -7,6 +7,7 @@ import { cloudResolveTaskRef, getTodosCloudClient, isCloudRouting } from "./clou
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { ensureProject, getProject, getProjectByPath, slugify } from "../db/projects.js";
+import { env } from "../lib/env.js";
 import { lockDisplayState } from "../lib/lock-display.js";
 import {
   collapseEnumValues,
@@ -19,7 +20,6 @@ import { TASK_PRIORITIES, TASK_STATUSES } from "../types/index.js";
 import type { Project, Task, TaskPriority, TaskStatus } from "../types/index.js";
 
 export { getPackageVersion };
-import { env } from "../lib/env.js";
 
 const stdoutRetryBuffer = new SharedArrayBuffer(4);
 const stdoutRetrySignal = new Int32Array(stdoutRetryBuffer);

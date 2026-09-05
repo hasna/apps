@@ -1502,7 +1502,7 @@ refuses to start unless one of the following is true:
 
 | Configuration | Result |
 | --- | --- |
-| `TODOS_API_KEY=<key>` (or `--api-key <key>`) | `/api/*` + `/mcp` require the key |
+| `HASNA_TODOS_API_KEY=<key>` (legacy `TODOS_API_KEY=<key>` accepted; or `--api-key <key>`) | `/api/*` + `/mcp` require the key |
 | at least one `todos api-keys create` key exists | `/api/*` + `/mcp` require a key |
 | `--allow-anonymous` **and** a loopback bind | anonymous, loopback peers only (local dev) |
 | a cloud `DATABASE_URL` is configured (hosted `/v1` deployment) | `/api/*` + `/mcp` are **not served**; `/v1` stays authenticated |
@@ -1510,7 +1510,7 @@ refuses to start unless one of the following is true:
 
 ```bash
 todos api-keys create "My app"          # then send x-api-key / Authorization: Bearer
-TODOS_API_KEY=<key> todos-serve --host 0.0.0.0
+HASNA_TODOS_API_KEY=<key> todos-serve --host 0.0.0.0   # legacy TODOS_API_KEY=<key> still accepted
 todos serve --allow-anonymous           # local dev only; refused for a non-loopback --host
 ```
 
@@ -1518,11 +1518,11 @@ todos serve --allow-anonymous           # local dev only; refused for a non-loop
 bind host, and even when enabled it only serves requests whose transport peer is
 itself loopback — so it can never publish an anonymous task read/write plane
 off-box. `todos-mcp --http` sets it implicitly because that transport is pinned to
-`127.0.0.1`; set `TODOS_API_KEY` (and send it from your MCP client) to require a
-credential there too.
+`127.0.0.1`; set `HASNA_TODOS_API_KEY` (legacy `TODOS_API_KEY` still accepted; send
+it from your MCP client) to require a credential there too.
 
-Pass the generated key from your app as `x-api-key` or set `TODOS_API_KEY` for
-the SDK client.
+Pass the generated key from your app as `x-api-key` or set `HASNA_TODOS_API_KEY`
+(legacy `TODOS_API_KEY` still accepted) for the SDK client.
 
 Always-on / hosted deployments should use the versioned `/v1` API, which
 authenticates independently against the cloud key store. `/health`, `/ready`,

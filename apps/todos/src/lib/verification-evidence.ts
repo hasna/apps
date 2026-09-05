@@ -8,6 +8,7 @@ import { dirname } from "node:path";
 import type { Database } from "bun:sqlite";
 import { getDatabase, now, uuid } from "../db/database.js";
 import { addArtifact } from "../db/artifacts.js";
+import { env } from "./env.js";
 import {
   type VerificationProviderStatus,
   type VerificationRecordResult,
@@ -95,7 +96,7 @@ export interface VerificationExportBundle {
 }
 
 function getMachineId(): string {
-  return process.env["TODOS_MACHINE_ID"] || require("node:os").hostname();
+  return env.machineId() || require("node:os").hostname();
 }
 
 function evidencePayload(input: CreateVerificationEvidenceInput): Record<string, unknown> {

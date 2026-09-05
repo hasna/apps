@@ -11,6 +11,7 @@ const originalTodosApiUrl = process.env["TODOS_API_URL"];
 const originalTodosUrl = process.env["TODOS_URL"];
 const originalTodosMode = process.env["TODOS_MODE"];
 const originalTodosApiKey = process.env["TODOS_API_KEY"];
+const originalCanonicalTodosApiKey = process.env["HASNA_TODOS_API_KEY"];
 const originalFetch = globalThis.fetch;
 
 let fakeHome: string;
@@ -22,6 +23,10 @@ beforeEach(() => {
   delete process.env["TODOS_URL"];
   delete process.env["TODOS_MODE"];
   delete process.env["TODOS_API_KEY"];
+  // The canonical HASNA_ name wins over the legacy alias, so a legacy-only
+  // scenario (these tests set only TODOS_* keys) must clear it too. The
+  // hermetic test preload blanks it to "" rather than deleting it.
+  delete process.env["HASNA_TODOS_API_KEY"];
   resetConfig();
 });
 
@@ -37,6 +42,8 @@ afterEach(() => {
   else process.env["TODOS_MODE"] = originalTodosMode;
   if (originalTodosApiKey === undefined) delete process.env["TODOS_API_KEY"];
   else process.env["TODOS_API_KEY"] = originalTodosApiKey;
+  if (originalCanonicalTodosApiKey === undefined) delete process.env["HASNA_TODOS_API_KEY"];
+  else process.env["HASNA_TODOS_API_KEY"] = originalCanonicalTodosApiKey;
   resetConfig();
   rmSync(fakeHome, { recursive: true, force: true });
 });

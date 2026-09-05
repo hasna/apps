@@ -29,6 +29,7 @@ import {
 } from "../../ai.js";
 import { createTodosAiToolSource } from "../../ai-tools.js";
 import { getTodosAiConfig } from "../../lib/config.js";
+import { env } from "../../lib/env.js";
 import { getPackageVersion } from "../../lib/package-version.js";
 
 interface TodosAiCliOptions {
@@ -101,7 +102,7 @@ function requestedErrorFormat(
     return options.format as TodosAiFormat;
   }
   if (globalOpts["json"] === true) return "json";
-  const envFormat = process.env["TODOS_AI_FORMAT"];
+  const envFormat = env.aiFormat();
   if (TODOS_AI_FORMATS.includes(envFormat as TodosAiFormat)) return envFormat as TodosAiFormat;
   if (TODOS_AI_FORMATS.includes(configFormat as TodosAiFormat)) {
     return configFormat as TodosAiFormat;

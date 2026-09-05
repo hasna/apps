@@ -40,9 +40,11 @@ let PORT_A = 0;
 let PORT_B = 0;
 let PORT_C = 0;
 let PORT_D = 0;
+let PORT_E = 0;
 let BASE_A = "";
 let BASE_B = "";
 let BASE_C = "";
+let BASE_E = "";
 const STATIC_KEY = "test-static-key-o15-04420";
 const CONTRACTS_SECRET = "test-signing-secret-o15-04420-0123456789abcdef";
 
@@ -50,6 +52,7 @@ let serverA: ReturnType<typeof Bun.spawn>;
 let serverB: ReturnType<typeof Bun.spawn>;
 let serverC: ReturnType<typeof Bun.spawn>;
 let serverD: ReturnType<typeof Bun.spawn>;
+let serverE: ReturnType<typeof Bun.spawn>;
 
 /** Ask the OS for a free loopback port (ephemeral allocation). */
 function freePort(): number {
@@ -112,9 +115,11 @@ beforeAll(
     PORT_B = freePort();
     PORT_C = freePort();
     PORT_D = freePort();
+    PORT_E = freePort();
     BASE_A = `http://localhost:${PORT_A}`;
     BASE_B = `http://localhost:${PORT_B}`;
     BASE_C = `http://localhost:${PORT_C}`;
+    BASE_E = `http://localhost:${PORT_E}`;
     serverA = await spawnServer(PORT_A, {
       MEMENTOS_CORS_ORIGIN: `http://localhost:${PORT_A}`,
     });
@@ -138,8 +143,17 @@ beforeAll(
     serverD = await spawnServer(PORT_D, {
       API_KEY_SIGNING_SECRET: CONTRACTS_SECRET,
     });
+    // Server E pins the static bearer path to the CANONICAL key name only
+    // (HASNA_MEMENTOS_API_KEY, no legacy MEMENTOS_API_KEY). The static-key
+    // check itself (env.apiKey()) is canonical-first; the markAuthenticated
+    // gate that exempts keyed requests from the Host allowlist must agree, or
+    // an operator who adopted the canonical name is refused 403 on every write.
+    serverE = await spawnServer(PORT_E, {
+      HASNA_MEMENTOS_API_KEY: STATIC_KEY,
+      MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES: "1",
+    });
   },
-  // Four servers boot sequentially; give the hook room (default is 5s).
+  // Five servers boot sequentially; give the hook room (default is 5s).
   30000,
 );
 
@@ -148,6 +162,7 @@ afterAll(() => {
   serverB.kill();
   serverC.kill();
   serverD.kill();
+  serverE.kill();
 });
 
 const MEMORY_BODY = {
@@ -455,6 +470,40 @@ describe("authenticated clients with a valid key are not refused by the Host all
 
   test("GET /api/inject with a valid key and a non-allowlisted Host is accepted (200)", async () => {
     const res = await fetch(`http://127.0.0.1:${PORT_C}/api/inject`, {
+      headers: AUTH,
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("canonical HASNA_MEMENTOS_API_KEY alone satisfies the static-key path (O15-04420 shape)", () => {
+  // Server E has ONLY the canonical key name set. authenticateRequest already
+  // checks canonical-first via env.apiKey(); these tests pin that the
+  // markAuthenticated gate (isAuthenticated / checkWriteOriginOrHost) honors
+  // the same name — a keyed write must never be refused 403 by the Host
+  // allowlist just because the legacy spelling was not set.
+  const AUTH = { Authorization: `Bearer ${STATIC_KEY}` };
+
+  test("POST with the canonical key and a non-allowlisted Host is accepted (201)", async () => {
+    const res = await fetch(`${BASE_E}/api/memories`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH },
+      body: JSON.stringify(MEMORY_BODY),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  test("POST with the canonical key via a loopback-IP Host is accepted (201)", async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT_E}/api/memories`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH },
+      body: JSON.stringify(MEMORY_BODY),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  test("GET /api/inject with the canonical key and a non-allowlisted Host is accepted (200)", async () => {
+    const res = await fetch(`http://127.0.0.1:${PORT_E}/api/inject`, {
       headers: AUTH,
     });
     expect(res.status).toBe(200);

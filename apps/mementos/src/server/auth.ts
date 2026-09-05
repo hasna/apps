@@ -12,8 +12,8 @@
  *   HASNA_API_SIGNING_KEY             (shared fallback)
  *
  * When no signing secret is configured the contracts verifier is disabled and
- * the server falls back to the legacy static `MEMENTOS_API_KEY` bearer check
- * (local/dev). When neither is set, state-changing requests are REFUSED
+ * the server falls back to the legacy static bearer check (`HASNA_MEMENTOS_API_KEY`,
+ * legacy alias `MEMENTOS_API_KEY`) for local/dev. When neither is set, state-changing requests are REFUSED
  * (fail-closed default); an operator may explicitly restore unauthenticated
  * writes with `MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES=1`. Read routes stay open
  * (local default).
@@ -26,6 +26,7 @@ import {
   type AuthQueryClient,
 } from "@hasna/contracts/auth";
 import { getStorageConnectionString, makePool } from "../storage.js";
+import { env } from "../lib/env.js";
 import { authenticateRequest, isStateChangingMethod, json } from "./helpers.js";
 
 const APP = "mementos";
@@ -152,7 +153,7 @@ export async function checkApiKey(
     if (authError) return authError;
     // A static bearer key was configured AND matched — an explicit credential,
     // so the request is not CSRF (see isAuthenticated / checkWriteOriginOrHost).
-    if (process.env["MEMENTOS_API_KEY"]) markAuthenticated(req);
+    if (env.apiKey()) markAuthenticated(req);
     return null;
   }
   if (_schemaReady) await _schemaReady;

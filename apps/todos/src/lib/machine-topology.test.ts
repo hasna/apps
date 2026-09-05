@@ -24,6 +24,8 @@ afterEach(() => {
   closeDatabase();
   delete process.env["TODOS_DB_PATH"];
   delete process.env["TODOS_MACHINE_NAME"];
+  delete process.env["HASNA_TODOS_MACHINE_NAME"];
+  delete process.env["HASNA_TODOS_MACHINE_ID"];
   resetMachineId();
 });
 
@@ -70,5 +72,21 @@ describe("machine topology", () => {
     process.env["TODOS_MACHINE_NAME"] = "dev-box";
     const names = getReachableHostnames();
     expect(names).toContain("dev-box");
+  });
+
+  it("lists reachable hostnames from the canonical HASNA_ names", () => {
+    process.env["HASNA_TODOS_MACHINE_NAME"] = "canon-box";
+    process.env["HASNA_TODOS_MACHINE_ID"] = "canon-id";
+    const names = getReachableHostnames();
+    expect(names).toContain("canon-box");
+    expect(names).toContain("canon-id");
+  });
+
+  it("prefers the canonical machine name over the legacy one", () => {
+    process.env["HASNA_TODOS_MACHINE_NAME"] = "canon-box";
+    process.env["TODOS_MACHINE_NAME"] = "legacy-box";
+    const names = getReachableHostnames();
+    expect(names).toContain("canon-box");
+    expect(names).not.toContain("legacy-box");
   });
 });

@@ -2,6 +2,8 @@
  * Local access profiles for CLI, MCP, SDK, and optional HTTP server.
  */
 
+import { env } from "./env.js";
+
 export const ACCESS_PROFILE_SCHEMA = "todos.access_profile.v1";
 
 export const ACCESS_PROFILES = ["read_only", "agent_safe", "minimal", "standard", "full", "admin"] as const;
@@ -117,7 +119,7 @@ export const DANGEROUS_TOOLS = new Set([
 ]);
 
 export function resolveAccessProfile(envValue?: string): AccessProfile {
-  const raw = (envValue ?? process.env["TODOS_PROFILE"] ?? "full").toLowerCase();
+  const raw = (envValue ?? env.profile() ?? "full").toLowerCase();
   if (ACCESS_PROFILES.includes(raw as AccessProfile)) return raw as AccessProfile;
   // backward compat aliases
   if (raw === "readonly") return "read_only";

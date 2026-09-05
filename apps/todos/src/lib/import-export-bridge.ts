@@ -13,6 +13,7 @@ import { listPlans } from "../db/plans.js";
 import { listComments } from "../db/comments.js";
 import { listTemplates, exportTemplate, importTemplate } from "../db/templates.js";
 import { exportArtifacts } from "../db/artifacts.js";
+import { env } from "./env.js";
 import { listVerificationRecords } from "./verification-providers.js";
 import { applyExportProfile, assertExportProfileAllowed, type ExportProfile } from "./local-encryption.js";
 import { redactExportRecord } from "./secret-redaction.js";
@@ -239,7 +240,7 @@ export function exportLocalBundle(options: ExportLocalBundleOptions = {}, db?: D
     bundle_type: options.bundle_type ?? (projectId ? "partial" : "full_export"),
     exported_at: new Date().toISOString(),
     source: {
-      machine_id: process.env["TODOS_MACHINE_ID"],
+      machine_id: env.machineId(),
       hostname: getHostname(),
     },
     project_id: projectId ?? null,
