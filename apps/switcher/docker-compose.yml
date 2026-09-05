@@ -1,0 +1,41 @@
+services:
+  switcher-sqlite:
+    profiles: [sqlite]
+    build: .
+    command: ["bun", "dist/serve/index.js", "--host", "0.0.0.0", "--port", "8080", "--data-dir", "/data"]
+    environment:
+      HASNA_SWITCHER_API_KEY: ${HASNA_SWITCHER_API_KEY:?Inject the operator API token}
+      SWITCHER_PROVIDER_OPENROUTER: ${SWITCHER_PROVIDER_OPENROUTER:-}
+    volumes:
+      - switcher-data:/data
+    ports:
+      - "127.0.0.1:8080:8080"
+  switcher-postgres:
+    profiles: [postgres]
+    build: .
+    environment:
+      HASNA_SWITCHER_API_KEY: ${HASNA_SWITCHER_API_KEY:?Inject the operator API token}
+      HASNA_SWITCHER_DATABASE_URL: ${HASNA_SWITCHER_DATABASE_URL:-}
+      SWITCHER_PROVIDER_OPENROUTER: ${SWITCHER_PROVIDER_OPENROUTER:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+  postgres:
+    profiles: [postgres]
+    image: postgres:17
+    environment:
+      POSTGRES_DB: switcher
+      POSTGRES_USER: switcher
+      POSTGRES_PASSWORD: ${SWITCHER_POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U switcher -d switcher"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  switcher-data:
+  postgres-data:

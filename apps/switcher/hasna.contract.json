@@ -1,0 +1,94 @@
+{
+  "$schema": "./node_modules/@hasna/contracts/src/hasna.contract.schema.json",
+  "schema": "hasna.service_contract.v1",
+  "name": "switcher",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "1.0.1",
+  "description": "Universal provider and model switcher for coding harnesses with an API, SDK and self-hosted storage",
+  "bins": [
+    "switcher",
+    "switcher-mcp",
+    "switcher-serve"
+  ],
+  "hosting": [
+    "user-hosted"
+  ],
+  "serviceSurfaces": [
+    {
+      "name": "http-api",
+      "kind": "api",
+      "status": "supported",
+      "bin": "switcher-serve",
+      "authMode": "api-key",
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
+      "apiBasePath": "/v1",
+      "openApiPath": "/v1/openapi.json"
+    },
+    {
+      "name": "package-sdk",
+      "kind": "sdk",
+      "status": "supported",
+      "authMode": "api-key",
+      "exportSubpath": "./sdk",
+      "generatedFrom": "/v1/openapi.json"
+    },
+    {
+      "name": "mcp",
+      "kind": "mcp",
+      "status": "supported",
+      "mcpBin": "switcher-mcp",
+      "authMode": "api-key"
+    },
+    {
+      "name": "cli",
+      "kind": "cli",
+      "status": "supported",
+      "bin": "switcher",
+      "authMode": "api-key"
+    }
+  ],
+  "storage": {
+    "backend": "postgresql",
+    "engines": [
+      "sqlite",
+      "postgresql"
+    ],
+    "envPrefix": "HASNA_SWITCHER_",
+    "aliasEnvPrefix": "SWITCHER_",
+    "sqlitePath": "~/.hasna/switcher/switcher.db",
+    "pgTestGate": {
+      "envVar": "SWITCHER_TEST_DATABASE_URL",
+      "command": "bun run test:postgres"
+    }
+  },
+  "metadata": {
+    "release": {
+      "artifactScan": {
+        "script": "scan:artifact"
+      }
+    },
+    "switcherStorageException": {
+      "authority": "Explicit user directive 2026-09-05, task 01a07181-ca8d-70c1-99a2-b276dc5770f3",
+      "serverBackends": [
+        "sqlite",
+        "postgresql"
+      ],
+      "scope": "Only switcher HTTP server; all CLI, SDK and MCP data access remains authenticated HTTP. PostgreSQL remains canonical backend."
+    }
+  }
+}
