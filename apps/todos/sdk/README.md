@@ -47,10 +47,15 @@ runtimes), so it does not read the macOS Keychain or
 [`@hasna/todos`](https://www.npmjs.com/package/@hasna/todos) instead — same
 client, full fleet credential chain behind it.
 
-| Setting | Option | Environment variable, in precedence order |
-| --- | --- | --- |
-| Authority | `baseUrl` | `HASNA_TODOS_API_URL`, then `TODOS_API_URL`, then `TODOS_URL` |
-| Credential | `apiKey` | `HASNA_TODOS_API_KEY`, then `TODOS_API_KEY` |
+| Setting | Option | Environment variable, in precedence order | Default |
+| --- | --- | --- | --- |
+| Authority | `baseUrl` | `HASNA_TODOS_API_URL`, then `TODOS_API_URL`, then `TODOS_URL` | `https://api.hasna.com/todos` with a credential, `http://localhost:19427` without one |
+| Credential | `apiKey` | `HASNA_TODOS_API_KEY`, then `TODOS_API_KEY` | none |
+
+**A credential means hosted.** When a key resolves and nothing names an
+authority, the authority is the fleet gateway — the same answer the
+`@hasna/todos` `./sdk` export gives for the identical environment. The two
+clients never disagree about where your key is going.
 
 `HASNA_TODOS_API_URL` / `HASNA_TODOS_API_KEY` are the canonical fleet names and
 always win. `TODOS_API_URL`, `TODOS_URL` and `TODOS_API_KEY` are this package's
@@ -75,7 +80,14 @@ todos-sdk: LOCAL mode — no HASNA_TODOS_API_URL and no HASNA_TODOS_API_KEY reso
 writing the local todos-serve at http://localhost:19427, not the hosted fleet. …
 ```
 
-Setting either one turns the notice off and uses what you set.
+The line is printed once per process, and `__resetTodosLocalModeNotice()` is
+exported so a test can observe it more than once.
+
+**Local mode requires that BOTH are absent.** A resolved credential with no
+authority is a hosted client aimed at the gateway, not a local one: your fleet
+key is never sent to an unauthenticated `todos-serve` on the box just because no
+URL was named. Setting only `baseUrl` / `HASNA_TODOS_API_URL` uses that
+authority with no credential.
 
 ## OpenAI / Anthropic Tool Schemas
 

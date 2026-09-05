@@ -31,6 +31,18 @@ export const TODOS_API_KEY_ENV_KEYS = ["HASNA_TODOS_API_KEY", "TODOS_API_KEY"] a
 /** The unhosted `todos-serve` a workstation runs. Never a hosted authority. */
 export const TODOS_LOCAL_SERVE_URL = "http://localhost:19427";
 
+/**
+ * The fleet gateway, and the authority a resolved credential implies.
+ *
+ * Kept as a literal rather than imported so this package stays dependency-free,
+ * but it is the SAME default `@hasna/contracts` composes for `todos`
+ * (`https://api.hasna.com/<app>`, path-prefixed, the caller appending its own
+ * path segment). The two clients MUST agree on identical configuration: a key
+ * with no URL is a hosted client on both, or an operator gets a different
+ * dataset depending on which import they picked.
+ */
+export const TODOS_DEFAULT_FLEET_URL = "https://api.hasna.com/todos";
+
 let localModeAnnounced = false;
 
 /** Reset the once-per-process local-mode notice. Test seam only. */
@@ -81,16 +93,22 @@ export class TodosClient {
     // Keychain and `~/.hasna/todos/config/credentials` tiers live in
     // `@hasna/todos/sdk`, which is the surface to use on a workstation.
     const configuredUrl = options.baseUrl || env(...TODOS_API_URL_ENV_KEYS);
-    this.baseUrl = (configuredUrl || TODOS_LOCAL_SERVE_URL).replace(/\/+$/, "");
     if (options.agentName) this.agentName = options.agentName;
     this.apiKey = options.apiKey || env(...TODOS_API_KEY_ENV_KEYS) || null;
-    // LOCAL MODE SAYS SO (2026-09-04 ruling, hasna/apps#1720). Nothing named an
-    // authority and nothing named a credential, so this client is talking to a
-    // `todos-serve` on this box rather than the fleet. That is a real product
-    // mode for this package, not a degradation — but a client silently reading
-    // an empty local store while the operator believes it is on the fleet is
-    // the false green the ruling exists to end, so it is announced once.
-    if (!configuredUrl && !this.apiKey) announceLocalMode();
+    // LOCAL MODE IS "NOTHING RESOLVED", NOT "NO URL RESOLVED" (2026-09-04
+    // ruling, hasna/apps#1720). The ruling permits the unhosted default only
+    // when NO URL **and** NO key resolve, and requires one clear line when it
+    // is taken. Gating only the notice on that pair — while the URL still fell
+    // back to localhost whenever no URL was named — left the case that matters:
+    // a credential resolves, nothing names an authority, and this client
+    // silently pointed the operator's FLEET KEY at an unauthenticated
+    // `todos-serve` on the box, saying nothing. A key is a statement that the
+    // caller is hosted, so it selects the fleet gateway exactly as the
+    // @hasna/contracts chain does for the `@hasna/todos` "./sdk" surface on the
+    // identical environment.
+    const local = !configuredUrl && !this.apiKey;
+    if (local) announceLocalMode();
+    this.baseUrl = (configuredUrl || (local ? TODOS_LOCAL_SERVE_URL : TODOS_DEFAULT_FLEET_URL)).replace(/\/+$/, "");
   }
 
   // ── Agent Identity ──────────────────────────────────────────────────────

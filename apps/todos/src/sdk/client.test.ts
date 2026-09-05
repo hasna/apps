@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { TodosClient } from "./client.js";
+import { resolveTodosSdkTransport } from "./resolve.js";
 import { resetConfig } from "../lib/config.js";
 import { getJsonContract, validateJsonContract } from "../json-contracts.js";
 
@@ -341,5 +342,121 @@ describe("TodosClient local API config", () => {
     // Drain the generator (closes immediately).
     for await (const _ of client.tasks.subscribe({ agentId: "a" })) { /* no events */ }
     expect(observedHeaders["x-api-key"]).toBe("sekret");
+  });
+});
+
+/**
+ * A caller-supplied authority is a PIN, and the station's fleet credential
+ * never travels to it.
+ *
+ * `baseUrl` is a documented public option on `TodosClientOptions`, exported
+ * through `@hasna/todos/sdk` and `createClient()`, and the shape
+ * `new TodosClient({ baseUrl })` with no `apiKey` is what every local-serve and
+ * test-double caller writes. Per-call credential re-resolution — correct for a
+ * client that resolved its own hosted authority — must not run for one of
+ * these, because the credential the ambient chain holds (Keychain,
+ * ~/.hasna/todos/config/credentials, HASNA_TODOS_API_KEY) was written for the
+ * FLEET. Sending it to an arbitrary caller-named URL is a credential leak, and
+ * it is the thing "the service authority is fixed for the life of a client"
+ * exists to promise.
+ */
+describe("TodosClient explicit baseUrl credential pin", () => {
+  const AMBIENT_NAMES = [
+    "HASNA_TODOS_API_URL",
+    "HASNA_TODOS_API_KEY",
+    "HASNA_TODOS_API_KEY_OVERRIDE",
+    "HASNA_TODOS_API_KEY_REF",
+    "HASNA_PROFILE",
+    "HASNA_TODOS_LOCAL",
+    "TODOS_LOCAL",
+    "HASNA_STATION",
+  ] as const;
+  let savedAmbient: Map<string, string | undefined>;
+
+  beforeEach(() => {
+    savedAmbient = new Map(AMBIENT_NAMES.map((name) => [name, process.env[name]]));
+    for (const name of AMBIENT_NAMES) delete process.env[name];
+    // Pin the Keychain tier's ACCOUNT to one that cannot exist, so this test
+    // reads the same on a developer Mac (where a real
+    // `hasna.credentials.todos.api-key` item outranks the disk tier and would
+    // make the fixture below dead weight) as it does on a Linux runner where
+    // the tier is off entirely. Not a bypass: the tier still runs, it simply
+    // has nothing to find and falls through, which is the documented behaviour
+    // for an absent item.
+    process.env["HASNA_STATION"] = "todos-sdk-test-account-that-does-not-exist";
+    // A credential the ambient chain WILL resolve, owner-only, under the fake
+    // HOME the outer beforeEach installed. Written to disk rather than to the
+    // environment so the tier under test is a real ambient one.
+    const credentialsPath = join(fakeHome, ".hasna", "todos", "config", "credentials");
+    mkdirSync(dirname(credentialsPath), { recursive: true });
+    writeFileSync(credentialsPath, "HASNA_TODOS_API_KEY=fleet-credential-for-the-fleet\n");
+    chmodSync(credentialsPath, 0o600);
+  });
+
+  afterEach(() => {
+    for (const [name, value] of savedAmbient) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  });
+
+  test("sends NO credential to a caller-supplied baseUrl, on every request", async () => {
+    // Self-validating: if nothing resolved ambiently the assertion below would
+    // pass for the wrong reason. Presence only — never the value.
+    expect(resolveTodosSdkTransport({ notice: () => {} }).apiKey).not.toBeNull();
+
+    const seen: { url: string; apiKey: string | undefined }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({
+        url: String(input),
+        apiKey: (init?.headers as Record<string, string> | undefined)?.["x-api-key"],
+      });
+      return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    const client = new TodosClient({ baseUrl: "https://third-party.example" });
+    await client.tasks.list();
+    await client.tasks.list();
+
+    expect(seen.map((call) => call.url)).toEqual([
+      "https://third-party.example/api/tasks",
+      "https://third-party.example/api/tasks",
+    ]);
+    expect(seen.map((call) => call.apiKey)).toEqual([undefined, undefined]);
+    expect(client.apiKey).toBeNull();
+  });
+
+  test("an explicit apiKey is still the one sent to an explicit baseUrl", async () => {
+    let observed: string | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observed = (init?.headers as Record<string, string> | undefined)?.["x-api-key"];
+      return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    const client = new TodosClient({ baseUrl: "https://third-party.example", apiKey: "caller-chosen" });
+    await client.tasks.list();
+
+    expect(observed).toBe("caller-chosen");
+  });
+
+  test("a client that resolved its OWN authority still re-resolves per call", async () => {
+    // The pin is about a caller-named authority, not a blanket freeze: a client
+    // built with no baseUrl resolved the hosted authority through the chain, so
+    // a key rotated on disk mid-process must still take effect.
+    const credentialsPath = join(fakeHome, ".hasna", "todos", "config", "credentials");
+    let observed: string | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observed = (init?.headers as Record<string, string> | undefined)?.["x-api-key"];
+      return new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    const client = new TodosClient();
+    await client.tasks.list();
+    expect(observed).toBe("fleet-credential-for-the-fleet");
+
+    writeFileSync(credentialsPath, "HASNA_TODOS_API_KEY=rotated-credential\n");
+    chmodSync(credentialsPath, 0o600);
+    await client.tasks.list();
+    expect(observed).toBe("rotated-credential");
   });
 });
