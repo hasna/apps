@@ -50,10 +50,16 @@
 // `resolveStorageClient` so it can never be read — by a human or by the
 // credential-seam conformance gate — as a second definition of the seam.
 
-import { createClientTransport } from "@hasna/contracts/client";
+import {
+  appConfigDiskValue,
+  clientTransportEnvKeys,
+  createClientTransport,
+  keychainConfigValue,
+} from "@hasna/contracts/client";
 import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
 import { guardedFetch } from "../test-isolation.js";
 import type {
+  ClientEnv,
   ClientTransportResolution,
   HasnaStorageClient,
   SecretsClientResolutionOptions,
@@ -97,6 +103,32 @@ export type {
   SecretsClientResolutionOptions,
   StorageListResult,
 } from "./client-types.js";
+
+/**
+ * True when SOMETHING configures a hosted authority for this app: the
+ * `HASNA_<NAME>_API_URL` env key (or its one accepted alias), the Keychain
+ * `api-url` item, or the `~/.hasna/<app>/config/credentials` file.
+ *
+ * It asks the SAME three sources, in the same order and through the same
+ * @hasna/contracts entry points, that `resolveClientTransport` consults before
+ * it falls back to the fleet gateway; the gateway default is deliberately NOT
+ * one of them, because a default that always applies would make this always
+ * true. A declared-but-unusable authority counts as configured — the run must
+ * fail loudly on it rather than be routed somewhere else.
+ *
+ * The local-vault lane is the only caller: the owner ruling makes the unhosted
+ * lane available only when NO url and NO key resolve.
+ */
+export function hostedAuthorityConfigured(
+  name: string,
+  env: ClientEnv,
+  options: SecretsClientResolutionOptions = {},
+): boolean {
+  const keys = clientTransportEnvKeys(name);
+  if (keys.apiUrlKeys.some((key) => (env[key] ?? "").trim().length > 0)) return true;
+  if (keychainConfigValue(name, env, options.credentials?.keychain) !== null) return true;
+  return appConfigDiskValue(name, env, keys.apiUrlKeys) !== null;
+}
 
 /**
  * The resolved HTTP storage client plus the decision that produced it.

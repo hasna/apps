@@ -215,6 +215,52 @@ describe("no credential (owner ruling 2026-09-04)", () => {
     expect(resolved.store.mode).toBe("api");
     expect(resolved.notice).toBeNull();
   });
+
+  it("the local opt-in yields to a configured AUTHORITY too — url with no key still fails closed", () => {
+    // The ruling is "no url AND no key", not "no key". Gating on the key alone
+    // meant a station with HASNA_SECRETS_API_URL exported and a Keychain lookup
+    // that misses (locked keychain, wrong HASNA_STATION account) silently read
+    // the on-box vault whenever the opt-in sat in the profile. A half-applied
+    // hosted run must fail exactly as loudly with the opt-in as without it.
+    expect(() =>
+      getStoreWithResolution(
+        env({ [LOCAL_VAULT_OPT_IN_ENV_KEY]: "1", HASNA_SECRETS_API_URL: "http://127.0.0.1:9999" }),
+      ),
+    ).toThrow(/HASNA_SECRETS_API_KEY/);
+  });
+
+  it("the local opt-in yields to the Keychain api-url item, not just to the env key", () => {
+    // Every tier of the authority ladder counts, or the hole just moves to the
+    // tier the ruling added.
+    expect(() =>
+      getStoreWithResolution(env({ [LOCAL_VAULT_OPT_IN_ENV_KEY]: "1", HASNA_STATION: "station-test" }), {
+        credentials: {
+          keychain: {
+            platform: "darwin",
+            run: fakeKeychain({ "hasna.credentials.secrets.api-url": "http://127.0.0.1:9999" }),
+          },
+        },
+      }),
+    ).toThrow(/HASNA_SECRETS_API_KEY/);
+  });
+
+  it("the local opt-in yields to an authority declared in the credentials file", () => {
+    const hasnaHome = writeCredentialsFile('HASNA_SECRETS_API_URL="http://127.0.0.1:9999"\n');
+    expect(() =>
+      getStoreWithResolution(env({ [LOCAL_VAULT_OPT_IN_ENV_KEY]: "1", HASNA_HOME: hasnaHome })),
+    ).toThrow(/HASNA_SECRETS_API_KEY/);
+  });
+
+  it("the local opt-in still applies when NOTHING configures a hosted run", () => {
+    // The other side of the same gate: an unhosted station is the product, and
+    // it must not have been tightened into unusability.
+    const hasnaHome = join(testDir, "empty-home");
+    const resolved = getStoreWithResolution(
+      env({ [LOCAL_VAULT_OPT_IN_ENV_KEY]: "1", HASNA_HOME: hasnaHome }),
+    );
+    expect(resolved.store.mode).toBe("local");
+    expect(resolved.notice).toContain("local vault");
+  });
 });
 
 describe("retired configuration is inert", () => {
