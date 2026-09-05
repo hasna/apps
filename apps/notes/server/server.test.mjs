@@ -29,7 +29,7 @@ function call(app, method, path, { token, idem, body, env = LOOPBACK } = {}) {
 
 async function login(app, email = 'owner@example.com') {
   const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
-  const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode } });
+  const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode, requestId: started.requestId } });
   expect(res.status).toBe(200);
   return res.json(); // { token, user, tenant, apiKey? }
 }

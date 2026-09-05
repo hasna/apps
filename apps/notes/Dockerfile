@@ -25,7 +25,12 @@ ENV NODE_ENV=production \
     # The server's default bind is 127.0.0.1 for single-user local runs; a
     # container is reached through its published port, so listen on all
     # interfaces here.
-    HASNA_NOTES_SERVER_HOST=0.0.0.0
+    HASNA_NOTES_SERVER_HOST=0.0.0.0 \
+    # The image runs behind one appending proxy (the fleet ALB), so the per-IP
+    # login limits key on the LAST x-forwarded-for entry instead of the
+    # balancer's own address (#1784; see server/client-ip.mjs). Set to 0 when
+    # a container is reached directly, or to the real chain depth.
+    HASNA_NOTES_SERVER_TRUSTED_PROXY_HOPS=1
 
 # App code, deps, and the migration runner (owner-scoped migrations run as a
 # one-shot task; the service itself runs as the app role).

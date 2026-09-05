@@ -134,6 +134,13 @@ export const NOTES_PG_MIGRATIONS: string[] = [
      tenant_id TEXT PRIMARY KEY,
      value INTEGER NOT NULL DEFAULT 0
    )`,
+
+  // Appended (the ledger checksums every earlier entry, so the otp table above
+  // is never edited in place). Failed verification attempts are counted per
+  // login REQUEST — its nonce — and burn that request at OTP_MAX_FAILED_ATTEMPTS
+  // (server/auth.mjs), never anything keyed on the address (#1770 review).
+  // The SQLite schema in server/db.mjs carries the column inline.
+  `ALTER TABLE otp_login_requests ADD COLUMN IF NOT EXISTS failed_attempts INTEGER NOT NULL DEFAULT 0`,
 ];
 
 /**

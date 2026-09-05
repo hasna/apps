@@ -34,7 +34,8 @@ client shows you with a signed-in session:
 #    adds devCode) or opt into console delivery for self-hosting with
 #    HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1.
 curl -X POST http://127.0.0.1:8788/api/v1/auth/login  -d '{"email":"you@example.com"}'
-curl -X POST http://127.0.0.1:8788/api/v1/auth/verify -d '{"email":"you@example.com","code":"123456"}'
+# → { sent, email, requestId, expiresAt }   (requestId is the request nonce; keep it)
+curl -X POST http://127.0.0.1:8788/api/v1/auth/verify -d '{"email":"you@example.com","code":"123456","requestId":"<requestId>"}'
 # → { token, user, tenant, apiKey }   (apiKey is returned exactly once)
 
 # 2. approve the device code the CLI showed you
@@ -42,53 +43,42 @@ curl -X POST http://127.0.0.1:8788/api/v1/auth/device/approve \
   -H 'authorization: Bearer <token>' -d '{"userCode":"XXXX-XXXX"}'
 ```
 
-Passwordless login is limited on **both** dimensions (issue #1542), and the two
-dimensions are deliberately shaped differently:
+Passwordless login is limited on three keys (issue #1542), none of which is the
+target address:
 
 - **Per source IP** — hourly quotas: 5 `/auth/login` and 20 `/auth/verify`
-  requests per hour. The key is the caller's own address, so spending the
-  budget only costs the caller.
-- **Process-wide** — a mint budget: 300 codes minted per minute, across all
-  addresses (`otpMintBudget`; `0` disables it). Past it, requests that would
-  mint a new code answer `429` until the minute rolls over; a request for an
-  address whose code is already outstanding still gets that envelope. It is a
-  circuit breaker for the database, the log and delivery under a distributed
-  flood, keyed on volume the caller cannot pick.
-- **Per target email** — never a quota, never a refusal. `/auth/login` enforces
-  a *minimum interval* (60 s, `otpCooldownMs`) between minted codes: a request
-  inside the interval is answered `200` with the code that is already
-  outstanding, and nothing new is minted, logged or delivered. `/auth/verify`
-  counts only **failed** attempts for an address — every request is checked
-  against the live code first, and a correct code logs in, full stop. After 5
-  wrong codes, further *wrong* codes for that address are answered `429`
-  (with `details.retryAfterMs`) for a 30 s pause (`otpFailureCooldownMs`; `0`
-  disables it), then the count starts over. The pause is back-pressure and an
-  operator signal (arming it is logged, address only), not a gate.
+  requests per hour. Behind the fleet's ALB the socket peer is the balancer
+  itself, so the key is the client the trusted proxy chain forwarded — see
+  `HASNA_NOTES_SERVER_TRUSTED_PROXY_HOPS` below (#1784).
+- **Process-wide** — a mint budget: 300 codes minted per minute across all
+  addresses (`otpMintBudget`; `0` disables). Past it, `/auth/login` answers
+  `429` until the minute rolls over: a circuit breaker for the database, the
+  log and delivery under a distributed flood, keyed on volume the caller
+  cannot pick.
+- **Per login request** — every `/auth/login` mints a request of its own: a
+  six-digit code (delivered to the address) and an opaque nonce, `requestId`
+  (returned only to the requester). `/auth/verify` takes
+  `{ email, code, requestId }` and looks the request up by its nonce; a
+  request that does not resolve is refused before anything is counted. Wrong
+  codes count against that request and **burn it after 5** — after which even
+  the correct code is refused, and the holder simply requests a new one.
 
-The asymmetry is the point. The server can tell the owner from a stranger only
-by the code itself, so anything keyed on the address that refuses a request
-*before* checking the code — a quota, a burn, a lock — is an account-lockout
-primitive: anyone who knows an address could spend its budget from throwaway
-IPs and keep the owner from logging in, renewably, for as long as they cared to.
-Neither per-address control here ever refuses the owner: the min-interval bounds
-a flood to one code per address per minute while the owner already holds a
-usable one (every code for an address is delivered only to that address), and
-wrong codes from strangers — from one IP or a thousand — never burn the code
-or delay a correct one. What bounds guessing is the per-IP verify quota, the
-6-digit space and the 10-minute lifetime: a distributed guess of one code at
-coin-flip odds needs ~25k source IPs inside ten minutes. (An earlier shape
-burned the code after ten wrong guesses across all IPs; that bounded guessing
-tighter but let ten throwaway IPs deny login for any address they chose.)
+Nothing is keyed on the address, and that is the point. The server can tell an
+address's owner from a stranger only by the code, so anything keyed on the
+caller-chosen address that refuses a request before checking the code — a
+quota, a burn, a lock — is an account-lockout primitive for whoever knows the
+address (#1756 shipped one; #1761 replaced it with a code burn that ten
+throwaway IPs could still trigger). Binding the guess budget to the request
+gives both properties at once: guessing is bounded at five tries per code no
+matter how many source IPs take part, and a stranger can only burn requests it
+minted itself — it never holds the owner's nonce — so N IPs requesting codes
+for an address and guessing at them cannot stop its owner from logging in with
+the owner's own request. A stranger's later request does not stale the owner's
+code either, since lookup is by nonce and not "the latest code for the address".
 
-Codes expire after 10 minutes. All of these counters live in the server
-process, so behind several tasks the ceilings apply per task; the per-IP quotas
-have always had the same property.
-
-One residual signal, stated rather than hidden: a coalesced `/auth/login`
-response is the outstanding code's own envelope, so its `expiresAt` shows that
-a code was requested for that address within the last interval. That is an
-activity signal, not an account-existence signal — every address gets a code,
-whether or not an account exists.
+Codes expire after 10 minutes. The per-IP buckets live in the server process
+(behind several tasks they apply per task); the attempt count lives in the
+request's own row, so it is exact across tasks.
 
 The listener defaults to loopback HTTP. Terminate TLS before connecting a client:
 all canonical Notes clients require HASNA_NOTES_API_URL with HTTPS and
@@ -105,6 +95,8 @@ HASNA_NOTES_API_KEY. No automatic client login/local fallback is provided.
 | | HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1 | off | print OTP login codes to the server console — explicit opt-in for self-hosting; never set in hosted/prod deploys (codes in logs = account takeover for anyone with log access) |
 | | HASNA_NOTES_SERVER_URL | loopback listener URL | public URL used in `verificationUri` |
 | | HASNA_NOTES_SERVER_JWT_SECRET | generated and persisted server-side | session-JWT secret |
+| | HASNA_NOTES_SERVER_TRUSTED_PROXY_HOPS | 0 (the image sets 1) | how many `x-forwarded-for`-appending proxies sit in front of the service; the per-IP login limits key on that entry counted from the RIGHT. `0` ignores forwarding headers and keys on the socket peer. The fleet image sets `1` for the ALB (#1784). Never the leftmost entry — the client writes that |
+| | HASNA_NOTES_SERVER_TRUSTED_GATEWAY_PEERS | unset | comma-separated IPs/CIDRs of the api.hasna.com gateway's egress. When the trusted hop is one of these, `x-real-ip` (which that gateway sets from `cf-connecting-ip`) is the client; from any other peer `x-real-ip` is ignored |
 | | HASNA_NOTES_DATABASE_URL | required PostgreSQL URL | storage backend (see below) |
 | | HASNA_NOTES_API_SIGNING_KEY | required signing key | api-key auth (api-key signing secret) |
 
