@@ -26,6 +26,14 @@ tier 1 — a pin the caller owns — and the **service authority is fixed for th
 life of a client**, because a credential written for one authority must never be
 sent to another; build a new client to point somewhere else.
 
+That second rule binds the credential too. `new TodosClient({ baseUrl })` with
+no `apiKey` pins the authority *and* sends no credential at all: the key in your
+Keychain or `~/.hasna/todos/config/credentials` was written for the fleet, so it
+is never re-resolved onto a URL you named — a local `todos-serve`, a staging
+box, a test double. Pass `apiKey` alongside `baseUrl` when that authority is
+supposed to get a credential. Per-call re-resolution applies to a client that
+resolved its own hosted authority, which is where rotation matters.
+
 **Credential, highest to lowest:**
 
 | # | Tier | Where |

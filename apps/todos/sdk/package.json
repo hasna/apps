@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos-sdk",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Universal agent SDK for @hasna/todos task management — works with Claude, Codex, Gemini, or any AI agent",
   "type": "module",
   "main": "dist/index.js",

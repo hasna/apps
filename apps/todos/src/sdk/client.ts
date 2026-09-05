@@ -525,6 +525,11 @@ export class TodosClient {
   private readonly explicitApiKey: string | undefined;
   /** The credential the chain produced at construction — the floor, never the answer. */
   private readonly constructedApiKey: string | null;
+  /**
+   * Tier 1 named the authority, so this client is pinned to it and the ambient
+   * credential chain is never consulted again. See {@link currentApiKey}.
+   */
+  private readonly pinnedAuthority: boolean;
 
   /** Namespaced resource accessors */
   readonly tasks: TasksResource;
@@ -549,6 +554,7 @@ export class TodosClient {
     this.timeout = options.timeout ?? 10000;
     this.explicitApiKey = options.apiKey;
     this.constructedApiKey = resolved.apiKey;
+    this.pinnedAuthority = Boolean(options.baseUrl);
     this.maxRetries = options.maxRetries ?? 0;
     this.retryDelay = options.retryDelay ?? 1000;
 
@@ -599,6 +605,19 @@ export class TodosClient {
    * for the life of the client, because a credential written for one authority
    * must never be sent to another; rebuild the client to change it.
    *
+   * THE AUTHORITY PIN IS ENFORCED HERE, NOT ONLY PROMISED. `baseUrl` is a
+   * public option, so `new TodosClient({ baseUrl: X })` with no `apiKey` is a
+   * caller pointing this client at an authority of their choosing — a local
+   * `todos-serve`, a staging box, a test double, any URL at all. The ambient
+   * chain (Keychain, ~/.hasna/todos/config/credentials, HASNA_TODOS_API_KEY)
+   * holds the credential written for the FLEET, and re-resolving it here would
+   * attach the station's hosted key as `x-api-key` on every request to X. That
+   * is the exact leak the "fixed for the life of a client" rule exists to
+   * prevent, so when tier 1 named the authority this returns the credential the
+   * client was CONSTRUCTED with — `options.apiKey`, or nothing — and never asks
+   * the chain again. Rotation-freshness is a hosted-authority property; a
+   * caller who pinned the authority pins the credential with it.
+   *
    * A re-resolution that throws or comes back empty falls back to the
    * credential this client was built with: a transient unreadable Keychain must
    * not turn a working client into a failing one mid-flight, and the request
@@ -606,6 +625,7 @@ export class TodosClient {
    */
   private currentApiKey(): string | null {
     if (this.explicitApiKey !== undefined) return this.explicitApiKey;
+    if (this.pinnedAuthority) return this.constructedApiKey;
     try {
       const fresh = resolveTodosSdkTransport({ notice: () => {} }).apiKey;
       if (fresh) return fresh;

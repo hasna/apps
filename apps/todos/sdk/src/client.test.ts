@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { TodosClient, TodosError } from "./client.js";
+import {
+  TodosClient,
+  TodosError,
+  TODOS_DEFAULT_FLEET_URL,
+  TODOS_LOCAL_SERVE_URL,
+  __resetTodosLocalModeNotice,
+} from "./client.js";
 import { todosTools } from "./schemas.js";
 
 const originalEventSource = globalThis.EventSource;
@@ -7,10 +13,42 @@ const originalFetch = globalThis.fetch;
 const originalTodosApiKey = process.env["TODOS_API_KEY"];
 const originalTodosApiUrl = process.env["TODOS_API_URL"];
 const originalTodosUrl = process.env["TODOS_URL"];
+const originalHasnaApiKey = process.env["HASNA_TODOS_API_KEY"];
+const originalHasnaApiUrl = process.env["HASNA_TODOS_API_URL"];
+
+/**
+ * Run a body with EVERY authority and credential name this client reads unset.
+ *
+ * The suite inherits the developer's shell, and on a station that shell has the
+ * fleet pair exported — so a test that asserts "nothing resolves" passes on CI
+ * and silently asserts nothing at all on the machine of the person most likely
+ * to be changing this file.
+ */
+function withNoTodosEnv<T>(body: () => T): T {
+  const names = [
+    "HASNA_TODOS_API_URL", "TODOS_API_URL", "TODOS_URL",
+    "HASNA_TODOS_API_KEY", "TODOS_API_KEY",
+  ];
+  const saved = new Map(names.map((name) => [name, process.env[name]]));
+  for (const name of names) delete process.env[name];
+  try {
+    return body();
+  } finally {
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
 
 afterEach(() => {
   globalThis.EventSource = originalEventSource;
   globalThis.fetch = originalFetch;
+  __resetTodosLocalModeNotice();
+  if (originalHasnaApiKey === undefined) delete process.env["HASNA_TODOS_API_KEY"];
+  else process.env["HASNA_TODOS_API_KEY"] = originalHasnaApiKey;
+  if (originalHasnaApiUrl === undefined) delete process.env["HASNA_TODOS_API_URL"];
+  else process.env["HASNA_TODOS_API_URL"] = originalHasnaApiUrl;
   if (originalTodosApiKey === undefined) delete process.env["TODOS_API_KEY"];
   else process.env["TODOS_API_KEY"] = originalTodosApiKey;
   if (originalTodosApiUrl === undefined) delete process.env["TODOS_API_URL"];
@@ -201,7 +239,10 @@ describe("TodosClient baseUrl normalization", () => {
   it("prefers the canonical HASNA_TODOS_API_KEY over the legacy key name", async () => {
     process.env["HASNA_TODOS_API_KEY"] = "canonical-key";
     process.env["TODOS_API_KEY"] = "legacy-key";
-    let observedKey: string | null = null;
+    // Annotated, not inferred: `let x: string | null = null` narrows to `null`
+    // at the assertion below, so `tsc` rejected comparing it to a string. The
+    // package's own typecheck has been failing on this line.
+    let observedKey: string | null | undefined;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       observedKey = new Headers(init?.headers).get("authorization");
       return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
@@ -260,5 +301,113 @@ describe("todosTools", () => {
     const createTask = todosTools.find(t => t.name === "todos_create_task");
     expect(createTask).toBeDefined();
     expect(createTask!.parameters.required).toContain("title");
+  });
+});
+
+/**
+ * The 2026-09-04 ruling (hasna/apps#1720) in this package's terms: the unhosted
+ * localhost default is reachable only when NO authority and NO credential
+ * resolve, and when it IS taken this client says so once.
+ */
+describe("TodosClient local mode", () => {
+  function captureStderr(): { lines: string[]; restore: () => void } {
+    const lines: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      lines.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    return { lines, restore: () => { process.stderr.write = original; } };
+  }
+
+  function stubFetch(): () => { url: string; auth: string | null } {
+    let url = "";
+    let auth: string | null = null;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      url = String(input);
+      auth = new Headers(init?.headers).get("authorization");
+      return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+    return () => ({ url, auth });
+  }
+
+  it("takes the local serve and announces it once when nothing resolves", async () => {
+    const read = stubFetch();
+    const stderr = captureStderr();
+    try {
+      await withNoTodosEnv(async () => {
+        __resetTodosLocalModeNotice();
+        const client = new TodosClient();
+        await client.listTasks();
+        // A second client in the same process must not repeat the line.
+        await new TodosClient().listTasks();
+      });
+    } finally {
+      stderr.restore();
+    }
+
+    expect(read().url).toBe(`${TODOS_LOCAL_SERVE_URL}/api/tasks`);
+    expect(read().auth).toBeNull();
+    const announcements = stderr.lines.filter((line) => line.includes("LOCAL mode"));
+    expect(announcements).toHaveLength(1);
+    expect(announcements[0]).toContain(TODOS_LOCAL_SERVE_URL);
+  });
+
+  it("goes to the fleet gateway — never localhost — when a credential resolves without a URL", async () => {
+    // THE REGRESSION THIS LOCKS DOWN. The notice was gated on "no URL and no
+    // key" while the URL still fell back to localhost whenever no URL was
+    // named, so a resolved fleet credential was attached to a request aimed at
+    // an unauthenticated `todos-serve` on the box, silently. A key means
+    // hosted, and the default authority is the gateway — the same answer the
+    // `@hasna/todos` "./sdk" surface gives for this identical environment.
+    const read = stubFetch();
+    const stderr = captureStderr();
+    try {
+      await withNoTodosEnv(async () => {
+        __resetTodosLocalModeNotice();
+        process.env["HASNA_TODOS_API_KEY"] = "resolved-fleet-key";
+        await new TodosClient().listTasks();
+      });
+    } finally {
+      stderr.restore();
+    }
+
+    expect(read().url).toBe(`${TODOS_DEFAULT_FLEET_URL}/api/tasks`);
+    expect(read().auth).toBe("Bearer resolved-fleet-key");
+    expect(read().url).not.toContain("localhost");
+    expect(stderr.lines.filter((line) => line.includes("LOCAL mode"))).toHaveLength(0);
+  });
+
+  it("does not announce local mode when only an authority resolves", async () => {
+    const read = stubFetch();
+    const stderr = captureStderr();
+    try {
+      await withNoTodosEnv(async () => {
+        __resetTodosLocalModeNotice();
+        process.env["HASNA_TODOS_API_URL"] = "https://configured.todos.test";
+        await new TodosClient().listTasks();
+      });
+    } finally {
+      stderr.restore();
+    }
+
+    expect(read().url).toBe("https://configured.todos.test/api/tasks");
+    expect(stderr.lines.filter((line) => line.includes("LOCAL mode"))).toHaveLength(0);
+  });
+
+  it("does not announce local mode for an explicit baseUrl that happens to be the local serve", async () => {
+    const read = stubFetch();
+    const stderr = captureStderr();
+    try {
+      await withNoTodosEnv(async () => {
+        __resetTodosLocalModeNotice();
+        await new TodosClient({ baseUrl: TODOS_LOCAL_SERVE_URL }).listTasks();
+      });
+    } finally {
+      stderr.restore();
+    }
+
+    expect(read().url).toBe(`${TODOS_LOCAL_SERVE_URL}/api/tasks`);
+    expect(stderr.lines.filter((line) => line.includes("LOCAL mode"))).toHaveLength(0);
   });
 });

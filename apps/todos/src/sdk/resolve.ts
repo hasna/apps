@@ -148,7 +148,21 @@ export function resolveTodosSdkTransport(
     };
   }
 
-  const chainOptions: ResolveClientTransportOptions = { credentials };
+  // ONE pass down the chain, not two. `resolveClientTransport` resolves the
+  // credential internally but deliberately returns only its SOURCE, so reading
+  // the value used to mean calling `resolveCredential` again one line later —
+  // and on macOS each pass spawns `/usr/bin/security`, so a surface that
+  // re-resolves per request (which the ruling requires) paid two spawns per
+  // request for one answer. Resolving here and handing the value down as the
+  // chain's tier-1 argument makes the second pass a no-op instead: tier 1
+  // returns immediately, so the transport still decides the authority exactly
+  // as before while consulting the Keychain once. It also closes a real
+  // TOCTOU — the key the transport validated and the key we sent were two
+  // separate reads, and a rotation between them made them different keys.
+  const credential = resolveCredential("todos", env, credentials);
+  const chainOptions: ResolveClientTransportOptions = {
+    credentials: credential ? { ...credentials, apiKey: credential.apiKey } : credentials,
+  };
 
   let resolution: ClientTransportResolution;
   try {
@@ -179,26 +193,17 @@ export function resolveTodosSdkTransport(
     mode: "http",
     baseUrl: stripV1(resolution.baseUrl),
     // The chain resolved a credential (a resolution without one throws), and
-    // the value is read here rather than carried on the resolution object.
-    apiKey: readResolvedApiKey(env, chainOptions),
-    apiKeySource: resolution.apiKeySource,
+    // the value is the one resolved above — the same read the transport was
+    // handed, so the key we validated is the key we send.
+    apiKey: credential ? credential.apiKey : null,
+    // The TRUE tier, not the tier-1 spelling the transport was handed: passing
+    // the value down as an argument makes the transport report "explicit apiKey
+    // argument", which would erase the Keychain/disk/env origin an operator
+    // needs in a diagnostic. `credential.source` is that origin, and never a
+    // value.
+    apiKeySource: credential ? credential.source : resolution.apiKeySource,
     apiUrlSource: resolution.apiUrlSource ?? "default",
   };
-}
-
-/**
- * Read the credential the chain just resolved.
- *
- * `resolveClientTransport` deliberately returns the SOURCE without the value,
- * so the value is taken from `resolveCredential` — the same chain, called
- * again, one line later. Re-resolving is the correct shape rather than a
- * duplicate: the chain is defined as fresh-per-call so a rotation heals inside
- * a long-lived process, and a cached snapshot here would reintroduce exactly
- * the staleness the chain exists to remove.
- */
-function readResolvedApiKey(env: Env, options: ResolveClientTransportOptions): string | null {
-  const credential = resolveCredential("todos", env, options.credentials ?? {});
-  return credential ? credential.apiKey : null;
 }
 
 /**
@@ -232,12 +237,25 @@ export function createTodosV1Client(
   // the generated header in place, so a transient unreadable Keychain cannot
   // turn a working client into a failing one mid-flight.
   const baseFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
+  // The per-request re-resolution must not TALK. It re-runs the same resolution
+  // that already succeeded above against the same environment, so any notice it
+  // produces is about a state this client is not in: a mid-flight degradation
+  // prints the "LOCAL mode — ... not the hosted fleet" line while the client is
+  // still addressing its original hosted authority with its constructed key.
+  // The refreshed credential is used; the commentary is dropped.
+  const refreshOptions: ResolveTodosSdkTransportOptions = { ...options, notice: () => {} };
   const fetchWithFreshCredential = ((input: RequestInfo | URL, init?: RequestInit) => {
-    // The generated client always hands us a plain record; keep that shape so a
-    // caller-supplied `fetch` sees the headers it has always seen.
-    const headers: Record<string, string> = { ...((init?.headers as Record<string, string>) ?? {}) };
+    // Normalise whatever shape the init carries. The generated client hands us
+    // a plain record today, but that was asserted only in a comment: an object
+    // spread over a `Headers` instance or a tuple array yields `{}` and would
+    // silently drop EVERY header, Content-Type included, the moment the client
+    // is regenerated. `Headers` normalises all three shapes for us.
+    const headers: Record<string, string> = {};
+    new Headers(init?.headers ?? {}).forEach((value, key) => {
+      headers[key] = value;
+    });
     try {
-      const fresh = resolveTodosSdkTransport(options).apiKey;
+      const fresh = resolveTodosSdkTransport(refreshOptions).apiKey;
       if (fresh) headers["x-api-key"] = fresh;
     } catch {
       // keep the credential the client was constructed with
