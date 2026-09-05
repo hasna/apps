@@ -237,37 +237,27 @@ export const MODE_AXIS_METRICS = [
     },
   },
   {
-    key: "getEmailsModeReferences",
+    key: "getClientModeReferences",
     kind: "content",
-    what: "`getEmailsMode` references — the process-wide mode read",
-    patternSource: String.raw`\bgetEmailsMode\b`,
+    what: "`getClientMode` references — the process-wide mode read",
+    patternSource: String.raw`\bgetClientMode\b`,
     positiveControl: {
-      hits: ['if (getEmailsMode() === "local") {'],
-      misses: ["getEmailsModeLabel(", "forgetEmailsMode", "getEmailsModes("],
+      hits: ['if (getClientMode() === "self_hosted") {'],
+      misses: ["getClientModeLabel(", "forgetClientMode", "getClientModes("],
     },
   },
   {
-    key: "resolveEmailsModeReferences",
+    key: "resolveClientModeReferences",
     kind: "content",
-    what: "`resolveEmailsMode` / `resolveEmailsModeSelection` references — mode resolution, including the credential-free selection variant",
+    what: "`resolveClientMode` / `resolveClientModeSelection` references — mode resolution, including the client-env-secret selection variant",
     // The alternation is enumerated rather than left as a bare prefix. A prefix match
-    // would also count the ratchet test's own metric key (`resolveEmailsModeReferences`),
+    // would also count the ratchet test's own metric key (`resolveClientModeReferences`),
     // which would make the guard count itself and break the "the ratchet contributes
     // zero" property that lets it live inside its own corpus.
-    patternSource: String.raw`\bresolveEmailsMode(?:Selection)?\b`,
+    patternSource: String.raw`\bresolveClientMode(?:Selection)?\b`,
     positiveControl: {
-      hits: ["resolveEmailsMode(env)", "resolveEmailsModeSelection(env)"],
-      misses: ["unresolveEmailsMode(", "resolveEmailsModeReferences", "resolveEmailsModes("],
-    },
-  },
-  {
-    key: "normalizeEmailsModeReferences",
-    kind: "content",
-    what: "`normalizeEmailsMode` references — the parser that admits the two mode values",
-    patternSource: String.raw`\bnormalizeEmailsMode\b`,
-    positiveControl: {
-      hits: ["const mode = normalizeEmailsMode(value);"],
-      misses: ["normalizeEmailsModeValue(", "denormalizeEmailsMode", "normalizeEmailsModes("],
+      hits: ["resolveClientMode(env)", "resolveClientModeSelection(env)"],
+      misses: ["unresolveClientMode(", "resolveClientModeReferences", "resolveClientModes("],
     },
   },
   {

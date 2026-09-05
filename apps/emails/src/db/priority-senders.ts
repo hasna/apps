@@ -13,7 +13,7 @@
 import { getDatabase, now, type Database } from "./database.js";
 import { selfHostedStoreFor } from "./self-hosted-store.js";
 import { ciso, cstr } from "./self-hosted-resource.js";
-import { getEmailsMode } from "../lib/mode.js";
+import { getClientMode } from "../lib/mode.js";
 import {
   normalizePriorityRuleInput,
   prioritySenderRuleId,
@@ -115,7 +115,7 @@ export function removePrioritySenderRuleRemote(id: string): boolean {
 // the process-wide store selection, so a mode change mid-process is honored.
 
 function rulesAreRemote(): boolean {
-  return getEmailsMode() === "self_hosted";
+  return getClientMode() === "self_hosted";
 }
 
 export function listPrioritySenderRules(db?: Database): PrioritySenderRule[] {

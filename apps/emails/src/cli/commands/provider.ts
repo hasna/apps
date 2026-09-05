@@ -10,7 +10,7 @@ import {
 } from "../../db/provider-secrets.js";
 import { getAdapter } from "../../providers/index.js";
 import { log } from "../../lib/logger.js";
-import { getEmailsMode } from "../../lib/mode.js";
+import { getClientMode } from "../../lib/mode.js";
 import type { Provider } from "../../types/index.js";
 import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliListPage } from "../utils.js";
 
@@ -75,7 +75,7 @@ async function validateProviderCandidate(
   if (opts.skipValidation) return { validated: false, note: "credential validation skipped (--skip-validation)" };
   if (candidate.type === "sandbox") return { validated: false };
   const hasCredentials = Boolean(candidate.api_key || candidate.access_key || candidate.secret_key);
-  if (!hasCredentials && getEmailsMode() === "self_hosted") {
+  if (!hasCredentials && getClientMode() === "self_hosted") {
     // Nothing was supplied and the SERVER holds the real credentials. Probing
     // this machine's ambient AWS chain would tell the operator nothing about
     // whether the server can send, so do not pretend it did.

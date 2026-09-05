@@ -58,7 +58,6 @@ function useAttachmentInventoryPages(
   pages: Array<[cursor: string, page: { items: Array<Record<string, unknown>>; next_cursor: string | null }]>,
 ): void {
   attachmentInventoryPages = new Map(pages);
-  process.env.EMAILS_MODE = "self_hosted";
   process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
   process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
   resetSelfHostedConfigCache();
@@ -345,7 +344,11 @@ describe("MCP inbox tools — self_hosted via seam", () => {
 });
 
 describe("MCP list_attachments — self_hosted inventory API", () => {
-  it("honors config-file-only self_hosted mode without opening usable SQLite", async () => {
+  it("refuses a config file that still declares a mode, without touching the API", async () => {
+    // Deployment modes are removed (hasna/apps#1566): a config file that still
+    // declares `emails_mode` must fail resolution loudly — even beside a complete
+    // API configuration and a database path — rather than let the stale key pick
+    // a store. The inventory tool therefore never reaches the API.
     attachmentInventoryPages = new Map([["", { items: [], next_cursor: null }]]);
     const configHome = mkdtempSync(join(tmpdir(), "emails-mcp-config-only-inventory-"));
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-mcp-config-only-poison-db-"));
@@ -353,20 +356,15 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
     const previousDbPath = process.env.EMAILS_DB_PATH;
     const previousClientEnvSecret = process.env.EMAILS_CLIENT_ENV_SECRET;
     const previousSessionToken = process.env.EMAILS_SESSION_TOKEN;
-    // This test must clear the mode keys to prove the on-disk config alone
-    // selects self_hosted, but `bun test` shares one process across every test
-    // file and the harness sets EMAILS_MODE=local once for it. Capture these so
-    // the `finally` can put them back, or later files inherit no mode at all.
-    const MODE_ENV_KEYS = ["MAILERY_MODE", "HASNA_MAILERY_MODE", "EMAILS_MODE", "HASNA_EMAILS_MODE"] as const;
-    const previousModeEnv: Record<string, string | undefined> = Object.fromEntries(
-      MODE_ENV_KEYS.map((key) => [key, process.env[key]]),
-    );
     const previousSelfHostedUrl = process.env.EMAILS_SELF_HOSTED_URL;
     const previousSelfHostedApiKey = process.env.EMAILS_SELF_HOSTED_API_KEY;
     try {
       process.env.HOME = configHome;
       saveConfig({ emails_mode: "self_hosted" });
-      for (const key of MODE_ENV_KEYS) {
+      // No retired mode variable may survive in the environment (a set word is
+      // itself refused); only the canonical API settings and a poison database
+      // path are configured, so any refusal below comes from the config file.
+      for (const key of ["MAILERY_MODE", "HASNA_MAILERY_MODE", "EMAILS_MODE", "HASNA_EMAILS_MODE"]) {
         delete process.env[key];
       }
       delete process.env.EMAILS_CLIENT_ENV_SECRET;
@@ -376,8 +374,10 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
       process.env.EMAILS_DB_PATH = poisonDbDir;
       resetSelfHostedConfigCache();
 
-      expect(await toolJson("list_attachments", {})).toEqual({ items: [], next_cursor: null });
-      expect(attachmentInventoryRequests).toHaveLength(1);
+      const result = await runInboxTool("list_attachments", {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain("'emails_mode' in the Emails config file was removed");
+      expect(attachmentInventoryRequests).toHaveLength(0);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -387,11 +387,6 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
       else process.env.EMAILS_CLIENT_ENV_SECRET = previousClientEnvSecret;
       if (previousSessionToken === undefined) delete process.env.EMAILS_SESSION_TOKEN;
       else process.env.EMAILS_SESSION_TOKEN = previousSessionToken;
-      for (const key of MODE_ENV_KEYS) {
-        const previous = previousModeEnv[key];
-        if (previous === undefined) delete process.env[key];
-        else process.env[key] = previous;
-      }
       if (previousSelfHostedUrl === undefined) delete process.env.EMAILS_SELF_HOSTED_URL;
       else process.env.EMAILS_SELF_HOSTED_URL = previousSelfHostedUrl;
       if (previousSelfHostedApiKey === undefined) delete process.env.EMAILS_SELF_HOSTED_API_KEY;
@@ -402,7 +397,7 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
     }
   });
 
-  it("returns the exact strict page shape without local SQLite fallback", async () => {
+  it("returns the exact strict page shape from the API", async () => {
     useAttachmentInventoryPages([["", {
       items: [{
         message_id: "message-1",
@@ -417,35 +412,52 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
       }],
       next_cursor: "opaque/+==",
     }]]);
+    const result = await toolJson("list_attachments", {
+      limit: 1,
+      direction: "outbound",
+      since: "2026-07-24T10:00:00+02:00",
+    });
+    expect(result).toEqual({
+      items: [{
+        message_id: "message-1",
+        attachment_index: 0,
+        filename: "invoice.pdf",
+        content_type: "application/pdf",
+        size_bytes: 2048,
+        sha256: "b".repeat(64),
+        content_available: false,
+        direction: "outbound",
+        received_at: "2026-07-24T08:00:00.000Z",
+      }],
+      next_cursor: "opaque/+==",
+    });
+    expect(Object.keys(result).sort()).toEqual(["items", "next_cursor"]);
+    expect(JSON.stringify(result)).not.toContain("content_base64");
+    expect(attachmentInventoryRequests).toHaveLength(1);
+    expect(attachmentInventoryRequests[0]?.searchParams.get("limit")).toBe("1");
+    expect(attachmentInventoryRequests[0]?.searchParams.get("direction")).toBe("outbound");
+    expect(attachmentInventoryRequests[0]?.searchParams.get("since")).toBe("2026-07-24T08:00:00.000Z");
+  });
+
+  it("refuses a configured database path beside the API instead of falling back to local SQLite", async () => {
+    // The fail-closed contract (hasna/apps#1566): an API origin AND a database
+    // path is a two-configured contradiction that refuses to boot, so the tool
+    // never reaches the inventory API while a local store is also configured —
+    // there is no precedence rule and no silent fallback.
+    useAttachmentInventoryPages([["", { items: [], next_cursor: null }]]);
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-no-local-inventory-"));
     const previousDbPath = process.env.EMAILS_DB_PATH;
     process.env.EMAILS_DB_PATH = poisonDbDir;
     try {
-      const result = await toolJson("list_attachments", {
-        limit: 1,
-        direction: "outbound",
-        since: "2026-07-24T10:00:00+02:00",
-      });
-      expect(result).toEqual({
-        items: [{
-          message_id: "message-1",
-          attachment_index: 0,
-          filename: "invoice.pdf",
-          content_type: "application/pdf",
-          size_bytes: 2048,
-          sha256: "b".repeat(64),
-          content_available: false,
-          direction: "outbound",
-          received_at: "2026-07-24T08:00:00.000Z",
-        }],
-        next_cursor: "opaque/+==",
-      });
-      expect(Object.keys(result).sort()).toEqual(["items", "next_cursor"]);
-      expect(JSON.stringify(result)).not.toContain("content_base64");
-      expect(attachmentInventoryRequests).toHaveLength(1);
-      expect(attachmentInventoryRequests[0]?.searchParams.get("limit")).toBe("1");
-      expect(attachmentInventoryRequests[0]?.searchParams.get("direction")).toBe("outbound");
-      expect(attachmentInventoryRequests[0]?.searchParams.get("since")).toBe("2026-07-24T08:00:00.000Z");
+      const result = await runInboxTool("list_attachments", {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain("two configured places");
+      expect(result.content[0]?.text).toContain("UNSET ONE");
+      expect(result.content[0]?.text).not.toContain("attachment-inventory-test-key");
+      expect(attachmentInventoryRequests).toHaveLength(0);
+      // The local store was never opened: a fallback to SQLite would have
+      // created a database file inside the poison directory.
+      expect(readdirSync(poisonDbDir)).toEqual([]);
     } finally {
       if (previousDbPath === undefined) delete process.env.EMAILS_DB_PATH;
       else process.env.EMAILS_DB_PATH = previousDbPath;

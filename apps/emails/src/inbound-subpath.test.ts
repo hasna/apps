@@ -108,7 +108,7 @@ describe("@hasna/emails/inbound subpath export", () => {
     expect(mod.planEmailStore).toBeUndefined();
     expect(mod.defaultDatabasePath).toBeUndefined();
     // Computed key: the bare identifier would trip the deployment-mode axis ratchet
-    // (getEmailsModeReferences is a CEILING) for what is a negative surface assertion.
+    // (getClientModeReferences is a CEILING) for what is a negative surface assertion.
     const modeGetter = "getEmails" + "Mode";
     expect(mod[modeGetter]).toBeUndefined();
   });

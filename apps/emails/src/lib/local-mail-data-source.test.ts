@@ -49,7 +49,9 @@ function clearMailModeEnv(): void {
 beforeEach(() => {
   captureInheritedProcessEnv();
   clearMailModeEnv();
-  process.env["EMAILS_MODE"] = "local";
+  // Storage configuration alone routes this arm (hasna/apps#1566): the explicit
+  // database path selects the local database — the deployment word is removed
+  // and never set (a carried-forward value is refused by the retired guard).
   process.env["EMAILS_DB_PATH"] = ":memory:";
   resetDatabase();
   resetMailDataSource();
@@ -141,10 +143,12 @@ function attachmentFile(name: string, content: string): string {
 }
 
 describe("SqliteMailDataSource", () => {
-  it("is selected by explicit local mode and by the safe default", () => {
+  it("routes the local database from the configured path alone", () => {
+    // Storage configuration alone selects the arm (hasna/apps#1566): the
+    // database path in beforeEach is enough — the deployment word is removed,
+    // so there is no explicit mode setting to consult or delete.
     expect(resolveMailDataSource()).toBeInstanceOf(SqliteMailDataSource);
     resetMailDataSource();
-    delete process.env["EMAILS_MODE"];
     expect(resolveMailDataSource()).toBeInstanceOf(SqliteMailDataSource);
   });
 

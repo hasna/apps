@@ -9,7 +9,7 @@ import { createSendKey, listSendKeySummaries, revokeSendKey, getSendKey, canOwne
 import { getProvider } from '../../db/providers.js';
 import { getAdapter, providerDnsPublishing } from '../../providers/index.js';
 import { assessDomainReadiness } from '../../lib/domain-readiness.js';
-import { resolveEmailsMode } from '../../lib/mode.js';
+import { resolveClientMode } from '../../lib/mode.js';
 import { formatError, resolveId, DomainNotFoundError, AddressNotFoundError, ProviderNotFoundError } from '../helpers.js';
 import type { Domain, EmailAddress } from '../../types/index.js';
 
@@ -114,10 +114,11 @@ function resolveSelfHostedAddressRef(ref: string): EmailAddress {
  * guards were the only thing refusing and are gone.
  */
 function assertMcpLocalStateAllowed(toolName: string, reason: string): void {
-  if (resolveEmailsMode().mode !== "self_hosted") return;
+  if (resolveClientMode().mode !== "self_hosted") return;
   throw new Error(
     `MCP tool ${toolName} is disabled in self_hosted API-only mode because ${reason}. ` +
-      "Use a self-hosted API-backed operation when it is available, or set EMAILS_MODE=local only for an explicit local store.",
+      "Run it in a local-database configuration instead: set HASNA_EMAILS_DB_PATH or " +
+      "EMAILS_DB_PATH to a database file, with the API settings unset.",
   );
 }
 

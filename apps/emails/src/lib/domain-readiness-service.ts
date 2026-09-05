@@ -19,7 +19,7 @@ import {
 } from "../db/provisioning.js";
 import { assessDomainReadiness, type DomainReadiness } from "./domain-readiness.js";
 import { domainInboundReadinessSignals } from "./domain-inbound-evidence.js";
-import { resolveEmailsMode, type EmailsModeResolution } from "./mode.js";
+import { resolveClientMode, type ClientModeResolution } from "./mode.js";
 
 export type DomainReadinessProviderSummary = Pick<Provider, "id" | "name" | "type" | "region" | "active">;
 
@@ -42,8 +42,8 @@ export interface DomainDnsLifecycleStatus {
 export interface DomainLifecycleSummary {
   id: string;
   domain: string;
-  mode: EmailsModeResolution["mode"];
-  mode_label: EmailsModeResolution["label"];
+  mode: ClientModeResolution["mode"];
+  mode_label: ClientModeResolution["label"];
   source_of_truth: DomainSourceOfTruth;
   domain_type: DomainType;
   provider: DomainReadinessProviderSummary | null;
@@ -60,7 +60,7 @@ export interface DomainLifecycleSummary {
 }
 
 export interface BuildDomainLifecycleSummaryOptions {
-  mode?: EmailsModeResolution;
+  mode?: ClientModeResolution;
   provider?: Provider | null;
   provisioning?: DomainProvisioning | null;
   ready_addresses?: number;
@@ -68,12 +68,12 @@ export interface BuildDomainLifecycleSummaryOptions {
 
 export interface ListDomainLifecycleSummaryOptions extends ListDomainOptions {
   provider_id?: string;
-  mode?: EmailsModeResolution;
+  mode?: ClientModeResolution;
 }
 
 export interface ResolveDomainLifecycleOptions {
   provider_id?: string;
-  mode?: EmailsModeResolution;
+  mode?: ClientModeResolution;
 }
 
 export interface DomainReadinessMutationInput {
@@ -156,18 +156,18 @@ function providerSummary(provider: Provider | null): DomainReadinessProviderSumm
   };
 }
 
-function resolveMode(mode?: EmailsModeResolution): EmailsModeResolution {
-  return mode ?? resolveEmailsMode();
+function resolveMode(mode?: ClientModeResolution): ClientModeResolution {
+  return mode ?? resolveClientMode();
 }
 
-export function defaultDomainSourceOfTruth(mode: EmailsModeResolution["mode"]): DomainSourceOfTruth {
+export function defaultDomainSourceOfTruth(mode: ClientModeResolution["mode"]): DomainSourceOfTruth {
   if (mode === "self_hosted") return "postgres";
   return "local";
 }
 
 export function assessDomainLifecycleReadiness(
   domain: Domain,
-  mode: EmailsModeResolution,
+  mode: ClientModeResolution,
   readyAddresses: number,
   provisioning: DomainProvisioning | null,
 ): DomainReadiness {

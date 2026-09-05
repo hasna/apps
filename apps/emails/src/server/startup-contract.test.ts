@@ -107,7 +107,7 @@ describe("server startup contract", () => {
     const combined = new TextDecoder().decode(result.stdout) + new TextDecoder().decode(result.stderr);
     expect(result.exitCode).not.toBe(0);
     expect(combined).toContain("MAILERY_MODE");
-    expect(combined).toContain("removed hosted/legacy runtime");
+    expect(combined).toContain("removed Mailery/cloud runtime");
   });
 
   it("selects the service from storage configuration, never from a deployment word", () => {
@@ -117,8 +117,8 @@ describe("server startup contract", () => {
     // it, because an operator service has to boot without any client credential at all.
     const source = readFileSync(serverIndexFile, "utf8");
     expect(source).toContain("resolveServerStorageBackend");
-    expect(source).not.toMatch(/resolveEmailsMode(?:Selection)?\(/);
-    expect(source).not.toMatch(/\bgetEmailsMode\b/);
+    expect(source).not.toMatch(/resolveClientMode(?:Selection)?\(/);
+    expect(source).not.toMatch(/\bgetClientMode\b/);
   });
 
   for (const command of ["ingest-worker", "ingest-s3-backfill"] as const) {

@@ -30,8 +30,12 @@ function restoreInheritedProcessEnv(): void {
 // Use a temp dir unique per test run to isolate from real ~/.hasna/emails
 const TMP_HOME = join("/tmp", `emails-config-test-${process.pid}`);
 
-// These tests keep self-hosted client credentials available while selecting the
-// attachment policy explicitly; credentials alone are now a split-storage error.
+// The attachment-storage tests below run against one of the two storage arms,
+// chosen the way an operator chooses one now (hasna/apps#1566): the API arm is an
+// API origin plus a credential, the local arm is an explicit database path, and
+// the deployment-mode variable that used to select between them is retired. The
+// variable is scrubbed — never set — under a name built at runtime, because the
+// guard module owns its spelling and nothing else in src/ may restate it.
 const SELF_HOSTED_URL = "https://emails.config.test";
 const SELF_HOSTED_KEY = "config-test-api-key";
 const MODE_ENV_KEY = ["EMAILS", "MODE"].join("_");
@@ -43,16 +47,28 @@ const SELF_HOSTED_ENV_KEYS = [
   "EMAILS_SELF_HOSTED_API_KEY",
   "EMAILS_SESSION_TOKEN",
   "EMAILS_IDP_TOKEN",
+  "HASNA_EMAILS_DB_PATH",
+  "EMAILS_DB_PATH",
 ] as const;
+
+/** Select the LOCAL arm: an explicit database path with the API settings unset. */
+function enableLocalArm(): void {
+  for (const key of SELF_HOSTED_ENV_KEYS) delete process.env[key];
+  process.env.HASNA_EMAILS_DB_PATH = join(TMP_HOME, "local.db");
+}
+
+/** Select the API arm: an API origin plus a credential with no database path. */
+function enableApiArm(): void {
+  for (const key of SELF_HOSTED_ENV_KEYS) delete process.env[key];
+  process.env.EMAILS_SELF_HOSTED_URL = SELF_HOSTED_URL;
+  process.env.EMAILS_SELF_HOSTED_API_KEY = SELF_HOSTED_KEY;
+}
 
 beforeEach(() => {
   captureInheritedProcessEnv();
   mkdirSync(TMP_HOME, { recursive: true });
   process.env.HOME = TMP_HOME;
-  for (const key of SELF_HOSTED_ENV_KEYS) delete process.env[key];
-  process.env[MODE_ENV_KEY] = "local";
-  process.env.EMAILS_SELF_HOSTED_URL = SELF_HOSTED_URL;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = SELF_HOSTED_KEY;
+  enableLocalArm();
   resetSelfHostedConfigCache();
 });
 
@@ -185,54 +201,36 @@ describe("config", () => {
   });
 
   it("getInboundAttachmentStorageConfig defaults self-hosted attachments to S3 when a bucket is configured", () => {
-    const previousMode = process.env["EMAILS_MODE"];
-    try {
-      process.env["EMAILS_MODE"] = "self_hosted";
-      setConfigValue("inbound_s3_bucket", "self-hosted-inbound");
+    enableApiArm();
+    setConfigValue("inbound_s3_bucket", "self-hosted-inbound");
 
-      expect(getInboundAttachmentStorageConfig()).toMatchObject({
-        attachment_storage: "s3",
-        s3_bucket: "self-hosted-inbound",
-        s3_region: "us-east-1",
-        s3_prefix: "emails",
-      });
-    } finally {
-      if (previousMode === undefined) delete process.env["EMAILS_MODE"];
-      else process.env["EMAILS_MODE"] = previousMode;
-    }
+    expect(getInboundAttachmentStorageConfig()).toMatchObject({
+      attachment_storage: "s3",
+      s3_bucket: "self-hosted-inbound",
+      s3_region: "us-east-1",
+      s3_prefix: "emails",
+    });
   });
 
   it("getInboundAttachmentStorageConfig avoids local attachment files in self-hosted mode without a bucket", () => {
-    const previousMode = process.env["EMAILS_MODE"];
-    try {
-      process.env["EMAILS_MODE"] = "self_hosted";
+    enableApiArm();
 
-      expect(getInboundAttachmentStorageConfig()).toMatchObject({
-        attachment_storage: "none",
-        s3_region: "us-east-1",
-        s3_prefix: "emails",
-      });
-    } finally {
-      if (previousMode === undefined) delete process.env["EMAILS_MODE"];
-      else process.env["EMAILS_MODE"] = previousMode;
-    }
+    expect(getInboundAttachmentStorageConfig()).toMatchObject({
+      attachment_storage: "none",
+      s3_region: "us-east-1",
+      s3_prefix: "emails",
+    });
   });
 
   it("getInboundAttachmentStorageConfig does not allow explicit local attachment storage in self-hosted mode", () => {
-    const previousMode = process.env["EMAILS_MODE"];
-    try {
-      process.env["EMAILS_MODE"] = "self_hosted";
-      setConfigValue("attachment_storage", "local");
-      setConfigValue("attachment_s3_bucket", "self-hosted-attachments");
+    enableApiArm();
+    setConfigValue("attachment_storage", "local");
+    setConfigValue("attachment_s3_bucket", "self-hosted-attachments");
 
-      expect(getInboundAttachmentStorageConfig()).toMatchObject({
-        attachment_storage: "s3",
-        s3_bucket: "self-hosted-attachments",
-      });
-    } finally {
-      if (previousMode === undefined) delete process.env["EMAILS_MODE"];
-      else process.env["EMAILS_MODE"] = previousMode;
-    }
+    expect(getInboundAttachmentStorageConfig()).toMatchObject({
+      attachment_storage: "s3",
+      s3_bucket: "self-hosted-attachments",
+    });
   });
 
   it("does not export concrete self-hosted infrastructure defaults in the OSS package", () => {
@@ -257,20 +255,14 @@ describe("config", () => {
   });
 
   it("getInboundAttachmentStorageConfig fails closed for explicit S3 storage without a bucket in self-hosted mode", () => {
-    const previousMode = process.env["EMAILS_MODE"];
-    try {
-      process.env["EMAILS_MODE"] = "self_hosted";
-      setConfigValue("attachment_storage", "s3");
+    enableApiArm();
+    setConfigValue("attachment_storage", "s3");
 
-      expect(getInboundAttachmentStorageConfig()).toMatchObject({
-        attachment_storage: "none",
-        s3_region: "us-east-1",
-        s3_prefix: "emails",
-      });
-    } finally {
-      if (previousMode === undefined) delete process.env["EMAILS_MODE"];
-      else process.env["EMAILS_MODE"] = previousMode;
-    }
+    expect(getInboundAttachmentStorageConfig()).toMatchObject({
+      attachment_storage: "none",
+      s3_region: "us-east-1",
+      s3_prefix: "emails",
+    });
   });
 
   it("getInboundAttachmentStorageConfig reads explicit inbound attachment overrides", () => {

@@ -16,8 +16,8 @@ async function toolError(error: unknown): Promise<ToolResult> {
 }
 
 async function isSelfHostedRuntimeMode(): Promise<boolean> {
-  const { resolveEmailsMode } = await import("../../lib/mode.js");
-  return resolveEmailsMode().mode === "self_hosted";
+  const { resolveClientMode } = await import("../../lib/mode.js");
+  return resolveClientMode().mode === "self_hosted";
 }
 
 async function assertSelfHostedApiRouteReady(toolName: string): Promise<void> {
@@ -25,8 +25,10 @@ async function assertSelfHostedApiRouteReady(toolName: string): Promise<void> {
   const { isSelfHostedMode } = await import("../../db/self-hosted-store.js");
   if (!isSelfHostedMode()) {
     throw new Error(
-      `MCP tool ${toolName} is API-backed in self_hosted mode and requires EMAILS_MODE=self_hosted with ` +
-        "EMAILS_SELF_HOSTED_URL and EMAILS_SELF_HOSTED_API_KEY. Set EMAILS_MODE=local only for an explicit local group store.",
+      `MCP tool ${toolName} is API-backed, but this process's API client configuration is not ` +
+        "ready: set EMAILS_SELF_HOSTED_URL and one of EMAILS_SESSION_TOKEN, EMAILS_IDP_TOKEN or " +
+        "EMAILS_SELF_HOSTED_API_KEY (or point EMAILS_CLIENT_ENV_SECRET at a vault entry that " +
+        "carries them).",
     );
   }
 }

@@ -4,7 +4,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import contract from "../hasna.contract.json" with { type: "json" };
-import { EMAILS_MODE_ENV_KEYS, resolveEmailsModeSelection } from "./lib/mode.js";
+import { resolveClientModeSelection } from "./lib/mode.js";
+import { RETIRED_MODE_VARIABLE_KEYS } from "./lib/retired-deployment-mode.js";
 import { emailsSelfHostedOpenApi } from "./server/self-hosted/openapi.js";
 import { SELF_HOSTED_APP, SELF_HOSTED_APP_ALIASES } from "./server/self-hosted/env.js";
 
@@ -86,19 +87,25 @@ describe("api-key app slug", () => {
   });
 });
 
-describe("MAILERY_* environment surface", () => {
+describe("the retired deployment-mode environment surface", () => {
   it("has no startup env bridge", () => {
     expect(existsSync(join(root, "src/lib/env-compat.ts"))).toBe(false);
     expect(existsSync(join(root, "src/lib/env-compat.test.ts"))).toBe(false);
   });
 
-  it("selects the mode from EMAILS_* names only", () => {
-    expect([...EMAILS_MODE_ENV_KEYS]).toEqual(["EMAILS_MODE", "HASNA_EMAILS_MODE"]);
+  it("retires both EMAILS_MODE spellings together in the guard module", () => {
+    // Deployment modes were removed (hasna/apps#1566): the two variables that
+    // used to DECLARE the mode are refused loudly, exported from the one guard
+    // module allowed to spell them. This pins that the whole retired set stays
+    // together and that nothing in src/lib/mode.ts re-declares it.
+    expect([...RETIRED_MODE_VARIABLE_KEYS]).toEqual(["EMAILS_MODE", "HASNA_EMAILS_MODE"]);
   });
 
-  it("rejects MAILERY_MODE / HASNA_MAILERY_MODE as removed-runtime variables", () => {
+  it("rejects the Mailery mode spellings as removed-runtime variables", () => {
     for (const key of ["MAILERY_MODE", "HASNA_MAILERY_MODE"]) {
-      expect(() => resolveEmailsModeSelection({ [key]: "self_hosted" })).toThrow(/removed hosted\/legacy runtime/);
+      expect(() => resolveClientModeSelection({ [key]: "self_hosted" })).toThrow(
+        `${key} belongs to the removed Mailery/cloud runtime`,
+      );
     }
   });
 });

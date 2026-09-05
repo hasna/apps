@@ -25,7 +25,7 @@ import {
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
 } from "./client-env.js";
-import { getEmailsMode } from "./mode.js";
+import { getClientMode } from "./mode.js";
 import {
   type AttachmentPath,
   type ConversationBodyOptions,
@@ -2358,8 +2358,8 @@ export class SelfHostedMailDataSource implements MailDataSource {
  * No URL or credential implies a mode, and no package-owned endpoint exists.
  */
 export function resolveSelfHostedMailDataSource(fetchImpl?: SelfHostedFetch): SelfHostedMailDataSource | null {
-  if (getEmailsMode() !== "self_hosted") return null;
-  const config = resolveSelfHostedConfig();
+  if (getClientMode() !== "self_hosted") return null;
+  const config = resolveSelfHostedConfig(process.env, { selectedMode: "self_hosted" });
   if (!config) return null;
   // `apiKey` here is the Bearer credential slot — a user session token when
   // present, else the next configured credential (resolveSelfHostedConfig decides).

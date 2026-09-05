@@ -110,10 +110,10 @@ describe("public package entrypoint", () => {
   it("exposes Emails mode and first-class local SQLite helpers from the storage subpath", async () => {
     const storage = await import("./storage.js");
 
-    expect(typeof storage.getEmailsMode).toBe("function");
-    expect(typeof storage.resolveEmailsMode).toBe("function");
-    expect(typeof storage.normalizeEmailsMode).toBe("function");
-    expect(typeof storage.labelForEmailsMode).toBe("function");
+    expect(typeof storage.getClientMode).toBe("function");
+    expect(typeof storage.resolveClientMode).toBe("function");
+    expect(typeof storage.resolveClientModeSelection).toBe("function");
+    expect(typeof storage.clientModeLabel).toBe("function");
     expect(typeof storage.getDatabase).toBe("function");
     expect(typeof storage.closeDatabase).toBe("function");
     expect(typeof storage.resetDatabase).toBe("function");
@@ -135,7 +135,12 @@ describe("public package entrypoint", () => {
         .map((key) => [key, process.env[key]] as const),
     );
     try {
-      process.env["EMAILS_MODE"] = "self_hosted";
+      // Deployment modes are removed (hasna/apps#1566): there is no mode word to
+      // set, so the retired variable is scrubbed (never set — a carried-forward
+      // value is refused by the guard) and the API settings are removed, proving
+      // the explicit-database helpers need neither a mode nor an API
+      // configuration to serve a caller-owned database.
+      delete process.env["EMAILS_MODE"];
       delete process.env["EMAILS_SELF_HOSTED_URL"];
       delete process.env["EMAILS_SELF_HOSTED_API_KEY"];
       delete process.env["EMAILS_SESSION_TOKEN"];
@@ -303,7 +308,7 @@ void getEmail("message-id", 42 as unknown as string);
         expect(rootEntry).not.toContain(storageInternal);
       }
       const storageEntry = readFileSync(join(rootDir, "storage.js"), "utf8");
-      expect(storageEntry).toContain("labelForEmailsMode");
+      expect(storageEntry).toContain("clientModeLabel");
       expect(storageEntry).not.toContain("var PG_MIGRATIONS");
       for (const removed of ["PgAdapterAsync", "storagePush", "storagePull", "storageSync"]) {
         expect(storageEntry).not.toContain(removed);

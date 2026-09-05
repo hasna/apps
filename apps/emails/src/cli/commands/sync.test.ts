@@ -18,7 +18,11 @@ const MODE_ENV_KEYS = [
 let originalModeEnv: Partial<Record<typeof MODE_ENV_KEYS[number], string>> = {};
 
 function enableSelfHostedMode() {
-  process.env["EMAILS_MODE"] = "self_hosted";
+  // The API arm is selected by configuration alone (hasna/apps#1566): an origin
+  // plus a credential. The retired deployment-mode variable is scrubbed — never
+  // set — because a set word trips the retired-variable guard.
+  delete process.env["EMAILS_MODE"];
+  delete process.env["HASNA_EMAILS_MODE"];
   process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example.test";
   process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-api-key";
 }
@@ -93,10 +97,12 @@ describe("sync JSON output", () => {
   it("prints one parseable stats document when -j follows the command", async () => {
     const env = {
       ...process.env,
-      [MODE_ENV_KEYS[0]]: "local",
       EMAILS_DB_PATH: ":memory:",
       NO_COLOR: "1",
     };
+    // Local is chosen by the explicit database path alone; every API and
+    // retired deployment-mode key is scrubbed so the child sees one store.
+    delete env[MODE_ENV_KEYS[0]];
     delete env[MODE_ENV_KEYS[1]];
     delete env[MODE_ENV_KEYS[2]];
     delete env.EMAILS_SELF_HOSTED_API_KEY;

@@ -11,7 +11,7 @@ import { describeWarmingProgress, formatWarmingStatus, generateWarmingPlan, getT
 import { colorDnsStatus, tableRow, truncate } from "../../lib/format.js";
 import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliListPage, resolveId } from "../utils.js";
 import { normalizeRoute53RegistrationContact } from "../../lib/route53-contact.js";
-import { resolveEmailsMode } from "../../lib/mode.js";
+import { resolveClientMode } from "../../lib/mode.js";
 import { now } from "../../db/runtime.js";
 
 // Every domain command below used to throw one sentence — "… is not available
@@ -351,7 +351,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
       // setup-inbound step nothing enforced, and SES 550-bounced every message
       // for a domain that looked "added".)
       const existing = getDomainByName(opts.provider, domain);
-      const mode = resolveEmailsMode();
+      const mode = resolveClientMode();
       const domainType = normalizeDomainType(opts.domainType) ?? "self_hosted";
       const { getInboundConfig } = await import("../../lib/config.js");
       const inboundConfig = getInboundConfig();

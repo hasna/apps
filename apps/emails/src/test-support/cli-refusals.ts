@@ -12,7 +12,7 @@
 
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import type { EmailsMode } from "../lib/mode.js";
+import type { ClientMode } from "../lib/mode.js";
 
 const COMMANDS_DIR = join(import.meta.dir, "..", "cli", "commands");
 
@@ -88,7 +88,7 @@ export function refusalHelpersObserved(): Record<RefusalHelper, number> {
 }
 
 /** Command prefixes that throw in `mode`, according to the CLI source. */
-export function cliRefusedPrefixes(mode: EmailsMode): string[] {
+export function cliRefusedPrefixes(mode: ClientMode): string[] {
   return scanCliRefusals()
     .filter((refusal) => refusal.shared || mode === "self_hosted")
     .map((refusal) => refusal.command);
@@ -100,7 +100,7 @@ export function cliRefusedPrefixes(mode: EmailsMode): string[] {
  * Deliberately independent of src/lib/status-commands.ts: this is the oracle, and
  * that registry is what is being tested.
  */
-export function cliRefusalFor(command: string, mode: EmailsMode): string | null {
+export function cliRefusalFor(command: string, mode: ClientMode): string | null {
   const normalized = command.trim();
   for (const prefix of cliRefusedPrefixes(mode)) {
     if (normalized === prefix || normalized.startsWith(`${prefix} `)) return prefix;

@@ -10,7 +10,7 @@
 
 import type { InboundBucket } from "./config.js";
 import type { EnrichedAddress } from "./address-ownership.js";
-import type { EmailsMode, EmailsModeLabel, EmailsModeSource } from "./mode.js";
+import type { ClientMode, ClientModeLabel, ClientModeSource } from "./mode.js";
 import type { MailboxSourceSummary, MailboxStatusSummary } from "./mail-types.js";
 import type { StatusAvailability } from "./status-availability.js";
 
@@ -153,9 +153,9 @@ export interface NextAction {
 export interface EmailSystemStatus {
   generated_at: string;
   mode: {
-    current: EmailsMode;
-    label: EmailsModeLabel;
-    source: EmailsModeSource;
+    current: ClientMode;
+    label: ClientModeLabel;
+    source: ClientModeSource;
     warning: string | null;
   };
   /**

@@ -1039,8 +1039,8 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
         // the operator is not asked to confirm a destructive action that cannot run.
         if (opts.provider) {
           const { SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED } = await import("../../lib/mail-types.js");
-          const { getEmailsMode } = await import("../../lib/mode.js");
-          if (getEmailsMode() === "self_hosted") handleError(new Error(SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED));
+          const { getClientMode } = await import("../../lib/mode.js");
+          if (getClientMode() === "self_hosted") handleError(new Error(SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED));
         }
         await confirmDestructiveAction(`Clear inbox emails ${target}?`, opts.yes);
         const { cleared } = await ds.clear({ providerId: opts.provider });

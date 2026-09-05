@@ -1,24 +1,29 @@
-// Dual-mode resolver contract: local is the safe default and never loads remote
-// credentials; self_hosted is explicit and fails closed without URL + credential.
+// THE CLIENT DATA-SOURCE MODE, resolved from the storage plan and from nothing else.
+//
+// Deployment modes were removed (hasna/apps#1566): no variable, config key or
+// operator instruction selects a mode any more. The store seam
+// (src/store-resolution.ts) decides which store this process reads and writes
+// from storage configuration alone — an API origin plus a credential, or an
+// explicit database path — and this module maps that plan onto the two-arm value
+// the not-yet-collapsed repository families still route on (`local` /
+// `self_hosted`). These tests pin that mapping, and pin that the RETIRED
+// deployment-mode contract — the word variables in either spelling, their
+// config-file spellings, and the legacy Mailery/cloud runtime keys — is refused
+// at the resolution boundary in the guard module's own words
+// (src/lib/retired-deployment-mode.ts, the only module allowed to spell it).
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync, chmodSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
-import {
-  EMAILS_CLIENT_ENV_SECRET_ENV,
-  EMAILS_MODE_ENV,
-  HASNA_EMAILS_MODE_ENV,
-  assertNoLegacyHostedEnvironment,
-  clientEnvCredentialOverrideWarning,
-  clientEnvPointerOverrideWarning,
-  getEmailsMode,
-  labelForEmailsMode,
-  normalizeEmailsMode,
-  resolveEmailsMode,
-  resolveEmailsModeSelection,
-} from "./mode.js";
+import { EMAILS_CLIENT_ENV_SECRET_ENV, EMAILS_SELF_HOSTED_API_KEY_ENV } from "./client-env.js";
 import { saveConfig } from "./config.js";
+import { clientModeLabel, getClientMode, resolveClientMode, resolveClientModeSelection } from "./mode.js";
+import {
+  RETIRED_MODE_VARIABLE_KEYS,
+  assertNoLegacyHostedEnvironment,
+  assertNoRetiredModeVariables,
+} from "./retired-deployment-mode.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 let ORIGINAL_HOME: string | undefined;
@@ -37,9 +42,14 @@ function restoreInheritedProcessEnv(): void {
 
 const TMP_HOME = join("/tmp", `emails-mode-test-${process.pid}`);
 
+// Every environment key a resolution reads or a guard refuses, scrubbed between
+// cases so no test inherits another's storage configuration. The retired word
+// spellings come from the guard module's export; the legacy Mailery keys are
+// spelled here only to scrub them from the harness (a value in any of them would
+// trip the legacy-runtime guard below) and to drive the guard's own refusal
+// cases.
 const ENV_KEYS = [
-  EMAILS_MODE_ENV,
-  HASNA_EMAILS_MODE_ENV,
+  ...RETIRED_MODE_VARIABLE_KEYS,
   EMAILS_CLIENT_ENV_SECRET_ENV,
   "HASNA_EMAILS_DB_PATH",
   "EMAILS_DB_PATH",
@@ -47,14 +57,14 @@ const ENV_KEYS = [
   "EMAILS_SELF_HOSTED_API_KEY",
   "EMAILS_SESSION_TOKEN",
   "EMAILS_IDP_TOKEN",
-  // Legacy mode keys (must be rejected loudly).
+  // Legacy mode keys (must be refused loudly).
   "MAILERY_MODE",
   "HASNA_MAILERY_MODE",
   "MAILERY_STORAGE_MODE",
   "HASNA_MAILERY_STORAGE_MODE",
   "EMAILS_STORAGE_MODE",
   "HASNA_EMAILS_STORAGE_MODE",
-  // Legacy hosted credential keys (must be ignored, never select/redirect).
+  // Legacy hosted credential keys (must be refused loudly, never select).
   "MAILERY_API_URL",
   "MAILERY_API_KEY",
   "MAILERY_CLOUD_API_URL",
@@ -64,17 +74,19 @@ const ENV_KEYS = [
   "HASNA_MAILERY_ENV_FILE",
 ] as const;
 
-// A canonical, non-loopback self-hosted endpoint (HTTPS is mandatory off-loopback).
+// A canonical, non-loopback API origin (HTTPS is mandatory off-loopback).
 const SELF_HOSTED_URL = "https://emails.example.invalid";
 const SELF_HOSTED_KEY = "not-a-real-key";
 
 function setSelfHostedCredentials(): void {
   process.env["EMAILS_SELF_HOSTED_URL"] = SELF_HOSTED_URL;
-  process.env["EMAILS_SELF_HOSTED_API_KEY"] = SELF_HOSTED_KEY;
+  process.env[EMAILS_SELF_HOSTED_API_KEY_ENV] = SELF_HOSTED_KEY;
 }
 
-// Install a `secrets` shim on PATH that returns a self_hosted client-env payload.
-function installSelfHostedSecretsCommand(): void {
+// Install a `secrets` shim on PATH that returns a client-env payload carrying the
+// canonical API settings. The payload is built in JS (never written as a word
+// literal) so tests may include the retired variable when a case needs it.
+function installSecretsCommandReturning(payload: Record<string, string>): void {
   const binDir = join(TMP_HOME, "bin");
   mkdirSync(binDir, { recursive: true });
   const secretsBin = join(binDir, "secrets");
@@ -82,7 +94,7 @@ function installSelfHostedSecretsCommand(): void {
     secretsBin,
     `#!/bin/sh
 if [ "$1" = "get" ] && [ "$2" = "hasna/xyz/opensource/emails/prod/client-env" ]; then
-  printf '%s\\n' '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"${SELF_HOSTED_URL}","EMAILS_SELF_HOSTED_API_KEY":"${SELF_HOSTED_KEY}"}'
+  printf '%s\\n' '${JSON.stringify(payload)}'
   exit 0
 fi
 exit 2
@@ -93,8 +105,13 @@ exit 2
   process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/xyz/opensource/emails/prod/client-env";
 }
 
-// Install a `secrets` shim that FAILS loudly if invoked — proves the loader is
-// never reached (e.g. for a removed mode).
+const API_PAYLOAD = {
+  EMAILS_SELF_HOSTED_URL: SELF_HOSTED_URL,
+  EMAILS_SELF_HOSTED_API_KEY: SELF_HOSTED_KEY,
+} as const;
+
+// Install a `secrets` shim that FAILS loudly if invoked — proves a path never
+// reaches the loader.
 function installFailingSecretsCommand(): void {
   const binDir = join(TMP_HOME, "bin-fail");
   mkdirSync(binDir, { recursive: true });
@@ -132,346 +149,230 @@ afterEach(() => {
   restoreInheritedProcessEnv();
 });
 
-describe("normalizeEmailsMode", () => {
-  it("accepts exactly local and self_hosted (case-insensitive, trimmed)", () => {
-    expect(normalizeEmailsMode("local")).toBe("local");
-    expect(normalizeEmailsMode("  LOCAL  ")).toBe("local");
-    expect(normalizeEmailsMode("self_hosted")).toBe("self_hosted");
-    expect(normalizeEmailsMode("  SELF_HOSTED  ")).toBe("self_hosted");
-  });
-
-  it("rejects cloud, remote, hybrid, and spelling aliases", () => {
-    for (const value of ["cloud", "remote", "hybrid", "self-hosted", "selfhosted"]) {
-      expect(() => normalizeEmailsMode(value)).toThrow(/removed hosted|exactly local or self_hosted/);
-    }
+describe("clientModeLabel", () => {
+  it("labels both mode values by the connection they mean, never by placement", () => {
+    expect(clientModeLabel("local")).toBe("Local");
+    expect(clientModeLabel("self_hosted")).toBe("Server API");
   });
 });
 
-describe("labelForEmailsMode / getEmailsMode", () => {
-  it("labels both canonical modes", () => {
-    expect(labelForEmailsMode("local")).toBe("Local");
-    expect(labelForEmailsMode("self_hosted")).toBe("Server API");
-  });
-
-  it("returns local when an explicit database path opts into local storage", () => {
-    // Local is EXPLICIT only (fail-closed ruling, 2026-09-04): a configured
-    // database path is the local choice both the store seam and the deployment
-    // word honour, so a DB-path-only environment resolves local without any API
-    // environment and without consulting a client credential.
+describe("resolveClientModeSelection — the storage-plan mapping", () => {
+  it("maps an explicit database path to the local arm, naming the setting", () => {
     process.env["EMAILS_DB_PATH"] = ":memory:";
-    expect(getEmailsMode()).toBe("local");
+    // Local is EXPLICIT only (fail-closed ruling, 2026-09-04): a configured
+    // database path is the local choice the store seam reads, so a DB-path-only
+    // environment resolves local without any API settings and without consulting
+    // a client credential.
+    expect(resolveClientModeSelection()).toEqual({
+      mode: "local",
+      label: "Local",
+      source: { kind: "env", name: "EMAILS_DB_PATH", value: ":memory:" },
+      warning: null,
+    });
+    expect(getClientMode()).toBe("local");
   });
 
-  it("getEmailsMode returns self_hosted once configured", () => {
-    process.env[EMAILS_MODE_ENV] = "self_hosted";
+  it("maps an API URL plus a credential to the API arm, without any mode variable", () => {
+    // The deployment-mode variable is retired (hasna/apps#1566): the API settings
+    // alone are the whole selection contract.
     setSelfHostedCredentials();
-    expect(getEmailsMode()).toBe("self_hosted");
+    expect(resolveClientModeSelection()).toEqual({
+      mode: "self_hosted",
+      label: "Server API",
+      source: { kind: "env", name: "EMAILS_SELF_HOSTED_URL", value: SELF_HOSTED_URL },
+      warning: null,
+    });
+    expect(getClientMode()).toBe("self_hosted");
+  });
+
+  it("refuses an environment that configures BOTH storage rows (contradiction row)", () => {
+    setSelfHostedCredentials();
+    process.env["HASNA_EMAILS_DB_PATH"] = "/tmp/unused-local.db";
+    let thrown: unknown;
+    try {
+      resolveClientModeSelection();
+    } catch (error) {
+      thrown = error;
+    }
+    // The seam's contradiction row — no precedence, no winner.
+    expect(String(thrown)).toContain("two configured places to keep its mail");
+    expect(String(thrown)).toContain("UNSET ONE");
+  });
+
+  it("fails closed on an API URL without a credential, naming the credential settings", () => {
+    process.env["EMAILS_SELF_HOSTED_URL"] = SELF_HOSTED_URL;
+    let thrown: unknown;
+    try {
+      resolveClientModeSelection();
+    } catch (error) {
+      thrown = error;
+    }
+    const message = String(thrown);
+    expect(message).toContain("configures an Emails API but no credential is set");
+    expect(message).toContain("EMAILS_SESSION_TOKEN");
+    expect(message).toContain("EMAILS_SELF_HOSTED_API_KEY");
+  });
+
+  it("fails closed when nothing is configured, naming both storage rows", () => {
+    // Incident 715712's shape, now a hard refusal (fail-closed ruling, 2026-09-04):
+    // with no API configuration and no explicit local choice there is no safe
+    // default, so resolution throws and names what it needs instead of serving an
+    // empty local database at rc=0.
+    for (const resolve of [resolveClientMode, resolveClientModeSelection]) {
+      let thrown: unknown;
+      try {
+        resolve();
+      } catch (error) {
+        thrown = error;
+      }
+      const message = String((thrown as Error).message);
+      // The required API environment: the origin, every credential route, and the
+      // vault pointer that delivers them...
+      expect(message).toContain("EMAILS_SELF_HOSTED_URL");
+      expect(message).toContain("EMAILS_SESSION_TOKEN");
+      expect(message).toContain("EMAILS_SELF_HOSTED_API_KEY");
+      expect(message).toContain(EMAILS_CLIENT_ENV_SECRET_ENV);
+      // ...and the explicit ways back to local.
+      expect(message).toContain("HASNA_EMAILS_DB_PATH");
+      expect(message).toContain("EMAILS_DB_PATH");
+    }
   });
 });
 
-describe("assertNoLegacyHostedEnvironment", () => {
-  it("throws on removed storage-mode env vars (both prefixes)", () => {
-    for (const key of [
-      "MAILERY_STORAGE_MODE",
-      "HASNA_MAILERY_STORAGE_MODE",
-      "EMAILS_STORAGE_MODE",
-      "HASNA_EMAILS_STORAGE_MODE",
-    ]) {
-      const env = { [key]: "cloud" } as NodeJS.ProcessEnv;
-      expect(() => assertNoLegacyHostedEnvironment(env)).toThrow("removed hosted/legacy runtime");
-    }
-  });
-
-  it("rejects the MAILERY_MODE selectors whatever value they carry", () => {
-    // MAILERY_MODE / HASNA_MAILERY_MODE configured the removed Mailery runtime.
-    // Honouring one would start this package in a mode the operator never asked
-    // it for, so both are refused even for an otherwise-valid value.
-    for (const key of ["MAILERY_MODE", "HASNA_MAILERY_MODE"]) {
+describe("the retired deployment-mode contract", () => {
+  it("refuses either retired word spelling, whatever value it carries", () => {
+    // The variables that used to DECLARE the mode were removed, not ignored: a
+    // carried-forward value — even the old "valid" self_hosted value — is refused
+    // with the guard's own sentence, which names the variable and its replacement.
+    for (const key of RETIRED_MODE_VARIABLE_KEYS) {
       for (const value of ["local", "self_hosted", "cloud"]) {
-        expect(() => assertNoLegacyHostedEnvironment({ [key]: value } as NodeJS.ProcessEnv))
-          .toThrow("removed hosted/legacy runtime");
+        expect(() => assertNoRetiredModeVariables({ [key]: value } as NodeJS.ProcessEnv)).toThrow(
+          `${key} was removed. Deployment modes no longer exist in Emails`,
+        );
       }
     }
   });
 
-  it("rejects legacy hosted API credentials so they cannot select a backend", () => {
-    const env = {
-      MAILERY_API_URL: "https://legacy.example",
-      MAILERY_API_KEY: "legacy",
-      HASNA_MAILERY_API_URL: "https://legacy.example",
-      HASNA_MAILERY_API_KEY: "legacy",
-    } as NodeJS.ProcessEnv;
-    expect(() => assertNoLegacyHostedEnvironment(env)).toThrow("removed hosted/legacy runtime");
-  });
-});
-
-describe("resolveEmailsMode — dual mode", () => {
-  it("resolves self_hosted from explicit mode + mandatory URL and key", () => {
-    process.env[EMAILS_MODE_ENV] = "self_hosted";
+  it("mode resolution refuses a carried-forward word BEFORE reading any storage row", () => {
+    // The strongest form: even an environment that fully and correctly configures
+    // BOTH storage rows must fail on the word, because the word itself is gone.
+    process.env[RETIRED_MODE_VARIABLE_KEYS[0]] = "local";
     setSelfHostedCredentials();
-    expect(resolveEmailsMode()).toEqual({
-      mode: "self_hosted",
-      label: "Server API",
-      source: { kind: "env", name: EMAILS_MODE_ENV, value: "self_hosted" },
-      warning: null,
-    });
-  });
-
-  it("refuses credentials alone instead of splitting API storage from local mode", () => {
-    setSelfHostedCredentials();
-    expect(() => resolveEmailsMode()).toThrow("EMAILS_SELF_HOSTED_URL configures an Emails API");
-  });
-
-  it("accepts the Hasna-prefixed mode alias", () => {
-    process.env[HASNA_EMAILS_MODE_ENV] = "self_hosted";
-    setSelfHostedCredentials();
-    expect(resolveEmailsMode()).toMatchObject({ mode: "self_hosted", label: "Server API" });
-  });
-
-  it("rejects MAILERY_MODE and names the key", () => {
-    for (const value of ["self_hosted", "cloud", "remote", "hybrid"]) {
-      process.env["MAILERY_MODE"] = value;
-      setSelfHostedCredentials();
-      resetSelfHostedConfigCache();
-      expect(() => resolveEmailsMode()).toThrow("MAILERY_MODE");
-      expect(() => resolveEmailsMode()).toThrow("removed hosted/legacy runtime");
-    }
-  });
-
-  it("resolves and validates a config-selected self_hosted client without requiring EMAILS_MODE", () => {
-    saveConfig({ emails_mode: "self_hosted" });
-    setSelfHostedCredentials();
-
-    expect(process.env[EMAILS_MODE_ENV]).toBeUndefined();
-    expect(resolveEmailsMode()).toMatchObject({
-      mode: "self_hosted",
-      label: "Server API",
-      source: { kind: "config", name: "emails_mode", value: "self_hosted" },
-    });
-  });
-
-  it("fails closed when nothing is configured, naming the required API environment", () => {
-    // Incident 715712's shape, now a hard refusal (fail-closed ruling, 2026-09-04):
-    // with no API configuration and no explicit local choice there is no safe
-    // default, so the resolver throws and names what it needs instead of serving an
-    // empty local database at rc=0. The counter-control for the shadowing note is
-    // gone with the default — there is no ordinary silent-local invocation left.
+    process.env["HASNA_EMAILS_DB_PATH"] = "/tmp/unused-local.db";
     let thrown: unknown;
     try {
-      resolveEmailsMode();
+      resolveClientMode();
     } catch (error) {
       thrown = error;
     }
-    expect(thrown).toBeInstanceOf(Error);
-    const message = String((thrown as Error).message);
-    expect(message).toContain("EMAILS_SELF_HOSTED_URL");
-    // Every credential route, so the operator can act without a second lookup...
-    expect(message).toContain("EMAILS_SESSION_TOKEN");
-    expect(message).toContain("EMAILS_SELF_HOSTED_API_KEY");
-    // ...the vault pointer that delivers them...
-    expect(message).toContain(EMAILS_CLIENT_ENV_SECRET_ENV);
-    // ...and the explicit ways back to local.
-    expect(message).toContain("HASNA_EMAILS_DB_PATH");
-    expect(message).toContain("EMAILS_DB_PATH");
+    const message = String(thrown);
+    expect(message).toContain("was removed. Deployment modes no longer exist in Emails");
+    expect(message).not.toContain("two configured places to keep its mail");
   });
 
-  it("fails loud when the mode is set but URL/key are missing", () => {
-    process.env[EMAILS_MODE_ENV] = "self_hosted";
-    expect(() => resolveEmailsMode()).toThrow("not configured");
+  it("refuses the config-file spellings of the retired contract", () => {
+    // The old client accepted an `emails_mode` key in the config file; none of
+    // those keys select anything any more, so a stale key fails resolution with
+    // the guard's refusal rather than being watched do nothing.
+    saveConfig({ emails_mode: "self_hosted" });
+    let thrown: unknown;
+    try {
+      resolveClientModeSelection();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(String(thrown)).toContain("'emails_mode' in the Emails config file was removed");
+    expect(String(thrown)).toContain("Deployment modes no longer exist in Emails");
   });
 
-  it("accepts explicit local without consulting self-hosted credentials", () => {
-    process.env[EMAILS_MODE_ENV] = "local";
-    setSelfHostedCredentials();
-    const resolution = resolveEmailsMode();
-    expect(resolution).toMatchObject({ mode: "local", source: { kind: "env", name: EMAILS_MODE_ENV } });
-    // Precedence unchanged — local still wins and no credential is read. But this
-    // fixture sets the canonical self-hosted URL + key and THEN selects local, which
-    // is the direct-configuration form of the shadowing bug: the process reads an
-    // empty local database while a deployment is fully configured in the same
-    // environment. It must say so, exactly as it does for a vault pointer.
-    // ENV_KEYS[0] is the canonical selector, used positionally because the mode-axis
-    // ratchet pins how many times its NAME may appear tree-wide.
-    expect(resolution.warning).toBe(clientEnvCredentialOverrideWarning(ENV_KEYS[0], SELF_HOSTED_URL));
-    expect(JSON.stringify(resolution)).not.toContain(SELF_HOSTED_KEY);
-  });
-
-
-  it("rejects removed cloud/remote/hybrid aliases", () => {
-    for (const value of ["cloud", "remote", "hybrid"]) {
-      process.env[EMAILS_MODE_ENV] = value;
-      setSelfHostedCredentials();
-      resetSelfHostedConfigCache();
-      expect(() => resolveEmailsMode()).toThrow("removed hosted/legacy runtime");
+  it("rejects the legacy Mailery mode and hosted-runtime keys", () => {
+    const legacyKeys = [
+      "MAILERY_MODE",
+      "HASNA_MAILERY_MODE",
+      "MAILERY_STORAGE_MODE",
+      "HASNA_MAILERY_STORAGE_MODE",
+      "EMAILS_STORAGE_MODE",
+      "HASNA_EMAILS_STORAGE_MODE",
+      "MAILERY_API_URL",
+      "MAILERY_API_KEY",
+      "MAILERY_CLOUD_API_URL",
+      "MAILERY_CLOUD_TOKEN",
+      "HASNA_MAILERY_API_URL",
+      "HASNA_MAILERY_API_KEY",
+      "HASNA_MAILERY_ENV_FILE",
+    ] as const;
+    for (const key of legacyKeys) {
+      const env = { [key]: "cloud" } as NodeJS.ProcessEnv;
+      let thrown: unknown;
+      try {
+        assertNoLegacyHostedEnvironment(env);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(String(thrown)).toContain(`${key} belongs to the removed Mailery/cloud runtime`);
+      expect(String(thrown)).toContain("Deployment modes no longer exist in Emails");
     }
   });
 
-  it("rejects legacy Mailery/storage mode environment variables", () => {
-    process.env["HASNA_MAILERY_STORAGE_MODE"] = "cloud";
+  it("mode resolution refuses legacy hosted keys even under a complete API environment", () => {
+    process.env["HASNA_MAILERY_API_URL"] = "https://legacy.example.invalid";
+    process.env["HASNA_MAILERY_API_KEY"] = "legacy-key";
     setSelfHostedCredentials();
-    expect(() => resolveEmailsMode()).toThrow("removed hosted/legacy runtime");
-  });
-
-  it("rejects inherited hosted API credentials (they never configure the client)", () => {
-    process.env["HASNA_MAILERY_API_URL"] = "https://example.invalid";
-    process.env["HASNA_MAILERY_API_KEY"] = "not-a-real-key";
-    expect(() => resolveEmailsMode()).toThrow("removed hosted/legacy runtime");
-  });
-
-  it("lets an explicit self_hosted endpoint override unrelated Mailery hosted credentials", () => {
-    process.env[EMAILS_MODE_ENV] = "self_hosted";
-    setSelfHostedCredentials();
-    process.env["HASNA_MAILERY_API_URL"] = "https://mailery.example.invalid";
-    process.env["HASNA_MAILERY_API_KEY"] = "old-mailery-key";
-    expect(resolveEmailsMode()).toMatchObject({
-      mode: "self_hosted",
-      source: { kind: "env", name: EMAILS_MODE_ENV },
-    });
+    expect(() => resolveClientMode()).toThrow("belongs to the removed Mailery/cloud runtime");
   });
 });
 
-describe("resolveEmailsMode — EMAILS_CLIENT_ENV_SECRET", () => {
-  it("selects operator mode from a client secret pointer without reading the secret", () => {
+describe("resolveClientMode / resolveClientModeSelection — the secret pointer", () => {
+  it("selection alone refuses a pointer whose payload has not been delivered", () => {
+    // resolveClientModeSelection never loads the pointer (loading is what turns a
+    // pointer-only environment into one the plan can decide), so a pointer with no
+    // URL in the environment is the seam's pointer-without-payload row — refused
+    // in the plan's own words, with the loader provably never invoked.
     installFailingSecretsCommand();
-
-    expect(resolveEmailsModeSelection()).toMatchObject({
-      mode: "self_hosted",
-      source: { kind: "env", name: EMAILS_CLIENT_ENV_SECRET_ENV },
-    });
-    expect(process.env[EMAILS_MODE_ENV]).toBeUndefined();
+    expect(() => resolveClientModeSelection()).toThrow(
+      "is set, but EMAILS_SELF_HOSTED_URL is not present in this environment",
+    );
   });
 
-  it("loads canonical self_hosted env from the client-env secret pointer", () => {
-    installSelfHostedSecretsCommand();
+  it("resolveClientMode delivers the pointer payload into canonical env and resolves the API arm", () => {
+    installSecretsCommandReturning({ ...API_PAYLOAD });
 
-    expect(resolveEmailsMode()).toMatchObject({
+    expect(resolveClientMode()).toEqual({
       mode: "self_hosted",
       label: "Server API",
-      source: { kind: "env", name: EMAILS_CLIENT_ENV_SECRET_ENV },
-      // The pointer was honoured, so nothing is being shadowed.
+      source: { kind: "env", name: "EMAILS_SELF_HOSTED_URL", value: SELF_HOSTED_URL },
       warning: null,
     });
-    // The pointer is expanded into the canonical env names.
-    expect(process.env[EMAILS_MODE_ENV]).toBe("self_hosted");
+    expect(getClientMode()).toBe("self_hosted");
+    // The pointer is expanded into the canonical API settings — and into nothing
+    // else: no retired variable is ever merged into the environment.
     expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBe(SELF_HOSTED_URL);
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe(SELF_HOSTED_KEY);
+    expect(process.env[EMAILS_SELF_HOSTED_API_KEY_ENV]).toBe(SELF_HOSTED_KEY);
+    for (const retiredKey of RETIRED_MODE_VARIABLE_KEYS) {
+      expect(process.env[retiredKey]).toBeUndefined();
+    }
   });
 
-  it("does not report the secret value on the error path or the resolution", () => {
-    installSelfHostedSecretsCommand();
-    const resolution = resolveEmailsMode();
-    // The source carries the (non-secret) vault POINTER, never the key value.
-    expect(JSON.stringify(resolution)).not.toContain(SELF_HOSTED_KEY);
-    expect(resolution.source.value).toBe("hasna/xyz/opensource/emails/prod/client-env");
-  });
-
-  it("never invokes the secrets loader for local mode, but SAYS it overrode the pointer", () => {
-    installFailingSecretsCommand();
-    process.env[EMAILS_MODE_ENV] = "local";
-
-    const resolution = resolveEmailsMode();
-    expect(resolution).toMatchObject({ mode: "local", label: "Local" });
-    // And the loader left the canonical credentials untouched.
+  it("refuses a vault entry that still carries a retired mode variable, at load", () => {
+    // A vault entry written against the older contract carries the word next to the
+    // settings. The loader refuses the whole entry rather than silently dropping
+    // the word (src/lib/client-env.ts), and nothing is merged into the env.
+    const retiredKey = RETIRED_MODE_VARIABLE_KEYS[0];
+    installSecretsCommandReturning({ ...API_PAYLOAD, [retiredKey]: "self_hosted" });
+    let thrown: unknown;
+    try {
+      resolveClientMode();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(String(thrown)).toContain(`${retiredKey} was removed`);
     expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBeUndefined();
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBeUndefined();
+  });
 
-    // THE REGRESSION (2026-07-27). Precedence above is correct and unchanged: the
-    // explicit selector beats the pointer and the loader is never reached. What used
-    // to be missing is any statement that it happened — `warning` was typed `null`
-    // and permanently unpopulated, while src/lib/doctor.local.ts already rendered it
-    // as a warn-level "Mode" check and src/lib/agent-context.ts already printed
-    // "Mode note:". Both surfaces were wired to a value that could not arrive, so the
-    // CLI read an empty local database and reported "0 total, 0 unread" against a
-    // deployment holding ~170,000 messages.
-    expect(resolution.warning).not.toBeNull();
-    // ENV_KEYS[0] is the canonical selector; used positionally because the mode-axis
-    // ratchet pins how many times its NAME may appear anywhere in the tree.
-    expect(resolution.warning).toBe(
-      clientEnvPointerOverrideWarning(ENV_KEYS[0], "hasna/xyz/opensource/emails/prod/client-env"),
-    );
-    // Never a credential value, even on the noisy path.
+  it("never carries the credential value on the resolution", () => {
+    installSecretsCommandReturning({ ...API_PAYLOAD });
+    const resolution = resolveClientMode();
     expect(JSON.stringify(resolution)).not.toContain(SELF_HOSTED_KEY);
-  });
-});
-
-// THE SILENT OVERRIDE (2026-07-27).
-//
-// A stale explicit local-mode selector — injected by `tmux set-environment -g` into
-// every pane created after it was set, so present in NO config file — shadowed a
-// configured EMAILS_CLIENT_ENV_SECRET pointer. loadEmailsClientEnvSecret
-// returned early without spawning `secrets get`, the CLI read the local SQLite
-// database, and `emails inbox status` reported "0 total, 0 unread" against a
-// deployment holding ~170,000 messages. Agents investigating a blocked production
-// email concluded the mailbox was empty.
-//
-// The precedence is CORRECT and these tests keep it: an explicit variable must beat
-// a pointer. What was missing is that nothing said so. The `warning` field existed
-// on EmailsModeResolution and was typed `null` — permanently unpopulated — while
-// src/lib/doctor.local.ts already rendered it as a warn-level "Mode" check and
-// src/lib/agent-context.ts already printed "Mode note:". Both surfaces were wired
-// to a value that could never arrive.
-describe("clientEnvPointerOverrideWarning — the note an operator has to be able to act on", () => {
-  const POINTER = "hasna/xyz/opensource/emails/prod/client-env";
-  // The mode-axis ratchet (src/mode-axis-ratchet.test.ts) pins, tree-wide and with an
-  // explicit "may only shrink" rule, both how many times the mode variable is NAMED
-  // and how many times the resolver is CALLED. So these cases take the key names from
-  // the ENV_KEYS list above instead of spelling them, and they exercise the pure
-  // message builder rather than adding resolver call sites — the resolver WIRING is
-  // asserted on the existing resolution tests above, which already construct exactly
-  // this scenario. ENV_KEYS[0] is the canonical selector, ENV_KEYS[1] its twin.
-  const MODE_KEY = ENV_KEYS[0];
-  const LEGACY_TWIN_KEY = ENV_KEYS[1];
-
-  for (const key of [MODE_KEY, LEGACY_TWIN_KEY] as const) {
-    it(`names ${key}, the pointer it overrides, and the way out`, () => {
-      const warning = clientEnvPointerOverrideWarning(key, POINTER);
-
-      // It must name the variable the operator has to change. A generic "mode
-      // mismatch" note is what leaves someone grepping dotfiles for a value that
-      // lives only in a tmux-injected pane environment.
-      expect(warning).toContain(key);
-      expect(warning).toContain(EMAILS_CLIENT_ENV_SECRET_ENV);
-      // …the pointer being overridden (a non-secret vault path)…
-      expect(warning).toContain(POINTER);
-      // …and the one-shot escape hatch, so the reader can prove it in one command.
-      expect(warning).toContain(`env -u ${key}`);
-      // It must say the numbers do not describe the deployment. A note that only says
-      // "mode is local" reads as informational next to a plausible 0.
-      expect(warning.toLowerCase()).toContain("local database");
-      expect(warning).toContain("do NOT describe the self-hosted");
-    });
-  }
-
-  it("says the value may be INHERITED, not configured — the reason grepping finds nothing", () => {
-    const warning = clientEnvPointerOverrideWarning(MODE_KEY, POINTER);
-    // The stale selector is typically injected into child processes by something
-    // upstream (a multiplexer's global environment, a supervisor, a CI runner) rather
-    // than written in a config file, so an operator who greps their dotfiles finds
-    // nothing and concludes the note is wrong.
-    expect(warning).toContain("exported by a parent process");
-    // And unsetting it at the source does not retract it from processes that already
-    // exist, so a reader who fixes it upstream and re-runs in the same shell is still
-    // blind. The note has to say that or it invites exactly that conclusion.
-    expect(warning).toContain("already-running shells");
-  });
-
-  // REVIEW FINDING. Keying the note solely on the vault pointer left the identical
-  // silent wrong-database read uncovered for an operator who exports the canonical
-  // URL + credential directly — the same "0 total" against a live deployment, with
-  // the same absence of any note.
-  it("also fires when explicit local shadows a DIRECTLY configured endpoint", () => {
-    const warning = clientEnvCredentialOverrideWarning(MODE_KEY, SELF_HOSTED_URL);
-    expect(warning).toContain(MODE_KEY);
-    expect(warning).toContain(SELF_HOSTED_URL);
-    expect(warning).toContain(`env -u ${MODE_KEY}`);
-    expect(warning).toContain("do NOT describe the self-hosted");
-    // The endpoint is named; the credential never is.
-    expect(warning).not.toContain(SELF_HOSTED_KEY);
-  });
-
-  it("carries no credential value — only the pointer name", () => {
-    const warning = clientEnvPointerOverrideWarning(MODE_KEY, POINTER);
-    expect(warning).not.toContain(SELF_HOSTED_KEY);
-    expect(warning).not.toContain(SELF_HOSTED_URL);
+    expect(resolution.source.value).toBe(SELF_HOSTED_URL);
   });
 });

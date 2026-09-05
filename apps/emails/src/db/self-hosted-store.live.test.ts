@@ -1,10 +1,10 @@
 // Live conformance test: drives the domains REPOSITORY (createDomain/getDomain/
-// listDomains/deleteDomain) with the client flipped to self_hosted, proving the
-// repo layer routes reads+writes to the selfHosted HTTP API. Skips cleanly when the
-// selfHosted env is not configured.
+// listDomains/deleteDomain) with the client pointed at a self-hosted API, proving
+// the repo layer routes reads+writes to the selfHosted HTTP API. Skips cleanly
+// when the self-hosted env is not configured.
 //
-// Enable by exporting:
-//   EMAILS_MODE=self_hosted
+// Enable by exporting (deployment modes are removed — hasna/apps#1566 — so the
+// API origin and credential alone select the arm):
 //   EMAILS_SELF_HOSTED_URL=https://emails.example
 //   EMAILS_SELF_HOSTED_API_KEY=<key>
 
@@ -12,12 +12,12 @@ import { describe, expect, test } from "bun:test";
 import { createDomain, deleteDomain, getDomain, getDomainByName, listDomains } from "./domains.js";
 import { resetSelfHostedConfigCache } from "./self-hosted-store.js";
 
+// The live lane must be unambiguous: an API origin with a credential, and no
+// database path that would make storage configuration contradict itself.
 const HAS_CLOUD =
-  Boolean(process.env.EMAILS_SELF_HOSTED_URL || process.env.EMAILS_SELF_HOSTED_URL) &&
-  Boolean(process.env.EMAILS_SELF_HOSTED_API_KEY || process.env.EMAILS_SELF_HOSTED_API_KEY) &&
-  /selfHosted|self_hosted|remote|hybrid/i.test(
-    process.env.EMAILS_MODE ?? process.env.EMAILS_STORAGE_MODE ?? process.env.HASNA_EMAILS_MODE ?? "",
-  );
+  Boolean(process.env.EMAILS_SELF_HOSTED_URL) &&
+  Boolean(process.env.EMAILS_SELF_HOSTED_API_KEY) &&
+  !Boolean(process.env.EMAILS_DB_PATH || process.env.HASNA_EMAILS_DB_PATH);
 
 const maybe = HAS_CLOUD ? test : test.skip;
 

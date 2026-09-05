@@ -33,7 +33,7 @@ import { findAddressesByEmail, listAddresses } from "../../db/addresses.js";
 import { getLatestActiveProviderId } from "../../db/providers.js";
 import { getInboundBuckets, loadConfig, saveConfig } from "../../lib/config.js";
 import { assessDomainReadiness } from "../../lib/domain-readiness.js";
-import { resolveEmailsMode } from "../../lib/mode.js";
+import { resolveClientMode } from "../../lib/mode.js";
 import { rethrowSelfHostedResponseFailure } from "../../lib/self-hosted-wire.js";
 import { describeIdentity, fetchIdentitySafe, type IdentityContext } from "../../lib/whoami.js";
 import { listS3Sources } from "../../lib/s3-sync.js";
@@ -307,14 +307,13 @@ function normalizeSubjectKey(subject: string): string {
 // ── mode / config helpers (unchanged; read config, not the DB) ─────────────
 
 function isSelfHostedTuiMode(): boolean {
-  const explicitMode = process.env["EMAILS_MODE"]?.trim() || process.env["HASNA_EMAILS_MODE"]?.trim();
-  if (explicitMode === "self_hosted") return true;
-  if (explicitMode === "local") return false;
-  if (!process.env["EMAILS_CLIENT_ENV_SECRET"]?.trim()) return false;
   try {
-    return resolveEmailsMode().mode === "self_hosted";
-  } catch (error) {
-    throw error;
+    return resolveClientMode().mode === "self_hosted";
+  } catch {
+    // A display helper never throws for an environment that cannot resolve to a
+    // store: boot paths refuse that configuration loudly in their own words, and
+    // here "not an API deployment" is the safe answer.
+    return false;
   }
 }
 
@@ -763,7 +762,7 @@ export async function listDomainSummaries(opts?: ListDomainSummaryOptions): Prom
       if (!domain || (item.status ?? "active") !== "active") continue;
       addressCountByDomain.set(domain, (addressCountByDomain.get(domain) ?? 0) + 1);
     }
-    const mode = resolveEmailsMode();
+    const mode = resolveClientMode();
     return domains
       .map((domain) => {
         const key = domain.domain.toLowerCase();

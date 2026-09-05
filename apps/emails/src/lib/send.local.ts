@@ -25,7 +25,7 @@ import { getDomainByName } from "../db/domains.local.js";
 // this module IS the local send path, and the fence has to read the same ledger the
 // send it fences writes to.
 import { findSentEmailByIdempotencyKey } from "./sent-ledger.local.js";
-import { resolveEmailsMode } from "./mode.js";
+import { resolveClientMode } from "./mode.js";
 import { getTodayLimit, getTodaySentCount } from "./warming.js";
 import type { Provider, SendEmailOptions } from "../types/index.js";
 import type { Database } from "../db/database.js";
@@ -89,7 +89,7 @@ function domainLifecycleFix(domainName: string, provider: Provider): string {
 }
 
 export function assertDomainOutboundReady(provider: Provider, opts: SendEmailOptions, db?: Database): void {
-  const mode = resolveEmailsMode().mode;
+  const mode = resolveClientMode().mode;
 
   if (mode === "self_hosted") {
     throw new Error(`Self-hosted sends must use the authenticated Emails service endpoint for ${providerRef(provider)}.`);

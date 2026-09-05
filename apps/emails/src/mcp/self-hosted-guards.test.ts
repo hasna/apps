@@ -318,7 +318,7 @@ describe("MCP self_hosted guards", () => {
       // tools instead fail later, at provider resolution or at the first AWS
       // call, so the refusal text cannot appear by accident.
       expect(text).toContain(`MCP tool ${name} is disabled in self_hosted mode`);
-      expect(text).toContain("EMAILS_MODE=local");
+      expect(text).toContain("local-database configuration");
       // The refusal must not repeat the false claim that a server route exists.
       expect(text).not.toContain("runs on the self-hosted server");
       // ...nor mention credentials: mcp/contracts.ts classifies by regex over the

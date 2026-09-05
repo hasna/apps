@@ -3,10 +3,10 @@
 Self-hosted means the operator owns the deployment, provider accounts and data.
 Emails does not provide or infer a hosted endpoint.
 
-Client configuration:
+Client configuration (deployment modes are removed — hasna/apps#1566 — so the
+API origin and one credential alone select the arm):
 
 ```bash
-export EMAILS_MODE=self_hosted
 export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
 export EMAILS_SELF_HOSTED_API_KEY="..." # or EMAILS_SESSION_TOKEN / EMAILS_IDP_TOKEN
 emails inbox list
@@ -34,8 +34,13 @@ private temporary directory. This is the smoke referenced by
 Service configuration. The service has NO deployment mode: setting
 `EMAILS_DATABASE_URL` is what makes `emails-serve` the operator `/v1` API over your
 own PostgreSQL, and leaving it unset is what makes it the local SQLite dashboard API.
-`EMAILS_MODE` remains a client selector while the client families still use it;
-do not set it in the service environment.
+Deployment modes are removed (hasna/apps#1566): the deployment-mode environment
+variable and the `emails_mode` config key are retired, and an environment or
+config file that still carries one is refused with an error naming the
+offending key — delete any carried-forward value everywhere, including this
+service environment. (The variable name is deliberately not spelled here: the
+retirement is enforced by name, and the refusal message prints the exact key
+to delete.)
 
 ```bash
 export EMAILS_DATABASE_URL="postgresql://..."

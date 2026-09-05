@@ -1,22 +1,25 @@
-/** Public deployment-mode and local SQLite entry point for @hasna/emails/storage. */
+/**
+ * Public client data-source mode and local SQLite entry point for
+ * @hasna/emails/storage.
+ *
+ * The retired deployment-mode variables and their parser are gone from this
+ * surface: a mode is no longer something an operator sets, it is the answer the
+ * store plan (below) produces. The two-arm value tokens (`local` /
+ * `self_hosted`) survive in the JSON status contract and in the arms that still
+ * route on them until they collapse onto the store seam.
+ */
 export {
-  EMAILS_MODE_CONFIG_KEY,
-  EMAILS_MODE_ENV,
-  EMAILS_MODE_ENV_KEYS,
-  HASNA_EMAILS_MODE_ENV,
-  assertNoLegacyHostedEnvironment,
-  getEmailsMode,
-  labelForEmailsMode,
-  normalizeEmailsMode,
-  resolveEmailsMode,
-  resolveEmailsModeSelection,
+  clientModeLabel,
+  getClientMode,
+  resolveClientMode,
+  resolveClientModeSelection,
 } from "./lib/mode.js";
 
 export type {
-  EmailsMode,
-  EmailsModeLabel,
-  EmailsModeResolution,
-  EmailsModeSource,
+  ClientMode,
+  ClientModeLabel,
+  ClientModeResolution,
+  ClientModeSource,
 } from "./lib/mode.js";
 
 export {

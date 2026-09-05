@@ -67,7 +67,9 @@ beforeEach(() => {
   scratchHome = mkdtempSync(join(tmpdir(), "emails-agent-context-local-"));
   for (const key of ISOLATED_ENV_KEYS) delete process.env[key];
   process.env[HOME_ENV_KEY] = scratchHome;
-  process.env[MODE_ENV_KEY] = "local";
+  // Storage configuration alone routes this arm (hasna/apps#1566): the explicit
+  // database path selects the local database — the deployment word is removed
+  // and never set (a carried-forward value is refused by the retired guard).
   process.env[DB_PATH_ENV_KEY] = ":memory:";
   resetDatabase();
 });

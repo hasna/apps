@@ -182,7 +182,6 @@ beforeEach(async () => {
   resetEnv();
   tempHome = mkdtempSync(join(tmpdir(), "emails-mcp-domain-address-self-hosted-"));
   process.env["HOME"] = tempHome;
-  process.env["EMAILS_MODE"] = "self_hosted";
   process.env["EMAILS_SELF_HOSTED_URL"] = await startApi();
   process.env["EMAILS_SELF_HOSTED_API_KEY"] = FIXTURE_BEARER;
   resetSelfHostedConfigCache();

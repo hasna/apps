@@ -108,7 +108,6 @@ describe("TUI autopull in self_hosted mode", () => {
       const env: Record<string, string> = {
         PATH: process.env["PATH"] ?? "",
         HOME: home,
-        EMAILS_MODE: "self_hosted",
         EMAILS_SELF_HOSTED_URL: "https://emails.example.test",
         EMAILS_SELF_HOSTED_API_KEY: "test-api-key",
         NO_COLOR: "1",

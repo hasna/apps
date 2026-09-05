@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import pkg from "../../package.json" with { type: "json" };
-import { assertNoLegacyHostedEnvironment } from "../lib/mode.js";
+import { assertNoLegacyHostedEnvironment } from "../lib/retired-deployment-mode.js";
 import { resolveServerBindOptions } from "./bind-options.js";
 import { resolveServerStorageBackend } from "./storage-backend.js";
 

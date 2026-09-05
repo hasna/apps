@@ -94,7 +94,8 @@ beforeEach(() => {
     previousStoreEnv[key] = process.env[key];
     delete process.env[key];
   }
-  process.env[STORE_MODE_ENV] = "local";
+  // The deployment-mode variable is retired (hasna/apps#1566): the database path
+  // alone routes the local arm.
   process.env[STORE_DB_ENV] = ":memory:";
   resetDatabase();
   resetMailDataSource();

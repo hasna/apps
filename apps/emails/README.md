@@ -26,13 +26,17 @@ bun install -g @hasna/emails
 ## Deployment
 
 The data backend is selected by `EMAILS_DATABASE_URL`: unset or blank means
-local SQLite, a PostgreSQL URL means PostgreSQL. On the client, store selection
-still follows the mode selector `EMAILS_MODE` — `local` by default, or
-`self_hosted` to talk to a server's HTTP API (`HASNA_EMAILS_MODE` and the
-`emails_mode` config key carry the same choice). Only `local` and `self_hosted`
-are supported; legacy Mailery-era selectors and `cloud`/`remote`/`hybrid`
-values are rejected. Local SQLite storage keeps the database, files, and
-credentials on the current machine; a PostgreSQL backend serves the
+local SQLite, a PostgreSQL URL means PostgreSQL. On the client, storage
+configuration alone routes the client: set `EMAILS_SELF_HOSTED_URL` and one
+credential (`EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN` or
+`EMAILS_SELF_HOSTED_API_KEY`) — or point `EMAILS_CLIENT_ENV_SECRET` at a vault
+entry that carries them — to talk to a server's HTTP API, or set
+`EMAILS_DB_PATH` / `HASNA_EMAILS_DB_PATH` to a database file for the local
+database. Deployment modes no longer exist (hasna/apps#1566): the deployment-mode
+environment variable is retired — a carried-forward value is refused with an
+error naming it — and so is the `emails_mode` config-file key. Local SQLite
+storage keeps the database,
+files, and credentials on the current machine; a PostgreSQL backend serves the
 authenticated `/v1` API from operator-owned infrastructure. Provider
 integrations always use user-supplied credentials; the package has no hosted
 account or control-plane service.
@@ -575,7 +579,6 @@ never replaced by S3-key fallback. MIME `To`/`Cc` headers are
 sender-controlled and are never used to select a tenant.
 
 ```bash
-export EMAILS_MODE=self_hosted
 export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
 export EMAILS_SELF_HOSTED_API_KEY="..."
 

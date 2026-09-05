@@ -7,7 +7,7 @@
 // The seam speaks the client's existing domain language (TuiMessage / Folder /
 // MailboxCounts / MessageBody / …) so callers stay independent of the backend.
 
-import { getEmailsMode, type EmailsMode } from "./mode.js";
+import { getClientMode, type ClientMode } from "./mode.js";
 import { getDatabase, resolvePartialIdOrThrow } from "../db/database.js";
 import { sqlEmailAddress } from "../db/email-address-sql.js";
 import { SelfHostedMailDataSource, resolveSelfHostedMailDataSource } from "./self-hosted-mail-data-source.js";
@@ -85,7 +85,7 @@ import { basename } from "node:path";
 
 // ── seam-level DTOs (backend-agnostic) ───────────────────────────────────────
 
-export type MailDataSourceMode = EmailsMode;
+export type MailDataSourceMode = ClientMode;
 
 export interface MailInsertionsQuery {
   /**
@@ -598,7 +598,7 @@ let memoized: { mode: MailDataSourceMode; source: MailDataSource } | null = null
  */
 export function resolveMailDataSource(opts: ResolveMailDataSourceOptions = {}): MailDataSource {
   const override = Boolean(opts.mode || opts.selfHosted);
-  const mode = opts.mode ?? getEmailsMode();
+  const mode = opts.mode ?? getClientMode();
   if (!override && memoized?.mode === mode) {
     return memoized.source;
   }

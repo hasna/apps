@@ -2,7 +2,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, statSync
 import { join } from "path";
 import { getDataRoot } from "../paths.js";
 import { resolveCloudflareAuth, type CloudflareAuth } from "./cloudflare-auth.js";
-import { getEmailsMode } from "./mode.js";
+import { getClientMode } from "./mode.js";
 import { isSensitiveKey } from "./redaction.js";
 
 /**
@@ -174,13 +174,16 @@ export function setConfigValue(key: string, value: unknown): void {
  * driven by model output. Without it, `set_config`'s bare `key: z.string()`
  * accepted anything in the file, and `saveConfig` re-seeds the in-process cache
  * so a write took effect immediately — most sharply for `emails_mode`, which
- * decides whether the process talks to local SQLite or the operator's
- * self-hosted API, mid-session.
+ * used to switch the process between local SQLite and the operator's self-hosted
+ * API mid-session. Deployment modes are removed (hasna/apps#1566): no mode key
+ * selects a store any more, and a stale one fails the next resolution loudly.
  *
  * Deliberately EXCLUDED, and why:
- *   - `emails_mode` (+ the `mode`/`storage_mode`/`mailery_mode` migration
- *     trip-wires in lib/mode.ts): switches the datastore the process reads and
- *     writes. Mode is an operator decision, made once, out of band.
+ *   - the retired deployment-mode spellings `emails_mode` / `mode` /
+ *     `storage_mode` / `mailery_mode` (refused by the retired-config guard in
+ *     lib/retired-deployment-mode.ts at every mode resolution): store choice is
+ *     an operator decision, made once out of band from storage configuration —
+ *     never from a key an agent can plant.
  *   - every credential/secret key (`cloudflare_api_token`, `cloudflare_api_key`,
  *     `resend_api_key`, the `*_webhook_secret` keys, …): an agent that can write
  *     a credential can point an integration at infrastructure it controls. Also
@@ -240,10 +243,12 @@ export function isAgentWritableConfigKey(key: string): boolean {
 export function agentConfigKeyRefusal(key: string): string {
   return `Config key "${key}" is not writable through this tool. Permitted keys: `
     + `${[...AGENT_WRITABLE_CONFIG_KEYS].join(", ")}. `
-    + `Mode selection (emails_mode), credential keys, and the S3/AWS data-flow keys `
-    + `are excluded on purpose. An operator sets those out of band — via the `
-    + `EMAILS_* environment variables, or by editing ~/.hasna/emails/config.json `
-    + `directly (this build registers no "emails config" command).`;
+    + `Mode-selection keys like "emails_mode" were removed with deployment modes `
+    + `(hasna/apps#1566) — a stale one fails the next mode resolution; credential `
+    + `keys and the S3/AWS data-flow keys are excluded on purpose. An operator sets `
+    + `those out of band — via the EMAILS_* environment variables, or by editing `
+    + `~/.hasna/emails/config.json directly (this build registers no "emails `
+    + `config" command).`;
 }
 
 /**
@@ -405,7 +410,7 @@ export function getInboundAttachmentStorageConfig(): InboundAttachmentStorageCon
   //   self_hosted -> the server owns attachments; the thin client never keeps them on the
   //             local filesystem — it uses S3 when a bucket is configured, else none
   //             (an explicit "local"/"s3" is coerced to that safe pair).
-  const selfHosted = getEmailsMode() === "self_hosted";
+  const selfHosted = getClientMode() === "self_hosted";
   const selfHostedStorage: AttachmentStorage = configuredBucket || inboundBucket ? "s3" : "none";
   const effectiveStorage = selfHosted
     ? (configuredStorage === "local" || configuredStorage === "s3" ? selfHostedStorage : configuredStorage)

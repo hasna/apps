@@ -162,7 +162,6 @@ describe("emails send — suppressed recipients (local)", () => {
 
   beforeEach(async () => {
     captureInheritedProcessEnv();
-    process.env["EMAILS_MODE"] = "local";
     process.env["EMAILS_DB_PATH"] = ":memory:";
     resetDatabase();
     resetMailDataSource();
@@ -222,7 +221,6 @@ describe("suppression matches the recipient canonically, not by exact string", (
 
   beforeEach(() => {
     captureInheritedProcessEnv();
-    process.env["EMAILS_MODE"] = "local";
     process.env["EMAILS_DB_PATH"] = ":memory:";
     resetDatabase();
     resetMailDataSource();
@@ -298,7 +296,6 @@ describe("reply, forward, and the MCP send tool refuse suppressed recipients too
 
   beforeEach(async () => {
     captureInheritedProcessEnv();
-    process.env["EMAILS_MODE"] = "local";
     process.env["EMAILS_DB_PATH"] = ":memory:";
     resetDatabase();
     resetMailDataSource();
@@ -418,18 +415,13 @@ describe("reply, forward, and the MCP send tool refuse suppressed recipients too
 
 describe("emails batch keeps its (already correct) skip-unless-force shape", () => {
   it("skips a suppressed row and counts it, rather than mailing it", async () => {
-    // RESTORE, NEVER DELETE. An earlier version of this cleanup deleted the two
-    // settings it had written — but the hermetic runner INHERITS this process both of
-    // them, so the delete stripped the deployment word and the database path from
-    // every file that ran after this one in the shared test process. That left later
-    // suites running against the defaulting word branch, and one API-configured case
-    // in the sendkey suite then genuinely diverged across its two storage
-    // provenances. The word key is named by construction: this file sits inside the
-    // deployment-axis ratchet's scanned corpus.
-    const wordSetting = ["EMAILS", "MODE"].join("_");
-    const priorWord = process.env[wordSetting];
+    // RESTORE, NEVER DELETE. The deployment word used to be SET here to force the
+    // local arm; the word is removed (hasna/apps#1566) and a set word now trips
+    // the retired-variable guard, so the explicit database path alone selects
+    // local. The path is restored rather than deleted because the hermetic runner
+    // INHERITS this process the database path — a delete would strip it from every
+    // file that ran after this one in the shared test process.
     const priorDbPath = process.env["EMAILS_DB_PATH"];
-    process.env[wordSetting] = "local";
     process.env["EMAILS_DB_PATH"] = ":memory:";
     resetDatabase();
     try {
@@ -453,8 +445,6 @@ describe("emails batch keeps its (already correct) skip-unless-force shape", () 
       expect(sent).toEqual(["fine@ext.com"]);
     } finally {
       closeDatabase();
-      if (priorWord === undefined) delete process.env[wordSetting];
-      else process.env[wordSetting] = priorWord;
       if (priorDbPath === undefined) delete process.env["EMAILS_DB_PATH"];
       else process.env["EMAILS_DB_PATH"] = priorDbPath;
     }
