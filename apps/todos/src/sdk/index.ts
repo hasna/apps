@@ -11,6 +11,19 @@
 export { TodosClient, createClient } from "./client.js";
 export type { TodosClientOptions } from "./client.js";
 
+// The ONE credential/authority resolver for this surface — the @hasna/contracts
+// client chain (Keychain, ~/.hasna/todos/config/credentials, the canonical
+// HASNA_TODOS_* env names, then the fleet gateway default). Exported so a
+// consumer can read WHERE its credential came from, and build the hosted /v1
+// client, without writing a private copy of the chain (hasna/apps#1720).
+export {
+  createTodosV1Client,
+  resolveTodosSdkTransport,
+  TODOS_LOCAL_SERVE_URL,
+  __resetTodosSdkLocalNotice,
+} from "./resolve.js";
+export type { ResolveTodosSdkTransportOptions, TodosSdkTransport } from "./resolve.js";
+
 // Versioned /v1 cloud client, generated from the serve OpenAPI document
 // (src/server/openapi.ts). Regenerate with `bun run scripts/generate-sdk.ts`.
 export { TodosV1Client, ApiError as TodosV1ApiError } from "./v1.generated.js";

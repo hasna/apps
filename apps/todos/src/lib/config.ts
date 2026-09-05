@@ -345,10 +345,13 @@ export interface WatchRulePattern {
 }
 
 export interface TodosConfig {
-  /** Local HTTP server URL used by SDK clients. Defaults to http://localhost:19427. */
-  apiUrl?: string;
-  /** API key for the local HTTP server when local API keys are enabled. */
-  apiKey?: string;
+  // No `apiUrl` and no `apiKey`. A credential never lives in config.json: it is
+  // rewritten wholesale by unrelated `todos config` writes and carries ordinary
+  // file permissions, whereas the credential tier @hasna/contracts reads —
+  // ~/.hasna/todos/config/credentials — is refused unless it is owner-only
+  // 0400/0600. The authority is not a config-file setting either; it comes from
+  // HASNA_TODOS_API_URL, the Keychain `api-url` item, that same credentials
+  // file, or the fleet gateway default (hasna/apps#1720).
   sync_agents?: string[] | string;
   task_list_id?: string;
   agent_tasks_dir?: string;
@@ -456,32 +459,15 @@ export function normalizeApiUrl(value: string | null | undefined): string | null
   return trimmed.replace(/\/+$/, "");
 }
 
-export interface LocalApiConfig {
-  apiUrl: string | null;
-  apiKey: string | null;
-  source: {
-    apiUrl: "TODOS_URL" | "config" | "none";
-    apiKey: "TODOS_API_KEY" | "config" | "none";
-  };
-}
-
-export function getLocalApiConfig(env: NodeJS.ProcessEnv = process.env): LocalApiConfig {
-  const config = loadConfig();
-  const envApiUrl = normalizeApiUrl(env["TODOS_URL"]);
-  const configApiUrl = normalizeApiUrl(config.apiUrl);
-  const apiUrl = envApiUrl ?? configApiUrl;
-
-  const apiKey = env["TODOS_API_KEY"] || config.apiKey || null;
-
-  return {
-    apiUrl,
-    apiKey,
-    source: {
-      apiUrl: envApiUrl ? "TODOS_URL" : configApiUrl ? "config" : "none",
-      apiKey: env["TODOS_API_KEY"] ? "TODOS_API_KEY" : config.apiKey ? "config" : "none",
-    },
-  };
-}
+// getLocalApiConfig() and LocalApiConfig are GONE (2026-09-04 adoption ruling,
+// hasna/apps#1720). They were this package's private credential chain: the
+// non-canonical `TODOS_URL` / `TODOS_API_KEY` names, which shadowed
+// HASNA_TODOS_API_URL / HASNA_TODOS_API_KEY and beat them for the SDK, plus an
+// `apiKey` field read out of ~/.todos/config.json — a long-lived secret in a
+// file with ordinary permissions that unrelated `todos config` writes rewrite
+// wholesale. Both surfaces now resolve through @hasna/contracts: see
+// src/sdk/resolve.ts (SDK) and src/cli/cloud-router.ts (CLI and MCP). Nothing
+// in this module reads or stores a credential any more.
 
 export function getSyncAgentsFromConfig(): string[] | null {
   const config = loadConfig();

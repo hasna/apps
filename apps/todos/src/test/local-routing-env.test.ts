@@ -10,10 +10,16 @@ describe("localRoutingTestEnv", () => {
     expect("HASNA_TODOS_MODE" in env).toBe(false);
     expect("TODOS_MODE" in env).toBe(false);
     expect(env.HASNA_TODOS_DB_PATH).toBe("");
-    expect(env.HASNA_TODOS_API_URL).toBe("");
-    expect(env.HASNA_TODOS_API_KEY).toBe("");
-    expect(env.TODOS_API_URL).toBe("");
-    expect(env.TODOS_API_KEY).toBe("");
+    // The shared-store pointers are REMOVED, not blanked: the @hasna/contracts
+    // resolver refuses a declared-but-blank credential or authority loudly
+    // instead of reading it as unset (hasna/apps#1720).
+    expect("HASNA_TODOS_API_URL" in env).toBe(false);
+    expect("HASNA_TODOS_API_KEY" in env).toBe(false);
+    expect("TODOS_API_URL" in env).toBe(false);
+    expect("TODOS_API_KEY" in env).toBe(false);
+    expect("HASNA_PROFILE" in env).toBe(false);
+    expect("HASNA_TODOS_API_KEY_OVERRIDE" in env).toBe(false);
+    expect("HASNA_TODOS_API_KEY_REF" in env).toBe(false);
   });
 
   test("applies explicit remote overrides after local defaults", () => {

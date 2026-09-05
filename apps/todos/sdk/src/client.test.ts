@@ -156,7 +156,12 @@ describe("TodosClient baseUrl normalization", () => {
     expect(client).toBeDefined();
   });
 
-  it("should ignore TODOS_API_URL and use local TODOS_URL", async () => {
+  it("prefers the canonical HASNA_TODOS_API_URL over every legacy spelling", async () => {
+    // The inversion this replaces: the canonical name was IGNORED here and the
+    // legacy `TODOS_URL` decided, so an operator who configured the pair every
+    // other surface documents silently got the wrong authority
+    // (2026-09-04 ruling, hasna/apps#1720).
+    process.env["HASNA_TODOS_API_URL"] = "https://canonical.todos.test/";
     process.env["TODOS_API_URL"] = "https://api-url.todos.test/";
     process.env["TODOS_URL"] = "http://127.0.0.1:19427/";
     let observedUrl = "";
@@ -168,10 +173,48 @@ describe("TodosClient baseUrl normalization", () => {
       });
     }) as typeof fetch;
 
+    try {
+      const client = new TodosClient();
+      await client.listTasks();
+      expect(observedUrl).toBe("https://canonical.todos.test/api/tasks");
+    } finally {
+      delete process.env["HASNA_TODOS_API_URL"];
+    }
+  });
+
+  it("still honours the legacy spellings when no canonical name is set", async () => {
+    // A documented, silent fallback for one release — not a shadow: it applies
+    // only when the canonical name is absent.
+    process.env["TODOS_URL"] = "http://127.0.0.1:19427/";
+    let observedUrl = "";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      observedUrl = String(input);
+      return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
     const client = new TodosClient();
     await client.listTasks();
 
     expect(observedUrl).toBe("http://127.0.0.1:19427/api/tasks");
+  });
+
+  it("prefers the canonical HASNA_TODOS_API_KEY over the legacy key name", async () => {
+    process.env["HASNA_TODOS_API_KEY"] = "canonical-key";
+    process.env["TODOS_API_KEY"] = "legacy-key";
+    let observedKey: string | null = null;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observedKey = new Headers(init?.headers).get("authorization");
+      return new Response(JSON.stringify([]), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    try {
+      const client = new TodosClient({ baseUrl: "http://127.0.0.1:19427" });
+      await client.listTasks();
+      expect(observedKey).toBe("Bearer canonical-key");
+    } finally {
+      delete process.env["HASNA_TODOS_API_KEY"];
+      delete process.env["TODOS_API_KEY"];
+    }
   });
 });
 

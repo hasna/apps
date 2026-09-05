@@ -2319,7 +2319,10 @@ describe("CLI integration", () => {
       TODOS_S3_FORCE_PATH_STYLE: "",
       TODOS_SYNC_BATCH_SIZE: "",
       TODOS_SYNC_DRY_RUN: "",
-      TODOS_API_URL: "https://legacy.example.invalid",
+      // `TODOS_API_URL` is NOT set here any more. It used to be, to prove the
+      // legacy alias was inert; it is now the resolver's documented silent
+      // fallback for the canonical name (hasna/apps#1720), so setting it makes
+      // this a hosted run — which the next case asserts on purpose.
       // Deployment identifiers come from the hosting layer via env; the package
       // ships no real cluster names or secrets-manager paths.
       HASNA_TODOS_RDS_CLUSTER: "example-cluster",

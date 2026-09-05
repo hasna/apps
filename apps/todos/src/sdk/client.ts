@@ -8,7 +8,7 @@
  * ```ts
  * import { TodosClient } from "@hasna/todos";
  *
- * const client = new TodosClient(); // uses local TODOS_URL or localhost:19427
+ * const client = new TodosClient(); // credentials via @hasna/contracts, else the local serve
  * const tasks = await client.tasks.list({ status: "pending", limit: 20 });
  * await client.tasks.complete(taskId);
  * ```
@@ -68,7 +68,7 @@ import {
   TodosRateLimitError,
   TodosTimeoutError,
 } from "./types.js";
-import { getLocalApiConfig, normalizeApiUrl } from "../lib/config.js";
+import { resolveTodosSdkTransport } from "./resolve.js";
 import type {
   AdmitPrGroupInput,
   AppendPrGroupEventInput,
@@ -533,12 +533,17 @@ export class TodosClient {
   readonly prGroups: PrGroupsResource;
 
   constructor(options: TodosClientOptions = {}) {
-    const localConfig = getLocalApiConfig();
-    this.baseUrl = normalizeApiUrl(options.baseUrl)
-      || localConfig.apiUrl
-      || "http://localhost:19427";
+    // ONE resolver, no private chain: `TODOS_URL` and the `apiKey` field in
+    // ~/.todos/config.json are gone (hasna/apps#1720). See ./resolve.ts for the
+    // five tiers and for why the local serve is reachable only when nothing
+    // resolves or the operator opted in.
+    const resolved = resolveTodosSdkTransport({
+      ...(options.baseUrl !== undefined ? { baseUrl: options.baseUrl } : {}),
+      ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
+    });
+    this.baseUrl = resolved.baseUrl;
     this.timeout = options.timeout ?? 10000;
-    this.apiKey = options.apiKey || localConfig.apiKey;
+    this.apiKey = resolved.apiKey;
     this.maxRetries = options.maxRetries ?? 0;
     this.retryDelay = options.retryDelay ?? 1000;
 
@@ -552,9 +557,12 @@ export class TodosClient {
     this.prGroups = new PrGroupsResource(this);
   }
 
-  /** Create a client from TODOS_URL env var */
+  /**
+   * Create a client from the resolved environment — the @hasna/contracts
+   * credential chain and its authority ladder, not a bespoke env read.
+   */
   static fromEnv(apiKey?: string): TodosClient {
-    return new TodosClient({ apiKey });
+    return new TodosClient(apiKey === undefined ? {} : { apiKey });
   }
 
   // ── Low-level fetch with error handling ──────────────────────────────────

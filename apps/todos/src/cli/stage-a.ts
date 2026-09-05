@@ -20,30 +20,72 @@ export type TodosCliCommandOwner = "diagnostic" | "remote-http" | "local-only";
  * Stage A is intentionally pure: it decides the authority route without
  * mutating the caller's environment. The executable applies an admitted local
  * redaction decision before importing command modules so any later
- * `getTodosCloudClient()` call cannot reconstruct hosted routing from the
- * ambient API pair. The retired storage-mode variables are never written here —
- * they are banned (owner directive 2026-08-15), and the HTTP selector is
- * HASNA_TODOS_API_URL + HASNA_TODOS_API_KEY, which the redaction blanks.
+ * `getTodosCloudClient()` call cannot reconstruct hosted routing.
  *
- * Because transport resolution now fails closed (hasna/apps#1613), blanking the
- * pair alone would make a later `resolveTodosCliTransport()` /
- * `getTodosCloudClient()` call THROW instead of reporting "no cloud client".
- * The local SQLite use here is a deliberate command-level decision (a
- * local-only command was admitted), never an implicit fallback, so the apply
- * stamps the explicit local opt-in alongside the blanking.
+ * The load-bearing line is the OPT-IN, not the redaction. Since the credential
+ * chain moved into @hasna/contracts (hasna/apps#1720) a key can arrive from the
+ * macOS Keychain or from `~/.hasna/todos/config/credentials`, neither of which
+ * an environment dictionary can redact — so clearing the API variables alone
+ * would leave a later `getTodosCloudClient()` resolving a real hosted client
+ * for a command that was admitted precisely because it must stay local.
+ * `HASNA_TODOS_LOCAL=1` is answered BEFORE the resolver runs, so it is what
+ * actually holds the decision; the variables are cleared alongside it so a
+ * child process inherits an environment that says the same thing.
+ *
+ * DELETED, not blanked: the resolver refuses a declared-but-blank
+ * `HASNA_TODOS_API_URL` / `HASNA_TODOS_API_KEY` loudly instead of reading it as
+ * absent, so blanking would convert "no cloud client" into a hard error.
  */
+/**
+ * The one line a local run prints, and the reason it prints at all.
+ *
+ * An unhosted CLI that says nothing looks exactly like a hosted one whose store
+ * happens to be empty — that is the false green the 2026-09-04 ruling
+ * (hasna/apps#1720) closes, and it is why the notice is unconditional rather
+ * than behind a verbosity flag. It goes to STDERR so `--json` output stays a
+ * clean parseable document on stdout, and it names the credential the run did
+ * NOT find, so the fix is in the message rather than in the docs.
+ */
+export function todosLocalModeNotice(reason: "local-opt-in" | "local-only-command" = "local-opt-in"): string {
+  if (reason === "local-only-command") {
+    return (
+      "todos: LOCAL mode — this command only ever runs against the on-box SQLite store, so this run " +
+      "does not reach the hosted fleet even though a Todos authority is configured."
+    );
+  }
+  return (
+    "todos: LOCAL mode — using the on-box SQLite store, not the hosted fleet " +
+    "(HASNA_TODOS_LOCAL is set). Unset it, and provide a credential via the Keychain item " +
+    "hasna.credentials.todos.api-key, ~/.hasna/todos/config/credentials, or HASNA_TODOS_API_KEY, " +
+    "to work against https://api.hasna.com/todos."
+  );
+}
+
+/**
+ * Print {@link todosLocalModeNotice} once for a run that resolved to the local
+ * store. A no-op for every hosted route, so a hosted run's stderr stays empty.
+ */
+export function announceTodosCliLocalMode(
+  authority: TodosCliAuthorityInitialization,
+  write: (line: string) => void = (line) => process.stderr.write(`${line}\n`),
+): boolean {
+  if (authority.route !== "local") return false;
+  write(todosLocalModeNotice(authority.selected_by === "local-only-command" ? "local-only-command" : "local-opt-in"));
+  return true;
+}
+
 export function applyTodosCliAuthorityEnvironment(
   authority: TodosCliAuthorityInitialization,
   env: Env = process.env as Env,
 ): void {
   if (authority.route !== "local" || authority.selected_by !== "local-only-command") return;
-  env.HASNA_TODOS_API_URL = "";
-  env.HASNA_TODOS_API_KEY = "";
-  env.TODOS_API_URL = "";
-  env.TODOS_API_KEY = "";
-  // Explicit local decision: resolver now returns the sqlite transport under
-  // the opt-in, and getTodosCloudClient() keeps returning null (no cloud
-  // client) instead of throwing REMOTE_API_CONFIG_MISSING.
+  delete env.HASNA_TODOS_API_URL;
+  delete env.HASNA_TODOS_API_KEY;
+  delete env.TODOS_API_URL;
+  delete env.TODOS_API_KEY;
+  delete env.HASNA_TODOS_API_KEY_OVERRIDE;
+  delete env.HASNA_TODOS_API_KEY_REF;
+  delete env.HASNA_PROFILE;
   env.HASNA_TODOS_LOCAL = "1";
   env.TODOS_LOCAL = "1";
 }

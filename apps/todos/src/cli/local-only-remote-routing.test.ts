@@ -1,3 +1,4 @@
+import { todosLocalModeNotice } from "./stage-a.js";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -90,9 +91,14 @@ describe("local-only commands with hosted routing configured", () => {
         "--pattern",
         "SAFE-REDACTION-FIXTURE-[0-9]{4}",
       ], env, cwd);
-      expect({ exitCode: configured.exitCode, stderr: configured.stderr }).toEqual({
+      // A local run is never silent about being local (hasna/apps#1720): with a
+      // hosted authority configured, a local-only command that said nothing
+      // would look exactly like a hosted read of an empty store. The notice is
+      // the whole stderr — nothing else is emitted — and it goes to stderr so
+      // the `--json` document on stdout stays parseable.
+      expect({ exitCode: configured.exitCode, stderr: configured.stderr.trim() }).toEqual({
         exitCode: 0,
-        stderr: "",
+        stderr: todosLocalModeNotice("local-only-command"),
       });
       expect(JSON.parse(configured.stdout).redaction_patterns).toContain(
         "SAFE-REDACTION-FIXTURE-[0-9]{4}",
@@ -111,9 +117,9 @@ describe("local-only commands with hosted routing configured", () => {
         positiveFixture,
         "--json",
       ], env, cwd);
-      expect({ exitCode: positive.exitCode, stderr: positive.stderr }).toEqual({
+      expect({ exitCode: positive.exitCode, stderr: positive.stderr.trim() }).toEqual({
         exitCode: 0,
-        stderr: "",
+        stderr: todosLocalModeNotice("local-only-command"),
       });
       expect(JSON.parse(positive.stdout)).toEqual({
         ok: false,
@@ -133,9 +139,9 @@ describe("local-only commands with hosted routing configured", () => {
         negativeFixture,
         "--json",
       ], env, cwd);
-      expect({ exitCode: negative.exitCode, stderr: negative.stderr }).toEqual({
+      expect({ exitCode: negative.exitCode, stderr: negative.stderr.trim() }).toEqual({
         exitCode: 0,
-        stderr: "",
+        stderr: todosLocalModeNotice("local-only-command"),
       });
       expect(JSON.parse(negative.stdout)).toEqual({ ok: true, findings: [] });
 

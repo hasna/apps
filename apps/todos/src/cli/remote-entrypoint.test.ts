@@ -10,7 +10,7 @@ import {
   type TodosCliAuthorityInitialization,
 } from "./stage-a.js";
 import { getTodosCloudClient, resetTodosCloudClient } from "./cloud-router.js";
-import { deliverTodosApiKeyViaDisk } from "../testing.js";
+import { deliverTodosApiKeyViaDisk, TODOS_TEST_KEYCHAIN_ACCOUNT } from "../testing.js";
 import {
   createBunPackageIsolatedTempDir,
   projectExternalBunDuplicatePackageWarning,
@@ -145,13 +145,23 @@ function recursiveInventory(root: string, relative = ""): string[] {
  *  `identity.json` is client-side session state — "who am I in this shell" — written
  *  by `todos init` and removed by `todos release`. It carries no task data and is
  *  not an authority store, so it does not breach the remote-authority boundary.
- *  Everything else must still be absent. */
-const REMOTE_SAFE_TODOS_HOME_ENTRIES = new Set(["identity.json"]);
+ *  `config/` is the credential directory the @hasna/contracts chain READS —
+ *  `config/credentials` is how these fixtures deliver the run's API key, so its
+ *  presence is the opposite of a boundary breach. Everything else must still be
+ *  absent. */
+const REMOTE_SAFE_TODOS_HOME_ENTRIES = new Set(["identity.json", "config"]);
+
+/** Nothing under ~/.hasna/todos/config may be a store; only the credential file lives there. */
+const REMOTE_SAFE_TODOS_CONFIG_ENTRIES = new Set(["credentials"]);
 
 function expectNoLocalDatabase(root: string, explicitPath: string): void {
   expect(existsSync(explicitPath)).toBe(false);
   expect(existsSync(join(root, ".todos"))).toBe(false);
   expect(existsSync(join(root, ".hasna", "todos", "todos.db"))).toBe(false);
+  const configDir = join(root, ".hasna", "todos", "config");
+  if (existsSync(configDir)) {
+    expect(readdirSync(configDir).filter((entry) => !REMOTE_SAFE_TODOS_CONFIG_ENTRIES.has(entry))).toEqual([]);
+  }
   // Assert on the CONTENTS rather than the directory's existence: the old check
   // used "the directory must not exist" as a proxy for "no local store was
   // created", which stopped being equivalent once a config file lived there.
@@ -1076,8 +1086,15 @@ describe("remote CLI entrypoint authority boundary", () => {
         selected_by: "local-only-command",
       });
       applyTodosCliAuthorityEnvironment(authority, env);
-      expect(env.HASNA_TODOS_API_URL).toBe("");
-      expect(env.HASNA_TODOS_API_KEY).toBe("");
+      // REMOVED, not blanked: the resolver refuses a declared-but-blank
+      // authority or credential loudly instead of reading it as absent, so the
+      // admitted-local decision has to spell "absent" as absent.
+      expect("HASNA_TODOS_API_URL" in env).toBe(false);
+      expect("HASNA_TODOS_API_KEY" in env).toBe(false);
+      // And the opt-in it stamps is what actually holds the decision: the
+      // Keychain and the credential file are not consulted at all, so a machine
+      // that has either cannot reconstruct hosted routing for a local command.
+      expect(env.HASNA_TODOS_LOCAL).toBe("1");
       expect(getTodosCloudClient(env)).toBeNull();
     }
 
@@ -1264,26 +1281,26 @@ describe("remote CLI entrypoint authority boundary", () => {
         expectNoLocalDatabase(root, localDbPath);
       }
 
-      const missingUrl = await runCli(executable, ["--json", "projects"], {
-        PATH: process.env.PATH ?? "",
-        BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
-        HOME: root,
-        TMPDIR: root,
-        LANG: "C.UTF-8",
-        TODOS_DB_PATH: localDbPath,
-        HASNA_TODOS_API_KEY: "fixture-remote-key",
-      });
-      expect(missingUrl.exitCode).toBe(1);
-      expect(missingUrl.stderr).toContain("REMOTE_API_URL_MISSING");
-      expectNoLocalDatabase(root, localDbPath);
-
+      // A credential with no URL is no longer half-configured: the fleet gateway
+      // is the default authority (hasna/apps#1720), so the URL-missing arm this
+      // block used to assert no longer exists. The half that is still missing —
+      // and still fatal — is the CREDENTIAL. `HASNA_STATION` is pinned to an
+      // account no item uses because the Keychain tier is ambient for the
+      // spawned process and is exactly what an env dictionary cannot blank:
+      // without the pin, the developer's own item would satisfy this run. The
+      // HOME is a FRESH one for the same reason: `root` already holds the
+      // credential file this fixture delivered for the hosted runs above, and
+      // the disk tier would resolve it.
+      const credentiallessHome = createBunPackageIsolatedTempDir("todos-remote-no-credential-");
+      tempRoots.push(credentiallessHome);
       const missingKey = await runCli(executable, ["--json", "projects"], {
         PATH: process.env.PATH ?? "",
         BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
-        HOME: root,
-        TMPDIR: root,
+        HOME: credentiallessHome,
+        TMPDIR: credentiallessHome,
         LANG: "C.UTF-8",
         TODOS_DB_PATH: localDbPath,
+        HASNA_STATION: TODOS_TEST_KEYCHAIN_ACCOUNT,
         HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
       });
       expect(missingKey.exitCode).toBe(1);

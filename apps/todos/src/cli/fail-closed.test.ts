@@ -2,6 +2,7 @@ import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TODOS_TEST_KEYCHAIN_ACCOUNT } from "../testing.js";
 
 setDefaultTimeout(120_000);
 
@@ -15,27 +16,30 @@ afterEach(() => {
 });
 
 // The spawned CLI must be hermetic: no inherited fleet API env (other apps'
-// URLs must not leak), a HOME the test owns (nothing may touch the developer's
-// real ~/.hasna or ~/Library/Application Support/Hasna), and BOTH local
-// opt-in variables explicitly blanked so an ambient HASNA_TODOS_LOCAL in the
-// developer's shell cannot turn the fail-closed run green.
+// URLs must not leak), a HOME the test owns — which now also anchors the
+// credential file tier, `$HOME/.hasna/todos/config/credentials`, so an owned
+// HOME is what keeps the machine's real credential out of the run — and no
+// local opt-in, so an ambient HASNA_TODOS_LOCAL in the developer's shell cannot
+// turn the fail-closed run green.
+//
+// The env is built by OMISSION rather than by blanking. Since the credential
+// chain moved into @hasna/contracts (hasna/apps#1720) a declared-but-blank
+// HASNA_TODOS_API_URL is a distinct, LOUDER failure ("set but blank") than an
+// absent one, deliberately: a blank that fell through to another tier would
+// authenticate as a different principal. This helper wants the absent shape.
 function hermeticEnv(tempRoot: string): Record<string, string> {
   const env: Record<string, string> = {
     HOME: tempRoot,
     PATH: process.env["PATH"] ?? "",
-    HASNA_TODOS_API_URL: "",
-    HASNA_TODOS_API_KEY: "",
-    TODOS_API_URL: "",
-    TODOS_API_KEY: "",
-    HASNA_TODOS_LOCAL: "",
-    TODOS_LOCAL: "",
+    // The macOS Keychain tier is ambient for the spawned process, and no env
+    // dictionary can blank a login-keychain item. Pinning the account to a name
+    // no item uses is what keeps the developer's real credential out of a run
+    // whose whole point is that nothing resolves.
+    HASNA_STATION: TODOS_TEST_KEYCHAIN_ACCOUNT,
   };
-  // Strip the ambient fleet env of every other HASNA_*/<APP>_API_* pair.
-  for (const key of Object.keys(process.env)) {
-    if (/^(?:HASNA_[A-Z0-9_]+_API_(?:URL|KEY)|[A-Z0-9]+_API_(?:URL|KEY))$/.test(key)) {
-      env[key] = "";
-    }
-  }
+  // Nothing else is copied in, so the ambient fleet env — every app's API pair,
+  // the deliberate HASNA_TODOS_API_KEY_OVERRIDE / _REF pointers and a global
+  // HASNA_PROFILE — cannot reach the child at all.
   return env;
 }
 
