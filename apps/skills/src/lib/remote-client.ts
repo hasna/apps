@@ -458,14 +458,15 @@ export class RemoteSkillsClient {
     if (!Array.isArray(payload)) {
       throw new Error("Remote tags payload did not match the expected contract (expected an array of tag names)");
     }
-    // Fail-closed: a malformed element is rejected, never silently dropped —
-    // a filtered tag list would quietly disagree with the instance.
-    for (const tag of payload) {
-      if (typeof tag !== "string" || tag.trim().length === 0) {
-        throw new Error("Remote tags payload did not match the expected contract (every element must be a non-empty tag name)");
-      }
+    // Instances expose either names or counted tag records. Accept one whole
+    // contract at a time; filtering malformed or mixed rows would hide drift.
+    const isName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
+    if (payload.every(isName)) return payload;
+    if (payload.every(tag => tag !== null && typeof tag === "object" && !Array.isArray(tag)
+      && isName(tag.name) && Number.isSafeInteger(tag.count) && tag.count >= 0)) {
+      return payload.map(tag => tag.name as string);
     }
-    return payload as string[];
+    throw new Error("Remote tags payload did not match the expected contract (every element must be a non-empty tag name, or every element must be a counted tag record)");
   }
 
   /** List the skills carrying a tag on the instance. */

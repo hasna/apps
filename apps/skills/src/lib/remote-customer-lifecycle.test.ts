@@ -59,6 +59,32 @@ describe("shared remote customer lifecycle transport", () => {
     expect(sessionCalls.filter(call => call.path.endsWith("/verify")).every(call => call.auth === null)).toBe(true);
     expect(sessionCalls.filter(call => call.path.includes("/auth/keys")).every(call => call.auth === "Bearer fixture-session")).toBe(true);
   }));
+  test("tag discovery accepts both instance contracts and rejects mixed or invalid records", async () => {
+    let payload: unknown = [];
+    const requests: string[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
+      requests.push(new URL(request.url).pathname);
+      return Response.json(payload);
+    } });
+    const client = new RemoteSkillsClient("fixture-credential", `http://127.0.0.1:${server.port}/prefix/api/v1`);
+    try {
+      for (const valid of [[], ["writing", "research"], [{ name: "writing", count: 2 }, { name: "research", count: 0 }]]) {
+        payload = valid;
+        expect(await client.listTags()).toEqual(valid.length === 0 ? [] : ["writing", "research"]);
+      }
+      for (const invalid of [
+        ["writing", { name: "research", count: 2 }], [{ name: "writing" }],
+        [{ name: "", count: 1 }], [{ name: "  ", count: 1 }], [{ name: "writing", count: -1 }],
+        [{ name: "writing", count: 0.5 }], [{ name: "writing", count: "2" }],
+        [{ name: "writing", count: Number.MAX_SAFE_INTEGER + 1 }], [null], { tags: [] },
+      ]) {
+        payload = invalid;
+        await expect(client.listTags()).rejects.toThrow("did not match the expected contract");
+      }
+      expect(requests).toHaveLength(13);
+      expect(requests.every(path => path === "/prefix/api/v1/tags")).toBe(true);
+    } finally { await server.stop(true); }
+  });
   test("approved uploads declare product files before sending bytes, without forwarding credentials to storage", async () => fixture(async (client, calls) => {
     const files = [{ name: "input.txt", bytes, contentType: "text/plain" }];
     const run = await client.submitQuotedRunWithFiles("server-only", {}, ["--fixture"], files, { maxCredits: 3, idempotencyKey: "same-attempt" });
