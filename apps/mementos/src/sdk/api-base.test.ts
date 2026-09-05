@@ -91,6 +91,31 @@ describe("resolveMementosApiBase", () => {
     expect(() => resolveMementosApiBase("api.hasna.com/mementos")).toThrow(/absolute http\(s\) URL/);
   });
 
+  test("refuses a bare trailing ? or #, which the URL parser reports as empty", () => {
+    // `url.search` / `url.hash` are "" for these, but the raw string is what
+    // gets concatenated: `…/mementos?` used to resolve to `…/mementos?/v1`.
+    for (const raw of [
+      "https://api.hasna.com/mementos?",
+      "https://api.hasna.com/mementos#",
+      "https://api.hasna.com/mementos/?",
+    ]) {
+      expect(() => resolveMementosApiBase(raw)).toThrow(/userinfo, query, or fragment/);
+    }
+  });
+
+  test("an unparseable base is refused without echoing it", () => {
+    // The parse-failure branch used to quote the raw input, so a value that
+    // both fails to parse and carries userinfo was echoed verbatim.
+    let message = "";
+    try {
+      resolveMementosApiBase("https://user:sup3rsecret@");
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toMatch(/absolute http\(s\) URL/);
+    expect(message).not.toContain("sup3rsecret");
+  });
+
   test("an empty or absent base falls back to the on-box default", () => {
     expect(resolveMementosApiBase(undefined)).toEqual({ baseUrl: "http://localhost:19428", prefix: "/v1" });
     expect(resolveMementosApiBase("   ")).toEqual({ baseUrl: "http://localhost:19428", prefix: "/v1" });

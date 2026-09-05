@@ -108,6 +108,25 @@ describe("mementos status", () => {
     expect(stderr).toContain("is not usable");
   });
 
+  test("--json never serialises a refused base, so userinfo cannot reach a pasted sweep", async () => {
+    // The text branch prints `API: (none)` for a refused base, but `--json`
+    // used to copy the raw env value into `api_base` BEFORE validation, so
+    // `https://user:sup3rsecret@…` came back verbatim, password included, on
+    // exactly the surface (#1588 sweeps) that gets pasted into issues.
+    const { stdout, stderr, exitCode } = await runStatus(
+      cliEnv({ ...CONFIGURED, HASNA_MEMENTOS_API_URL: "https://user:sup3rsecret@api.hasna.com/mementos" }),
+      "--json",
+    );
+    expect(exitCode).toBe(1);
+    expect(stdout + stderr).not.toContain("sup3rsecret");
+    const parsed = JSON.parse(stdout) as Record<string, unknown>;
+    expect(parsed.api_base).toBeNull();
+    expect(parsed.api_url).toBeNull();
+    // A refused base is not a configured HTTP transport.
+    expect(parsed.transport).toBe("unconfigured");
+    expect(parsed.error).toContain("userinfo, query, or fragment");
+  });
+
   test("creates no database file as a side effect", async () => {
     // `status` opts out of the startup DB access, so pointing HOME at an empty
     // directory must not leave a mementos store behind. (bun's own transpiler

@@ -330,13 +330,12 @@ async function runCloudDoctor(
   // 1. Version (local client package)
   checks.push({ name: "Version", status: "ok", detail: getPackageVersion() });
 
-  // 2. Server backend + API endpoint (never print the key)
+  // 2. API endpoint in the fleet-uniform shape (hasna/apps#1588): the
+  //    resolved /v1 authority on an `API:` line, with the transport as a
+  //    read-only diagnostic beside it. Never print the key.
   const cfg = getApiConfig();
-  checks.push({
-    name: "Storage backend",
-    status: "ok",
-    detail: `self-hosted API (${cfg?.baseUrl ?? "unknown endpoint"})`,
-  });
+  checks.push({ name: "API", status: "ok", detail: cfg?.baseUrl ?? "unknown endpoint" });
+  checks.push({ name: "transport", status: "ok", detail: "http" });
 
   // 3. Cloud health + data checks (single authed round-trip)
   let healthy = false;

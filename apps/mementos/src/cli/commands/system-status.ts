@@ -25,7 +25,13 @@ export interface MementosApiStatus {
   transport: "http" | "local" | "unconfigured";
   /** The resolved `/v1` authority, e.g. https://api.hasna.com/mementos/v1. */
   api_url: string | null;
-  /** The base URL exactly as configured, before `/v1` resolution. */
+  /**
+   * The base URL exactly as configured, before `/v1` resolution — but only
+   * once it has passed validation. A refused base is reported as `null`: it
+   * is not a base, and the very reason it was refused may be that it carries
+   * userinfo, which this report must never serialise (`--json` sweeps get
+   * pasted into issues).
+   */
   api_base: string | null;
   api_key_present: boolean;
 }
@@ -60,8 +66,13 @@ export function resolveApiStatus(version: string = getPackageVersion()): { statu
     }
   }
 
+  // A refused base configures no HTTP transport and is never echoed: the
+  // rejection reason may be userinfo, and the `--json` branch would otherwise
+  // print the raw env value verbatim, password included.
+  const validBase = error ? null : apiBase;
+
   let transport: MementosApiStatus["transport"];
-  if (apiBase && apiKeyPresent && !localOptIn) transport = "http";
+  if (validBase && apiKeyPresent && !localOptIn) transport = "http";
   else if (localOptIn) transport = "local";
   else transport = "unconfigured";
 
@@ -71,7 +82,7 @@ export function resolveApiStatus(version: string = getPackageVersion()): { statu
       version,
       transport,
       api_url: apiUrl,
-      api_base: apiBase,
+      api_base: validBase,
       api_key_present: apiKeyPresent,
     },
     error,

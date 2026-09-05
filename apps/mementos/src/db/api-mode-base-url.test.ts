@@ -64,6 +64,14 @@ describe("api-mode base URL resolution", () => {
     expect(() => resolve("https://api.hasna.com/mementos#frag")).toThrow(/userinfo, query, or fragment/);
   });
 
+  test("a bare trailing ? or # is rejected rather than concatenated into the route", () => {
+    // The URL parser reports an empty search/hash for these, but the raw
+    // string is what the route is built from: `…/mementos?` used to resolve
+    // to `…/mementos?/v1` and `list` answered 404 instead of the clear error.
+    expect(() => resolve("https://api.hasna.com/mementos?")).toThrow(/userinfo, query, or fragment/);
+    expect(() => resolve("https://api.hasna.com/mementos#")).toThrow(/userinfo, query, or fragment/);
+  });
+
   test("userinfo is rejected so credentials cannot reach a printed endpoint", () => {
     expect(() => resolve("https://user:pass@api.hasna.com/mementos")).toThrow(/userinfo, query, or fragment/);
   });
@@ -77,13 +85,17 @@ describe("api-mode base URL resolution", () => {
   });
 
   test("the rejection message never contains the credential material", () => {
-    let message = "";
-    try {
-      resolve("https://user:sup3rsecret@api.hasna.com/mementos");
-    } catch (err) {
-      message = err instanceof Error ? err.message : String(err);
+    // Both branches: a well-formed URL refused for its userinfo, and one that
+    // does not even parse (the parse-failure message used to quote the input).
+    for (const raw of ["https://user:sup3rsecret@api.hasna.com/mementos", "https://user:sup3rsecret@"]) {
+      let message = "";
+      try {
+        resolve(raw);
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).not.toContain("sup3rsecret");
+      expect(message.length).toBeGreaterThan(0);
     }
-    expect(message).not.toContain("sup3rsecret");
-    expect(message.length).toBeGreaterThan(0);
   });
 });

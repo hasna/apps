@@ -18,3 +18,12 @@ Adds `mementos status` (`--json`), which prints the fleet-uniform
 is present — never the key itself (hasna/apps#1588). Like `storage mode`, it
 opts out of the startup store access so it still answers when nothing is
 configured.
+
+`mementos status --json` reports `api_base: null` for a refused base instead of
+echoing the raw value (a base refused for its userinfo must not come back,
+password included, on the surface that gets pasted into issues), and a refused
+base no longer reports `transport: http`. The shared resolver also refuses a
+bare trailing `?` or `#` (previously concatenated into `…/mementos?/v1`) and no
+longer quotes an unparseable input in its error. `mementos doctor` prints the
+same `API: …/v1` line and `transport: http` diagnostic instead of
+`Storage backend: self-hosted API (…)`.

@@ -686,12 +686,18 @@ export function resolveMementosApiBase(
   try {
     url = new URL(trimmed);
   } catch {
-    throw new Error(`mementos base URL must be an absolute http(s) URL, got ${JSON.stringify(rawBaseUrl)}`);
+    // Never echo the input: a value that fails to parse can still carry
+    // userinfo (`https://user:pass@`), and this message reaches operator
+    // surfaces (`status`, `doctor`) that must stay credential-free.
+    throw new Error("mementos base URL must be an absolute http(s) URL (the configured value does not parse as a URL)");
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("mementos base URL must be an absolute http(s) URL");
   }
-  if (url.username || url.password || url.search || url.hash) {
+  // `url.search` / `url.hash` are empty for a bare trailing `?` or `#`, yet
+  // the raw string is what gets concatenated — `…/mementos?` would resolve
+  // to `…/mementos?/v1` — so the raw text is checked for the delimiters too.
+  if (url.username || url.password || url.search || url.hash || /[?#]/.test(trimmed)) {
     throw new Error("mementos base URL must not contain userinfo, query, or fragment data");
   }
   const prefixMatch = /^(.*)(\/(?:v1|api))$/.exec(trimmed);
