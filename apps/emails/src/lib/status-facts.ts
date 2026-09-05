@@ -31,9 +31,8 @@
 //      derived from the strongest arm, which has no such columns — so no store
 //      answers the question and the only honest reply is a reason. `issues` keeps the
 //      lines the store DOES justify: provisioning state, `verified`, `last_error`.
-//   2. sources.configured.* uses a read-only, projected inventory extension. Older
-//      injected stores without that extension still refuse it structurally. These
-//      records do not answer mailbox-view classification or operator queue health.
+//   2. sources.configured.* is now REFUSED. `EmailStore` has no ingestion-source
+//      repository at all; the deleted HTTP sibling read a `/v1` route directly.
 //   3. addresses.usable_from is now REFUSED, and this one is a DEFECT REMOVAL rather
 //      than a loss. Send eligibility is `getAddressSendability`, gated on the
 //      `outboundPolicy` capability, which BOTH implementations declare false
@@ -50,19 +49,29 @@
 //      published as a lower bound instead of a total. The local sibling's exact
 //      `COUNT(*)` aggregates had no way to be wrong — and no way to say so either.
 //
-// OPERATOR OBSERVATIONS ARE SEPARATE AUTHORITY, not a store selector. The default
-// client cannot observe a service data directory, bucket configuration or realtime
-// queue. An injected inventory store or its human descriptor grants no such access.
-// Only collectOperatorStatusFacts accepts an already-open caller-owned Database
-// and an explicit raw-document reader (or no reader). Its directory follows the
-// actual connection; configuration values are projected safely from one raw read.
-// Neither entrypoint opens operator state, infers authority from environment or
-// descriptors, or treats recorded configuration as evidence of live ingestion.
-// Both entrypoints share the same inventory, paging and refusal assembly below.
+// THE ONE THING HERE THAT IS NOT A STORE READ. Three fields describe how this
+// installation is WIRED rather than what its store holds: where the local database
+// file is, which inbound buckets this installation's pullers walk, and the realtime
+// ingestion queue. No store operation returns any of them, and `StoreDescriptor`
+// (src/store/descriptor.ts) is two human strings that must never be branched on. So
+// they are answered from STORAGE CONFIGURATION, read once, through the resolver that
+// owns that question (`planEmailStore`). That is not the deleted axis wearing a new
+// name, and the difference is exact: the resolver reads storage settings only, it
+// answers "which store did you configure?" rather than "what kind of deployment is
+// this?", and a contradiction is a refusal instead of a silently-picked winner. The
+// three fields need it because ingestion into a local database is performed BY THIS
+// INSTALLATION and recorded in its own config file, while ingestion into an Emails
+// API is performed by the service — so an empty bucket list or a `queue_configured`
+// negative would be a fabricated claim there rather than a measurement.
+//
+// THAT READ NOW LIVES IN `src/lib/storage-wiring.ts`, because the forwarding pipeline needs
+// exactly the same fact for exactly the same reason — it performs its own forwarding when it
+// owns its database and the service performs it otherwise — and a second copy of this
+// reasoning is how a sanctioned narrow answer becomes an unsanctioned general one. The rule
+// that decides who may ask is stated there, once.
 
-import { dirname, isAbsolute } from "node:path";
-import type { Database } from "bun:sqlite";
-import { readOperatorStatusObservations, type OperatorStatusConfigReader, type OperatorStatusObservations } from "./operator-status-observations.js";
+import { dirname } from "node:path";
+import { getInboundBuckets, loadConfig } from "./config.js";
 import {
   readStorageWiring,
   storeErrorMessage as errorMessage,
@@ -90,8 +99,8 @@ import type {
 } from "./status-types.js";
 import { createConfiguredEmailStore } from "../store-resolution.js";
 import type { EmailStore } from "../store/email-store.js";
-import type { Outcome, RefusalCode } from "../store/outcome.js";
-import type { AddressRecord, DomainRecord, IngestionSourceInventoryRow, ResourceRow } from "../store/records.js";
+import type { Outcome } from "../store/outcome.js";
+import type { AddressRecord, DomainRecord, ResourceRow } from "../store/records.js";
 
 export interface StatusFactsInput {
   /** Mailbox-view sources already resolved by the assembler. */
@@ -99,11 +108,6 @@ export interface StatusFactsInput {
   domainLimit: number;
   usableFromLimit: number;
   sourceLimit: number;
-}
-
-export interface ExplicitOperatorStatusContext {
-  readonly database: Database;
-  readonly operatorConfig: OperatorStatusConfigReader | null;
 }
 
 export interface StatusFactsBundle {
@@ -162,6 +166,22 @@ function countByKey(rows: ResourceRow[], key: string): Record<string, number> {
   }
   return counts;
 }
+
+// ── how this installation is wired ──────────────────────────────────────────────
+//
+// `StorageWiring` and `readStorageWiring` moved to `src/lib/storage-wiring.ts` when the
+// forwarding pipeline needed the same fact for the same reason. The rule for who may ask it,
+// and why it is not the deleted deployment axis under another name, is stated there once.
+
+// WHO PERFORMS THE INGESTION, which is what the two ingestion blocks below turn on.
+// An installation that keeps its mail in its own database performs its own
+// ingestion: the pullers, the S3 bucket list and the realtime queue are its own and
+// are recorded in its own config file, so they are observable. An installation that
+// reads through an Emails API does not: ingestion belongs to the service, which
+// publishes no inventory of it, so nothing on this side can observe it and a count
+// or a negative flag here would be invented. Both blocks therefore branch on the
+// storage wiring rather than on a config value that is empty for two different
+// reasons.
 
 // ── reading a family off the store ──────────────────────────────────────────────
 
@@ -277,45 +297,6 @@ function resourceRowId(row: ResourceRow): string | null {
   return row["id"] == null ? null : String(row["id"]);
 }
 
-/** Keep arbitrary injected-store errors out of the generic pager's message channel. */
-async function readSourceInventory(store: EmailStore | null, source: string): Promise<FactRead<IngestionSourceInventoryRow>> {
-  if (store === null) return unresolvedRead("sources", "client configuration did not resolve");
-  const inventory = store.sourceInventory;
-  if (inventory === undefined) {
-    return {
-      rows: [], answered: false, exact: false,
-      availability: statusUnavailable("not_modelled_on_store", "no_ingestion_source_repository", source,
-        "this store does not implement the read-only ingestion-source inventory"),
-    };
-  }
-  const codes: readonly RefusalCode[] = ["capability_unavailable", "not_found", "ambiguous_id", "scope_violation",
-    "invalid_input", "conflict", "precondition_failed", "quota_exceeded"];
-  return readFamily(source, "sources", async (opts) => {
-    try {
-      const result = await inventory.list(opts);
-      if (!result.ok) {
-        if (!codes.includes(result.code)) throw new Error("invalid source refusal");
-        return { ok: false, code: result.code, status: result.status, message: "source inventory request declined" };
-      }
-      if (!Array.isArray(result.value) || result.value.some(row => !row || typeof row.id !== "string" || !row.id.trim()
-        || (row.status !== null && typeof row.status !== "string")
-        || (row.last_synced_at !== null && typeof row.last_synced_at !== "string"))) {
-        throw new Error("invalid source metadata");
-      }
-      return { ok: true, value: result.value };
-    } catch (error) {
-      // Do not invoke an injected error's getters, coercion or message formatter.
-      let status: unknown;
-      try {
-        status = error !== null && typeof error === "object" ? Object.getOwnPropertyDescriptor(error, "status")?.value : null;
-      } catch { status = null; }
-      const category = typeof status === "number" && Number.isInteger(status) && status >= 0 && status <= 599
-        ? `source_inventory_http_${status}` : "source_inventory_read_failed";
-      throw new Error(category);
-    }
-  }, row => row.id);
-}
-
 /**
  * Turn a block's own availability record into the field-level gap that a DERIVED
  * value has to carry.
@@ -371,14 +352,16 @@ function domainFixCommands(row: DomainRecord): string[] {
 /**
  * Gather every system-status fact.
  *
- * `store` is an inventory injection seam, not operator authority. Without it the
- * canonical client configuration must resolve. Operator-only fields remain
- * unobserved in either case; explicit observations use the separate entrypoint.
+ * `store` is an INJECTION POINT FOR TESTS. A caller that passes nothing gets the
+ * store this installation's configuration means, which is what every shipped call
+ * site wants; a caller that passes one is responsible for the environment agreeing
+ * with it, because the three wiring fields are read from configuration either way.
  */
 export async function collectStatusFacts(
   input: StatusFactsInput,
   store?: EmailStore,
 ): Promise<StatusFactsBundle> {
+  const gaps = new StatusGaps();
   const wiring = readStorageWiring(process.env);
 
   let resolved: EmailStore | null = store ?? null;
@@ -390,40 +373,6 @@ export async function collectStatusFacts(
       storeError = errorMessage(error);
     }
   }
-  return assembleStatusFacts(input, resolved, storeError, { kind: "client", wiring });
-}
-
-/** Explicit observation authority, never an alternative selected by client configuration. */
-export async function collectOperatorStatusFacts(
-  input: StatusFactsInput,
-  context: ExplicitOperatorStatusContext,
-): Promise<StatusFactsBundle> {
-  let database: Database | null = null;
-  let store: EmailStore | null = null;
-  let storeError: string | null = null;
-  try {
-    const { Database: NativeDatabase } = await import("bun:sqlite");
-    const supplied = context.database;
-    if (!(supplied instanceof NativeDatabase)) throw new Error();
-    database = supplied;
-    const { createSqliteEmailStore } = await import("../store-sqlite/index.js");
-    store = createSqliteEmailStore({ database });
-  } catch { storeError = "the explicitly supplied database could not be observed"; }
-  return assembleStatusFacts(input, store, storeError, {
-    kind: "operator", database, observations: readOperatorStatusObservations(context.operatorConfig),
-  });
-}
-
-type StatusOwnership =
-  | { kind: "client"; wiring: StorageWiring }
-  | { kind: "operator"; database: Database | null; observations: OperatorStatusObservations };
-
-/** One inventory algorithm; ownership is established only by the two entrypoints above. */
-async function assembleStatusFacts(
-  input: StatusFactsInput, resolved: EmailStore | null, storeError: string | null, ownership: StatusOwnership,
-): Promise<StatusFactsBundle> {
-  const gaps = new StatusGaps();
-  if (ownership.kind === "operator") for (const [path, availability] of Object.entries(ownership.observations.gaps)) gaps.mark(path, availability);
   const kind = resolved === null ? "unresolved_store" : resolved.descriptor.kind;
   const sourceOf = (family: string): string => `${kind}:${family}`;
 
@@ -439,41 +388,23 @@ async function assembleStatusFacts(
     return readFamily(sourceOf(family), family, listPage(open), idOf);
   };
 
-  const [providersRead, domainsRead, addressesRead, sourcesRead] = await Promise.all([
+  const [providersRead, domainsRead, addressesRead] = await Promise.all([
     readOrRefuse<ResourceRow>("providers", (open) => (opts) => open.providers.list(opts), resourceRowId),
     readOrRefuse<DomainRecord>("domains", (open) => (opts) => open.domains.listDomains(opts), (row) => row.id),
     readOrRefuse<AddressRecord>("addresses", (open) => (opts) => open.addresses.listAddresses(opts), (row) => row.id),
-    readSourceInventory(resolved, sourceOf("sources")),
   ]);
 
   return {
-    database: ownership.kind === "operator" ? explicitDatabaseBlock(ownership.database, gaps) : databaseBlock(ownership.wiring, gaps),
+    database: databaseBlock(wiring, gaps),
     providers: providersBlock(providersRead, gaps),
     domains: domainsBlock(input, providersRead, domainsRead, addressesRead, gaps),
     addresses: addressesBlock(input, addressesRead, resolved, sourceOf("addresses"), gaps),
-    inboundBuckets: ownership.kind === "operator" ? ownership.observations.inboundBuckets : inboundBucketsBlock(ownership.wiring, gaps),
-    realtime: ownership.kind === "operator" ? ownership.observations.realtime : realtimeBlock(ownership.wiring, gaps),
-    sources: sourcesBlock(input, sourcesRead, gaps),
+    inboundBuckets: inboundBucketsBlock(wiring, gaps),
+    realtime: realtimeBlock(wiring, gaps),
+    sources: sourcesBlock(input, sourceOf("sources"), gaps),
     provisioning: provisioningBlock(domainsRead, addressesRead, kind, gaps),
     gaps: gaps.toRecord(),
   };
-}
-
-function explicitDatabaseBlock(database: Database | null, gaps: StatusGaps): DatabaseStatusBlock {
-  const source = "explicit_database_connection";
-  let filename: unknown;
-  try { filename = database?.filename; } catch { filename = null; }
-  if (filename === ":memory:") {
-    const availability = statusUnavailable("not_applicable", "in_memory_database", source,
-      "the explicitly supplied database is in memory, so there is no data directory");
-    return { availability, data_dir: gaps.mark("database.data_dir", availability) };
-  }
-  if (typeof filename === "string" && isAbsolute(filename)) return {
-    availability: statusAvailable(source, "local_config"), data_dir: dirname(filename),
-  };
-  const availability = statusUnavailable("source_unreachable", "explicit_database_identity_unavailable", source,
-    "the supplied connection does not expose a recognized database filename; no ambient path is inferred");
-  return { availability, data_dir: gaps.mark("database.data_dir", availability) };
 }
 
 function databaseBlock(wiring: StorageWiring, gaps: StatusGaps): DatabaseStatusBlock {
@@ -735,8 +666,17 @@ function inboundBucketsBlock(wiring: StorageWiring, gaps: StatusGaps): InboundBu
         + `own mail is not known: ${wiring.message}`,
     ));
   }
-  return refuse(statusUnavailable("not_applicable", "operator_config_not_observed", LOCAL_CONFIG,
-    "only the explicit Database/operator entrypoint can observe operator bucket settings"));
+  try {
+    const items = getInboundBuckets();
+    return { availability: statusAvailable(LOCAL_CONFIG, LOCAL_CONFIG), items, total: items.length };
+  } catch (error) {
+    return refuse(statusUnavailable(
+      "source_unreachable",
+      errorMessage(error),
+      LOCAL_CONFIG,
+      "the inbound bucket list could not be read from this installation's config file",
+    ));
+  }
 }
 
 function realtimeBlock(wiring: StorageWiring, gaps: StatusGaps): RealtimeStatusBlock {
@@ -768,78 +708,32 @@ function realtimeBlock(wiring: StorageWiring, gaps: StatusGaps): RealtimeStatusB
     ));
   }
 
-  return refuse(statusUnavailable("not_applicable", "operator_config_not_observed", LOCAL_CONFIG,
-    "only the explicit Database/operator entrypoint can observe operator realtime settings"));
-}
-
-interface SourceSyncInstant {
-  wholeMilliseconds: number;
-  fraction: string;
-  normalized: string;
-}
-
-/** Strict calendar validation before Date arithmetic; timezone-free SQLite values are UTC. */
-function sourceSyncInstant(value: string): SourceSyncInstant | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})([Tt ])(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|[+-]\d{2}:\d{2})?$/.exec(value);
-  if (!match) return null;
-  const [, yearText, monthText, dayText, separator, hourText, minuteText, secondText, digits = "", zone] = match;
-  if ((separator === " " && zone !== undefined) || (separator !== " " && zone === undefined) || zone === "-00:00") return null;
-  const year = Number(yearText), month = Number(monthText), day = Number(dayText);
-  const hour = Number(hourText), minute = Number(minuteText), second = Number(secondText);
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (month < 1 || month > 12 || day < 1 || day > days[month - 1]! || hour > 23 || minute > 59 || second > 59) return null;
-  let offsetMinutes = 0;
-  if (zone && /^[+-]/.test(zone)) {
-    const offsetHour = Number(zone.slice(1, 3)), offsetMinute = Number(zone.slice(4));
-    if (offsetHour > 23 || offsetMinute > 59) return null;
-    offsetMinutes = (zone[0] === "+" ? 1 : -1) * (offsetHour * 60 + offsetMinute);
+  let config: Awaited<ReturnType<typeof loadConfig>>;
+  try {
+    config = loadConfig();
+  } catch (error) {
+    return refuse(statusUnavailable(
+      "source_unreachable",
+      errorMessage(error),
+      LOCAL_CONFIG,
+      "the realtime queue settings could not be read from this installation's config file",
+    ));
   }
-  // setUTCFullYear avoids Date.UTC's special 1900 interpretation for years 00–99.
-  const date = new Date(0);
-  date.setUTCFullYear(year, month - 1, day);
-  date.setUTCHours(hour, minute, second, 0);
-  const wholeMilliseconds = date.getTime() - offsetMinutes * 60_000;
-  const fraction = digits.replace(/0+$/, "");
-  const normalized = new Date(wholeMilliseconds).toISOString().replace(/\.000Z$/, `.${fraction.padEnd(3, "0")}Z`);
-  return { wholeMilliseconds, fraction, normalized };
-}
-
-function configuredSourcesBlock(read: FactRead<IngestionSourceInventoryRow>, gaps: StatusGaps): ConfiguredSourcesStatusBlock {
-  const { availability } = read;
-  if (!read.answered) return {
-    availability,
-    total: gaps.mark("sources.configured.total", availability),
-    by_status: gaps.mark("sources.configured.by_status", availability),
-    latest_last_synced_at: gaps.mark("sources.configured.latest_last_synced_at", availability),
+  const configString = (key: string): string | null => {
+    const value = config[key];
+    return typeof value === "string" && value.trim() ? value : null;
   };
-  const counts = new Map<string, number>();
-  let latest: SourceSyncInstant | null = null;
-  let invalidTimestamp = false;
-  for (const row of read.rows) {
-    const status = row.status || "unknown";
-    counts.set(status, (counts.get(status) ?? 0) + 1);
-    if (!read.exact || row.last_synced_at === null) continue;
-    const instant = sourceSyncInstant(row.last_synced_at);
-    if (instant === null) { invalidTimestamp = true; continue; }
-    const precision = Math.max(instant.fraction.length, latest?.fraction.length ?? 0);
-    if (latest === null || instant.wholeMilliseconds > latest.wholeMilliseconds
-      || (instant.wholeMilliseconds === latest.wholeMilliseconds
-        && instant.fraction.padEnd(precision, "0") > latest.fraction.padEnd(precision, "0"))) latest = instant;
-  }
-  const latestGap = !read.exact ? derivedGap(availability) : invalidTimestamp
-    ? statusUnavailable("source_unreachable", "invalid_source_sync_timestamp", availability.source,
-      "a source sync timestamp is invalid; inventory counts remain observed") : null;
+  const queueUrl = configString("inbound_realtime_queue_url");
   return {
-    availability,
-    total: read.rows.length,
-    by_status: Object.fromEntries(counts),
-    latest_last_synced_at: latestGap === null ? latest?.normalized ?? null
-      : gaps.mark("sources.configured.latest_last_synced_at", latestGap),
+    availability: statusAvailable(LOCAL_CONFIG, LOCAL_CONFIG),
+    queue_configured: queueUrl !== null,
+    queue_url: queueUrl,
+    last_poll_at: configString("inbound_realtime_last_poll_at"),
+    last_error: configString("inbound_realtime_last_error"),
   };
 }
 
-function sourcesBlock(input: StatusFactsInput, read: FactRead<IngestionSourceInventoryRow>, gaps: StatusGaps): SourcesStatusBlock {
+function sourcesBlock(input: StatusFactsInput, source: string, gaps: StatusGaps): SourcesStatusBlock {
   // THE AGGREGATE ROW IS NOT A SOURCE. The mailbox view puts one at the head of its
   // list (`kind: "all"` — src/cli/tui/data.local.ts, and it is the ONLY row the view
   // in src/lib/self-hosted-mail-data-source.ts returns, because that store is a
@@ -887,7 +781,20 @@ function sourcesBlock(input: StatusFactsInput, read: FactRead<IngestionSourceInv
   );
   const badged = (badge: string): number => counted.filter((entry) => entry.badges.includes(badge)).length;
 
-  const configured = configuredSourcesBlock(read, gaps);
+  const configuredGap = statusUnavailable(
+    "not_modelled_on_store",
+    "no_ingestion_source_repository",
+    source,
+    "the ingestion-source inventory has no repository on the store seam (src/store/email-store.ts "
+      + "declares none), so no store operation answers it; the mailbox view above is what "
+      + "`emails inbox sync-status` reads",
+  );
+  const configured: ConfiguredSourcesStatusBlock = {
+    availability: configuredGap,
+    total: gaps.mark("sources.configured.total", configuredGap),
+    by_status: gaps.mark("sources.configured.by_status", configuredGap),
+    latest_last_synced_at: gaps.mark("sources.configured.latest_last_synced_at", configuredGap),
+  };
 
   return {
     availability: statusAvailable(MAILBOX_VIEW, "client_enumeration"),

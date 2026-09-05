@@ -34,6 +34,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "./database.js";
+import { createProvider } from "./providers.local.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import { createHttpEmailStore } from "../store-http/index.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
@@ -41,13 +42,6 @@ import { STORE_LIST_PAGE_MAX } from "../lib/status-facts-enumeration.js";
 import type { EmailStore } from "../store/email-store.js";
 import type { ListOptions, ResourceRow } from "../store/records.js";
 import type { Outcome } from "../store/outcome.js";
-import {
-  CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV,
-  EMAILS_API_URL_SETTINGS, RETIRED_EMAILS_SELECTOR_SETTINGS,
-} from "../lib/client-settings.js";
-import {
-  CLIENT_ENV_CREDENTIAL_SELECTION_KEYS, EMAILS_CLIENT_ENV_SECRET_ENV,
-} from "../lib/client-env.js";
 import {
   createScheduledEmail,
   getScheduledEmail,
@@ -62,35 +56,36 @@ import {
 /** 600: one hundred rows past the page every list route clamps to. */
 const OVER_CLAMP = STORE_LIST_PAGE_MAX + 100;
 
+const DB_PATH_ENV = "EMAILS_DB_PATH";
 /**
- * The backing database is an explicit in-memory fixture, never client configuration.
- * Clear every client setting so inherited operator credentials or retired selectors
- * cannot affect either store arm, and restore absent/blank values after each case.
+ * Every setting `planEmailStore` reads, cleared before each case.
+ *
+ * All of them, not just the database path: an inherited API pointer makes a local database
+ * path a CONTRADICTION the resolver refuses outright (there is deliberately no precedence),
+ * so a developer whose shell carries one would see this file fail for a reason that has
+ * nothing to do with the schedule.
  */
 const TOUCHED_ENV = [
-  ...CLIENT_DATABASE_SETTINGS, ...RETIRED_EMAILS_SELECTOR_SETTINGS,
-  ...EMAILS_API_URL_SETTINGS, ...CLIENT_ENV_CREDENTIAL_SELECTION_KEYS,
-  EMAILS_CLIENT_ENV_SECRET_ENV,
+  DB_PATH_ENV,
+  "HASNA_EMAILS_DB_PATH",
+  "EMAILS_SELF_HOSTED_URL",
+  "EMAILS_SELF_HOSTED_API_KEY",
+  "EMAILS_CLIENT_ENV_SECRET",
+  "EMAILS_SESSION_TOKEN",
 ] as const;
 
 let saved: Array<readonly [string, string | undefined]> = [];
 let api: V1StoreApi | null = null;
 let providerId = "";
 
-beforeEach(async () => {
+beforeEach(() => {
   saved = TOUCHED_ENV.map((key) => [key, process.env[key]] as const);
   for (const key of TOUCHED_ENV) delete process.env[key];
+  process.env[DB_PATH_ENV] = ":memory:";
   resetDatabase();
   // `scheduled_emails.provider_id` is a real foreign key and `PRAGMA foreign_keys` is ON,
   // so every fixture row needs a provider that exists.
-  // Provider creation is setup only: seed the explicit backing store instead of
-  // invoking a public client dispatcher that correctly refuses client DB settings.
-  const database = getDatabase(":memory:");
-  const provider = await createSqliteEmailStore({ database }).providers.create({
-    name: "schedule-fixture", type: "sandbox", active: true,
-  });
-  if (!provider.ok) throw new Error(`Cannot seed schedule provider: ${provider.code}`);
-  providerId = String(provider.value.id);
+  providerId = createProvider({ name: "schedule-fixture", type: "sandbox" }, getDatabase()).id;
 });
 
 afterEach(() => {
@@ -113,14 +108,6 @@ function overTheWire(): EmailStore {
   const sqlite = createSqliteEmailStore();
   api = startV1StoreApi({ store: sqlite });
   return createHttpEmailStore({ baseUrl: api.baseUrl, credential: api.apiKey, detail: "Emails API (fixture)" });
-}
-
-/** Exercise the unchanged no-argument public schedule API through real HTTP. */
-function configureApi(): V1StoreApi {
-  api = startV1StoreApi({ store: createSqliteEmailStore({ database: getDatabase() }) });
-  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
-  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
-  return api;
 }
 
 const STORES: Array<readonly [string, () => EmailStore]> = [
@@ -485,7 +472,6 @@ for (const [name, build] of STORES) {
 
 describe("rows sharing a due instant", () => {
   it("are ordered by id, so paging cannot repeat or skip one", async () => {
-    const configured = configureApi();
     const db = getDatabase();
     const insert = db.query(
       `INSERT INTO scheduled_emails (${SCHEDULED_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -511,7 +497,6 @@ describe("rows sharing a due instant", () => {
     const first = await listScheduledEmails({ limit: 2, offset: 0 });
     const second = await listScheduledEmails({ limit: 2, offset: 2 });
     expect([...first, ...second].map((row) => row.id)).toEqual(["tie-a", "tie-b", "tie-c"]);
-    expect(configured.requestCount()).toBeGreaterThan(0);
   });
 });
 
@@ -672,7 +657,6 @@ describe("a store that cannot answer", () => {
 
 describe("with no store handed in", () => {
   it("resolves one from storage configuration and reads the same rows", async () => {
-    const configured = configureApi();
     // NO injected store: this exercises `createConfiguredEmailStore()`, and therefore the
     // resolver, rather than only the injectable seam.
     const created = await createScheduledEmail(scheduleOne({ subject: "Configured" }));
@@ -680,16 +664,13 @@ describe("with no store handed in", () => {
     expect((await listScheduledEmails({ limit: 10 })).map((row) => row.subject)).toEqual(["Configured"]);
     expect(await cancelScheduledEmail(created.id)).toBe(true);
     expect((await listScheduledEmails({ status: "cancelled", limit: 10 })).map((row) => row.id)).toEqual([created.id]);
-    expect(configured.requestCount()).toBeGreaterThan(0);
   });
 
   it("RAISES on a mark for a row that does not exist", async () => {
-    const configured = configureApi();
     // Also through the configured store, and also to detect behaviour rather than signature:
     // the deleted local arm ran `UPDATE ... WHERE id = ?`, changed zero rows, and returned
     // normally — so it reported a send recorded against a row that was not there.
     await expect(markSent("nonexistent")).rejects.toThrow(/no such row/);
     await expect(markFailed("nonexistent", "boom")).rejects.toThrow(/no such row/);
-    expect(configured.requestCount()).toBeGreaterThan(0);
   });
 });

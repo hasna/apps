@@ -20,7 +20,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
-import { createProvider } from "../db/providers.js";
+import { createProvider } from "../db/providers.local.js";
 import { createSentEmailLedger } from "./sent-ledger.local.js";
 import { createEvent } from "../db/events.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
@@ -31,19 +31,13 @@ import { formatAnalytics, getAnalytics, type AnalyticsData } from "./analytics.j
 import type { EmailStore } from "../store/email-store.js";
 import type { MessageListRecord, Page, ResourceRow } from "../store/records.js";
 import type { Outcome } from "../store/outcome.js";
-import {
-  CLIENT_DATABASE_SETTINGS, EMAILS_API_URL_SETTINGS, RETIRED_EMAILS_SELECTOR_SETTINGS,
-} from "./client-settings.js";
-import {
-  CLIENT_ENV_CREDENTIAL_SELECTION_KEYS, EMAILS_CLIENT_ENV_SECRET_ENV,
-} from "./client-env.js";
 
-// The backing store is an explicit fixture, not process-wide client configuration.
-// Isolate the whole client context and restore absent/blank inherited values exactly.
+const DB_PATH_ENV = "EMAILS_DB_PATH";
 const TOUCHED_ENV = [
-  ...CLIENT_DATABASE_SETTINGS, ...RETIRED_EMAILS_SELECTOR_SETTINGS,
-  ...EMAILS_API_URL_SETTINGS, ...CLIENT_ENV_CREDENTIAL_SELECTION_KEYS,
-  EMAILS_CLIENT_ENV_SECRET_ENV,
+  DB_PATH_ENV,
+  "HASNA_EMAILS_DB_PATH",
+  "EMAILS_SELF_HOSTED_URL",
+  "EMAILS_SELF_HOSTED_API_KEY",
 ] as const;
 
 let saved: Array<readonly [string, string | undefined]> = [];
@@ -51,8 +45,8 @@ let saved: Array<readonly [string, string | undefined]> = [];
 beforeEach(() => {
   saved = TOUCHED_ENV.map((key) => [key, process.env[key]] as const);
   for (const key of TOUCHED_ENV) delete process.env[key];
+  process.env[DB_PATH_ENV] = ":memory:";
   resetDatabase();
-  getDatabase(":memory:");
 });
 
 afterEach(() => {
@@ -88,7 +82,6 @@ interface Fixture {
 
 async function seed(): Promise<Fixture> {
   const db = getDatabase();
-  // The public facade preserves explicit Database injection for nested provider reads.
   const provider = createProvider({ name: "SES production", type: "ses" }, db);
 
   const stamp = (id: string, sentAt: string): void => {

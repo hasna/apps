@@ -74,7 +74,6 @@ import type {
   DomainPatch,
   DomainProvisioningPatch,
   DomainRecord,
-  IngestionSourceInventoryRow,
   ListAttachmentsOptions,
   ListMessagesOptions,
   ListOptions,
@@ -99,11 +98,6 @@ import type {
   StoredAttachmentLookup,
   ThreadRollup,
 } from "./records.js";
-
-/** Tenant-bound metadata inventory only; does not advertise source management. */
-export interface IngestionSourceInventoryRepository {
-  list(opts?: ListOptions): Promise<Outcome<IngestionSourceInventoryRow[]>>;
-}
 
 // ---- domains and addresses --------------------------------------------------
 

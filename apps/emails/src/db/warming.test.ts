@@ -26,11 +26,7 @@
 // that pause a schedule and then re-list are what keep that sort load-bearing.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV, StoreConfigurationError } from "../lib/client-settings.js";
-import { closeDatabase, getDatabase } from "./database.js";
+import { closeDatabase, getDatabase, resetDatabase } from "./database.js";
 import {
   createWarmingSchedule,
   deleteWarmingSchedule,
@@ -46,13 +42,14 @@ import type { Outcome } from "../store/outcome.js";
 import type { ResourceInput, ResourceRow } from "../store/records.js";
 import type { ResourceRepository } from "../store/repositories.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
+import {
+  API_BASE_URL_SETTING,
+  API_CREDENTIAL_SETTINGS,
+  API_SETTINGS_POINTER,
+  DATABASE_PATH_SETTINGS,
+} from "../store-resolution.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
-let originalExitCode: typeof process.exitCode;
-let originalExit: typeof process.exit;
-let originalError: typeof console.error;
-let fixtureRoot: string;
-let stateRoots: string[];
 
 function captureInheritedProcessEnv(): void {
   INHERITED_PROCESS_ENV = { ...process.env };
@@ -65,13 +62,18 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-/** The default client uses HTTP; only the fixture owns the explicit memory store. */
-function clearClientConfiguration(): void {
-  for (const key of Object.keys(process.env)) {
-    if (/^(?:HASNA_)?(?:EMAILS|MAILERY)_/.test(key)) delete process.env[key];
+/**
+ * Leave exactly ONE store configured, named through the resolution's OWN exported
+ * constants: a stray inherited API setting beside the database path is a hard boot
+ * error with deliberately no precedence rule, and it would turn every default-store
+ * case into that error.
+ */
+function configureExactlyOneStore(): void {
+  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
+    delete process.env[setting];
   }
-  for (const key of [...CLIENT_DATABASE_SETTINGS, "HASNA_HOME", "HASNA_DATA_HOME", "CODEWITH_HOME",
-    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "RESEND_API_KEY"]) delete process.env[key];
+  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
+  process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
 }
 
 let db: ReturnType<typeof getDatabase>;
@@ -84,45 +86,17 @@ function service(): V1StoreApi {
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  originalExitCode = process.exitCode;
-  originalExit = process.exit;
-  originalError = console.error;
-  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-warming-configured-"));
-  clearClientConfiguration();
-  stateRoots = Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
-    XDG_STATE_HOME: "state", XDG_CACHE_HOME: "cache", HASNA_EMAILS_HOME: "app" }).map(([key, name]) => {
-    const path = join(fixtureRoot, name);
-    mkdirSync(path, { mode: 0o700 });
-    process.env[key] = path;
-    return path;
-  });
-  process.env.TMPDIR = join(fixtureRoot, "tmp");
-  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(fixtureRoot, "compiler");
-  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
-  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
-  closeDatabase();
-  db = getDatabase(":memory:");
+  configureExactlyOneStore();
+  resetDatabase();
+  db = getDatabase();
   api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "warming row fixture" }) });
-  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
-  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
 });
 
 afterEach(() => {
-  try {
-    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
-    expect(process.exit).toBe(originalExit);
-    expect(console.error).toBe(originalError);
-  } finally {
-    api?.stop();
-    api = null;
-    closeDatabase();
-    restoreInheritedProcessEnv();
-    process.exit = originalExit;
-    console.error = originalError;
-    // Bun ignores undefined assignment; preserve an unset status's effective zero.
-    process.exitCode = originalExitCode ?? 0;
-    rmSync(fixtureRoot, { recursive: true, force: true });
-  }
+  api?.stop();
+  api = null;
+  closeDatabase();
+  restoreInheritedProcessEnv();
 });
 
 function sqliteStore(): EmailStore {
@@ -160,53 +134,6 @@ function seedSchedule(row: {
 }
 
 const pad = (value: number): string => String(value).padStart(3, "0");
-
-describe("canonical configured-store boundary", () => {
-  it("persists and reads the default operation through authenticated HTTP", async () => {
-    const before = service().requestCount();
-    const created = await createWarmingSchedule({ domain: "canonical-default.example", target_daily_volume: 50 });
-    expect(service().requestCount()).toBeGreaterThan(before);
-    expect(db.query("SELECT * FROM warming_schedules WHERE id = ?").get(created.id)).toMatchObject({ id: created.id, domain: "canonical-default.example", target_daily_volume: 50 });
-    const afterWrite = service().requestCount();
-    expect(await getWarmingSchedule(created.domain)).toMatchObject({ id: created.id, domain: "canonical-default.example", target_daily_volume: 50 });
-    expect(service().requestCount()).toBeGreaterThan(afterWrite);
-  });
-
-  it("rejects a missing credential before dispatch or mutation", async () => {
-    delete process.env[EMAILS_API_KEY_ENV];
-    const before = service().requestCount();
-    await expect(createWarmingSchedule({ domain: "canonical-default.example", target_daily_volume: 50 })).rejects.toThrow(/API credential is required/);
-    expect(service().requestCount()).toBe(before);
-    expect(db.query("SELECT COUNT(*) AS n FROM warming_schedules").get()).toEqual({ n: 0 });
-  });
-
-  it("rejects a wrong credential at HTTP without exposing it or falling back", async () => {
-    const wrong = "synthetic-invalid-fixture-bearer";
-    process.env[EMAILS_API_KEY_ENV] = wrong;
-    const before = service().requestCount();
-    const error = await createWarmingSchedule({ domain: "canonical-default.example", target_daily_volume: 50 }).catch(error => error);
-    expect(error).toBeInstanceOf(Error);
-    expect(String(error)).toMatch(/401|authentication required/i);
-    expect(String(error)).not.toContain(wrong);
-    expect(String(error)).not.toContain(service().apiKey);
-    expect(service().requestCount()).toBeGreaterThan(before);
-    expect(db.query("SELECT COUNT(*) AS n FROM warming_schedules").get()).toEqual({ n: 0 });
-  });
-
-  it("rejects every client database input before HTTP or mutation", async () => {
-    for (const setting of CLIENT_DATABASE_SETTINGS) {
-      process.env[setting] = "synthetic-client-database-poison";
-      const before = service().requestCount();
-      const error = await createWarmingSchedule({ domain: "canonical-default.example", target_daily_volume: 50 }).catch(error => error);
-      expect(error).toBeInstanceOf(StoreConfigurationError);
-      expect((error as StoreConfigurationError).settings).toContain(setting);
-      expect(String(error)).not.toContain("synthetic-client-database-poison");
-      expect(service().requestCount()).toBe(before);
-      expect(db.query("SELECT COUNT(*) AS n FROM warming_schedules").get()).toEqual({ n: 0 });
-      delete process.env[setting];
-    }
-  });
-});
 
 describe.each(STORE_VARIANTS)("warming CRUD (%s)", (_label, variant) => {
   it("creates a warming schedule with the declared defaults and store-stamped instants", async () => {
@@ -439,8 +366,8 @@ describe("the injectable and the argument orders", () => {
   });
 
   it("resolves the configured store when no store is passed", async () => {
-    // The configured HTTP client writes into the fixture's explicit memory store;
-    // the raw-row check still verifies the actual persisted operation.
+    // Only the database path is configured (see configureExactlyOneStore), so the
+    // default resolution binds to the same process-wide connection `db` is.
     const schedule = await createWarmingSchedule({ domain: "default-store.example.com", target_daily_volume: 50 });
     expect(
       (db.query("SELECT domain FROM warming_schedules WHERE id = ?").get(schedule.id) as { domain: string }).domain,

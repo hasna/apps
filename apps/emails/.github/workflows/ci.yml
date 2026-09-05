@@ -129,8 +129,7 @@ jobs:
             if (pkg.name !== "@hasna/emails") throw new Error(`unexpected package name: ${pkg.name}`);
             if (pkg.publishConfig?.access !== "public") throw new Error("npm package must publish with public access");
             if (pkg.publishConfig?.registry !== "https://registry.npmjs.org") throw new Error("npm registry must be the public registry");
-            if (pkg.repository?.url !== "git+https://github.com/hasna/apps.git") throw new Error("repository provenance must be hasna/apps");
-            if (pkg.repository?.directory !== "apps/emails") throw new Error("repository directory must be apps/emails");
+            if (pkg.repository?.url !== "git+https://github.com/hasna/emails.git") throw new Error("repository provenance must be hasna/emails");
           '
       - name: Require immutable gates on future release and deployment workflows
         run: bun run deployment:policy

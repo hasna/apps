@@ -26,7 +26,6 @@ const SRC = join(import.meta.dir, "..");
 const STATUS_BUILDERS = [
   "lib/agent-context.ts",
   "lib/status-facts.ts",
-  "lib/operator-status-observations.ts",
   // The enumeration EVERY status count is now built on. Same reason as
   // db/self-hosted-page.ts below: a hardcoded `complete: true` here is the same lie
   // as a hardcoded `total: 0`.
@@ -173,7 +172,6 @@ describe("status builders never hardcode a measurement (G4)", () => {
         ||
         /(^|\/)(agent-context|status-facts|status-types|status-availability|status-commands)[^/]*\.ts$/.test(relative)
         || /(^|\/)resources[^/]*\.ts$/.test(relative)
-        || /(^|\/)operator-status-observations\.ts$/.test(relative)
         || /(^|\/)inbox-sync-status-format\.ts$/.test(relative));
     const registered = new Set<string>(STATUS_BUILDERS);
     const unregistered = candidates

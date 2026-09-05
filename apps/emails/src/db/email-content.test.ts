@@ -27,10 +27,7 @@
 //     else in this suite would notice.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { closeDatabase, getDatabase, type Database } from "./database.js";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { closeDatabase, getDatabase, resetDatabase, type Database } from "./database.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 import { createHttpEmailStore } from "../store-http/index.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
@@ -43,8 +40,7 @@ import {
 import type { EmailStore } from "../store/email-store.js";
 import type { MessageRecord } from "../store/records.js";
 import type { Outcome, Refusal } from "../store/outcome.js";
-import { CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV, StoreConfigurationError } from "../lib/client-settings.js";
-import { EmailsApiFault } from "../store-http/outcome.js";
+import { createProvider } from "./providers.local.js";
 import { createSentEmailLedger, storeSentEmailContent } from "../lib/sent-ledger.local.js";
 import {
   getEmailContent,
@@ -91,12 +87,6 @@ interface Harness {
 let db: Database;
 let api: V1StoreApi;
 let INHERITED_ENV: NodeJS.ProcessEnv;
-let originalFetch: typeof globalThis.fetch;
-let originalExit: typeof process.exit;
-let originalExitCode: typeof process.exitCode;
-let originalConsole: Pick<Console, "log" | "error" | "warn">;
-let fixtureRoot: string | null = null;
-let stateRoots: string[] = [];
 
 async function seedThrough(store: EmailStore, input: SeedMessage): Promise<string> {
   const created = await store.messages.createMessage({
@@ -130,198 +120,30 @@ const httpHarness: Harness = {
 
 beforeEach(() => {
   INHERITED_ENV = { ...process.env };
-  originalFetch = globalThis.fetch;
-  originalExit = process.exit;
-  originalExitCode = process.exitCode;
-  originalConsole = { log: console.log, error: console.error, warn: console.warn };
-  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-content-configured-"));
-  stateRoots = [];
-  // Only the fixture owns memory storage; default library clients use the authenticated API.
-  for (const key of Object.keys(process.env)) {
-    if (/^(?:HASNA_)?(?:EMAILS|MAILERY)_|^(?:AWS|AMAZON|CLOUDFLARE|RESEND)_/.test(key)) delete process.env[key];
-  }
+  // EXACTLY ONE store is configured for this file, and the key list comes from
+  // `src/store-resolution.ts` rather than being re-spelled here, so a new setting cannot be
+  // missed. Both a database path and an API configured together is a BOOT ERROR, not a
+  // precedence rule, and an inherited API setting from a developer's shell would fail these
+  // cases for the wrong reason.
   for (const key of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS, ...DATABASE_PATH_SETTINGS]) {
     delete process.env[key];
   }
-  for (const key of ["HASNA_HOME", "HASNA_DATA_HOME", "CODEWITH_HOME"]) delete process.env[key];
-  stateRoots = Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
-    XDG_STATE_HOME: "state", XDG_CACHE_HOME: "cache", HASNA_EMAILS_HOME: "app" }).map(([key, name]) => {
-    const path = join(fixtureRoot!, name);
-    mkdirSync(path, { mode: 0o700 });
-    process.env[key] = path;
-    return path;
-  });
-  process.env.TMPDIR = join(fixtureRoot, "tmp");
-  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(fixtureRoot, "compiler");
-  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
-  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
-  process.env.AWS_EC2_METADATA_DISABLED = "true";
-  process.env.AWS_CONFIG_FILE = join(fixtureRoot, "tmp", "absent-aws-config");
-  process.env.AWS_SHARED_CREDENTIALS_FILE = join(fixtureRoot, "tmp", "absent-aws-credentials");
-  closeDatabase();
-  db = getDatabase(":memory:");
+  process.env["EMAILS_DB_PATH"] = ":memory:";
+  resetDatabase();
+  db = getDatabase();
   api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "v1 fixture" }) });
-  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
-  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
 });
 
 afterEach(() => {
-  try {
-    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
-    expect(globalThis.fetch).toBe(originalFetch);
-    expect(process.exit).toBe(originalExit);
-    expect(console.log).toBe(originalConsole.log);
-    expect(console.error).toBe(originalConsole.error);
-    expect(console.warn).toBe(originalConsole.warn);
-  } finally {
-    try { api?.stop(); } finally {
-      try { closeDatabase(); } finally {
-        for (const key of Object.keys(process.env)) {
-          if (!Object.prototype.hasOwnProperty.call(INHERITED_ENV, key)) delete process.env[key];
-        }
-        Object.assign(process.env, INHERITED_ENV);
-        globalThis.fetch = originalFetch;
-        process.exit = originalExit;
-        Object.assign(console, originalConsole);
-        process.exitCode = originalExitCode ?? 0;
-        if (fixtureRoot !== null) rmSync(fixtureRoot, { recursive: true, force: true });
-        fixtureRoot = null;
-      }
-    }
+  api.stop();
+  closeDatabase();
+  for (const key of Object.keys(process.env)) {
+    if (!Object.prototype.hasOwnProperty.call(INHERITED_ENV, key)) delete process.env[key];
   }
+  Object.assign(process.env, INHERITED_ENV);
 });
 
 const HARNESSES: readonly Harness[] = [sqliteHarness, httpHarness];
-
-describe("configured default content clients", () => {
-  it("writes and reads through the public entry point with real protected backing rows", async () => {
-    const entry = await import("../index.js");
-    const id = await sqliteHarness.seedMessage({ text: "before", html: "<p>before</p>" });
-    const protectedId = await sqliteHarness.seedMessage({ text: "protected" });
-    const requests = api.requestCount();
-    await entry.storeEmailContent(id, {
-      text: SECRET_BODY, html: "<p>configured replacement</p>",
-      headers: { [SECRET_HEADER_NAME]: SECRET_HEADER_VALUE },
-    });
-    expect(await entry.getEmailContent(id)).toEqual({
-      email_id: id, text_body: SECRET_BODY, html: "<p>configured replacement</p>",
-      headers: { [SECRET_HEADER_NAME]: SECRET_HEADER_VALUE },
-    });
-    expect(api.requestCount()).toBeGreaterThan(requests);
-    expect(await getEmailContent(id, sqliteHarness.store())).toEqual(await entry.getEmailContent(id));
-    expect((await getEmailContent(protectedId, sqliteHarness.store()))!.text_body).toBe("protected");
-  });
-
-  it("refuses missing credentials before any fetch and leaves stored content unchanged", async () => {
-    const id = await sqliteHarness.seedMessage({ text: "before" });
-    const before = await getEmailContent(id, sqliteHarness.store());
-    const requests = api.requestCount();
-    delete process.env[EMAILS_API_KEY_ENV];
-    const nativeFetch = globalThis.fetch;
-    let fetchCalls = 0;
-    globalThis.fetch = Object.assign(function (this: unknown, ...args: Parameters<typeof fetch>) {
-      fetchCalls += 1;
-      return Reflect.apply(nativeFetch, this, args);
-    }, nativeFetch) as typeof fetch;
-    try {
-      await expect(getEmailContent(id)).rejects.toBeInstanceOf(StoreConfigurationError);
-      await expect(storeEmailContent(id, { text: SECRET_BODY })).rejects.toBeInstanceOf(StoreConfigurationError);
-      expect(fetchCalls).toBe(0);
-    } finally { globalThis.fetch = nativeFetch; }
-    expect(api.requestCount()).toBe(requests);
-    expect(await getEmailContent(id, sqliteHarness.store())).toEqual(before);
-  });
-
-  it("surfaces actual wrong-key401 for both reads and writes without mutating stored content", async () => {
-    const id = await sqliteHarness.seedMessage({ text: "before" });
-    const before = await getEmailContent(id, sqliteHarness.store());
-    process.env[EMAILS_API_KEY_ENV] = "synthetic-wrong-content-key";
-    for (const operation of [
-      () => getEmailContent(id),
-      () => storeEmailContent(id, { text: SECRET_BODY, headers: { [SECRET_HEADER_NAME]: SECRET_HEADER_VALUE } }),
-    ]) {
-      const requests = api.requestCount();
-      const raised: unknown = await operation().catch(error => error);
-      expect(raised).toBeInstanceOf(EmailsApiFault);
-      expect((raised as EmailsApiFault).status).toBe(401);
-      expect(api.requestCount()).toBeGreaterThan(requests);
-      for (const marker of [SECRET_BODY, SECRET_HEADER_NAME, SECRET_HEADER_VALUE, process.env[EMAILS_API_KEY_ENV]!]) {
-        expect(String(raised)).not.toContain(marker);
-      }
-      expect(await getEmailContent(id, sqliteHarness.store())).toEqual(before);
-    }
-  });
-
-  it("rejects every blank and nonblank client database setting before fetch without fallback", async () => {
-    const id = await sqliteHarness.seedMessage({ text: "before" });
-    const before = await getEmailContent(id, sqliteHarness.store());
-    const requests = api.requestCount();
-    const nativeFetch = globalThis.fetch;
-    let fetchCalls = 0;
-    globalThis.fetch = Object.assign(function (this: unknown, ...args: Parameters<typeof fetch>) {
-      fetchCalls += 1;
-      return Reflect.apply(nativeFetch, this, args);
-    }, nativeFetch) as typeof fetch;
-    try {
-      expect(CLIENT_DATABASE_SETTINGS).toHaveLength(7);
-      for (const setting of CLIENT_DATABASE_SETTINGS) {
-        for (const value of ["", "synthetic-client-db-marker"]) {
-          process.env[setting] = value;
-          for (const operation of [() => getEmailContent(id), () => storeEmailContent(id, { text: SECRET_BODY })]) {
-            const raised: unknown = await operation().catch(error => error);
-            expect(raised).toBeInstanceOf(StoreConfigurationError);
-            expect((raised as StoreConfigurationError).settings).toEqual([setting]);
-            expect(String(raised)).not.toContain("synthetic-client-db-marker");
-            expect(String(raised)).not.toContain(SECRET_BODY);
-          }
-          delete process.env[setting];
-        }
-      }
-      expect(fetchCalls).toBe(0);
-    } finally { globalThis.fetch = nativeFetch; }
-    expect(api.requestCount()).toBe(requests);
-    expect(await getEmailContent(id, sqliteHarness.store())).toEqual(before);
-  });
-
-  it("does not report a real HTTP read failure as absent content", async () => {
-    const id = await sqliteHarness.seedMessage({ text: SECRET_BODY });
-    api.stop();
-    api = startV1StoreApi({ store: refusingStore(sqliteHarness.store()) });
-    process.env[EMAILS_API_URL_ENV] = api.baseUrl;
-    const requests = api.requestCount();
-    const raised: unknown = await getEmailContent(id).catch(error => error);
-    expect(raised).toBeInstanceOf(EmailsApiFault);
-    expect((raised as EmailsApiFault).status).toBe(503);
-    expect(raised).not.toBeNull();
-    expect(api.requestCount()).toBeGreaterThan(requests);
-    expect(String(raised)).not.toContain(SECRET_BODY);
-    expect((await getEmailContent(id, sqliteHarness.store()))!.text_body).toBe(SECRET_BODY);
-  });
-
-  it("does not report a real HTTP write refusal as a successful content replacement", async () => {
-    const id = await sqliteHarness.seedMessage({ text: "before", html: "<p>before</p>" });
-    const before = await getEmailContent(id, sqliteHarness.store());
-    const backing = sqliteHarness.store();
-    api.stop();
-    api = startV1StoreApi({ store: {
-      ...backing,
-      messages: { ...backing.messages, updateMessageContent: async () => ({
-        ok: false, code: "capability_unavailable", status: 501,
-        message: "this fixture store declines a content replacement",
-      }) },
-    } });
-    process.env[EMAILS_API_URL_ENV] = api.baseUrl;
-    const requests = api.requestCount();
-    const raised: unknown = await storeEmailContent(id, {
-      text: SECRET_BODY, headers: { [SECRET_HEADER_NAME]: SECRET_HEADER_VALUE },
-    }).catch(error => error);
-    expect(raised).toBeInstanceOf(EmailsApiFault);
-    expect((raised as EmailsApiFault).status).toBe(503);
-    expect(api.requestCount()).toBeGreaterThan(requests);
-    for (const marker of [SECRET_BODY, SECRET_HEADER_NAME, SECRET_HEADER_VALUE]) expect(String(raised)).not.toContain(marker);
-    expect(await getEmailContent(id, sqliteHarness.store())).toEqual(before);
-  });
-});
 
 /**
  * A store that holds no message under the asked-for id and answers the RESOLVE step with
@@ -713,7 +535,7 @@ describe("a legacy API that returns 200 after dropping a content write", () => {
 
     // Positive control: the ordinary HTTP store really sent every new value. The failure is
     // therefore the unchanged response, not a client that omitted the fields itself.
-    expect(writtenBody as Record<string, unknown> | null).toEqual({
+    expect(writtenBody).toEqual({
       body_text: SECRET_BODY,
       body_html: `<p>${SECRET_BODY}</p>`,
       headers: { [SECRET_HEADER_NAME]: SECRET_HEADER_VALUE },
@@ -864,14 +686,12 @@ describe("the published entry point", () => {
 
 describe("content written by the ledger writer, read back through the seam", () => {
   async function seedLegacyLedgerRow(subject: string): Promise<string> {
-    // This is a provider prerequisite, not a test of the retained mode-branching provider facade.
-    const provider = await sqliteHarness.store().providers.create({ name: "sandbox", type: "sandbox", active: true });
-    if (!provider.ok || typeof provider.value.id !== "string") throw new Error("The explicit provider fixture was not created");
-    return (await createSentEmailLedger(provider.value.id, {
+    const provider = createProvider({ name: "sandbox", type: "sandbox" });
+    return (await createSentEmailLedger(provider.id, {
       from: "sender@example.test",
       to: ["recipient@example.test"],
       subject,
-    }, undefined, db)).id;
+    })).id;
   }
 
   // THE TEST THE COLLAPSE NEEDS MOST. `createEmail` writes the ledger row and records NO body;

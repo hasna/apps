@@ -26,7 +26,7 @@ import type { EmailsClientCredentialCandidate, EmailsClientCredentialSetting } f
 import type { AddressOwnershipLedger } from "../store-address-ownership-ledger.js";
 import type { GroupMembership } from "../store-group-membership.js";
 import type { SequenceCapableEmailStore } from "../store-sequence-subledger.js";
-import type { PrioritySenderRulesStore, SourceInventoryStore } from "../store/email-store.js";
+import type { PrioritySenderRulesStore } from "../store/email-store.js";
 import { createAttachmentRepairRepository, createSendIntentsRepository } from "./ledger.js";
 import {
   createEmailContentRepository,
@@ -49,7 +49,6 @@ import {
 } from "./resources.js";
 import { RESOURCE_PATHS } from "./routes.js";
 import { createSendKeysRepository } from "./send-keys.js";
-import { createSourceInventoryRepository } from "./source-inventory.js";
 import { createTransport, toV1BaseUrl, type FetchImplementation } from "./wire.js";
 
 /**
@@ -280,7 +279,7 @@ function gateway(gateways: Record<string, ResourceGateway>, family: string): Res
 
 export function createHttpEmailStore(
   options: HttpEmailStoreOptions,
-): SequenceCapableEmailStore & GroupMembership & AddressOwnershipLedger & PrioritySenderRulesStore & SourceInventoryStore {
+): SequenceCapableEmailStore & GroupMembership & AddressOwnershipLedger & PrioritySenderRulesStore {
   const transport = createTransport({
     baseUrl: options.baseUrl,
     credential: options.credential,
@@ -306,7 +305,6 @@ export function createHttpEmailStore(
     threads: createThreadsRepository(transport),
     sandbox: createResourceRepository(gateway(gateways, "sandbox")),
     prioritySenderRules: createImmutableResourceRepository(gateway(gateways, "prioritySenderRules")),
-    sourceInventory: createSourceInventoryRepository(transport),
     emailDigests: createResourceRepository(gateway(gateways, "emailDigests")),
     scheduled: createResourceRepository(gateway(gateways, "scheduled")),
     events: createResourceRepository(gateway(gateways, "events")),

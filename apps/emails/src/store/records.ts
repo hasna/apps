@@ -48,13 +48,6 @@ export interface ListOptions {
   offset?: number;
 }
 
-/** Read-only ingestion metadata; never provider settings, snapshots or mail content. */
-export interface IngestionSourceInventoryRow {
-  id: string;
-  status: string | null;
-  last_synced_at: string | null;
-}
-
 /**
  * Keyset paging. `cursor` is opaque and comes from a previous page's `next_cursor`;
  * callers never construct or parse one. Behind the `keysetPagination` capability.

@@ -39,6 +39,7 @@
 // the capability does not exist yet then the seam needs widening and the widening is the
 // deliverable — not a branch here.
 
+import { getDatabasePath } from "../db/database.js";
 import { StoreConfigurationError, planEmailStore } from "../store-resolution.js";
 
 /**
@@ -91,8 +92,13 @@ export function storeErrorMessage(error: unknown): string {
  */
 export function readStorageWiring(env: NodeJS.ProcessEnv): StorageWiring {
   try {
-    planEmailStore(env);
-    return { kind: "api" };
+    const plan = planEmailStore(env);
+    if (plan.store === "api") return { kind: "api" };
+    // `plan.databasePath` is what the operator WROTE. The path reported here has to be the
+    // one the rows are actually in, and the database layer canonicalises the value when it
+    // opens the file, so the resolved path is read from there rather than from the plan.
+    const path = getDatabasePath();
+    return path === ":memory:" ? { kind: "database_in_memory" } : { kind: "database_file", path };
   } catch (error) {
     return { kind: "unresolved", message: storeErrorMessage(error) };
   }

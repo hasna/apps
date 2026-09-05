@@ -5,8 +5,8 @@
 // both of which refused in self_hosted mode.
 //
 // `emails doctor` no longer refuses — src/lib/doctor.ts reads its facts through
-// the store seam — so the self_hosted examples below use `emails pull`, whose
-// provider ingestion still needs server-owned execution. Keeping a
+// the store seam — so the self_hosted examples below use `emails stats`, which
+// still has no client-side aggregation over the delivery events table. Keeping a
 // runnable command in these fixtures would make them vacuously green.
 
 import { describe, expect, it } from "bun:test";
@@ -20,14 +20,14 @@ import {
 
 describe("mode-aware command availability", () => {
   it("rejects the commands that refuse in self_hosted", () => {
-    expect(isCommandAvailableInMode("emails pull --json", "self_hosted")).toBe(false);
+    expect(isCommandAvailableInMode("emails stats --json", "self_hosted")).toBe(false);
     expect(isCommandAvailableInMode("emails provision status", "self_hosted")).toBe(false);
     expect(isCommandAvailableInMode("emails inbox watch --all-buckets", "self_hosted")).toBe(false);
     expect(isCommandAvailableInMode("emails refresh", "self_hosted")).toBe(false);
   });
 
   it("keeps the self_hosted-only refusals available in local mode", () => {
-    for (const command of ["emails pull --json", "emails pull", "emails monitor"]) {
+    for (const command of ["emails stats --json", "emails pull", "emails monitor"]) {
       expect(isCommandAvailableInMode(command, "local")).toBe(true);
     }
   });
@@ -54,8 +54,6 @@ describe("mode-aware command availability", () => {
   it("does not refuse the commands that were un-blocked in self_hosted", () => {
     for (const command of [
       "emails doctor --json",
-      "emails stats --json",
-      "emails analytics --period 7d --json",
       "emails export emails --format json",
       "emails export events --format json",
       "emails schedule list --json",
@@ -101,7 +99,7 @@ describe("mode-aware command availability", () => {
 
   it("filters a suggestion list while preserving order", () => {
     const filtered = keepAvailableCommands(
-      ["emails status --json", "emails pull --json", "emails provider list --json"],
+      ["emails status --json", "emails stats --json", "emails provider list --json"],
       "self_hosted",
     );
     expect(filtered).toEqual(["emails status --json", "emails provider list --json"]);
@@ -133,27 +131,6 @@ describe("mode-aware command availability", () => {
 // those literals, so it is STRUCTURALLY blind to these — they are pinned here by name
 // instead, in both directions, so neither half can drift.
 describe("flag-conditional refusals the coverage scan cannot see", () => {
-  it("keeps supported reports available while preserving provider and inbound gaps", () => {
-    for (const mode of ["local", "self_hosted"] as const) {
-      for (const command of ["emails stats --period 7d --json", "emails stats --provider p1 --json",
-        "emails analytics --period 7d --json", "emails --json analytics"]) {
-        expect(isCommandAvailableInMode(command, mode), command).toBe(true);
-      }
-      for (const command of ["emails analytics --provider p1", "emails analytics --period 7d --provider p1 --json",
-        "emails analytics --provider=p1 --period 7d", "emails --json analytics --period 7d --provider=p1"]) {
-        expect(isCommandAvailableInMode(command, mode), command).toBe(false);
-      }
-    }
-    for (const command of ["emails stats --inbox", "emails stats --json --period 7d --inbox",
-      "emails --json stats --inbox --period 7d"]) {
-      expect(isCommandAvailableInMode(command, "self_hosted"), command).toBe(false);
-      expect(isCommandAvailableInMode(command, "local"), command).toBe(true);
-    }
-    expect(isCommandAvailableInMode("emails stats --inbox-summary", "self_hosted")).toBe(true);
-    expect(SELF_HOSTED_REFUSED_COMMANDS).not.toContain("emails stats");
-    expect(SELF_HOSTED_REFUSED_COMMANDS).not.toContain("emails analytics");
-  });
-
   it("refuses the flag form while keeping the base command available", () => {
     for (const [base, refusedFlagForm] of [
       ["emails inbox clear", "emails inbox clear --provider p1"],

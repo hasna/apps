@@ -114,9 +114,7 @@ export async function getTodaySentCountsByDomain(domains: readonly string[]): Pr
   const start = `${today}T00:00:00.000Z`;
   const tomorrow = new Date(start);
   tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  // The ledger's upper bound is inclusive; canonical service timestamps have millisecond precision.
-  const endOfToday = new Date(tomorrow.getTime() - 1).toISOString();
-  for (const email of await listEmails({ since: start, until: endOfToday })) {
+  for (const email of await listEmails({ since: start, until: tomorrow.toISOString() })) {
     const sender = (email.from_address ?? "").toLowerCase().split("@")[1]?.trim();
     if (sender !== undefined && counts.has(sender)) counts.set(sender, counts.get(sender)! + 1);
   }

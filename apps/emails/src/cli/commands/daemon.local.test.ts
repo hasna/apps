@@ -1,33 +1,12 @@
-// Adapter-harness coverage for the retained local command, not canonical CLI
-// due/realtime capability. One explicit in-memory store also backs the loopback
-// API read by the status assembler; client configuration never names a database.
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { closeDatabase, getDatabase } from "../../db/database.js";
-import { resetSelfHostedConfigCache } from "../../db/self-hosted-store.js";
+import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
+import { createDomain } from "../../db/domains.local.js";
+import { createProvider } from "../../db/providers.local.js";
 import { setDomainProvisioning } from "../../db/provisioning.js";
-import { resetMailDataSource } from "../../lib/mail-data-source.js";
-import {
-  CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV,
-  EMAILS_API_URL_SETTINGS, RETIRED_EMAILS_SELECTOR_SETTINGS,
-} from "../../lib/client-settings.js";
-import {
-  CLIENT_ENV_CREDENTIAL_SELECTION_KEYS, EMAILS_CLIENT_ENV_SECRET_ENV,
-} from "../../lib/client-env.js";
-import { createSqliteEmailStore } from "../../store-sqlite/index.js";
-import type { EmailStore } from "../../store/email-store.js";
-import { startV1StoreApi, type V1StoreApi } from "../../test-support/v1-store-api.js";
 import { formatDaemonStatus, registerDaemonCommands } from "./daemon.local.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
-let originalExitCode: typeof process.exitCode;
-let fixtureRoot: string;
-let stateRoots: string[];
-let store: EmailStore;
-let api: V1StoreApi;
 function captureInheritedProcessEnv(): void {
   INHERITED_PROCESS_ENV = { ...process.env };
 }
@@ -47,59 +26,20 @@ async function runDaemonCommand(args: string[]) {
     data = d;
     out.push(String(formatted ?? ""));
   });
-  const originalExit = process.exit;
-  // Commander exitOverride does not intercept handleError's direct process.exit.
-  // An unexpected command error must fail this case, not abort every later file.
-  process.exit = ((code?: string | number | null) => {
-    throw new Error(`process.exit:${code ?? 0}`);
-  }) as typeof process.exit;
-  try {
-    await program.parseAsync(["node", "emails", ...args]);
-    return { data, out: out.join("\n") };
-  } finally {
-    process.exit = originalExit;
-  }
+  await program.parseAsync(["node", "emails", ...args]);
+  return { data, out: out.join("\n") };
 }
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  originalExitCode = process.exitCode;
-  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-daemon-adapter-"));
-  stateRoots = Object.entries({
-    HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
-    XDG_CACHE_HOME: "cache", XDG_STATE_HOME: "state", HASNA_EMAILS_HOME: "app",
-  }).map(([key, name]) => {
-    const path = join(fixtureRoot, name);
-    mkdirSync(path);
-    process.env[key] = path;
-    return path;
-  });
-  for (const key of [
-    ...CLIENT_DATABASE_SETTINGS, ...RETIRED_EMAILS_SELECTOR_SETTINGS,
-    ...EMAILS_API_URL_SETTINGS, ...CLIENT_ENV_CREDENTIAL_SELECTION_KEYS,
-    EMAILS_CLIENT_ENV_SECRET_ENV, "EMAILS_HOME", "HASNA_HOME", "HASNA_DATA_HOME", "CODEWITH_HOME",
-  ]) delete process.env[key];
-  closeDatabase();
-  store = createSqliteEmailStore({ database: getDatabase(":memory:") });
-  api = startV1StoreApi({ store });
-  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
-  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
-  resetSelfHostedConfigCache();
-  resetMailDataSource();
+  process.env["EMAILS_DB_PATH"] = ":memory:";
+  resetDatabase();
 });
 
 afterEach(() => {
-  try {
-    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
-  } finally {
-    api.stop();
-    closeDatabase();
-    resetSelfHostedConfigCache();
-    resetMailDataSource();
-    restoreInheritedProcessEnv();
-    process.exitCode = originalExitCode;
-    rmSync(fixtureRoot, { recursive: true, force: true });
-  }
+  closeDatabase();
+  delete process.env["EMAILS_DB_PATH"];
+  restoreInheritedProcessEnv();
 });
 
 describe("daemon commands", () => {
@@ -107,14 +47,12 @@ describe("daemon commands", () => {
     const result = await runDaemonCommand(["daemon", "status"]);
     expect(result.out).toContain("Daemon status");
     expect(result.data).toMatchObject({ queue: { due_domains: 0, due_addresses: 0 } });
-    expect(api.requestCount()).toBeGreaterThan(0);
   });
 
   it("restart returns managed-process guidance", async () => {
     const result = await runDaemonCommand(["daemon", "restart"]);
     expect(result.out).toContain("No managed email daemon process");
     expect(result.data).toMatchObject({ managed_process: false });
-    expect(api.requestCount()).toBeGreaterThan(0);
   });
 
   // Regression: `daemon status` used to print
@@ -124,14 +62,13 @@ describe("daemon commands", () => {
   // output told operators to run something that cannot work, while implying the
   // queue below it would eventually drain.
   it("never advertises a provisioning daemon and says the queue is not drained", async () => {
-    const provider = await store.providers.create({ name: "ses", type: "ses", active: true });
-    if (!provider.ok) throw new Error(`Provider fixture failed: ${provider.code}`);
-    const domain = await store.domains.createDomain({ provider: String(provider.value.id), domain: "due.example.com" });
-    if (!domain.ok) throw new Error(`Domain fixture failed: ${domain.code}`);
-    await setDomainProvisioning(domain.value.id, {
+    getDatabase();
+    const provider = createProvider({ name: "ses", type: "ses", active: true });
+    const domain = createDomain(provider.id, "due.example.com");
+    await setDomainProvisioning(domain.id, {
       provisioning_status: "ses_identity_created",
       next_check_at: "2020-01-01T00:00:00.000Z",
-    }, store);
+    });
 
     const result = await runDaemonCommand(["daemon", "status"]);
     expect(result.data).toMatchObject({ queue: { due_domains: 1, drainable: false } });
@@ -141,15 +78,6 @@ describe("daemon commands", () => {
     expect(result.out).toContain("No provisioning reconciler ships in this build");
     expect(result.out).toContain("emails domain adopt");
     expect(result.out).not.toContain("emails provision");
-    expect(api.requestCount()).toBeGreaterThan(0);
-    // Prove the canonical assembler read the SAME seeded row over HTTP, not a
-    // second empty fixture. Pending is its measurement; it does not claim due.
-    const { getEmailSystemStatusForRuntime } = await import("../../lib/agent-context.js");
-    const system = await getEmailSystemStatusForRuntime();
-    expect(system.provisioning.domains_pending).toBe(1);
-    expect(system.domains.usable).toContainEqual(expect.objectContaining({
-      id: domain.value.id, domain: "due.example.com",
-    }));
   });
 
   // ── the queue counts are no longer four bare integers ─────────────────────────
@@ -318,36 +246,6 @@ describe("daemon commands", () => {
     expect(result.data).toMatchObject({
       queue: { availability: { available: true, complete: true, basis: "client_enumeration" } },
     });
-    expect(api.requestCount()).toBeGreaterThan(0);
-  });
-
-  it("rejects client DB settings without terminating the runner or making an API request", async () => {
-    const originalExit = process.exit;
-    const originalError = console.error;
-    const errors: string[] = [];
-    console.error = (...values: unknown[]) => { errors.push(values.map(String).join(" ")); };
-    try {
-      for (const setting of CLIENT_DATABASE_SETTINGS) {
-        errors.length = 0;
-        process.env[setting] = ":memory:";
-        try {
-          await expect(runDaemonCommand(["daemon", "status"])).rejects.toThrow("process.exit:1");
-          expect(process.exit).toBe(originalExit);
-          expect(api.requestCount()).toBe(0);
-          expect(errors.join("\n")).toContain(setting);
-          expect(errors.join("\n")).not.toContain(api.apiKey);
-        } finally {
-          delete process.env[setting];
-        }
-      }
-      errors.length = 0;
-      const result = await runDaemonCommand(["daemon", "status"]);
-      expect(result.data).toMatchObject({ queue: { due_domains: 0, due_addresses: 0 } });
-      expect(api.requestCount()).toBeGreaterThan(0);
-      expect(errors).toEqual([]);
-    } finally {
-      console.error = originalError;
-    }
   });
 
   it("rejects inherited object keys as log components", async () => {

@@ -360,6 +360,6 @@ describe("tui data — settings (self-hosted)", () => {
       defaultFrom: null,
       theme: "light",
     });
-    expect(() => setSetting("theme", "dark")).toThrow(/API-only client/);
+    expect(() => setSetting("theme", "dark")).toThrow(/self_hosted API-only mode/);
   });
 });

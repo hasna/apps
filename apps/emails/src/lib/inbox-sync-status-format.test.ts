@@ -73,7 +73,7 @@ function emptyLocalStatus(mode: ModeStatus): EmailSystemStatus {
         queue_configured: false, queue_url: null, last_poll_at: null, last_error: null,
       },
     },
-    mailboxes: { counts: { inbox: 0, unread: 0, sent: 0, archived: 0, spam: 0, trash: 0, starred: 0, priority: 0 }, folders: [], countsComplete: true },
+    mailboxes: { counts: { inbox: 0, unread: 0, sent: 0, archived: 0, spam: 0, trash: 0, starred: 0 }, folders: [] },
     sources: {
       availability: available,
       total: 0, active: 0, legacy: 0, orphaned: 0,
@@ -142,94 +142,4 @@ describe("formatInboxSyncStatus — the pull hint names a real command", () => {
     expect(out).not.toContain("emails pull");
     expect(out).not.toContain("emails refresh");
   });
-});
-
-describe("formatInboxSyncStatus — recorded errors are independent observations", () => {
-  const recordedError = "Synthetic recorded failure: try again later.";
-  const recordedPoll = "2026-09-02T20:00:00.000Z";
-
-  // These are renderer inputs, not claims about collection or live queue health.
-  for (const queueConfigured of [true, false, null] as const) {
-    for (const lastError of [recordedError, null, ""] as const) {
-      for (const lastPoll of [recordedPoll, null] as const) {
-        const errorLabel = lastError === null ? "null" : lastError === "" ? "empty" : "recorded";
-        it(`renders queue=${queueConfigured}, error=${errorLabel}, poll=${lastPoll === null ? "absent" : "recorded"}`, () => {
-          const status = emptyLocalStatus(localMode(null));
-          status.inbox.realtime = {
-            availability: statusAvailable("synthetic_renderer_input", "local_config"),
-            queue_configured: queueConfigured,
-            queue_url: null,
-            last_poll_at: lastPoll,
-            last_error: lastError,
-          };
-          const before = structuredClone(status);
-          const rendered = Bun.stripANSI(formatInboxSyncStatus(status));
-          const lines = rendered.split("\n");
-          const realtimeLine = `  Realtime:    ${queueConfigured === null ? "unavailable" : queueConfigured ? "configured" : "not configured"}`;
-          const errorLines = lines.filter((line) => line.startsWith("  Last error:"));
-          const pollLines = lines.filter((line) => line.startsWith("  Last poll:"));
-
-          expect(lines.filter((line) => line.startsWith("  Realtime:"))).toEqual([realtimeLine]);
-          expect(errorLines).toEqual(lastError ? [`  Last error:  ${lastError}`] : []);
-          expect(pollLines).toEqual(queueConfigured !== null && lastPoll ? [`  Last poll:   ${lastPoll}`] : []);
-          if (lastError) {
-            expect(rendered.split(lastError)).toHaveLength(2);
-            expect(lines.indexOf(errorLines[0]!)).toBeGreaterThan(lines.indexOf(realtimeLine));
-            expect(rendered.indexOf("Last error:")).toBeLessThan(rendered.indexOf("Pull now:"));
-            if (pollLines.length > 0) {
-              expect(lines.indexOf(errorLines[0]!)).toBeGreaterThan(lines.indexOf(pollLines[0]!));
-            }
-          }
-          expect(rendered).toContain("Local inbox: 0 total, 0 unread");
-          expect(rendered).toContain("Folders:     0 inbox, 0 sent, 0 archived");
-          expect(rendered).toContain("Latest mail: never");
-          expect(rendered).toContain("S3 buckets:  0");
-          expect(rendered).toContain("Pull now: emails pull");
-          expect(rendered).toContain("Watch realtime: emails inbox watch --all-buckets");
-          expect(rendered).not.toContain("Data gaps (");
-          expect(rendered).not.toContain("Read failures (");
-          expect(status).toEqual(before);
-        });
-      }
-    }
-  }
-
-  for (const lastError of [recordedError, null] as const) {
-    it(`preserves warning and gap footer with unknown queue and ${lastError === null ? "absent" : "recorded"} error`, () => {
-      const warning = "Synthetic independent warning.";
-      const status = emptyLocalStatus(localMode(warning));
-      const gap = statusUnavailable("source_unreachable", "synthetic_queue_observation", "synthetic_renderer_input");
-      status.inbox.realtime = {
-        availability: statusAvailable("synthetic_renderer_input", "local_config"),
-        queue_configured: null,
-        queue_url: null,
-        last_poll_at: recordedPoll,
-        last_error: lastError,
-      };
-      status.degraded = true;
-      status.unavailable = ["inbox.realtime.queue_configured"];
-      status.failures = ["inbox.realtime.queue_configured"];
-      status.gaps = { "inbox.realtime.queue_configured": gap };
-      const before = structuredClone(status);
-      const rendered = Bun.stripANSI(formatInboxSyncStatus(status));
-      const footer = "Read failures (1) — these numbers could not be measured:";
-
-      expect(rendered).toContain(warning);
-      expect(rendered.indexOf(warning)).toBeLessThan(rendered.indexOf("Local inbox:"));
-      expect(rendered).toContain("Realtime:    unavailable");
-      expect(rendered).not.toContain("Last poll:");
-      expect(rendered).toContain(footer);
-      expect(rendered).toContain(`inbox.realtime.queue_configured — ${gap.reason}`);
-      expect(rendered.indexOf("Realtime:")).toBeLessThan(rendered.indexOf(footer));
-      expect(rendered.indexOf(footer)).toBeLessThan(rendered.indexOf("Pull now:"));
-      if (lastError) {
-        expect(rendered.split(lastError)).toHaveLength(2);
-        expect(rendered.indexOf("Last error:")).toBeGreaterThan(rendered.indexOf("Realtime:"));
-        expect(rendered.indexOf("Last error:")).toBeLessThan(rendered.indexOf(footer));
-      } else {
-        expect(rendered).not.toContain("Last error:");
-      }
-      expect(status).toEqual(before);
-    });
-  }
 });

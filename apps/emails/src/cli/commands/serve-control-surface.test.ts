@@ -67,9 +67,6 @@ describe("emails serve answers --help/--version before config validation (O15-04
     const result = await runCli(["serve", "--port", "0"]);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("EMAILS_MODE");
-    expect(result.stderr).toContain("are retired. Remove them.");
-    expect(result.stderr).toContain("the service requires server-side PostgreSQL.");
-    expect(result.stderr).toContain("No local fallback exists.");
-    expect(result.stdout.trim()).toBe("");
+    expect(result.stderr).toContain("DELETE IT");
   });
 });

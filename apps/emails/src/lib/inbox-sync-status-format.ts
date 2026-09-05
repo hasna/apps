@@ -60,8 +60,8 @@ export function formatInboxSyncStatus(status: EmailSystemStatus): string {
   } else {
     lines.push(`  Realtime:    ${realtime.queue_configured ? chalk.green("configured") : chalk.yellow("not configured")}`);
     if (realtime.last_poll_at) lines.push(`  Last poll:   ${chalk.green(realtime.last_poll_at)}`);
+    if (realtime.last_error) lines.push(`  Last error:  ${chalk.red(realtime.last_error)}`);
   }
-  if (realtime.last_error) lines.push(`  Last error:  ${chalk.red(realtime.last_error)}`);
 
   lines.push(...formatStatusDataGaps(status));
 

@@ -601,15 +601,12 @@ describe("store seam", () => {
     // Families the STRONGEST arm has and src/db never did. Declared explicitly so an
     // unmapped repository cannot hide among them.
     const serverOnly = ["sendIntents", "attachmentRepair"];
-    // A list-only service resource extension, not a src/db CRUD family.
-    const readOnlyExtensions = ["sourceInventory"];
     const diagnostics = ["descriptor", "capabilities"];
     expect(
       declared.filter(
         (name) =>
           !Object.values(familyToRepository).includes(name) &&
           !serverOnly.includes(name) &&
-          !readOnlyExtensions.includes(name) &&
           !diagnostics.includes(name),
       ),
       "EmailStore declares a repository that maps to no src/db family",
@@ -618,20 +615,6 @@ describe("store seam", () => {
       Object.values(familyToRepository).filter((name) => !declared.includes(name)),
       "a src/db family has no repository on EmailStore",
     ).toEqual([]);
-  });
-  it("declares the optional source inventory and both complete concrete implementations explicitly", () => {
-    const storeCode = stripComments(readFileSync(join(storeDir, "email-store.ts"), "utf8"));
-    expect(storeCode).toMatch(/readonly sourceInventory\?: IngestionSourceInventoryRepository;/);
-    expect(storeCode).toMatch(/interface SourceInventoryStore\s*\{\s*readonly sourceInventory: IngestionSourceInventoryRepository;\s*\}/);
-    const repository = stripComments(readFileSync(join(storeDir, "repositories.ts"), "utf8"));
-    expect(repository).toMatch(/interface IngestionSourceInventoryRepository\s*\{\s*list\(opts\?: ListOptions\): Promise<Outcome<IngestionSourceInventoryRow\[\]>>;\s*\}/);
-    const records = stripComments(readFileSync(join(storeDir, "records.ts"), "utf8"));
-    expect(records).toMatch(/interface IngestionSourceInventoryRow\s*\{\s*id: string;\s*status: string \| null;\s*last_synced_at: string \| null;\s*\}/);
-    for (const implementation of ["store-http", "store-sqlite"]) {
-      const source = stripComments(readFileSync(join(import.meta.dir, implementation, "index.ts"), "utf8"));
-      expect(source).toContain("& SourceInventoryStore");
-      expect(source).toMatch(/sourceInventory: createSourceInventoryRepository\(/);
-    }
   });
 });
 
