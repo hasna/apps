@@ -1,7 +1,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Command } from "commander";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -3603,7 +3603,10 @@ describe("project-first CLI surface", () => {
   });
 
   test("top-level start auto-detects the current registered project path", () => {
-    const root = mkdtempSync(join(tmpdir(), "projects-cli-start-cwd-"));
+    // realpath the temp root: macOS tmpdir is /var/folders (a symlink to
+    // /private/var), and the spawned child's cwd canonicalizes while `create`
+    // would store the logical path - the by-path lookup then misses.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "projects-cli-start-cwd-")));
     const env = { HASNA_PROJECTS_DB_PATH: join(root, "projects.db") };
     const projectPath = join(root, "cwd-app");
     mkdirSync(projectPath);
