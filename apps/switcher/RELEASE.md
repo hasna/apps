@@ -4,7 +4,7 @@ title: "Switcher 0.1.0 verification and release evidence"
 type: "release-report"
 owner: "codex-fixer"
 created_at: "2026-09-05T13:26:26.273004+00:00"
-updated_at: "2026-09-05T13:39:04.576066+00:00"
+updated_at: "2026-09-05T13:45:41.012524+00:00"
 status: "verification"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -12,6 +12,8 @@ source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 # Scope and provenance
 
 Initial public `@hasna/switcher` release. Tracking task: `e0be8c8c-9588-4b7b-9996-382f113736e3`. Parent-owned worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/implementation`; branch `codex/fixer/2026-09-05-universal-harness-switcher`; fetched base `c6a9fcf5a4825a9e49bab7b3ae688040726fcd61`. Canonical checkout changes were preserved.
+
+The changeset parser contract permits only package/bump pairs in front matter. Required artifact metadata for `.changeset/switcher-initial-release.md` is carried by this release report; the entry records the already-applied initial version with a `none` bump. A hermetic per-package `bun.lock` is included.
 
 Canonical directives are under `~/Workspace/scratch/universal-harness-switcher/directives/`, including `2026-09-05-01a07181-build-ship-switcher.md`. Research helpers investigated todos, Ori, GitHub alternatives and native harness configuration. The parent implemented the package. Read-only helpers reviewed the service/store and packaging contracts; exact-commit review is a separate release gate.
 
@@ -42,8 +44,8 @@ Detailed sanitized evidence is under `~/Workspace/scratch/universal-harness-swit
 
 # Release gates remaining
 
-- Exact-commit independent review.
-- PR creation, required CI and merge.
+- Exact implementation commit `4a2a5d6755fe530b22f703c701f6664299cf5109` was independently approved by two reviewers; release metadata follow-up was independently reviewed with no blockers.
+- PR [#1797](https://github.com/hasna/apps/pull/1797) is open; required CI and merge remain. CI identified a missing per-package lockfile and committed changeset record. Both were corrected; local versioning now passes `22 pass`, `1 skip` (opt-in npm parity), `0 fail`, `481 expect() calls`. The unrelated emails PostgreSQL setup timeout passed on retry.
 - Version negative control, required publication notice, npm publish and registry timestamp/integrity verification.
 - Exact registry-artifact install and repeated live acceptance in ephemeral tmux.
 - Final commit/PR/version/outcomes below and task/goal completion.
