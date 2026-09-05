@@ -308,8 +308,13 @@ jobs:
   # apps/knowledge/scripts/verify-generated-artifacts.mjs) and the gate rebuilds it,
   # then requires `git diff --exit-code -- bin dist` to be empty. apps/events commits
   # dist/ (13 files, plus types/) and ships `generated-artifacts:check`, which rebuilds
-  # and requires a clean `git status --porcelain` over dist/ and types/. A PR whose
-  # committed bundles drift from what the current source builds is refused here. That
+  # and requires a clean `git status --porcelain` over dist/ and types/. apps/contracts
+  # commits generated/deployment/v1/ and generated/todos/v1/ (shipped via the package's
+  # `files` as public export subpaths) and ships `deployment:check` + `todos:check`,
+  # which render the artifacts from src and byte-compare against the committed files —
+  # the stale-artifact failure of #1775 that reddened every root-file PR until the
+  # regeneration landed in #1744. A PR whose committed bundles drift from what the
+  # current source builds is refused here. That
   # is the dirty-tree class that broke the merge train and was fixed by #110
   # (regenerated bundles under bun 1.3.14); it regresses silently whenever someone
   # regenerates artifacts and forgets to commit them, or rebuilds under a different
@@ -358,6 +363,10 @@ jobs:
       - name: Verify generated artifacts (events — rebuild + byte-compare dist/ types/)
         run: bun run generated-artifacts:check
         working-directory: apps/events
+
+      - name: Verify generated artifacts (contracts — render + byte-compare generated/)
+        run: bun run deployment:check && bun run todos:check
+        working-directory: apps/contracts
 
   # ---------------------------------------------------------------------------------
   publish-guard:
