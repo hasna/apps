@@ -41,12 +41,13 @@ export function listCommand(): Command {
   const cmd = new Command("list")
     .description("List uploaded attachments")
     .option("--format <format>", "Output format: compact, json, or table", "compact")
+    .option("--json", "Output as JSON (alias for --format json)")
     .option("--expired", "Include expired attachments", false)
     .option("--limit <n>", "Maximum number of results", "20")
     .option("--brief", "Compact one-line output per attachment")
     .option("--tag <tag>", "Filter by tag")
     .action(async (options) => {
-      const format = options.format as string;
+      const format = (options.json ? "json" : options.format) as string;
       const includeExpired = options.expired as boolean;
       const limit = parseInt(options.limit as string, 10);
       const tag = options.tag as string | undefined;
