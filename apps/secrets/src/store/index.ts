@@ -38,9 +38,11 @@ import {
   credentialDiskSources,
   resolveCredential,
   resolveSecretsStorageClient,
-  type ClientTransportResolution,
-  type SecretsClientResolutionOptions,
 } from "./client.js";
+// TYPES come from the published spelling, never from @hasna/contracts directly:
+// this module's declarations are reachable from the `./storage` export, and a
+// build-time-only import there breaks every TS consumer (see ./client-types.ts).
+import type { ClientTransportResolution, SecretsClientResolutionOptions } from "./client-types.js";
 import { ApiStore } from "./api.js";
 import { LocalStore } from "./local.js";
 import { assertTestNetworkTargetAllowed } from "../test-isolation.js";

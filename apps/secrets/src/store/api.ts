@@ -1,7 +1,7 @@
 // ApiStore — the self_hosted/cloud transport.
 //
 // Every read and write routes to the app's cloud HTTP API at `<API_URL>/v1` with
-// the bearer key, via the vendored @hasna/contracts storage client. `self_hosted`
+// the bearer key, via the @hasna/contracts storage client. `self_hosted`
 // and `cloud` are identical here; only the URL/key differ (server-side tenancy).
 //
 // SAFETY: values are sent as plaintext over TLS to the API, which encrypts them
@@ -9,7 +9,10 @@
 // api mode. The API key lives only inside the transport and is never logged,
 // returned, or embedded in any value produced here.
 
-import type { HasnaStorageClient } from "./client.js";
+// The published type spelling, not @hasna/contracts: `ApiStore` is exported
+// from the `./storage` subpath, so its constructor signature is part of the
+// package's public declarations (see ./client-types.ts).
+import type { HasnaStorageClient } from "./client-types.js";
 import { gatewayApiV1Root } from "../api-display-url.js";
 import { assertValidSecretPath } from "../hasna-xyz-paths.js";
 import { computeCounts, matchVaultItemsForUrl } from "./local.js";

@@ -11,6 +11,18 @@
 // package now imports the resolver merged in hasna/apps#1723 and released as
 // @hasna/contracts 1.0.1.
 //
+// WHAT THIS MODULE PUBLISHES, AND WHAT IT ONLY IMPORTS. @hasna/contracts is a
+// BUILD-TIME dependency: `bun build --target bun` inlines the resolver, so the
+// shipped bundles import node builtins only. The declarations `tsc` emits are
+// not bundled, so anything this module names in an EXPORTED type signature
+// would land in `dist/**/*.d.ts` as a live `@hasna/contracts` import and break
+// every TS consumer, which installs this package's runtime dependencies and not
+// its devDependencies. The contracts VALUES below are therefore re-exported for
+// this package's own modules (an import in a function body is erased from a
+// declaration), while every TYPE that crosses the published boundary is spelled
+// in ./client-types.ts and re-exported from there. `./client-types.test.ts`
+// asserts the two spellings are the same types, in both directions.
+//
 // THE FIVE TIERS the resolver applies, in order, FRESH ON EVERY CALL:
 //   1. an explicit argument            — `apiKey` / `profile` passed in code
 //   2. a deliberate env pointer        — HASNA_SECRETS_API_KEY_OVERRIDE,
@@ -38,55 +50,53 @@
 // `resolveStorageClient` so it can never be read — by a human or by the
 // credential-seam conformance gate — as a second definition of the seam.
 
-import {
-  createClientTransport,
-  type ClientTransportResolution,
-  type CredentialChainOptions,
-} from "@hasna/contracts/client";
-import {
-  createHasnaStorageClient,
-  type HasnaStorageClient,
-} from "@hasna/contracts/client/storage";
+import { createClientTransport } from "@hasna/contracts/client";
+import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
 import { guardedFetch } from "../test-isolation.js";
+import type {
+  ClientTransportResolution,
+  HasnaStorageClient,
+  SecretsClientResolutionOptions,
+} from "./client-types.js";
 
+// Runtime values, for this package's own modules only. A consumer never reaches
+// these: they are bundled, not re-exported from a published entry point.
 export {
   ClientTransportConfigurationError,
-  CredentialResolutionError,
   clientTransportEnvKeys,
   createHasnaHttpTransport,
   credentialDiskSources,
   credentialOverrideEnvKey,
   credentialPointerEnvKey,
-  defaultFleetGatewayBaseUrl,
   HasnaHttpError,
   resolveClientTransport,
   resolveCredential,
-  toV1BaseUrl,
   CREDENTIAL_PROFILE_ENV_KEY,
-  DEFAULT_FLEET_GATEWAY_ORIGIN,
   HASNA_CONFIG_HOME_ENV_KEY,
   HASNA_HOME_ENV_KEY,
   KEYCHAIN_STATION_ENV_KEY,
 } from "@hasna/contracts/client";
-export type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+
+// The published type spelling. Every one of these is asserted identical to the
+// @hasna/contracts declaration it mirrors by ./client-types.test.ts.
 export type {
+  ClientEnv,
+  ClientTransportEnvKeys,
+  ClientTransportKind,
   ClientTransportResolution,
   CredentialChainOptions,
   CredentialProvider,
   CredentialTier,
   HasnaHttpTransport,
   HasnaRequestOptions,
+  HasnaStorageClient,
+  KeychainCommandResult,
   KeychainCommandRunner,
   QueryParams,
   ResolvedCredential,
-} from "@hasna/contracts/client";
-export { createHasnaStorageClient } from "@hasna/contracts/client/storage";
-export type { StorageListResult } from "@hasna/contracts/client/storage";
-
-/** Options the app forwards to the shared resolver (tier-1 inputs, Keychain seam). */
-export interface SecretsClientResolutionOptions {
-  credentials?: CredentialChainOptions;
-}
+  SecretsClientResolutionOptions,
+  StorageListResult,
+} from "./client-types.js";
 
 /**
  * The resolved HTTP storage client plus the decision that produced it.

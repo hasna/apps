@@ -10,14 +10,17 @@
 // This is a client-only surface: it always talks to a remote `<baseUrl>` and can
 // never touch local data, so it cannot split-brain.
 
-import {
-  createHasnaHttpTransport,
-  HasnaHttpError,
-  type CredentialProvider,
-  type HasnaHttpTransport,
-  type HasnaRequestOptions,
-  type QueryParams,
-} from "../store/client.js";
+import { createHasnaHttpTransport, HasnaHttpError } from "../store/client.js";
+// TYPES come from the published spelling. `CredentialProvider` in particular is
+// part of `SecretsClientOptions`, which IS the `.`/`./sdk` type entry: naming
+// @hasna/contracts here would put a build-time-only import into dist/sdk.d.ts
+// and break every TS consumer (see ../store/client-types.ts).
+import type {
+  CredentialProvider,
+  HasnaHttpTransport,
+  HasnaRequestOptions,
+  QueryParams,
+} from "../store/client-types.js";
 
 export interface Status { "status": string; "version": string; "mode": string }
 
