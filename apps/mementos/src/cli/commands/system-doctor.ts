@@ -52,7 +52,23 @@ export function registerDoctorCommand(program: Command): void {
       // API (self-hosted cloud) mode: opening a local SQLite file would trip the
       // split-brain guard, so run a cloud-aware health path against the API
       // instead of the local-DB checks below.
-      if (isApiMode()) {
+      //
+      // A malformed endpoint makes this throw (hasna/apps#1601: the base URL is
+      // validated rather than concatenated blind). Diagnosing that endpoint is
+      // precisely what an operator ran `doctor` for, so report it as a failed
+      // check instead of letting a stack trace escape. The thrown message is
+      // already credential-free by construction — it names the defect class,
+      // never the offending URL.
+      let apiMode: boolean;
+      try {
+        apiMode = isApiMode();
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        checks.push({ name: "API endpoint", status: "fail", detail });
+        outputDoctorResults(globalOpts, checks);
+        process.exit(1);
+      }
+      if (apiMode) {
         await runCloudDoctor(globalOpts, checks);
         return;
       }
@@ -314,13 +330,12 @@ async function runCloudDoctor(
   // 1. Version (local client package)
   checks.push({ name: "Version", status: "ok", detail: getPackageVersion() });
 
-  // 2. Server backend + API endpoint (never print the key)
+  // 2. API endpoint in the fleet-uniform shape (hasna/apps#1588): the
+  //    resolved /v1 authority on an `API:` line, with the transport as a
+  //    read-only diagnostic beside it. Never print the key.
   const cfg = getApiConfig();
-  checks.push({
-    name: "Storage backend",
-    status: "ok",
-    detail: `self-hosted API (${cfg?.baseUrl ?? "unknown endpoint"})`,
-  });
+  checks.push({ name: "API", status: "ok", detail: cfg?.baseUrl ?? "unknown endpoint" });
+  checks.push({ name: "transport", status: "ok", detail: "http" });
 
   // 3. Cloud health + data checks (single authed round-trip)
   let healthy = false;
