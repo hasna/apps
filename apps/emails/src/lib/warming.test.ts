@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, describe, it, expect } from "bun:test";
-import { closeDatabase, getDatabase, resetDatabase, type Database } from "../db/database.js";
+import { afterEach, beforeEach, describe, it, expect, setSystemTime } from "bun:test";
+import { closeDatabase, getDatabase, type Database } from "../db/database.js";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { createSqliteEmailStore } from "../store-sqlite/index.js";
+import type { EmailStore } from "../store/email-store.js";
+import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 import {
   API_BASE_URL_SETTING,
-  API_CREDENTIAL_SETTINGS,
-  API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
 } from "../store-resolution.js";
 import { describeWarmingProgress, generateWarmingPlan, getTodayLimit, formatWarmingStatus, getTodaySentCount, getTodaySentCountsByDomain, warmingDayIndex } from "./warming.js";
@@ -15,8 +19,8 @@ import type { WarmingSchedule } from "./warming.js";
 // depend on it are ASYNC. `src/test-support/v1-stub.ts` is the wrong fixture for a seam read
 // (its generic list handler ignores equality filters, and the real HTTP store reads
 // `GET /v1/openapi.json` before a filtered list, which that stub serves only on request), so
-// the counting cases seed a real SQLite `emails` table instead and read it through the
-// configured store. `src/db/emails.test.ts` covers the same read against BOTH shipped stores;
+// the counting cases preserve real legacy `emails` rows in the explicit fixture backing
+// and read its unified stream through the configured authenticated HTTP store. `src/db/emails.test.ts` covers the same read against BOTH shipped stores;
 // what these cases own is the UTC day window and the sender-domain tally.
 //
 // `generateWarmingPlan`, `getTodayLimit` and `warmingDayIndex` are pure and need none of it.
@@ -31,36 +35,56 @@ function utcDaysAgo(days: number): string {
 const PROVIDER = "warming-provider";
 let db: Database;
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
+let fixtureRoot: string;
+let clientRoots: string[];
+let api: V1StoreApi;
+let backing: EmailStore;
 
-/**
- * Leave exactly ONE store configured. A database path AND an API are a HARD BOOT ERROR with no
- * precedence rule, so a stray inherited API setting turns every count below into that error
- * rather than into a zero — which is the failure this file must never report as "nothing sent
- * today", because a zero there raises a warming cap.
- */
-function configureLocalStoreOnly(): void {
-  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
-    delete process.env[setting];
-  }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-  process.env["EMAILS_DB_PATH"] = ":memory:";
-}
-
+// The fixture owns explicit SQLite; configured library calls use real authenticated HTTP.
 beforeEach(() => {
   INHERITED_PROCESS_ENV = { ...process.env };
-  configureLocalStoreOnly();
-  resetDatabase();
-  db = getDatabase();
+  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-warming-library-"));
+  clientRoots = [];
+  const state: NodeJS.ProcessEnv = {};
+  for (const [key, name] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_CACHE_HOME: "cache", XDG_STATE_HOME: "state", HASNA_EMAILS_HOME: "app" })) {
+    const path = join(fixtureRoot, name);
+    mkdirSync(path, { mode: 0o700 });
+    state[key] = path;
+    clientRoots.push(path);
+  }
+  for (const name of ["tmp", "compiler"]) mkdirSync(join(fixtureRoot, name), { mode: 0o700 });
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env, state, { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+    TMPDIR: join(fixtureRoot, "tmp"), BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(fixtureRoot, "compiler"),
+    AWS_EC2_METADATA_DISABLED: "true", NO_COLOR: "1", TZ: "UTC" });
+  closeDatabase();
+  // Only the fixture server owns this explicit database; default calls use actual HTTP.
+  db = getDatabase(":memory:");
   db.run("INSERT INTO providers (id, name, type, active) VALUES (?, ?, 'ses', 1)", [PROVIDER, PROVIDER]);
+  backing = createSqliteEmailStore({ database: db, detail: "warming fixture backing" });
+  api = startV1StoreApi({ store: backing });
+  process.env[API_BASE_URL_SETTING] = api.baseUrl;
+  process.env["HASNA_EMAILS_API_KEY"] = api.apiKey;
 });
 
 afterEach(() => {
-  closeDatabase();
-  for (const key of Object.keys(process.env)) {
-    if (!Object.prototype.hasOwnProperty.call(INHERITED_PROCESS_ENV, key)) delete process.env[key];
+  try {
+    for (const path of clientRoots) expect(readdirSync(path)).toEqual([]);
+  } finally {
+    try {
+      api.stop();
+      closeDatabase();
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (!Object.prototype.hasOwnProperty.call(INHERITED_PROCESS_ENV, key)) delete process.env[key];
+      }
+      Object.assign(process.env, INHERITED_PROCESS_ENV);
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   }
-  Object.assign(process.env, INHERITED_PROCESS_ENV);
 });
+
 
 /** A sent-ledger row with the sender and instant a case names. */
 function seedSent(id: string, fromAddress: string, sentAt: string): void {
@@ -390,5 +414,158 @@ describe("formatWarmingStatus", () => {
     });
     expect(output).toContain("Day 4/10 (40% complete)");
     expect(output).toContain("Today's limit: 100 | Sent today: 37");
+  });
+});
+
+describe("configured warming HTTP boundary", () => {
+  it("counts real legacy and unified outbound rows without mixing directions or domains", async () => {
+    const now = new Date().toISOString();
+    const today = now.slice(0, 10);
+    seedSent("legacy-today", "one@warm.test", now);
+    seedSent("legacy-old", "two@warm.test", new Date(Date.parse(`${today}T00:00:00.000Z`) - 1).toISOString());
+    seedSent("legacy-future", "three@warm.test", new Date(Date.parse(`${today}T00:00:00.000Z`) + 86_400_001).toISOString());
+    seedSent("legacy-other", "four@other.test", now);
+    for (const direction of ["outbound", "inbound"] as const) {
+      const created = await backing.messages.createMessage({ direction, from_addr: "five@warm.test",
+        to_addrs: ["recipient@example.test"], subject: "fixture", received_at: now });
+      expect(created.ok).toBe(true);
+    }
+    const before = api.requestCount();
+    const counts = await getTodaySentCountsByDomain([" WARM.test ", "other.test", "quiet.test"]);
+    expect([...counts]).toEqual([["warm.test", 2], ["other.test", 1], ["quiet.test", 0]]);
+    expect(api.requestCount()).toBeGreaterThan(before);
+    expect(db.query("SELECT COUNT(*) AS count FROM emails").get()).toEqual({ count: 4 });
+    expect(db.query("SELECT COUNT(*) AS count FROM inbound_emails").get()).toEqual({ count: 2 });
+  });
+
+  it("refuses missing credentials before HTTP instead of returning a zero count", async () => {
+    seedSent("existing", "sender@warm.test", new Date().toISOString());
+    delete process.env["HASNA_EMAILS_API_KEY"];
+    const before = api.requestCount();
+    await expect(getTodaySentCount("warm.test")).rejects.toThrow(/credential/i);
+    expect(api.requestCount()).toBe(before);
+    expect(db.query("SELECT id FROM emails").all()).toEqual([{ id: "existing" }]);
+  });
+
+  it("propagates real HTTP401 instead of bypassing authentication or inventing zero", async () => {
+    seedSent("existing", "sender@warm.test", new Date().toISOString());
+    process.env["HASNA_EMAILS_API_KEY"] = "synthetic-warming-wrong-key";
+    const before = api.requestCount();
+    const nativeFetch = globalThis.fetch;
+    let observedStatus: number | undefined;
+    // Enumeration retains the fault message, not its original class/status fields.
+    // Observe the real response without replacing the request, promise or result.
+    globalThis.fetch = Object.assign(function (this: unknown, ...args: Parameters<typeof fetch>) {
+      const promise = Reflect.apply(nativeFetch, this, args);
+      void promise.then((response: Response) => { observedStatus = response.status; }, () => {});
+      return promise;
+    }, nativeFetch) as typeof fetch;
+    try {
+      const error: unknown = await getTodaySentCount("warm.test").catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error("Expected the actual authentication fault");
+      expect(observedStatus).toBe(401);
+      expect(error.message).toContain("store failed while reading the sent ledger");
+      expect(error.message).toContain("authentication required");
+      expect(error.message).not.toContain("synthetic-warming-wrong-key");
+      expect(api.requestCount()).toBeGreaterThan(before);
+      expect(db.query("SELECT id FROM emails").all()).toEqual([{ id: "existing" }]);
+    } finally {
+      globalThis.fetch = nativeFetch;
+    }
+  });
+
+  it("rejects every client database setting, including blank, before HTTP", async () => {
+    seedSent("existing", "sender@warm.test", new Date().toISOString());
+    expect(DATABASE_PATH_SETTINGS).toHaveLength(7);
+    for (const setting of DATABASE_PATH_SETTINGS) {
+      for (const value of ["", ":memory:"]) {
+        process.env[setting] = value;
+        try {
+          const before = api.requestCount();
+          await expect(getTodaySentCount("warm.test")).rejects.toThrow(setting);
+          expect(api.requestCount()).toBe(before);
+          expect(db.query("SELECT id FROM emails").all()).toEqual([{ id: "existing" }]);
+        } finally {
+          delete process.env[setting];
+        }
+      }
+    }
+  });
+});
+
+describe("warming UTC calendar-day endpoints", () => {
+  it.each([
+    "2026-01-31T12:00:00.000Z",
+    "2026-12-31T12:00:00.000Z",
+    "2024-02-29T12:00:00.000Z",
+  ])("counts only the current UTC day across the rollover at %s", async (now) => {
+    const priorTimezone = process.env.TZ;
+    try {
+      process.env.TZ = "Pacific/Auckland";
+      setSystemTime(new Date(now));
+      const start = Date.parse(`${now.slice(0, 10)}T00:00:00.000Z`);
+      const end = start + 86_400_000;
+      const points = [start - 1, start, start + 1, end - 1, end, end + 1];
+      for (const [index, instant] of points.entries()) {
+        const timestamp = new Date(instant).toISOString();
+        seedSent(`legacy-edge-${index}`, "legacy@warm.test", timestamp);
+        const created = await backing.messages.createMessage({ direction: "outbound",
+          from_addr: "unified@warm.test", to_addrs: ["recipient@example.test"],
+          subject: "UTC boundary fixture", received_at: timestamp });
+        expect(created.ok).toBe(true);
+      }
+      seedSent("other-domain", "sender@other.test", new Date(start).toISOString());
+      const inbound = await backing.messages.createMessage({ direction: "inbound",
+        from_addr: "inbound@warm.test", to_addrs: ["recipient@example.test"],
+        subject: "direction complement", received_at: new Date(start).toISOString() });
+      expect(inbound.ok).toBe(true);
+      const before = api.requestCount();
+      expect([...await getTodaySentCountsByDomain([" WARM.test ", "other.test", "quiet.test"])])
+        .toEqual([["warm.test", 6], ["other.test", 1], ["quiet.test", 0]]);
+      expect(api.requestCount()).toBeGreaterThan(before);
+
+      // Exactly midnight belongs to the following day, once, while end-1ms no longer does.
+      setSystemTime(new Date(end));
+      const beforeNextDay = api.requestCount();
+      expect([...await getTodaySentCountsByDomain(["warm.test", "other.test", "quiet.test"])])
+        .toEqual([["warm.test", 4], ["other.test", 0], ["quiet.test", 0]]);
+      expect(api.requestCount()).toBeGreaterThan(beforeNextDay);
+      expect(db.query("SELECT COUNT(*) AS count FROM emails").get()).toEqual({ count: 7 });
+      expect(db.query("SELECT COUNT(*) AS count FROM inbound_emails").get()).toEqual({ count: 7 });
+    } finally {
+      setSystemTime();
+      if (priorTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = priorTimezone;
+    }
+  });
+
+  it("excludes an unpresentable next-midnight row before mapping, but refuses it on its own day", async () => {
+    try {
+      setSystemTime(new Date("2026-04-30T12:00:00.000Z"));
+      seedSent("valid-today", "sender@warm.test", "2026-04-30T00:00:00.000Z");
+      // The legacy table CHECK rejects this status; the unified table deliberately retains raw text.
+      const invalid = await backing.messages.createMessage({ direction: "outbound",
+        from_addr: "sender@warm.test", to_addrs: ["recipient@example.test"],
+        subject: "unpresentable boundary fixture", received_at: "2026-05-01T00:00:00.000Z" });
+      expect(invalid.ok).toBe(true);
+      if (!invalid.ok) throw new Error("The explicit fixture failed to create its unified row");
+      db.run("UPDATE inbound_emails SET status = ? WHERE id = ?", ["not-a-send-status", invalid.value.id]);
+      const before = api.requestCount();
+      expect(await getTodaySentCount("warm.test")).toBe(1);
+      expect(api.requestCount()).toBeGreaterThan(before);
+      setSystemTime(new Date("2026-05-01T00:00:00.000Z"));
+      const beforeNextDay = api.requestCount();
+      const error: unknown = await getTodaySentCount("warm.test").catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(Error);
+      if (!(error instanceof Error)) throw new Error("The unpresentable row must refuse on its own day");
+      expect(error.message).toContain(invalid.value.id);
+      expect(error.message).toContain("not-a-send-status");
+      expect(api.requestCount()).toBeGreaterThan(beforeNextDay);
+      expect(db.query("SELECT COUNT(*) AS count FROM emails").get()).toEqual({ count: 1 });
+      expect(db.query("SELECT COUNT(*) AS count FROM inbound_emails").get()).toEqual({ count: 1 });
+    } finally {
+      setSystemTime();
+    }
   });
 });

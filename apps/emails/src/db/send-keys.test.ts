@@ -19,7 +19,11 @@
 // never asserted on. The published record carries NO hash at all, and there is a case for that.
 
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
-import { closeDatabase, getDatabase, resetDatabase } from "./database.js";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV, StoreConfigurationError } from "../lib/client-settings.js";
+import { closeDatabase, getDatabase } from "./database.js";
 import {
   createSendKey,
   getSendKey,
@@ -33,21 +37,24 @@ import {
   assertSendAuthorized,
 } from "./send-keys.js";
 import { createHttpEmailStore } from "../store-http/index.js";
+import { EmailsApiFault } from "../store-http/outcome.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import type { EmailStore } from "../store/email-store.js";
 import type { Outcome } from "../store/outcome.js";
 import type { ListOptions, SendKeyRecord } from "../store/records.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
-import {
-  API_BASE_URL_SETTING,
-  API_CREDENTIAL_SETTINGS,
-  API_SETTINGS_POINTER,
-  DATABASE_PATH_SETTINGS,
-} from "../store-resolution.js";
+import { API_BASE_URL_SETTING, API_CREDENTIAL_SETTINGS, DATABASE_PATH_SETTINGS } from "../store-resolution.js";
 
 const PROVIDER_ID = "provider-ses";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
+let originalExitCode: typeof process.exitCode;
+let originalExit: typeof process.exit;
+let originalError: typeof console.error;
+let fixtureRoot: string | null = null;
+let stateRoots: string[] = [];
+let db: ReturnType<typeof getDatabase>;
+let api: V1StoreApi | null = null;
 
 function captureInheritedProcessEnv(): void {
   INHERITED_PROCESS_ENV = { ...process.env };
@@ -60,25 +67,14 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-/**
- * Leave exactly ONE store configured, so the cases that pass no store can resolve.
- *
- * The settings are named through the resolution's OWN exported constants rather than copied as
- * literals: this is the list that decides which store a caller with no injected store gets,
- * and a second copy here would go stale the first time the resolution learned another setting.
- * A database path AND an API together are a hard boot error with deliberately no precedence
- * rule, so a stray inherited API setting would turn every default-store case into that error.
- */
-function configureExactlyOneStore(): void {
-  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
-    delete process.env[setting];
+/** Configured clients use HTTP; the fixture alone owns the explicit memory store. */
+function clearClientConfiguration(): void {
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:HASNA_)?(?:EMAILS|MAILERY)_/.test(key)) delete process.env[key];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-  process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
+  for (const key of [...CLIENT_DATABASE_SETTINGS, "HASNA_HOME", "HASNA_DATA_HOME", "CODEWITH_HOME",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "RESEND_API_KEY"]) delete process.env[key];
 }
-
-let db: ReturnType<typeof getDatabase>;
-let api: V1StoreApi | null = null;
 
 /**
  * The running `/v1` fixture, or a clear failure.
@@ -94,18 +90,50 @@ function service(): V1StoreApi {
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  configureExactlyOneStore();
-  resetDatabase();
-  db = getDatabase();
+  originalExitCode = process.exitCode;
+  originalExit = process.exit;
+  originalError = console.error;
+  stateRoots = [];
+  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-send-keys-configured-"));
+  clearClientConfiguration();
+  stateRoots = Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_STATE_HOME: "state", XDG_CACHE_HOME: "cache", HASNA_EMAILS_HOME: "app" }).map(([key, name]) => {
+    const path = join(fixtureRoot!, name);
+    mkdirSync(path, { mode: 0o700 });
+    process.env[key] = path;
+    return path;
+  });
+  process.env.TMPDIR = join(fixtureRoot, "tmp");
+  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(fixtureRoot, "compiler");
+  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
+  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
+  closeDatabase();
+  db = getDatabase(":memory:");
   db.run("INSERT INTO providers (id, name, type, active) VALUES (?, ?, 'sandbox', 1)", [PROVIDER_ID, PROVIDER_ID]);
   api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "send-key row fixture" }) });
+  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
+  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
 });
 
 afterEach(() => {
-  api?.stop();
-  api = null;
-  closeDatabase();
-  restoreInheritedProcessEnv();
+  try {
+    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
+    expect(process.exit).toBe(originalExit);
+    expect(console.error).toBe(originalError);
+  } finally {
+    try { api?.stop(); } finally {
+      api = null;
+      try { closeDatabase(); } finally {
+        restoreInheritedProcessEnv();
+        process.exit = originalExit;
+        console.error = originalError;
+        // Bun ignores undefined assignment; retain the inherited effective status.
+        process.exitCode = originalExitCode ?? 0;
+        if (fixtureRoot !== null) rmSync(fixtureRoot, { recursive: true, force: true });
+        fixtureRoot = null;
+      }
+    }
+  }
 });
 
 function sqliteStore(): EmailStore {
@@ -1018,12 +1046,113 @@ describe("send keys — the configured store", () => {
     expect(keys.map((key) => key.label)).toEqual(["from-configuration"]);
   });
 
-  it("refuses to resolve a store when a database path AND an API are both configured", async () => {
+  it("refuses to resolve a store when a database path AND an API are both configured", withClientDatabaseSetting(async () => {
     process.env[API_BASE_URL_SETTING] = service().baseUrl;
     process.env[API_CREDENTIAL_SETTINGS[2]] = service().apiKey;
 
     const error = await rejection(listSendKeys("agent-1"));
 
     expect(error.name).toBe("StoreConfigurationError");
+  }));
+});
+
+/** Keep the original contradictory-config case's prerequisite, not a client default. */
+function withClientDatabaseSetting(run: () => Promise<void>): () => Promise<void> {
+  return async () => {
+    const setting = DATABASE_PATH_SETTINGS[1];
+    const prior = process.env[setting];
+    process.env[setting] = ":memory:";
+    try { await run(); } finally {
+      if (prior === undefined) delete process.env[setting];
+      else process.env[setting] = prior;
+    }
+  };
+}
+
+async function boundaryFailure(run: () => Promise<unknown>): Promise<Error> {
+  let caught: unknown;
+  try { await run(); } catch (error) { caught = error; }
+  expect(caught instanceof Error).toBe(true);
+  if (!(caught instanceof Error)) throw new Error("expected a failed configured operation");
+  return caught;
+}
+
+function seedBoundaryKey(): void {
+  seedOwner("boundary-owner", "fixture-private");
+  seedKey("boundary-existing", "boundary-owner", stamp(1), { label: "fixture-private" });
+}
+
+function boundarySnapshot(): string {
+  // No token/hash in snapshots or assertion output, even for synthetic keys.
+  return JSON.stringify(db.query("SELECT id, owner_id, prefix, label, created_at, last_used_at, revoked_at FROM send_keys ORDER BY id").all());
+}
+
+describe("configured send-key HTTP boundary", () => {
+  it("issues, verifies and revokes through HTTP with hash-free ordinary records", async () => {
+    seedBoundaryKey();
+    const before = service().requestCount();
+    const minted = await createSendKey("boundary-owner", "boundary-issued");
+    expect(service().requestCount()).toBeGreaterThan(before);
+    expect(/^esk_/.test(minted.token) && minted.token.length > 20).toBe(true);
+    expect(minted.key.owner_id).toBe("boundary-owner");
+    expect(db.query("SELECT owner_id, label FROM send_keys WHERE id = ?").get(minted.key.id))
+      .toEqual({ owner_id: "boundary-owner", label: "boundary-issued" });
+    const verified = await verifySendKey(minted.token);
+    expect(verified?.id).toBe(minted.key.id);
+    expect(verified?.last_used_at).not.toBeNull();
+    const summaries = await listSendKeySummaries("boundary-owner");
+    expect(summaries.map(row => row.id).sort()).toEqual(["boundary-existing", minted.key.id].sort());
+    expect(summaries.every(row => !("key_hash" in row) && !("token" in row))).toBe(true);
+    expect(JSON.stringify(summaries).includes(minted.token)).toBe(false);
+    expect(await revokeSendKey(minted.key.id)).toBe(true);
+    const revoked = (await getSendKey(minted.key.id))!.revoked_at;
+    expect(revoked).not.toBeNull();
+    expect(await revokeSendKey(minted.key.id)).toBe(false);
+    expect((await getSendKey(minted.key.id))!.revoked_at).toBe(revoked);
+    expect(await verifySendKey(minted.token)).toBeNull();
+    expect((await getSendKey("boundary-existing"))!.revoked_at).toBeNull();
+  });
+
+  it("rejects a missing credential without requests, mutation or fallback", async () => {
+    seedBoundaryKey();
+    const snapshot = boundarySnapshot();
+    const before = service().requestCount();
+    delete process.env[EMAILS_API_KEY_ENV];
+    const error = await boundaryFailure(() => createSendKey("boundary-owner", "must-not-write"));
+    expect(error instanceof StoreConfigurationError).toBe(true);
+    expect(error.message.includes("fixture-private")).toBe(false);
+    expect(service().requestCount()).toBe(before);
+    expect(boundarySnapshot()).toBe(snapshot);
+  });
+
+  it("rejects a wrong credential at real HTTP authentication without leaking rows", async () => {
+    seedBoundaryKey();
+    const snapshot = boundarySnapshot();
+    const before = service().requestCount();
+    const wrong = "synthetic-wrong-sendkey-fixture";
+    process.env[EMAILS_API_KEY_ENV] = wrong;
+    const error = await boundaryFailure(() => createSendKey("boundary-owner", "must-not-write"));
+    expect(error instanceof EmailsApiFault).toBe(true);
+    expect((error as EmailsApiFault).status).toBe(401);
+    expect(service().requestCount()).toBeGreaterThan(before);
+    expect([wrong, service().apiKey, "fixture-private"].some(value => error.message.includes(value))).toBe(false);
+    expect(boundarySnapshot()).toBe(snapshot);
+  });
+
+  it("rejects all client DB settings, blank and nonblank, before any request", async () => {
+    seedBoundaryKey();
+    const snapshot = boundarySnapshot();
+    const before = service().requestCount();
+    for (const setting of CLIENT_DATABASE_SETTINGS) for (const value of ["", ":memory:"]) {
+      process.env[setting] = value;
+      try {
+        const error = await boundaryFailure(() => createSendKey("boundary-owner", "must-not-write"));
+        expect(error instanceof StoreConfigurationError).toBe(true);
+        expect(error.message.includes(setting)).toBe(true);
+        expect(error.message.includes("fixture-private")).toBe(false);
+        expect(service().requestCount()).toBe(before);
+        expect(boundarySnapshot()).toBe(snapshot);
+      } finally { delete process.env[setting]; }
+    }
   });
 });

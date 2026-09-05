@@ -20,7 +20,11 @@
 // those disagreements are the whole reason this family had two arms.
 
 import { afterEach, beforeEach, describe, it, expect } from "bun:test";
-import { closeDatabase, getDatabase, resetDatabase } from "./database.js";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDatabase, getDatabase } from "./database.js";
+import { EMAILS_API_KEY_ENV, EMAILS_API_URL_SETTINGS, RETIRED_EMAILS_SELECTOR_SETTINGS } from "../lib/client-settings.js";
 import {
   storeSandboxEmail,
   listSandboxEmails,
@@ -58,26 +62,46 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-/**
- * Leave exactly ONE store configured, so the cases that pass no store can resolve.
- *
- * The settings are named through the resolution's OWN exported constants rather than copied
- * as literals: this is the list that decides which store a caller with no injected store
- * gets, and a second copy here would go stale the first time the resolution learned another
- * setting. A database path AND an API together are a hard boot error with deliberately no
- * precedence rule, so a stray inherited API setting would turn every default-store case into
- * that error.
- */
+/** Only the fixture owns memory storage; default clients use its authenticated HTTP. */
 function configureExactlyOneStore(): void {
-  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
+  for (const setting of [...EMAILS_API_URL_SETTINGS, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS,
+    ...RETIRED_EMAILS_SELECTOR_SETTINGS, ...DATABASE_PATH_SETTINGS, "EMAILS_HOME", "HASNA_HOME",
+    "HASNA_DATA_HOME", "HASNA_CONFIG_HOME", "HASNA_CACHE_HOME", "HASNA_STATE_HOME"]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-  process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
+  for (const key of Object.keys(process.env)) if (/^(?:AWS|AMAZON|RESEND|CLOUDFLARE)_/.test(key)) delete process.env[key];
 }
 
 let db: ReturnType<typeof getDatabase>;
 let api: V1StoreApi | null = null;
+let scratch: string | null = null;
+let stateRoots: string[] = [];
+let savedFetch: typeof globalThis.fetch;
+let observedFetch: typeof globalThis.fetch;
+let savedExit: typeof process.exit;
+let savedExitCode: typeof process.exitCode;
+let savedConsole: Pick<Console, "log" | "error" | "warn" | "info">;
+let savedDate: DateConstructor;
+let failLaterPages = false;
+let backendCalls = 0;
+const wire: Array<{ path: string; method: string; offset: number; authorized: boolean; status: number | null }> = [];
+
+/** Observe metadata only, returning the native fetch promise and response unchanged. */
+function observeRequests(): void {
+  observedFetch = Object.assign((...args: Parameters<typeof fetch>): ReturnType<typeof fetch> => {
+    const [request, init] = args;
+    const url = new URL(request instanceof Request ? request.url : String(request));
+    if (url.origin !== service().baseUrl) throw new Error("fixture request left its loopback service");
+    const headers = new Headers(init?.headers ?? (request instanceof Request ? request.headers : undefined));
+    const item = { path: url.pathname, method: init?.method ?? (request instanceof Request ? request.method : "GET"),
+      offset: Number(url.searchParams.get("offset") ?? 0), authorized: headers.get("authorization") === `Bearer ${service().apiKey}`, status: null as number | null };
+    wire.push(item);
+    const pending = savedFetch(...args);
+    void pending.then((response) => { item.status = response.status; }, () => { item.status = 0; });
+    return pending;
+  }, { preconnect: savedFetch.preconnect });
+  globalThis.fetch = observedFetch;
+}
 
 /**
  * The running `/v1` fixture, or a clear failure.
@@ -93,23 +117,68 @@ function service(): V1StoreApi {
 
 beforeEach(() => {
   captureInheritedProcessEnv();
+  savedFetch = globalThis.fetch;
+  savedExit = process.exit;
+  savedExitCode = process.exitCode;
+  savedConsole = { log: console.log, error: console.error, warn: console.warn, info: console.info };
+  savedDate = Date;
+  stateRoots = [];
+  wire.length = 0;
+  failLaterPages = false;
+  backendCalls = 0;
+  scratch = mkdtempSync(join(tmpdir(), "emails-sandbox-configured-"));
   configureExactlyOneStore();
-  resetDatabase();
-  db = getDatabase();
+  for (const [key, name] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_CACHE_HOME: "cache", XDG_STATE_HOME: "state", HASNA_EMAILS_HOME: "app" })) {
+    const path = join(scratch, name);
+    mkdirSync(path, { mode: 0o700 });
+    process.env[key] = path;
+    stateRoots.push(path);
+  }
+  process.env.TMPDIR = join(scratch, "tmp");
+  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(scratch, "compiler");
+  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
+  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
+  closeDatabase();
+  db = getDatabase(":memory:");
   // `sandbox_emails.provider_id` is a real foreign key into `providers` locally (the
   // self-hosted schema declares the same reference), so both providers this file writes for
   // have to exist before anything captures mail for them.
   for (const id of [P1, P2]) {
     db.run("INSERT INTO providers (id, name, type, active) VALUES (?, ?, 'sandbox', 1)", [id, id]);
   }
-  api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "sandbox row fixture" }) });
+  const backing = createSqliteEmailStore({ database: db, detail: "sandbox row fixture" });
+  api = startV1StoreApi({ store: { ...backing, sandbox: { ...backing.sandbox,
+    get: (id) => { backendCalls++; return backing.sandbox.get(id); },
+    create: (row) => { backendCalls++; return backing.sandbox.create(row); },
+    remove: (id) => { backendCalls++; return backing.sandbox.remove(id); },
+    list: (options) => {
+    backendCalls++;
+    if (failLaterPages && (options?.offset ?? 0) > 0) return Promise.resolve({ ok: false, code: "capability_unavailable", message: "synthetic later-page refusal", status: 501 });
+    return backing.sandbox.list(options);
+  } } } });
+  process.env[API_BASE_URL_SETTING] = api.baseUrl;
+  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
+  observeRequests();
 });
 
 afterEach(() => {
-  api?.stop();
-  api = null;
-  closeDatabase();
-  restoreInheritedProcessEnv();
+  try {
+    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
+    expect(globalThis.fetch).toBe(observedFetch);
+    expect(process.exit).toBe(savedExit);
+    expect(Date).toBe(savedDate);
+    for (const key of ["log", "error", "warn", "info"] as const) expect(console[key]).toBe(savedConsole[key]);
+  } finally {
+    try { api?.stop(); api = null; closeDatabase(); } finally {
+      globalThis.fetch = savedFetch;
+      restoreInheritedProcessEnv();
+      // Bun ignores undefined assignments; preserve explicit statuses, normalize only unset.
+      process.exitCode = savedExitCode ?? 0;
+      if (scratch !== null) rmSync(scratch, { recursive: true, force: true });
+      scratch = null;
+    }
+  }
 });
 
 function sqliteStore(): EmailStore {
@@ -124,6 +193,118 @@ const STORE_VARIANTS: ReadonlyArray<[string, () => EmailStore]> = [
   ["SQLite store", sqliteStore],
   ["HTTP store over /v1", httpStore],
 ];
+
+describe("configured sandbox transport evidence", () => {
+  it("round-trips default captures through native authenticated HTTP and one backing table", async () => {
+    const before = service().requestCount();
+    const first = await storeSandboxEmail(input({ subject: "configured first", html: "<p>fixture</p>", headers: { "x-fixture": "one" } }));
+    const second = await storeSandboxEmail(input({ provider_id: P2, subject: "configured second" }));
+    expect(tableRows()).toHaveLength(2);
+    expect((await getSandboxEmail(first.id))?.id).toBe(first.id);
+    expect((await listSandboxEmails(P1)).map((row) => row.id)).toEqual([first.id]);
+    expect((await listSandboxEmailSummaries(P2)).map((row) => row.id)).toEqual([second.id]);
+    expect(await getSandboxCount(P1)).toBe(1);
+    expect(await getSandboxCount()).toBe(2);
+    const readSnapshot = JSON.stringify(tableRows());
+    expect(await getSandboxEmail("missing-configured-capture")).toBeNull();
+    expect(JSON.stringify(tableRows()) === readSnapshot).toBe(true);
+    expect(await clearSandboxEmails(P1)).toBe(1);
+    expect(tableRows().map((row) => row["id"])).toEqual([second.id]);
+    expect(service().requestCount() - before).toBe(wire.length);
+    expect(wire.length).toBeGreaterThan(6);
+    expect(wire.some((row) => row.path === "/v1/sandbox-emails" && row.method === "POST" && row.status === 201)).toBe(true);
+    expect(wire.every((row) => row.authorized && row.status !== null)).toBe(true);
+  });
+
+  it("completes configured multipage reads and refuses later-page failure without deleting", async () => {
+    for (let i = 0; i < 520; i++) seedCapture(`configured-${String(i).padStart(4, "0")}`, stamp(i));
+    seedCapture("other-provider", stamp(521), { provider_id: P2 });
+    const snapshot = JSON.stringify(tableRows());
+    expect(await getSandboxCount(P1)).toBe(520);
+    expect((await listSandboxEmails(P1, 3, 505)).map((row) => row.id)).toEqual(["configured-0014", "configured-0013", "configured-0012"]);
+    expect(wire.some((row) => row.offset > 0 && row.status === 200)).toBe(true);
+    const failureStart = wire.length;
+    failLaterPages = true;
+    for (const call of [() => getSandboxCount(P1), () => listSandboxEmails(P1), () => clearSandboxEmails(P1)]) {
+      await expect(call()).rejects.toThrow(/faulted.*synthetic later-page refusal/);
+      expect(JSON.stringify(tableRows()) === snapshot).toBe(true);
+    }
+    expect(wire.slice(failureStart).filter((row) => row.offset > 0 && row.status === 503)).toHaveLength(3);
+    expect(wire.slice(failureStart).some((row) => row.method === "DELETE")).toBe(false);
+    failLaterPages = false;
+    expect(await getSandboxCount(P1)).toBe(520);
+  });
+
+  it("rejects missing credentials before native dispatch and recovers on the same populated table", async () => {
+    seedCapture("present-configured", stamp(1));
+    const snapshot = JSON.stringify(tableRows());
+    delete process.env[EMAILS_API_KEY_ENV];
+    await expect(getSandboxEmail("present-configured")).rejects.toThrow(/credential|API_KEY/);
+    expect(wire).toHaveLength(0);
+    expect(service().requestCount()).toBe(0);
+    expect(backendCalls).toBe(0);
+    expect(JSON.stringify(tableRows()) === snapshot).toBe(true);
+    process.env[EMAILS_API_KEY_ENV] = service().apiKey;
+    expect((await getSandboxEmail("present-configured"))?.id).toBe("present-configured");
+    expect(service().requestCount()).toBeGreaterThan(0);
+  });
+
+  it("observes a real protected HTTP401 for a wrong key without reading or mutating the row", async () => {
+    seedCapture("present-configured", stamp(1));
+    const snapshot = JSON.stringify(tableRows());
+    process.env[EMAILS_API_KEY_ENV] = "synthetic-wrong-sandbox-key";
+    const error = await rejection(getSandboxEmail("present-configured"));
+    expect(error).toMatchObject({ name: "EmailsApiFault", status: 401 });
+    expect(error.message.includes(service().apiKey)).toBe(false);
+    expect(wire.some((row) => row.status === 401 && !row.authorized)).toBe(true);
+    expect(service().requestCount()).toBe(wire.length);
+    expect(backendCalls).toBe(0);
+    expect(JSON.stringify(tableRows()) === snapshot).toBe(true);
+    process.env[EMAILS_API_KEY_ENV] = service().apiKey;
+    expect((await getSandboxEmail("present-configured"))?.id).toBe("present-configured");
+  });
+
+  for (const setting of DATABASE_PATH_SETTINGS) for (const value of ["", "synthetic-client-database"]) {
+    it(`refuses ${setting} ${value === "" ? "blank" : "nonblank"} before transport without a fallback`, async () => {
+      seedCapture("present-configured", stamp(1));
+      const snapshot = JSON.stringify(tableRows());
+      process.env[setting] = value;
+      await expect(storeSandboxEmail(input())).rejects.toThrow(setting);
+      await expect(getSandboxEmail("present-configured")).rejects.toThrow(setting);
+      expect(wire).toHaveLength(0);
+      expect(service().requestCount()).toBe(0);
+      expect(backendCalls).toBe(0);
+      expect(JSON.stringify(tableRows()) === snapshot).toBe(true);
+      delete process.env[setting];
+      expect((await getSandboxEmail("present-configured"))?.id).toBe("present-configured");
+      expect(wire.some((row) => row.authorized && row.status === 200)).toBe(true);
+    });
+  }
+
+  it("validates unreadable capture input before dispatch despite a reachable populated service", async () => {
+    seedCapture("present-configured", stamp(1));
+    const snapshot = JSON.stringify(tableRows());
+    await expect(storeSandboxEmail(input({ headers: [] as unknown as Record<string, string> }))).rejects.toThrow(/headers.*map/);
+    expect(wire).toHaveLength(0);
+    expect(service().requestCount()).toBe(0);
+    expect(backendCalls).toBe(0);
+    expect(JSON.stringify(tableRows()) === snapshot).toBe(true);
+    expect((await storeSandboxEmail(input())).id).toBeTruthy();
+    expect(tableRows()).toHaveLength(2);
+  });
+
+  it("enumerates the real configured store before rejecting the legacy OFFSET position", async () => {
+    seedCapture("present-configured", stamp(1));
+    const snapshot = JSON.stringify(tableRows());
+    const error = await rejection(listSandboxEmails(P1, 10, db as unknown as number));
+    expect(error.message).toContain("the OFFSET");
+    expect(error.message).toContain("fourth position");
+    expect(wire.some((row) => row.path === "/v1/sandbox-emails" && row.method === "GET" && row.status === 200)).toBe(true);
+    expect(service().requestCount()).toBeGreaterThan(0);
+    expect(JSON.stringify(tableRows()) === snapshot).toBe(true);
+    expect((await listSandboxEmails(P1)).map((row) => row.id)).toEqual(["present-configured"]);
+  });
+});
 
 function input(overrides: Partial<StoreSandboxEmailInput> = {}): StoreSandboxEmailInput {
   return {

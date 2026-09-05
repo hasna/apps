@@ -27,14 +27,15 @@
 //     per arm; a suspended row must win on both stores.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { closeDatabase, getDatabase, resetDatabase, type Database } from "./database.js";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { closeDatabase, getDatabase, type Database } from "./database.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 import { createHttpEmailStore } from "../store-http/index.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import {
   API_BASE_URL_SETTING,
-  API_CREDENTIAL_SETTINGS,
-  API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
 } from "../store-resolution.js";
 import type { EmailStore } from "../store/email-store.js";
@@ -82,6 +83,8 @@ interface Harness {
 
 let db: Database;
 let INHERITED_ENV: NodeJS.ProcessEnv;
+let fixtureRoot: string;
+let clientRoots: string[];
 
 /**
  * The SQLite `addresses` table has a NOT NULL provider foreign key that the seam's
@@ -186,28 +189,44 @@ const httpHarness: Harness = {
 
 beforeEach(() => {
   INHERITED_ENV = { ...process.env };
-  // EXACTLY ONE store is configured for this file, and the key list is read from
-  // `src/store-resolution.ts` rather than re-spelled, so a new setting cannot be missed
-  // here. Anything else is a BOOT ERROR from `planEmailStore` — correctly: an installation
-  // with both a database path and an API configured has two places to keep its mail and no
-  // way to tell which was meant. The config-driven cases below resolve a real store, so an
-  // inherited API setting from the developer's shell would fail them for the wrong reason.
-  for (const key of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS, ...DATABASE_PATH_SETTINGS]) {
-    delete process.env[key];
+  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-address-lifecycle-"));
+  clientRoots = [];
+  const state: NodeJS.ProcessEnv = {};
+  for (const [key, name] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_CACHE_HOME: "cache", XDG_STATE_HOME: "state", HASNA_EMAILS_HOME: "app" })) {
+    const path = join(fixtureRoot, name);
+    mkdirSync(path, { mode: 0o700 });
+    state[key] = path;
+    clientRoots.push(path);
   }
-  process.env["EMAILS_DB_PATH"] = ":memory:";
-  resetDatabase();
-  db = getDatabase();
+  for (const name of ["tmp", "compiler"]) mkdirSync(join(fixtureRoot, name), { mode: 0o700 });
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env, state, { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+    TMPDIR: join(fixtureRoot, "tmp"), BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(fixtureRoot, "compiler"),
+    AWS_EC2_METADATA_DISABLED: "true", NO_COLOR: "1", TZ: "UTC" });
+  closeDatabase();
+  // Only the fixture server owns this explicit database; default calls use actual HTTP.
+  db = getDatabase(":memory:");
   api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "v1 fixture" }) });
+  process.env[API_BASE_URL_SETTING] = api.baseUrl;
+  process.env["HASNA_EMAILS_API_KEY"] = api.apiKey;
 });
 
 afterEach(() => {
-  api.stop();
-  closeDatabase();
-  for (const key of Object.keys(process.env)) {
-    if (!Object.prototype.hasOwnProperty.call(INHERITED_ENV, key)) delete process.env[key];
+  try {
+    for (const path of clientRoots) expect(readdirSync(path)).toEqual([]);
+  } finally {
+    try {
+      api.stop();
+      closeDatabase();
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (!Object.prototype.hasOwnProperty.call(INHERITED_ENV, key)) delete process.env[key];
+      }
+      Object.assign(process.env, INHERITED_ENV);
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   }
-  Object.assign(process.env, INHERITED_ENV);
 });
 
 const HARNESSES: readonly Harness[] = [sqliteHarness, httpHarness];
@@ -401,8 +420,8 @@ for (const harness of HARNESSES) {
 //
 // The cases above hand the family a store, which is the right way to pin behaviour and the
 // wrong way to prove that a real configuration reaches it. These two inject NOTHING, so
-// they go through `createConfiguredEmailStore()` — and they are the local-store half of the
-// change-detector evidence, because the deleted local arm counted `SELECT COUNT(*) FROM
+// they go through `createConfiguredEmailStore()` and actual authenticated HTTP. They retain
+// the change-detector evidence because the deleted local arm counted `SELECT COUNT(*) FROM
 // emails`, the LEGACY ledger table only, while the seam's outbound stream unions that ledger
 // with the outbound rows in the unified table. A send recorded only in the unified table was
 // invisible to that arm's quota check.
@@ -422,6 +441,78 @@ describe("address lifecycle — resolved from configuration", () => {
     expect(answer.sendable).toBe(false);
     expect(answer.reason).toMatch(/quota/i);
     expect(answer.sent_today).toBe(1);
+  });
+
+  it("measures unified outbound rows and enforces quota over real configured HTTP", async () => {
+    const id = await sqliteHarness.seedAddress({ email: "wire@x.test" });
+    await sqliteHarness.seedSends([
+      { from: "wire@x.test" }, { from: "wire@x.test" },
+      { from: "wire@x.test", at: at(YESTERDAY) }, { from: "wire@x.test", at: at(TOMORROW) },
+      { from: "xwire@x.test" },
+    ]);
+    const inbound = await sqliteHarness.store().messages.createMessage({
+      direction: "inbound", from_addr: "wire@x.test", to_addrs: ["recipient@example.test"], received_at: at(TODAY),
+    });
+    expect(inbound.ok).toBe(true);
+    expect(db.query("SELECT COUNT(*) AS n FROM emails").get()).toEqual({ n: 0 });
+    expect(db.query("SELECT COUNT(*) AS n FROM inbound_emails WHERE is_sent = 1").get()).toEqual({ n: 5 });
+    let before = api.requestCount();
+    expect((await setAddressQuota(id, 2)).daily_quota).toBe(2);
+    expect(api.requestCount()).toBeGreaterThan(before);
+    expect(db.query("SELECT daily_quota FROM addresses WHERE id = ?").get(id)).toEqual({ daily_quota: 2 });
+    before = api.requestCount();
+    expect(await countSendsToday("wire@x.test")).toBe(2);
+    expect(api.requestCount()).toBeGreaterThan(before);
+    before = api.requestCount();
+    expect(await getAddressSendability("wire@x.test")).toMatchObject({
+      sendable: false, sent_today: 2, daily_quota: 2,
+      evaluated: ["registration", "suspension", "quota"],
+    });
+    expect(api.requestCount()).toBeGreaterThan(before);
+  });
+
+  it("refuses missing credentials before HTTP or quota mutation", async () => {
+    const id = await sqliteHarness.seedAddress({ email: "missing@x.test" });
+    const original = db.query("SELECT * FROM addresses WHERE id = ?").get(id);
+    const before = api.requestCount();
+    delete process.env["HASNA_EMAILS_API_KEY"];
+    await expect(setAddressQuota(id, 0)).rejects.toThrow(/credential/i);
+    expect(api.requestCount()).toBe(before);
+    expect(db.query("SELECT * FROM addresses WHERE id = ?").get(id)).toEqual(original);
+  });
+
+  it("reaches real authentication denial with a wrong key without quota mutation", async () => {
+    const id = await sqliteHarness.seedAddress({ email: "wrong@x.test" });
+    const original = db.query("SELECT * FROM addresses WHERE id = ?").get(id);
+    const before = api.requestCount();
+    process.env["HASNA_EMAILS_API_KEY"] = "synthetic-address-wrong-key";
+    let failure: unknown;
+    try { await setAddressQuota(id, 0); } catch (error) { failure = error; }
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({ name: "EmailsApiFault", status: 401 });
+    expect(String(failure)).toContain("authentication required (missing_token)");
+    expect(String(failure)).not.toContain(api.apiKey);
+    expect(String(failure)).not.toContain("synthetic-address-wrong-key");
+    expect(api.requestCount()).toBeGreaterThan(before);
+    expect(db.query("SELECT * FROM addresses WHERE id = ?").get(id)).toEqual(original);
+  });
+
+  it("rejects every client database setting before HTTP or quota mutation", async () => {
+    const id = await sqliteHarness.seedAddress({ email: "poison@x.test" });
+    const original = db.query("SELECT * FROM addresses WHERE id = ?").get(id);
+    const before = api.requestCount();
+    for (const setting of DATABASE_PATH_SETTINGS) for (const value of ["", "synthetic-never-opened-address-db"]) {
+      process.env[setting] = value;
+      try {
+        let failure: unknown;
+        try { await setAddressQuota(id, 0); } catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(Error);
+        expect(String(failure)).toContain(setting);
+        expect(String(failure)).not.toContain("synthetic-never-opened-address-db");
+        expect(api.requestCount()).toBe(before);
+        expect(db.query("SELECT * FROM addresses WHERE id = ?").get(id)).toEqual(original);
+      } finally { delete process.env[setting]; }
+    }
   });
 });
 

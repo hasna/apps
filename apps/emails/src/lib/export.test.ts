@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { closeDatabase, getDatabase, resetDatabase, type Database } from "../db/database.js";
-import {
-  API_BASE_URL_SETTING,
-  API_CREDENTIAL_SETTINGS,
-  API_SETTINGS_POINTER,
-  DATABASE_PATH_SETTINGS,
-} from "../store-resolution.js";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDatabase, getDatabase, type Database } from "../db/database.js";
+import { CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV, StoreConfigurationError } from "./client-settings.js";
+import { createSqliteEmailStore } from "../store-sqlite/index.js";
+import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 import {
   EXPORT_DEFAULT_LIMIT,
   EXPORT_MAX_LIMIT,
@@ -19,7 +19,7 @@ import {
 // through `listEmails` and the event exports through `listEvents`, and BOTH families
 // have collapsed onto the seam — the events half used to drive the out-of-process
 // `/v1` stub because its family still had a mode-routed second arm, and that arm is
-// gone. Each half runs against a real SQLite store, seeded straight into its table;
+// gone. Each half uses authenticated HTTP over real memory-backed legacy rows;
 // `src/db/emails.test.ts` and `src/db/events.test.ts` cover the same reads against
 // BOTH shipped stores. What is asserted here is the EXPORT's own behaviour: its
 // default and maximum page, its CSV shape and escaping, and the filters it forwards.
@@ -35,34 +35,83 @@ import {
 // by sender or by date instead, and the refusal itself gets a case — because an export that
 // silently widened would be a file that looks right and is not.
 
-let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
-
-function captureInheritedProcessEnv(): void {
-  INHERITED_PROCESS_ENV = { ...process.env };
-}
-
-function restoreInheritedProcessEnv(): void {
-  for (const key of Object.keys(process.env)) {
-    if (!Object.prototype.hasOwnProperty.call(INHERITED_PROCESS_ENV, key)) delete process.env[key];
-  }
-  Object.assign(process.env, INHERITED_PROCESS_ENV);
-}
-
 const PROVIDER = "p1";
 let db: Database;
+let inheritedEnv: NodeJS.ProcessEnv;
+let originalExit: typeof process.exit;
+let originalExitCode: typeof process.exitCode;
+let originalFetch: typeof globalThis.fetch;
+let originalError: typeof console.error;
+let fixtureRoot: string;
+let stateRoots: string[];
+let api: V1StoreApi;
+let requests: Array<{ path: string; method: string; status: number }>;
 
-/**
- * Leave exactly ONE store configured. A database path AND an API are a HARD BOOT ERROR with
- * no precedence rule, so a stray API setting — including one this file's own stub applies in
- * its other half — turns every email case into that error rather than into a store.
- */
-function configureLocalStoreOnly(): void {
-  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
-    delete process.env[setting];
+function clearClientConfiguration(): void {
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:HASNA_)?(?:EMAILS|MAILERY)_/.test(key)) delete process.env[key];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-  process.env["EMAILS_DB_PATH"] = ":memory:";
+  for (const key of [...CLIENT_DATABASE_SETTINGS, "HASNA_HOME", "HASNA_DATA_HOME", "CODEWITH_HOME",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "RESEND_API_KEY"]) delete process.env[key];
 }
+
+beforeEach(() => {
+  inheritedEnv = { ...process.env };
+  originalExit = process.exit;
+  originalExitCode = process.exitCode;
+  originalFetch = globalThis.fetch;
+  originalError = console.error;
+  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-lib-configured-"));
+  clearClientConfiguration();
+  stateRoots = Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_CACHE_HOME: "cache", XDG_STATE_HOME: "state", HASNA_EMAILS_HOME: "app" }).map(([key, name]) => {
+    const path = join(fixtureRoot, name);
+    mkdirSync(path, { mode: 0o700 });
+    process.env[key] = path;
+    return path;
+  });
+  process.env.TMPDIR = join(fixtureRoot, "tmp");
+  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(fixtureRoot, "compiler");
+  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
+  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
+  closeDatabase();
+  db = getDatabase(":memory:");
+  api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "explicit library fixture" }) });
+  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
+  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
+  requests = [];
+  const observer = function(this: unknown, ...args: Parameters<typeof fetch>) {
+    const promise = Reflect.apply(originalFetch, this, args);
+    const [input, init] = args;
+    void promise.then((response: Response) => requests.push({
+      path: new URL(input instanceof Request ? input.url : String(input)).pathname,
+      method: init?.method ?? "GET", status: response.status,
+    }), () => {});
+    return promise;
+  };
+  globalThis.fetch = Object.assign(observer, originalFetch) as typeof fetch;
+});
+
+afterEach(() => {
+  try {
+    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
+    expect(process.exit).toBe(originalExit);
+    expect(console.error).toBe(originalError);
+  } finally {
+    api.stop();
+    closeDatabase();
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+    process.exit = originalExit;
+    for (const key of Object.keys(process.env)) {
+      if (!Object.hasOwn(inheritedEnv, key)) delete process.env[key];
+    }
+    Object.assign(process.env, inheritedEnv);
+    // Bun ignores undefined assignment; retain an unset status's effective zero.
+    process.exitCode = originalExitCode ?? 0;
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
 
 /** A ledger row written straight into `emails`, with the id and `sent_at` a case names. */
 function seedLedger(id: string, sentAt: string, overrides: Record<string, unknown> = {}): void {
@@ -94,19 +143,92 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
   throw new Error("expected the call to throw, and it resolved");
 }
 
+describe("configured export boundary", () => {
+  const exporters = [exportEmailsJson, exportEmailsCsv, exportEventsJson, exportEventsCsv];
+
+  it("rejects missing credentials before any export dispatches", async () => {
+    delete process.env[EMAILS_API_KEY_ENV];
+    const before = api.requestCount();
+    for (const run of exporters) await expect(run({})).rejects.toThrow(/API credential is required/);
+    expect(api.requestCount()).toBe(before);
+    expect(db.query("SELECT COUNT(*) AS n FROM emails").get()).toEqual({ n: 0 });
+    expect(db.query("SELECT COUNT(*) AS n FROM events").get()).toEqual({ n: 0 });
+  });
+
+  it("rejects a wrong key at HTTP without producing an empty CSV or JSON export", async () => {
+    const wrong = "synthetic-invalid-library-bearer";
+    process.env[EMAILS_API_KEY_ENV] = wrong;
+    for (const run of exporters) {
+      const error = await rejection(run({}));
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toMatch(/authentication required|401/i);
+      expect(String(error).includes(wrong) || String(error).includes(api.apiKey)).toBe(false);
+    }
+    expect(requests).toHaveLength(4);
+    expect(requests.every(row => row.method === "GET" && row.status === 401)).toBe(true);
+    expect(db.query("SELECT COUNT(*) AS n FROM emails").get()).toEqual({ n: 0 });
+    expect(db.query("SELECT COUNT(*) AS n FROM events").get()).toEqual({ n: 0 });
+  });
+
+  it("rejects every blank and nonblank database setting before exporting", async () => {
+    for (const setting of CLIENT_DATABASE_SETTINGS) for (const value of ["", "synthetic-database-poison"]) {
+      process.env[setting] = value;
+      const before = api.requestCount();
+      for (const run of exporters) {
+        const error = await rejection(run({}));
+        expect(error).toBeInstanceOf(StoreConfigurationError);
+        expect((error as StoreConfigurationError).settings).toContain(setting);
+        expect(String(error).includes("synthetic-database-poison")).toBe(false);
+      }
+      expect(api.requestCount()).toBe(before);
+      expect(db.query("SELECT COUNT(*) AS n FROM emails").get()).toEqual({ n: 0 });
+      expect(db.query("SELECT COUNT(*) AS n FROM events").get()).toEqual({ n: 0 });
+      delete process.env[setting];
+    }
+  });
+});
+
 describe("email exports, over the store seam", () => {
   beforeEach(() => {
-    captureInheritedProcessEnv();
-    configureLocalStoreOnly();
-    resetDatabase();
-    db = getDatabase();
     // `emails.provider_id` is NOT NULL with a foreign key into `providers`.
     db.run("INSERT INTO providers (id, name, type, active) VALUES (?, ?, 'ses', 1)", [PROVIDER, PROVIDER]);
   });
 
-  afterEach(() => {
-    closeDatabase();
-    restoreInheritedProcessEnv();
+  it("paginates real legacy rows through HTTP without rewriting the ledger", async () => {
+    for (let index = 0; index < 501; index++) seedLedger(`http-ledger-${index}`, new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString());
+    const rows = JSON.parse(await exportEmailsJson({})) as Array<{ id: string }>;
+    expect(rows).toHaveLength(501);
+    expect(rows[0]?.id).toBe("http-ledger-500");
+    expect(rows[500]?.id).toBe("http-ledger-0");
+    expect(requests.filter(row => row.path === "/v1/messages" && row.status === 200)).toHaveLength(2);
+    expect(db.query("SELECT COUNT(*) AS n FROM emails").get()).toEqual({ n: 501 });
+    expect(db.query("SELECT COUNT(*) AS n FROM inbound_emails").get()).toEqual({ n: 0 });
+  });
+
+  it("never emits a partial email export when a later actual page refuses or faults", async () => {
+    for (let index = 0; index < 501; index++) seedLedger(`fault-ledger-${index}`, new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString());
+    const native = globalThis.fetch;
+    for (const status of [400, 503]) for (const run of [exportEmailsJson, exportEmailsCsv]) {
+      let pages = 0;
+      const intercept = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        const response = await native(input, init);
+        if (new URL(input instanceof Request ? input.url : String(input)).pathname === "/v1/messages" && ++pages === 2) {
+          await response.body?.cancel();
+          return new Response(JSON.stringify({ error: "synthetic later-page denial" }), { status, headers: { "Content-Type": "application/json" } });
+        }
+        return response;
+      };
+      globalThis.fetch = Object.assign(intercept, native) as typeof fetch;
+      try {
+        const error = await rejection(run({}));
+        expect(error).toBeInstanceOf(Error);
+        expect(String(error)).toContain(status === 400
+          ? "cannot list the sent ledger (invalid_input, 422)"
+          : "failed while reading the sent ledger");
+        expect(pages).toBe(2);
+        expect(db.query("SELECT COUNT(*) AS n FROM emails").get()).toEqual({ n: 501 });
+      } finally { globalThis.fetch = native; }
+    }
   });
 
   it("defaults direct email exports to a bounded page", async () => {
@@ -214,19 +336,10 @@ describe("email exports, over the store seam", () => {
 
 describe("event exports, over the store seam", () => {
   beforeEach(() => {
-    captureInheritedProcessEnv();
-    configureLocalStoreOnly();
-    resetDatabase();
-    db = getDatabase();
     // `events.provider_id` and `events.email_id` carry enforced foreign keys.
     db.run("INSERT INTO providers (id, name, type, active) VALUES ('p1', 'p1', 'ses', 1)");
     db.run("INSERT INTO providers (id, name, type, active) VALUES ('p2', 'p2', 'ses', 1)");
     seedLedger("msg", "2026-01-01T00:00:00.000Z");
-  });
-
-  afterEach(() => {
-    closeDatabase();
-    restoreInheritedProcessEnv();
   });
 
   function seedEvent(row: {
@@ -251,6 +364,43 @@ describe("event exports, over the store seam", () => {
       ],
     );
   }
+
+  it("paginates actual provider-filtered event rows without mixing another provider", async () => {
+    for (let index = 0; index < 501; index++) seedEvent({ id: `http-event-${index}`, occurred_at: new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString() });
+    seedEvent({ id: "foreign-event", provider_id: "p2", email_id: null, occurred_at: "2026-03-01T00:00:00.000Z" });
+    const rows = JSON.parse(await exportEventsJson({ provider_id: "p1" })) as Array<{ id: string }>;
+    expect(rows).toHaveLength(501);
+    expect(rows[0]?.id).toBe("http-event-500");
+    expect(rows[500]?.id).toBe("http-event-0");
+    expect(rows.some(row => row.id === "foreign-event")).toBe(false);
+    expect(requests.some(row => row.path === "/v1/openapi.json" && row.status === 200)).toBe(true);
+    expect(requests.filter(row => row.path === "/v1/events" && row.status === 200).length).toBeGreaterThan(1);
+    expect(db.query("SELECT COUNT(*) AS n FROM events").get()).toEqual({ n: 502 });
+  });
+
+  it("never emits partial event CSV or JSON after a later actual page refuses or faults", async () => {
+    for (let index = 0; index < 501; index++) seedEvent({ id: `fault-event-${index}`, occurred_at: new Date(Date.UTC(2026, 0, 1) + index * 1000).toISOString() });
+    const native = globalThis.fetch;
+    for (const status of [400, 503]) for (const run of [exportEventsJson, exportEventsCsv]) {
+      let pages = 0;
+      const intercept = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        const response = await native(input, init);
+        if (new URL(input instanceof Request ? input.url : String(input)).pathname === "/v1/events" && ++pages === 2) {
+          await response.body?.cancel();
+          return new Response(JSON.stringify({ error: "synthetic later-page denial" }), { status, headers: { "Content-Type": "application/json" } });
+        }
+        return response;
+      };
+      globalThis.fetch = Object.assign(intercept, native) as typeof fetch;
+      try {
+        const error = await rejection(run({ provider_id: "p1" }));
+        expect(error).toBeInstanceOf(Error);
+        expect(String(error)).toMatch(/refused|faulted/i);
+        expect(pages).toBe(2);
+        expect(db.query("SELECT COUNT(*) AS n FROM events").get()).toEqual({ n: 501 });
+      } finally { globalThis.fetch = native; }
+    }
+  });
 
   it("defaults direct event exports to a bounded page", async () => {
     for (let i = 0; i < EXPORT_DEFAULT_LIMIT + 1; i += 1) {

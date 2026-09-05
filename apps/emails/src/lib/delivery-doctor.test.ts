@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   diagnoseInboundDelivery,
@@ -8,7 +9,9 @@ import {
   type DeliveryDoctorCheck,
   type DeliveryDoctorReport,
 } from "./delivery-doctor.js";
-import { closeDatabase, getDatabase, resetDatabase, type Database } from "../db/database.js";
+import { closeDatabase, getDatabase, type Database } from "../db/database.js";
+import { CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV, StoreConfigurationError } from "./client-settings.js";
+import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 import type { EmailStore } from "../store/email-store.js";
 import type { Outcome } from "../store/outcome.js";
 import type { AddressRecord, MessageListRecord } from "../store/records.js";
@@ -26,20 +29,79 @@ import { createSqliteEmailStore } from "../store-sqlite/index.js";
 
 let db: Database;
 let inheritedEnv: NodeJS.ProcessEnv;
+let originalExit: typeof process.exit;
+let originalExitCode: typeof process.exitCode;
+let originalFetch: typeof globalThis.fetch;
+let originalError: typeof console.error;
+let fixtureRoot: string;
+let stateRoots: string[];
+let api: V1StoreApi;
+let requests: Array<{ path: string; method: string; status: number }>;
+
+function clearClientConfiguration(): void {
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:HASNA_)?(?:EMAILS|MAILERY)_/.test(key)) delete process.env[key];
+  }
+  for (const key of [...CLIENT_DATABASE_SETTINGS, "HASNA_HOME", "HASNA_DATA_HOME", "CODEWITH_HOME",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "RESEND_API_KEY"]) delete process.env[key];
+}
 
 beforeEach(() => {
   inheritedEnv = { ...process.env };
-  process.env["EMAILS_DB_PATH"] = ":memory:";
-  resetDatabase();
-  db = getDatabase();
+  originalExit = process.exit;
+  originalExitCode = process.exitCode;
+  originalFetch = globalThis.fetch;
+  originalError = console.error;
+  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-lib-configured-"));
+  clearClientConfiguration();
+  stateRoots = Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_CACHE_HOME: "cache", XDG_STATE_HOME: "state", HASNA_EMAILS_HOME: "app" }).map(([key, name]) => {
+    const path = join(fixtureRoot, name);
+    mkdirSync(path, { mode: 0o700 });
+    process.env[key] = path;
+    return path;
+  });
+  process.env.TMPDIR = join(fixtureRoot, "tmp");
+  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(fixtureRoot, "compiler");
+  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
+  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
+  closeDatabase();
+  db = getDatabase(":memory:");
+  api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "explicit library fixture" }) });
+  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
+  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
+  requests = [];
+  const observer = function(this: unknown, ...args: Parameters<typeof fetch>) {
+    const promise = Reflect.apply(originalFetch, this, args);
+    const [input, init] = args;
+    void promise.then((response: Response) => requests.push({
+      path: new URL(input instanceof Request ? input.url : String(input)).pathname,
+      method: init?.method ?? "GET", status: response.status,
+    }), () => {});
+    return promise;
+  };
+  globalThis.fetch = Object.assign(observer, originalFetch) as typeof fetch;
 });
 
 afterEach(() => {
-  closeDatabase();
-  for (const key of Object.keys(process.env)) {
-    if (!Object.prototype.hasOwnProperty.call(inheritedEnv, key)) delete process.env[key];
+  try {
+    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
+    expect(process.exit).toBe(originalExit);
+    expect(console.error).toBe(originalError);
+  } finally {
+    api.stop();
+    closeDatabase();
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+    process.exit = originalExit;
+    for (const key of Object.keys(process.env)) {
+      if (!Object.hasOwn(inheritedEnv, key)) delete process.env[key];
+    }
+    Object.assign(process.env, inheritedEnv);
+    // Bun ignores undefined assignment; retain an unset status's effective zero.
+    process.exitCode = originalExitCode ?? 0;
+    rmSync(fixtureRoot, { recursive: true, force: true });
   }
-  Object.assign(process.env, inheritedEnv);
 });
 
 function store(): EmailStore {
@@ -79,6 +141,7 @@ function inboundListRow(recipient: string, id: string): MessageListRecord {
     subject: "filler",
     status: "received",
     provider_message_id: null,
+    policy_denial: null,
     message_id: null,
     in_reply_to: null,
     received_at: "2026-01-01T00:00:00.000Z",
@@ -137,6 +200,72 @@ async function seedAddress(subject: EmailStore, email: string, provisioning: str
   if (!provisioned.ok) throw new Error("address provisioning seed refused");
   return created.value.id;
 }
+
+describe("configured delivery report boundary", () => {
+  it("reads populated ownership, alias and exact-recipient facts over real HTTP", async () => {
+    const subject = store();
+    const owner = await subject.owners.create({ type: "human", name: "Configured Owner" });
+    if (!owner.ok) throw new Error("owner seed refused");
+    const id = await seedAddress(subject, "ops@example.com", "ready");
+    expect((await subject.addressLifecycle.applyAddressOwnership(id, { owner_id: String(owner.value["id"]) })).ok).toBe(true);
+    expect((await subject.aliases.create({ domain: "example.com", local_part: "hello", target_address: "ops@example.com" })).ok).toBe(true);
+    for (const [recipient, direction, at] of [
+      ["ops@example.com", "inbound", "2026-01-01T00:00:00.000Z"],
+      ["Ops <ops@example.com>", "inbound", "2026-01-02T00:00:00.000Z"],
+      ["devops@example.com", "inbound", "2026-01-03T00:00:00.000Z"],
+      ["ops@example.com", "outbound", "2026-01-04T00:00:00.000Z"],
+    ]) expect((await subject.messages.createMessage({ from_addr: "sender@example.com", to_addrs: [recipient!], direction, received_at: at })).ok).toBe(true);
+    const report = await diagnoseInboundDelivery("ops@example.com");
+    expect(report.store).toBe(`Emails API at ${api.baseUrl}`);
+    expect(report.recent_local_messages).toBe(2);
+    expect(report.latest_received_at).toBe("2026-01-02T00:00:00.000Z");
+    expect(named(report, "Ownership")[0]?.message).toBe("Owned by Configured Owner.");
+    expect(named(report, "Address receive readiness")[0]?.status).toBe("pass");
+    const alias = await diagnoseInboundDelivery("hello@example.com");
+    expect(alias.alias_target).toBe("ops@example.com");
+    expect(named(alias, "Alias")[0]?.status).toBe("pass");
+    for (const path of ["/v1/addresses", "/v1/aliases", "/v1/messages", "/v1/domains", `/v1/owners/${owner.value["id"]}`]) {
+      expect(requests.some(row => row.path === path && row.method === "GET" && row.status === 200)).toBe(true);
+    }
+    expect(db.query("SELECT owner_id, provisioning_status FROM addresses WHERE id = ?").get(id)).toEqual({ owner_id: owner.value["id"], provisioning_status: "ready" });
+    // Operator config still performs private directory metadata I/O. Empty roots
+    // prove no stored client data, not no I/O or working service-side ingestion.
+    expect(named(report, "Inbound sources")[0]?.message).toContain("this installation's config");
+    expect(existsSync(join(process.env.HASNA_EMAILS_HOME!, "config.json"))).toBe(false);
+  });
+
+  it("rejects missing credentials before HTTP or data mutation", async () => {
+    delete process.env[EMAILS_API_KEY_ENV];
+    const before = api.requestCount();
+    await expect(diagnoseInboundDelivery("ops@example.com")).rejects.toThrow(/API credential is required/);
+    expect(api.requestCount()).toBe(before);
+    expect(db.query("SELECT COUNT(*) AS n FROM addresses").get()).toEqual({ n: 0 });
+  });
+
+  it("rejects a wrong key at HTTP instead of reporting an empty healthy installation", async () => {
+    const wrong = "synthetic-invalid-library-bearer";
+    process.env[EMAILS_API_KEY_ENV] = wrong;
+    const error = await diagnoseInboundDelivery("ops@example.com").catch(error => error);
+    expect(error).toMatchObject({ name: "EmailsApiFault", status: 401 });
+    expect(String(error).includes(wrong) || String(error).includes(api.apiKey)).toBe(false);
+    expect(requests).toEqual([{ path: "/v1/addresses", method: "GET", status: 401 }]);
+    expect(db.query("SELECT COUNT(*) AS n FROM addresses").get()).toEqual({ n: 0 });
+  });
+
+  it("rejects every blank and nonblank database setting before the report dispatches", async () => {
+    for (const setting of CLIENT_DATABASE_SETTINGS) for (const value of ["", "synthetic-database-poison"]) {
+      process.env[setting] = value;
+      const before = api.requestCount();
+      const error = await diagnoseInboundDelivery("ops@example.com").catch(error => error);
+      expect(error).toBeInstanceOf(StoreConfigurationError);
+      expect((error as StoreConfigurationError).settings).toContain(setting);
+      expect(String(error).includes("synthetic-database-poison")).toBe(false);
+      expect(api.requestCount()).toBe(before);
+      expect(db.query("SELECT COUNT(*) AS n FROM addresses").get()).toEqual({ n: 0 });
+      delete process.env[setting];
+    }
+  });
+});
 
 describe("diagnoseInboundDelivery over the store seam", () => {
   it("reads the address, its provisioning and its owner from the configured store", async () => {
@@ -252,10 +381,10 @@ describe("diagnoseInboundDelivery over the store seam", () => {
 
   it("builds its own store from the storage configuration when the caller hands in none", async () => {
     // No `store` option: the resolution in src/store-resolution.ts decides, and
-    // EMAILS_DB_PATH is what this test set. The report names the store it read.
+    // The authenticated fixture is configured. The report names its credential-free origin.
     const report = await diagnoseInboundDelivery("ops@example.com");
 
-    expect(report.store).toContain("SQLite at");
+    expect(report.store).toBe(`Emails API at ${api.baseUrl}`);
     expect(named(report, "Address format")[0]?.status).toBe("pass");
   });
 });
@@ -411,8 +540,9 @@ describe("diagnoseInboundDeliveryLive", () => {
       inspectMx: async () => ({
         domain: "example.com",
         owner: "aws-ses" as const,
-        records: [{ priority: 10, exchange: "inbound-smtp.us-east-1.amazonaws.com" }],
+        records: [{ priority: 10, exchange: "inbound-smtp.us-east-1.amazonaws.com", owner: "aws-ses" as const }],
         summary: "Root MX is owned by Amazon SES",
+        protects_existing_inbound: false,
       }),
     });
 

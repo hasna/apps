@@ -28,6 +28,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "./db/database.js";
 import { uuid } from "./db/runtime.js";
 import { EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./lib/client-env.js";
+import { EMAILS_API_URL_ENV, StoreConfigurationError } from "./lib/client-settings.js";
 import { emailsSelfHostedOpenApi } from "./server/self-hosted/openapi.js";
 import { SELF_HOSTED_RESOURCES } from "./server/self-hosted/resources.js";
 import { CAPABILITY_KEYS, capabilityRefusal, isCapabilityRefusal } from "./store/capabilities.js";
@@ -249,12 +250,19 @@ describe("HttpEmailStore conformance", () => {
   });
 
   it("never exposes a credential through the diagnostics descriptor", () => {
-    // A URL carrying userinfo and a query string is the realistic hazard: this string is
-    // the one most likely to reach a log.
-    const descriptor = httpStoreDescriptor("https://operator:sup3rsecret@mail.example.test/v1?token=abc#frag");
+    // Reject an unsafe URL without quoting its values, rather than silently turning
+    // it into a different configuration. Both rejection and success are safe to log.
+    const unsafe = "https://operator:sup3rsecret@mail.example.test/v1?token=abc#frag";
+    let rejected: unknown;
+    try { httpStoreDescriptor(unsafe); } catch (error) { rejected = error; }
+    expect(rejected).toBeInstanceOf(StoreConfigurationError);
+    expect((rejected as StoreConfigurationError).settings).toEqual([EMAILS_API_URL_ENV]);
+    const diagnostic = `${String(rejected)} ${JSON.stringify(rejected)}`;
+    const descriptor = httpStoreDescriptor("https://mail.example.test/v1");
     expect(descriptor.kind).toBe("api");
     expect(descriptor.detail).toBe("Emails API at https://mail.example.test");
-    for (const secret of ["sup3rsecret", "operator", "token", "abc", "?", "#"]) {
+    for (const secret of ["sup3rsecret", "operator", "token", "abc", "?", "#", unsafe]) {
+      expect(diagnostic).not.toContain(secret);
       expect(descriptor.detail).not.toContain(secret);
     }
     // The DEFAULT detail of a real store, not one this test supplied.
@@ -626,13 +634,46 @@ describe("the HTTP transport's bounds", () => {
     expect(refused.status).toBe(403);
   });
 
-  it("strips a credential and a query string out of the base URL it reports", () => {
-    const { requestBase, safeBase } = toV1BaseUrl("https://user:pw@mail.example.test/?a=b#c");
+  it("rejects unsafe URLs before transport and normalizes valid API bases", () => {
+    let requests = 0;
+    const fetchImpl: FetchImplementation = async () => {
+      requests += 1;
+      throw new Error("invalid URL must not reach transport");
+    };
+    for (const baseUrl of [
+      "https://user:pw@mail.example.test/?a=b#c",
+      "https://user@mail.example.test",
+      "https://mail.example.test/?token=abc",
+      "https://mail.example.test/#fragment",
+      "https://mail.example.test/?",
+      "https://mail.example.test/#",
+      "https://mail.example.test/\n",
+      "http://mail.example.test",
+    ]) {
+      for (const validate of [
+        () => toV1BaseUrl(baseUrl),
+        () => createHttpEmailStore({ baseUrl, credential: api.apiKey, fetchImpl }),
+      ]) {
+        let rejected: unknown;
+        try { validate(); } catch (error) { rejected = error; }
+        expect(rejected).toBeInstanceOf(StoreConfigurationError);
+        expect((rejected as StoreConfigurationError).settings).toEqual([EMAILS_API_URL_ENV]);
+        const diagnostic = `${String(rejected)} ${JSON.stringify(rejected)}`;
+        expect(diagnostic).not.toContain(baseUrl);
+        expect(diagnostic).not.toContain(api.apiKey);
+      }
+    }
+    expect(requests).toBe(0);
+    const { requestBase, safeBase } = toV1BaseUrl("https://mail.example.test/");
     expect(requestBase).toBe("https://mail.example.test/v1");
     expect(safeBase).toBe("https://mail.example.test");
     // A configured URL that ALREADY ends in /v1 must not gain a second one.
     expect(toV1BaseUrl("https://mail.example.test/v1").requestBase).toBe("https://mail.example.test/v1");
     expect(toV1BaseUrl("https://mail.example.test/v1/").requestBase).toBe("https://mail.example.test/v1");
+    expect(toV1BaseUrl("https://mail.example.test/api/v1")).toEqual({
+      requestBase: "https://mail.example.test/api/v1", safeBase: "https://mail.example.test/api",
+    });
+    expect(toV1BaseUrl(api.baseUrl).requestBase).toBe(`${api.baseUrl}/v1`);
   });
 });
 

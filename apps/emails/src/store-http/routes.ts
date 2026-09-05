@@ -114,6 +114,8 @@ function resourceRoutes(): RouteUse[] {
 }
 
 export const ROUTES: readonly RouteUse[] = Object.freeze([
+  // Read-only metadata projection, deliberately absent from generic CRUD paths.
+  { method: "GET", template: "/v1/sources", operations: ["sourceInventory.list"] },
   // ---- domains -------------------------------------------------------------
   { method: "GET", template: "/v1/domains", operations: ["listDomains", "getDomainByName"] },
   { method: "POST", template: "/v1/domains", operations: ["createDomain"] },

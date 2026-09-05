@@ -52,7 +52,8 @@
 // forwarded" is a compile error rather than a test case.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "./database.js";
 import {
@@ -66,11 +67,13 @@ import {
   type ForwardingMode,
 } from "./forwarding.js";
 import { createHttpEmailStore } from "../store-http/index.js";
+import { EmailsApiFault } from "../store-http/outcome.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import type { EmailStore } from "../store/email-store.js";
 import type { Outcome } from "../store/outcome.js";
 import type { ResourceInput, ResourceRow } from "../store/records.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
+import { EMAILS_API_KEY_ENV, EMAILS_API_URL_SETTINGS, RETIRED_EMAILS_SELECTOR_SETTINGS } from "../lib/client-settings.js";
 import {
   API_BASE_URL_SETTING,
   API_CREDENTIAL_SETTINGS,
@@ -93,37 +96,105 @@ function restoreInheritedProcessEnv(): void {
 
 let db: Database;
 let api: V1StoreApi;
+let activeApi: V1StoreApi | null = null;
+let fixtureDirectory: string | null = null;
+let clientRoots: string[];
+let inheritedFetch: typeof globalThis.fetch;
+let inheritedExit: typeof process.exit;
+let inheritedExitCode: typeof process.exitCode;
+let requests: Array<{ method: string; path: string; status: number; authorized: boolean; body: unknown }>;
+let resourceAccess: string[];
+const CLIENT_ROOT_SETTINGS = [
+  "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "HASNA_EMAILS_HOME",
+] as const;
 
 /**
- * Leave exactly ONE store configured, so the cases that pass no store can resolve.
- *
- * The settings are named through the resolution's OWN exported constants rather than copied
- * as literals. This matters because "a database path AND an API are both configured" is a
- * HARD BOOT ERROR with deliberately no precedence rule, so a stray inherited API setting
- * turns every default-store case into that error.
+ * Remove inherited client inputs before binding the canonical API to the explicit test DB.
+ * The raw SQLite adapter is fixture backing, never configured client fallback. In particular,
+ * malformed SQLite scalar rows sent over this fixture are mapper tests, not PostgreSQL claims.
  */
 function configureExactlyOneStore(): void {
-  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
+  for (const setting of [
+    ...EMAILS_API_URL_SETTINGS, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS,
+    ...DATABASE_PATH_SETTINGS, ...RETIRED_EMAILS_SELECTOR_SETTINGS,
+  ]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-  process.env["EMAILS_DB_PATH"] = ":memory:";
 }
 
 beforeEach(() => {
   captureInheritedProcessEnv();
+  inheritedFetch = globalThis.fetch;
+  inheritedExit = process.exit;
+  inheritedExitCode = process.exitCode;
+  fixtureDirectory = null;
+  clientRoots = [];
+  process.exit = ((code?: number | string | null) => {
+    throw new Error(`Unexpected forwarding fixture process.exit(${code ?? 0})`);
+  }) as typeof process.exit;
+  requests = [];
+  resourceAccess = [];
+  fixtureDirectory = mkdtempSync(join(tmpdir(), "forwarding-configured-fixture-"));
+  clientRoots = CLIENT_ROOT_SETTINGS.map((setting, index) => {
+    const directory = join(fixtureDirectory!, `client-${index}`);
+    mkdirSync(directory, { mode: 0o700 });
+    process.env[setting] = directory;
+    return directory;
+  });
   configureExactlyOneStore();
   resetDatabase();
-  db = getDatabase();
+  db = getDatabase(":memory:");
   // The `/v1` service the HTTP store talks to. Every row it serves comes out of this same
   // database through the seam, so both store variants below read one dataset.
-  api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "forwarding fixture" }) });
+  const backing = createSqliteEmailStore({ database: db, detail: "forwarding fixture" });
+  api = startV1StoreApi({ store: {
+    ...backing,
+    forwarding: {
+      ...backing.forwarding,
+      async list(opts) { resourceAccess.push("list"); return backing.forwarding.list(opts); },
+      async get(id) { resourceAccess.push("get"); return backing.forwarding.get(id); },
+      async create(input) { resourceAccess.push("create"); return backing.forwarding.create(input); },
+      async update(id, patch) { resourceAccess.push("update"); return backing.forwarding.update(id, patch); },
+      async remove(id) { resourceAccess.push("remove"); return backing.forwarding.remove(id); },
+    },
+  } });
+  activeApi = api;
+  process.env[API_BASE_URL_SETTING] = api.baseUrl;
+  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
+  // Observe the real promise without substituting a response, credential or storage operation.
+  const observedFetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
+    const [input, init] = args;
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    const promise = Reflect.apply(inheritedFetch, this, args);
+    if (url.origin === api.baseUrl) {
+      void promise.then((response: Response) => requests.push({
+        method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+        path: `${url.pathname}${url.search}`,
+        status: response.status,
+        authorized: headers.get("authorization") === `Bearer ${api.apiKey}`,
+        body: typeof init?.body === "string" ? JSON.parse(init.body) as unknown : null,
+      }), () => {});
+    }
+    return promise;
+  };
+  globalThis.fetch = Object.assign(observedFetch, inheritedFetch) as typeof fetch;
 });
 
 afterEach(() => {
-  api.stop();
-  closeDatabase();
-  restoreInheritedProcessEnv();
+  try {
+    activeApi?.stop();
+    activeApi = null;
+    closeDatabase();
+    for (const directory of clientRoots) expect(readdirSync(directory)).toEqual([]);
+    expect(process.exitCode ?? 0).toBe(inheritedExitCode ?? 0);
+  } finally {
+    globalThis.fetch = inheritedFetch;
+    process.exit = inheritedExit;
+    process.exitCode = inheritedExitCode;
+    restoreInheritedProcessEnv();
+    if (fixtureDirectory !== null) rmSync(fixtureDirectory, { recursive: true, force: true });
+  }
 });
 
 function sqliteStore(): EmailStore {
@@ -858,10 +929,10 @@ function seedInbound(to: string, receivedAt: string, opts: { isSent?: boolean } 
 /**
  * A rule whose `created_at` is set explicitly, so the backfill gate can be exercised.
  *
- * NO STORE IS INJECTED, deliberately: the configured store is the same in-memory SQLite
- * database, so this fixture works under the collapsed signature AND under the deleted
- * facade's — which is what lets the behavioural cases below run against `main` and DETECT a
- * wrong answer there instead of dying on a signature mismatch.
+ * NO STORE IS INJECTED, deliberately: the default client uses authenticated HTTP against
+ * the fixture's explicit memory backing. The returned ID names the exact row stamped here
+ * and read by the explicit local pending/ledger operations. This does not configure a local
+ * client or establish canonical forwarding-pipeline capability.
  */
 async function seedRule(source: string, createdAt: string, opts: { enabled?: boolean } = {}): Promise<string> {
   const rule = await createForwardingRule({
@@ -1166,5 +1237,168 @@ describe("the collapsed module", () => {
     // Positive control that the file really was read, so a path that stops resolving cannot
     // satisfy the negative assertion by handing back an empty string.
     expect(pipeline.length).toBeGreaterThan(4000);
+  });
+});
+
+describe("configured forwarding fixture boundary", () => {
+  it("persists default CRUD over authenticated HTTP with exact writable payloads and backing rows", async () => {
+    const first = await createForwardingRule({
+      source_address: " Alpha@Wire.Example ", target_address: " Archive@Target.Example ",
+      from_address: " Sender@Wire.Example ",
+    });
+    const other = await createForwardingRule({ source_address: "zulu@wire.example", target_address: "archive@target.example" });
+    const changed = await createForwardingRule({
+      source_address: "alpha@wire.example", target_address: "archive@target.example", enabled: false,
+    });
+    expect(changed.id).toBe(first.id);
+    expect(changed.from_address).toBeNull();
+    expect(changed.enabled).toBe(false);
+    expect((await setForwardingRuleEnabled(first.id, true)).enabled).toBe(true);
+    expect((await listForwardingRules()).map(row => row.id)).toEqual([first.id, other.id]);
+    expect((await listForwardingRules({ source_address: "ALPHA@WIRE.EXAMPLE", limit: 1 })).map(row => row.id)).toEqual([first.id]);
+    expect((await listForwardingRules({ limit: 1, offset: 1 })).map(row => row.id)).toEqual([other.id]);
+    const stored = db.query("SELECT * FROM forwarding_rules ORDER BY source_address").all();
+    expect(stored).toHaveLength(2);
+    expect(stored[0]).toMatchObject({ id: first.id, source_address: "alpha@wire.example", target_address: "archive@target.example", mode: "app-copy", provider_id: null, from_address: null, enabled: 1 });
+    const writes = requests.filter(row => row.method === "POST" || row.method === "PATCH");
+    expect(writes.map(row => row.status)).toEqual([201, 201, 200, 200]);
+    expect(writes[0]?.body).toEqual({ source_address: "alpha@wire.example", target_address: "archive@target.example", mode: "app-copy", provider_id: null, from_address: "sender@wire.example", enabled: true });
+    expect(writes[2]?.body).toEqual({ provider_id: null, from_address: null, enabled: false });
+    expect(writes[3]?.body).toEqual({ enabled: true });
+    expect(requests.some(row => row.path.includes("source_address=alpha%40wire.example") && row.path.includes("mode=app-copy"))).toBe(true);
+    expect(requests.filter(row => row.path !== "/v1/openapi.json").every(row => row.authorized)).toBe(true);
+    expect(resourceAccess).toContain("create");
+    expect(resourceAccess).toContain("update");
+    expect((await getForwardingRule(first.id))?.source_address).toBe("alpha@wire.example");
+    expect(await removeForwardingRule(other.id)).toBe(true);
+    expect(await removeForwardingRule(other.id)).toBe(false);
+    expect((await listForwardingRules()).map(row => row.id)).toEqual([first.id]);
+  });
+
+  it("uses an HTTP-created rule in the same explicit local pending and delivery ledger without further requests", async () => {
+    const id = await seedRule("local-ledger@wire.example", "2026-01-01 00:00:00");
+    const inbound = seedInbound("local-ledger@wire.example", "2026-01-02 00:00:00");
+    expect(requests.filter(row => row.method === "POST")).toEqual([{
+      method: "POST", path: "/v1/forwarding", status: 201, authorized: true,
+      body: { source_address: "local-ledger@wire.example", target_address: "archive@example.net", mode: "app-copy", provider_id: null, from_address: null, enabled: true },
+    }]);
+    expect(db.query("SELECT id, created_at FROM forwarding_rules WHERE id = ?").get(id)).toEqual({ id, created_at: "2026-01-01 00:00:00" });
+    const served = api.requestCount(), access = resourceAccess.length;
+    expect(listPendingForwarding(100, db).map(row => [row.rule.id, row.inbound_email_id])).toEqual([[id, inbound]]);
+    const delivered = recordForwardingDelivery({ rule_id: id, inbound_email_id: inbound, status: "sent" }, db);
+    expect(delivered).toMatchObject({ rule_id: id, inbound_email_id: inbound, status: "sent" });
+    expect(listPendingForwarding(100, db)).toEqual([]);
+    expect(db.query("SELECT rule_id, inbound_email_id, status FROM forwarding_deliveries").all()).toEqual([{ rule_id: id, inbound_email_id: inbound, status: "sent" }]);
+    expect(api.requestCount()).toBe(served);
+    expect(resourceAccess).toHaveLength(access);
+  });
+
+  it("passes raw corrupt mode and enabled values through real HTTP without repairing or mutating them", async () => {
+    // Raw SQLite-to-wire decoder coverage only: this does not make these shapes valid PG data.
+    const id = await seedRule("corrupt@wire.example", "2026-01-01 00:00:00");
+    for (const [column, value, restored, diagnostic] of [
+      ["mode", "relay", "app-copy", "Invalid forwarding mode in database: relay"],
+      ["enabled", "no", "1", "no readable enabled flag"],
+    ] as const) {
+      forceRuleColumn(id, column, value);
+      const before = db.query("SELECT * FROM forwarding_rules ORDER BY id").all();
+      const start = requests.length, access = resourceAccess.length;
+      await expect(getForwardingRule(id)).rejects.toThrow(diagnostic);
+      await expect(listForwardingRules()).rejects.toThrow(diagnostic);
+      const observed = requests.slice(start);
+      expect(observed.some(row => row.path === `/v1/forwarding/${id}`)).toBe(true);
+      expect(observed.some(row => row.path.startsWith("/v1/forwarding?"))).toBe(true);
+      expect(observed.every(row => row.method === "GET" && row.status === 200 && row.authorized)).toBe(true);
+      expect(resourceAccess.slice(access)).toContain("get");
+      expect(resourceAccess.slice(access)).toContain("list");
+      expect(db.query("SELECT * FROM forwarding_rules ORDER BY id").all()).toEqual(before);
+      forceRuleColumn(id, column, restored);
+      expect(await getForwardingRule(id)).toMatchObject({ id, mode: "app-copy", enabled: true });
+    }
+  });
+
+  it("rejects missing URL or credentials and every blank or nonblank DB input before requests or mutation", async () => {
+    const created = await createForwardingRule({ source_address: "private@guard.example", target_address: "private@target.example" });
+    const before = db.query("SELECT * FROM forwarding_rules ORDER BY id").all();
+    const served = api.requestCount(), access = resourceAccess.length;
+    delete process.env[API_BASE_URL_SETTING];
+    await expect(getForwardingRule(created.id)).rejects.toThrow(/API_URL/);
+    expect(api.requestCount()).toBe(served);
+    process.env[API_BASE_URL_SETTING] = api.baseUrl;
+    for (const key of API_CREDENTIAL_SETTINGS) delete process.env[key];
+    await expect(getForwardingRule(created.id)).rejects.toThrow(/API credential is required/);
+    expect(api.requestCount()).toBe(served);
+    process.env[EMAILS_API_KEY_ENV] = api.apiKey;
+    expect(DATABASE_PATH_SETTINGS).toHaveLength(7);
+    for (const setting of DATABASE_PATH_SETTINGS) {
+      for (const value of ["", ":memory:"]) {
+        process.env[setting] = value;
+        try {
+          await expect(getForwardingRule(created.id)).rejects.toThrow(/cannot configure an Emails client/);
+          await expect(listForwardingRules()).rejects.toThrow(/cannot configure an Emails client/);
+          await expect(createForwardingRule({ source_address: "other@guard.example", target_address: "other@target.example" })).rejects.toThrow(/cannot configure an Emails client/);
+          await expect(setForwardingRuleEnabled(created.id, false)).rejects.toThrow(/cannot configure an Emails client/);
+          await expect(removeForwardingRule(created.id)).rejects.toThrow(/cannot configure an Emails client/);
+          expect(api.requestCount()).toBe(served);
+          expect(resourceAccess).toHaveLength(access);
+          expect(db.query("SELECT * FROM forwarding_rules ORDER BY id").all()).toEqual(before);
+        } finally { delete process.env[setting]; }
+      }
+    }
+    expect(await getForwardingRule(created.id)).toEqual(created);
+  });
+
+  it("observes real 401 before populated resource access without leaking credentials or stored payload", async () => {
+    const created = await createForwardingRule({ source_address: "private@auth.example", target_address: "private-synthetic@target.example" });
+    const before = db.query("SELECT * FROM forwarding_rules ORDER BY id").all();
+    const served = api.requestCount(), access = resourceAccess.length, start = requests.length;
+    const wrong = "synthetic-wrong-forwarding-bearer";
+    process.env[EMAILS_API_KEY_ENV] = wrong;
+    let fault: unknown;
+    let answer: unknown = "not returned";
+    try { answer = await getForwardingRule(created.id); } catch (error) { fault = error; }
+    expect(answer).toBe("not returned");
+    expect(fault).toBeInstanceOf(EmailsApiFault);
+    expect((fault as EmailsApiFault).status).toBe(401);
+    expect(api.requestCount()).toBe(served + 1);
+    expect(requests.slice(start)).toEqual([{ method: "GET", path: `/v1/forwarding/${created.id}`, status: 401, authorized: false, body: null }]);
+    expect(resourceAccess).toHaveLength(access);
+    expect(db.query("SELECT * FROM forwarding_rules ORDER BY id").all()).toEqual(before);
+    for (const secret of [wrong, api.apiKey, created.target_address]) expect(String(fault)).not.toContain(secret);
+    process.env[EMAILS_API_KEY_ENV] = api.apiKey;
+    expect(await getForwardingRule(created.id)).toEqual(created);
+  });
+
+  it("rejects invalid mode and addresses before wire access while retaining populated rows", async () => {
+    await createForwardingRule({ source_address: "kept@validation.example", target_address: "kept@target.example" });
+    const before = db.query("SELECT * FROM forwarding_rules ORDER BY id").all();
+    const served = api.requestCount(), access = resourceAccess.length;
+    for (const mode of ["relay", "", "APP-COPY"]) {
+      await expect(createForwardingRule({ source_address: "new@validation.example", target_address: "new@target.example", mode: mode as ForwardingMode })).rejects.toThrow(/Forwarding mode must be app-copy/);
+    }
+    for (const source of ["missing-domain", "@validation.example", "name@"]) {
+      await expect(createForwardingRule({ source_address: source, target_address: "new@target.example" })).rejects.toThrow(/Invalid email address/);
+    }
+    expect(api.requestCount()).toBe(served);
+    expect(resourceAccess).toHaveLength(access);
+    expect(db.query("SELECT * FROM forwarding_rules ORDER BY id").all()).toEqual(before);
+  });
+
+  it("faults on a closed real service instead of reading populated explicit backing", async () => {
+    const created = await createForwardingRule({ source_address: "kept@closed.example", target_address: "kept@target.example" });
+    const before = db.query("SELECT * FROM forwarding_rules ORDER BY id").all();
+    api.stop();
+    activeApi = null;
+    const access = resourceAccess.length;
+    await expect(getForwardingRule(created.id)).rejects.toThrow();
+    expect(resourceAccess).toHaveLength(access);
+    expect(db.query("SELECT * FROM forwarding_rules ORDER BY id").all()).toEqual(before);
+  });
+
+  it("contains unexpected nonzero process exit without changing the inherited effective code", () => {
+    const exit = process.exit, code = process.exitCode;
+    expect(() => process.exit(92)).toThrow("Unexpected forwarding fixture process.exit(92)");
+    expect(process.exit).toBe(exit);
+    expect(process.exitCode).toBe(code);
   });
 });

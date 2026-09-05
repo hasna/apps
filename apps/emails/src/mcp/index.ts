@@ -40,6 +40,10 @@ if (args.includes("--version") || args.includes("-V")) {
 }
 
 async function main(): Promise<void> {
+  // Validate the upstream client before either MCP transport can start. The
+  // HTTP transport's separate local bearer remains its own access boundary.
+  const { loadEmailsClientConfig } = await import("../lib/client-config.js");
+  loadEmailsClientConfig();
   const { isHttpMode, isStdioMode, resolveHttpPort } = await import("./options.js");
   // HTTP is opt-in. Serving the full tool graph (send_email, add_forwarding_rule,
   // set_config, create_send_key, ...) on a listening socket must be a deliberate

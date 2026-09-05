@@ -48,7 +48,11 @@
 // against.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { closeDatabase, getDatabase, resetDatabase, type Database } from "./database.js";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDatabase, getDatabase, type Database } from "./database.js";
+import { EMAILS_API_KEY_ENV, EMAILS_API_URL_SETTINGS, RETIRED_EMAILS_SELECTOR_SETTINGS } from "../lib/client-settings.js";
 import {
   emailDigestPeriodLabel,
   getEmailDigest,
@@ -62,7 +66,6 @@ import {
 import { createHttpEmailStore } from "../store-http/index.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import type { EmailStore } from "../store/email-store.js";
-import type { Outcome } from "../store/outcome.js";
 import type { ResourceInput, ResourceRow } from "../store/records.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 import {
@@ -87,42 +90,106 @@ function restoreInheritedProcessEnv(): void {
 
 let db: Database;
 let api: V1StoreApi;
+let activeApi: V1StoreApi | null = null;
+let scratch: string | null = null;
+let stateRoots: string[] = [];
+let savedFetch: typeof globalThis.fetch;
+let observedFetch: typeof globalThis.fetch;
+let savedExit: typeof process.exit;
+let savedExitCode: typeof process.exitCode;
+let savedConsole: Pick<Console, "log" | "error" | "warn" | "info">;
+let savedDate: DateConstructor;
+let failLaterPages = false;
+let backendCalls = 0;
+const wire: Array<{ path: string; method: string; offset: number; authorized: boolean; status: number | null }> = [];
 
-/**
- * Leave exactly ONE store configured, so the cases that pass no store can resolve.
- *
- * The settings are named through the resolution's OWN exported constants rather than
- * copied as literals: this is the list that decides which store a caller with no
- * injected store gets, and a second copy of it here would go stale the first time the
- * resolution learned another setting.
- *
- * This matters because "a database path AND an API are both configured" is a HARD BOOT
- * ERROR with deliberately no precedence rule, so a stray inherited API setting turns
- * every default-path case into that error. The suite runner scrubs them; this makes the
- * file independent of that.
- */
+/** Only the fixture owns memory storage; default clients use its authenticated HTTP. */
 function configureExactlyOneStore(): void {
-  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
+  for (const setting of [...EMAILS_API_URL_SETTINGS, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS,
+    ...RETIRED_EMAILS_SELECTOR_SETTINGS, ...DATABASE_PATH_SETTINGS, "EMAILS_HOME", "HASNA_HOME",
+    "HASNA_DATA_HOME", "HASNA_CONFIG_HOME", "HASNA_CACHE_HOME", "HASNA_STATE_HOME"]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-  process.env["EMAILS_DB_PATH"] = ":memory:";
+  for (const key of Object.keys(process.env)) if (/^(?:AWS|AMAZON|RESEND|CLOUDFLARE)_/.test(key)) delete process.env[key];
+}
+
+/** Observe metadata only, returning the native fetch promise and response unchanged. */
+function observeRequests(): void {
+  observedFetch = Object.assign((...args: Parameters<typeof fetch>): ReturnType<typeof fetch> => {
+    const [request, init] = args;
+    const url = new URL(request instanceof Request ? request.url : String(request));
+    if (activeApi === null || url.origin !== activeApi.baseUrl) throw new Error("fixture request left its loopback service");
+    const headers = new Headers(init?.headers ?? (request instanceof Request ? request.headers : undefined));
+    const item = { path: url.pathname, method: init?.method ?? (request instanceof Request ? request.method : "GET"),
+      offset: Number(url.searchParams.get("offset") ?? 0), authorized: headers.get("authorization") === `Bearer ${activeApi.apiKey}`, status: null as number | null };
+    wire.push(item);
+    const pending = savedFetch(...args);
+    void pending.then((response) => { item.status = response.status; }, () => { item.status = 0; });
+    return pending;
+  }, { preconnect: savedFetch.preconnect });
+  globalThis.fetch = observedFetch;
 }
 
 beforeEach(() => {
   captureInheritedProcessEnv();
+  savedFetch = globalThis.fetch;
+  savedExit = process.exit;
+  savedExitCode = process.exitCode;
+  savedConsole = { log: console.log, error: console.error, warn: console.warn, info: console.info };
+  savedDate = Date;
+  stateRoots = [];
+  wire.length = 0;
+  failLaterPages = false;
+  backendCalls = 0;
+  scratch = mkdtempSync(join(tmpdir(), "emails-digest-configured-"));
   configureExactlyOneStore();
-  resetDatabase();
-  db = getDatabase();
+  for (const [key, name] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_CACHE_HOME: "cache", XDG_STATE_HOME: "state", HASNA_EMAILS_HOME: "app" })) {
+    const path = join(scratch, name);
+    mkdirSync(path, { mode: 0o700 });
+    process.env[key] = path;
+    stateRoots.push(path);
+  }
+  process.env.TMPDIR = join(scratch, "tmp");
+  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(scratch, "compiler");
+  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
+  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
+  closeDatabase();
+  db = getDatabase(":memory:");
   // The `/v1` service the HTTP store talks to. Every row it serves comes out of this same
   // database through the seam, so both store variants below read one dataset.
-  api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "digest row fixture" }) });
+  const backing = createSqliteEmailStore({ database: db, detail: "digest row fixture" });
+  activeApi = startV1StoreApi({ store: { ...backing, emailDigests: { ...backing.emailDigests,
+    get: (id) => { backendCalls++; return backing.emailDigests.get(id); },
+    create: (row) => { backendCalls++; return backing.emailDigests.create(row); },
+    list: (options) => {
+    backendCalls++;
+    if (failLaterPages && (options?.offset ?? 0) > 0) return Promise.resolve({ ok: false, code: "capability_unavailable", message: "synthetic later-page refusal", status: 501 });
+    return backing.emailDigests.list(options);
+  } } } });
+  api = activeApi;
+  process.env[API_BASE_URL_SETTING] = api.baseUrl;
+  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
+  observeRequests();
 });
 
 afterEach(() => {
-  api.stop();
-  closeDatabase();
-  restoreInheritedProcessEnv();
+  try {
+    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
+    expect(globalThis.fetch).toBe(observedFetch);
+    expect(process.exit).toBe(savedExit);
+    expect(Date).toBe(savedDate);
+    for (const key of ["log", "error", "warn", "info"] as const) expect(console[key]).toBe(savedConsole[key]);
+  } finally {
+    try { activeApi?.stop(); activeApi = null; closeDatabase(); } finally {
+      globalThis.fetch = savedFetch;
+      restoreInheritedProcessEnv();
+      // Bun ignores undefined assignments; preserve explicit statuses, normalize only unset.
+      process.exitCode = savedExitCode ?? 0;
+      if (scratch !== null) rmSync(scratch, { recursive: true, force: true });
+      scratch = null;
+    }
+  }
 });
 
 function sqliteStore(): EmailStore {
@@ -137,6 +204,113 @@ const STORE_VARIANTS: ReadonlyArray<[string, () => EmailStore]> = [
   ["SQLite store", sqliteStore],
   ["HTTP store over /v1", httpStore],
 ];
+
+function digestSnapshot(): string {
+  return JSON.stringify(db.query("SELECT * FROM email_digests ORDER BY id ASC").all());
+}
+
+describe("configured digest transport evidence", () => {
+  it("uses native authenticated HTTP, real creation time and the same populated backing rows", async () => {
+    const before = Date.now();
+    const first = await saveEmailDigest(digestInput({ completed_at: "2020-01-01T00:00:00.000Z" }));
+    const second = await saveEmailDigest(digestInput({ period: "month", completed_at: "2026-06-20T00:00:00.000Z" }));
+    expect(Date.parse(first.created_at) >= Math.floor(before / 1000) * 1000 && Date.parse(first.created_at) <= Date.now()).toBe(true);
+    expect(first.created_at).not.toBe(first.completed_at);
+    expect(await storedRows(sqliteStore())).toHaveLength(2);
+    const snapshot = digestSnapshot();
+    expect((await getEmailDigest(first.id))?.id).toBe(first.id);
+    expect((await getLatestEmailDigest("today"))?.id).toBe(first.id);
+    expect((await listEmailDigests({ period: "month", status: "ok" })).map((row) => row.id)).toEqual([second.id]);
+    expect(await getEmailDigest("missing-configured-digest")).toBeNull();
+    expect(await getLatestEmailDigest("yesterday")).toBeNull();
+    expect(digestSnapshot() === snapshot).toBe(true);
+    expect(api.requestCount()).toBe(wire.length);
+    expect(wire.length).toBeGreaterThan(6);
+    expect(wire.filter((row) => row.path === "/v1/email-digests" && row.method === "POST" && row.status === 201)).toHaveLength(2);
+    expect(wire.every((row) => row.authorized && row.status !== null)).toBe(true);
+  });
+
+  it("completes configured multipage scans and never reports a later-page refusal as empty", async () => {
+    for (let i = 0; i < 520; i++) seedStoredRow(syntheticRow(i));
+    seedStoredRow(syntheticRow(900, { period: "month" }));
+    const snapshot = digestSnapshot();
+    expect((await getLatestEmailDigest("today"))?.id).toBe("synthetic-000519");
+    expect((await listEmailDigests({ period: "today", offset: 505, limit: 3 })).map((row) => row.id))
+      .toEqual(["synthetic-000014", "synthetic-000013", "synthetic-000012"]);
+    expect(wire.some((row) => row.offset > 0 && row.status === 200)).toBe(true);
+    const failureStart = wire.length;
+    failLaterPages = true;
+    await expect(getLatestEmailDigest("today")).rejects.toThrow(/faulted.*synthetic later-page refusal/);
+    await expect(listEmailDigests({ period: "today" })).rejects.toThrow(/faulted.*synthetic later-page refusal/);
+    expect(wire.slice(failureStart).filter((row) => row.offset > 0 && row.status === 503)).toHaveLength(2);
+    expect(wire.slice(failureStart).every((row) => row.method === "GET")).toBe(true);
+    expect(digestSnapshot() === snapshot).toBe(true);
+    failLaterPages = false;
+    expect((await getLatestEmailDigest("today"))?.id).toBe("synthetic-000519");
+  });
+
+  it("rejects missing credentials before native dispatch and recovers on the same populated table", async () => {
+    seedStoredRow(syntheticRow(1));
+    const snapshot = digestSnapshot();
+    delete process.env[EMAILS_API_KEY_ENV];
+    await expect(getEmailDigest("synthetic-000001")).rejects.toThrow(/credential|API_KEY/);
+    expect(wire).toHaveLength(0);
+    expect(api.requestCount()).toBe(0);
+    expect(backendCalls).toBe(0);
+    expect(digestSnapshot() === snapshot).toBe(true);
+    process.env[EMAILS_API_KEY_ENV] = api.apiKey;
+    expect((await getEmailDigest("synthetic-000001"))?.id).toBe("synthetic-000001");
+    expect(api.requestCount()).toBeGreaterThan(0);
+  });
+
+  it("observes a real protected HTTP401 for a wrong key without reading or mutating the row", async () => {
+    seedStoredRow(syntheticRow(1));
+    const snapshot = digestSnapshot();
+    process.env[EMAILS_API_KEY_ENV] = "synthetic-wrong-digest-key";
+    await expect(getEmailDigest("synthetic-000001")).rejects.toMatchObject({ name: "EmailsApiFault", status: 401 });
+    expect(wire.some((row) => row.status === 401 && !row.authorized)).toBe(true);
+    expect(api.requestCount()).toBe(wire.length);
+    expect(backendCalls).toBe(0);
+    expect(digestSnapshot() === snapshot).toBe(true);
+    process.env[EMAILS_API_KEY_ENV] = api.apiKey;
+    expect((await getEmailDigest("synthetic-000001"))?.id).toBe("synthetic-000001");
+  });
+
+  for (const setting of DATABASE_PATH_SETTINGS) for (const value of ["", "synthetic-client-database"]) {
+    it(`refuses ${setting} ${value === "" ? "blank" : "nonblank"} before transport without a fallback`, async () => {
+      seedStoredRow(syntheticRow(1));
+      const snapshot = digestSnapshot();
+      process.env[setting] = value;
+      await expect(saveEmailDigest(digestInput())).rejects.toThrow(setting);
+      await expect(getEmailDigest("synthetic-000001")).rejects.toThrow(setting);
+      expect(wire).toHaveLength(0);
+      expect(api.requestCount()).toBe(0);
+      expect(backendCalls).toBe(0);
+      expect(digestSnapshot() === snapshot).toBe(true);
+      delete process.env[setting];
+      expect((await getEmailDigest("synthetic-000001"))?.id).toBe("synthetic-000001");
+      expect(wire.some((row) => row.authorized && row.status === 200)).toBe(true);
+    });
+  }
+
+  it("validates enum and count before dispatch despite a reachable populated service", async () => {
+    seedStoredRow(syntheticRow(1));
+    const snapshot = digestSnapshot();
+    const invalid: Array<[Partial<SaveEmailDigestInput>, RegExp]> = [
+      [{ period: "unknown" as EmailDigestPeriod }, /Digest period must be/],
+      [{ provider: "unknown" as "local" }, /Digest provider must be/],
+      [{ status: "unknown" as "ok" }, /Digest status must be/],
+      [{ message_count: Number.NaN }, /finite number/],
+    ];
+    for (const [overrides, message] of invalid) await expect(saveEmailDigest(digestInput(overrides))).rejects.toThrow(message);
+    expect(wire).toHaveLength(0);
+    expect(api.requestCount()).toBe(0);
+    expect(backendCalls).toBe(0);
+    expect(digestSnapshot() === snapshot).toBe(true);
+    expect((await saveEmailDigest(digestInput())).id).toBeTruthy();
+    expect(await storedRows(sqliteStore())).toHaveLength(2);
+  });
+});
 
 const CAPABILITY_REFUSAL = {
   ok: false,
@@ -328,8 +502,8 @@ describe("saveEmailDigest", () => {
   it("refuses an out-of-enum period, provider or status before any store is touched", async () => {
     // ONLY SQLITE CONSTRAINS THESE COLUMNS — the self-hosted Postgres migration drops all
     // three CHECKs — so without this the same input is a refusal on one store and an
-    // accepted, unreadable row on the other. No store is passed and none is configured to
-    // be reachable: the refusal must not depend on having one.
+    // accepted, unreadable row on the other. No store is passed; a reachable authenticated
+    // fixture is configured, but validation must refuse before touching it.
     const bad: Array<[Partial<SaveEmailDigestInput>, RegExp]> = [
       [{ period: "fortnight" as EmailDigestPeriod }, /Digest period must be/],
       [{ provider: "smtp" as "local" }, /Digest provider must be/],
@@ -847,9 +1021,9 @@ describe("with no store passed", () => {
     // COVERAGE THIS SUITE OTHERWISE HAS NONE OF. Every behavioural case above injects a store,
     // which is right for testing what the seam does and says nothing about the default. This
     // one exercises `createConfiguredEmailStore()` end to end: the row is written, found as the
-    // period's newest, read back by id, and listed — all through whichever store the
-    // configuration resolves, which under this suite's settings is the same in-memory SQLite
-    // database the assertions below read directly.
+    // period's newest, read back by id, and listed — all through configured authenticated
+    // HTTP, backed by the same explicit in-memory SQLite database the assertions below
+    // read directly.
     //
     // A PARITY GUARD, not a change-detector: this is the path the deleted arms served and it
     // still answers the same way.

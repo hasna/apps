@@ -75,6 +75,8 @@ export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
   // `emails inbox status` printed "Pull now: emails refresh" to every local
   // operator. A command that exists in NO mode must be unavailable in every mode.
   "emails refresh",
+  // getAnalytics() refuses provider-scoped message aggregates in both arms.
+  "emails analytics --provider",
 ];
 
 /**
@@ -83,7 +85,6 @@ export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
  * Source of truth: `grep -n 'serverOnly(' src/cli/commands/*.remote.ts`.
  */
 export const SELF_HOSTED_REFUSED_COMMANDS: readonly string[] = [
-  "emails analytics",
   "emails batch",
   // Only the delivery sub-diagnosis refuses; `emails doctor` itself reads through
   // the store seam (src/lib/doctor.ts) and is a real remedy.
@@ -113,6 +114,7 @@ export const SELF_HOSTED_REFUSED_COMMANDS: readonly string[] = [
   // it used to refuse in self_hosted and is now served by the /v1 server
   // endpoint (GET /v1/messages/unread-by-address), so it RUNS in both modes.
   "emails inbox clear --provider",
+  "emails stats --inbox",
   "emails monitor",
   "emails provider sync",
   "emails pull",
@@ -122,7 +124,6 @@ export const SELF_HOSTED_REFUSED_COMMANDS: readonly string[] = [
   // cancelling the schedule over /v1/scheduled does not.
   "emails schedule run",
   "emails scheduler",
-  "emails stats",
   "emails test",
   "emails webhook listen",
 ];
@@ -146,6 +147,16 @@ function refusedFor(mode: ClientMode): readonly string[] {
  */
 export function isCommandAvailableInMode(command: string, mode: ClientMode): boolean {
   const normalized = command.trim();
+  // Reporting is wired up, but these FLAG forms still refuse. Match the flag
+  // independently of --period/--json order (and --provider=value), rather than
+  // suppressing the whole working report. This is command-suggestion matching,
+  // not shell evaluation; the accepted leading flags are the CLI's booleans.
+  const report = /^emails\s+(?:(?:--json|-q|--quiet|-v|--verbose)\s+)*(stats|analytics)(?:\s+(.*))?$/.exec(normalized);
+  if (report) {
+    const args = report[2]?.split(/\s+/) ?? [];
+    if (report[1] === "analytics" && args.some(arg => arg === "--provider" || arg.startsWith("--provider="))) return false;
+    if (mode === "self_hosted" && report[1] === "stats" && args.includes("--inbox")) return false;
+  }
   return !refusedFor(mode).some((prefix) =>
     normalized === prefix || normalized.startsWith(`${prefix} `));
 }

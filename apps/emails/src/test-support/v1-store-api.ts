@@ -108,6 +108,12 @@ export interface V1StoreApiOptions {
   /** The store every route reads and writes. */
   store: EmailStore;
   apiKey?: string;
+  /**
+   * Optional real-store rollup absent from the generic seam. The callback owns
+   * the service SQL window/predicate semantics; no callback means fixture 503,
+   * not empty rows. This retains the fixture's one-bearer/no-role limitation.
+   */
+  unreadByAddress?: (options: { limit?: number; offset?: number }) => Promise<Array<{ address: string; unread: number }>>;
 }
 
 const DEFAULT_API_KEY = "hasna_emails_store_api_fixture_key";
@@ -266,6 +272,7 @@ function keepDeclared(body: Record<string, unknown>, columns: Set<string>): Reso
 
 interface RouteContext {
   store: EmailStore;
+  unreadByAddress?: V1StoreApiOptions["unreadByAddress"];
   url: URL;
   method: string;
   body: Record<string, unknown>;
@@ -886,6 +893,14 @@ async function route(context: RouteContext): Promise<Response> {
     const counts = settled(await store.messages.messageCounts(domains ? { domains } : undefined));
     return "response" in counts ? counts.response : json(200, { counts: counts.value });
   }
+  // Exact authenticated service route, before the single-message matcher.
+  if (path === "/v1/messages/unread-by-address") {
+    if (method !== "GET") return json(405, { error: "method not allowed" });
+    if (!context.unreadByAddress) {
+      return json(503, { error: "unread-by-address is not configured in this fixture", reason: "fixture_unread_by_address_unavailable" });
+    }
+    return json(200, { rows: await context.unreadByAddress({ limit: intParam(url, "limit"), offset: intParam(url, "offset") }) });
+  }
   if (path === "/v1/messages/threads") {
     if (method !== "GET") return json(405, { error: "method not allowed" });
     const threads = settled(
@@ -1043,7 +1058,7 @@ export function startV1StoreApi(options: V1StoreApiOptions): V1StoreApi {
         }
       }
       try {
-        return await route({ store: options.store, url, method: request.method, body, sendKeyRevocations });
+        return await route({ store: options.store, unreadByAddress: options.unreadByAddress, url, method: request.method, body, sendKeyRevocations });
       } catch (error) {
         // A THROW from the store is a fault, and the service answers 500 for one. It is
         // reported rather than swallowed so a broken fixture is not read as a refusal.

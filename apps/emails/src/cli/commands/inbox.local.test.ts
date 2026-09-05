@@ -1,55 +1,92 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
-import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDatabase, getDatabase } from "../../db/database.js";
 import { getInboundEmail, storeInboundEmail } from "../../db/inbound.local.js";
-import { resetMailDataSource } from "../../lib/mail-data-source.js";
-import { EMAILS_CLIENT_ENV_SECRET_ENV } from "../../lib/client-env.js";
-import {
-  API_BASE_URL_SETTING,
-  API_CREDENTIAL_SETTINGS,
-  DATABASE_PATH_SETTINGS,
-} from "../../store-resolution.js";
+import { resetMailDataSource, SqliteMailDataSource } from "../../lib/mail-data-source.js";
+import { CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV } from "../../lib/client-settings.js";
+import { createSqliteEmailStore } from "../../store-sqlite/index.js";
+import { startV1StoreApi, type V1StoreApi } from "../../test-support/v1-store-api.js";
 import { registerInboxCommands } from "./inbox.local.js";
 
-// Any inherited store selector — a deployment-word variable, the client-env
-// vault pointer, or a configured API endpoint/credential — would route the
-// inbox commands at something other than the local SQLite store this suite
-// exercises. They are cleared by shape rather than named, so this file adds no
-// fresh spelling of the deployment-word variable the axis ratchet is retiring.
-const DEPLOYMENT_WORD_ENV = /^(?:HASNA_)?EMAILS_[A-Z_]*MODE$/;
-function pinLocalStore(): void {
+// The registrar under test uses the canonical authenticated HTTP client. Only
+// the fixture owns the explicit memory adapter used by the original seeds.
+function scrubClientSettings(): void {
   for (const key of Object.keys(process.env)) {
-    if (DEPLOYMENT_WORD_ENV.test(key)) delete process.env[key];
+    if (/^(?:HASNA_)?(?:EMAILS|MAILERY)_/.test(key)) delete process.env[key];
   }
-  delete process.env[EMAILS_CLIENT_ENV_SECRET_ENV];
-  delete process.env[API_BASE_URL_SETTING];
-  for (const key of API_CREDENTIAL_SETTINGS) delete process.env[key];
-  for (const key of DATABASE_PATH_SETTINGS) delete process.env[key];
-  process.env.EMAILS_DB_PATH = ":memory:";
+  for (const key of ["HASNA_HOME", "HASNA_DATA_HOME", "CODEWITH_HOME", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN", "AWS_PROFILE", "RESEND_API_KEY"]) delete process.env[key];
 }
 
 let originalEnv: NodeJS.ProcessEnv;
+let originalExitCode: typeof process.exitCode;
+let originalExit: typeof process.exit;
+let originalError: typeof console.error;
+let root: string;
+let stateRoots: string[];
+let api: V1StoreApi;
+let statusWrites: number;
 let sequence = 0;
 
 type StoreInput = Parameters<typeof storeInboundEmail>[0];
 
 beforeEach(() => {
   originalEnv = { ...process.env };
-  pinLocalStore();
+  originalExitCode = process.exitCode;
+  originalExit = process.exit;
+  originalError = console.error;
+  root = mkdtempSync(join(tmpdir(), "emails-inbox-canonical-"));
+  scrubClientSettings();
+  stateRoots = Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_STATE_HOME: "state", XDG_CACHE_HOME: "cache", HASNA_EMAILS_HOME: "app" }).map(([key, name]) => {
+    const path = join(root, name);
+    mkdirSync(path, { mode: 0o700 });
+    process.env[key] = path;
+    return path;
+  });
+  process.env.TMPDIR = join(root, "tmp");
+  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(root, "compiler");
+  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
+  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
   resetMailDataSource();
-  resetDatabase();
-  getDatabase();
+  closeDatabase();
+  const store = createSqliteEmailStore({ database: getDatabase(":memory:") });
+  const memory = new SqliteMailDataSource();
+  statusWrites = 0;
+  api = startV1StoreApi({ store: { ...store, messages: { ...store.messages,
+    async updateMessageStatus(id, patch) { statusWrites++; return store.messages.updateMessageStatus(id, patch); },
+  } }, unreadByAddress: options => memory.unreadByAddress({
+    // The service SQL store owns these windows; raw SQLite defaults to 50.
+    limit: !options.limit || Number.isNaN(options.limit) ? 100 : Math.min(Math.max(1, Math.floor(options.limit)), 500),
+    offset: !options.offset || Number.isNaN(options.offset) || options.offset < 0 ? 0 : Math.min(Math.floor(options.offset), 100_000),
+  }) });
+  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
+  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
   sequence = 0;
 });
 
 afterEach(() => {
-  resetMailDataSource();
-  closeDatabase();
-  for (const key of Object.keys(process.env)) {
-    if (!Object.prototype.hasOwnProperty.call(originalEnv, key)) delete process.env[key];
+  try {
+    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
+    expect(process.exit).toBe(originalExit);
+    expect(console.error).toBe(originalError);
+  } finally {
+    api?.stop();
+    resetMailDataSource();
+    closeDatabase();
+    for (const key of Object.keys(process.env)) {
+      if (!Object.prototype.hasOwnProperty.call(originalEnv, key)) delete process.env[key];
+    }
+    Object.assign(process.env, originalEnv);
+    process.exit = originalExit;
+    console.error = originalError;
+    // Bun ignores assigning undefined; normalize only an unset prior status to 0.
+    process.exitCode = originalExitCode ?? 0;
+    rmSync(root, { recursive: true, force: true });
   }
-  Object.assign(process.env, originalEnv);
-  process.exitCode = 0;
 });
 
 function seed(overrides: Partial<StoreInput> = {}) {
@@ -73,17 +110,30 @@ function seed(overrides: Partial<StoreInput> = {}) {
   }, getDatabase());
 }
 
-async function runInbox(args: string[]): Promise<{ data: unknown; formatted: string }> {
-  const program = new Command();
-  program.exitOverride();
-  let data: unknown;
-  const rendered: string[] = [];
-  registerInboxCommands(program, (value, formatted) => {
-    data = value;
-    rendered.push(formatted);
-  });
-  await program.parseAsync(["node", "emails", ...args]);
-  return { data, formatted: rendered.join("\n") };
+async function runInbox(
+  args: string[],
+  register: typeof registerInboxCommands = registerInboxCommands,
+): Promise<{ data: unknown; formatted: string }> {
+  const originalExit = process.exit;
+  // Registration and actions can exit directly, outside Commander's override.
+  // Keep those failures observable without terminating the remaining cases.
+  process.exit = ((code?: number) => { throw new Error(`process.exit:${code ?? process.exitCode ?? 0}`); }) as typeof process.exit;
+  try {
+    const requestsBefore = api.requestCount();
+    const program = new Command();
+    program.exitOverride();
+    let data: unknown;
+    const rendered: string[] = [];
+    register(program, (value, formatted) => {
+      data = value;
+      rendered.push(formatted);
+    });
+    await program.parseAsync(["node", "emails", ...args]);
+    if (register === registerInboxCommands) expect(api.requestCount()).toBeGreaterThan(requestsBefore);
+    return { data, formatted: rendered.join("\n") };
+  } finally {
+    process.exit = originalExit;
+  }
 }
 
 async function runInboxExpectingExit(args: string[]): Promise<{ error: string; stderr: string }> {
@@ -199,5 +249,144 @@ describe("local inbox commands", () => {
     const cleared = await runInbox(["inbox", "clear", "--yes"]);
     expect(cleared.formatted).toContain("Cleared 1 email");
     expect((await runInbox(["inbox", "list"])).data).toEqual([]);
+  });
+});
+
+describe("inbox helper exit containment", () => {
+  it("propagates an unexpected registrar exit and restores the previous hook", async () => {
+    const previousExit = process.exit;
+    await expect(runInbox([], () => { process.exit(73); })).rejects.toThrow("process.exit:73");
+    expect(process.exit).toBe(previousExit);
+  });
+
+  it("propagates an unexpected action exit and restores the previous hook", async () => {
+    const previousExit = process.exit;
+    await expect(runInbox(["guard-action"], (program) => {
+      program.command("guard-action").action(() => { process.exit(23); });
+    })).rejects.toThrow("process.exit:23");
+    expect(process.exit).toBe(previousExit);
+  });
+
+  it("restores an enclosing exit hook instead of replacing it with the native hook", async () => {
+    const previousExit = process.exit;
+    const enclosingExit = (() => { throw new Error("enclosing exit hook"); }) as typeof process.exit;
+    process.exit = enclosingExit;
+    try {
+      await expect(runInbox([], () => { process.exit(17); })).rejects.toThrow("process.exit:17");
+      expect(process.exit).toBe(enclosingExit);
+    } finally {
+      process.exit = previousExit;
+    }
+  });
+
+  it("preserves an ordinary action error and restores the previous hook", async () => {
+    const previousExit = process.exit;
+    const failure = new Error("ordinary action failure");
+    await expect(runInbox(["guard-action"], (program) => {
+      program.command("guard-action").action(() => { throw failure; });
+    })).rejects.toBe(failure);
+    expect(process.exit).toBe(previousExit);
+  });
+
+  it("leaves an action exit code observable until per-case cleanup restores its prior value", async () => {
+    await runInbox(["guard-action"], (program) => {
+      program.command("guard-action").action(() => { process.exitCode = 47; });
+    });
+    expect(process.exitCode).toBe(47);
+  });
+
+  it("continues to execute and render later actions after contained exits", async () => {
+    const previousExit = process.exit;
+    let invoked = false;
+    const result = await runInbox(["guard-action"], (program, output) => {
+      program.command("guard-action").action(() => {
+        invoked = true;
+        output({ completed: true }, "completed action");
+      });
+    });
+    expect(invoked).toBe(true);
+    expect(result).toEqual({ data: { completed: true }, formatted: "completed action" });
+    expect(process.exit).toBe(previousExit);
+  });
+});
+
+describe("canonical inbox fixture boundary", () => {
+  it("reaches the populated authenticated store through the actual registrar", async () => {
+    const message = seed({ subject: "Canonical HTTP sentinel", text_body: "Canonical body preserved",
+      html_body: "<p>Canonical body preserved</p>", headers: { "x-fixture": "preserved" } });
+    const before = api.requestCount();
+    const listed = await runInbox(["inbox", "list"]);
+    expect(listed.data).toMatchObject([{ id: message.id, subject: "Canonical HTTP sentinel" }]);
+    expect(api.requestCount()).toBeGreaterThan(before);
+    const read = await runInbox(["inbox", "read", message.id, "--keep-unread"]);
+    expect(read.data).toMatchObject({ id: message.id, text_body: "Canonical body preserved",
+      html_body: "<p>Canonical body preserved</p>" });
+    // Headers belong to the existing HTTP Message DTO, not SeamMailDetail.
+    const raw = await fetch(`${api.baseUrl}/v1/messages/${message.id}`, { headers: { authorization: `Bearer ${api.apiKey}` } });
+    expect(raw.status).toBe(200);
+    expect(await raw.json()).toMatchObject({ message: { id: message.id, body_text: "Canonical body preserved",
+      body_html: "<p>Canonical body preserved</p>", headers: { "x-fixture": "preserved" } } });
+    expect(statusWrites).toBe(0);
+    expect(getInboundEmail(message.id, getDatabase())?.is_read).toBe(false);
+    expect(getInboundEmail(message.id, getDatabase())?.headers).toEqual({ "x-fixture": "preserved" });
+  });
+
+  it("keeps the CLI default of 50 distinct from the service default of 100 and its 500-row cap", async () => {
+    const recipients = Array.from({ length: 501 }, (_, i) => `window-${String(i).padStart(3, "0")}@example.test`);
+    seed({ to_addresses: recipients });
+    const direct = await fetch(`${api.baseUrl}/v1/messages/unread-by-address`, { headers: { authorization: `Bearer ${api.apiKey}` } });
+    expect(direct.status).toBe(200);
+    expect(await direct.json()).toEqual({ rows: recipients.slice(0, 100).map(address => ({ address, unread: 1 })) });
+    expect((await runInbox(["inbox", "unread-count", "--by-address"])).data)
+      .toEqual(recipients.slice(0, 50).map(address => ({ address, unread: 1 })));
+    expect((await runInbox(["inbox", "unread-count", "--by-address", "--limit", "1000"])).data)
+      .toEqual(recipients.slice(0, 500).map(address => ({ address, unread: 1 })));
+    expect((await runInbox(["inbox", "unread-count", "--by-address", "--limit", "1000", "--offset", "500"])).data)
+      .toEqual([{ address: recipients[500], unread: 1 }]);
+    expect(statusWrites).toBe(0);
+  });
+
+  it("rejects a missing key before HTTP or local mutation", async () => {
+    const message = seed();
+    delete process.env[EMAILS_API_KEY_ENV];
+    const before = api.requestCount();
+    const denied = await runInboxExpectingExit(["inbox", "mark-read", message.id]);
+    expect(denied.error).toBe("process.exit:1");
+    expect(api.requestCount()).toBe(before);
+    expect(statusWrites).toBe(0);
+    expect(getInboundEmail(message.id, getDatabase())?.is_read).toBe(false);
+    expect(denied.stderr).not.toContain(api.apiKey);
+  });
+
+  it("rejects a wrong key at the real fixture without mutating or falling back", async () => {
+    const message = seed();
+    const wrong = "synthetic-inbox-wrong-key";
+    process.env[EMAILS_API_KEY_ENV] = wrong;
+    const before = api.requestCount();
+    const denied = await runInboxExpectingExit(["inbox", "mark-read", message.id]);
+    expect(denied.error).toBe("process.exit:1");
+    expect(api.requestCount()).toBeGreaterThan(before);
+    expect(statusWrites).toBe(0);
+    expect(getInboundEmail(message.id, getDatabase())?.is_read).toBe(false);
+    expect(denied.stderr).not.toContain(wrong);
+    expect(denied.stderr).not.toContain(api.apiKey);
+  });
+
+  it("refuses every client database setting without HTTP or local mutation", async () => {
+    const message = seed();
+    for (const setting of CLIENT_DATABASE_SETTINGS) {
+      process.env[setting] = ":memory:";
+      const before = api.requestCount();
+      try {
+        const denied = await runInboxExpectingExit(["inbox", "mark-read", message.id]);
+        expect(denied.error).toBe("process.exit:1");
+        expect(denied.stderr).toContain(setting);
+        expect(api.requestCount()).toBe(before);
+        expect(statusWrites).toBe(0);
+        expect(getInboundEmail(message.id, getDatabase())?.is_read).toBe(false);
+      } finally {
+        delete process.env[setting];
+      }
+    }
   });
 });

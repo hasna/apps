@@ -54,8 +54,9 @@
 // write does to a column the caller did not name is a product decision.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "./database.js";
 import {
   ALL_DOMAINS,
@@ -83,6 +84,8 @@ import {
   API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
 } from "../store-resolution.js";
+import { EMAILS_API_URL_SETTINGS, RETIRED_EMAILS_SELECTOR_SETTINGS } from "../lib/client-settings.js";
+import { EmailsApiFault } from "../store-http/outcome.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 
@@ -99,37 +102,105 @@ function restoreInheritedProcessEnv(): void {
 
 let db: Database;
 let api: V1StoreApi;
+let activeApi: V1StoreApi | null = null;
+let fixtureDirectory: string | null = null;
+let clientRoots: string[];
+let inheritedFetch: typeof globalThis.fetch;
+let inheritedExit: typeof process.exit;
+let inheritedExitCode: typeof process.exitCode;
+let requests: Array<{ method: string; path: string; status: number; authorized: boolean; body: unknown }>;
+let resourceAccess: string[];
+const CLIENT_ROOT_SETTINGS = [
+  "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "HASNA_EMAILS_HOME",
+] as const;
 
 /**
- * Leave exactly ONE store configured, so the cases that pass no store can resolve.
- *
- * The settings are named through the resolution's OWN exported constants rather than copied as
- * literals. This matters because "a database path AND an API are both configured" is a HARD
- * BOOT ERROR with deliberately no precedence rule, so a stray inherited API setting turns every
- * default-store case into that error.
+ * Remove inherited client inputs before binding the canonical API to the explicit test DB.
+ * The raw SQLite adapter is fixture backing, never configured client fallback. In particular,
+ * malformed SQLite scalar rows sent over this fixture are mapper tests, not PostgreSQL claims.
  */
 function configureExactlyOneStore(): void {
-  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
+  for (const setting of [
+    ...EMAILS_API_URL_SETTINGS, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS,
+    ...DATABASE_PATH_SETTINGS, ...RETIRED_EMAILS_SELECTOR_SETTINGS,
+  ]) {
     delete process.env[setting];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-  process.env["EMAILS_DB_PATH"] = ":memory:";
 }
 
 beforeEach(() => {
   captureInheritedProcessEnv();
+  inheritedFetch = globalThis.fetch;
+  inheritedExit = process.exit;
+  inheritedExitCode = process.exitCode;
+  fixtureDirectory = null;
+  clientRoots = [];
+  process.exit = ((code?: number | string | null) => {
+    throw new Error(`Unexpected aliases fixture process.exit(${code ?? 0})`);
+  }) as typeof process.exit;
+  requests = [];
+  resourceAccess = [];
+  fixtureDirectory = mkdtempSync(join(tmpdir(), "aliases-configured-fixture-"));
+  clientRoots = CLIENT_ROOT_SETTINGS.map((setting, index) => {
+    const directory = join(fixtureDirectory!, `client-${index}`);
+    mkdirSync(directory, { mode: 0o700 });
+    process.env[setting] = directory;
+    return directory;
+  });
   configureExactlyOneStore();
   resetDatabase();
-  db = getDatabase();
+  db = getDatabase(":memory:");
   // The `/v1` service the HTTP store talks to. Every row it serves comes out of this same
   // database through the seam, so both store variants below read one dataset.
-  api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "aliases fixture" }) });
+  const backing = createSqliteEmailStore({ database: db, detail: "aliases fixture" });
+  api = startV1StoreApi({ store: {
+    ...backing,
+    aliases: {
+      ...backing.aliases,
+      async list(opts) { resourceAccess.push("list"); return backing.aliases.list(opts); },
+      async get(id) { resourceAccess.push("get"); return backing.aliases.get(id); },
+      async create(input) { resourceAccess.push("create"); return backing.aliases.create(input); },
+      async update(id, patch) { resourceAccess.push("update"); return backing.aliases.update(id, patch); },
+      async remove(id) { resourceAccess.push("remove"); return backing.aliases.remove(id); },
+    },
+  } });
+  activeApi = api;
+  process.env[API_BASE_URL_SETTING] = api.baseUrl;
+  process.env[API_CREDENTIAL_SETTINGS[0]!] = api.apiKey;
+  // Observe the real promise without substituting a response, credential or storage operation.
+  const observedFetch = function (this: unknown, ...args: Parameters<typeof fetch>) {
+    const [input, init] = args;
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    const promise = Reflect.apply(inheritedFetch, this, args);
+    if (url.origin === api.baseUrl) {
+      void promise.then((response: Response) => requests.push({
+        method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+        path: `${url.pathname}${url.search}`,
+        status: response.status,
+        authorized: headers.get("authorization") === `Bearer ${api.apiKey}`,
+        body: typeof init?.body === "string" ? JSON.parse(init.body) as unknown : null,
+      }), () => {});
+    }
+    return promise;
+  };
+  globalThis.fetch = Object.assign(observedFetch, inheritedFetch) as typeof fetch;
 });
 
 afterEach(() => {
-  api.stop();
-  closeDatabase();
-  restoreInheritedProcessEnv();
+  try {
+    activeApi?.stop();
+    activeApi = null;
+    closeDatabase();
+    for (const directory of clientRoots) expect(readdirSync(directory)).toEqual([]);
+    expect(process.exitCode ?? 0).toBe(inheritedExitCode ?? 0);
+  } finally {
+    globalThis.fetch = inheritedFetch;
+    process.exit = inheritedExit;
+    process.exitCode = inheritedExitCode;
+    restoreInheritedProcessEnv();
+    if (fixtureDirectory !== null) rmSync(fixtureDirectory, { recursive: true, force: true });
+  }
 });
 
 function sqliteStore(): EmailStore {
@@ -1465,5 +1536,178 @@ describe("the collapsed module", () => {
       expect(source, parts.join("/")).toMatch(/from ["'](?:\.\.\/)+db\/aliases\.js["']/);
       expect(/aliases\.(local|remote)\.js/.test(source), `${parts.join("/")} imports a deleted arm`).toBe(false);
     }
+  });
+});
+
+describe("configured alias API fixture boundaries", () => {
+  it("persists populated default operations through real authenticated HTTP with exact writable payloads", async () => {
+    const created = await createAlias("Alpha@wire.example", "Initial@target.example");
+    const other = await createAlias("other@different.example", "other@target.example");
+    const updated = await createAlias("ALPHA@WIRE.EXAMPLE", "Changed@target.example");
+    expect(updated.id).toBe(created.id);
+    expect(await getAlias(created.id)).toEqual(updated);
+    expect(await resolveAlias("alpha@wire.example")).toBe("changed@target.example");
+    expect((await listAliases("wire.example")).map(row => row.id)).toEqual([created.id]);
+    expect(db.query("SELECT id, target_address FROM aliases WHERE id = ?").get(created.id)).toEqual({
+      id: created.id, target_address: "changed@target.example",
+    });
+    const writes = requests.filter(row => row.method === "POST" || row.method === "PATCH");
+    expect(writes.map(row => row.status)).toEqual([201, 201, 200]);
+    expect(writes[0]?.body).toEqual({
+      domain: "wire.example", local_part: "alpha", target_address: "initial@target.example", protected: false,
+    });
+    expect(writes[2]?.body).toEqual({ target_address: "changed@target.example" });
+    expect(requests.some(row => row.path.includes("domain=wire.example") && row.path.includes("local_part=alpha"))).toBe(true);
+    expect(requests.filter(row => row.path !== "/v1/openapi.json").every(row => row.authorized)).toBe(true);
+    expect(resourceAccess).toContain("create");
+    expect(resourceAccess).toContain("update");
+    const protectedAlias = await getGlobalCatchAll();
+    expect(protectedAlias?.protected).toBe(true);
+    const before = db.query("SELECT * FROM aliases ORDER BY id").all();
+    const deletes = requests.filter(row => row.method === "DELETE").length;
+    await expect(removeAlias(protectedAlias!.id)).rejects.toThrow(/protected and cannot be deleted/);
+    expect(requests.filter(row => row.method === "DELETE")).toHaveLength(deletes);
+    expect(db.query("SELECT * FROM aliases ORDER BY id").all()).toEqual(before);
+    expect(await removeAlias(other.id)).toBe(true);
+    expect(await removeAlias(other.id)).toBe(false);
+    expect(await getAlias(created.id)).toEqual(updated);
+  });
+
+  it("delivers every raw corruption to the unchanged decoder without repairing or mutating it", async () => {
+    // PostgreSQL rejects several of these scalar shapes. This is intentionally a real
+    // SQLite-storage-to-HTTP-to-client-decoder check, not PostgreSQL corruption coverage.
+    const cases: Array<[string, string | number, string, string, string, string]> = [
+      ["odd", "no", "2026-01-01", "x.example", "a", "refusing to guess whether it can be deleted"],
+      ["two", 2, "2026-01-01", "x.example", "a", "no readable protected flag (2)"],
+      ["blank", 0, "", "x.example", "a", "has no readable created_at"],
+      ["nodomain", 0, "2026-01-01", "", "a", "has no readable domain"],
+      ["nolocal", 0, "2026-01-01", "x.example", "", "has no readable local_part"],
+    ];
+    for (const [id, protectedFlag, stamp, domain, localPart, diagnostic] of cases) {
+      clearAliases();
+      db.run("INSERT INTO aliases (id, domain, local_part, target_address, protected, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [id, domain, localPart, "private-synthetic@target.example", protectedFlag, stamp, "2026-01-01"]);
+      const before = db.query("SELECT * FROM aliases ORDER BY id").all();
+      const start = requests.length;
+      const access = resourceAccess.length;
+      await expect(getAlias(id)).rejects.toThrow(diagnostic);
+      expect(requests.slice(start)).toEqual([{
+        method: "GET", path: `/v1/aliases/${id}`, status: 200, authorized: true, body: null,
+      }]);
+      expect(resourceAccess.slice(access)).toEqual(["get"]);
+      expect(db.query("SELECT * FROM aliases ORDER BY id").all()).toEqual(before);
+    }
+  });
+
+  it("refuses missing credentials and all blank or nonblank database inputs before any request or mutation", async () => {
+    const created = await createAlias("private@guard.example", "private@target.example");
+    const before = db.query("SELECT * FROM aliases ORDER BY id").all();
+    const served = api.requestCount();
+    const access = resourceAccess.length;
+    for (const key of API_CREDENTIAL_SETTINGS) delete process.env[key];
+    await expect(getAlias(created.id)).rejects.toThrow(/API credential is required/);
+    expect(api.requestCount()).toBe(served);
+    process.env[API_CREDENTIAL_SETTINGS[0]!] = api.apiKey;
+    expect(DATABASE_PATH_SETTINGS).toHaveLength(7);
+    for (const setting of DATABASE_PATH_SETTINGS) {
+      for (const value of ["", ":memory:"]) {
+        process.env[setting] = value;
+        try {
+          await expect(getAlias(created.id)).rejects.toThrow(/cannot configure an Emails client/);
+          expect(api.requestCount()).toBe(served);
+          expect(resourceAccess).toHaveLength(access);
+          expect(db.query("SELECT * FROM aliases ORDER BY id").all()).toEqual(before);
+        } finally { delete process.env[setting]; }
+      }
+    }
+    expect(await getAlias(created.id)).toEqual(created);
+  });
+
+  it("observes real 401 before populated resource access and leaks neither credential nor stored payload", async () => {
+    const created = await createAlias("private@auth.example", "private-synthetic@target.example");
+    const before = db.query("SELECT * FROM aliases ORDER BY id").all();
+    const served = api.requestCount(), access = resourceAccess.length, start = requests.length;
+    const wrong = "synthetic-wrong-alias-bearer";
+    process.env[API_CREDENTIAL_SETTINGS[0]!] = wrong;
+    let fault: unknown;
+    let answer: unknown = "not returned";
+    try { answer = await getAlias(created.id); } catch (error) { fault = error; }
+    expect(answer).toBe("not returned");
+    expect(fault).toBeInstanceOf(EmailsApiFault);
+    expect((fault as EmailsApiFault).status).toBe(401);
+    expect(api.requestCount()).toBe(served + 1);
+    expect(requests.slice(start)).toEqual([{
+      method: "GET", path: `/v1/aliases/${created.id}`, status: 401, authorized: false, body: null,
+    }]);
+    expect(resourceAccess).toHaveLength(access);
+    expect(db.query("SELECT * FROM aliases ORDER BY id").all()).toEqual(before);
+    for (const secret of [wrong, api.apiKey, created.target_address]) expect(String(fault)).not.toContain(secret);
+    process.env[API_CREDENTIAL_SETTINGS[0]!] = api.apiKey;
+    expect(await getAlias(created.id)).toEqual(created);
+  });
+
+  it("refuses invalid addresses before wire access and preserves every populated row", async () => {
+    await createAlias("kept@validation.example", "kept@target.example");
+    const before = db.query("SELECT * FROM aliases ORDER BY id").all();
+    const served = api.requestCount(), access = resourceAccess.length;
+    for (const address of ["missing-domain", "@validation.example", "name@"]) {
+      await expect(createAlias(address, "not-written@target.example")).rejects.toThrow(/Invalid email address/);
+    }
+    expect(api.requestCount()).toBe(served);
+    expect(resourceAccess).toHaveLength(access);
+    expect(db.query("SELECT * FROM aliases ORDER BY id").all()).toEqual(before);
+  });
+
+  it("faults on a closed real service instead of reading the populated local backing", async () => {
+    const created = await createAlias("kept@closed.example", "kept@target.example");
+    const before = db.query("SELECT * FROM aliases ORDER BY id").all();
+    api.stop();
+    activeApi = null;
+    const access = resourceAccess.length;
+    await expect(getAlias(created.id)).rejects.toThrow();
+    expect(resourceAccess).toHaveLength(access);
+    expect(db.query("SELECT * FROM aliases ORDER BY id").all()).toEqual(before);
+  });
+
+  it("keeps malformed real HTTP envelopes as faults after a valid backing-row positive", async () => {
+    const created = await createAlias("kept@shape.example", "kept@target.example");
+    const before = db.query("SELECT * FROM aliases ORDER BY id").all();
+    let shape: "row" | "array" | "items-object" = "row";
+    const served: Array<{ path: string; status: number }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        if (request.headers.get("authorization") !== `Bearer ${api.apiKey}`) return Response.json({ error: "authentication required" }, { status: 401 });
+        if (request.method !== "GET" || !["/v1/aliases", `/v1/aliases/${created.id}`].includes(url.pathname)) return new Response(null, { status: 404 });
+        served.push({ path: url.pathname, status: 200 });
+        return Response.json(shape === "array" ? [] : shape === "items-object" ? { items: {} }
+          : db.query("SELECT * FROM aliases WHERE id = ?").get(created.id));
+      },
+    });
+    process.env[API_BASE_URL_SETTING] = `http://127.0.0.1:${server.port}`;
+    try {
+      expect(await getAlias(created.id)).toEqual(created);
+      shape = "array";
+      await expect(getAlias(created.id)).rejects.toThrow(/body that is not an object/);
+      shape = "items-object";
+      await expect(listAliases()).rejects.toThrow(/body that is not an array/);
+      expect(served).toEqual([
+        { path: `/v1/aliases/${created.id}`, status: 200 },
+        { path: `/v1/aliases/${created.id}`, status: 200 },
+        { path: "/v1/aliases", status: 200 },
+      ]);
+      expect(db.query("SELECT * FROM aliases ORDER BY id").all()).toEqual(before);
+    } finally {
+      server.stop(true);
+      process.env[API_BASE_URL_SETTING] = api.baseUrl;
+    }
+  });
+
+  it("contains an unexpected nonzero process exit without changing the inherited effective code", () => {
+    const exit = process.exit, code = process.exitCode;
+    expect(() => process.exit(92)).toThrow("Unexpected aliases fixture process.exit(92)");
+    expect(process.exit).toBe(exit);
+    expect(process.exitCode).toBe(code);
   });
 });

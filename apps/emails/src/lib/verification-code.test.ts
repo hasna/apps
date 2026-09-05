@@ -21,9 +21,12 @@
 
 import { describe, it, expect, afterEach, beforeEach } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDatabase, getDatabase, resetDatabase, type Database } from "../db/database.js";
+import { closeDatabase, getDatabase, type Database } from "../db/database.js";
+import { CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV, StoreConfigurationError } from "./client-settings.js";
+import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 import { type InboundEmail } from "../db/inbound.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import type { EmailStore } from "../store/email-store.js";
@@ -38,29 +41,81 @@ import {
 const libDir = import.meta.dir;
 const repoRoot = join(libDir, "..", "..");
 
-let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
-function captureInheritedProcessEnv(): void {
-  INHERITED_PROCESS_ENV = { ...process.env };
-}
-function restoreInheritedProcessEnv(): void {
-  for (const key of Object.keys(process.env)) {
-    if (!Object.prototype.hasOwnProperty.call(INHERITED_PROCESS_ENV, key)) delete process.env[key];
-  }
-  Object.assign(process.env, INHERITED_PROCESS_ENV);
-}
-
 let db: Database;
+let inheritedEnv: NodeJS.ProcessEnv;
+let originalExit: typeof process.exit;
+let originalExitCode: typeof process.exitCode;
+let originalFetch: typeof globalThis.fetch;
+let originalError: typeof console.error;
+let fixtureRoot: string;
+let stateRoots: string[];
+let api: V1StoreApi;
+let requests: Array<{ path: string; method: string; status: number }>;
+
+function clearClientConfiguration(): void {
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:HASNA_)?(?:EMAILS|MAILERY)_/.test(key)) delete process.env[key];
+  }
+  for (const key of [...CLIENT_DATABASE_SETTINGS, "HASNA_HOME", "HASNA_DATA_HOME", "CODEWITH_HOME",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "RESEND_API_KEY"]) delete process.env[key];
+}
 
 beforeEach(() => {
-  captureInheritedProcessEnv();
-  process.env["EMAILS_DB_PATH"] = ":memory:";
-  resetDatabase();
-  db = getDatabase();
+  inheritedEnv = { ...process.env };
+  originalExit = process.exit;
+  originalExitCode = process.exitCode;
+  originalFetch = globalThis.fetch;
+  originalError = console.error;
+  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-lib-configured-"));
+  clearClientConfiguration();
+  stateRoots = Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_CACHE_HOME: "cache", XDG_STATE_HOME: "state", HASNA_EMAILS_HOME: "app" }).map(([key, name]) => {
+    const path = join(fixtureRoot, name);
+    mkdirSync(path, { mode: 0o700 });
+    process.env[key] = path;
+    return path;
+  });
+  process.env.TMPDIR = join(fixtureRoot, "tmp");
+  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(fixtureRoot, "compiler");
+  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
+  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
+  closeDatabase();
+  db = getDatabase(":memory:");
+  api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "explicit library fixture" }) });
+  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
+  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
+  requests = [];
+  const observer = function(this: unknown, ...args: Parameters<typeof fetch>) {
+    const promise = Reflect.apply(originalFetch, this, args);
+    const [input, init] = args;
+    void promise.then((response: Response) => requests.push({
+      path: new URL(input instanceof Request ? input.url : String(input)).pathname,
+      method: init?.method ?? "GET", status: response.status,
+    }), () => {});
+    return promise;
+  };
+  globalThis.fetch = Object.assign(observer, originalFetch) as typeof fetch;
 });
 
 afterEach(() => {
-  closeDatabase();
-  restoreInheritedProcessEnv();
+  try {
+    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
+    expect(process.exit).toBe(originalExit);
+    expect(console.error).toBe(originalError);
+  } finally {
+    api.stop();
+    closeDatabase();
+    globalThis.fetch = originalFetch;
+    console.error = originalError;
+    process.exit = originalExit;
+    for (const key of Object.keys(process.env)) {
+      if (!Object.hasOwn(inheritedEnv, key)) delete process.env[key];
+    }
+    Object.assign(process.env, inheritedEnv);
+    // Bun ignores undefined assignment; retain an unset status's effective zero.
+    process.exitCode = originalExitCode ?? 0;
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 /** A real store over the test database. Everything below builds on this one. */
@@ -151,6 +206,80 @@ function inboundFixture(partial: Partial<InboundEmail>): InboundEmail {
     created_at: partial.created_at ?? "2026-06-04T00:00:00.000Z",
   };
 }
+
+describe("configured verification reader boundary", () => {
+  it("reads the real list and full detail twice without consuming stored mail", async () => {
+    const id = await seedMessage(realStore(), { to: ["reader@example.com"], text: "A synthetic verification body" });
+    const before = db.query("SELECT is_read, is_archived, is_trash, is_spam FROM inbound_emails WHERE id = ?").get(id);
+    for (let index = 0; index < 2; index++) {
+      const candidates = await listVerificationCodeCandidates("reader@example.com");
+      expect(candidates.map(row => row.id)).toEqual([id]);
+      expect(candidates[0]?.text_body === "A synthetic verification body").toBe(true);
+    }
+    expect(requests.filter(row => row.method === "GET" && row.path === "/v1/messages" && row.status === 200)).toHaveLength(2);
+    expect(requests.filter(row => row.method === "GET" && row.path === `/v1/messages/${id}` && row.status === 200)).toHaveLength(2);
+    expect(db.query("SELECT is_read, is_archived, is_trash, is_spam FROM inbound_emails WHERE id = ?").get(id)).toEqual(before);
+    expect(db.query("SELECT COUNT(*) AS n FROM inbound_emails").get()).toEqual({ n: 1 });
+  });
+
+  it("reaches the intended detail refusal after a populated real list without disclosing content", async () => {
+    const base = realStore();
+    const marker = ["17", "29", "43"].join("");
+    const id = await seedMessage(base, { to: ["reader@example.com"], subject: `Private ${marker}`, text: marker });
+    let listed = 0;
+    let detail = 0;
+    const subject: EmailStore = { ...base, messages: { ...base.messages,
+      listMessages: async options => { listed++; return base.messages.listMessages(options); },
+      getMessage: async requested => {
+        detail++;
+        expect(requested).toBe(id);
+        return { ok: false, code: "not_found", status: 404, message: "synthetic detail refusal" };
+      },
+    } };
+    const error = await listVerificationCodeCandidates("reader@example.com", {}, subject).catch(error => error);
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toMatch(/cannot read a stored inbound message.*not_found, 404/);
+    expect(String(error).includes(marker)).toBe(false);
+    expect(String(error).includes("Private")).toBe(false);
+    expect(listed).toBe(1);
+    expect(detail).toBe(1);
+    expect(db.query("SELECT COUNT(*) AS n FROM inbound_emails").get()).toEqual({ n: 1 });
+  });
+
+  it("rejects a missing key before dispatch without reading or mutating mail", async () => {
+    const id = await seedMessage(realStore(), { to: ["reader@example.com"] });
+    delete process.env[EMAILS_API_KEY_ENV];
+    const before = api.requestCount();
+    await expect(listVerificationCodeCandidates("reader@example.com")).rejects.toThrow(/API credential is required/);
+    expect(api.requestCount()).toBe(before);
+    expect(db.query("SELECT id, is_read FROM inbound_emails WHERE id = ?").get(id)).toEqual({ id, is_read: 0 });
+  });
+
+  it("rejects the wrong key at real HTTP without fallback or mutation", async () => {
+    const id = await seedMessage(realStore(), { to: ["reader@example.com"] });
+    const wrong = "synthetic-invalid-library-bearer";
+    process.env[EMAILS_API_KEY_ENV] = wrong;
+    const error = await listVerificationCodeCandidates("reader@example.com").catch(error => error);
+    expect(error).toMatchObject({ name: "EmailsApiFault", status: 401 });
+    expect(String(error).includes(wrong) || String(error).includes(api.apiKey)).toBe(false);
+    expect(requests).toEqual([{ path: "/v1/messages", method: "GET", status: 401 }]);
+    expect(db.query("SELECT id, is_read FROM inbound_emails WHERE id = ?").get(id)).toEqual({ id, is_read: 0 });
+  });
+
+  it("rejects every blank and nonblank client database setting before HTTP", async () => {
+    for (const setting of CLIENT_DATABASE_SETTINGS) for (const value of ["", "synthetic-database-poison"]) {
+      process.env[setting] = value;
+      const before = api.requestCount();
+      const error = await listVerificationCodeCandidates("reader@example.com").catch(error => error);
+      expect(error).toBeInstanceOf(StoreConfigurationError);
+      expect((error as StoreConfigurationError).settings).toContain(setting);
+      expect(String(error).includes("synthetic-database-poison")).toBe(false);
+      expect(api.requestCount()).toBe(before);
+      expect(db.query("SELECT COUNT(*) AS n FROM inbound_emails").get()).toEqual({ n: 0 });
+      delete process.env[setting];
+    }
+  });
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Structure: the arms are gone and nothing reaches past a facade.

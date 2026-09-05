@@ -40,6 +40,23 @@ const ALLOWED_UNREACHABLE: Array<{ path: string; reason: string }> = [
       "test-only Ed25519 IdP-token signer, imported by *.test.ts. Deliberately not shipped — emails only VERIFIES IdP tokens; minting belongs to the IdP, so no runtime module may sign one.",
   },
   { path: "src/types/domains.d.ts", reason: "ambient module declaration; consumed by tsc, not by the module graph" },
+  // Retired local SQLite dashboard stack (canonical-client boundary). The serve entrypoint
+  // (src/server/index.ts) no longer has a `sqlite` backend arm — PostgreSQL only — so the
+  // legacy local dashboard server, its route modules, and the local webhook-receipt store are
+  // unreachable from any shipped build. They remain on disk because the dashboard capability
+  // gap after the backend boundary is acknowledged follow-up work (PR #1506 body), not
+  // something this boundary change claims to preserve. Each entry names its module.
+  { path: "src/cli/commands/serve.local.ts", reason: "local serve CLI intended for the retired SQLite dashboard; not loaded by the canonical-client CLI" },
+  { path: "src/db/webhook-receipts.local.ts", reason: "local SQLite webhook-receipt store for the retired dashboard; unreachable once the serve entrypoint lost its sqlite arm" },
+  { path: "src/server/api-routes.ts", reason: "local SQLite dashboard API dispatcher, retired with the sqlite serve arm" },
+  { path: "src/server/routes/contacts-groups.ts", reason: "local SQLite dashboard route module (contacts/groups), retired with the sqlite serve arm" },
+  { path: "src/server/routes/core.ts", reason: "local SQLite dashboard route module (core CRUD), retired with the sqlite serve arm" },
+  { path: "src/server/routes/helpers.ts", reason: "local SQLite dashboard route helper module, retired with the sqlite serve arm" },
+  { path: "src/server/routes/inbound-sequences.ts", reason: "local SQLite dashboard route module (inbound sequences), retired with the sqlite serve arm" },
+  { path: "src/server/routes/inbound-webhook.ts", reason: "local SQLite dashboard route module (inbound webhooks), retired with the sqlite serve arm" },
+  { path: "src/server/routes/mailbox-filters.ts", reason: "local SQLite dashboard route module (mailbox filters), retired with the sqlite serve arm" },
+  { path: "src/server/routes/resend-webhook.ts", reason: "local SQLite dashboard route module (Resend webhooks), retired with the sqlite serve arm" },
+  { path: "src/server/serve.ts", reason: "local SQLite dashboard HTTP server, retired with the sqlite serve arm of the entrypoint" },
 ];
 
 const RESOLVE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mts", ".cts"];

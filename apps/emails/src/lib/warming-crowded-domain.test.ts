@@ -9,47 +9,71 @@
 // newest-1000 window the noisy rows fill the window and warm.test counts 0; the
 // correct answer is 300.
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { closeDatabase, getDatabase, resetDatabase, type Database } from "../db/database.js";
+import { closeDatabase, getDatabase, type Database } from "../db/database.js";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { createSqliteEmailStore } from "../store-sqlite/index.js";
+import type { EmailStore } from "../store/email-store.js";
+import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 import {
   API_BASE_URL_SETTING,
-  API_CREDENTIAL_SETTINGS,
-  API_SETTINGS_POINTER,
-  DATABASE_PATH_SETTINGS,
 } from "../store-resolution.js";
 import { getTodaySentCount, getTodaySentCountsByDomain } from "./warming.js";
 
 const PROVIDER = "crowding-provider";
 let db: Database;
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
+let fixtureRoot: string;
+let clientRoots: string[];
+let api: V1StoreApi;
+let backing: EmailStore;
 
-/**
- * Leave exactly ONE store configured (the same fixture warming.test.ts uses): a
- * database path AND an API are a hard boot error, so a stray inherited API setting
- * would turn every count below into that error instead of a number.
- */
-function configureLocalStoreOnly(): void {
-  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
-    delete process.env[setting];
-  }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-  process.env["EMAILS_DB_PATH"] = ":memory:";
-}
-
+// The fixture owns explicit SQLite; configured library calls use real authenticated HTTP.
 beforeEach(() => {
   INHERITED_PROCESS_ENV = { ...process.env };
-  configureLocalStoreOnly();
-  resetDatabase();
-  db = getDatabase();
+  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-warming-library-"));
+  clientRoots = [];
+  const state: NodeJS.ProcessEnv = {};
+  for (const [key, name] of Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_CACHE_HOME: "cache", XDG_STATE_HOME: "state", HASNA_EMAILS_HOME: "app" })) {
+    const path = join(fixtureRoot, name);
+    mkdirSync(path, { mode: 0o700 });
+    state[key] = path;
+    clientRoots.push(path);
+  }
+  for (const name of ["tmp", "compiler"]) mkdirSync(join(fixtureRoot, name), { mode: 0o700 });
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env, state, { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+    TMPDIR: join(fixtureRoot, "tmp"), BUN_RUNTIME_TRANSPILER_CACHE_PATH: join(fixtureRoot, "compiler"),
+    AWS_EC2_METADATA_DISABLED: "true", NO_COLOR: "1", TZ: "UTC" });
+  closeDatabase();
+  // Only the fixture server owns this explicit database; default calls use actual HTTP.
+  db = getDatabase(":memory:");
   db.run("INSERT INTO providers (id, name, type, active) VALUES (?, ?, 'ses', 1)", [PROVIDER, PROVIDER]);
+  backing = createSqliteEmailStore({ database: db, detail: "warming fixture backing" });
+  api = startV1StoreApi({ store: backing });
+  process.env[API_BASE_URL_SETTING] = api.baseUrl;
+  process.env["HASNA_EMAILS_API_KEY"] = api.apiKey;
 });
 
 afterEach(() => {
-  closeDatabase();
-  for (const key of Object.keys(process.env)) {
-    if (!Object.prototype.hasOwnProperty.call(INHERITED_PROCESS_ENV, key)) delete process.env[key];
+  try {
+    for (const path of clientRoots) expect(readdirSync(path)).toEqual([]);
+  } finally {
+    try {
+      api.stop();
+      closeDatabase();
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (!Object.prototype.hasOwnProperty.call(INHERITED_PROCESS_ENV, key)) delete process.env[key];
+      }
+      Object.assign(process.env, INHERITED_PROCESS_ENV);
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   }
-  Object.assign(process.env, INHERITED_PROCESS_ENV);
 });
+
 
 /** `count` sent-ledger rows from one sender, all stamped `sentAt` (today, UTC). */
 function seedSentBatch(idPrefix: string, fromAddress: string, count: number, sentAt: string): void {
@@ -84,5 +108,45 @@ describe("getTodaySentCount under cross-domain volume", () => {
     expect(counts.get("noisy.test")).toBe(1000);
     // Zero must still MEAN zero — a domain with no sends today.
     expect(counts.get("quiet.test")).toBe(0);
+  });
+});
+
+describe("configured crowded-domain HTTP boundary", () => {
+  it("reads at least three real pages and includes the unified outbound ledger", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    seedSentBatch("warm", "ramp@warm.test", 300, `${today}T00:00:01.000Z`);
+    seedSentBatch("noisy", "blast@noisy.test", 1000, `${today}T00:00:02.000Z`);
+    const created = await backing.messages.createMessage({ direction: "outbound", from_addr: "other@warm.test",
+      to_addrs: ["recipient@example.test"], subject: "unified", received_at: `${today}T00:00:03.000Z` });
+    expect(created.ok).toBe(true);
+    const before = api.requestCount();
+    const counts = await getTodaySentCountsByDomain(["warm.test", "noisy.test", "quiet.test"]);
+    expect([...counts]).toEqual([["warm.test", 301], ["noisy.test", 1000], ["quiet.test", 0]]);
+    expect(api.requestCount() - before).toBeGreaterThanOrEqual(3);
+    expect(db.query("SELECT COUNT(*) AS count FROM emails").get()).toEqual({ count: 1300 });
+    expect(db.query("SELECT COUNT(*) AS count FROM inbound_emails").get()).toEqual({ count: 1 });
+  });
+
+  it("propagates an actual second-page HTTP refusal rather than reporting a partial total", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    seedSentBatch("warm", "ramp@warm.test", 300, `${today}T00:00:01.000Z`);
+    seedSentBatch("noisy", "blast@noisy.test", 1000, `${today}T00:00:02.000Z`);
+    let pages = 0;
+    api.stop();
+    api = startV1StoreApi({ store: { ...backing, messages: { ...backing.messages,
+      async listMessages(options) {
+        pages++;
+        if (pages === 2) return { ok: false, code: "capability_unavailable", status: 501,
+          message: "synthetic second-page refusal" };
+        return backing.messages.listMessages(options);
+      },
+    } } });
+    process.env[API_BASE_URL_SETTING] = api.baseUrl;
+    process.env["HASNA_EMAILS_API_KEY"] = api.apiKey;
+    await expect(getTodaySentCountsByDomain(["warm.test", "noisy.test"]))
+      .rejects.toThrow("synthetic second-page refusal");
+    expect(pages).toBe(2);
+    expect(api.requestCount()).toBeGreaterThanOrEqual(2);
+    expect(db.query("SELECT COUNT(*) AS count FROM emails").get()).toEqual({ count: 1300 });
   });
 });

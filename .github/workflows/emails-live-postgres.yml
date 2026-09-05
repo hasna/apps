@@ -1,0 +1,52 @@
+name: emails live PostgreSQL
+
+on:
+  pull_request:
+    paths:
+      - 'apps/emails/**'
+      - 'bun.lock'
+      - '.github/workflows/emails-live-postgres.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/emails/**'
+      - 'bun.lock'
+      - '.github/workflows/emails-live-postgres.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  emails-live-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          # Fresh runner-local database; never an operator database or secret.
+          POSTGRES_USER: emails_test
+          POSTGRES_DB: emails_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U emails_test -d emails_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - name: Install frozen dependencies without lifecycle scripts
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Verify the fail-closed gate
+        working-directory: apps/emails
+        run: bun --no-env-file scripts/prepublish-local-test.mjs scripts/live-postgres-test.test.ts
+      - name: Exercise all real PostgreSQL suites
+        working-directory: apps/emails
+        env:
+          EMAILS_TEST_DATABASE_URL: postgres://emails_test@127.0.0.1:5432/emails_test
+        run: bun run test:postgres

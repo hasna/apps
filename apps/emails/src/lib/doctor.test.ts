@@ -20,7 +20,7 @@
 // configuration PARSED, with no request ever made, was this very module.
 
 import { describe, it, expect, afterEach, beforeEach } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "../db/database.js";
@@ -35,6 +35,8 @@ import {
 } from "./status-commands.js";
 import { runDiagnostics, formatDiagnostics } from "./doctor.js";
 import type { DoctorCheck } from "./doctor.js";
+import { CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_SETTINGS, EMAILS_API_URL_SETTINGS, RETIRED_EMAILS_SELECTOR_SETTINGS } from "./client-settings.js";
+import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 
 const libDir = import.meta.dir;
 const repoRoot = join(libDir, "..", "..");
@@ -57,6 +59,17 @@ function restoreInheritedProcessEnv(): void {
 // ones matter as much as the storage ones: with them set, the provisioning check reports a
 // real environment credential and the "not observable" assertions become vacuous.
 const CONTROLLED_ENV = [
+  ...CLIENT_DATABASE_SETTINGS,
+  ...EMAILS_API_KEY_SETTINGS,
+  ...EMAILS_API_URL_SETTINGS,
+  ...RETIRED_EMAILS_SELECTOR_SETTINGS,
+  "EMAILS_IDP_TOKEN",
+  "HASNA_EMAILS_HOME",
+  "EMAILS_HOME",
+  "HASNA_DATA_HOME",
+  "HASNA_CONFIG_HOME",
+  "HASNA_CACHE_HOME",
+  "HASNA_STATE_HOME",
   "HASNA_EMAILS_DB_PATH",
   "EMAILS_DB_PATH",
   "EMAILS_SELF_HOSTED_URL",
@@ -76,21 +89,66 @@ const CONTROLLED_ENV = [
 
 let db: Database;
 let tempHome: string;
+let scratch: string;
+let savedExitCode: typeof process.exitCode;
+let savedFetch: typeof globalThis.fetch;
+let api: V1StoreApi | undefined;
+let emptyRoots: string[];
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  tempHome = mkdtempSync(join(tmpdir(), "emails-doctor-test-home-"));
+  savedExitCode = process.exitCode;
+  savedFetch = globalThis.fetch;
+  scratch = mkdtempSync(join(tmpdir(), "emails-doctor-test-"));
+  tempHome = join(scratch, "home");
+  mkdirSync(tempHome, { mode: 0o700 });
   process.env["HOME"] = tempHome;
   for (const key of CONTROLLED_ENV) delete process.env[key];
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("AWS_") || key.startsWith("AMAZON_") || key.startsWith("CLOUDFLARE_") || key.startsWith("RESEND_")) delete process.env[key];
+  }
+  emptyRoots = ["config", "data", "cache", "state", "app"].map((name) => join(scratch, name));
+  for (const root of emptyRoots) mkdirSync(root, { mode: 0o700 });
+  for (const [index, key] of ["XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"].entries()) {
+    process.env[key] = emptyRoots[index]!;
+  }
+  // Do not set an app/data-root override: the original obstructed HOME/.hasna
+  // case must still reach that directory. Isolate the synthetic SDK profile too.
+  process.env["AWS_CONFIG_FILE"] = join(scratch, "aws-config");
+  process.env["AWS_SHARED_CREDENTIALS_FILE"] = join(scratch, "aws-credentials");
+  process.env["AWS_EC2_METADATA_DISABLED"] = "true";
   process.env["EMAILS_DB_PATH"] = ":memory:";
   resetDatabase();
-  db = getDatabase();
+  db = getDatabase(":memory:");
 });
 
 afterEach(() => {
-  closeDatabase();
-  restoreInheritedProcessEnv();
-  rmSync(tempHome, { recursive: true, force: true });
+  try {
+    for (const root of emptyRoots) expect(readdirSync(root)).toEqual([]);
+    // Doctor intentionally reads/hardens operator config, and two original cases
+    // write it or obstruct its parent. This is an allowed footprint, not no-I/O.
+    expect(readdirSync(tempHome).filter((name) => name !== ".hasna")).toEqual([]);
+    const parent = join(tempHome, ".hasna");
+    if (existsSync(parent) && lstatSync(parent).isDirectory()) {
+      expect(readdirSync(parent)).toEqual(["emails"]);
+      expect(readdirSync(join(parent, "emails")).filter((name) => name !== "config.json")).toEqual([]);
+      const config = join(parent, "emails", "config.json");
+      if (existsSync(config)) expect(JSON.parse(readFileSync(config, "utf8"))).toEqual({ cloudflare_account_id: "acct" });
+    } else if (existsSync(parent)) {
+      expect(readFileSync(parent, "utf8")).toBe("not a directory");
+    }
+    expect(globalThis.fetch).toBe(savedFetch);
+  } finally {
+    api?.stop();
+    api = undefined;
+    globalThis.fetch = savedFetch;
+    closeDatabase();
+    restoreInheritedProcessEnv();
+    // Bun rejects assigning undefined. Preserve every explicit status; only an
+    // initially unset value is normalized to its equivalent successful status.
+    process.exitCode = savedExitCode ?? 0;
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
 
 /** A real store over the test database. Everything below builds on this one. */
@@ -552,9 +610,9 @@ describe("runDiagnostics and the storage configuration", () => {
     const store = named(checks, "Store");
 
     expect(store.status).toBe("fail");
-    expect(store.message).toContain("no way to tell which one you meant");
+    expect(store.message).toContain("cannot configure an Emails client");
     expect(store.message).toContain("EMAILS_DB_PATH");
-    expect(store.message).toContain("EMAILS_SELF_HOSTED_URL");
+    expect(store.message).toContain("HASNA_EMAILS_API_URL");
 
     // And every subject the store would have answered says so, rather than vanishing from
     // the report or reporting a zero.
@@ -876,3 +934,204 @@ describe("provisioning credentials on an API-backed installation", () => {
     expect(named(checks, "Provisioning: cloudflare").status).toBe("pass");
   });
 });
+
+// These default-call checks supplement, rather than replace, the original
+// explicit-store fault/paging/compatibility cases above. No provider is invoked.
+async function configuredDoctorFixture(providerCount = 2): Promise<EmailStore> {
+  const store = realStore();
+  await seedProviders(providerCount);
+  for (const [name, verified] of [["first.example", true], ["second.example", false]] as const) {
+    expect((await store.domains.createDomain({ domain: name, verified })).ok).toBe(true);
+    expect((await store.addresses.createAddress({ email: `ops@${name}`, verified })).ok).toBe(true);
+  }
+  expect((await store.contacts.create({ email: "one@example.test", suppressed: false })).ok).toBe(true);
+  expect((await store.contacts.create({ email: "two@example.test", suppressed: true })).ok).toBe(true);
+  expect((await store.templates.create({ name: "diagnostic", subject_template: "Synthetic subject" })).ok).toBe(true);
+  api = startV1StoreApi({ store });
+  for (const key of CLIENT_DATABASE_SETTINGS) delete process.env[key];
+  process.env[EMAILS_API_URL_SETTINGS[0]] = api.baseUrl;
+  process.env[EMAILS_API_KEY_SETTINGS[0]] = api.apiKey;
+  return store;
+}
+
+async function diagnosticRows(store: EmailStore): Promise<unknown[]> {
+  return Promise.all([
+    store.providers.list({ limit: 500 }), store.providers.list({ limit: 500, offset: 500 }),
+    store.domains.listDomains(), store.addresses.listAddresses(), store.contacts.list(), store.templates.list(),
+  ]);
+}
+
+type DoctorWireEvent = { path: string; offset: number; status: number; method: string };
+async function withoutDoctorWire<T>(run: () => Promise<T>): Promise<T> {
+  const original = globalThis.fetch;
+  let attempts = 0;
+  const observer = function (this: unknown, ...args: Parameters<typeof fetch>) {
+    attempts += 1;
+    return Reflect.apply(original, this, args);
+  };
+  globalThis.fetch = Object.assign(observer, original) as typeof fetch;
+  try {
+    const value = await run();
+    expect(attempts).toBe(0);
+    return value;
+  } finally { globalThis.fetch = original; }
+}
+
+async function observeDoctorWire<T>(
+  run: (events: DoctorWireEvent[]) => Promise<T>,
+  transform?: (event: DoctorWireEvent, response: Response) => Response,
+): Promise<T> {
+  const original = globalThis.fetch;
+  const events: DoctorWireEvent[] = [];
+  globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    expect(url.origin).toBe(api!.baseUrl);
+    const response = await original(input, init);
+    const event = { path: url.pathname, offset: Number(url.searchParams.get("offset") ?? 0), status: response.status, method: init?.method ?? "GET" };
+    events.push(event);
+    return transform ? transform(event, response) : response;
+  }, original) as typeof fetch;
+  try { return await run(events); } finally { globalThis.fetch = original; }
+}
+
+describe("doctor configured HTTP evidence", () => {
+  it("reads every populated inventory through the authenticated default call without mutation", async () => {
+    const store = await configuredDoctorFixture();
+    const before = await diagnosticRows(store);
+    await observeDoctorWire(async (events) => {
+      const checks = await runDiagnostics();
+      expect(named(checks, "Store").status).toBe("pass");
+      expect(named(checks, "Store").message).toContain(`Emails API at ${api!.baseUrl}`);
+      expect(named(checks, "Providers").message).toBe("2 provider(s) configured");
+      expect(named(checks, "Domains").message).toContain("1/2 domains ownership-verified");
+      expect(named(checks, "Addresses").message).toContain("1/2 sender address(es) verified");
+      expect(named(checks, "Contacts").message).toBe("2 contacts (1 suppressed)");
+      expect(named(checks, "Templates").message).toBe("1 template(s)");
+      for (const family of ["providers", "domains", "addresses", "contacts", "templates"]) {
+        expect(events.some((event) => event.path === `/v1/${family}` && event.status === 200)).toBe(true);
+      }
+      expect(events.every((event) => event.method === "GET")).toBe(true);
+      // Five populated families each require a data page and an empty page;
+      // generic reads do not fetch the writable-column OpenAPI contract.
+      expect(api!.requestCount()).toBe(10);
+      expect(named(checks, "Provisioning: cloudflare").status).toBe("unknown");
+      expect(named(checks, "Provisioning: resend").status).toBe("unknown");
+      expect(existsSync(join(tempHome, ".hasna", "emails", "config.json"))).toBe(false);
+      expect(JSON.stringify(checks).includes(api!.apiKey)).toBe(false);
+    });
+    expect(await diagnosticRows(store)).toEqual(before);
+  });
+
+  it("rejects a wrong credential at the real HTTP fixture and preserves the backing rows", async () => {
+    const store = await configuredDoctorFixture();
+    const before = await diagnosticRows(store);
+    process.env[EMAILS_API_KEY_SETTINGS[0]] = "synthetic-doctor-wrong-credential";
+    await observeDoctorWire(async (events) => {
+      const checks = await runDiagnostics();
+      expect(named(checks, "Store").status).toBe("fail");
+      expect(named(checks, "Providers").status).toBe("fail");
+      expect(named(checks, "Providers").message).toContain("authentication required");
+      expect(events.length).toBeGreaterThan(0);
+      expect(events.every((event) => event.status === 401)).toBe(true);
+      expect(JSON.stringify(checks).includes(process.env[EMAILS_API_KEY_SETTINGS[0]]!)).toBe(false);
+    });
+    expect(await diagnosticRows(store)).toEqual(before);
+  });
+
+  it("missing credentials refuse before any HTTP request or backing mutation", async () => {
+    const store = await configuredDoctorFixture();
+    const before = await diagnosticRows(store);
+    delete process.env[EMAILS_API_KEY_SETTINGS[0]];
+    const count = api!.requestCount();
+    const checks = await withoutDoctorWire(() => runDiagnostics());
+    expect(named(checks, "Store").status).toBe("fail");
+    expect(named(checks, "Store").message).toContain("credential");
+    for (const subject of STORE_BACKED) expect(named(checks, subject).status).toBe("unknown");
+    expect(api!.requestCount()).toBe(count);
+    expect(await diagnosticRows(store)).toEqual(before);
+  });
+
+  it("every client database setting refuses even when blank without dispatch or mutation", async () => {
+    const store = await configuredDoctorFixture();
+    const before = await diagnosticRows(store);
+    const count = api!.requestCount();
+    for (const key of CLIENT_DATABASE_SETTINGS) {
+      for (const value of ["", "synthetic-database-input"]) {
+        process.env[key] = value;
+        const checks = await withoutDoctorWire(() => runDiagnostics());
+        expect(named(checks, "Store").status).toBe("fail");
+        expect(named(checks, "Store").message).toContain(key);
+        expect(named(checks, "Store").message).toContain("cannot configure an Emails client");
+        expect(named(checks, "Store").message.includes("synthetic-database-input")).toBe(false);
+        for (const subject of STORE_BACKED) expect(named(checks, subject).status).toBe("unknown");
+        delete process.env[key];
+      }
+    }
+    expect(api!.requestCount()).toBe(count);
+    expect(await diagnosticRows(store)).toEqual(before);
+  });
+
+  it("retired, blank and conflicting settings cannot dispatch a configured diagnostic", async () => {
+    const store = await configuredDoctorFixture();
+    const before = await diagnosticRows(store);
+    const count = api!.requestCount();
+    const badSettings = [
+      [RETIRED_EMAILS_SELECTOR_SETTINGS[0]!, ""],
+      [EMAILS_API_URL_SETTINGS[1], ""],
+      [EMAILS_API_URL_SETTINGS[1], "https://synthetic-conflict.invalid"],
+      [EMAILS_API_KEY_SETTINGS[1], ""],
+      [EMAILS_API_KEY_SETTINGS[1], "synthetic-conflicting-credential"],
+    ] as const;
+    for (const [key, value] of badSettings) {
+      process.env[key] = value;
+      const checks = await withoutDoctorWire(() => runDiagnostics());
+      expect(named(checks, "Store").status).toBe("fail");
+      expect(named(checks, "Store").message).toContain(key);
+      if (value) expect(JSON.stringify(checks).includes(value)).toBe(false);
+      delete process.env[key];
+    }
+    expect(api!.requestCount()).toBe(count);
+    expect(await diagnosticRows(store)).toEqual(before);
+  });
+
+  it("continues real HTTP inventory paging through the final empty page", async () => {
+    const store = await configuredDoctorFixture(501);
+    const before = await diagnosticRows(store);
+    await observeDoctorWire(async (events) => {
+      const checks = await runDiagnostics();
+      expect(named(checks, "Providers").status).toBe("pass");
+      expect(named(checks, "Providers").message).toBe("501 provider(s) configured");
+      expect(events.filter((event) => event.path === "/v1/providers").map((event) => event.offset)).toEqual([0, 500, 501]);
+    });
+    expect(await diagnosticRows(store)).toEqual(before);
+  });
+
+  it("a later-page HTTP refusal does not publish a partial exact provider count", async () => {
+    await laterPageDoctorFailure(400);
+  });
+
+  it("a later-page HTTP fault does not publish a partial exact provider count", async () => {
+    await laterPageDoctorFailure(503);
+  });
+});
+
+async function laterPageDoctorFailure(status: 400 | 503): Promise<void> {
+  const store = await configuredDoctorFixture(501);
+  const before = await diagnosticRows(store);
+  let injected = 0;
+  await observeDoctorWire(async (events) => {
+    const checks = await runDiagnostics();
+    expect(injected).toBe(1);
+    expect(events.filter((event) => event.path === "/v1/providers").map((event) => event.offset)).toEqual([0, 500]);
+    expect(named(checks, "Providers").status).toBe("fail");
+    expect(named(checks, "Providers").message).toContain("synthetic later-page failure");
+    expect(named(checks, "Providers").message).not.toContain("provider(s) configured");
+    expect(named(checks, "Store").status).toBe("pass");
+    expect(named(checks, "Templates").message).toBe("1 template(s)");
+  }, (event, response) => {
+    if (event.path !== "/v1/providers" || event.offset !== 500) return response;
+    injected += 1;
+    return Response.json({ error: "synthetic later-page failure" }, { status });
+  });
+  expect(await diagnosticRows(store)).toEqual(before);
+}

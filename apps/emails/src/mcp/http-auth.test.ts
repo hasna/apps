@@ -275,7 +275,7 @@ describe("emails-mcp transport selection", () => {
   const entrypoint = join(import.meta.dir, "index.ts");
 
   function freePort(): number {
-    const probe = Bun.serve({ port: 0, fetch: () => new Response("probe") });
+    const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("probe") });
     const port = probe.port;
     probe.stop(true);
     return port;
@@ -284,7 +284,12 @@ describe("emails-mcp transport selection", () => {
   async function spawnEntrypoint(args: string[], env: Record<string, string>) {
     const home = mkdtempSync(join(tmpdir(), "emails-mcp-entry-"));
     const child = Bun.spawn([process.execPath, entrypoint, ...args], {
-      env: { PATH: process.env["PATH"] ?? "", HOME: home, ...env },
+      env: {
+        PATH: process.env["PATH"] ?? "", HOME: home,
+        HASNA_EMAILS_API_URL: "https://emails.example",
+        HASNA_EMAILS_API_KEY: "fixture-mcp-key",
+        ...env,
+      },
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",

@@ -21,7 +21,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { closeDatabase, getDatabase, resetDatabase, type Database } from "../db/database.js";
-import { createProvider } from "../db/providers.local.js";
+import { createProvider } from "../db/providers.js";
 import { createSentEmailLedger } from "./sent-ledger.local.js";
 import { createEvent } from "../db/events.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
@@ -33,13 +33,20 @@ import type { EmailStore } from "../store/email-store.js";
 import type { EventType } from "../types/index.js";
 import type { Outcome, Refusal } from "../store/outcome.js";
 import type { MessageListRecord, Page, ResourceRow } from "../store/records.js";
+import {
+  CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV,
+  EMAILS_API_URL_SETTINGS, RETIRED_EMAILS_SELECTOR_SETTINGS,
+} from "./client-settings.js";
+import {
+  CLIENT_ENV_CREDENTIAL_SELECTION_KEYS, EMAILS_CLIENT_ENV_SECRET_ENV,
+} from "./client-env.js";
 
-const DB_PATH_ENV = "EMAILS_DB_PATH";
+// The backing store is an explicit fixture, not process-wide client configuration.
+// Isolate the whole client context and restore absent/blank inherited values exactly.
 const TOUCHED_ENV = [
-  DB_PATH_ENV,
-  "HASNA_EMAILS_DB_PATH",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
+  ...CLIENT_DATABASE_SETTINGS, ...RETIRED_EMAILS_SELECTOR_SETTINGS,
+  ...EMAILS_API_URL_SETTINGS, ...CLIENT_ENV_CREDENTIAL_SELECTION_KEYS,
+  EMAILS_CLIENT_ENV_SECRET_ENV,
 ] as const;
 
 let saved: Array<readonly [string, string | undefined]> = [];
@@ -49,9 +56,8 @@ let api: V1StoreApi | null = null;
 beforeEach(() => {
   saved = TOUCHED_ENV.map((key) => [key, process.env[key]] as const);
   for (const key of TOUCHED_ENV) delete process.env[key];
-  process.env[DB_PATH_ENV] = ":memory:";
   resetDatabase();
-  db = getDatabase();
+  db = getDatabase(":memory:");
 });
 
 afterEach(() => {
@@ -81,6 +87,7 @@ function isoAgo(ms: number): string {
  * could be deleted with this suite still green.
  */
 async function seed(): Promise<{ alpha: string; beta: string }> {
+  // The public facade preserves explicit Database injection for nested provider reads.
   const alpha = createProvider({ name: "alpha", type: "sandbox" }, db).id;
   const beta = createProvider({ name: "beta", type: "sandbox" }, db).id;
 
@@ -420,9 +427,12 @@ describe("a read that did not happen is never published as a zero", () => {
 
   it("reports a contradictory storage configuration instead of throwing", async () => {
     // `emails stats` must not itself fail while trying to say why it cannot measure.
+    await seed();
+    await seedUnifiedOutbound(sqliteStore());
+    api = startV1StoreApi({ store: sqliteStore() });
     process.env["EMAILS_DB_PATH"] = "/tmp/emails-stats-contradiction.db";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://mail.example.test";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "k";
+    process.env[EMAILS_API_URL_ENV] = api.baseUrl;
+    process.env[EMAILS_API_KEY_ENV] = api.apiKey;
     const stats = await getLocalStats(undefined, "30d");
     expect(stats.sent).toBeNull();
     expect(stats.delivered).toBeNull();
@@ -430,8 +440,22 @@ describe("a read that did not happen is never published as a zero", () => {
     expect(statusReasonCode(stats.gaps["sent"]?.reason)).toBe("source_unreachable");
     expect(stats.gaps["sent"]?.reason).toContain("store_unresolved");
     // The setting KEYS are named so an operator can act; no value is echoed.
-    expect(stats.gaps["sent"]?.reason).toContain("EMAILS_SELF_HOSTED_URL");
-    expect(stats.gaps["sent"]?.reason).not.toContain("mail.example.test");
+    expect(stats.gaps["sent"]?.reason).toContain("EMAILS_DB_PATH");
+    expect(stats.gaps["sent"]?.reason).toContain(EMAILS_API_URL_ENV);
+    expect(stats.gaps["sent"]?.reason).not.toContain(api.baseUrl);
+    expect(stats.gaps["sent"]?.reason).not.toContain(api.apiKey);
+    expect(stats.gaps["sent"]?.reason).not.toContain(process.env["EMAILS_DB_PATH"]!);
+    expect(api.requestCount()).toBe(0);
+
+    // Once the forbidden setting is removed, the same public call reads actual API
+    // rows. An injected fixture DB must never become this client's silent fallback.
+    delete process.env["EMAILS_DB_PATH"];
+    const measured = await getLocalStats(undefined, "30d");
+    expect(measured.sent).toBe(3);
+    expect(measured.delivered).toBe(3);
+    expect(measured.delivery_rate).toBe(100);
+    expect(measured.gaps).toEqual({});
+    expect(api.requestCount()).toBeGreaterThan(0);
   });
 });
 

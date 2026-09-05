@@ -20,7 +20,11 @@
 // cannot pass vacuously.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { closeDatabase, getDatabase, resetDatabase } from "./database.js";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV, StoreConfigurationError } from "../lib/client-settings.js";
+import { closeDatabase, getDatabase } from "./database.js";
 import {
   addStep,
   advanceEnrollment,
@@ -40,18 +44,20 @@ import {
   type SequenceStore,
 } from "./sequences.js";
 import { createHttpEmailStore } from "../store-http/index.js";
+import { EmailsApiFault } from "../store-http/outcome.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import { sequenceSubledgerOf } from "../store-sequence-subledger.js";
 import type { EmailStore } from "../store/email-store.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
-import {
-  API_BASE_URL_SETTING,
-  API_CREDENTIAL_SETTINGS,
-  API_SETTINGS_POINTER,
-  DATABASE_PATH_SETTINGS,
-} from "../store-resolution.js";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
+let originalExitCode: typeof process.exitCode;
+let originalExit: typeof process.exit;
+let originalError: typeof console.error;
+let fixtureRoot: string | null = null;
+let stateRoots: string[] = [];
+let db: ReturnType<typeof getDatabase>;
+let api: V1StoreApi | null = null;
 
 function captureInheritedProcessEnv(): void {
   INHERITED_PROCESS_ENV = { ...process.env };
@@ -64,22 +70,14 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-/**
- * Leave exactly ONE store configured, named through the resolution's OWN exported
- * constants: a stray inherited API setting beside the database path is a hard boot error
- * with deliberately no precedence rule, and it would turn every default-store case into
- * that error.
- */
-function configureExactlyOneStore(): void {
-  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
-    delete process.env[setting];
+/** Configured clients use HTTP; the fixture alone owns the explicit memory store. */
+function clearClientConfiguration(): void {
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:HASNA_)?(?:EMAILS|MAILERY)_/.test(key)) delete process.env[key];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-  process.env[DATABASE_PATH_SETTINGS[1]] = ":memory:";
+  for (const key of [...CLIENT_DATABASE_SETTINGS, "HASNA_HOME", "HASNA_DATA_HOME", "CODEWITH_HOME",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "RESEND_API_KEY"]) delete process.env[key];
 }
-
-let db: ReturnType<typeof getDatabase>;
-let api: V1StoreApi | null = null;
 
 function service(): V1StoreApi {
   if (api === null) throw new Error("the /v1 fixture was not started");
@@ -88,17 +86,49 @@ function service(): V1StoreApi {
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  configureExactlyOneStore();
-  resetDatabase();
-  db = getDatabase();
+  originalExitCode = process.exitCode;
+  originalExit = process.exit;
+  originalError = console.error;
+  stateRoots = [];
+  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-sequences-configured-"));
+  clearClientConfiguration();
+  stateRoots = Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_STATE_HOME: "state", XDG_CACHE_HOME: "cache", HASNA_EMAILS_HOME: "app" }).map(([key, name]) => {
+    const path = join(fixtureRoot!, name);
+    mkdirSync(path, { mode: 0o700 });
+    process.env[key] = path;
+    return path;
+  });
+  process.env.TMPDIR = join(fixtureRoot, "tmp");
+  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(fixtureRoot, "compiler");
+  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
+  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
+  closeDatabase();
+  db = getDatabase(":memory:");
   api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "sequence row fixture" }) });
+  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
+  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
 });
 
 afterEach(() => {
-  api?.stop();
-  api = null;
-  closeDatabase();
-  restoreInheritedProcessEnv();
+  try {
+    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
+    expect(process.exit).toBe(originalExit);
+    expect(console.error).toBe(originalError);
+  } finally {
+    try { api?.stop(); } finally {
+      api = null;
+      try { closeDatabase(); } finally {
+        restoreInheritedProcessEnv();
+        process.exit = originalExit;
+        console.error = originalError;
+        // Bun ignores undefined assignment; retain the inherited effective status.
+        process.exitCode = originalExitCode ?? 0;
+        if (fixtureRoot !== null) rmSync(fixtureRoot, { recursive: true, force: true });
+        fixtureRoot = null;
+      }
+    }
+  }
 });
 
 function sqliteStore(): EmailStore {
@@ -698,5 +728,91 @@ describe("cascade on the local store", () => {
     expect(await deleteSequence(seq.id, store)).toBe(true);
     expect((db.query("SELECT COUNT(*) AS n FROM sequence_steps").get() as { n: number }).n).toBe(0);
     expect((db.query("SELECT COUNT(*) AS n FROM sequence_enrollments").get() as { n: number }).n).toBe(0);
+  });
+});
+
+async function boundaryFailure(run: () => Promise<unknown>): Promise<Error> {
+  let caught: unknown;
+  try { await run(); } catch (error) { caught = error; }
+  expect(caught instanceof Error).toBe(true);
+  if (!(caught instanceof Error)) throw new Error("expected a failed configured operation");
+  return caught;
+}
+
+function boundarySnapshot(): string {
+  return JSON.stringify(["sequences", "sequence_steps", "sequence_enrollments"].map(table => db.query(`SELECT * FROM ${table} ORDER BY id`).all()));
+}
+
+describe("configured sequence HTTP boundary", () => {
+  it("persists ordered steps, provider binding and advancement through HTTP", async () => {
+    seedSequence({ id: "boundary-existing", name: "fixture-private" });
+    const before = service().requestCount();
+    const sequence = await createSequence({ name: "boundary-sequence", description: "fixture description" });
+    expect(service().requestCount()).toBeGreaterThan(before);
+    expect((db.query("SELECT name, description, status FROM sequences WHERE id = ?").get(sequence.id)))
+      .toEqual({ name: "boundary-sequence", description: "fixture description", status: "active" });
+    const provider = "boundary-provider";
+    db.run("INSERT INTO providers (id, name, type, active) VALUES (?, ?, 'sandbox', 1)", [provider, provider]);
+    await addStep({ sequence_id: sequence.id, step_number: 20, delay_hours: 4, template_name: "later" });
+    await addStep({ sequence_id: sequence.id, step_number: 10, delay_hours: 1, template_name: "first", from_address: "fixture@example.com", subject_override: "fixture subject" });
+    const started = Date.now();
+    const enrollment = await enroll({ sequence_id: sequence.id, contact_email: "fixture@example.com", provider_id: provider });
+    expect(Date.parse(enrollment.next_send_at!)).toBeGreaterThanOrEqual(started + 3600000);
+    expect(Date.parse(enrollment.next_send_at!)).toBeLessThanOrEqual(Date.now() + 3600000);
+    expect(enrollment.provider_id).toBe(provider);
+    expect((await listSteps(sequence.id)).map(row => [row.step_number, row.template_name, row.from_address, row.subject_override]))
+      .toEqual([[10, "first", "fixture@example.com", "fixture subject"], [20, "later", null, null]]);
+    expect(db.query("SELECT provider_id, contact_email, current_step, status, next_send_at FROM sequence_enrollments WHERE id = ?").get(enrollment.id))
+      .toEqual({ provider_id: provider, contact_email: "fixture@example.com", current_step: 0, status: "active", next_send_at: enrollment.next_send_at });
+    expect((await listEnrollments({ sequence_id: sequence.id }))[0]?.id).toBe(enrollment.id);
+    expect((await advanceEnrollment(enrollment.id))?.current_step).toBe(1);
+    const completed = await advanceEnrollment(enrollment.id);
+    expect(completed?.status).toBe("completed");
+    expect(completed?.completed_at).not.toBeNull();
+    expect(completed?.next_send_at).toBeNull();
+    expect((await getSequence("boundary-existing"))?.name).toBe("fixture-private");
+  });
+
+  it("rejects a missing credential without requests, mutation or fallback", async () => {
+    seedSequence({ id: "boundary-existing", name: "fixture-private" });
+    const snapshot = boundarySnapshot();
+    const before = service().requestCount();
+    delete process.env[EMAILS_API_KEY_ENV];
+    const error = await boundaryFailure(() => createSequence({ name: "must-not-write" }));
+    expect(error instanceof StoreConfigurationError).toBe(true);
+    expect(error.message.includes("fixture-private")).toBe(false);
+    expect(service().requestCount()).toBe(before);
+    expect(boundarySnapshot()).toBe(snapshot);
+  });
+
+  it("rejects a wrong credential at real HTTP authentication without leaking rows", async () => {
+    seedSequence({ id: "boundary-existing", name: "fixture-private" });
+    const snapshot = boundarySnapshot();
+    const before = service().requestCount();
+    const wrong = "synthetic-wrong-sequence-fixture";
+    process.env[EMAILS_API_KEY_ENV] = wrong;
+    const error = await boundaryFailure(() => createSequence({ name: "must-not-write" }));
+    expect(error instanceof EmailsApiFault).toBe(true);
+    expect((error as EmailsApiFault).status).toBe(401);
+    expect(service().requestCount()).toBeGreaterThan(before);
+    expect([wrong, service().apiKey, "fixture-private"].some(value => error.message.includes(value))).toBe(false);
+    expect(boundarySnapshot()).toBe(snapshot);
+  });
+
+  it("rejects all client DB settings, blank and nonblank, before any request", async () => {
+    seedSequence({ id: "boundary-existing", name: "fixture-private" });
+    const snapshot = boundarySnapshot();
+    const before = service().requestCount();
+    for (const setting of CLIENT_DATABASE_SETTINGS) for (const value of ["", ":memory:"]) {
+      process.env[setting] = value;
+      try {
+        const error = await boundaryFailure(() => createSequence({ name: "must-not-write" }));
+        expect(error instanceof StoreConfigurationError).toBe(true);
+        expect(error.message.includes(setting)).toBe(true);
+        expect(error.message.includes("fixture-private")).toBe(false);
+        expect(service().requestCount()).toBe(before);
+        expect(boundarySnapshot()).toBe(snapshot);
+      } finally { delete process.env[setting]; }
+    }
   });
 });

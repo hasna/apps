@@ -1,20 +1,16 @@
 // The seam itself: what a store IS.
 //
-// Two implementations will satisfy this, and only two, ever:
+// The configured HTTP client is the sole implicit client transport. PostgreSQL is
+// internal service storage, reached through the API, never a client transport.
+// The explicit SQLite adapter remains for caller-supplied Database compatibility
+// and fixtures; it is not selected by missing or invalid client configuration.
 //
-//   * SqliteEmailStore — the local, default, on-disk SQLite database.
-//   * HttpEmailStore    — a client of an Emails API.
-//
-// THERE IS NO CLIENT-SIDE POSTGRES STORE, and there will not be one. Postgres is the
-// SERVER's internal storage and is reached only through the API; it is never a client
-// transport. "Local" means SQLite. If a caller means "somewhere else", it means the
-// API. Any third implementation would be a deployment-mode axis growing back under a
-// new name.
-//
-// No product code consumes this yet — `src/storage.ts` re-exports the core types and
-// nothing else reads them. It declares the contract so the two implementations can be
-// built against it and checked against each other, and so the operations that today
-// return plausible wrong data have somewhere to say "no" instead.
+// Product repositories and library functions already consume this contract through
+// src/store-resolution.ts; src/storage.ts also exposes its types and explicit
+// adapters. Retained raw exports and implementation arms have not all disappeared.
+// The shared conformance suite checks both concrete adapters against the same async
+// outcomes, so an unavailable capability must refuse truthfully rather than return
+// plausible wrong data. That consistency check is not full feature acceptance.
 
 import type { StoreCapabilities } from "./capabilities.js";
 import type { StoreDescriptor } from "./descriptor.js";
@@ -31,6 +27,7 @@ import type {
   ForwardingRepository,
   GroupsRepository,
   InboundRepository,
+  IngestionSourceInventoryRepository,
   MailboxFiltersRepository,
   MessagesRepository,
   OwnersRepository,
@@ -77,6 +74,8 @@ export interface EmailStore {
   readonly sandbox: SandboxRepository;
   /** Priority sender rules are persisted resources, scoped to this store's tenant/mailbox. */
   readonly prioritySenderRules?: PrioritySenderRulesRepository;
+  /** Optional for older injected stores; absence is unsupported, never an empty inventory. */
+  readonly sourceInventory?: IngestionSourceInventoryRepository;
   readonly emailDigests: EmailDigestsRepository;
   readonly scheduled: ScheduledRepository;
   readonly events: EventsRepository;
@@ -103,4 +102,9 @@ export interface EmailStore {
 /** Complete store surface used by the concrete SQLite and HTTP implementations. */
 export interface PrioritySenderRulesStore {
   readonly prioritySenderRules: PrioritySenderRulesRepository;
+}
+
+/** Both concrete adapters implement the complete read-only inventory extension. */
+export interface SourceInventoryStore {
+  readonly sourceInventory: IngestionSourceInventoryRepository;
 }

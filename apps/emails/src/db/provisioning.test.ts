@@ -46,14 +46,18 @@
 // renderer itself is pinned in `src/cli/commands/daemon.local.test.ts`.
 
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { closeDatabase, getDatabase, resetDatabase, type Database } from "./database.js";
+import { tmpdir } from "node:os";
+import { CLIENT_DATABASE_SETTINGS, EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV, StoreConfigurationError } from "../lib/client-settings.js";
+import { closeDatabase, getDatabase, type Database } from "./database.js";
 import { createProvider } from "./providers.js";
 import { createDomain } from "./domains.js";
 import { createAddress } from "./addresses.js";
 import {
   TERMINAL_STATES,
+  type DomainProvisioningStatus,
+  type AddressProvisioningStatus,
   claimDueAddresses,
   claimDueDomains,
   countReadyAddressesForDomain,
@@ -75,20 +79,26 @@ import {
   setDomainProvisioning,
 } from "./provisioning.js";
 import { createHttpEmailStore } from "../store-http/index.js";
+import { EmailsApiFault } from "../store-http/outcome.js";
 import { createSqliteEmailStore } from "../store-sqlite/index.js";
 import type { EmailStore } from "../store/email-store.js";
 import type { Outcome } from "../store/outcome.js";
 import type { DomainRecord, ResourceInput, ResourceRow } from "../store/records.js";
 import { startV1StoreApi, type V1StoreApi } from "../test-support/v1-store-api.js";
 import { statusGapClass, statusReasonCode } from "../lib/status-availability.js";
-import {
-  API_BASE_URL_SETTING,
-  API_CREDENTIAL_SETTINGS,
-  API_SETTINGS_POINTER,
-  DATABASE_PATH_SETTINGS,
-} from "../store-resolution.js";
 
+// The original raw-storage and unknown-state queue cases intentionally retain `verifying`.
+// Literal-only casts preserve that compatibility evidence; they do not declare a canonical state.
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
+let originalExitCode: typeof process.exitCode;
+let originalExit: typeof process.exit;
+let originalError: typeof console.error;
+let fixtureRoot: string | null = null;
+let stateRoots: string[] = [];
+let db: Database;
+let api: V1StoreApi;
+let activeApi: V1StoreApi | null = null;
+let providerId: string;
 
 function captureInheritedProcessEnv(): void {
   INHERITED_PROCESS_ENV = { ...process.env };
@@ -101,40 +111,67 @@ function restoreInheritedProcessEnv(): void {
   Object.assign(process.env, INHERITED_PROCESS_ENV);
 }
 
-let db: Database;
-let api: V1StoreApi;
-let providerId: string;
-
-/**
- * Leave exactly ONE store configured, so the cases that pass no store can resolve.
- *
- * Named through the resolution's OWN exported constants rather than copied as literals: "a
- * database path AND an API are both configured" is a HARD BOOT ERROR with no precedence rule,
- * so a stray inherited API setting turns every default-store case into that error.
- */
-function configureExactlyOneStore(): void {
-  for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
-    delete process.env[setting];
+/** Configured clients use HTTP; the fixture alone owns the explicit memory store. */
+function clearClientConfiguration(): void {
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:HASNA_)?(?:EMAILS|MAILERY)_/.test(key)) delete process.env[key];
   }
-  for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-  process.env["EMAILS_DB_PATH"] = ":memory:";
+  for (const key of [...CLIENT_DATABASE_SETTINGS, "HASNA_HOME", "HASNA_DATA_HOME", "CODEWITH_HOME",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE", "RESEND_API_KEY"]) delete process.env[key];
+}
+
+function service(): V1StoreApi {
+  if (activeApi === null) throw new Error("the /v1 fixture was not started");
+  return activeApi;
 }
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  configureExactlyOneStore();
-  resetDatabase();
-  db = getDatabase();
+  originalExitCode = process.exitCode;
+  originalExit = process.exit;
+  originalError = console.error;
+  stateRoots = [];
+  fixtureRoot = mkdtempSync(join(tmpdir(), "emails-provisioning-configured-"));
+  clearClientConfiguration();
+  stateRoots = Object.entries({ HOME: "home", XDG_CONFIG_HOME: "config", XDG_DATA_HOME: "data",
+    XDG_STATE_HOME: "state", XDG_CACHE_HOME: "cache", HASNA_EMAILS_HOME: "app" }).map(([key, name]) => {
+    const path = join(fixtureRoot!, name);
+    mkdirSync(path, { mode: 0o700 });
+    process.env[key] = path;
+    return path;
+  });
+  process.env.TMPDIR = join(fixtureRoot, "tmp");
+  process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = join(fixtureRoot, "compiler");
+  mkdirSync(process.env.TMPDIR, { mode: 0o700 });
+  mkdirSync(process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH, { mode: 0o700 });
+  closeDatabase();
+  db = getDatabase(":memory:");
   providerId = createProvider({ name: "SES production", type: "ses" }, db).id;
-  // The `/v1` service the HTTP store talks to. Every row it serves comes out of this same
-  // database through the seam, so both store variants below read one dataset.
-  api = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "provisioning fixture" }) });
+  activeApi = startV1StoreApi({ store: createSqliteEmailStore({ database: db, detail: "provisioning fixture" }) });
+  api = activeApi;
+  process.env[EMAILS_API_URL_ENV] = api.baseUrl;
+  process.env[EMAILS_API_KEY_ENV] = api.apiKey;
 });
 
 afterEach(() => {
-  api.stop();
-  closeDatabase();
-  restoreInheritedProcessEnv();
+  try {
+    for (const path of stateRoots) expect(readdirSync(path)).toEqual([]);
+    expect(process.exit).toBe(originalExit);
+    expect(console.error).toBe(originalError);
+  } finally {
+    try { activeApi?.stop(); } finally {
+      activeApi = null;
+      try { closeDatabase(); } finally {
+        restoreInheritedProcessEnv();
+        process.exit = originalExit;
+        console.error = originalError;
+        // Bun ignores undefined assignment; retain the inherited effective status.
+        process.exitCode = originalExitCode ?? 0;
+        if (fixtureRoot !== null) rmSync(fixtureRoot, { recursive: true, force: true });
+        fixtureRoot = null;
+      }
+    }
+  }
 });
 
 function sqliteStore(): EmailStore {
@@ -332,7 +369,7 @@ describe.each(STORE_VARIANTS)("writing provisioning state through the %s", (_lab
   it("round-trips every domain column it accepts", async () => {
     const id = seedDomain("example.com");
     const written = await setDomainProvisioning(id, {
-      provisioning_status: "verifying",
+      provisioning_status: "verifying" as DomainProvisioningStatus,
       purchase_provider: "namecheap",
       dns_provider: "route53",
       send_provider: "ses",
@@ -343,7 +380,7 @@ describe.each(STORE_VARIANTS)("writing provisioning state through the %s", (_lab
       next_check_at: "2026-02-01T00:00:00.000Z",
     }, makeStore());
     expect(written).toEqual({
-      provisioning_status: "verifying",
+      provisioning_status: "verifying" as DomainProvisioningStatus,
       purchase_provider: "namecheap",
       dns_provider: "route53",
       send_provider: "ses",
@@ -387,11 +424,11 @@ describe.each(STORE_VARIANTS)("writing provisioning state through the %s", (_lab
 
   it("clears a column with an explicit null and leaves an absent one alone", async () => {
     const id = seedDomain("example.com");
-    await setDomainProvisioning(id, { provisioning_status: "verifying", last_error: "boom" }, makeStore());
+    await setDomainProvisioning(id, { provisioning_status: "verifying" as DomainProvisioningStatus, last_error: "boom" }, makeStore());
     const cleared = await setDomainProvisioning(id, { last_error: null }, makeStore());
     expect(cleared!.last_error).toBeNull();
     // The status was NOT named on the second patch and must survive it.
-    expect(cleared!.provisioning_status).toBe("verifying");
+    expect(cleared!.provisioning_status).toBe("verifying" as DomainProvisioningStatus);
   });
 
   it("refuses to record an event with a blank entity_id or to_state, BEFORE writing", async () => {
@@ -678,7 +715,7 @@ describe.each(STORE_VARIANTS)("ready-address counts through the %s", (_label, ma
     for (const id of [readyOne, readyTwo, other, unowned]) {
       await setAddressProvisioning(id, { provisioning_status: "ready" }, makeStore());
     }
-    await setAddressProvisioning(pending, { provisioning_status: "verifying" }, makeStore());
+    await setAddressProvisioning(pending, { provisioning_status: "verifying" as AddressProvisioningStatus }, makeStore());
 
     const all = await listReadyAddressCountsByDomain(makeStore());
     expect(all.get(first)).toBe(2);
@@ -1273,9 +1310,9 @@ describe.each(STORE_VARIANTS)("the daemon queue through the %s", (_label, makeSt
     const notYet = seedDomain("not-yet.example");
     const terminal = seedDomain("terminal.example");
     seedDomain("never-scheduled.example");
-    await setDomainProvisioning(due, { provisioning_status: "verifying", next_check_at: PAST }, store);
-    await setDomainProvisioning(later, { provisioning_status: "verifying", next_check_at: LATER }, store);
-    await setDomainProvisioning(notYet, { provisioning_status: "verifying", next_check_at: FUTURE }, store);
+    await setDomainProvisioning(due, { provisioning_status: "verifying" as DomainProvisioningStatus, next_check_at: PAST }, store);
+    await setDomainProvisioning(later, { provisioning_status: "verifying" as DomainProvisioningStatus, next_check_at: LATER }, store);
+    await setDomainProvisioning(notYet, { provisioning_status: "verifying" as DomainProvisioningStatus, next_check_at: FUTURE }, store);
     await setDomainProvisioning(terminal, { provisioning_status: "failed", next_check_at: PAST }, store);
     return { due, later };
   }
@@ -1294,7 +1331,7 @@ describe.each(STORE_VARIANTS)("the daemon queue through the %s", (_label, makeSt
       scheduled.push(id);
     }
     const active = seedDomain("active.example");
-    await setDomainProvisioning(active, { provisioning_status: "verifying", next_check_at: PAST }, store);
+    await setDomainProvisioning(active, { provisioning_status: "verifying" as DomainProvisioningStatus, next_check_at: PAST }, store);
     const due = await claimDueDomains(NOW, makeStore());
     expect(due.map((row) => row.id)).toEqual([active]);
     for (const id of scheduled) expect(due.some((row) => row.id === id)).toBe(false);
@@ -1307,19 +1344,19 @@ describe.each(STORE_VARIANTS)("the daemon queue through the %s", (_label, makeSt
     // realistic shape, and under `<` its own row is invisible for a tick.
     const store = makeStore();
     const onTheDot = seedDomain("exact.example");
-    await setDomainProvisioning(onTheDot, { provisioning_status: "verifying", next_check_at: NOW }, store);
+    await setDomainProvisioning(onTheDot, { provisioning_status: "verifying" as DomainProvisioningStatus, next_check_at: NOW }, store);
     expect((await claimDueDomains(NOW, makeStore())).map((row) => row.id)).toEqual([onTheDot]);
     // CONTROL: one millisecond later it is not yet due, so the assertion above is about the
     // boundary rather than about the comparison being absent.
     const justAfter = new Date(Date.parse(NOW) + 1).toISOString();
     const later = seedDomain("just-after.example");
-    await setDomainProvisioning(later, { provisioning_status: "verifying", next_check_at: justAfter }, store);
+    await setDomainProvisioning(later, { provisioning_status: "verifying" as DomainProvisioningStatus, next_check_at: justAfter }, store);
     expect((await claimDueDomains(NOW, makeStore())).map((row) => row.id)).toEqual([onTheDot]);
   });
 
   it("excludes a row with no next_check_at even when it is not terminal", async () => {
     const id = seedDomain("unscheduled.example");
-    await setDomainProvisioning(id, { provisioning_status: "verifying" }, makeStore());
+    await setDomainProvisioning(id, { provisioning_status: "verifying" as DomainProvisioningStatus }, makeStore());
     expect(await claimDueDomains(NOW, makeStore())).toEqual([]);
   });
 
@@ -1327,8 +1364,8 @@ describe.each(STORE_VARIANTS)("the daemon queue through the %s", (_label, makeSt
     const store = makeStore();
     const due = seedAddress("due@example.com");
     const notYet = seedAddress("later@example.com");
-    await setAddressProvisioning(due, { provisioning_status: "verifying", next_check_at: PAST }, store);
-    await setAddressProvisioning(notYet, { provisioning_status: "verifying", next_check_at: FUTURE }, store);
+    await setAddressProvisioning(due, { provisioning_status: "verifying" as AddressProvisioningStatus, next_check_at: PAST }, store);
+    await setAddressProvisioning(notYet, { provisioning_status: "verifying" as AddressProvisioningStatus, next_check_at: FUTURE }, store);
     expect((await claimDueAddresses(NOW, makeStore())).map((row) => row.id)).toEqual([due]);
   });
 
@@ -1337,7 +1374,7 @@ describe.each(STORE_VARIANTS)("the daemon queue through the %s", (_label, makeSt
     const first = seedDomain("aaa.example");
     const second = seedDomain("bbb.example");
     for (const id of [first, second]) {
-      await setDomainProvisioning(id, { provisioning_status: "verifying", next_check_at: PAST }, store);
+      await setDomainProvisioning(id, { provisioning_status: "verifying" as DomainProvisioningStatus, next_check_at: PAST }, store);
     }
     expect((await claimDueDomains(NOW, makeStore())).map((row) => row.id)).toEqual([first, second].sort());
   });
@@ -1346,7 +1383,7 @@ describe.each(STORE_VARIANTS)("the daemon queue through the %s", (_label, makeSt
     const store = makeStore();
     await seedQueue();
     const address = seedAddress("due@example.com");
-    await setAddressProvisioning(address, { provisioning_status: "verifying", next_check_at: PAST }, store);
+    await setAddressProvisioning(address, { provisioning_status: "verifying" as AddressProvisioningStatus, next_check_at: PAST }, store);
     const failedAddress = seedAddress("failed@example.com");
     await setAddressProvisioning(failedAddress, { provisioning_status: "failed" }, store);
 
@@ -1528,7 +1565,7 @@ describe("the work summary reports a bound instead of refusing", () => {
     // The queue asks about two columns and must not be blocked by a third it never reads. A
     // domain whose nameservers cannot be parsed is still a domain whose check is due.
     const id = seedDomain("example.com");
-    await setDomainProvisioning(id, { provisioning_status: "verifying", next_check_at: PAST }, sqliteStore());
+    await setDomainProvisioning(id, { provisioning_status: "verifying" as DomainProvisioningStatus, next_check_at: PAST }, sqliteStore());
     const base = sqliteStore();
     const corrupt = (rows: DomainRecord[]): DomainRecord[] =>
       rows.map((row) => ({ ...row, nameservers_json: "{not json" as unknown as string[] }));
@@ -1561,8 +1598,8 @@ describe("the configured store", () => {
     // No store argument: `configureExactlyOneStore` leaves the SQLite path as the only one, so
     // this exercises the resolution rather than an injected handle.
     const id = seedDomain("example.com");
-    await setDomainProvisioning(id, { provisioning_status: "verifying" });
-    expect((await getDomainProvisioning(id))!.provisioning_status).toBe("verifying");
+    await setDomainProvisioning(id, { provisioning_status: "verifying" as DomainProvisioningStatus });
+    expect((await getDomainProvisioning(id))!.provisioning_status).toBe("verifying" as DomainProvisioningStatus);
     expect((await listDomainProvisioningById()).size).toBe(1);
     expect(await countReadyAddressesForDomain(id)).toBe(0);
     expect(await claimDueDomains()).toEqual([]);
@@ -1587,5 +1624,88 @@ describe("the two arms are gone", () => {
 
     expect(existsSync(join(here, "provisioning.local.ts"))).toBe(false);
     expect(existsSync(join(here, "provisioning.remote.ts"))).toBe(false);
+  });
+});
+
+async function boundaryFailure(run: () => Promise<unknown>): Promise<Error> {
+  let caught: unknown;
+  try { await run(); } catch (error) { caught = error; }
+  expect(caught instanceof Error).toBe(true);
+  if (!(caught instanceof Error)) throw new Error("expected a failed configured operation");
+  return caught;
+}
+
+function boundarySnapshot(): string {
+  return JSON.stringify([
+    db.query("SELECT * FROM domains ORDER BY id").all(),
+    db.query("SELECT * FROM addresses ORDER BY id").all(),
+    db.query("SELECT * FROM provisioning_events ORDER BY id").all(),
+  ]);
+}
+
+describe("configured provisioning HTTP boundary", () => {
+  it("persists the actual patch and transition payload through HTTP", async () => {
+    const id = seedDomain("fixture-private.example");
+    const address = seedAddress("fixture-private@fixture-private.example", id);
+    const before = service().requestCount();
+    const written = await setDomainProvisioning(id, { provisioning_status: "dns_published", send_provider: "ses", nameservers: ["ns1.example.net", "ns2.example.net"] });
+    expect(service().requestCount()).toBeGreaterThan(before);
+    expect(written!.nameservers).toEqual(["ns1.example.net", "ns2.example.net"]);
+    expect((db.query("SELECT provider_id, send_provider, nameservers_json FROM domains WHERE id = ?").get(id) as { provider_id: string; send_provider: string; nameservers_json: string }))
+      .toEqual({ provider_id: providerId, send_provider: "ses", nameservers_json: JSON.stringify(["ns1.example.net", "ns2.example.net"]) });
+    await setAddressProvisioning(address, { provisioning_status: "ready", receive_strategy: "ses-s3", next_check_at: null });
+    expect((await getAddressProvisioning(address))!.receive_strategy).toBe("ses-s3");
+    const detail = { provider_id: providerId, operation: "fixture-transition", attempt: 2 };
+    const event = await recordProvisioningEvent("domain", id, "none", "dns_published", detail);
+    const stored = db.query("SELECT entity_type, entity_id, from_state, to_state, detail_json FROM provisioning_events WHERE id = ?").get(event.id) as {
+      entity_type: string; entity_id: string; from_state: string; to_state: string; detail_json: string;
+    };
+    expect({ ...stored, detail_json: JSON.parse(String(stored["detail_json"])) })
+      .toEqual({ entity_type: "domain", entity_id: id, from_state: "none", to_state: "dns_published", detail_json: detail });
+    expect((await listProvisioningEvents("domain", id)).map(row => row.id)).toEqual([event.id]);
+    expect(await countReadyAddressesForDomain(id)).toBe(1);
+  });
+
+  it("rejects a missing credential without requests, mutation or fallback", async () => {
+    const id = seedDomain("fixture-private.example");
+    const snapshot = boundarySnapshot();
+    const before = service().requestCount();
+    delete process.env[EMAILS_API_KEY_ENV];
+    const error = await boundaryFailure(() => setDomainProvisioning(id, { last_error: "must-not-write" }));
+    expect(error instanceof StoreConfigurationError).toBe(true);
+    expect(error.message.includes("fixture-private")).toBe(false);
+    expect(service().requestCount()).toBe(before);
+    expect(boundarySnapshot()).toBe(snapshot);
+  });
+
+  it("rejects a wrong credential at real HTTP authentication without leaking rows", async () => {
+    const id = seedDomain("fixture-private.example");
+    const snapshot = boundarySnapshot();
+    const before = service().requestCount();
+    const wrong = "synthetic-wrong-provisioning-fixture";
+    process.env[EMAILS_API_KEY_ENV] = wrong;
+    const error = await boundaryFailure(() => setDomainProvisioning(id, { last_error: "must-not-write" }));
+    expect(error instanceof EmailsApiFault).toBe(true);
+    expect((error as EmailsApiFault).status).toBe(401);
+    expect(service().requestCount()).toBeGreaterThan(before);
+    expect([wrong, service().apiKey, "fixture-private"].some(value => error.message.includes(value))).toBe(false);
+    expect(boundarySnapshot()).toBe(snapshot);
+  });
+
+  it("rejects all client DB settings, blank and nonblank, before any request", async () => {
+    const id = seedDomain("fixture-private.example");
+    const snapshot = boundarySnapshot();
+    const before = service().requestCount();
+    for (const setting of CLIENT_DATABASE_SETTINGS) for (const value of ["", ":memory:"]) {
+      process.env[setting] = value;
+      try {
+        const error = await boundaryFailure(() => setDomainProvisioning(id, { last_error: "must-not-write" }));
+        expect(error instanceof StoreConfigurationError).toBe(true);
+        expect(error.message.includes(setting)).toBe(true);
+        expect(error.message.includes("fixture-private")).toBe(false);
+        expect(service().requestCount()).toBe(before);
+        expect(boundarySnapshot()).toBe(snapshot);
+      } finally { delete process.env[setting]; }
+    }
   });
 });

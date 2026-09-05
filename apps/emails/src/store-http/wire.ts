@@ -19,6 +19,7 @@
 // code path.
 
 import { EmailsApiFault } from "./outcome.js";
+import { normalizeEmailsApiUrl, validateEmailsCredential } from "../lib/client-settings.js";
 import {
   EMAILS_SELF_HOSTED_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
@@ -35,7 +36,7 @@ const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 /** The `fetch` shape this store needs. Injectable so a test drives a real server. */
 export type FetchImplementation = (
   input: string,
-  init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
+  init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal; redirect?: "error" },
 ) => Promise<Response>;
 
 export interface TransportOptions {
@@ -84,13 +85,7 @@ export interface Transport {
  * safe to print. The search string and hash go for the same reason.
  */
 export function toV1BaseUrl(configured: string): { requestBase: string; safeBase: string } {
-  const parsed = new URL(configured);
-  parsed.username = "";
-  parsed.password = "";
-  parsed.search = "";
-  parsed.hash = "";
-  const trimmed = parsed.toString().replace(/\/+$/, "");
-  const requestBase = /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+  const requestBase = normalizeEmailsApiUrl(configured);
   return { requestBase, safeBase: requestBase.replace(/\/v1$/, "") };
 }
 
@@ -116,7 +111,7 @@ function credentialCandidates(options: TransportOptions): readonly EmailsClientC
   return [
     { setting: options.credentialSetting ?? EMAILS_SELF_HOSTED_API_KEY_ENV, value: options.credential },
     ...(options.credentialFallbacks ?? []),
-  ];
+  ].map((candidate) => ({ ...candidate, value: validateEmailsCredential(candidate.value, candidate.setting) }));
 }
 
 function errorReason(body: unknown): string | null {
@@ -198,13 +193,13 @@ async function requestOnce(
         headers,
         ...(hasBody ? { body: JSON.stringify(requestOptions?.body) } : {}),
         signal: controller.signal,
+        redirect: "error",
       });
-    } catch (error) {
+    } catch {
       // A transport failure is a FAULT, never a refusal — see outcome.ts RULE 1.
       // The message names the method and path but never the query string, which can
       // carry a recipient address, and never the headers, which carry the credential.
-      const cause = error instanceof Error ? error.message : String(error);
-      throw new EmailsApiFault(0, `${method} ${path} could not reach the Emails API: ${cause}`);
+      throw new EmailsApiFault(0, `${method} ${path} could not reach the Emails API.`);
     }
 
     let text: string;
@@ -217,8 +212,7 @@ async function requestOnce(
       // version called this outside the try/catch above, so those rejections escaped
       // raw while outcome.ts promised every network error would be typed.
       if (error instanceof EmailsApiFault) throw error;
-      const cause = error instanceof Error ? error.message : String(error);
-      throw new EmailsApiFault(0, `${method} ${path} failed while reading the response: ${cause}`);
+      throw new EmailsApiFault(0, `${method} ${path} failed while reading the response.`);
     }
     if (text.length === 0) return { status: response.status, body: null };
     try {
