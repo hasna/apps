@@ -82,7 +82,7 @@ describe('notes server on PostgreSQL backend', () => {
     expect(login.status).toBe(200);
     const code = login.json.devCode;
     expect(typeof code).toBe('string');
-    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'pg@example.test', code, name: 'Pg User' } });
+    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'pg@example.test', code, requestId: login.json.requestId, name: 'Pg User' } });
     expect(verify.status).toBe(200);
     expect(verify.json.apiKey).toStartWith('hasna_notes_');
     expect(verify.json.token).toBeTruthy();
@@ -95,7 +95,7 @@ describe('notes server on PostgreSQL backend', () => {
     ]) {
       const { app } = await bootPgServer(env);
       const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'pg2@example.test' } });
-      const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'pg2@example.test', code: login.json.devCode, name: 'Pg2' } });
+      const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'pg2@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Pg2' } });
       expect(verify.status).toBe(200);
       expect(verify.json.apiKey).toStartWith('hasna_notes_');
     }
@@ -108,7 +108,7 @@ describe('notes server on PostgreSQL backend', () => {
   test('contracts api key authenticates notes CRUD over the wire dialect', async () => {
     const { app } = await bootPgServer({ HASNA_NOTES_API_SIGNING_KEY: SIGNING });
     const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'crud@example.test' } });
-    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'crud@example.test', code: login.json.devCode, name: 'Crud' } });
+    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'crud@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Crud' } });
     const apiKey = verify.json.apiKey;
 
     const created = await request(app, 'POST', '/api/v1/notes', { token: apiKey, body: { title: 'PG note', bodyMarkdown: 'hello postgres' } });
@@ -142,7 +142,7 @@ describe('notes server on PostgreSQL backend', () => {
   test('session (JWT) auth works on postgres', async () => {
     const { app } = await bootPgServer({ HASNA_NOTES_API_SIGNING_KEY: SIGNING });
     const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'session@example.test' } });
-    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'session@example.test', code: login.json.devCode, name: 'Session' } });
+    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'session@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Session' } });
     const token = verify.json.token;
     const whoami = await request(app, 'GET', '/api/v1/auth/whoami', { token });
     expect(whoami.status).toBe(200);
@@ -152,7 +152,7 @@ describe('notes server on PostgreSQL backend', () => {
   test('api-keys listing works on postgres (contracts table shape)', async () => {
     const { app } = await bootPgServer({ HASNA_NOTES_API_SIGNING_KEY: SIGNING });
     const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'keys@example.test' } });
-    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'keys@example.test', code: login.json.devCode, name: 'Keys' } });
+    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'keys@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Keys' } });
     const apiKey = verify.json.apiKey;
     const res = await request(app, 'GET', '/api/v1/api-keys', { token: apiKey });
     expect(res.status).toBe(200);
@@ -172,7 +172,7 @@ describe('notes server on PostgreSQL backend', () => {
   test('sync endpoint is unavailable on postgres (sync_batches dropped)', async () => {
     const { app } = await bootPgServer({ HASNA_NOTES_API_SIGNING_KEY: SIGNING });
     const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'sync@example.test' } });
-    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'sync@example.test', code: login.json.devCode, name: 'Sync' } });
+    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'sync@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Sync' } });
     const res = await request(app, 'POST', '/api/v1/sync', {
       token: verify.json.apiKey,
       body: { items: [], cursor: null },

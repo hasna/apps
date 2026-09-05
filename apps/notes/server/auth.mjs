@@ -26,6 +26,8 @@ import { ApiKeyStore, mintApiKey, verifyApiKey } from '@hasna/contracts/auth';
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 const DEVICE_TTL_MS = 10 * 60 * 1000;
 const OTP_TTL_MS = 10 * 60 * 1000;
+/** Wrong codes a single login request survives before it is burned (#1770 review). */
+export const OTP_MAX_FAILED_ATTEMPTS = 5;
 
 export function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -291,9 +293,15 @@ export async function startOtpLogin(db, config, input) {
   const email = normalizeEmail(input.email);
   if (!isValidEmail(email)) throw new ApiError('bad_request', 'a valid email is required', 400);
   const code = otpCode();
+  // The request's nonce: an opaque 122-bit random id that only the requester
+  // receives (the code goes to the inbox). /auth/verify looks the request up
+  // by it, so the guess budget belongs to THIS request and nobody who does not
+  // hold the nonce can spend it — a stranger asking for the same address gets
+  // a request of their own and never sees this one (#1770 review).
+  const requestId = randomUUID();
   const expiresAt = new Date(Date.now() + OTP_TTL_MS).toISOString();
   await db.query('INSERT INTO otp_login_requests (id, email, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)').run(
-    randomUUID(), email, sha256(`${email}:${code}`), expiresAt, nowIso(),
+    requestId, email, sha256(`${email}:${code}`), expiresAt, nowIso(),
   );
   // The one-time code must never reach the log (issue #1542): anyone with log
   // access could request a code for any email and complete the login. Log a
@@ -304,17 +312,43 @@ export async function startOtpLogin(db, config, input) {
   if (config.consoleCodes) {
     config.log(`[notes-server] login code for ${email}: ${code} (expires in 10 minutes)`);
   }
-  return { sent: true, email, expiresAt, ...(config.devMode ? { devCode: code } : {}) };
+  return { sent: true, email, requestId, expiresAt, ...(config.devMode ? { devCode: code } : {}) };
 }
 
+/**
+ * Verify {email, code, requestId}.
+ *
+ * The request is looked up by ITS nonce — never "the latest pending code for
+ * the address" — so one requester's request is invisible to every other, and
+ * a later mint for the same address cannot stale it. A request that does not
+ * resolve (unknown nonce, other address, consumed, burned, expired) is refused
+ * before anything is counted. A wrong code counts against THAT request and
+ * burns it at OTP_MAX_FAILED_ATTEMPTS, after which even the correct code is
+ * refused: the holder simply mints again. Nothing here is keyed on the
+ * address, so no remote party can lock an address out (#1770 review).
+ */
 export async function verifyOtp(db, config, input) {
   const email = normalizeEmail(input.email);
   const code = String(input.code ?? '').trim();
-  if (!isValidEmail(email) || !code) throw new ApiError('bad_request', 'email and code are required', 400);
-  const request = await db
-    .query("SELECT * FROM otp_login_requests WHERE email = ? AND status = 'pending' AND expires_at > ? ORDER BY created_at DESC LIMIT 1")
-    .get(email, nowIso());
-  if (!request || request.code_hash !== sha256(`${email}:${code}`)) throw new ApiError('unauthorized', 'invalid or expired login code', 401);
+  const requestId = String(input.requestId ?? '').trim();
+  if (!isValidEmail(email) || !code || !requestId) throw new ApiError('bad_request', 'email, code and requestId are required', 400);
+  const request = requestId.length <= 64
+    ? await db
+      .query("SELECT * FROM otp_login_requests WHERE id = ? AND email = ? AND status = 'pending' AND expires_at > ?")
+      .get(requestId, email, nowIso())
+    : null;
+  if (!request) throw new ApiError('unauthorized', 'invalid or expired login code', 401);
+  if (request.code_hash !== sha256(`${email}:${code}`)) {
+    const counted = await db
+      .query("UPDATE otp_login_requests SET failed_attempts = failed_attempts + 1 WHERE id = ? AND status = 'pending' RETURNING failed_attempts")
+      .get(request.id);
+    if ((counted?.failed_attempts ?? OTP_MAX_FAILED_ATTEMPTS) >= OTP_MAX_FAILED_ATTEMPTS) {
+      await db.query("UPDATE otp_login_requests SET status = 'burned', consumed_at = ? WHERE id = ? AND status = 'pending'").run(nowIso(), request.id);
+      // Observability, address only — never a code or the nonce.
+      config.log(`[notes-server] login request for ${email} burned after ${OTP_MAX_FAILED_ATTEMPTS} wrong codes`);
+    }
+    throw new ApiError('unauthorized', 'invalid or expired login code', 401);
+  }
   await db.query("UPDATE otp_login_requests SET status = 'consumed', consumed_at = ? WHERE id = ?").run(nowIso(), request.id);
 
   let user = await findUserByEmail(db, email);

@@ -12,6 +12,7 @@ import { describe, expect, test } from 'bun:test';
 import { openDb } from './db.mjs';
 import { createApp, resolveConfig } from './app.mjs';
 import { sha256 } from './auth.mjs';
+import { parsePeerList } from './client-ip.mjs';
 import { ApiError, errorBody, mapError, bearer, parseLimit } from './http.mjs';
 
 const LOOPBACK = { ip: '127.0.0.1' };
@@ -22,15 +23,15 @@ async function makeApp(overrides = {}) {
   return { db, app: await createApp({ db, config, testOnlySqlite: true }) };
 }
 
-function call(app, method, path, { token, body, env = LOOPBACK } = {}) {
-  const headers = { 'content-type': 'application/json' };
+function call(app, method, path, { token, body, env = LOOPBACK, headers: extra = {} } = {}) {
+  const headers = { 'content-type': 'application/json', ...extra };
   if (token) headers.authorization = `Bearer ${token}`;
   return app.request(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }, env);
 }
 
 async function login(app, email = 'owner@example.com') {
   const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
-  const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode } });
+  const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode, requestId: started.requestId } });
   expect(res.status).toBe(200);
   return res.json(); // { token, user, tenant, apiKey? }
 }
@@ -77,19 +78,45 @@ describe('http helpers', () => {
 });
 
 describe('OTP login edges', () => {
+  const mint = (app, email, ip = '127.0.0.1') => call(app, 'POST', '/api/v1/auth/login', { body: { email }, env: { ip } });
+  const verify = (app, body, ip = '127.0.0.1') => call(app, 'POST', '/api/v1/auth/verify', { body, env: { ip } });
+  const pendingCount = async (db, email) =>
+    (await db.query("SELECT COUNT(*) AS n FROM otp_login_requests WHERE email = ? AND status = 'pending'").get(email)).n;
+  const requestRow = (db, id) => db.query('SELECT status, failed_attempts FROM otp_login_requests WHERE id = ?').get(id);
+
   test('invalid email -> 400 before any code is issued', async () => {
     const { app } = await makeApp();
     for (const email of ['', 'not-an-email', 'a@b']) {
-      const res = await call(app, 'POST', '/api/v1/auth/login', { body: { email } });
+      const res = await mint(app, email);
       expect(res.status).toBe(400);
       expect((await res.json()).error.code).toBe('bad_request');
     }
   });
 
+  test('login mints a request per call — its own code and its own nonce — and a nonce accepts only its own code', async () => {
+    const { app, db } = await makeApp();
+    const email = 'two@example.com';
+    const a = await (await mint(app, email, '10.0.0.1')).json();
+    const b = await (await mint(app, email, '10.0.0.2')).json();
+    for (const r of [a, b]) {
+      expect(r.sent).toBe(true);
+      expect(r.requestId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(r.devCode).toMatch(/^\d{6}$/);
+    }
+    expect(a.requestId).not.toBe(b.requestId);
+    expect(await pendingCount(db, email)).toBe(2);
+    // b's code under a's nonce is a wrong code for a (unless the two six-digit
+    // codes happen to coincide, in which case it is simply right).
+    const crossed = await verify(app, { email, requestId: a.requestId, code: b.devCode });
+    expect(crossed.status).toBe(a.devCode === b.devCode ? 200 : 401);
+    expect((await verify(app, { email, requestId: b.requestId, code: b.devCode })).status).toBe(200);
+  });
+
   test('wrong code -> 401', async () => {
     const { app } = await makeApp();
-    const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'wrong@example.com' } })).json();
-    const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email: 'wrong@example.com', code: '000000' } });
+    const email = 'wrong@example.com';
+    const started = await (await mint(app, email)).json();
+    const res = await verify(app, { email, requestId: started.requestId, code: '000000' });
     expect(res.status).toBe(401);
     expect((await res.json()).error.code).toBe('unauthorized');
     expect(started.devCode).not.toBe('000000');
@@ -98,318 +125,270 @@ describe('OTP login edges', () => {
   test('expired request -> 401 (invalid or expired login code)', async () => {
     const { db, app } = await makeApp();
     const email = 'expired@example.com';
-    const code = '123456';
-    db.query(
-      'INSERT INTO otp_login_requests (id, email, code_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run('00000000-0000-4000-8000-00000000dead', email, sha256(`${email}:${code}`), 'pending', '2000-01-01T00:00:00.000Z', '2000-01-01T00:00:00.000Z');
-    const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code } });
+    const id = 'expired-request';
+    db.query('INSERT INTO otp_login_requests (id, email, code_hash, status, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(
+      id, email, sha256(`${email}:123456`), 'pending', new Date(Date.now() - 1000).toISOString(), new Date().toISOString(),
+    );
+    const res = await verify(app, { email, requestId: id, code: '123456' });
     expect(res.status).toBe(401);
-    expect((await res.json()).error.code).toBe('unauthorized');
+    expect((await res.json()).error.message).toContain('invalid or expired login code');
   });
 
   test('a consumed code cannot be replayed', async () => {
     const { app } = await makeApp();
-    const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'once@example.com' } })).json();
-    const first = await call(app, 'POST', '/api/v1/auth/verify', { body: { email: 'once@example.com', code: started.devCode } });
-    expect(first.status).toBe(200);
-    const replay = await call(app, 'POST', '/api/v1/auth/verify', { body: { email: 'once@example.com', code: started.devCode } });
-    expect(replay.status).toBe(401);
+    const email = 'replay@example.com';
+    const started = await (await mint(app, email)).json();
+    const body = { email, requestId: started.requestId, code: started.devCode };
+    expect((await verify(app, body)).status).toBe(200);
+    expect((await verify(app, body)).status).toBe(401);
   });
 
   test('email lookup is case-insensitive: same user, api key issued exactly once', async () => {
     const { app } = await makeApp();
-    const first = await login(app, 'Mixed@Example.com');
-    const second = await login(app, 'mixed@example.com');
-    expect(second.user.id).toBe(first.user.id);
-    expect(second.apiKey).toBeUndefined();
-    expect(first.apiKey).toStartWith('pn_');
+    const first = await (await mint(app, 'Case@Example.com')).json();
+    const one = await (await verify(app, { email: 'Case@Example.com', requestId: first.requestId, code: first.devCode })).json();
+    expect(one.apiKey).toStartWith('pn_');
+    const second = await (await mint(app, '  case@example.com ')).json();
+    const two = await (await verify(app, { email: 'CASE@example.com', requestId: second.requestId, code: second.devCode })).json();
+    expect(two.apiKey).toBeUndefined();
+    expect(two.user.id).toBe(one.user.id);
+  });
+
+  test('verify without a valid nonce is refused before anything is counted', async () => {
+    const { app, db } = await makeApp();
+    const email = 'nonce@example.com';
+    const started = await (await mint(app, email)).json();
+    // No nonce at all: a malformed request, not a guess.
+    const bare = await verify(app, { email, code: started.devCode });
+    expect(bare.status).toBe(400);
+    expect((await bare.json()).error.code).toBe('bad_request');
+    // Nonces nobody minted, the right nonce under another address, an
+    // oversized nonce: none resolve, none count against the real request —
+    // even with the CORRECT code attached.
+    const bogus = [
+      { email, requestId: crypto.randomUUID(), code: started.devCode },
+      { email: 'other@example.com', requestId: started.requestId, code: started.devCode },
+      { email, requestId: 'x'.repeat(65), code: started.devCode },
+      { email, requestId: crypto.randomUUID(), code: '000000' },
+      { email, requestId: crypto.randomUUID(), code: '000001' },
+      { email, requestId: crypto.randomUUID(), code: '000002' },
+    ];
+    for (const [i, body] of bogus.entries()) expect((await verify(app, body, `10.6.0.${i + 1}`)).status).toBe(401);
+    expect(await requestRow(db, started.requestId)).toEqual({ status: 'pending', failed_attempts: 0 });
+    expect((await verify(app, { email, requestId: started.requestId, code: started.devCode })).status).toBe(200);
   });
 
   test('OTP login is rate limited per IP after 5 requests; other IPs unaffected', async () => {
     const { app } = await makeApp();
-    // Distinct addresses per request, so this exercises the per-IP dimension
-    // only — the per-address controls (#1542) have their own tests below.
-    let last = null;
-    for (let i = 0; i < 5; i += 1) {
-      last = await call(app, 'POST', '/api/v1/auth/login', { body: { email: `rl${i}@example.com` } });
-      expect(last.status).toBe(200);
-    }
-    const sixth = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'rl5@example.com' } });
+    for (let i = 0; i < 5; i += 1) expect((await mint(app, `rl${i}@example.com`)).status).toBe(200);
+    const sixth = await mint(app, 'rl5@example.com');
     expect(sixth.status).toBe(429);
     expect((await sixth.json()).error.code).toBe('rate_limited');
-    const otherIp = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'rl6@example.com' }, env: { ip: '127.0.0.2' } });
-    expect(otherIp.status).toBe(200);
-  });
-
-  test('login: a second request for one address inside the min-interval reuses the outstanding code (#1542)', async () => {
-    // A per-IP limit alone lets a distributed caller mint unlimited live login
-    // codes for one address. The address itself is limited too — as a MINIMUM
-    // INTERVAL between minted codes, not as an hourly quota (a quota on a key
-    // the caller picks is an account-lockout weapon; see app.mjs).
-    const { app, db } = await makeApp();
-    const victim = 'victim@example.com';
-    const first = await call(app, 'POST', '/api/v1/auth/login', { body: { email: victim } });
-    expect(first.status).toBe(200);
-    const firstBody = await first.json();
-    for (let i = 0; i < 5; i += 1) {
-      const res = await call(app, 'POST', '/api/v1/auth/login', {
-        body: { email: victim },
-        env: { ip: `10.0.0.${i + 1}` },
-      });
-      // Never refused — and never a second live code either.
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual(firstBody);
-    }
-    const pending = await db
-      .query("SELECT COUNT(*) AS n FROM otp_login_requests WHERE email = ? AND status = 'pending'")
-      .get(victim);
-    expect(pending.n).toBe(1);
-    // A different address from one of those IPs mints its own code.
-    const other = await call(app, 'POST', '/api/v1/auth/login', {
-      body: { email: 'bystander@example.com' },
-      env: { ip: '10.0.0.6' },
-    });
-    expect(other.status).toBe(200);
-    expect((await other.json()).devCode).not.toBe(firstBody.devCode);
+    expect((await mint(app, 'rl6@example.com', '127.0.0.2')).status).toBe(200);
   });
 
   test('login: a flood from many IPs can never lock the address owner out (#1542 review)', async () => {
-    // The regression this replaces a per-email quota with: with a quota, these
-    // twelve throwaway requests would leave the owner a 429 for the rest of
-    // the hour, renewably, forever.
     const { app } = await makeApp();
     const victim = 'locked@example.com';
-    for (let i = 0; i < 12; i += 1) {
-      const res = await call(app, 'POST', '/api/v1/auth/login', {
-        body: { email: victim },
-        env: { ip: `203.0.113.${i + 1}` },
-      });
-      expect(res.status).toBe(200);
-    }
-    // The owner, from their own address, still gets a usable code and a token.
-    const mine = await call(app, 'POST', '/api/v1/auth/login', {
-      body: { email: victim },
-      env: { ip: '198.51.100.7' },
-    });
+    for (let i = 0; i < 12; i += 1) expect((await mint(app, victim, `203.0.113.${i + 1}`)).status).toBe(200);
+    const mine = await mint(app, victim, '198.51.100.7');
     expect(mine.status).toBe(200);
-    const { devCode } = await mine.json();
+    const { requestId, devCode } = await mine.json();
     expect(devCode).toMatch(/^\d{6}$/);
-    const verified = await call(app, 'POST', '/api/v1/auth/verify', {
-      body: { email: victim, code: devCode },
-      env: { ip: '198.51.100.7' },
-    });
+    const verified = await verify(app, { email: victim, requestId, code: devCode }, '198.51.100.7');
     expect(verified.status).toBe(200);
     expect((await verified.json()).token).toBeString();
   });
 
-  test('the login min-interval normalizes case and whitespace', async () => {
-    const { app } = await makeApp();
-    const first = await call(app, 'POST', '/api/v1/auth/login', {
-      body: { email: '  Casey@Example.com ' },
-      env: { ip: '10.1.0.1' },
-    });
-    expect(first.status).toBe(200);
-    const again = await call(app, 'POST', '/api/v1/auth/login', {
-      body: { email: 'casey@example.com' },
-      env: { ip: '10.1.0.2' },
-    });
-    expect(again.status).toBe(200);
-    expect((await again.json()).devCode).toBe((await first.json()).devCode);
-  });
-
-  test('the min-interval is a knob: otpCooldownMs 0 mints a code per request', async () => {
-    const { app, db } = await makeApp({ otpCooldownMs: 0 });
-    const email = 'nocooldown@example.com';
-    await call(app, 'POST', '/api/v1/auth/login', { body: { email } });
-    const second = await call(app, 'POST', '/api/v1/auth/login', { body: { email } });
-    expect(second.status).toBe(200);
-    // Two live codes, i.e. the coalescing above is the min-interval doing it
-    // and not something the login path does unconditionally.
-    const pending = await db
-      .query("SELECT COUNT(*) AS n FROM otp_login_requests WHERE email = ? AND status = 'pending'")
-      .get(email);
-    expect(pending.n).toBe(2);
-  });
-
-  test('login: the process-wide mint budget refuses NEW codes at 429, never a request for a code already outstanding', async () => {
+  test('login: the process-wide mint budget refuses new codes at 429 for everyone; 0 disables it', async () => {
     const { app } = await makeApp({ otpMintBudget: 3 });
-    const first = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'budget1@example.com' }, env: { ip: '10.4.0.1' } });
-    expect(first.status).toBe(200);
-    const firstBody = await first.json();
-    for (const i of [2, 3]) {
-      const res = await call(app, 'POST', '/api/v1/auth/login', { body: { email: `budget${i}@example.com` }, env: { ip: `10.4.0.${i}` } });
-      expect(res.status).toBe(200);
-    }
-    // A fourth mint inside the minute is refused for everyone — a circuit
-    // breaker on volume the caller cannot pick, not a per-address key.
-    const fourth = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'budget4@example.com' }, env: { ip: '10.4.0.4' } });
+    for (let i = 1; i <= 3; i += 1) expect((await mint(app, `budget${i}@example.com`, `10.4.0.${i}`)).status).toBe(200);
+    const fourth = await mint(app, 'budget4@example.com', '10.4.0.4');
     expect(fourth.status).toBe(429);
     expect((await fourth.json()).error.code).toBe('rate_limited');
-    // An address whose code is outstanding still gets its envelope: that
-    // request mints nothing, so it spends nothing.
-    const again = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'budget1@example.com' }, env: { ip: '10.4.0.5' } });
-    expect(again.status).toBe(200);
-    expect(await again.json()).toEqual(firstBody);
-    // And the budget is a knob: 0 disables it.
+    // A volume key the caller cannot pick — not an address key: an address
+    // that already has a request is refused from a fresh IP exactly like any
+    // other address, and nobody's request is touched.
+    expect((await mint(app, 'budget1@example.com', '10.4.0.5')).status).toBe(429);
     const { app: unbounded } = await makeApp({ otpMintBudget: 0 });
-    for (let i = 0; i < 6; i += 1) {
-      const res = await call(unbounded, 'POST', '/api/v1/auth/login', { body: { email: `free${i}@example.com` }, env: { ip: `10.4.1.${i}` } });
-      expect(res.status).toBe(200);
-    }
+    for (let i = 0; i < 6; i += 1) expect((await mint(unbounded, `free${i}@example.com`, `10.4.1.${i}`)).status).toBe(200);
   });
 
   test('invariant: N distinct IPs requesting codes for X and guessing at them cannot prevent X from logging in with a valid code (#1770 review)', async () => {
-    // The shape the #1770 review reproduced against the code-burning limiter:
-    // owner mints, ten attacker IPs send one wrong code each, the owner's
-    // correct code is refused (the burn), repeated for as long as the attacker
-    // cares to. Here the code is never burned and nothing keyed on the
-    // address refuses a request before the code is checked, so the owner logs
-    // in every round — during the attacker's pause and outside it — while
-    // every attacker request is answered 401 or 429 and never 200.
+    // Round 1: 25 attacker IPs each mint a request for the victim (the only
+    // nonces they will ever hold), guess three wrong codes at their own
+    // request and one at a nonce they made up; the owner's request, minted
+    // BEFORE the flood, logs in after it. Rounds 2–5: the round-1 review's
+    // exact repro — owner mints, ten IPs send one wrong code each, owner
+    // verifies. Every attacker verdict is 401; the owner's is 200 every time.
     const { app } = await makeApp();
     const victim = 'target@example.com';
-    const owner = { ip: '198.51.100.7' };
+    const owner = '198.51.100.7';
     const attackerIps = Array.from({ length: 25 }, (_, i) => `203.0.113.${i + 1}`);
-    const attackerStatuses = new Set();
+    const seen = new Set();
     const attack = async (ip, guesses) => {
-      // Each attacker IP first requests a code for the victim (a coalesced
-      // envelope, never a refusal) and then guesses at it.
-      const minted = await call(app, 'POST', '/api/v1/auth/login', { body: { email: victim }, env: { ip } });
+      const minted = await mint(app, victim, ip);
       expect(minted.status).toBe(200);
+      const { requestId } = await minted.json();
       for (let g = 0; g < guesses; g += 1) {
-        const res = await call(app, 'POST', '/api/v1/auth/verify', {
-          body: { email: victim, code: String(g).padStart(6, '0') },
-          env: { ip },
-        });
-        attackerStatuses.add(res.status);
+        const res = await verify(app, { email: victim, requestId, code: String(g).padStart(6, '0') }, ip);
+        seen.add(res.status);
         expect(res.status).not.toBe(200);
       }
+      const fabricated = await verify(app, { email: victim, requestId: crypto.randomUUID(), code: '123456' }, ip);
+      seen.add(fabricated.status);
+      expect(fabricated.status).not.toBe(200);
     };
-
-    // Round 1: the owner mints; 25 IPs × 3 wrong codes — seven times the
-    // budget that used to burn the code.
-    const started = await call(app, 'POST', '/api/v1/auth/login', { body: { email: victim }, env: owner });
-    expect(started.status).toBe(200);
-    const { devCode } = await started.json();
-    for (const ip of attackerIps) await attack(ip, 3);
-    const verified = await call(app, 'POST', '/api/v1/auth/verify', { body: { email: victim, code: devCode }, env: owner });
-    expect(verified.status).toBe(200);
-    expect((await verified.json()).token).toBeString();
-
-    // Rounds 2–5: the review's exact repro, ten IPs × one wrong code between
-    // the owner's mint and the owner's verify.
-    for (let round = 2; round <= 5; round += 1) {
-      const mint = await call(app, 'POST', '/api/v1/auth/login', { body: { email: victim }, env: owner });
-      expect(mint.status).toBe(200);
-      const { devCode: code } = await mint.json();
-      expect(code).toMatch(/^\d{6}$/);
-      for (const ip of attackerIps.slice(0, 10)) await attack(ip, 1);
-      const ok = await call(app, 'POST', '/api/v1/auth/verify', { body: { email: victim, code }, env: owner });
+    const ownerMints = async () => {
+      const minted = await mint(app, victim, owner);
+      expect(minted.status).toBe(200);
+      return minted.json();
+    };
+    const ownerVerifies = async ({ requestId, devCode }) => {
+      const ok = await verify(app, { email: victim, requestId, code: devCode }, owner);
       expect(ok.status).toBe(200);
       expect((await ok.json()).token).toBeString();
+    };
+    const first = await ownerMints();
+    for (const ip of attackerIps) await attack(ip, 3);
+    await ownerVerifies(first);
+    for (let round = 2; round <= 5; round += 1) {
+      const minted = await ownerMints();
+      for (const ip of attackerIps.slice(0, 10)) await attack(ip, 1);
+      await ownerVerifies(minted);
     }
-    // The attacker saw only wrong-code verdicts, and did hit the pause.
-    expect([...attackerStatuses].sort()).toEqual([401, 429]);
+    expect([...seen]).toEqual([401]);
   });
 
-  test('verify: past 5 wrong codes, further wrong codes are 429 for a short pause, then 401 again; a correct code is accepted throughout', async () => {
+  test('verify: five wrong codes burn THAT request — even the correct code is then refused — and a fresh mint for the same address works at once', async () => {
     const lines = [];
-    const { app } = await makeApp({ otpFailureCooldownMs: 600, log: (line) => lines.push(String(line)) });
-    const email = 'guessme@example.com';
-    const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
-    const guess = (code, ip) => call(app, 'POST', '/api/v1/auth/verify', { body: { email, code }, env: { ip } });
-    for (let i = 1; i <= 4; i += 1) expect((await guess('000000', `10.2.0.${i}`)).status).toBe(401);
-    // The fifth arms the pause and is itself answered 429, with the wait.
-    const fifth = await guess('000000', '10.2.0.5');
-    expect(fifth.status).toBe(429);
-    const fifthBody = await fifth.json();
-    expect(fifthBody.error.code).toBe('rate_limited');
-    expect(fifthBody.error.details.retryAfterMs).toBeGreaterThan(0);
-    expect(fifthBody.error.details.retryAfterMs).toBeLessThanOrEqual(600);
-    // Wrong codes inside the pause are refused and do NOT extend it: the pause
-    // is a fixed breather, not a sliding lock a caller can hold open.
-    await Bun.sleep(150);
-    expect((await guess('000000', '10.2.0.6')).status).toBe(429);
-    await Bun.sleep(150);
-    expect((await guess('000000', '10.2.0.7')).status).toBe(429);
-    // The operator sees the pressure — the address, never a code.
-    const armed = lines.filter((l) => l.includes('wrong login codes for'));
-    expect(armed).toHaveLength(1);
-    expect(armed[0]).toContain(email);
-    expect(armed[0]).not.toMatch(/\b\d{6}\b/);
-    // It lapses on its own (600 ms after arming, whatever landed meanwhile)
-    // and the count starts over at 401s.
-    await Bun.sleep(450);
-    expect((await guess('000000', '10.2.0.8')).status).toBe(401);
-    // Arm it again, then prove the pause never touches the CODE: the owner's
-    // correct code logs in while wrong ones are being refused.
-    for (let i = 9; i <= 12; i += 1) await guess('000000', `10.2.0.${i}`);
-    expect((await guess('000000', '10.2.0.13')).status).toBe(429);
-    const ok = await guess(started.devCode, '198.51.100.9');
-    expect(ok.status).toBe(200);
-    expect((await ok.json()).token).toBeString();
-    // The code is spent by its owner (not burned by strangers) and success
-    // cleared the pause: a wrong code is an ordinary 401 again.
-    expect((await guess(started.devCode, '198.51.100.9')).status).toBe(401);
-  });
-
-  test('verify: the pause is a knob — otpFailureCooldownMs 0 keeps answering wrong codes 401 and still never burns the code', async () => {
-    const { app } = await makeApp({ otpFailureCooldownMs: 0 });
-    const email = 'nopause@example.com';
-    const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
-    for (let i = 1; i <= 12; i += 1) {
-      const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: '000000' }, env: { ip: `10.5.0.${i}` } });
+    const { app, db } = await makeApp({ log: (line) => lines.push(String(line)) });
+    const email = 'burn@example.com';
+    const first = await (await mint(app, email)).json();
+    for (let i = 1; i <= 5; i += 1) {
+      const res = await verify(app, { email, requestId: first.requestId, code: '000000' }, `10.2.0.${i}`);
       expect(res.status).toBe(401);
+      expect(await requestRow(db, first.requestId)).toEqual(i < 5 ? { status: 'pending', failed_attempts: i } : { status: 'burned', failed_attempts: 5 });
     }
-    const ok = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode } });
+    // The operator sees the burn — the address, never the nonce or a code.
+    const burned = lines.filter((l) => l.includes('burned after'));
+    expect(burned).toHaveLength(1);
+    expect(burned[0]).toContain(email);
+    expect(burned[0]).not.toContain(first.requestId);
+    expect(burned[0]).not.toMatch(/\b\d{6}\b/);
+    // Burned: the correct code is refused for this request, and refused
+    // attempts are not counted any further …
+    expect((await verify(app, { email, requestId: first.requestId, code: first.devCode }, '10.2.0.6')).status).toBe(401);
+    expect(await requestRow(db, first.requestId)).toEqual({ status: 'burned', failed_attempts: 5 });
+    // … and nothing about the ADDRESS is: the next mint is immediate and logs in.
+    const second = await (await mint(app, email)).json();
+    expect(second.requestId).not.toBe(first.requestId);
+    expect((await verify(app, { email, requestId: second.requestId, code: second.devCode })).status).toBe(200);
+  });
+
+  test('verify: the fourth wrong code does not burn; the correct code still logs in (boundary)', async () => {
+    const { app, db } = await makeApp();
+    const email = 'four@example.com';
+    const started = await (await mint(app, email)).json();
+    for (let i = 1; i <= 4; i += 1) expect((await verify(app, { email, requestId: started.requestId, code: '000000' }, `10.7.0.${i}`)).status).toBe(401);
+    expect(await requestRow(db, started.requestId)).toEqual({ status: 'pending', failed_attempts: 4 });
+    expect((await verify(app, { email, requestId: started.requestId, code: started.devCode })).status).toBe(200);
+  });
+
+  test("verify: a stranger's failures burn only the stranger's request; a stranger's later mint never stales the owner's code", async () => {
+    const { app, db } = await makeApp();
+    const email = 'shared@example.com';
+    const ownerReq = await (await mint(app, email, '198.51.100.7')).json();
+    const strangerReq = await (await mint(app, email, '203.0.113.5')).json();
+    for (let i = 1; i <= 6; i += 1) {
+      expect((await verify(app, { email, requestId: strangerReq.requestId, code: '000000' }, `203.0.113.${i}`)).status).toBe(401);
+    }
+    expect(await requestRow(db, strangerReq.requestId)).toEqual({ status: 'burned', failed_attempts: 5 });
+    expect(await requestRow(db, ownerReq.requestId)).toEqual({ status: 'pending', failed_attempts: 0 });
+    // Another stranger mints AFTER the owner did: lookup is by nonce, so the
+    // owner's code is still the owner's code (the round-2 residual).
+    expect((await mint(app, email, '203.0.113.9')).status).toBe(200);
+    const ok = await verify(app, { email, requestId: ownerReq.requestId, code: ownerReq.devCode }, '198.51.100.7');
     expect(ok.status).toBe(200);
   });
 
-  test('verify: a successful login clears the failure count, the pause and the min-interval', async () => {
-    const { app } = await makeApp();
-    const email = 'recovers@example.com';
-    const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
-    for (let i = 0; i < 9; i += 1) {
-      const res = await call(app, 'POST', '/api/v1/auth/verify', {
-        body: { email, code: '000000' },
-        env: { ip: `10.3.0.${i + 1}` },
-      });
-      expect(res.status).toBe(i < 4 ? 401 : 429);
-    }
-    // The tenth attempt is the owner's, with the real code, inside the pause:
-    // it succeeds, and the code was never burned.
-    const ok = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode } });
-    expect(ok.status).toBe(200);
-    // The spent code's interval is cleared, so logging in again is instant …
-    const next = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
-    expect(next.devCode).toMatch(/^\d{6}$/);
-    expect(next.devCode).not.toBe(started.devCode);
-    // … and so is the pause: a wrong code for the new one is an ordinary 401.
-    const wrong = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: '000000' }, env: { ip: '10.3.0.20' } });
-    expect(wrong.status).toBe(401);
-    const verified = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: next.devCode } });
-    expect(verified.status).toBe(200);
+  test('per-IP quotas key on the forwarded client behind a trusted proxy, not on the balancer peer (ALB case, #1784)', async () => {
+    const alb = { ip: '10.0.5.1' };
+    const via = (xff) => ({ env: alb, headers: { 'x-forwarded-for': xff } });
+    const loginVia = (app, email, xff) => call(app, 'POST', '/api/v1/auth/login', { body: { email }, ...via(xff) });
+    const verifyVia = (app, body, xff) => call(app, 'POST', '/api/v1/auth/verify', { body, ...via(xff) });
+    const guess = { email: 'x@example.com', code: '000000' };
+    // The pre-#1784 shape, for contrast: with no trusted hop every request
+    // shares the balancer's bucket, so 20 wrong verifies from one client
+    // lock a second client's correct code out for the hour.
+    const { app: naive } = await makeApp();
+    const victimNaive = await (await loginVia(naive, 'v@example.com', '198.51.100.4')).json();
+    for (let i = 0; i < 20; i += 1) expect((await verifyVia(naive, { ...guess, requestId: crypto.randomUUID() }, '203.0.113.7')).status).toBe(401);
+    expect((await verifyVia(naive, { email: 'v@example.com', requestId: victimNaive.requestId, code: victimNaive.devCode }, '198.51.100.4')).status).toBe(429);
+    // With the ALB declared as the one trusted hop, the attacker's bucket is
+    // the attacker's, and the second client logs in.
+    const { app } = await makeApp({ trustedProxyHops: 1 });
+    const victim = await (await loginVia(app, 'v@example.com', '198.51.100.4')).json();
+    for (let i = 0; i < 20; i += 1) expect((await verifyVia(app, { ...guess, requestId: crypto.randomUUID() }, '203.0.113.7')).status).toBe(401);
+    expect((await verifyVia(app, { ...guess, requestId: crypto.randomUUID() }, '203.0.113.7')).status).toBe(429);
+    expect((await verifyVia(app, { email: 'v@example.com', requestId: victim.requestId, code: victim.devCode }, '198.51.100.4')).status).toBe(200);
+    // A client-supplied chain on the left never buys a fresh bucket: the
+    // entry the ALB appended (rightmost) is the key.
+    for (let i = 0; i < 5; i += 1) expect((await loginVia(app, `s${i}@example.com`, `10.${i}.${i}.${i}, 192.0.2.44`)).status).toBe(200);
+    expect((await loginVia(app, 's5@example.com', '10.9.9.9, 192.0.2.44')).status).toBe(429);
+    // No forwarded header at all: the request did not traverse the proxy, so
+    // the socket peer is the key.
+    expect((await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'direct@example.com' }, env: alb })).status).toBe(200);
   });
 
-  test('an oversized "email" is refused before any per-address state is created', async () => {
-    const { app } = await makeApp();
+  test('x-real-ip is the key only when the trusted hop is an allowlisted gateway peer (api.hasna.com case)', async () => {
+    const { app } = await makeApp({ trustedProxyHops: 1, trustedGatewayPeers: parsePeerList('173.245.48.0/20') });
+    const alb = { ip: '10.0.5.1' };
+    const loginWith = (email, headers) => call(app, 'POST', '/api/v1/auth/login', { body: { email }, env: alb, headers });
+    // Through the gateway: the ALB appended the gateway's egress, and
+    // x-real-ip (set by the gateway from cf-connecting-ip) is the client.
+    const gw = (client) => ({ 'x-forwarded-for': `${client}, 173.245.50.9`, 'x-real-ip': client });
+    for (let i = 0; i < 5; i += 1) expect((await loginWith(`g${i}@example.com`, gw('203.0.113.7'))).status).toBe(200);
+    expect((await loginWith('g5@example.com', gw('203.0.113.7'))).status).toBe(429);
+    expect((await loginWith('g6@example.com', gw('198.51.100.4'))).status).toBe(200);
+    // Straight at the ALB, x-real-ip is whatever the client typed: ignored,
+    // so rotating it buys nothing.
+    for (let i = 0; i < 5; i += 1) {
+      expect((await loginWith(`d${i}@example.com`, { 'x-forwarded-for': '192.0.2.44', 'x-real-ip': `203.0.113.${i + 10}` })).status).toBe(200);
+    }
+    expect((await loginWith('d5@example.com', { 'x-forwarded-for': '192.0.2.44', 'x-real-ip': '203.0.113.99' })).status).toBe(429);
+  });
+
+  test('--auto-approve trusts only the raw socket peer: a forwarded loopback never approves a remote device login', async () => {
+    const { app } = await makeApp({ autoApprove: true, trustedProxyHops: 1 });
+    const remote = await (await call(app, 'POST', '/api/v1/auth/device/start', {
+      body: {}, env: { ip: '203.0.113.9' }, headers: { 'x-forwarded-for': '127.0.0.1' },
+    })).json();
+    const poll = await (await call(app, 'POST', '/api/v1/auth/device/token', { body: { deviceCode: remote.deviceCode } })).json();
+    expect(poll.status).toBe('pending');
+  });
+
+  test('an oversized "email" is refused before any request is minted', async () => {
+    const { app, db } = await makeApp();
     const junk = `${'a'.repeat(300)}@example.com`;
-    const res = await call(app, 'POST', '/api/v1/auth/login', { body: { email: junk } });
+    const res = await mint(app, junk);
     expect(res.status).toBe(400);
     expect((await res.json()).error.code).toBe('bad_request');
+    expect((await db.query('SELECT COUNT(*) AS n FROM otp_login_requests').get()).n).toBe(0);
   });
 
   test('the OTP code never reaches the server log by default (regression for #1542)', async () => {
     const lines = [];
     const { app } = await makeApp({ log: (line) => lines.push(String(line)) });
     const email = 'noleak@example.com';
-    const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
+    const started = await (await mint(app, email)).json();
     expect(started.devCode).toMatch(/^\d{6}$/);
     const output = lines.join('\n');
-    // A non-secret reference is still logged (observability), but never the code.
+    // A non-secret reference is still logged (observability), but never the code or the nonce.
     expect(output).toContain(email);
     expect(output).toContain('login code requested');
     expect(output).not.toContain(started.devCode);
+    expect(output).not.toContain(started.requestId);
     expect(output).not.toMatch(/\b\d{6}\b/);
   });
 
@@ -419,8 +398,16 @@ describe('OTP login edges', () => {
     const lines = [];
     const { app } = await makeApp({ consoleCodes: true, log: (line) => lines.push(String(line)) });
     const email = 'optin@example.com';
-    const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
+    const started = await (await mint(app, email)).json();
     expect(lines.join('\n')).toContain(started.devCode);
+  });
+
+  test('the proxy knobs come from HASNA_NOTES_SERVER_TRUSTED_PROXY_HOPS / _TRUSTED_GATEWAY_PEERS and default to trusting nothing', () => {
+    expect(resolveConfig({}, []).trustedProxyHops).toBe(0);
+    expect(resolveConfig({}, []).trustedGatewayPeers).toEqual([]);
+    expect(resolveConfig({ HASNA_NOTES_SERVER_TRUSTED_PROXY_HOPS: '1' }, []).trustedProxyHops).toBe(1);
+    expect(resolveConfig({ HASNA_NOTES_SERVER_TRUSTED_PROXY_HOPS: 'yes' }, []).trustedProxyHops).toBe(0);
+    expect(resolveConfig({ HASNA_NOTES_SERVER_TRUSTED_GATEWAY_PEERS: '173.245.48.0/20, junk' }, []).trustedGatewayPeers).toHaveLength(1);
   });
 
   test('device login pairing codes are never written to the server log', async () => {
