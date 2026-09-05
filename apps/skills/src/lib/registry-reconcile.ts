@@ -413,8 +413,8 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
   const client = options.client !== undefined
     ? options.client
     : dryRun
-      ? createRemoteSkillsClientReadOnly()
-      : createRemoteSkillsClient();
+      ? await createRemoteSkillsClientReadOnly()
+      : await createRemoteSkillsClient();
   if (!client) {
     throw new ReconcileRegistryError(
       "No API key configured, so there is nowhere to sync to.",

@@ -356,7 +356,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
       return;
     }
   }
-  const routing = resolveConfiguredRunRouting(skill);
+  const routing = await resolveConfiguredRunRouting(skill);
   const runContext = createSkillRun({
     skill: skill.name,
     args,
@@ -533,7 +533,7 @@ function handleRunsShow(runId: string, options: { json: boolean }) {
 
 async function handleRunsStatus(runId: string, options: { json: boolean }) {
   const { skillsCredentialOrReason } = await import("../../lib/fleet-credentials.js");
-  const { apiKey, reason } = skillsCredentialOrReason();
+  const { apiKey, reason } = await skillsCredentialOrReason();
   if (!apiKey) {
     const error = reason ?? "Remote run status requires API access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
@@ -622,7 +622,7 @@ async function handleExportsOpen(runId: string, options: { json: boolean }) {
 
 async function handleExportsDownload(runId: string, options: { json: boolean }) {
   const { skillsCredentialOrReason } = await import("../../lib/fleet-credentials.js");
-  const { apiKey, reason } = skillsCredentialOrReason();
+  const { apiKey, reason } = await skillsCredentialOrReason();
   if (!apiKey) {
     const error = reason ?? "Remote artifact downloads require API access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ error }, null, 2));

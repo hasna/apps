@@ -291,7 +291,7 @@ export function registerOperationTools(server: McpServer): void {
       }
     }
 
-    const routing = resolveConfiguredRunRouting(skill);
+    const routing = await resolveConfiguredRunRouting(skill);
     const runContext = createSkillRun({
       skill: skillName,
       args: runArgs,
@@ -375,7 +375,7 @@ export function registerOperationTools(server: McpServer): void {
     },
   }, async ({ run_id, detail }) => {
     const { skillsCredentialOrReason } = await import("../lib/fleet-credentials.js");
-    const { apiKey, reason } = skillsCredentialOrReason();
+    const { apiKey, reason } = await skillsCredentialOrReason();
     if (!apiKey) {
       // A configured authority with no credential carries the ladder's own
       // message. It is still a refusal — this tool never answers locally.

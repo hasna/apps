@@ -199,7 +199,7 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
   // both configured it still fails closed because scheduled hosted runs are not
   // supported yet — the README guarantee is "never silently runs locally".
   const { resolveConfiguredRunRouting } = await import("../../lib/run-routing.js");
-  const routing = resolveConfiguredRunRouting(skill);
+  const routing = await resolveConfiguredRunRouting(skill);
   if (routing.route === "error") {
     throw new Error(`${routing.code}: ${routing.error}`);
   }

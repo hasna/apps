@@ -104,6 +104,13 @@ into one child process re-reads its store every time and cannot go stale; a shel
 never falls through to another identity: if it cannot be honoured, the command
 fails rather than acting as a different principal.
 
+`HASNA_SKILLS_API_KEY_REF` names a *vault item*, not a key, so it resolves in two
+steps: the item is fetched through the `@hasna/secrets` SDK on each call, which
+means a rotated item is picked up without a restart — and which means the SDK has
+to be installed in the process. Every way that fetch can fail (SDK absent, vault
+unreachable, item missing or empty) is terminal and exits non-zero; a pointer
+never falls through to another tier, and never to the local corpus.
+
 **The service address, in the same shape:**
 
 `HASNA_SKILLS_API_URL` → the Keychain item `hasna.credentials.skills.api-url` →
@@ -119,7 +126,10 @@ as silent aliases one rung below the canonical names, for one release. Use the
 
 **Three outcomes, and no fourth:**
 
-- a credential resolves → **hosted**, against the configured URL or the gateway;
+- a credential resolves → **hosted**, against the configured URL or the gateway.
+  A credential that resolves but cannot produce a usable key — a deliberate
+  selection that cannot be honoured, a vault pointer whose item is missing, any
+  tier that yields a blank value — is a **loud failure** too, never a demotion;
 - no credential but a URL is configured → **loud failure**, exit non-zero. There
   is no local fallback: answering from the bundled corpus while authentication is
   unconfigured is a false green;

@@ -11,6 +11,12 @@
  *   1. an explicit argument            — `--api-key`, `--profile`
  *   2. a deliberate env pointer        — `HASNA_SKILLS_API_KEY_OVERRIDE`,
  *                                        `HASNA_PROFILE`, `HASNA_SKILLS_API_KEY_REF`
+ *
+ *      `HASNA_SKILLS_API_KEY_REF` names a VAULT ITEM rather than a key, so it
+ *      resolves in two steps: the synchronous chain yields the pointer, and
+ *      `resolveSkillsApiKey()` (async) fetches the value through the secrets
+ *      SDK on each call. Never treat the pointer's own `apiKey` — the empty
+ *      string — as a credential; `resolveSkillsFleet` reports null for it.
  *   3. the macOS Keychain              — generic-password `hasna.credentials.skills.api-key`,
  *                                        account `HASNA_STATION`, else `hostname -s`, else `USER`
  *   4. disk, read at call time         — `~/.hasna/skills/config/credentials`
@@ -33,7 +39,12 @@
  * THREE OUTCOMES, and no fourth:
  *
  *   - a credential resolves            → HOSTED. The authority is the configured
- *                                        URL, else the fleet gateway.
+ *                                        URL, else the fleet gateway. A credential
+ *                                        that cannot produce a usable key — a
+ *                                        deliberate selection contracts refuses, a
+ *                                        pointer whose vault item is missing, any
+ *                                        tier that yields a blank value — is a LOUD
+ *                                        failure, never a demotion to local.
  *   - no credential, but a URL is configured
  *                                      → LOUD failure. The caller exits non-zero
  *                                        with one line naming what is missing.
@@ -48,9 +59,12 @@
 
 import {
   ClientTransportConfigurationError,
+  CredentialResolutionError,
   appConfigDiskValue,
   clientTransportEnvKeys,
+  completePointerCredential,
   credentialDiskSources,
+  credentialPointerEnvKey,
   keychainConfigValue,
   resolveClientTransport,
   resolveCredential,
@@ -58,6 +72,7 @@ import {
   type CredentialChainOptions,
   type CredentialTier,
   type KeychainTierOptions,
+  type ResolvedCredential,
 } from "@hasna/contracts/client";
 
 /** The app slug: the Keychain service, the `~/.hasna/<app>` folder, the gateway path. */
@@ -86,8 +101,28 @@ export interface HostedSkillsFleet {
   mode: "hosted";
   /** Origin the CLI/SDK sends requests to. Never carries a trailing slash. */
   apiOrigin: string;
-  /** The resolved key. Never logged, never written anywhere but the header. */
-  apiKey: string;
+  /**
+   * The resolved key, or null when the credential is a vault POINTER
+   * (`HASNA_SKILLS_API_KEY_REF` / a `credential_ref` line) that only the async
+   * path can complete — see {@link apiKeyPointer} and {@link resolveSkillsApiKey}.
+   *
+   * It is NEVER the empty string: a blank key would produce
+   * `Authorization: Bearer ` on the wire, and — read as falsy by a caller
+   * looking for "is there a token" — a silent drop back to local data. Both
+   * are refused at resolution time instead.
+   *
+   * Never logged, never written anywhere but the header.
+   */
+  apiKey: string | null;
+  /**
+   * The unresolved vault pointer, when tier === "pointer"; null otherwise.
+   *
+   * `resolveCredential` returns a TRUTHY credential for the pointer tier whose
+   * `apiKey` is empty and whose `pointerVaultKey` names the vault item;
+   * fetching that item is a separate async step. Carrying the pointer (rather
+   * than its empty key) is what keeps the sending paths honest.
+   */
+  apiKeyPointer: ResolvedCredential | null;
   /** WHERE the URL came from: an env key NAME, a Keychain reference, a path, or "default". */
   apiUrlSource: string;
   /** WHERE the key came from: an env key NAME, a Keychain reference, or a path. Never a value. */
@@ -137,6 +172,36 @@ function isClientTransportConfigurationError(error: unknown): boolean {
       error !== null &&
       (error as { name?: unknown }).name === "ClientTransportConfigurationError")
   );
+}
+
+/** True for the shared seam's credential error, across bundle boundaries. */
+function isCredentialResolutionError(error: unknown): boolean {
+  return (
+    error instanceof CredentialResolutionError ||
+    (typeof error === "object" &&
+      error !== null &&
+      (error as { name?: unknown }).name === "CredentialResolutionError")
+  );
+}
+
+/**
+ * Translate the shared seam's `CredentialResolutionError` into this package's
+ * own refusal, or return null for anything else.
+ *
+ * A DELIBERATE selection that cannot be honoured — `HASNA_PROFILE` naming a
+ * profile that has no entry, an override or pointer that resolves to nothing, a
+ * corrupt credentials file — is thrown by `@hasna/contracts`, not by the
+ * transport resolver. Left untranslated it escaped every helper in this file:
+ * `skillsCredentialOrReason` and `resolveConfiguredRunRouting` recognise only
+ * `SkillsFleetCredentialError`, so a `--json` command or an MCP tool got an
+ * unhandled exception where the structured refusal was the whole point.
+ *
+ * The seam's message already names what was attempted and never carries a
+ * credential value, so it is kept verbatim.
+ */
+function asSkillsFleetCredentialError(error: unknown): SkillsFleetCredentialError | null {
+  if (!isCredentialResolutionError(error)) return null;
+  return new SkillsFleetCredentialError((error as Error).message, "MISSING_API_CREDENTIAL");
 }
 
 /**
@@ -253,6 +318,20 @@ export function resetLocalSkillsModeNotice(): void {
  * configured authority to local mode.
  */
 export function resolveSkillsFleet(env: Env = process.env, options: SkillsFleetOptions = {}): SkillsFleet {
+  try {
+    return resolveSkillsFleetOrThrow(env, options);
+  } catch (error) {
+    // Every exit from this function speaks in this package's vocabulary, so the
+    // helpers that turn a refusal into data (skillsCredentialOrReason,
+    // resolveConfiguredRunRouting) see one error type and never leak a raw
+    // contracts error to a --json command or an MCP tool.
+    const translated = asSkillsFleetCredentialError(error);
+    if (translated) throw translated;
+    throw error;
+  }
+}
+
+function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): SkillsFleet {
   let resolution;
   try {
     resolution = resolveClientTransport(SKILLS_APP, env, { credentials: options.credentials });
@@ -298,15 +377,95 @@ export function resolveSkillsFleet(env: Env = process.env, options: SkillsFleetO
       `A Skills authority resolved but no API key did. Sign in with: skills auth login`,
     );
   }
-  return {
-    mode: "hosted",
+  const base = {
+    mode: "hosted" as const,
     apiOrigin,
-    apiKey: credential.apiKey,
     apiUrlSource: resolution.apiUrlSource ?? (configured?.source ?? "default"),
     apiKeySource: resolution.apiKeySource ?? credential.source,
     apiKeyTier: resolution.apiKeyTier,
     warning: resolution.warning,
   };
+
+  if (credential.tier === "pointer") {
+    // A vault pointer is a credential the operator DID configure, but its value
+    // lives in the secrets vault and only `completePointerCredential` (async)
+    // can fetch it. `resolveCredential` reports the pointer as a truthy
+    // credential whose `apiKey` is "", and `resolveClientTransport` reports
+    // `apiKeyPresent: true` — so publishing that empty string as the key made a
+    // configured install LESS safe than an unconfigured one: the read path read
+    // it as "no token" and served the bundled local corpus with a zero exit and
+    // no notice. The pointer travels instead; resolveSkillsApiKey() completes it.
+    return { ...base, apiKey: null, apiKeyPointer: credential };
+  }
+
+  if (!credential.apiKey.trim()) {
+    // Any other tier that produced a blank value is a refusal, not a key: the
+    // alternative is `Authorization: Bearer ` on the wire.
+    throw new SkillsFleetCredentialError(
+      `The Skills API key from ${credential.source} is empty — refusing to send an unauthenticated request. ` +
+        `Sign in with: skills auth login`,
+    );
+  }
+
+  return { ...base, apiKey: credential.apiKey, apiKeyPointer: null };
+}
+
+/**
+ * The usable API key for this process, completing a vault pointer if that is
+ * the tier that won.
+ *
+ * ASYNC because the pointer tier is: the value is fetched from the secrets
+ * vault at call time, so a rotated item is picked up without a restart. Every
+ * path that is about to SEND the key resolves it here; the synchronous
+ * `resolveSkillsFleet` is for reporting (which tier, which source, which
+ * origin), and its `apiKey` is deliberately null for a pointer.
+ *
+ * Returns null only in local mode. Throws {@link SkillsFleetCredentialError}
+ * when a credential is configured and cannot be produced — never a fallback.
+ */
+export async function resolveSkillsApiKey(
+  env: Env = process.env,
+  options: SkillsFleetOptions = {},
+): Promise<string | null> {
+  const fleet = resolveSkillsFleet(env, options);
+  if (fleet.mode !== "hosted") return null;
+  if (fleet.apiKey) return fleet.apiKey;
+
+  const pointer = fleet.apiKeyPointer;
+  if (!pointer) {
+    // Unreachable while the two branches above are exhaustive; kept as a
+    // refusal so a future field change cannot yield an unauthenticated client.
+    throw new SkillsFleetCredentialError(
+      `A Skills authority resolved but no API key did. Sign in with: skills auth login`,
+    );
+  }
+
+  let completed: ResolvedCredential;
+  try {
+    completed = await completePointerCredential(SKILLS_APP, pointer, env);
+  } catch (error) {
+    const translated = asSkillsFleetCredentialError(error);
+    if (translated) throw translated;
+    throw error;
+  }
+  if (!completed.apiKey?.trim()) {
+    throw new SkillsFleetCredentialError(
+      `${credentialPointerEnvKey(SKILLS_APP)} names a vault item that produced an empty Skills API key — ` +
+        `refusing to send an unauthenticated request.`,
+    );
+  }
+  return completed.apiKey;
+}
+
+/** The usable API key, or throw naming what is missing. Use on every send path. */
+export async function requireSkillsApiKey(
+  action = "This command",
+  env: Env = process.env,
+  options: SkillsFleetOptions = {},
+): Promise<string> {
+  const apiKey = await resolveSkillsApiKey(env, options);
+  if (!apiKey) throw new MissingSkillsFleetError(action);
+  return apiKey;
 }
 
 /** `<origin>/v1` back to `<origin>`, for the gateway default. */
@@ -323,15 +482,16 @@ function stripV1(baseUrl: string): string {
  * still refuse. It is null only when nothing at all is configured, which is the
  * ordinary "not signed in" case.
  */
-export function skillsCredentialOrReason(
+export async function skillsCredentialOrReason(
   env: Env = process.env,
   options: SkillsFleetOptions = {},
-): { apiKey: string; reason: null } | { apiKey: null; reason: string | null } {
+): Promise<{ apiKey: string; reason: null } | { apiKey: null; reason: string | null }> {
   try {
-    const fleet = resolveSkillsFleet(env, options);
-    return fleet.mode === "hosted"
-      ? { apiKey: fleet.apiKey, reason: null }
-      : { apiKey: null, reason: null };
+    // The async resolver, because a vault pointer is only a credential once it
+    // has been completed: a surface that reports refusals as data must report
+    // a broken pointer as a refusal, not as "not signed in".
+    const apiKey = await resolveSkillsApiKey(env, options);
+    return apiKey ? { apiKey, reason: null } : { apiKey: null, reason: null };
   } catch (error) {
     if (error instanceof SkillsFleetCredentialError || (error as Error)?.name === "SkillsFleetCredentialError") {
       return { apiKey: null, reason: (error as Error).message };

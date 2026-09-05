@@ -9,8 +9,11 @@
 
 import { z } from "zod";
 import { resolveApiUrl } from "./api-url.js";
-import { getApiKey } from "./auth-store.js";
-import { SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "./fleet-credentials.js";
+import {
+  resolveSkillsApiKey,
+  SKILLS_API_KEY_ENV,
+  SKILLS_API_URL_ENV,
+} from "./fleet-credentials.js";
 import { sanitizePublicDiscoveryText } from "./discovery.js";
 import { mergeSkillRegistryLists } from "./registry-merge.js";
 import type { SkillMeta } from "./registry.js";
@@ -77,26 +80,39 @@ export function getConfiguredApiUrl(
   return resolveApiUrl(env);
 }
 
+/**
+ * Compose one Skills API request URL from an authority and an endpoint.
+ *
+ * The Skills server serves its API under `/api/v1`, so a bare authority gets
+ * `/api/v1` appended — the SAME composition `RemoteSkillsClient` performs
+ * (`${origin}/api/v1/...`). The two sites must agree: they are handed the same
+ * origin by the same resolver.
+ *
+ * A trailing `/skills` is only stripped when the API prefix precedes it
+ * (`.../api/skills`, `.../api/v1/skills`), i.e. when an operator pasted the
+ * full collection base that this package's own error messages print. A BARE
+ * trailing `/skills` is NOT a collection: the default fleet authority is
+ * `https://api.hasna.com/skills`, where `/skills` is the gateway's per-app PATH
+ * PREFIX. Treating that as "the base already names the collection" collapsed
+ * every remote read onto the gateway app root — which answers 404 — so a
+ * correctly credentialled install on the default authority could not run
+ * `skills list` at all, on the plain merge path as well as `--remote`.
+ */
 export function buildSkillsApiUrl(apiUrl: string, endpoint = "/skills"): string {
   const url = new URL(apiUrl);
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
   const pathname = url.pathname.replace(/\/+$/, "");
 
-  if (pathname.endsWith("/skills")) {
-    if (cleanEndpoint === "/skills") {
-      url.pathname = pathname;
-    } else {
-      url.pathname = `${pathname.slice(0, -"/skills".length)}${cleanEndpoint}` || cleanEndpoint;
-    }
+  const apiBase = /\/api(?:\/v1)?\/skills$/.test(pathname)
+    ? pathname.slice(0, -"/skills".length)
+    : pathname;
+
+  if (/\/api(?:\/v1)?$/.test(apiBase)) {
+    url.pathname = `${apiBase}${cleanEndpoint}`;
     return url.toString();
   }
 
-  if (pathname.endsWith("/api") || pathname.endsWith("/api/v1")) {
-    url.pathname = `${pathname}${cleanEndpoint}`;
-    return url.toString();
-  }
-
-  url.pathname = `${pathname}/api/v1${cleanEndpoint}`.replace(/\/{2,}/g, "/");
+  url.pathname = `${apiBase}/api/v1${cleanEndpoint}`.replace(/\/{2,}/g, "/");
   return url.toString();
 }
 
@@ -178,9 +194,24 @@ function parseRemoteContract<T>(schema: z.ZodType<T>, payload: unknown, message:
   }
 }
 
-function remoteRequestHeaders(options: RemoteRegistryOptions): Headers {
+/**
+ * Headers for one remote read: the caller's token, else the fleet ladder's.
+ *
+ * ASYNC because the ladder is: the pointer tier (`HASNA_SKILLS_API_KEY_REF`)
+ * names a VAULT ITEM, and fetching its value is an await. Reading the
+ * credential synchronously — the old `getApiKey()` here — saw the pointer's own
+ * empty `apiKey` and sent no Authorization header at all, and callers reading
+ * the same empty value as "no credential" silently served local data instead.
+ * `resolveSkillsApiKey()` completes the pointer, and refuses (loudly) rather
+ * than ever returning a blank key, so a hosted install always sends a real one.
+ *
+ * The header is still omitted when NOTHING is configured and the caller passed
+ * an explicit `apiUrl` — a library consumer reading an unauthenticated instance
+ * of its own — and when the caller passed `authToken: null` on purpose.
+ */
+async function remoteRequestHeaders(options: RemoteRegistryOptions): Promise<Headers> {
   const headers = new Headers({ Accept: "application/json" });
-  const token = options.authToken !== undefined ? options.authToken : getApiKey();
+  const token = options.authToken !== undefined ? options.authToken : await resolveSkillsApiKey();
   const trimmed = token?.trim();
   if (trimmed) headers.set("Authorization", `Bearer ${trimmed}`);
   return headers;
@@ -188,12 +219,13 @@ function remoteRequestHeaders(options: RemoteRegistryOptions): Headers {
 
 async function fetchRemoteJson(url: string, options: RemoteRegistryOptions): Promise<unknown> {
   const fetchImpl = options.fetchImpl || fetch;
+  const headers = await remoteRequestHeaders(options);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
 
   try {
     const response = await fetchImpl(url, {
-      headers: remoteRequestHeaders(options),
+      headers,
       signal: controller.signal,
     });
 
@@ -250,9 +282,21 @@ export async function mergeRemoteRegistry(
 ): Promise<SkillMeta[]> {
   const apiUrl = options.apiUrl || getConfiguredApiUrl();
   if (!apiUrl) return local;
-  const token = options.authToken !== undefined ? options.authToken : getApiKey();
-  if (!token?.trim()) return local;
-  const remote = await loadRemoteRegistry({ ...options, apiUrl, authToken: token });
+  // A caller that passed `authToken: null` ITSELF asked for an unauthenticated
+  // read; that is a library consumer's decision, taken in its own code, and it
+  // keeps the local list.
+  //
+  // The AMBIENT ladder is deliberately NOT consulted here any more. Reading the
+  // credential at this line and returning `local` when it looked empty is the
+  // silent fallback this function's own doc comment says it removed: a vault
+  // pointer (`HASNA_SKILLS_API_KEY_REF`) resolves synchronously to an EMPTY
+  // string, so a correctly configured install was read as "no credential" and
+  // served the bundled corpus with a zero exit — a configured CLI behaving
+  // less safely than an unconfigured one. Resolving the key is now the request
+  // path's job (remoteRequestHeaders), which completes a pointer and refuses
+  // loudly when a configured credential cannot be produced.
+  if (options.authToken !== undefined && !options.authToken?.trim()) return local;
+  const remote = await loadRemoteRegistry({ ...options, apiUrl });
   return mergeSkillRegistryLists(local, remote);
 }
 

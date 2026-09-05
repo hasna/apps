@@ -1,5 +1,5 @@
 import { getApiUrl } from "./auth-store.js";
-import { resolveSkillsFleet } from "./fleet-credentials.js";
+import { resolveSkillsApiKey, resolveSkillsFleet } from "./fleet-credentials.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 
 /**
@@ -449,13 +449,25 @@ function normalizeUpdatedSincePage(payload: unknown): UpdatedSincePage {
  * A configured authority with no credential does NOT return null: the shared
  * ladder throws, so the caller fails loudly instead of quietly reading the
  * bundled corpus while authentication is unconfigured.
+ *
+ * ASYNC because the credential ladder is: a vault pointer
+ * (`HASNA_SKILLS_API_KEY_REF`) is completed through the secrets vault before a
+ * client is built, so this never hands `RemoteSkillsClient` an empty key to put
+ * behind `Authorization: Bearer `.
  */
-export function createRemoteSkillsClient(
+export async function createRemoteSkillsClient(
   env: Record<string, string | undefined> = process.env,
-): RemoteSkillsClient | null {
+): Promise<RemoteSkillsClient | null> {
   const fleet = resolveSkillsFleet(env);
   if (fleet.mode !== "hosted") return null;
-  return new RemoteSkillsClient(fleet.apiKey, fleet.apiOrigin);
+  const apiKey = await resolveSkillsApiKey(env);
+  if (!apiKey) {
+    // Unreachable: resolveSkillsApiKey returns null only in local mode, which
+    // the check above already took. Kept so no future change can build an
+    // unauthenticated client here.
+    throw new Error("A Skills authority resolved but no API key did. Sign in with: skills auth login");
+  }
+  return new RemoteSkillsClient(apiKey, fleet.apiOrigin);
 }
 
 /**
@@ -468,6 +480,6 @@ export function createRemoteSkillsClient(
  */
 export function createRemoteSkillsClientReadOnly(
   env: Record<string, string | undefined> = process.env,
-): RemoteSkillsClient | null {
+): Promise<RemoteSkillsClient | null> {
   return createRemoteSkillsClient(env);
 }

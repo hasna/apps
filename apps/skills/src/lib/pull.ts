@@ -159,7 +159,7 @@ export async function pullSkills(options: PullSkillsOptions = {}): Promise<PullS
   // createRemoteSkillsClient() returns null only when NOTHING is configured; a
   // configured authority with no credential throws from the shared ladder — so the
   // fail-closed behaviour is inherited here rather than re-implemented.
-  const client = options.client !== undefined ? options.client : createRemoteSkillsClient();
+  const client = options.client !== undefined ? options.client : await createRemoteSkillsClient();
   if (!client) {
     throw new PullSkillError(
       "No API key configured, so there is no instance to pull from.",

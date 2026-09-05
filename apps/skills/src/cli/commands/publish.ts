@@ -171,7 +171,7 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
 
   if (options.dryRun) return base;
 
-  const client = options.client !== undefined ? options.client : createRemoteSkillsClient();
+  const client = options.client !== undefined ? options.client : await createRemoteSkillsClient();
   if (!client) {
     throw new PushSkillError(
       "No API key configured, so there is nowhere to publish to.",

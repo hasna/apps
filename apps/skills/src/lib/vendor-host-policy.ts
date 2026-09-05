@@ -150,7 +150,9 @@ export const VENDOR_HOST_URL_EXCEPTIONS: readonly { url: string; reason: string 
     reason:
       "The composed default authority for this app, named in the README and in " +
       "documentation so an operator can see where an unconfigured-but-credentialled " +
-      "CLI connects. The client appends /api/v1 to it.",
+      "CLI connects. It is an ORIGIN-plus-app-prefix, not an API base: the trailing " +
+      "/skills is the gateway's per-app path prefix, and BOTH composition sites " +
+      "(RemoteSkillsClient and buildSkillsApiUrl) append /api/v1 to it.",
   },
 ];
 
