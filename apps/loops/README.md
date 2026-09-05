@@ -1155,6 +1155,16 @@ For a loop with a bundle (`bundle_name` set), and only for such a loop:
    from outside the bundle, while the receipt's `bundle` block attests the
    bundle that was verified. Prefer a bundle-relative command whenever the
    receipt is meant to answer "what code ran here?" on its own.
+7. Verification reads and hashes the tree, and the child is spawned after that
+   returns; the verified files are not held open across the gap. "Verified
+   before every run" is therefore exactly that and no more — anyone who can
+   write to the bundle directory can still replace a script inside the window
+   between the hash and the spawn, and the digest on the receipt attests the
+   bytes as they were READ, not as they were executed. The gate is a guard
+   against drift — a stale tree, a hand-edit, a half-finished pull — not
+   against an attacker with concurrent write access to the bundle root. Keep
+   `~/.hasna/loops/loops/` writable only by the account the daemon runs as;
+   that permission, not the digest, is what closes the window.
 
 Run receipts carry `bundle: { name, version, digest }` for bundled runs, so a
 receipt answers "what code ran here?" long after the local tree has moved on.
