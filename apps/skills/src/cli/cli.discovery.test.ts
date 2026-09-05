@@ -9,6 +9,7 @@ import {
   SLOW_TEST_TIMEOUT,
   runCli,
   runCliInCwd,
+  stderrWithoutLocalNotice,
 } from "./cli.test-utils";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -155,7 +156,7 @@ describe("CLI discovery", () => {
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();
       const exitCode = await proc.exited;
-      expect(stderr).toBe("");
+      expect(stderrWithoutLocalNotice(stderr)).toBe("");
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
       expect(data.length).toBeGreaterThan(65_536);
@@ -579,7 +580,7 @@ describe("CLI discovery", () => {
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();
       const exitCode = await proc.exited;
-      expect(stderr).toBe("");
+      expect(stderrWithoutLocalNotice(stderr)).toBe("");
       expect(exitCode).toBe(0);
       const data = JSON.parse(stdout);
       // See the repeated-pipe test above: completeness is the skill count, not a

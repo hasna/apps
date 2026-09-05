@@ -22,8 +22,8 @@ Resolve credentials through the shared `@hasna/contracts` client ladder
 - **Fails closed.** An authority configured with no credential now exits
   non-zero with one line naming every tier that was consulted, instead of
   quietly answering from the bundled corpus. Local mode remains available when
-  neither a credential nor a URL resolves — Skills ships its corpus — and prints
-  one line saying so.
+  neither a credential nor a URL resolves — Skills ships its corpus — and says so
+  once per process, on stderr, in one line.
 - `skills auth login` now writes `~/.hasna/skills/config/credentials` (the tier
   the whole fleet reads) with the display identity beside it in `identity.json`;
   `auth.json` in the data directory and `~/.skills/auth.json` are retired and no

@@ -10,6 +10,7 @@ import {
   SLOW_TEST_TIMEOUT,
   runCli,
   runCliInCwd,
+  stderrWithoutLocalNotice,
 } from "./cli.test-utils";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -225,7 +226,9 @@ describe("CLI runtime and misc commands", () => {
     test("prints no first-run onboarding nudge on a normal command", async () => {
       // The nudge existed only to force a mode choice. It is deleted, and the
       // replacement for its three tests is this: a fresh HOME running a normal
-      // command must emit nothing on stderr.
+      // command emits nothing on stderr beyond the one local-mode line the
+      // credential ruling requires — which demands no choice and asks no
+      // question, and is stripped here so an unexpected warning still fails.
       const { mkdtempSync, rmSync } = require("fs");
       const { tmpdir } = require("os");
       const { join } = require("path");
@@ -235,7 +238,8 @@ describe("CLI runtime and misc commands", () => {
         expect(result.exitCode).toBe(0);
         expect(result.stderr).not.toContain("No Skills setup found");
         expect(result.stderr).not.toContain("skills setup");
-        expect(result.stderr.trim()).toBe("");
+        expect(result.stderr).toContain("skills: local mode");
+        expect(stderrWithoutLocalNotice(result.stderr)).toBe("");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -723,7 +727,7 @@ describe("CLI runtime and misc commands", () => {
           "--json",
         ], tmpDir, { HOME: tmpDir });
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderrWithoutLocalNotice(stderr)).toBe("");
         expect(exitCode).toBe(0);
         expect(data).toMatchObject({ saved: true, category: "bug" });
         expect(data.path).toContain(".hasna/skills/skills.db");

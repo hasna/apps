@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runCli } from "./cli.test-utils.js";
+import { runCli, stderrWithoutLocalNotice } from "./cli.test-utils.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
@@ -43,7 +43,7 @@ describe("skills top-level verb handling (e3997558 residual)", () => {
   test("bare `skills` keeps the default compact discovery output", async () => {
     const { stdout, stderr, exitCode } = await runCli([]);
     expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
+    expect(stderrWithoutLocalNotice(stderr)).toBe("");
     const parsed = JSON.parse(stdout);
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed.length).toBeGreaterThan(0);
@@ -52,7 +52,7 @@ describe("skills top-level verb handling (e3997558 residual)", () => {
   test("real verbs still dispatch: list", async () => {
     const { stdout, stderr, exitCode } = await runCli(["list", "--json"]);
     expect(exitCode).toBe(0);
-    expect(stderr).toBe("");
+    expect(stderrWithoutLocalNotice(stderr)).toBe("");
     const parsed = JSON.parse(stdout);
     expect(Array.isArray(parsed)).toBe(true);
     expect(parsed.length).toBeGreaterThan(0);

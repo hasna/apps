@@ -247,7 +247,13 @@ export function resolveSkillsFleet(env: Env = process.env, options: SkillsFleetO
     // simply an offline OSS install.
     const configured = configuredSkillsApiUrl(env, options.credentials?.keychain);
     const credential = resolveCredential(SKILLS_APP, env, options.credentials);
-    if (!configured && !credential) return { mode: "local", apiOrigin: null, apiKey: null };
+    if (!configured && !credential) {
+      // Say it, once, and only for the ambient environment: a caller that built
+      // its own env object is a library consumer deciding for itself, and a
+      // notice on stderr is not that caller's to emit.
+      if (env === process.env) noticeLocalSkillsMode();
+      return { mode: "local", apiOrigin: null, apiKey: null };
+    }
     if (configured && !credential) {
       throw new SkillsFleetCredentialError(
         `${configured.source} points this CLI at a Skills service but no API key resolved — ` +

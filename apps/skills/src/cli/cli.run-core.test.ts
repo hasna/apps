@@ -10,6 +10,7 @@ import {
   SLOW_TEST_TIMEOUT,
   runCli,
   runCliInCwd,
+  stderrWithoutLocalNotice,
 } from "./cli.test-utils";
 
 import { useDefaultTestTimeout } from "../test-preload.js";
@@ -53,7 +54,7 @@ describe("CLI run core", () => {
       try {
         const { stdout, stderr, exitCode } = await runCliInCwd(["run", "--json", "lorem-generator", "--help"], tmpDir, FIXTURE_ENV);
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderrWithoutLocalNotice(stderr)).toBe("");
         expect(exitCode).toBe(0);
         expect(data.exitCode).toBe(0);
         expect(data.stdout).toContain("lorem-generator");
@@ -95,7 +96,7 @@ describe("CLI run core", () => {
           SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
         });
         const data = JSON.parse(stdout);
-        expect(stderr).toBe("");
+        expect(stderrWithoutLocalNotice(stderr)).toBe("");
         expect(exitCode).toBe(0);
         expect(data.exitCode).toBe(0);
         expect(data.stdout).toContain("lorem-generator");

@@ -126,8 +126,10 @@ as silent aliases one rung below the canonical names, for one release. Use the
 - neither → **local**. Skills ships its corpus, so running on this machine is a
   real mode; it prints one line on stderr saying so.
 
-`~/.hasna/skills/auth.json`, `~/.skills/auth.json`, `~/.hasna/fleet-env/`,
-`~/.hasna/cloud/` and `~/.config/hasna/` are retired and are not read.
+The retired locations are not read: `auth.json` (in either the app directory or
+the legacy `~/.skills/`), the old fleet-env and per-machine cloud env folders
+under `~/.hasna`, and the XDG config directory. `~/.hasna` is a closed namespace
+of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 
 ## CLI Commands
 

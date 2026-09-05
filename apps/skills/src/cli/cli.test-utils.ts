@@ -27,6 +27,28 @@ export const PACKAGE_VERSION = pkg.version;
 export const SLOW_TEST_TIMEOUT = DEFAULT_TEST_TIMEOUT_MS;
 export const CLEAN_CLI_HOME = mkdtempSync(join(tmpdir(), "skills-cli-home-"));
 
+/**
+ * The one line an unconfigured install is allowed to print on stderr.
+ *
+ * Local mode announces itself (owner ruling 2026-09-04, hasna/apps#1720): with no
+ * credential and no API URL, the CLI says once, per process, that it is running
+ * on this machine. That is not the deleted onboarding nudge — it demands no
+ * choice and asks no question — but it does mean "stderr is empty" is the wrong
+ * assertion for a local command. Use {@link stderrWithoutLocalNotice}, which
+ * strips exactly this line and nothing else, so an unexpected warning still
+ * fails the test it would have failed before.
+ */
+export const LOCAL_MODE_NOTICE_MARKER = "skills: local mode";
+
+/** `stderr` with the single local-mode notice line removed. */
+export function stderrWithoutLocalNotice(stderr: string): string {
+  return stderr
+    .split("\n")
+    .filter((line) => !line.includes(LOCAL_MODE_NOTICE_MARKER))
+    .join("\n")
+    .trim();
+}
+
 // The CLI under test resolves its data dir from $HOME. Drop the preload's
 // $HASNA_SKILLS_DIR from the *inherited* environment, or that ambient override
 // wins inside the child and CLEAN_CLI_HOME (or a test's own $HOME) is never
