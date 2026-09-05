@@ -749,9 +749,7 @@ KMS envelope-encryption mode.
 ### Credentials (five tiers)
 
 The CLI, the MCP server and the SDK all resolve their credential and their API
-base URL through the **`@hasna/contracts` client resolver** (the seam released
-in 1.0.0/1.0.1; see the changeset for which exact version this package pins and
-why) — one implementation,
+base URL through the **`@hasna/contracts` client resolver** — one implementation,
 shared by every hosted Hasna app, re-read **fresh on every call** so a key
 rotation heals immediately in a shell that is older than the rotation.
 

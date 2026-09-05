@@ -6,8 +6,8 @@ Resolve the client credential and API base URL through the `@hasna/contracts`
 resolver (hasna/apps#1720, #1668, #1690).
 
 The package's vendored copy of the contracts client (`src/store/contracts-client/`,
-~750 lines pinned at the v0.5.0 shape) is deleted and replaced by the published
-`@hasna/contracts` client seam. The CLI, the MCP server and the SDK now share the fleet
+~750 lines pinned at the v0.5.0 shape) is deleted and replaced by
+`@hasna/contracts` 1.0.1. The CLI, the MCP server and the SDK now share the fleet
 credential chain, resolved fresh on every call: an explicit argument, then
 `HASNA_SECRETS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_SECRETS_API_KEY_REF`,
 then the macOS Keychain item `hasna.credentials.secrets.api-key` (account
@@ -20,17 +20,6 @@ credentials file, and otherwise defaults to the fleet gateway
 
 Behaviour changes:
 
-- The `@hasna/contracts` pin moves from `^0.14.0` to an exact `1.0.0`, not
-  `1.0.1`: `apps/contracts` is itself at 1.0.1 in this workspace, so a `1.0.1`
-  spec makes bun link the workspace member, and the resulting
-  `secrets -> contracts -> peer @hasna/secrets` cycle makes
-  `bun install --frozen-lockfile` fail at the repo root (reproducible on bun
-  1.3.14; a `1.0.0` spec, which does not admit 1.0.1, resolves from the registry
-  and is stable). `dist/client/transport.js`, `dist/client/storage.js` and
-  `dist/client/credentials.d.ts` are byte-identical between 1.0.0 and 1.0.1, so
-  no resolver behaviour differs. The pin moves to 1.0.1 as soon as
-  `@hasna/contracts` publishes past it, or the `@hasna/secrets` peer edge that
-  closes the cycle is dropped.
 - A station whose key lives only in the Keychain or in
   `~/.hasna/secrets/config/credentials` now works with no environment at all;
   previously it failed closed.

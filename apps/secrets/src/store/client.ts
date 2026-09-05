@@ -8,12 +8,8 @@
 // `~/.hasna/<app>/config/credentials` tier and no default gateway authority, so
 // on a station whose credential lives in the Keychain `secrets list` failed
 // closed while `todos list` in the same shell worked. The copy is gone; the
-// package now imports the resolver merged in hasna/apps#1723, from the published
-// @hasna/contracts 1.0.0 — whose dist/client/* is BYTE-IDENTICAL to 1.0.1. The
-// exact 1.0.1 pin has to wait: apps/contracts is itself at 1.0.1 here, so that
-// spec links the workspace member, and the resulting secrets -> contracts ->
-// peer @hasna/secrets cycle breaks `bun install --frozen-lockfile` at the repo
-// root. See the changeset for the reproduction.
+// package now imports the resolver merged in hasna/apps#1723 and released as
+// @hasna/contracts 1.0.1.
 //
 // THE FIVE TIERS the resolver applies, in order, FRESH ON EVERY CALL:
 //   1. an explicit argument            — `apiKey` / `profile` passed in code
