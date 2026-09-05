@@ -70,7 +70,7 @@ async function main() {
   const verify = await app.request('/api/v1/auth/verify', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: loginBody.email, code: loginBody.devCode, name: 'PG Gate' }),
+    body: JSON.stringify({ email: loginBody.email, code: loginBody.devCode, requestId: loginBody.requestId, name: 'PG Gate' }),
   }, { ip: '127.0.0.1' });
   const verifyBody = await verify.json();
   if (!verifyBody.apiKey || !String(verifyBody.apiKey).startsWith('hasna_notes_')) {
