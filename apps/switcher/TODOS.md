@@ -4,8 +4,8 @@ title: "Switcher implementation and release checklist"
 type: "task-checklist"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-05T13:39:04.576066+00:00"
-status: "active"
+updated_at: "2026-09-05T15:00:05.316596+00:00"
+status: "released"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
@@ -84,9 +84,9 @@ Mark an item complete only with evidence. All four launchers are required for th
 - [x] Pass generated SDK/artifact drift checks and package conformance checks.
 - [x] Pass required repository name/dependency/secrets/manifest/publish/standard gates.
 - [x] Pass affected build/test checks or resolve evidenced failures.
-- [ ] Obtain independent review of the exact implementation commit.
-- [ ] Fix review findings and independently verify the corrected commit.
-- [ ] Run staged secret scans before each commit and push.
+- [x] Obtain independent review of the exact implementation commit.
+- [x] Fix review findings and independently verify the corrected commit.
+- [x] Run staged secret scans before each commit and push.
 
 ## Live verification in ephemeral tmux
 - [x] Create only task-owned tmux sessions, scratch directories and loopback services.
@@ -102,19 +102,25 @@ Mark an item complete only with evidence. All four launchers are required for th
 - [x] Record source-test versions, outcomes and sanitized evidence; clean up only owned tmux sessions/processes.
 
 ## Ship and publish
-- [ ] Open the implementation PR with scope, validation and Agent trailer.
-- [ ] Wait for required CI/review and merge through the authorized PR-first workflow.
-- [ ] Verify the publish version is not already present on npm.
-- [ ] Announce publication intent in the required publishing channel.
-- [ ] Publish from the package directory via npm and protected vault-token/npmrc pairing.
-- [ ] Verify npm version, fresh timestamp and artifact integrity.
-- [ ] Confirm publication in the required thread and task record.
-- [ ] Install the exact published version in an isolated test location respecting quarantine.
-- [ ] Repeat required live acceptance checks against the registry artifact.
-- [ ] Update PLAN.md/TODOS.md and final evidence with actual commit/PR/version/results.
-- [ ] Mark the goal complete only after all required release and live-test work is complete.
+- [x] Open the implementation PR with scope, validation and Agent trailer.
+- [x] Wait for required CI/review and merge through the authorized PR-first workflow.
+- [x] Verify the publish version is not already present on npm.
+- [x] Announce publication intent in the required publishing channel.
+- [x] Publish from the package directory via npm and protected vault-token/npmrc pairing.
+- [x] Verify npm version, fresh timestamp and artifact integrity.
+- [x] Confirm publication in the required thread and task record.
+- [x] Install the exact published version in an isolated test location respecting quarantine.
+- [x] Repeat required live acceptance checks against the registry artifact.
+- [x] Update PLAN.md/TODOS.md and final evidence with actual commit/PR/version/results.
+- [x] Verify release and live-test prerequisites before closing the external task/goal.
 
 Current verification details and limitations are recorded in `RELEASE.md`. Container manifests have been parsed; a Docker engine is unavailable on this station, so container runtime verification remains open.
+
+## Maintenance follow-ups
+
+- [ ] Execute the published Dockerfile and both compose profiles on a Docker-capable host.
+- [ ] Investigate intermittent Grok overlay cleanup and make state removal independent of bridge shutdown; one credential-free overlay required manual cleanup, while 30 controlled subprocess repetitions and two additional real runs cleaned normally.
+- [ ] Remove the deprecated transitive `@hasna/paths` dependency through an upstream contracts/secrets peer-dependency fix; the current explicit environment credential path does not load that SDK chain.
 
 ## Deferred product extensions
 These do not reduce the first-release requirements above.
