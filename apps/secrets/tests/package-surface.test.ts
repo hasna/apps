@@ -78,12 +78,24 @@ describe("published package surface", () => {
       value: "fixture-value",
       type: "api_key",
     };
+    // The canonical names, with no alias present: the SDK factory reads the
+    // environment ONLY through the @hasna/contracts resolver now (#1720), so the
+    // old `SECRETS_API_URL` / `SECRETS_API_KEY` reads that shadowed them are gone.
     const client = createSecretsClientFromEnv({
-      SECRETS_API_URL: "https://example.invalid",
+      HASNA_SECRETS_API_URL: "https://example.invalid",
+      HASNA_SECRETS_API_KEY: "hasna_secrets_fixture_key",
     });
 
     expect(input.key).toBe("example/service/dev/api_key");
     expect(client).toBeInstanceOf(SecretsClient);
+  });
+
+  it("refuses to build an SDK client with no credential", () => {
+    // An authority without a credential is never turned into an unauthenticated
+    // client, and never falls back to local data.
+    expect(() =>
+      createSecretsClientFromEnv({ HASNA_SECRETS_API_URL: "https://example.invalid" }),
+    ).toThrow(/no API key could be resolved/);
   });
 
   it("wires both CLI and MCP entrypoints without starting the server", () => {

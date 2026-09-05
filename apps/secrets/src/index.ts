@@ -109,9 +109,14 @@ Examples:
   secrets aws configure
   secrets aws sync
 
-Self-hosted (api mode): set HASNA_SECRETS_API_URL + HASNA_SECRETS_API_KEY to route
-all reads/writes to the cloud API. Without them the CLI fails closed unless the
-local vault is explicitly opted into with HASNA_SECRETS_LOCAL_VAULT=1.
+Credentials resolve through @hasna/contracts, fresh on every call, in this order:
+an explicit argument; HASNA_SECRETS_API_KEY_OVERRIDE / HASNA_PROFILE /
+HASNA_SECRETS_API_KEY_REF; the macOS Keychain item hasna.credentials.secrets.api-key;
+~/.hasna/secrets/config/credentials; then HASNA_SECRETS_API_KEY. The API base URL
+follows HASNA_SECRETS_API_URL, the Keychain api-url item, the credentials file,
+and otherwise defaults to https://api.hasna.com/secrets. With no credential the
+CLI fails closed unless the local vault is explicitly opted into with
+HASNA_SECRETS_LOCAL_VAULT=1.
 `);
 }
 
@@ -254,15 +259,30 @@ MCP usage
     scan_workspace_exposures(root?, cursor?, limit?, maxFileBytes?, maxFiles?, maxBytesScanned?, timeoutMs?)
     scan_history_exposures(root?, cursor?, limit?, maxCommits?, timeoutMs?)
 
-Self-hosted (api mode)
-  Route all reads/writes to the cloud API instead of the local vault:
-    export HASNA_SECRETS_API_URL=https://secrets.your-deployment.example
-    export HASNA_SECRETS_API_KEY=<bearer key from your vault>
+Credentials (five tiers, resolved fresh on every call by @hasna/contracts)
+  1. an explicit argument passed in code (SDK apiKey / profile)
+  2. a deliberate env pointer:
+       HASNA_SECRETS_API_KEY_OVERRIDE   a key you set on purpose
+       HASNA_PROFILE                    selects credentials-<profile> on disk
+       HASNA_SECRETS_API_KEY_REF        a vault item key, resolved at request time
+  3. the macOS Keychain (darwin only), generic-password item
+       hasna.credentials.secrets.api-key, read with
+       "security find-generic-password -a <account> -s <service> -w";
+       account: HASNA_STATION, else the short hostname, else $USER
+  4. ~/.hasna/secrets/config/credentials  (0400/0600; HASNA_HOME replaces
+       ~/.hasna, HASNA_CONFIG_HOME replaces the config root; XDG is never read)
+  5. HASNA_SECRETS_API_KEY in the environment — legitimate, no deprecation notice
 
-  Without both vars the CLI FAILS CLOSED unless the local vault is explicitly
-  opted into (HASNA_SECRETS_LOCAL_VAULT=1); it never silently falls back to
-  local SQLite (owner ruling 2026-09-04).
-  A raw database URL is NEVER used on the client.
+  API base URL: HASNA_SECRETS_API_URL, else the Keychain "api-url" item, else the
+  credentials file, else the fleet gateway https://api.hasna.com/secrets (the
+  client appends /v1).
+
+  With NO credential from any tier the CLI FAILS CLOSED unless the local vault is
+  explicitly opted into (HASNA_SECRETS_LOCAL_VAULT=1, which prints one line
+  saying the run is local); it never silently falls back to local SQLite (owner
+  ruling 2026-09-04). A raw database URL is NEVER used on the client.
+  The retired fleet-env, cloud and XDG credential locations are never read, and
+  no *_MODE / *_STORAGE_MODE variable selects anything.
 
 Safety
   NO command prints a secret value to stdout without an explicit --show or
@@ -541,12 +561,17 @@ let _store: Store | undefined;
 function store(): Store {
   if (_store) return _store;
   try {
-    _store = getStoreWithResolution().store;
+    const resolved = getStoreWithResolution();
+    // A local run says so, once, on stderr. An unhosted run must never be
+    // mistaken for a hosted one that came back empty (owner ruling 2026-09-04).
+    if (resolved.notice) console.error(resolved.notice);
+    _store = resolved.store;
   } catch (e: any) {
-    // FAIL CLOSED (owner ruling 2026-09-04; incident 715558): no hosted API env
-    // and no explicit local-vault opt-in, or a misconfigured flip. Exit non-zero
-    // with a clean actionable message naming the required env — never a silent
-    // rc=0 local-vault read, never a `secrets-local-fallback` event.
+    // FAIL CLOSED (owner ruling 2026-09-04; incident 715558): no credential from
+    // any resolver tier and no explicit local-vault opt-in, or a misconfigured
+    // authority. Exit non-zero with a clean actionable message naming every tier
+    // that was consulted — never a silent rc=0 local-vault read, never a
+    // `secrets-local-fallback` event.
     console.error(e?.message ?? String(e));
     process.exit(1);
   }

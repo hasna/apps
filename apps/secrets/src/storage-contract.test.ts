@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { resolveMcpRoot } from "./mcp.js";
 import { getStore, LocalStore, ApiStore } from "./store/index.js";
-import type { HasnaStorageClient } from "./store/contracts-client/index.js";
+import type { HasnaStorageClient } from "./store/client.js";
 
 const rootDir = join(import.meta.dir, "..");
 

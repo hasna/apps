@@ -31,15 +31,49 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { getStore } from "../src/store/index.js";
-import { clientTransportEnvKeys } from "../src/store/contracts-client/transport.js";
+import { testVaultDir } from "../src/test-isolation.js";
+import {
+  clientTransportEnvKeys,
+  credentialOverrideEnvKey,
+  credentialPointerEnvKey,
+  CREDENTIAL_PROFILE_ENV_KEY,
+  HASNA_CONFIG_HOME_ENV_KEY,
+  HASNA_HOME_ENV_KEY,
+  KEYCHAIN_STATION_ENV_KEY,
+} from "../src/store/client.js";
 
 const rootDir = join(import.meta.dir, "..");
 
-/** Every env key that can steer the secrets client at a hosted vault. */
-const SELECTOR_KEYS = (() => {
+/**
+ * Env keys that CARRY a hosted credential or authority. The preload DELETES
+ * these. Retired `*_MODE` / `*_STORAGE_MODE` names are gone from the list
+ * because they steer nothing any more (#1720).
+ */
+const SCRUBBED_SELECTOR_KEYS = (() => {
   const keys = clientTransportEnvKeys("secrets");
-  return [...keys.modeKeys, ...keys.apiUrlKeys, ...keys.apiKeyKeys];
+  return [
+    ...keys.apiUrlKeys,
+    ...keys.apiKeyKeys,
+    credentialOverrideEnvKey("secrets"),
+    credentialPointerEnvKey("secrets"),
+    CREDENTIAL_PROFILE_ENV_KEY,
+  ];
 })();
+
+/**
+ * Env keys that ANCHOR the two ambient tiers — the credentials file on disk and
+ * the Keychain account. Deleting these would not make the tiers absent (they
+ * would fall back to `$HOME` and `hostname -s`, which on a station is exactly
+ * where a live key lives), so the preload REDIRECTS them at a throwaway
+ * location instead.
+ */
+const REDIRECTED_TIER_KEYS = [
+  HASNA_HOME_ENV_KEY,
+  HASNA_CONFIG_HOME_ENV_KEY,
+  KEYCHAIN_STATION_ENV_KEY,
+];
+
+const SELECTOR_KEYS = [...SCRUBBED_SELECTOR_KEYS, ...REDIRECTED_TIER_KEYS];
 
 /** Snapshot + restore the selector keys so one test cannot leak into the next. */
 let savedSelectors: Record<string, string | undefined>;
@@ -340,9 +374,22 @@ describe("test-vault isolation — the run-wide preload", () => {
     // Asserted against the selector list the transport itself publishes, so a
     // selector added to the client-flip contract later is covered automatically
     // rather than needing this list to be edited.
-    expect(SELECTOR_KEYS.length).toBeGreaterThan(0);
-    const present = SELECTOR_KEYS.filter((key) => (savedSelectors[key] ?? "").trim().length > 0);
+    expect(SCRUBBED_SELECTOR_KEYS.length).toBeGreaterThan(0);
+    const present = SCRUBBED_SELECTOR_KEYS.filter((key) => (savedSelectors[key] ?? "").trim().length > 0);
     expect(present).toEqual([]);
+  });
+
+  it("redirects the ambient credential tiers instead of trusting them to be absent", () => {
+    // The Keychain and ~/.hasna/<app>/config/credentials sit ABOVE the process
+    // env in the chain, so scrubbing variables is not enough on a station that
+    // holds a live key. Each anchor must point somewhere throwaway.
+    for (const key of REDIRECTED_TIER_KEYS) {
+      expect((process.env[key] ?? "").trim().length).toBeGreaterThan(0);
+    }
+    expect(process.env[HASNA_HOME_ENV_KEY]).toStartWith(testVaultDir());
+    // A Keychain ACCOUNT no generic-password item is stored under, so the
+    // lookup misses and the tier falls through rather than being disabled.
+    expect(process.env[KEYCHAIN_STATION_ENV_KEY]).toContain("hasna-secrets-test-");
   });
 
   it("marks the process as isolated so the guard holds without a config file", () => {

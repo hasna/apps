@@ -7,7 +7,7 @@ import {
   scanHistoryExposures,
   scanWorkspaceExposures,
 } from "./scanner.js";
-import { getStore } from "./store/index.js";
+import { getStoreWithResolution } from "./store/index.js";
 import { VERSION } from "./version.js";
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
@@ -20,8 +20,12 @@ export function buildServer(): McpServer {
   });
 
   // Every DATA tool routes through the resolved Store (LocalStore or ApiStore).
-  // No tool touches sqlite or fetch directly.
-  const store = getStore();
+  // No tool touches sqlite or fetch directly. Resolution FAILS CLOSED when no
+  // credential resolves from any @hasna/contracts tier, and a local run says so
+  // once on stderr — stdout is the MCP protocol stream and stays untouched.
+  const resolved = getStoreWithResolution();
+  if (resolved.notice) console.error(resolved.notice);
+  const store = resolved.store;
 
   server.tool(
     "get_secret",
