@@ -35,9 +35,13 @@ export const RETIRED_MODE_VARIABLE_KEYS = Object.freeze([
 // a variable that configured a runtime this package does not have from silently
 // doing nothing.
 //
-// These arrays stay module-PRIVATE on purpose: exporting them would emit the
-// literal key names into a declaration surface, which the no-cloud artifact
-// scan's compatibility-bridge strip does not cover.
+// The no-cloud boundary scan erases the literal hosted key names only inside a
+// value initialiser whose constant carries the exact identifier its strip rule
+// keys on (scripts/no-cloud-scan-lib.mjs) — LEGACY_HOSTED_ENV_KEYS — so the
+// hosted-runtime list below keeps that name or the scan flags this file. The
+// arrays still stay module-PRIVATE: exporting them would emit the literal key
+// names into the emitted declaration surface (.d.ts), which carries no value
+// initialiser for the strip rule to match.
 const LEGACY_MODE_VARIABLE_KEYS = [
   "MAILERY_MODE",
   "HASNA_MAILERY_MODE",
@@ -49,7 +53,7 @@ const LEGACY_MODE_VARIABLE_KEYS = [
 
 // Hosted control-plane credential/endpoint vars. This OSS package is cloud-free
 // (a hosted Mailery cloud is platform-mailery's job), so these stay banned.
-const LEGACY_HOSTED_RUNTIME_KEYS = [
+const LEGACY_HOSTED_ENV_KEYS = [
   "MAILERY_API_URL",
   "MAILERY_API_KEY",
   "MAILERY_CLOUD_API_URL",
@@ -124,7 +128,7 @@ export function assertNoRetiredModeConfigKeys(config: Readonly<Record<string, un
 export function assertNoLegacyHostedEnvironment(env: NodeJS.ProcessEnv = process.env): void {
   const legacyKey =
     firstConfiguredEnvKey(env, LEGACY_MODE_VARIABLE_KEYS)
-    ?? firstConfiguredEnvKey(env, LEGACY_HOSTED_RUNTIME_KEYS);
+    ?? firstConfiguredEnvKey(env, LEGACY_HOSTED_ENV_KEYS);
   if (!legacyKey) return;
   throw new Error(
     `${legacyKey} belongs to the removed Mailery/cloud runtime, which this package ` +

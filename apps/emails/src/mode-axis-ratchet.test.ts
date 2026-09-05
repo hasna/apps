@@ -1469,15 +1469,20 @@ const CEILINGS: Record<string, number> = {
   // carried-forward-selector and config-key inputs, alongside the kept
   // call sites.
   resolveClientModeReferences: 66,
-  // 2026-09-05, hasna/apps#1566: 213 -> 63. MEASURED RE-PIN: the deployment-mode
-  // deletion removed the selector from the client env contract, so the residue
-  // is the retired-key guard's own key arrays, test scrub lists and refusal
-  // assertions, the server rollout tolerance and its control-surface tests,
-  // and the no-cloud scan control fixture — all of it falls to zero when the
-  // guard and the tolerance are deleted with the axis. (The selector's name is
-  // not spelled here on purpose — this file sits inside its own corpus and
-  // must contribute zero to the count.)
-  emailsModeEnvReferences: 63,
+  // 2026-09-05, hasna/apps#1566: CORRECTED RE-PIN to 67. The measurement that
+  // produced 63 predated the retired-key guard module's final form: the module
+  // alone carries the four occurrences the pin was short by (its exported key
+  // array of the two env spellings and its top-of-module prose naming them),
+  // so the residue composition stated below is unchanged — guard key arrays,
+  // test scrub lists and refusal assertions, the server rollout tolerance and
+  // its control-surface tests, and the no-cloud scan control fixture — and all
+  // of it falls to zero when the guard and the tolerance are deleted with the
+  // axis. Re-measured 2026-09-05 over the real `git ls-files` corpus (736
+  // tracked / 735 scanned) after CI reported the final tree at 67, exactly the
+  // guard's four over the pin. (The selector's name is not spelled here on
+  // purpose — this file sits inside its own corpus and must contribute zero
+  // to the count.)
+  emailsModeEnvReferences: 67,
 };
 
 // 649 files are tracked and 648 scanned today, totalling ~9.7M characters. (The figures in
