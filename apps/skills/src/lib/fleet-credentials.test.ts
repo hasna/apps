@@ -110,7 +110,14 @@ describe("fleet credential ladder", () => {
       // Skipping it would silently demote a configured install to the gateway
       // default, which is the class of silence this ladder exists to remove.
       expect(() => resolveSkillsFleet({ HOME: home })).toThrow(/blank or malformed/);
-      expect(() => configuredSkillsApiUrl({ HOME: home })).toThrow(/blank or malformed/);
+      try {
+        configuredSkillsApiUrl({ HOME: home });
+        throw new Error("expected a refusal");
+      } catch (error) {
+        // A distinct code: a malformed authority is not the same fault as a
+        // missing credential, and a JSON caller must be able to tell them apart.
+        expect((error as SkillsFleetCredentialError).code).toBe("INVALID_API_URL");
+      }
     });
   });
 

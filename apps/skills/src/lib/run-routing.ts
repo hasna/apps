@@ -98,9 +98,12 @@ export function resolveConfiguredRunRouting(
     // reports per-skill results, so the refusal is carried as this resolver's own
     // structured error rather than as an exception that aborts the whole batch.
     // A local route is never produced here.
-    if (!(error instanceof SkillsFleetCredentialError) && (error as Error)?.name !== "SkillsFleetCredentialError") {
-      throw error;
-    }
+    const isMissingCredential =
+      (error instanceof SkillsFleetCredentialError || (error as Error)?.name === "SkillsFleetCredentialError") &&
+      (error as SkillsFleetCredentialError).code === "MISSING_API_CREDENTIAL";
+    // A malformed authority is a different fault and is not this resolver's to
+    // reshape: it propagates.
+    if (!isMissingCredential) throw error;
     return {
       route: "error",
       code: "REMOTE_REQUIRES_CREDENTIAL",

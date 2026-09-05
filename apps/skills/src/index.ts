@@ -181,6 +181,7 @@ export {
   type HostedSkillsFleet,
   type LocalSkillsFleet,
   type SkillsFleet,
+  type SkillsFleetErrorCode,
   type SkillsFleetOptions,
 } from "./lib/fleet-credentials.js";
 

@@ -106,19 +106,26 @@ export interface LocalSkillsFleet {
 
 export type SkillsFleet = HostedSkillsFleet | LocalSkillsFleet;
 
+/** Machine-readable reasons a hosted resolution was refused. */
+export type SkillsFleetErrorCode = "MISSING_API_CREDENTIAL" | "INVALID_API_URL";
+
 /**
- * A hosted path could not resolve a credential.
+ * A configured install could not produce a usable hosted client.
  *
- * `code` is stable so JSON callers can branch on it. MISSING_API_URL is kept as
- * the code for the "nothing configured at all" case (see api-url.ts), which is a
- * different failure: this one means an authority IS configured and the key is not.
+ * `code` is stable so JSON callers can branch on it, and distinguishes the two
+ * refusals that are NOT the same fault: an authority with no credential
+ * (MISSING_API_CREDENTIAL) versus an authority that is declared but unusable
+ * (INVALID_API_URL). MISSING_API_URL stays the code for "nothing configured at
+ * all" (see MissingSkillsFleetError), which is a third, non-error state for the
+ * commands that may run locally.
  */
 export class SkillsFleetCredentialError extends Error {
-  readonly code = "MISSING_API_CREDENTIAL";
+  readonly code: SkillsFleetErrorCode;
 
-  constructor(message: string) {
+  constructor(message: string, code: SkillsFleetErrorCode = "MISSING_API_CREDENTIAL") {
     super(message);
     this.name = "SkillsFleetCredentialError";
+    this.code = code;
   }
 }
 
@@ -185,6 +192,7 @@ export function configuredSkillsApiUrl(
     throw new SkillsFleetCredentialError(
       `${fromDisk.key} in ${fromDisk.path} is declared but blank or malformed; ` +
         `a Skills authority must be a valid https URL (or an exact loopback http URL).`,
+      "INVALID_API_URL",
     );
   }
   if (fromDisk) return { value: fromDisk.value.trim(), source: fromDisk.path };
