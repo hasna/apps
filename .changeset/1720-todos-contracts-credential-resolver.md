@@ -62,6 +62,12 @@ Behaviour worth knowing about:
   ONE case by design: `new TodosClient()` falls to the local `todos-serve` with
   a stderr line, `createTodosV1Client()` throws. Every other refusal throws on
   every surface.
+- The bundled `@hasna/todos-sdk` package (`apps/todos/sdk`, published separately
+  and NOT a workspace member, so it carries no changeset of its own — see
+  hasna/apps#1787) now documents the environment variables it reads and prints
+  one line when it falls back to the local `todos-serve`. Its canonical
+  `HASNA_TODOS_*` names always win; the unprefixed spellings are legacy and are
+  accepted for one release only.
 - A declared-but-blank `*TODOS_*` variable no longer disables the Keychain tier.
   Removing a blank means handing the resolver a COPY of the environment, and
   @hasna/contracts gates its ambient tiers on object identity, so the copy used
