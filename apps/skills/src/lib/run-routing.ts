@@ -32,7 +32,7 @@
  */
 
 import type { SkillMeta } from "./registry-types.js";
-import { resolveSkillsFleet, SkillsFleetCredentialError } from "./fleet-credentials.js";
+import { resolveSkillsApiKey, SkillsFleetCredentialError, resolveSkillsFleet } from "./fleet-credentials.js";
 
 export type RunRoutingErrorCode = "REMOTE_REQUIRES_ORIGIN" | "REMOTE_REQUIRES_CREDENTIAL";
 
@@ -85,13 +85,20 @@ export function resolveRunRouting(
  * validated, so the caller never re-reads (and cannot diverge from) the
  * credential the decision was made with.
  */
-export function resolveConfiguredRunRouting(
+export async function resolveConfiguredRunRouting(
   skill: Pick<SkillMeta, "name" | "serverOwned">,
   env: Record<string, string | undefined> = process.env,
-): RunRouting {
+): Promise<RunRouting> {
   let fleet;
+  let apiKey: string | null;
   try {
     fleet = resolveSkillsFleet(env);
+    // ASYNC, because a vault pointer (`HASNA_SKILLS_API_KEY_REF`) only becomes a
+    // key once the secrets vault has answered. Resolving it here — before the
+    // route is decided — keeps the promise this resolver makes: the `apiKey` on
+    // the remote route is the value the decision was made with, so the caller
+    // never re-reads it and never sends an empty one.
+    apiKey = fleet.mode === "hosted" ? await resolveSkillsApiKey(env) : null;
   } catch (error) {
     // An authority with no credential. The shared ladder is right to throw — the
     // alternative is running a server-owned skill locally — but a scheduled run
@@ -110,5 +117,5 @@ export function resolveConfiguredRunRouting(
       error: `${skill.name} is a server-owned skill. ${(error as Error).message}`,
     };
   }
-  return resolveRunRouting(skill, fleet.apiKey, fleet.apiOrigin ?? undefined);
+  return resolveRunRouting(skill, apiKey, fleet.apiOrigin ?? undefined);
 }

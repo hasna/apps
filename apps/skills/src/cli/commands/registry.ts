@@ -142,7 +142,7 @@ export function registerVersions(parent: Command) {
     .option("--json", "Output as JSON", false)
     .description("List the published versions of a skill on the configured instance")
     .action(async (name: string, options: { json: boolean }) => {
-      const client = createRemoteSkillsClient();
+      const client = await createRemoteSkillsClient();
       if (!client) {
         const message = "No API key configured, so there is no instance to list versions from.";
         if (options.json) console.log(JSON.stringify({ error: message }, null, 2));

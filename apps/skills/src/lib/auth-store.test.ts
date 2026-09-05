@@ -26,13 +26,13 @@ import {
   readStoredApiUrl,
   saveApiUrl,
   saveAuthConfig,
-  type AuthConfig,
+  type StoredAuthConfig,
 } from "./auth-store.js";
 import { SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "./fleet-credentials.js";
 
 useDefaultTestTimeout();
 
-const SAMPLE_CONFIG: AuthConfig = {
+const SAMPLE_CONFIG: StoredAuthConfig = {
   apiKey: "sk_boundary_test_only",
   email: "boundary@example.com",
   orgId: "org_boundary",

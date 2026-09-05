@@ -21,8 +21,10 @@ import {
   noticeLocalSkillsMode,
   requireSkillsFleet,
   resetLocalSkillsModeNotice,
+  resolveSkillsApiKey,
   resolveSkillsFleet,
   skillsCredentialFilePath,
+  skillsCredentialOrReason,
   SKILLS_API_KEY_ENV,
   SKILLS_API_URL_ENV,
 } from "./fleet-credentials.js";
@@ -292,6 +294,101 @@ function databaseFilesUnder(root: string): string[] {
   walk(root);
   return found;
 }
+
+/**
+ * Tier 2, the half that had no coverage.
+ *
+ * `HASNA_SKILLS_API_KEY_REF` names a VAULT ITEM, so `resolveCredential` answers
+ * with a TRUTHY credential whose own `apiKey` is the empty string plus the item
+ * to fetch; completing it is a separate async step. Publishing that empty
+ * string as the resolved key produced hosted mode with no credential — and the
+ * read path, seeing a falsy token, served the bundled local corpus with a zero
+ * exit and no notice. Configuring a credential made the CLI LESS safe than
+ * configuring nothing, which is precisely what the 2026-09-04 ruling forbids.
+ */
+describe("tier 2 — a vault pointer is a credential, never a blank key", () => {
+  const POINTER_ENV = "HASNA_SKILLS_API_KEY_REF";
+  const VAULT_ITEM = "hasna/skills/live/api_key";
+
+  test("resolves hosted, carries the pointer, and publishes no key", () => {
+    const fleet = resolveSkillsFleet({ [POINTER_ENV]: VAULT_ITEM });
+    expect(fleet.mode).toBe("hosted");
+    if (fleet.mode !== "hosted") return;
+    expect(fleet.apiKey).toBeNull();
+    expect(fleet.apiKey).not.toBe("");
+    expect(fleet.apiKeyTier).toBe("pointer");
+    expect(fleet.apiKeyPointer).not.toBeNull();
+    expect(fleet.apiOrigin).toBe("https://api.hasna.com/skills");
+  });
+
+  test("completing it without the secrets SDK refuses loudly", async () => {
+    // Terminal by contract: a deliberate pointer never falls through to another
+    // tier, and it certainly never falls back to local data.
+    const failure = resolveSkillsApiKey({ [POINTER_ENV]: VAULT_ITEM });
+    await expect(failure).rejects.toBeInstanceOf(SkillsFleetCredentialError);
+    await expect(failure).rejects.toThrow(/HASNA_SKILLS_API_KEY_REF/);
+  });
+
+  test("and reaches a --json surface as a reason, not as an unhandled error", async () => {
+    const { apiKey, reason } = await skillsCredentialOrReason({ [POINTER_ENV]: VAULT_ITEM });
+    expect(apiKey).toBeNull();
+    // `reason: null` here would be the false green: "not signed in" for an
+    // install that IS configured, and a caller free to answer locally.
+    expect(reason).toMatch(/HASNA_SKILLS_API_KEY_REF/);
+  });
+});
+
+/**
+ * Tier 2, the profile pointer.
+ *
+ * `@hasna/contracts` throws its own `CredentialResolutionError` for a
+ * deliberate selection it cannot honour. Untranslated, that error escaped every
+ * helper here — `skillsCredentialOrReason` and `resolveConfiguredRunRouting`
+ * recognise only `SkillsFleetCredentialError` — so a `--json` command or an MCP
+ * tool got an unhandled exception where the structured refusal was the point.
+ */
+describe("tier 2 — HASNA_PROFILE", () => {
+  test("a profile with no entry is this package's refusal, with a stable code", () => {
+    withTempDir((home) => {
+      let thrown: unknown;
+      try {
+        resolveSkillsFleet({ HOME: home, HASNA_PROFILE: "work" });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(SkillsFleetCredentialError);
+      expect((thrown as SkillsFleetCredentialError).code).toBe("MISSING_API_CREDENTIAL");
+      expect((thrown as Error).message).toMatch(/work/);
+    });
+  });
+
+  test("and reaches a --json surface as a reason", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skills-fleet-profile-"));
+    try {
+      const { apiKey, reason } = await skillsCredentialOrReason({ HOME: home, HASNA_PROFILE: "work" });
+      expect(apiKey).toBeNull();
+      expect(reason).toMatch(/work/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a profile that HAS a credentials file resolves through it", () => {
+    withTempDir((home) => {
+      const dir = join(home, ".hasna", "skills", "config");
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, "credentials-work");
+      writeFileSync(file, `${SKILLS_API_KEY_ENV}=${KEY}_work\n`, { mode: 0o600 });
+      chmodSync(file, 0o600);
+      const fleet = resolveSkillsFleet({ HOME: home, HASNA_PROFILE: "work" });
+      expect(fleet.mode).toBe("hosted");
+      if (fleet.mode !== "hosted") return;
+      expect(fleet.apiKey).toBe(`${KEY}_work`);
+      expect(fleet.apiKeyTier).toBe("profile");
+      expect(fleet.apiKeyPointer).toBeNull();
+    });
+  });
+});
 
 describe("skills setup-info reports where the credential came from, never its value", () => {
   test("names the tier and the file mode, and says local when nothing is configured", async () => {

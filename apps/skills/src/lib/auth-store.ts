@@ -30,6 +30,7 @@ import { dirname, join } from "node:path";
 
 import {
   requireSkillsApiOrigin,
+  resolveSkillsApiKey,
   resolveSkillsFleet,
   skillsCredentialFilePath,
   SKILLS_API_KEY_ENV,
@@ -72,7 +73,13 @@ export function getIdentityFilePath(env: Env = process.env): string {
  * written here is indistinguishable from a value the server actually returned.
  */
 export interface AuthConfig {
-  apiKey: string;
+  /**
+   * The credential the ladder resolved, or null when it is a vault POINTER that
+   * only the async path can complete (see {@link getApiKeyAsync}). Callers that
+   * need to SEND it must resolve it there; the display surfaces below only need
+   * to know that one is configured.
+   */
+  apiKey: string | null;
   email?: string;
   orgId?: string;
   orgSlug?: string;
@@ -81,6 +88,15 @@ export interface AuthConfig {
 
 /** The identity half, on its own: what `whoami` said, with no credential. */
 export type AuthIdentity = Omit<AuthConfig, "apiKey">;
+
+/**
+ * What `saveAuthConfig` is handed: a key this CLI actually holds.
+ *
+ * Distinct from {@link AuthConfig}, whose `apiKey` may be null for a vault
+ * pointer — there is nothing to write to disk in that case, and writing an
+ * empty line would masquerade as a stored credential.
+ */
+export type StoredAuthConfig = AuthIdentity & { apiKey: string };
 
 export function getAuthIdentity(env: Env = process.env): AuthIdentity {
   return readIdentity(env);
@@ -107,9 +123,12 @@ function readIdentity(env: Env = process.env): AuthIdentity {
  * when no credential resolves anywhere on the ladder.
  */
 export function getAuthConfig(env: Env = process.env, options: SkillsFleetOptions = {}): AuthConfig | null {
-  const apiKey = getApiKey(env, options);
-  if (!apiKey) return null;
-  return { apiKey, ...readIdentity(env) };
+  const fleet = resolveSkillsFleet(env, options);
+  if (fleet.mode !== "hosted") return null;
+  // A vault pointer IS a configured credential; keyed off the synchronous value
+  // alone this reported "not signed in" for one, which is a false negative the
+  // operator would chase in the wrong place.
+  return { apiKey: fleet.apiKey, ...readIdentity(env) };
 }
 
 /** Alias kept for the read-only callers; resolution never writes. */
@@ -187,7 +206,7 @@ function readCredentialValue(key: string, env: Env = process.env): string | null
  * Returns the file it wrote, so the CLI can name the real path rather than a
  * path it assumed.
  */
-export function saveAuthConfig(config: AuthConfig, env: Env = process.env): string {
+export function saveAuthConfig(config: StoredAuthConfig, env: Env = process.env): string {
   const apiKey = config.apiKey.trim();
   if (!apiKey) throw new Error("Refusing to store an empty Skills API key.");
   if (/[^\t\x20-\x7e]/.test(apiKey)) {
@@ -233,13 +252,45 @@ export function clearAuthConfig(env: Env = process.env): { stillResolves: boolea
     // No home, or nothing to clear.
   }
   try { unlinkSync(getIdentityFilePath(env)); } catch {}
-  return { stillResolves: Boolean(getApiKey(env)) };
+  // "Does one still resolve", not "can this process read its value": a vault
+  // pointer resolves without yielding a key synchronously, and a credential
+  // that resolves but is refused (a broken deliberate selection) is still a
+  // credential the operator has configured somewhere. Both must keep the
+  // "clear it there to finish signing out" line honest.
+  let stillResolves: boolean;
+  try {
+    stillResolves = resolveSkillsFleet(env).mode === "hosted";
+  } catch {
+    stillResolves = true;
+  }
+  return { stillResolves };
 }
 
-/** The credential in effect, resolved fresh through the shared ladder. */
+/**
+ * The credential in effect, resolved fresh through the shared ladder.
+ *
+ * SYNCHRONOUS, so it cannot complete a vault pointer
+ * (`HASNA_SKILLS_API_KEY_REF`): for that tier it returns null, because the
+ * pointer's own value is the empty string and handing THAT back as a key is how
+ * `Authorization: Bearer ` reached the wire. Any path that is about to SEND the
+ * key must use {@link getApiKeyAsync} (or `resolveSkillsApiKey`), which fetches
+ * the vault item and refuses loudly when it cannot.
+ */
 export function getApiKey(env: Env = process.env, options: SkillsFleetOptions = {}): string | null {
   const fleet = resolveSkillsFleet(env, options);
   return fleet.mode === "hosted" ? fleet.apiKey : null;
+}
+
+/**
+ * The credential in effect, completing a vault pointer through the secrets
+ * vault. Null only in local mode; throws when a configured credential cannot
+ * be produced. Use this wherever the key is about to be sent.
+ */
+export async function getApiKeyAsync(
+  env: Env = process.env,
+  options: SkillsFleetOptions = {},
+): Promise<string | null> {
+  return resolveSkillsApiKey(env, options);
 }
 
 /** Identical to getApiKey(): resolution has no write side effects. */

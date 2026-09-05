@@ -63,7 +63,6 @@ describe("remote registry", () => {
     );
   });
 
-
   test("reads the authority from the fleet ladder, not from this app's config", () => {
     // The env alias and the canonical name both work, and the API base an
     // operator pastes is normalized to the origin the client dials.
@@ -484,6 +483,29 @@ describe("remote registry", () => {
       const bundledSkill = result.find((skill) => skill.name === "bundled-skill");
       expect(localSkill).toMatchObject({ source: "custom", description: "Written on this machine" });
       expect(bundledSkill).toMatchObject({ source: "remote", description: "Instance-published override of a bundled skill" });
+    });
+
+    test("a vault pointer never degrades the merge to the local list", async () => {
+      // The credential IS configured (tier 2, HASNA_SKILLS_API_KEY_REF), but its
+      // value lives in the vault and resolves to "" synchronously. Reading the
+      // credential here and returning `local` when it looked empty made a
+      // configured install answer from the bundled corpus with a zero exit —
+      // a silent false green that an unconfigured install does not produce.
+      process.env.HASNA_SKILLS_API_KEY_REF = "hasna/skills/live/api_key";
+      let fetched = false;
+      try {
+        await expect(
+          mergeRemoteRegistry(localFixture, {
+            fetchImpl: async () => {
+              fetched = true;
+              throw new Error("must not fetch with an uncompleted pointer");
+            },
+          }),
+        ).rejects.toThrow(/HASNA_SKILLS_API_KEY_REF/);
+      } finally {
+        delete process.env.HASNA_SKILLS_API_KEY_REF;
+      }
+      expect(fetched).toBe(false);
     });
 
     test("surfaces an auth failure as a clear error instead of a silent local list", async () => {
