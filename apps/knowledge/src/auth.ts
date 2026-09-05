@@ -1,10 +1,20 @@
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { HasnaHttpError } from '@hasna/contracts/client';
+import {
+  appConfigDiskValue,
+  CredentialResolutionError,
+  HasnaHttpError,
+  keychainConfigValue,
+  resolveCredential,
+  type CredentialTier,
+} from '@hasna/contracts/client';
 import { ownAgentClaim, ownTenantId, parseApiKey } from '@hasna/contracts/auth';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
+  KNOWLEDGE_APP_SLUG,
+  KNOWLEDGE_DEFAULT_API_URL,
+  knowledgeKeychainTierOptions,
   resolveKnowledgeClientTransport,
 } from './client-transport';
 import { resolveKnowledgeHttpStore } from './http-store';
@@ -72,7 +82,13 @@ export interface KnowledgeAuthStatus {
   authenticated: boolean;
   /** Alias of `authenticated`: a key is present (kept for callers that read `configured`). */
   configured: boolean;
-  source: 'env' | 'file' | 'none';
+  /**
+   * WHICH KIND of source supplied the credential — `keychain` for the macOS
+   * Keychain item, `file` for `~/.hasna/knowledge/config/credentials` (or the
+   * legacy `auth.json`), `env` for an environment tier, `none` when nothing
+   * resolved. `source_ref` names the exact one.
+   */
+  source: KnowledgeCredentialSourceKind;
   api_url: string;
   auth_path: string;
   email: string | null;
@@ -80,9 +96,40 @@ export interface KnowledgeAuthStatus {
   org_slug: string | null;
   user_id: string | null;
   api_key_present: boolean;
+  /** The exact source: an env key NAME, a Keychain item reference, or a file PATH. Never a value. */
+  source_ref: string | null;
+  /** Which tier of the shared @hasna/contracts chain answered, when one did. */
+  tier: CredentialTier | null;
 }
 
-export const DEFAULT_KNOWLEDGE_API_URL = 'https://knowledge.md';
+/**
+ * The default authority: the fleet gateway `https://api.hasna.com/knowledge`
+ * (the client appends `/v1`). It replaced the per-app `https://knowledge.md`
+ * origin with the 2026-09-04 URL ruling — a URL never needs configuring, and a
+ * key from any tier is enough to reach the fleet.
+ */
+export const DEFAULT_KNOWLEDGE_API_URL = KNOWLEDGE_DEFAULT_API_URL;
+
+/** Which KIND of source answered the credential chain. */
+export type KnowledgeCredentialSourceKind = 'env' | 'keychain' | 'file' | 'none';
+
+/** The credential the shared chain resolved, described without its value. */
+export interface KnowledgeCredentialResolution {
+  /** The secret, or null when nothing resolved (or when only a vault pointer is configured). */
+  apiKey: string | null;
+  source: KnowledgeCredentialSourceKind;
+  /** An env key NAME, a Keychain item reference, or an absolute file PATH. Never a value. */
+  sourceRef: string | null;
+  /** The shared chain's tier, or null for the legacy auth.json fallback and for nothing. */
+  tier: CredentialTier | null;
+}
+
+/** Map a shared-chain tier onto the kind of place it read from. */
+function credentialSourceKind(tier: CredentialTier): KnowledgeCredentialSourceKind {
+  if (tier === 'keychain') return 'keychain';
+  if (tier === 'disk' || tier === 'profile') return 'file';
+  return 'env';
+}
 
 export function normalizeKnowledgeApiOrigin(apiUrl: string): string {
   const url = new URL(apiUrl);
@@ -106,13 +153,29 @@ export function knowledgeAuthPath(env: Record<string, string | undefined> = proc
   return join(root, 'auth.json');
 }
 
+/**
+ * The service authority, through the shared ladder: `HASNA_KNOWLEDGE_API_URL`
+ * (then its unprefixed alias), the Keychain `api-url` item, the credentials
+ * file, and finally the fleet gateway. Returns the normalized base — the
+ * caller appends `/v1`, and {@link gatewayApiV1Root} renders the display form.
+ */
 export function resolveKnowledgeApiUrl(
   env: Record<string, string | undefined> = process.env,
 ): string {
-  const envApiUrl = KNOWLEDGE_API_URL_ENV_KEYS
-    .map((key) => env[key]?.trim())
-    .find((value): value is string => Boolean(value));
-  return normalizeKnowledgeApiOrigin(envApiUrl ?? DEFAULT_KNOWLEDGE_API_URL);
+  return normalizeKnowledgeApiOrigin(resolveKnowledgeApiAuthority(env).url);
+}
+
+/** The authority and the SOURCE that decided it (an env key name, a Keychain item, a path, or 'default'). */
+export function resolveKnowledgeApiAuthority(
+  env: Record<string, string | undefined> = process.env,
+): { url: string; source: string } {
+  const envKey = KNOWLEDGE_API_URL_ENV_KEYS.find((key) => Boolean(env[key]?.trim()));
+  if (envKey) return { url: env[envKey]!.trim(), source: envKey };
+  const keychain = keychainConfigValue(KNOWLEDGE_APP_SLUG, env, knowledgeKeychainTierOptions(env));
+  if (keychain) return { url: keychain.value, source: keychain.source };
+  const disk = appConfigDiskValue(KNOWLEDGE_APP_SLUG, env, KNOWLEDGE_API_URL_ENV_KEYS);
+  if (disk && !disk.unusable && disk.value.trim()) return { url: disk.value.trim(), source: disk.path };
+  return { url: DEFAULT_KNOWLEDGE_API_URL, source: 'default' };
 }
 
 export function getKnowledgeAuth(env: Record<string, string | undefined> = process.env): KnowledgeAuthConfig | null {
@@ -150,13 +213,38 @@ export function clearKnowledgeAuth(env: Record<string, string | undefined> = pro
   }
 }
 
-export function getKnowledgeApiKey(env: Record<string, string | undefined> = process.env): { apiKey: string | null; source: KnowledgeAuthStatus['source'] } {
-  const envApiKey = KNOWLEDGE_API_KEY_ENV_KEYS
-    .map((key) => env[key])
-    .find((value): value is string => Boolean(value));
-  if (envApiKey) return { apiKey: envApiKey, source: 'env' };
+/**
+ * The client credential, resolved through the SHARED chain in
+ * `@hasna/contracts/client` — argument, deliberate env pointer, macOS
+ * Keychain, `~/.hasna/knowledge/config/credentials`, then
+ * `HASNA_KNOWLEDGE_API_KEY`. This package no longer carries a second copy of
+ * that precedence.
+ *
+ * `auth.json` — what `knowledge auth login` writes — is consulted only when
+ * the shared chain answers with nothing. It is a documented LEGACY fallback
+ * kept for one release so an existing login keeps working; move the key to the
+ * Keychain item or the credentials file. A deliberate tier that cannot be
+ * honoured throws instead of falling through to it: `auth login` is not an
+ * identity the operator asked for when they named another one.
+ */
+export function getKnowledgeApiKey(
+  env: Record<string, string | undefined> = process.env,
+): KnowledgeCredentialResolution {
+  const resolved = resolveCredential(KNOWLEDGE_APP_SLUG, env, {
+    keychain: knowledgeKeychainTierOptions(env),
+  });
+  if (resolved) {
+    return {
+      apiKey: resolved.tier === 'pointer' ? null : resolved.apiKey,
+      source: credentialSourceKind(resolved.tier),
+      sourceRef: resolved.source,
+      tier: resolved.tier,
+    };
+  }
   const auth = getKnowledgeAuth(env);
-  return auth?.api_key ? { apiKey: auth.api_key, source: 'file' } : { apiKey: null, source: 'none' };
+  return auth?.api_key
+    ? { apiKey: auth.api_key, source: 'file', sourceRef: knowledgeAuthPath(env), tier: null }
+    : { apiKey: null, source: 'none', sourceRef: null, tier: null };
 }
 
 export function knowledgeAuthStatus(
@@ -164,15 +252,19 @@ export function knowledgeAuthStatus(
 ): KnowledgeAuthStatus {
   const auth = getKnowledgeAuth(env);
   const key = getKnowledgeApiKey(env);
-  const hasEnvApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.some((name) => Boolean(env[name]?.trim()));
-  const apiUrl = hasEnvApiUrl
-    ? resolveKnowledgeApiUrl(env)
-    : auth?.api_url
-      ? normalizeKnowledgeApiOrigin(auth.api_url)
-      : resolveKnowledgeApiUrl(env);
+  const authority = resolveKnowledgeApiAuthority(env);
+  // The legacy auth.json `api_url` decides only when nothing in the shared
+  // ladder does — an env var, the Keychain item and the credentials file all
+  // outrank it, exactly as they do for the key.
+  const apiUrl = authority.source === 'default' && auth?.api_url
+    ? normalizeKnowledgeApiOrigin(auth.api_url)
+    : normalizeKnowledgeApiOrigin(authority.url);
+  // A vault pointer carries no value until request time, yet a credential IS
+  // configured; reporting it as unauthenticated would be a false negative.
+  const configured = Boolean(key.apiKey) || key.tier === 'pointer';
   return {
-    authenticated: Boolean(key.apiKey),
-    configured: Boolean(key.apiKey),
+    authenticated: configured,
+    configured,
     source: key.source,
     // The auth-status `api_url` is a DISPLAY value: it reports the resolved
     // `/v1` root for the api.hasna.com gateway form, never the bare base or
@@ -180,11 +272,13 @@ export function knowledgeAuthStatus(
     // existing normalized base.
     api_url: gatewayApiV1Root(apiUrl) ?? apiUrl,
     auth_path: knowledgeAuthPath(env),
-    email: key.source === 'file' ? auth?.email ?? null : null,
-    org_id: key.source === 'file' ? auth?.org_id ?? null : null,
-    org_slug: key.source === 'file' ? auth?.org_slug ?? null : null,
-    user_id: key.source === 'file' ? auth?.user_id ?? null : null,
-    api_key_present: Boolean(key.apiKey),
+    email: key.tier === null && key.source === 'file' ? auth?.email ?? null : null,
+    org_id: key.tier === null && key.source === 'file' ? auth?.org_id ?? null : null,
+    org_slug: key.tier === null && key.source === 'file' ? auth?.org_slug ?? null : null,
+    user_id: key.tier === null && key.source === 'file' ? auth?.user_id ?? null : null,
+    api_key_present: configured,
+    source_ref: key.sourceRef,
+    tier: key.tier,
   };
 }
 
@@ -235,13 +329,14 @@ export async function probeKnowledgeAuth(
     reason: null,
     principal,
   };
-  if (!key.apiKey) return notProbed;
-  // Authenticate only against the transport reads actually use. Under the
-  // explicit HASNA_KNOWLEDGE_LOCAL opt-in the client reads the on-box store,
-  // so whoami must not suddenly send a key anywhere. Without hosted config AND
-  // without the opt-in the transport resolver fails closed (client-transport
-  // resolution throws); that rejection propagates — a key with nowhere
-  // authorized to go is exactly the state whoami must surface as an error.
+  // A vault pointer has no value here but does authenticate at request time.
+  if (!key.apiKey && key.tier !== 'pointer') return notProbed;
+  // Authenticate only against the transport reads actually use. With nothing
+  // configured anywhere the client reads the on-box store, so whoami must not
+  // suddenly send a key anywhere. A configured authority whose credential does
+  // not resolve makes the shared resolver throw, and that rejection propagates
+  // — a key with nowhere authorized to go is exactly the state whoami must
+  // surface as an error.
   if (resolveKnowledgeClientTransport(env).transport !== 'http') return notProbed;
   const store = resolveKnowledgeHttpStore(env);
   if (!store) return { ...notProbed, probed: true, reason: 'unreachable' };

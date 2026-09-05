@@ -1,3 +1,4 @@
+import { type CredentialTier } from '@hasna/contracts/client';
 export interface KnowledgeAuthConfig {
     api_key: string;
     email?: string;
@@ -50,7 +51,13 @@ export interface KnowledgeAuthStatus {
     authenticated: boolean;
     /** Alias of `authenticated`: a key is present (kept for callers that read `configured`). */
     configured: boolean;
-    source: 'env' | 'file' | 'none';
+    /**
+     * WHICH KIND of source supplied the credential — `keychain` for the macOS
+     * Keychain item, `file` for `~/.hasna/knowledge/config/credentials` (or the
+     * legacy `auth.json`), `env` for an environment tier, `none` when nothing
+     * resolved. `source_ref` names the exact one.
+     */
+    source: KnowledgeCredentialSourceKind;
     api_url: string;
     auth_path: string;
     email: string | null;
@@ -58,20 +65,64 @@ export interface KnowledgeAuthStatus {
     org_slug: string | null;
     user_id: string | null;
     api_key_present: boolean;
+    /** The exact source: an env key NAME, a Keychain item reference, or a file PATH. Never a value. */
+    source_ref: string | null;
+    /** Which tier of the shared @hasna/contracts chain answered, when one did. */
+    tier: CredentialTier | null;
 }
-export declare const DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
+/**
+ * The default authority: the fleet gateway `https://api.hasna.com/knowledge`
+ * (the client appends `/v1`). It replaced the per-app `https://knowledge.md`
+ * origin with the 2026-09-04 URL ruling — a URL never needs configuring, and a
+ * key from any tier is enough to reach the fleet.
+ */
+export declare const DEFAULT_KNOWLEDGE_API_URL: string;
+/** Which KIND of source answered the credential chain. */
+export type KnowledgeCredentialSourceKind = 'env' | 'keychain' | 'file' | 'none';
+/** The credential the shared chain resolved, described without its value. */
+export interface KnowledgeCredentialResolution {
+    /** The secret, or null when nothing resolved (or when only a vault pointer is configured). */
+    apiKey: string | null;
+    source: KnowledgeCredentialSourceKind;
+    /** An env key NAME, a Keychain item reference, or an absolute file PATH. Never a value. */
+    sourceRef: string | null;
+    /** The shared chain's tier, or null for the legacy auth.json fallback and for nothing. */
+    tier: CredentialTier | null;
+}
 export declare function normalizeKnowledgeApiOrigin(apiUrl: string): string;
 export declare function knowledgeAuthPath(env?: Record<string, string | undefined>): string;
+/**
+ * The service authority, through the shared ladder: `HASNA_KNOWLEDGE_API_URL`
+ * (then its unprefixed alias), the Keychain `api-url` item, the credentials
+ * file, and finally the fleet gateway. Returns the normalized base — the
+ * caller appends `/v1`, and {@link gatewayApiV1Root} renders the display form.
+ */
 export declare function resolveKnowledgeApiUrl(env?: Record<string, string | undefined>): string;
+/** The authority and the SOURCE that decided it (an env key name, a Keychain item, a path, or 'default'). */
+export declare function resolveKnowledgeApiAuthority(env?: Record<string, string | undefined>): {
+    url: string;
+    source: string;
+};
 export declare function getKnowledgeAuth(env?: Record<string, string | undefined>): KnowledgeAuthConfig | null;
 export declare function saveKnowledgeAuth(auth: Omit<KnowledgeAuthConfig, 'created_at'> & {
     created_at?: string;
 }, env?: Record<string, string | undefined>): KnowledgeAuthConfig;
 export declare function clearKnowledgeAuth(env?: Record<string, string | undefined>): boolean;
-export declare function getKnowledgeApiKey(env?: Record<string, string | undefined>): {
-    apiKey: string | null;
-    source: KnowledgeAuthStatus['source'];
-};
+/**
+ * The client credential, resolved through the SHARED chain in
+ * `@hasna/contracts/client` — argument, deliberate env pointer, macOS
+ * Keychain, `~/.hasna/knowledge/config/credentials`, then
+ * `HASNA_KNOWLEDGE_API_KEY`. This package no longer carries a second copy of
+ * that precedence.
+ *
+ * `auth.json` — what `knowledge auth login` writes — is consulted only when
+ * the shared chain answers with nothing. It is a documented LEGACY fallback
+ * kept for one release so an existing login keeps working; move the key to the
+ * Keychain item or the credentials file. A deliberate tier that cannot be
+ * honoured throws instead of falling through to it: `auth login` is not an
+ * identity the operator asked for when they named another one.
+ */
+export declare function getKnowledgeApiKey(env?: Record<string, string | undefined>): KnowledgeCredentialResolution;
 export declare function knowledgeAuthStatus(env?: Record<string, string | undefined>): KnowledgeAuthStatus;
 /**
  * Decode the principal a knowledge API key claims (kid/app/agent/tid). The

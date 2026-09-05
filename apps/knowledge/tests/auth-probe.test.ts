@@ -15,8 +15,9 @@
  * with a throwaway signing secret — never a real credential, never a value in
  * test output.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { dirname, join } from 'node:path';
+import { resetKnowledgeLocalModeNotice } from '../src/client-transport';
 import { fileURLToPath } from 'node:url';
 import { mintApiKey } from '@hasna/contracts/auth';
 import { probeKnowledgeAuth } from '../src/auth';
@@ -178,34 +179,35 @@ describe('probeKnowledgeAuth — live probe decoding', () => {
     }
   });
 
-  test('key under the explicit on-box opt-in: nothing is sent anywhere', async () => {
+  test('no credential in any tier: nothing is probed and nothing is sent', async () => {
     const stub = startStub(200, { items: [], total: 0 });
+    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      // knowledgeTestEnv inherits the suite-wide HASNA_KNOWLEDGE_LOCAL=1
-      // opt-in (tests/preload.ts), so the client is on-box by explicit choice
-      // and a key must not be sent.
-      const probe = await probeKnowledgeAuth(
-        knowledgeTestEnv({ HASNA_KNOWLEDGE_API_KEY: REVOKED_SHAPE_KEY, NODE_ENV: 'test' }),
-      );
-      expect(probe).toMatchObject({ probed: false, verified: false, status: null, reason: null });
-      // The principal is still surfaced so the operator sees WHICH key is inert.
-      expect(probe.principal).toEqual({ kid: MINTED_KID, app: 'knowledge', agent: MINTED_AGENT, tid: MINTED_TID });
+      // knowledgeTestEnv strips every credential tier and anchors HOME at the
+      // suite's throwaway directory, so the client is on the on-box store and
+      // whoami must not send anything anywhere.
+      const probe = await probeKnowledgeAuth(knowledgeTestEnv({ NODE_ENV: 'test' }));
+      expect(probe).toEqual(NOT_PROBED);
       expect(stub.seen).toEqual([]);
     } finally {
+      errSpy.mockRestore();
+      resetKnowledgeLocalModeNotice();
       stub.stop();
     }
   });
 
-  test('a key with no hosted API config and no explicit on-box opt-in fails closed', async () => {
+  test('a key with no API URL probes the fleet gateway, and the guard refuses the egress', async () => {
     const stub = startStub(200, { items: [], total: 0 });
     try {
-      // No process.env spread: neither HASNA_KNOWLEDGE_API_URL/KEY nor the
-      // suite's HASNA_KNOWLEDGE_LOCAL opt-in is present, so the transport
-      // resolver refuses and the probe surfaces the actionable env error
-      // instead of claiming anything was probed or served.
-      await expect(
-        probeKnowledgeAuth({ HASNA_KNOWLEDGE_API_KEY: REVOKED_SHAPE_KEY, NODE_ENV: 'test' }),
-      ).rejects.toThrow(/no hosted API configuration.*HASNA_KNOWLEDGE_API_URL.*HASNA_KNOWLEDGE_LOCAL/s);
+      // The 2026-09-04 authority ruling: a credential from any tier is enough,
+      // so this is a HOSTED process pointed at https://api.hasna.com/knowledge
+      // — not an unconfigured one. Under NODE_ENV=test the outbound guard
+      // refuses the non-loopback request, so the probe reports `unreachable`
+      // and the stub never sees it: the key still leaves no machine.
+      const probe = await probeKnowledgeAuth({ HASNA_KNOWLEDGE_API_KEY: REVOKED_SHAPE_KEY, NODE_ENV: 'test' });
+      expect(probe).toMatchObject({ probed: true, verified: false, status: null, reason: 'unreachable' });
+      // The principal is still surfaced so the operator sees WHICH key failed.
+      expect(probe.principal).toEqual({ kid: MINTED_KID, app: 'knowledge', agent: MINTED_AGENT, tid: MINTED_TID });
       expect(stub.seen).toEqual([]);
     } finally {
       stub.stop();

@@ -144,15 +144,20 @@ describe('API environment and server contracts', () => {
     expect(() => normalizeKnowledgeApiOrigin('ftp://knowledge.example.com')).toThrow('http or https');
   });
 
-  test('canonical HASNA API URL wins and the unprefixed alias is ignored', () => {
+  test('the canonical HASNA API URL wins; the alias is the documented fallback; the gateway is the default', () => {
     expect(resolveKnowledgeApiUrl({
         HASNA_KNOWLEDGE_API_URL: 'https://canonical.example.com/api/v1',
         KNOWLEDGE_API_URL: 'https://alias.example.com/api/v1',
     })).toBe('https://canonical.example.com');
 
+    // The unprefixed alias is the fleet-wide fallback tier, accepted below the
+    // canonical name rather than ignored.
     expect(resolveKnowledgeApiUrl({
       KNOWLEDGE_API_URL: 'https://alias.example.com/api/v1',
-    })).toBe('https://knowledge.md');
+    })).toBe('https://alias.example.com');
+
+    // Nothing configured: the fleet gateway, path-prefixed by app.
+    expect(resolveKnowledgeApiUrl({})).toBe('https://api.hasna.com/knowledge');
 
     expect(knowledgeAuthStatus({
       HASNA_KNOWLEDGE_API_URL: 'https://canonical.example.com/api',

@@ -4106,23 +4106,85 @@ describe('Knowledge CLI transport selection', () => {
     expect(JSON.parse(decode(result.stdout))).toMatchObject({ ok: true, transport: 'http' });
   });
 
-  test('canonical API URL absent fails closed: non-zero, actionable error, no on-box store created', () => {
+  test('an API URL with no resolvable credential fails LOUD: non-zero, actionable, no store created', () => {
+    // Hosted mode never falls back. This is incident 715712's shape: the
+    // authority is still configured, the credential is gone, and the CLI must
+    // exit non-zero rather than serve a stale on-box dataset at exit 0.
     const home = mkdtempSync(join(tmpdir(), 'knowledge-transport-'));
-    const homeEnv = { HOME: home, USERPROFILE: home };
+    const homeEnv = { HOME: home, USERPROFILE: home, HASNA_KNOWLEDGE_API_URL: API_URL };
     const result = runCliWithCleanRoute(['list', '--limit', '1', '--json'], homeEnv);
     expect(result.exitCode).not.toBe(0);
-    // The fail-closed error names the required hosted env pair and the opt-in.
     const combined = decode(result.stdout) + decode(result.stderr);
-    expect(combined).toContain('HASNA_KNOWLEDGE_API_URL');
+    // The rejection names every place the credential was looked for.
+    expect(combined).toContain('no API key could be resolved');
+    expect(combined).toContain('Keychain');
+    expect(combined).toContain(join(home, '.hasna', 'knowledge', 'config', 'credentials'));
     expect(combined).toContain('HASNA_KNOWLEDGE_API_KEY');
-    expect(combined).toContain('HASNA_KNOWLEDGE_LOCAL');
     // No false-green fallback notice may accompany the rejection.
     expect(combined).not.toContain('knowledge-local-fallback');
-    // And no on-box store file was created under the sandbox home.
+    // And nothing on-box — no workspace, no *.db — was created on the way out.
     expect(existsSync(join(home, '.hasna', 'knowledge'))).toBe(false);
   });
 
-  test('explicit HASNA_KNOWLEDGE_LOCAL=1 opt-in selects SQLite and exits zero', () => {
+  test('a credentials file under HOME selects HTTP with no environment at all', () => {
+    // Tier 4: ~/.hasna/knowledge/config/credentials, 0600, read at call time.
+    const home = mkdtempSync(join(tmpdir(), 'knowledge-transport-'));
+    const configDir = join(home, '.hasna', 'knowledge', 'config');
+    mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    const credentials = join(configDir, 'credentials');
+    writeFileSync(
+      credentials,
+      `HASNA_KNOWLEDGE_API_URL=https://knowledge.invalid\nHASNA_KNOWLEDGE_API_KEY=k_fake_test_key\n`,
+      { mode: 0o600 },
+    );
+    const result = runCliWithCleanRoute(['transport', '--json'], { HOME: home, USERPROFILE: home });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({
+      ok: true,
+      transport: 'http',
+      base_url: 'https://knowledge.invalid/v1',
+      api_url_source: credentials,
+      api_key_source: credentials,
+      api_key_tier: 'disk',
+    });
+    // The file's contents never reach the diagnostic.
+    expect(decode(result.stdout) + decode(result.stderr)).not.toContain('k_fake_test_key');
+  });
+
+  test('a key alone reaches the fleet gateway; no URL needs configuring', () => {
+    const result = runCliWithCleanRoute(['transport', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({
+      ok: true,
+      transport: 'http',
+      source: 'default',
+      base_url: 'https://api.hasna.com/knowledge/v1',
+      api_key_tier: 'env',
+      api_key_source: 'HASNA_KNOWLEDGE_API_KEY',
+    });
+  });
+
+  test('nothing configured anywhere: the on-box store, exit zero, announced once on stderr', () => {
+    // Local mode is legitimate for this package (it is an OSS local knowledge
+    // base) but never silent, and never a place a hosted process lands.
+    const result = runCliWithCleanRoute(['transport', '--json'], sandboxHome());
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({
+      ok: true,
+      transport: 'sqlite',
+      source: 'local',
+      api_key_present: false,
+      legacy_local_opt_in_present: false,
+    });
+    const err = decode(result.stderr);
+    expect(err).toContain('using the on-box store (local mode)');
+    expect(err.match(/using the on-box store \(local mode\)/g)).toHaveLength(1);
+  });
+
+  test('the retired HASNA_KNOWLEDGE_LOCAL opt-in is accepted, ignored, and reported', () => {
     const result = runCliWithCleanRoute(['transport', '--json'], {
       ...sandboxHome(),
       HASNA_KNOWLEDGE_LOCAL: '1',
@@ -4131,9 +4193,10 @@ describe('Knowledge CLI transport selection', () => {
     expect(JSON.parse(decode(result.stdout))).toMatchObject({
       ok: true,
       transport: 'sqlite',
-      source: 'HASNA_KNOWLEDGE_LOCAL',
-      local_opt_in_present: true,
+      source: 'local',
+      legacy_local_opt_in_present: true,
     });
+    expect(decode(result.stdout) + decode(result.stderr)).toContain('HASNA_KNOWLEDGE_LOCAL');
   });
 
   test('retired selector fails loudly and names both replacements', () => {

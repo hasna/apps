@@ -7,11 +7,12 @@
 import { defaultStorePath, ensureStore, importLegacyGlobalStore, itemMatchesSearch, type KnowledgeItem } from './store';
 import { resolveItemStore, type ItemListDirection, type ItemListSort, type ItemStore } from './item-store';
 import { usesKnowledgeHttpTransport, KnowledgeVersionConflictError } from './http-store';
+import { KNOWLEDGE_APP_SLUG, knowledgeKeychainTierOptions } from './client-transport';
 import { diffEntries, formatEntryDiff, redactEntryDiff, type EntrySnapshot } from './entry-diff';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
-  KNOWLEDGE_API_URL_ENV,
   KNOWLEDGE_API_URL_ENV_KEYS,
+  KNOWLEDGE_DEFAULT_API_URL,
   assertNoRetiredKnowledgeStorageSelector,
   resolveKnowledgeClientTransport,
   type KnowledgeClientTransportReport,
@@ -602,9 +603,9 @@ function printCommandHelp(command: string): void {
   if (command === 'project-resources') { console.log('Usage: knowledge project-resources <project-id> [--kind <project|collection|item|taxonomy>]... [--limit <n>] [--cursor <cursor>] [--all] [--json]'); return; }
   if (command === 'project-resource') { console.log('Usage: knowledge project-resource <project-id> <project|collection|item|taxonomy> <resource-id> [--json]'); return; }
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--verbose] [--json]'); return; }
-  if (command === 'transport') { console.log(`Usage: knowledge transport [--json]\n  Reports whether this process uses the on-box SQLite store or the server HTTP API.\n  ${KNOWLEDGE_API_URL_ENV_KEYS[0]} plus ${KNOWLEDGE_API_KEY_ENV_KEYS[0]} selects HTTP; the on-box store is served only under the explicit opt-in HASNA_KNOWLEDGE_LOCAL=1.\n  With neither, the CLI fails closed instead of serving local data.\n  Reads environment names and presence only; it never prints credential values.`); return; }
+  if (command === 'transport') { console.log(`Usage: knowledge transport [--json]\n  Reports whether this process uses the on-box SQLite store or the server HTTP API, and WHICH tier decided.\n  A credential from any tier of the shared @hasna/contracts chain selects HTTP: --api-key, ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}_REF, the macOS Keychain item hasna.credentials.knowledge.api-key, ~/.hasna/knowledge/config/credentials, then ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}.\n  The authority is ${KNOWLEDGE_API_URL_ENV_KEYS[0]}, the Keychain api-url item, the credentials file, else ${KNOWLEDGE_DEFAULT_API_URL}.\n  A configured authority with no resolvable credential exits non-zero; with nothing configured at all the on-box store applies and says so.\n  Reads source NAMES and presence only; it never prints credential values.`); return; }
   if (command === 'guarded') { console.log('Usage:\n  knowledge guarded capabilities [--json]\n  knowledge guarded execute-descriptor --ipc [--json]\n\n  execute-descriptor is an internal package-owned worker. Private requests and results use the\n  runtime-owned child-process IPC channel, never argv, stdin, environment variables, files, stdout,\n  or stderr. Direct shell invocation has no IPC channel and fails closed. Use the exported opaque-\n  descriptor helpers rather than invoking this worker directly from a shell.'); return; }
-  if (command === 'setup') { console.log('Usage: knowledge setup [--canonical-example] [--scope local|global|project] [--json]\nClient routing: HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY selects the server API; the on-box store requires HASNA_KNOWLEDGE_LOCAL=1. With neither, the CLI fails closed.'); return; }
+  if (command === 'setup') { console.log('Usage: knowledge setup [--canonical-example] [--scope local|global|project] [--json]\nClient routing: any resolved credential (Keychain item hasna.credentials.knowledge.api-key, ~/.hasna/knowledge/config/credentials, or HASNA_KNOWLEDGE_API_KEY) selects the server API at HASNA_KNOWLEDGE_API_URL, else the fleet gateway. With nothing configured anywhere the on-box store applies; a configured authority without a credential fails closed.'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path|migrate-project-path|merge-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]\n       migrate-project-path moves <cwd>/.hasna/knowledge into ~/.hasna/knowledge/projects/<key> (canonical); dry-run by default'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--verbose] [--json]'); return; }
@@ -671,10 +672,21 @@ function compactObjectFallback(data: unknown): string {
  */
 function formatTransport(report: KnowledgeClientTransportReport): string {
   const target = report.transport === 'http' ? 'HTTP /v1 API' : 'on-box SQLite';
-  const chose = report.source === KNOWLEDGE_API_URL_ENV
-    ? 'selected by HASNA_KNOWLEDGE_API_URL presence'
-    : 'selected by explicit on-box opt-in HASNA_KNOWLEDGE_LOCAL=1';
-  const lines = [`Knowledge transport: ${report.transport} (${target})`, `  ${chose}`];
+  const lines = [`Knowledge transport: ${report.transport} (${target})`];
+  if (report.transport === 'http') {
+    lines.push(`  Authority: ${report.base_url} (from ${report.api_url_source})`);
+    lines.push(`  Credential: tier ${report.api_key_tier} (from ${report.api_key_source})`);
+  } else {
+    lines.push('  No credential resolved in any tier — local mode.');
+    if (report.credential_file_candidates[0]) {
+      lines.push(`  Credential file looked for at: ${report.credential_file_candidates[0]}`);
+    }
+    lines.push(`  Keychain tier: ${report.keychain_tier_enabled ? 'consulted' : 'not consulted here'}.`);
+  }
+  if (report.legacy_local_opt_in_present) {
+    lines.push('  HASNA_KNOWLEDGE_LOCAL is set and IGNORED (retired): routing follows the credential chain.');
+  }
+  if (report.warning) lines.push(`  Note: ${report.warning}`);
   if (report.network_guard_active) {
     lines.push('  Outbound guard: ACTIVE (NODE_ENV=test) — non-loopback requests are refused.');
   }
@@ -1159,12 +1171,13 @@ async function run(argv: string[]): Promise<void> {
       storePath = defaultStorePath();
     }
   }
-  // Single knowledge-item Store abstraction. The canonical API URL and key
-  // select the server HTTP API; the on-box store is served only under the
-  // explicit HASNA_KNOWLEDGE_LOCAL=1 opt-in or an explicit --store override.
-  // With no hosted config and no explicit on-box choice this resolution
-  // throws and the CLI exits non-zero (fail closed). Every item command below
-  // routes through `itemStore` — never the JSON file or HTTP client directly.
+  // Single knowledge-item Store abstraction. A credential resolved through the
+  // shared @hasna/contracts chain selects the server HTTP API; the on-box
+  // store applies when nothing resolves anywhere, or under an explicit
+  // --store override. A configured authority whose credential does not
+  // resolve makes this throw and the CLI exit non-zero (hosted fails loud).
+  // Every item command below routes through `itemStore` — never the JSON file
+  // or HTTP client directly.
   const itemStore: ItemStore = resolveItemStore({ storePath, storePathOverridden });
 
   // Natural-language shorthand: when invoked as the `knowledge` bin, a prompt is
@@ -1544,7 +1557,10 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     if (action === 'login') {
-      const apiKey = flags.apiKey ?? resolveClientCredential('knowledge', process.env)?.apiKey;
+      const apiKey = flags.apiKey
+        ?? resolveClientCredential(KNOWLEDGE_APP_SLUG, process.env, {
+          keychain: knowledgeKeychainTierOptions(process.env),
+        })?.apiKey;
       if (!apiKey) throw new Error('Usage: knowledge auth login --api-key <key> [--email <email>]');
       const auth = service.saveAuth({
         apiKey,

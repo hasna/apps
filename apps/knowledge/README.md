@@ -408,7 +408,7 @@ knowledge sync push --peer-workspace /path/to/peer/repo --scope project --json
 knowledge sync dry-run --machine linux-node-a --peer-workspace /workspace/knowledge --scope project --json
 
 # Inspect environment-selected client transport and remote contracts
-HASNA_KNOWLEDGE_API_URL=https://knowledge.md HASNA_KNOWLEDGE_API_KEY='<api-key>' knowledge transport --json
+HASNA_KNOWLEDGE_API_KEY='<api-key>' knowledge transport --json   # gateway default; no URL needed
 knowledge auth whoami --scope project --json
 knowledge remote contracts --scope project --json
 
@@ -755,16 +755,28 @@ every path and the loaded config.
 ```bash
 knowledge transport [--json]
 ```
-Report whether this process uses the on-box SQLite store or the HTTP `/v1` API.
-`HASNA_KNOWLEDGE_API_URL` plus `HASNA_KNOWLEDGE_API_KEY` selects HTTP.
-Without hosted API configuration, the CLI FAILS CLOSED rather than silently
-serving the on-box store: the on-box SQLite store is used only under the
-explicit opt-in `HASNA_KNOWLEDGE_LOCAL=1`. The unprefixed URL alias is not
-recognized.
+Report whether this process uses the on-box SQLite store or the HTTP `/v1` API,
+and — the part that matters when something is wrong — WHICH tier decided.
 
-The command reads the environment only: no store is opened, no config file is
-read, and no request is made, so it answers correctly on a machine with no
-config and no network. Environment variable **names** are printed, never values.
+Routing follows the credential, not a mode switch: a key resolved from any tier
+of the shared `@hasna/contracts` chain selects HTTP, against
+`HASNA_KNOWLEDGE_API_URL` or, when nothing configures one, the fleet gateway
+`https://api.hasna.com/knowledge` (the client appends `/v1`). See
+[Credential resolution](#credential-resolution) for the full ladder.
+
+* **Configured authority, no resolvable credential → the CLI FAILS CLOSED**
+  (non-zero, naming every place it looked). It never drops onto the on-box
+  store: serving stale local rows at exit 0 while authentication is broken is
+  the incident this closes.
+* **Nothing configured anywhere → the on-box store**, and one line on stderr
+  saying so. Local is a real mode for this package; it is never a silent one.
+* `HASNA_KNOWLEDGE_LOCAL` is retired. It is accepted and ignored for one
+  release, and reported as ignored, then deleted.
+
+The command opens no store, reads no config file and makes no request, so it
+answers correctly on a machine with no config and no network. It prints source
+**names** — an env key name, a Keychain item reference, a file path — never
+values.
 
 While `NODE_ENV=test`, every non-loopback outbound request from this package is
 refused before a socket is opened; `transport` reports that as
@@ -989,11 +1001,60 @@ reason and the failing key's kid. A negative verdict **exits non-zero** and
 carries `ok: false`, in `--json` too — `knowledge auth whoami --json | jq -e .ok`
 is a usable health gate (issue #1587).
 
-The OSS package stays on-box by default, while `HASNA_KNOWLEDGE_API_URL` and
-`HASNA_KNOWLEDGE_API_KEY` select the HTTP client boundary. Credentials are
-stored locally in `~/.hasna/knowledge/auth.json` or supplied by env vars.
-`remote contracts` prints the typed registry/search/ask/build/sync/status/logs
-and artifact API contract that a future SaaS wrapper can implement.
+The OSS package stays on-box while no credential resolves; any resolved
+credential selects the HTTP client boundary (see
+[Credential resolution](#credential-resolution)). `auth login --api-key` writes
+`~/.hasna/knowledge/auth.json`, which is now a LEGACY last resort consulted only
+when the shared chain finds nothing — put new credentials in the Keychain item
+or `~/.hasna/knowledge/config/credentials` instead; `auth.json` is removed in a
+following release. `remote contracts` prints the typed
+registry/search/ask/build/sync/status/logs and artifact API contract that a
+future SaaS wrapper can implement.
+
+<a id="credential-resolution"></a>
+### Credential resolution
+
+`knowledge` does not resolve credentials itself. The CLI, the MCP server and the
+`./sdk` export all call the one client seam in `@hasna/contracts`, which is
+re-read on EVERY call — so a rotated key heals a long-running process instead of
+waiting for it to restart. Precedence, highest first:
+
+| # | Tier | Where |
+|---|------|-------|
+| 1 | explicit argument | `--api-key`, `--profile` |
+| 2 | deliberate env pointer | `HASNA_KNOWLEDGE_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_KNOWLEDGE_API_KEY_REF` (a secrets-vault ITEM KEY, never a value) |
+| 3 | macOS Keychain | generic-password item `hasna.credentials.knowledge.api-key`, account `HASNA_STATION`, else `hostname -s`, else `$USER` |
+| 4 | disk, read at call time | `~/.hasna/knowledge/config/credentials`, mode 0400/0600 (`HASNA_HOME` moves the root; `HASNA_CONFIG_HOME` moves the config root; a `--profile` reads `credentials-<profile>` beside it) |
+| 5 | process env | `HASNA_KNOWLEDGE_API_KEY` — a legitimate tier, deliberately BELOW disk, with no deprecation notice |
+
+Tier 5 sits below disk because a shell `export` is a snapshot taken at process
+start while the credential is mutable state: when both exist, a rotated on-disk
+key beats a stale export. A station wrapper that injects the variable per child
+process is unaffected — it re-reads its store on every invocation.
+
+A tier the operator selected ON PURPOSE (1, 2) never falls through: an override
+that is blank, a vault pointer that cannot be reached, or a Keychain item that
+exists but cannot be read is a loud error, because continuing would authenticate
+as somebody they did not name.
+
+The service authority follows the same shape: `HASNA_KNOWLEDGE_API_URL` → the
+Keychain `api-url` item → the credentials file → `https://api.hasna.com/knowledge`.
+A URL never needs configuring; a credential from any tier is enough to reach the
+fleet. The unprefixed `KNOWLEDGE_API_URL` / `KNOWLEDGE_API_KEY` spellings are
+accepted as a silent alias fallback below the canonical names.
+
+Never consulted, and never restored: `~/.hasna/fleet-env/`, `~/.hasna/cloud/`,
+`~/.config/hasna/`, `$XDG_CONFIG_HOME`, and any `*-cloud.env` file. There is no
+`*_MODE` or `*_STORAGE_MODE` switch: routing is decided by what resolves.
+
+A credential file is:
+
+```bash
+install -m 700 -d ~/.hasna/knowledge/config
+printf 'HASNA_KNOWLEDGE_API_KEY=%s\n' "<api-key>" > ~/.hasna/knowledge/config/credentials
+chmod 600 ~/.hasna/knowledge/config/credentials
+knowledge transport --json     # says which tier answered; never prints a value
+```
 
 ### db
 ```bash

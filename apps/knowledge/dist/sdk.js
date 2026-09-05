@@ -4836,9 +4836,21 @@ import {
   createHasnaStorageClient
 } from "@hasna/contracts/client/storage";
 import {
-  createHasnaHttpTransport,
+  createClientTransport,
   CREDENTIAL_PROFILE_ENV_KEY,
-  credentialOverrideEnvKey
+  credentialOverrideEnvKey,
+  credentialPointerEnvKey
+} from "@hasna/contracts/client";
+
+// src/client-transport.ts
+import {
+  appConfigDiskValue,
+  ClientTransportConfigurationError,
+  clientTransportEnvKeys,
+  credentialDiskSources,
+  defaultFleetGatewayBaseUrl,
+  keychainConfigValue,
+  resolveClientTransport
 } from "@hasna/contracts/client";
 
 // src/net-guard.ts
@@ -4902,7 +4914,7 @@ function assertOutboundRequestAllowed(input, env = process.env) {
   }
   if (isLoopbackHostname(url.hostname))
     return;
-  throw new KnowledgeNetworkGuardError(`knowledge: refused a non-loopback ${url.protocol.replace(":", "")} request while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). This process selected the HTTP API under test, which means a " + "read or write was about to leave the machine and reach the live store. Set " + "HASNA_KNOWLEDGE_LOCAL=1 to select the on-box store under test, or point HASNA_KNOWLEDGE_API_URL " + "at 127.0.0.1 for a hermetic test.", { scheme: url.protocol.replace(":", ""), port: url.port });
+  throw new KnowledgeNetworkGuardError(`knowledge: refused a non-loopback ${url.protocol.replace(":", "")} request while ${NETWORK_GUARD_ENV}=test ` + "(target host withheld on purpose). This process selected the HTTP API under test, which means a " + "read or write was about to leave the machine and reach the live store. Clear every credential tier " + "from the test environment (the suite preload does this, and the Keychain tier is off while this " + "guard is armed) to stay on the on-box store, or point HASNA_KNOWLEDGE_API_URL at 127.0.0.1 for a " + "hermetic test.", { scheme: url.protocol.replace(":", ""), port: url.port });
 }
 var REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 var MAX_GUARDED_REDIRECTS = 5;
@@ -4949,22 +4961,29 @@ async function guardedFetch(input, init) {
 
 // src/client-transport.ts
 var KNOWLEDGE_APP_SLUG = "knowledge";
-var KNOWLEDGE_API_URL_ENV = "HASNA_KNOWLEDGE_API_URL";
-var KNOWLEDGE_API_KEY_ENV = "HASNA_KNOWLEDGE_API_KEY";
+var ENV_KEYS = clientTransportEnvKeys(KNOWLEDGE_APP_SLUG);
+var KNOWLEDGE_API_URL_ENV_KEYS = Object.freeze([...ENV_KEYS.apiUrlKeys]);
+var KNOWLEDGE_API_KEY_ENV_KEYS = Object.freeze([...ENV_KEYS.apiKeyKeys]);
+var KNOWLEDGE_API_URL_ENV = KNOWLEDGE_API_URL_ENV_KEYS[0];
+var KNOWLEDGE_API_KEY_ENV = KNOWLEDGE_API_KEY_ENV_KEYS[0];
 var KNOWLEDGE_DATABASE_URL_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
-var KNOWLEDGE_LOCAL_ENV = "HASNA_KNOWLEDGE_LOCAL";
-var KNOWLEDGE_API_URL_ENV_KEYS = [KNOWLEDGE_API_URL_ENV];
-var KNOWLEDGE_API_KEY_ENV_KEYS = [KNOWLEDGE_API_KEY_ENV];
+var KNOWLEDGE_DEFAULT_API_URL = defaultFleetGatewayBaseUrl(KNOWLEDGE_APP_SLUG);
 var RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS = [
   "HASNA_KNOWLEDGE_STORAGE_MODE",
   "HASNA_KNOWLEDGE_MODE",
   "KNOWLEDGE_STORAGE_MODE",
   "KNOWLEDGE_MODE"
 ];
-function isPresent(env, key) {
-  if (!Object.prototype.hasOwnProperty.call(env, key))
-    return false;
-  return (env[key] ?? "").trim().length > 0;
+var RETIRED_KNOWLEDGE_LOCAL_ENV = "HASNA_KNOWLEDGE_LOCAL";
+
+class RetiredKnowledgeStorageSelectorError extends Error {
+  envKey;
+  code = "retired_knowledge_storage_selector";
+  constructor(envKey) {
+    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients resolve their credential through @hasna/contracts \u2014 an explicit --api-key, ` + `${KNOWLEDGE_API_KEY_ENV}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV}_REF, the macOS Keychain ` + `item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key, ~/.hasna/${KNOWLEDGE_APP_SLUG}/config/credentials, ` + `then ${KNOWLEDGE_API_KEY_ENV} \u2014 and reach ${KNOWLEDGE_DEFAULT_API_URL} unless ${KNOWLEDGE_API_URL_ENV} ` + `(or the Keychain api-url item, or the credentials file) names another authority. ` + `With no credential and no authority anywhere, the on-box store applies. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
+    this.envKey = envKey;
+    this.name = "RetiredKnowledgeStorageSelectorError";
+  }
 }
 function firstDefined(env, keys) {
   for (const key of keys) {
@@ -4973,40 +4992,104 @@ function firstDefined(env, keys) {
   }
   return null;
 }
-
-class RetiredKnowledgeStorageSelectorError extends Error {
-  envKey;
-  code = "retired_knowledge_storage_selector";
-  constructor(envKey) {
-    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients select the HTTP API when ${KNOWLEDGE_API_URL_ENV} and ${KNOWLEDGE_API_KEY_ENV} are set, ` + `or the on-box store under the explicit opt-in ${KNOWLEDGE_LOCAL_ENV}=1; ` + `with neither, they fail closed. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
-    this.envKey = envKey;
-    this.name = "RetiredKnowledgeStorageSelectorError";
-  }
-}
 function assertNoRetiredKnowledgeStorageSelector(env = process.env) {
   const retired = firstDefined(env, RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS);
   if (retired)
     throw new RetiredKnowledgeStorageSelectorError(retired);
 }
-function resolveKnowledgeClientTransport(env = process.env) {
-  assertNoRetiredKnowledgeStorageSelector(env);
-  const apiUrlPresent = isPresent(env, KNOWLEDGE_API_URL_ENV);
-  const apiKeyPresent = isPresent(env, KNOWLEDGE_API_KEY_ENV);
-  const localOptInPresent = isPresent(env, KNOWLEDGE_LOCAL_ENV);
-  if (apiUrlPresent && !apiKeyPresent) {
-    throw new Error(`knowledge: ${KNOWLEDGE_API_URL_ENV} selects the HTTP API, but ${KNOWLEDGE_API_KEY_ENV} is missing. ` + `Set ${KNOWLEDGE_API_KEY_ENV}, or unset ${KNOWLEDGE_API_URL_ENV} and set ${KNOWLEDGE_LOCAL_ENV}=1 ` + `to explicitly use the on-box store.`);
-  }
-  if (!apiUrlPresent && !localOptInPresent) {
-    throw new Error(`knowledge: no hosted API configuration and no explicit on-box choice. ` + `Set ${KNOWLEDGE_API_URL_ENV} and ${KNOWLEDGE_API_KEY_ENV} to use the server API, ` + `or set ${KNOWLEDGE_LOCAL_ENV}=1 to explicitly use the on-box store. ` + `Refusing to serve the on-box store without an explicit choice.`);
-  }
+function knowledgeKeychainTierOptions(env = process.env) {
+  return isNetworkGuardActive(env) ? { enabled: false } : {};
+}
+function credentialOptions(env, options) {
   return {
-    transport: apiUrlPresent ? "http" : "sqlite",
-    source: apiUrlPresent ? KNOWLEDGE_API_URL_ENV : KNOWLEDGE_LOCAL_ENV,
-    api_url_present: apiUrlPresent,
-    api_key_present: apiKeyPresent,
-    local_opt_in_present: localOptInPresent,
+    ...options.apiKey !== undefined ? { apiKey: options.apiKey } : {},
+    ...options.profile !== undefined ? { profile: options.profile } : {},
+    keychain: options.keychain ?? knowledgeKeychainTierOptions(env)
+  };
+}
+function configuredAuthoritySource(env, keychain) {
+  const envKey = ENV_KEYS.apiUrlKeys.find((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined);
+  if (envKey)
+    return envKey;
+  const keychainHit = keychainConfigValue(KNOWLEDGE_APP_SLUG, env, keychain);
+  if (keychainHit)
+    return keychainHit.source;
+  const diskHit = appConfigDiskValue(KNOWLEDGE_APP_SLUG, env, ENV_KEYS.apiUrlKeys);
+  return diskHit ? diskHit.path : null;
+}
+var localModeAnnounced = false;
+var legacyOptInAnnounced = false;
+function resetKnowledgeLocalModeNotice() {
+  localModeAnnounced = false;
+  legacyOptInAnnounced = false;
+}
+function announceRetiredLocalOptIn() {
+  if (legacyOptInAnnounced)
+    return;
+  legacyOptInAnnounced = true;
+  console.error(`knowledge: ${RETIRED_KNOWLEDGE_LOCAL_ENV} is set and IGNORED (retired). Routing follows the credential ` + `chain now: a credential from any tier selects the server API, and the on-box store applies when none ` + `resolves. Unset it; it is deleted in the next minor.`);
+}
+function announceLocalMode(env) {
+  if (localModeAnnounced)
+    return;
+  localModeAnnounced = true;
+  const candidates = credentialDiskSources(KNOWLEDGE_APP_SLUG, env);
+  console.error(`knowledge: no fleet credential resolved \u2014 using the on-box store (local mode). ` + `To use the fleet, put the key in the Keychain item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key` + `${candidates[0] ? ` or in ${candidates[0]}` : ""}, or set ${KNOWLEDGE_API_KEY_ENV}.`);
+}
+function resolveKnowledgeClientTransport(env = process.env, options = {}) {
+  assertNoRetiredKnowledgeStorageSelector(env);
+  const keychain = options.keychain ?? knowledgeKeychainTierOptions(env);
+  const legacyLocalOptIn = Object.prototype.hasOwnProperty.call(env, RETIRED_KNOWLEDGE_LOCAL_ENV) && env[RETIRED_KNOWLEDGE_LOCAL_ENV] !== undefined;
+  if (legacyLocalOptIn)
+    announceRetiredLocalOptIn();
+  const base = {
+    credential_file_candidates: Object.freeze(credentialDiskSources(KNOWLEDGE_APP_SLUG, env)),
+    keychain_tier_enabled: keychainTierLive(env, keychain),
+    legacy_local_opt_in_present: legacyLocalOptIn,
     network_guard_active: isNetworkGuardActive(env)
   };
+  try {
+    const resolution = resolveClientTransport(KNOWLEDGE_APP_SLUG, env, {
+      credentials: credentialOptions(env, { ...options, keychain })
+    });
+    return {
+      transport: "http",
+      source: resolution.transportSource,
+      base_url: resolution.baseUrl,
+      api_url_present: resolution.apiUrlSource !== null && resolution.apiUrlSource !== "default",
+      api_url_source: resolution.apiUrlSource,
+      api_key_present: resolution.apiKeyPresent,
+      api_key_source: resolution.apiKeySource,
+      api_key_tier: resolution.apiKeyTier,
+      warning: resolution.warning,
+      ...base
+    };
+  } catch (error) {
+    if (!(error instanceof ClientTransportConfigurationError))
+      throw error;
+    if (configuredAuthoritySource(env, keychain))
+      throw error;
+    announceLocalMode(env);
+    return {
+      transport: "sqlite",
+      source: "local",
+      base_url: null,
+      api_url_present: false,
+      api_url_source: null,
+      api_key_present: false,
+      api_key_source: null,
+      api_key_tier: null,
+      warning: null,
+      ...base
+    };
+  }
+}
+function keychainTierLive(env, options) {
+  if ((options.platform ?? process.platform) !== "darwin")
+    return false;
+  if (options.enabled !== undefined)
+    return options.enabled;
+  return options.run !== undefined || env === process.env;
 }
 
 // src/query-contract.ts
@@ -5224,23 +5307,18 @@ function guardedTransportEnv(env) {
   delete guardedEnv.USERPROFILE;
   delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY];
   delete guardedEnv[credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG)];
+  delete guardedEnv[credentialPointerEnvKey(KNOWLEDGE_APP_SLUG)];
   return guardedEnv;
 }
 function resolveKnowledgeHttpClient(env, options = {}) {
-  if (resolveKnowledgeClientTransport(env).transport !== "http")
-    return null;
   const transportEnv = options.guarded ? guardedTransportEnv(env) : env;
-  const apiUrl = transportEnv[KNOWLEDGE_API_URL_ENV]?.trim();
-  const apiKey = transportEnv[KNOWLEDGE_API_KEY_ENV]?.trim();
-  if (!apiUrl || !apiKey) {
-    throw new Error("knowledge HTTP transport configuration changed during resolution");
-  }
-  return createHasnaStorageClient(KNOWLEDGE_APP_SLUG, createHasnaHttpTransport({
-    name: KNOWLEDGE_APP_SLUG,
-    baseUrl: apiUrl,
-    apiKey,
-    ...transportOverrides(transportEnv)
-  }));
+  if (resolveKnowledgeClientTransport(transportEnv).transport !== "http")
+    return null;
+  const { client } = createClientTransport(KNOWLEDGE_APP_SLUG, transportEnv, {
+    ...transportOverrides(transportEnv),
+    credentials: { keychain: knowledgeKeychainTierOptions(transportEnv) }
+  });
+  return createHasnaStorageClient(KNOWLEDGE_APP_SLUG, client);
 }
 function usesKnowledgeHttpTransport(env = process.env) {
   return resolveKnowledgeClientTransport(env).transport === "http";
@@ -7833,7 +7911,12 @@ async function ingestAppWikiSourceRef(options) {
 // src/auth.ts
 import { existsSync as existsSync7, mkdirSync as mkdirSync3, readFileSync as readFileSync5, unlinkSync, writeFileSync as writeFileSync3 } from "fs";
 import { dirname as dirname3, join as join5 } from "path";
-import { HasnaHttpError } from "@hasna/contracts/client";
+import {
+  appConfigDiskValue as appConfigDiskValue2,
+  HasnaHttpError,
+  keychainConfigValue as keychainConfigValue2,
+  resolveCredential
+} from "@hasna/contracts/client";
 import { ownAgentClaim, ownTenantId, parseApiKey } from "@hasna/contracts/auth";
 
 // src/api-display-url.ts
@@ -7864,7 +7947,14 @@ function gatewayApiV1Root(raw) {
 }
 
 // src/auth.ts
-var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.md";
+var DEFAULT_KNOWLEDGE_API_URL = KNOWLEDGE_DEFAULT_API_URL;
+function credentialSourceKind(tier) {
+  if (tier === "keychain")
+    return "keychain";
+  if (tier === "disk" || tier === "profile")
+    return "file";
+  return "env";
+}
 function normalizeKnowledgeApiOrigin(apiUrl) {
   const url = new URL(apiUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -7887,8 +7977,19 @@ function knowledgeAuthPath(env = process.env) {
   return join5(root, "auth.json");
 }
 function resolveKnowledgeApiUrl(env = process.env) {
-  const envApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.map((key) => env[key]?.trim()).find((value) => Boolean(value));
-  return normalizeKnowledgeApiOrigin(envApiUrl ?? DEFAULT_KNOWLEDGE_API_URL);
+  return normalizeKnowledgeApiOrigin(resolveKnowledgeApiAuthority(env).url);
+}
+function resolveKnowledgeApiAuthority(env = process.env) {
+  const envKey = KNOWLEDGE_API_URL_ENV_KEYS.find((key) => Boolean(env[key]?.trim()));
+  if (envKey)
+    return { url: env[envKey].trim(), source: envKey };
+  const keychain = keychainConfigValue2(KNOWLEDGE_APP_SLUG, env, knowledgeKeychainTierOptions(env));
+  if (keychain)
+    return { url: keychain.value, source: keychain.source };
+  const disk = appConfigDiskValue2(KNOWLEDGE_APP_SLUG, env, KNOWLEDGE_API_URL_ENV_KEYS);
+  if (disk && !disk.unusable && disk.value.trim())
+    return { url: disk.value.trim(), source: disk.path };
+  return { url: DEFAULT_KNOWLEDGE_API_URL, source: "default" };
 }
 function getKnowledgeAuth(env = process.env) {
   try {
@@ -7922,28 +8023,39 @@ function clearKnowledgeAuth(env = process.env) {
   }
 }
 function getKnowledgeApiKey(env = process.env) {
-  const envApiKey = KNOWLEDGE_API_KEY_ENV_KEYS.map((key) => env[key]).find((value) => Boolean(value));
-  if (envApiKey)
-    return { apiKey: envApiKey, source: "env" };
+  const resolved = resolveCredential(KNOWLEDGE_APP_SLUG, env, {
+    keychain: knowledgeKeychainTierOptions(env)
+  });
+  if (resolved) {
+    return {
+      apiKey: resolved.tier === "pointer" ? null : resolved.apiKey,
+      source: credentialSourceKind(resolved.tier),
+      sourceRef: resolved.source,
+      tier: resolved.tier
+    };
+  }
   const auth = getKnowledgeAuth(env);
-  return auth?.api_key ? { apiKey: auth.api_key, source: "file" } : { apiKey: null, source: "none" };
+  return auth?.api_key ? { apiKey: auth.api_key, source: "file", sourceRef: knowledgeAuthPath(env), tier: null } : { apiKey: null, source: "none", sourceRef: null, tier: null };
 }
 function knowledgeAuthStatus(env = process.env) {
   const auth = getKnowledgeAuth(env);
   const key = getKnowledgeApiKey(env);
-  const hasEnvApiUrl = KNOWLEDGE_API_URL_ENV_KEYS.some((name) => Boolean(env[name]?.trim()));
-  const apiUrl = hasEnvApiUrl ? resolveKnowledgeApiUrl(env) : auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : resolveKnowledgeApiUrl(env);
+  const authority = resolveKnowledgeApiAuthority(env);
+  const apiUrl = authority.source === "default" && auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : normalizeKnowledgeApiOrigin(authority.url);
+  const configured = Boolean(key.apiKey) || key.tier === "pointer";
   return {
-    authenticated: Boolean(key.apiKey),
-    configured: Boolean(key.apiKey),
+    authenticated: configured,
+    configured,
     source: key.source,
     api_url: gatewayApiV1Root(apiUrl) ?? apiUrl,
     auth_path: knowledgeAuthPath(env),
-    email: key.source === "file" ? auth?.email ?? null : null,
-    org_id: key.source === "file" ? auth?.org_id ?? null : null,
-    org_slug: key.source === "file" ? auth?.org_slug ?? null : null,
-    user_id: key.source === "file" ? auth?.user_id ?? null : null,
-    api_key_present: Boolean(key.apiKey)
+    email: key.tier === null && key.source === "file" ? auth?.email ?? null : null,
+    org_id: key.tier === null && key.source === "file" ? auth?.org_id ?? null : null,
+    org_slug: key.tier === null && key.source === "file" ? auth?.org_slug ?? null : null,
+    user_id: key.tier === null && key.source === "file" ? auth?.user_id ?? null : null,
+    api_key_present: configured,
+    source_ref: key.sourceRef,
+    tier: key.tier
   };
 }
 function knowledgeApiKeyPrincipal(apiKey) {
@@ -7967,7 +8079,7 @@ async function probeKnowledgeAuth(env = process.env) {
     reason: null,
     principal
   };
-  if (!key.apiKey)
+  if (!key.apiKey && key.tier !== "pointer")
     return notProbed;
   if (resolveKnowledgeClientTransport(env).transport !== "http")
     return notProbed;
@@ -19602,7 +19714,7 @@ var package_default = {
     "@ai-sdk/openai": "^3.0.68",
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/credential-providers": "^3.1063.0",
-    "@hasna/contracts": "0.14.2",
+    "@hasna/contracts": "1.0.1",
     "@hasna/events": "0.1.14",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/json-schema": "^7.0.15",
