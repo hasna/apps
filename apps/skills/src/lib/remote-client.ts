@@ -319,8 +319,20 @@ export class RemoteSkillsClient {
     if (files.length && !(await this.getCapabilities()).capabilities.includes("runs.uploads")) throw new Error("The configured server does not support input uploads");
     const run = await this.submitQuotedRun(slug, input, args, { ...approval, inputFiles });
     if (run.error || !run.id || !files.length) return run;
+    // A replay may already have advanced beyond the upload phase. Never upload
+    // again or cancel completed work just because its upload route now refuses.
+    const pastUploads = (status: unknown) => typeof status === "string" && [
+      "running", "completed", "failed", "cancelled", "expired", "pending_approval", "approved", "waiting",
+    ].includes(status);
+    if (pastUploads(run.status)) return run;
     try { await this.uploadRunFiles(run.id, files); }
     catch {
+      // Another retry can finish uploads and start the worker after admission
+      // returned queued. Re-read before requesting cancellation of that run.
+      try {
+        const current = await this.getRun(run.id);
+        if (current && pastUploads(current.status)) return current;
+      } catch {}
       let cancellationRequested = false;
       try { await this.cancelRun(run.id); cancellationRequested = true; } catch {}
       throw new Error(`Input upload failed for run ${run.id}; ${cancellationRequested ? "cancellation requested" : "check its status and cancel the run"}`);

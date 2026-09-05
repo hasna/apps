@@ -7,7 +7,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 useDefaultTestTimeout();
 const bytes = new TextEncoder().encode("verified fixture artifact\n");
 const runId = "00000000-0000-4000-8000-000000000001";
-type Mode = "ok" | "corrupt" | "short" | "redirect" | "upload-failed" | "no-capability";
+type Mode = "ok" | "corrupt" | "short" | "redirect" | "upload-failed" | "no-capability" | "completed-replay" | "upload-race";
 async function fixture(action: (client: RemoteSkillsClient, calls: Array<{ path: string; method: string; auth: string | null; body: any }>, redirected: () => number, origin: string) => Promise<void>, mode: Mode = "ok") {
   const calls: Array<{ path: string; method: string; auth: string | null; body: any }> = [];
   let redirectCount = 0;
@@ -22,6 +22,7 @@ async function fixture(action: (client: RemoteSkillsClient, calls: Array<{ path:
     if (path.includes("/auth/")) return Response.json({ status: "fixture-response" });
     if (path.endsWith("/capabilities")) return Response.json({ product: "skills", contractVersion: 1, apiVersion: 1, capabilities: mode === "no-capability" ? [] : ["runs.submit", "runs.uploads"], billing: { unit: "credits", boundedRunApproval: true } });
     if (path.endsWith("/quote")) return Response.json({ skill: "server-only", pricing: { costCredits: 3 } });
+    if (path.endsWith("/uploads") && mode === "upload-race") return Response.json({ code: "RUN_NOT_QUEUED" }, { status: 409 });
     if (path.endsWith("/uploads")) return Response.json({ files: [{ name: "input.txt", uploadUrl: `http://127.0.0.1:${server.port}/object` }] });
     if (path === "/object") return new Response(null, { status: mode === "upload-failed" ? 500 : 200 });
     if (path.endsWith("/artifacts")) return Response.json([{ id: "artifact", fileName: "result.txt", byteSize: bytes.byteLength, sha256: sha256(bytes) }]);
@@ -29,7 +30,7 @@ async function fixture(action: (client: RemoteSkillsClient, calls: Array<{ path:
       if (mode === "redirect") return new Response(null, { status: 307, headers: { location: `http://127.0.0.1:${destination.port}/leak` } });
       return new Response(mode === "corrupt" ? new Uint8Array(bytes.byteLength) : mode === "short" ? bytes.slice(1) : bytes);
     }
-    return Response.json({ id: runId, skill: "server-only", status: path.endsWith("/cancel") ? "cancelled" : "waiting" });
+    return Response.json({ id: runId, skill: "server-only", status: path.endsWith("/cancel") ? "cancelled" : mode === "completed-replay" ? "completed" : mode === "upload-race" && request.method === "GET" ? "running" : "queued" });
   } });
   try { await action(new RemoteSkillsClient("fixture-credential", `http://127.0.0.1:${server.port}/prefix/api/v1`), calls, () => redirectCount, `http://127.0.0.1:${server.port}/prefix`); }
   finally { await server.stop(true); await destination.stop(true); }
@@ -96,6 +97,14 @@ describe("shared remote customer lifecycle transport", () => {
     expect(calls.find(call => call.path === "/object")).toMatchObject({ auth: null, method: "PUT", body: bytes });
     expect(calls.filter(call => call.path !== "/object").every(call => call.auth === "Bearer fixture-credential")).toBe(true);
   }));
+  test("file-run replays preserve completed work and a concurrently started worker", async () => {
+    for (const mode of ["completed-replay", "upload-race"] as const) await fixture(async (client, calls) => {
+      const run = await client.submitQuotedRunWithFiles("server-only", {}, [], [{ name: "input.txt", bytes }], { maxCredits: 3, idempotencyKey: "same-attempt" });
+      expect(run.status).toBe(mode === "completed-replay" ? "completed" : "running");
+      expect(calls.filter(call => call.path.endsWith("/uploads"))).toHaveLength(mode === "completed-replay" ? 0 : 1);
+      expect(calls.filter(call => call.path.endsWith("/cancel") || call.path === "/object")).toHaveLength(0);
+    }, mode);
+  });
   test("failed uploads request cancellation of the same admitted run", async () => fixture(async (client, calls) => {
     await expect(client.submitQuotedRunWithFiles("server-only", {}, [], [{ name: "input.txt", bytes }], { maxCredits: 3 })).rejects.toThrow("cancellation requested");
     expect(calls.filter(call => call.path.endsWith(`/${runId}/cancel`))).toHaveLength(1);
