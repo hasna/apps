@@ -133,9 +133,13 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     expect(res.stdout).toContain("1 secret(s)");
     // An opted-in local run says, in ONE line on stderr, that it is local — the
     // ruling's replacement for the old silent fallback. stdout stays clean, so
-    // `--json` consumers are unaffected.
+    // `--json` consumers are unaffected. Assert that on the run this block is
+    // about (`res`, the read) as well as on the write above it: the assertion
+    // used to name `set` under this comment, so `res`'s own stdout — the one
+    // the comment is describing — was never checked.
     expect(res.stderr).toContain("local vault mode");
     expect(res.stderr).not.toContain("secrets-local-fallback");
+    expect(res.stdout).not.toContain("local vault mode");
     expect(set.stdout).not.toContain("local vault mode");
   });
 
