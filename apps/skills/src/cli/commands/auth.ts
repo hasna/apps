@@ -2,7 +2,7 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
 import { getAuthConfig, getAuthIdentity, saveAuthConfig, clearAuthConfig, getApiUrl, getAuthFilePath } from "../../lib/auth-store.js";
-import { resolveSkillsFleet, resolveSkillsConnection, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
+import { resolveSkillsFleet, resolveSkillsConnection, SkillsFleetCredentialError, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
 
 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
@@ -12,14 +12,28 @@ import { HostedApiError, RemoteSkillsAuthClient } from "../../lib/remote-auth.js
 const CONFIG_HINT_STATUSES = new Set([401, 403, 404, 405, 501]);
 
 
-function prompt(question: string): Promise<string> {
+function prompt(question: string): Promise<string | null> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
-    rl.question(question, (answer) => {
+    let settled = false;
+    const finish = (answer: string | null) => {
+      if (settled) return;
+      settled = true;
       rl.close();
-      resolve(answer.trim());
-    });
+      if (answer === null) process.exitCode = 130;
+      resolve(answer);
+    };
+    rl.once("SIGINT", () => finish(null));
+    rl.once("close", () => finish(null));
+    rl.question(question, answer => finish(answer.trim()));
   });
+}
+function authForPrompt() {
+  try { return getAuthConfig(); }
+  catch (error) {
+    if (error instanceof SkillsFleetCredentialError && error.code === "MISSING_API_CREDENTIAL") return null;
+    throw error;
+  }
 }
 
 async function apiRequest(path: string, options?: RequestInit, instance?: string) {
@@ -230,7 +244,9 @@ async function doLogin(email: string, code?: string, json?: boolean) {
       return;
     }
 
-    code = await prompt(chalk.bold("Code: "));
+    const answer = await prompt(chalk.bold("Code: "));
+    if (answer === null) return;
+    code = answer;
   }
 
   let verifyRes: any;
@@ -319,6 +335,11 @@ interface DeviceLoginOptions {
 }
 
 async function doDeviceLogin(options: DeviceLoginOptions) {
+  const timeoutMs = Number(options.pollTimeoutMs ?? DEFAULT_DEVICE_POLL_TIMEOUT_MS);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > DEFAULT_DEVICE_POLL_TIMEOUT_MS) {
+    writeCommandError(new Error("Device polling timeout must be an integer from 1 to 600000 milliseconds"), "Invalid polling timeout", options.json);
+    return;
+  }
   const env = { ...process.env };
   let origin: string;
   try { origin = getApiUrl("Device sign in"); }
@@ -372,8 +393,8 @@ async function doDeviceLogin(options: DeviceLoginOptions) {
     console.log(chalk.dim("\nWaiting for authentication..."));
   }
 
-  const intervalMs = Math.max(1000, Number(start.interval || 5) * 1000);
-  const timeoutMs = Number(options.pollTimeoutMs || DEFAULT_DEVICE_POLL_TIMEOUT_MS);
+  const interval = Number(start.interval ?? 5);
+  const intervalMs = Number.isFinite(interval) ? Math.min(30_000, Math.max(1000, interval * 1000)) : 5000;
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
@@ -389,7 +410,7 @@ async function doDeviceLogin(options: DeviceLoginOptions) {
     }
 
     if (tokenRes.error === "authorization_pending" || tokenRes.status === "pending") {
-      await sleep(intervalMs);
+      await sleep(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
       continue;
     }
 
@@ -477,13 +498,15 @@ export function registerAuth(parent: Command) {
       let email = options.email;
 
       if (!email && isTTY && !options.json) {
-        const existing = getAuthConfig();
+        const existing = authForPrompt();
         if (existing) {
           console.log(chalk.dim(`Already signed in as ${existing.email}`));
           const again = await prompt("Sign in with a different account? (y/N) ");
-          if (again.toLowerCase() !== "y") return;
+          if (again === null || again.toLowerCase() !== "y") return;
         }
-        email = await prompt(chalk.bold("Email: "));
+        const answer = await prompt(chalk.bold("Email: "));
+        if (answer === null) return;
+        email = answer;
       }
 
       if (!email) {
@@ -504,13 +527,15 @@ export function registerAuth(parent: Command) {
       let email = options.email;
 
       if (!email && isTTY && !options.json) {
-        const existing = getAuthConfig();
+        const existing = authForPrompt();
         if (existing) {
           console.log(chalk.dim(`Already signed in as ${existing.email}`));
           const again = await prompt("Continue with a different account? (y/N) ");
-          if (again.toLowerCase() !== "y") return;
+          if (again === null || again.toLowerCase() !== "y") return;
         }
-        email = await prompt(chalk.bold("Email: "));
+        const answer = await prompt(chalk.bold("Email: "));
+        if (answer === null) return;
+        email = answer;
       }
 
       if (!email) {

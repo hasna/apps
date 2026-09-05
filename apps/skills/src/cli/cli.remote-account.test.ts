@@ -75,6 +75,50 @@ describe("built public CLI server account and spending", () => {
     expect(status.exitCode).toBe(1);
     expect(calls).toEqual([]);
   }));
+  test("fresh-profile interactive signup cancels before a request or credential write", async () => fixture(async (origin, calls) => {
+    const cwd = mkdtempSync(join(scratch, "cancel-signup-"));
+    const script = `import os,pty,select,time,signal,json,sys
+pid,fd=pty.fork()
+if pid==0:
+ os.execv(sys.argv[1],sys.argv[1:])
+seen=False; transcript=b""; status=None; deadline=time.monotonic()+8
+try:
+ while time.monotonic()<deadline:
+  done,result=os.waitpid(pid,os.WNOHANG)
+  if done: status=result; break
+  if select.select([fd],[],[],0.05)[0]:
+   try: chunk=os.read(fd,4096)
+   except OSError: chunk=b""
+   transcript+=chunk
+   if len(transcript)>32768: raise RuntimeError("PTY output limit")
+   if not seen and b"Email:" in transcript:
+    seen=True; os.write(fd,b"\\x03")
+ if status is None: os.killpg(pid,signal.SIGKILL); _,status=os.waitpid(pid,0)
+ print(json.dumps({"code":os.waitstatus_to_exitcode(status),"prompt":seen,"bytes":len(transcript)}))
+finally:
+ try: os.killpg(pid,signal.SIGTERM)
+ except ProcessLookupError: pass
+ os.close(fd)
+`;
+    const child = Bun.spawn(["python3", "-c", script, process.execPath, "--no-env-file", "--preload", guard, binary, "auth", "signup"], {
+      cwd, env: { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, TERM: "xterm-256color", NO_COLOR: "1", TMPDIR: scratch,
+        HASNA_PROFILE: "cancel", HASNA_HOME: join(cwd,"hasna"), HASNA_CONFIG_HOME: join(cwd,"config"), HASNA_SKILLS_DIR: join(cwd,"data"),
+        HASNA_SKILLS_API_URL: origin, HASNA_STATION: "skills-pty-no-keychain", QA_ALLOWED_ORIGIN: origin, SKILLS_TEST_MODE: "1" },
+      stdin: "ignore", stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(stderr).toBe(""); expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({ code: 130, prompt: true });
+    expect(calls).toEqual([]);
+    expect(existsSync(join(cwd, "config", "skills", "credentials-cancel"))).toBe(false);
+  }));
+  test("noninteractive auth validation never prompts or starts an unbounded device poll", async () => fixture(async (origin, calls) => {
+    const signup = await cli(["auth", "signup", "--json"], origin, { key: false, profile: "fresh" });
+    expect(signup.exitCode).toBe(1); expect(JSON.parse(signup.stdout).error).toContain("Email required");
+    const device = await cli(["auth", "login", "--device", "--poll", "--poll-timeout-ms", "Infinity", "--json"], origin, { key: false });
+    expect(device.exitCode).toBe(1); expect(JSON.parse(device.stdout).error).toContain("polling timeout");
+    expect(calls).toEqual([]);
+  }));
   test("quotes server-only skills without submission, preserving full API base prefixes", async () => fixture(async (origin, calls) => {
     const result = await cli(["quote", "--json", "blog-article", "--topic", "fixture"], `${origin}/instance/api/v1/`);
     expect(result.exitCode).toBe(0);
