@@ -5,6 +5,7 @@ import { getDb } from "../db/index.ts";
 import { resolveServerDataBackend } from "../generated/storage-kit/backend.ts";
 import { getBrowserScript } from "../lib/browser-script.ts";
 import { getHealth } from "../lib/health.ts";
+import { resolvePublicOrigin } from "./request-origin.ts";
 import {
   PACKAGE_VERSION,
   exitIfMetadataRequest,
@@ -74,12 +75,19 @@ function buildLocalServe() {
     }),
   );
 
-  // Browser tracking script
+  // Browser tracking script — the script self-reports to the public origin the
+  // browser reached this server through. x-forwarded-proto is honored (the
+  // api.hasna.com gateway terminates TLS) and every host candidate is
+  // sanitized, so a hostile or malformed header can never turn the script URL
+  // into an injection payload (see ./request-origin.ts).
   app.get("/script.js", (c) => {
-    const host = `${c.req.header("x-forwarded-proto") ?? "http"}://${c.req.header("host") ?? `localhost:${PORT}`}`;
+    const origin = resolvePublicOrigin({
+      headers: c.req.raw.headers,
+      defaultHost: `localhost:${PORT}`,
+    }) ?? `http://localhost:${PORT}`;
     c.header("Content-Type", "application/javascript");
     c.header("Cache-Control", "public, max-age=300");
-    return c.text(getBrowserScript(host));
+    return c.text(getBrowserScript(origin));
   });
 
   // API routes

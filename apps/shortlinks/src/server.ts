@@ -1,5 +1,12 @@
 import { ShortlinksStore } from "./store.js";
 import type { ClickInput, Link } from "./types.js";
+import {
+  normalizeIpLiteral,
+  resolveRequestClientIp,
+  resolveTrustProxy,
+  trustedProxiesFromEnv,
+} from "./client-ip.js";
+import { resolvePublicOrigin } from "./request-origin.js";
 
 export interface ShortlinksRuntimeStore {
   totalStats(): { domains: number; links: number; clicks: number } | Promise<{ domains: number; links: number; clicks: number }>;
@@ -31,16 +38,44 @@ function json(data: unknown, status = 200, headers?: HeadersInit): Response {
   });
 }
 
+/**
+ * Host used to resolve a shortlink. `x-forwarded-host` is only honored when
+ * the forwarding hop is explicitly trusted (SHORTLINKS_TRUST_PROXY) — the
+ * shortlinks Cloudflare worker and the api.hasna.com gateway both set it —
+ * and every candidate is sanitized, so a hostile header can never steer
+ * resolution to an attacker-chosen domain (see ./request-origin.ts).
+ */
 function getHost(request: Request, fallback?: string): string {
-  const forwarded = request.headers.get("x-forwarded-host");
-  const host = forwarded || request.headers.get("host") || fallback || "";
-  return host.split(",")[0]!.trim().split(":")[0]!;
+  const origin = resolvePublicOrigin({
+    headers: request.headers,
+    defaultHost: fallback,
+    trustForwardedHost: resolveTrustProxy(),
+  });
+  if (!origin) return "";
+  const url = new URL(origin);
+  return url.hostname;
 }
 
+/**
+ * Caller identity for click analytics. Untrusted by default: the leftmost
+ * X-Forwarded-For entry is client-written, so keying analytics on it without
+ * a trust gate hands the client the pen. With SHORTLINKS_TRUST_PROXY=1 the
+ * hardened derivation applies (validated x-real-ip set by the api gateway,
+ * then the first untrusted XFF entry from the right), and the CF-Connecting-IP
+ * the Cloudflare edge itself sets is accepted as a last resort — validated
+ * like every other candidate (see ./client-ip.ts).
+ */
 function getClientIp(request: Request): string | null {
-  const forwarded = request.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]!.trim();
-  return request.headers.get("cf-connecting-ip") || request.headers.get("x-real-ip");
+  const trust = resolveTrustProxy();
+  if (!trust) return null;
+  const derived = resolveRequestClientIp({
+    headers: request.headers,
+    socketAddress: null,
+    trustProxy: true,
+    trustedProxies: trustedProxiesFromEnv(),
+  });
+  if (derived) return derived;
+  return normalizeIpLiteral(request.headers.get("cf-connecting-ip"));
 }
 
 function isExpired(link: Link): boolean {

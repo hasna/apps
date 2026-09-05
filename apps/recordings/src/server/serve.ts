@@ -19,6 +19,7 @@ import { VERSION } from "../version.js";
 import { resolveDataBackend } from "./cloud-config.js";
 import { handleV1Request } from "./v1.js";
 import { buildV1OpenApiDocument } from "./openapi.js";
+import { resolveRequestClientIp, resolveTrustProxy, trustedProxiesFromEnv } from "./client-ip.js";
 
 export const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -39,17 +40,27 @@ const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = Number.parseInt(process.env["RECORDINGS_RATE_LIMIT_MAX"] || "240", 10);
 
+/**
+ * Resolve the rate-limit bucket key for a request.
+ *
+ * Forwarding headers are ignored by default (keyed on the socket peer, which
+ * no header can forge) and only honored when the operator opts in via
+ * RECORDINGS_TRUST_PROXY — i.e. the server genuinely sits behind the trusted
+ * proxies (api.hasna.com gateway + ALB) that set them — and then only through
+ * the hardened derivation in ./client-ip.ts: validated `x-real-ip` -> first
+ * untrusted `X-Forwarded-For` entry from the right (skipping
+ * `RECORDINGS_TRUSTED_PROXIES`) -> socket peer.
+ */
 function resolveClientIp(
   req: Request,
   server: { requestIP(req: Request): { address: string } | null },
 ): string {
-  const trustProxy = process.env["RECORDINGS_TRUST_PROXY"] === "1" || process.env["RECORDINGS_TRUST_PROXY"] === "true";
-  if (trustProxy) {
-    const forwarded =
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip")?.trim();
-    if (forwarded) return forwarded;
-  }
-  return server.requestIP(req)?.address || "unknown";
+  return resolveRequestClientIp({
+    headers: req.headers,
+    socketAddress: server.requestIP(req)?.address,
+    trustProxy: resolveTrustProxy(),
+    trustedProxies: trustedProxiesFromEnv(),
+  }) ?? "unknown";
 }
 
 function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {

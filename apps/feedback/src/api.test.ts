@@ -152,6 +152,10 @@ describe("Feedback HTTP API and SDK", () => {
       publicSubmit: true,
       sharedDeployment: true,
       rateLimit: { windowMs: 60_000, maxSubmissions: 1 },
+      // Key the limiter on X-Forwarded-For on purpose: this suite asserts that
+      // distinct client IPs get independent buckets, which is exactly the
+      // gateway behavior the operator opts into with FEEDBACK_TRUST_PROXY.
+      trustProxy: true,
     });
 
     const first = await handler(new Request("http://feedback.test/v1/feedback", {

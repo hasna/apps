@@ -13,6 +13,11 @@ export function startFeedbackServer(options: StartFeedbackServerOptions = {}): R
   return Bun.serve({
     hostname: host,
     port,
-    fetch: handler,
+    fetch(req, server) {
+      // Hand the raw socket peer to the handler: the rate limiter keys on it
+      // unless the operator opts into trusting the forwarding headers
+      // (FEEDBACK_TRUST_PROXY) — a client header can never forge it.
+      return handler(req, { peer: server.requestIP(req)?.address ?? null });
+    },
   });
 }
