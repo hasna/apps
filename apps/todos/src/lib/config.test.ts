@@ -172,7 +172,7 @@ describe("global config path", () => {
     }
   });
 
-  it("prefers ~/.hasna/todos/config.json when both new and legacy configs exist", () => {
+  it("prefers the todos data root/config.json when both new and legacy configs exist", () => {
     const originalHome = process.env["HOME"];
     const bothHome = `/tmp/todos-test-both-config-home-${Date.now()}`;
     const newConfigDir = join(bothHome, ".hasna", "todos");

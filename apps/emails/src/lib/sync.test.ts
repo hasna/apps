@@ -16,7 +16,7 @@
 // The ratchet enforces both absences tree-wide, this file included.
 //
 // `HOME` IS REDIRECTED IN EVERY CASE. When no database path is configured the database
-// layer resolves — and CREATES — `~/.hasna/emails/emails.db`, and a case about a refusal
+// layer resolves — and CREATES — `the emails data root/emails.db`, and a case about a refusal
 // must not be able to touch a developer's real mailbox on the way to failing.
 
 import { Database } from "bun:sqlite";

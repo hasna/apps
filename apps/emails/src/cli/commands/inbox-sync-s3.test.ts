@@ -27,7 +27,7 @@ describe("inbox sync-s3 configuration hint", () => {
 
       expect(exitCode).toBe(1);
       expect(stderr).toContain("EMAILS_INBOUND_S3_BUCKET");
-      expect(stderr).toContain("~/.hasna/emails/config.json");
+      expect(stderr).toContain("the emails data root/config.json");
       expect(stderr).not.toContain("emails config set");
     } finally {
       rmSync(tempHome, { recursive: true, force: true });

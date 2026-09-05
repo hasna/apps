@@ -13,7 +13,7 @@
  *     custom  >  extension  >  private  >  private-hosted  >  remote  >  upstream  >  official
  *
  * The rule is "whichever copy this machine would actually use, wins the listing". A skill
- * present in ~/.hasna/skills/installed is the one `skills run` executes, so a listing that
+ * present in <skills data root>/installed is the one `skills run` executes, so a listing that
  * described the server's copy instead would be describing something that is not going to
  * run. `remote` beats `official` for the mirror-image reason: an organization that
  * published a skill under a bundled name did so to override the bundled one on their

@@ -8,7 +8,7 @@
         "@ai-sdk/anthropic": "^3.0.82",
         "@ai-sdk/openai": "^3.0.69",
         "@ai-sdk/openai-compatible": "^2.0.48",
-        "@hasna/contracts": "0.10.6",
+        "@hasna/contracts": "1.0.0",
         "@hasna/events": "0.1.6",
         "@modelcontextprotocol/sdk": "^1.12.1",
         "ai": "^6.0.199",
@@ -84,7 +84,7 @@
 
     "@gar/promise-retry": ["@gar/promise-retry@1.0.3", "", {}, "sha512-GmzA9ckNokPypTg10pgpeHNQe7ph+iIKKmhKu3Ob9ANkswreCx7R3cKmY781K8QK3AqVL3xVh9A42JvIAbkkSA=="],
 
-    "@hasna/contracts": ["@hasna/contracts@0.10.6", "", { "dependencies": { "@hasna/secrets": "^0.2.22", "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-lHGwSjCAJof2868o3xAHbWbq8WR675MNQMnRVaRPHvX0LeSLsEWfV5nqE4KjhDJfDRhXhiSo4pmvI03AW4cMnQ=="],
+    "@hasna/contracts": ["@hasna/contracts@1.0.0", "", { "dependencies": { "commander": "^13.1.0", "zod": "^3.25.76", "zod-to-json-schema": "^3.24.6" }, "peerDependencies": { "@hasna/secrets": "0.3.10" }, "bin": { "contracts": "dist/cli/index.js", "contracts-cli": "dist/cli/contracts-cli.js" } }, "sha512-hukCDEK9uyjYzd8f+CcexvurVqpO2mWXfPLw8htHTGGNxr5LVo0UNa8WuI+akeMdM/hq24NP5TOW3/F7GBqGWg=="],
 
     "@hasna/events": ["@hasna/events@0.1.6", "", { "dependencies": { "commander": "^13.1.0" }, "bin": { "events": "dist/cli/index.js", "hasna-events": "dist/cli/index.js" } }, "sha512-rKLxjBIat45UxciUwh9hKM63l/mcurJXAhgVkYHvrsGnOK9HwExrwgOlylNzDBDb+huiQw9DWdLb31q5oWDfIw=="],
 

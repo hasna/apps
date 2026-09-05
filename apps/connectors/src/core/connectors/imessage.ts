@@ -234,7 +234,7 @@ API Key authentication is optional and depends on the bridge deployment. A bridg
 
 ## Data Storage
 
-Connector state is stored under \`~/.hasna/connectors/imessage/\`. Profiles are read from both \`profiles/<name>.json\` and \`profiles/<name>/config.json\` so the connector stays compatible with the shared auth helpers while remaining fully internal to the one-product repo.
+Connector state is stored in the connectors data root's \`imessage/\` subdirectory. Profiles are read from both \`profiles/<name>.json\` and \`profiles/<name>/config.json\` so the connector stays compatible with the shared auth helpers while remaining fully internal to the one-product repo.
 `;
 
 const commandInputSchema = z.object({

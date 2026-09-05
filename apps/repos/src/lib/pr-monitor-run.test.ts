@@ -292,7 +292,7 @@ describe("runPrMonitor envelope", () => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       "lease-1300", String(repoId), "/tmp/nowhere/hasna-apps", "test-machine",
-      "/home/u/.hasna/repos/worktrees/apps/1300", "plan/1300", "main", MAIN,
+      join("/home/u", ".hasna", "repos", "worktrees", "apps", "1300"), "plan/1300", "main", MAIN,
       "task-1300", "run-1300", "worktree", "{}", "remove", "active",
       "2026-08-18T08:00:00Z", "2026-08-18T08:00:00Z", "2026-08-18T08:00:00Z",
     );

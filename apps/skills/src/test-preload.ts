@@ -2,7 +2,7 @@
  * Test hermeticity preload.
  *
  * Gives every test its own throwaway skills data directory, so the suite never
- * reads or writes the developer's real ~/.hasna/skills.
+ * reads or writes the developer's real the skills data root.
  *
  * The leak this closes: reading and writing the real home. Any machine with
  * portable skills installed saw ten failures across registry, skillinfo, and
@@ -10,7 +10,7 @@
  * custom skill shadow the bundled official entry. Those failures track the
  * developer's home directory rather than the code - indistinguishable from a
  * real regression, and guaranteed to get worse as we dogfood this tool and every
- * machine accumulates custom skills. The suite also created ~/.hasna/skills on
+ * machine accumulates custom skills. The suite also created the skills data root on
  * machines that had none, because getDataDir() mkdirs what it returns.
  *
  * Why per-test rather than one directory for the whole run: measured, both work
@@ -52,7 +52,7 @@ import { DATA_DIR_ENV } from "./lib/config.js";
  *
  *   11.06s  cli.discovery      flushes complete registry sync JSON through a shell pipe
  *    9.50s  unconfigured-...   no packed code file names a host outside APPROVED_CODE_HOSTS
- *    9.01s  cli.portable-...   new, list, show, validate, and run work against ~/.hasna/skills
+ *    9.01s  cli.portable-...   new, list, show, validate, and run work against the skills data root
  *    8.83s  cli.runtime        config unset apiUrl returns a project to running on this machine
  *    7.53s  agent-workflow     the moved skills are absent from the repo and the customer catalog
  *
@@ -116,7 +116,7 @@ export function useDefaultTestTimeout(): void {
  * isolation; it does not establish it.
  *
  * Without this, every describe body, beforeAll, and afterAll in the suite would
- * run against the developer's real ~/.hasna/skills - the hooks that run outside
+ * run against the developer's real the skills data root - the hooks that run outside
  * a test body are exactly the ones a per-test beforeEach cannot reach. The suite
  * has no beforeAll today, so nothing would have failed; the invariant would have
  * been enforced by a comment until the first one was added.
@@ -169,7 +169,7 @@ export function withHomeDataDir<T>(fn: () => T): T {
 
 /**
  * withHomeDataDir() plus a throwaway $HOME, for tests that exercise the $HOME
- * branch but must not create ~/.hasna/skills on the developer's machine while
+ * branch but must not create the skills data root on the developer's machine while
  * doing it - getDataDir() mkdirs the directory it returns.
  */
 export function withTempHome<T>(fn: (home: string) => T): T {

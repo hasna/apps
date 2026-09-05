@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 describe("global database path", () => {
-  it("uses ~/.hasna/todos/todos.db when no global database exists", () => {
+  it("uses the todos data root/todos.db when no global database exists", () => {
     closeDatabase();
     resetDatabase();
     delete process.env["TODOS_DB_PATH"];
@@ -43,7 +43,7 @@ describe("global database path", () => {
       globalDb.close();
       resetDatabase();
 
-      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(true);
+      expect(existsSync(join(todosDataRoot(home), "todos.db"))).toBe(true);
       expect(existsSync(join(home, ".todos", "todos.db"))).toBe(false);
     } finally {
       process.chdir(originalCwd);
@@ -54,7 +54,7 @@ describe("global database path", () => {
     }
   });
 
-  it("uses ~/.hasna/todos/todos.db even when a legacy ~/.todos/todos.db exists", () => {
+  it("uses the todos data root/todos.db even when a legacy ~/.todos/todos.db exists", () => {
     closeDatabase();
     resetDatabase();
     delete process.env["TODOS_DB_PATH"];
@@ -78,7 +78,7 @@ describe("global database path", () => {
       globalDb.close();
       resetDatabase();
 
-      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(true);
+      expect(existsSync(join(todosDataRoot(home), "todos.db"))).toBe(true);
       expect(existsSync(join(home, ".todos", "todos.db"))).toBe(true);
     } finally {
       process.chdir(originalCwd);
@@ -89,7 +89,7 @@ describe("global database path", () => {
     }
   });
 
-  it("uses nearest project .hasna/todos/todos.db instead of the global database", () => {
+  it("uses the nearest project-relative todos store instead of the global database", () => {
     closeDatabase();
     resetDatabase();
     delete process.env["TODOS_DB_PATH"];
@@ -152,7 +152,7 @@ describe("global database path", () => {
 
       expect(existsSync(join(project, ".hasna", "todos", "todos.db"))).toBe(false);
       expect(existsSync(join(project, ".todos", "todos.db"))).toBe(false);
-      expect(existsSync(join(home, ".hasna", "todos", "todos.db"))).toBe(true);
+      expect(existsSync(join(todosDataRoot(home), "todos.db"))).toBe(true);
     } finally {
       process.chdir(originalCwd);
       if (originalHome === undefined) delete process.env["HOME"];

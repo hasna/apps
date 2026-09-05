@@ -10,7 +10,7 @@ import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 
 // The config module supports MONITOR_CONFIG_DIR so tests can exercise the
-// real load/save path without touching a developer's ~/.hasna/monitor state.
+// real load/save path without touching a developer's the monitor data root state.
 
 import { loadConfig, saveConfig } from "./config";
 import type { MonitorConfig } from "./config";

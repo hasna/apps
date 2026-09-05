@@ -273,7 +273,7 @@ describe("content-scan does NOT false-positive on legitimate public content", ()
   });
 
   test("allows the public @hasnaxyz npm scope and ~/.hasna config path", () => {
-    const text = "bun install -g @hasnaxyz/service-apidocs\nconfig lives in ~/.hasna/skills";
+    const text = "bun install -g @hasnaxyz/service-apidocs\nconfig lives in the skills data root";
     expect(scanText(text)).toEqual([]);
   });
 

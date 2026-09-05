@@ -313,7 +313,7 @@ describe("knowledge adapter", () => {
   // serves the built artifact), whose local-store home resolution uses
   // os.homedir() and ignores a process.env.HOME override — the run wrote two
   // duplicate `eff_race_stable` rows to the REAL on-box knowledge store
-  // (~/.hasna/knowledge/db.json) instead of the intended temp dir (removed
+  // (the knowledge workspace db.json) instead of the intended temp dir (removed
   // via `knowledge delete`, verified 0 remaining). A source-import variant
   // would not test what the monitor actually consumes. The fake-store test
   // above models LocalItemStore.create exactly (unconditional append, no
@@ -525,7 +525,7 @@ describe("knowledge adapter", () => {
     const { adapter, createCalls } = makeHarness();
     const outcome = await adapter.create({
       title: "Monitor finding",
-      content: "key at /home/ops/.hasna/secrets/id_rsa and ~/.ssh/id_ed25519 and /tmp/probe",
+      content: "key at /home/ops/.ssh/id_ed25519 and /tmp/probe",
     });
     expect(outcome.ok).toBe(true);
     const persisted = createCalls[0]?.input.content ?? "";

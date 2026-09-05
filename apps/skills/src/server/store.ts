@@ -94,7 +94,7 @@ export interface StoreOptions {
  *
  *   - a postgres:// URL         -> Postgres, and a failure to reach it is fatal here
  *   - a sqlite path / file: URL -> SQLite at that path, migrated on open
- *   - nothing at all            -> SQLite at ~/.hasna/skills/server.db, migrated on open
+ *   - nothing at all            -> SQLite at <skills data root>/server.db, migrated on open
  *   - "memory:" or ":memory:"   -> non-durable, and only because it was named
  *   - anything else             -> throws, naming what is supported
  */

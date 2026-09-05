@@ -181,7 +181,7 @@ export interface AttachmentPath {
   filename: string;
   content_type: string;
   size: number;
-  /** Local file path, e.g. ~/.hasna/emails/attachments/<email_id>/filename */
+  /** Local file path, e.g. <data root>/attachments/<email_id>/filename (data root per the paths resolver) */
   local_path?: string;
   /** S3 URL if uploaded, e.g. s3://bucket/emails/<email_id>/filename */
   s3_url?: string;

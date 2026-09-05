@@ -48,7 +48,7 @@ function testEnv(): Record<string, string> {
   return isolatedStoreEnv(DB_PATH, {
     // save attributes agent-source writes to the writing agent, resolved from
     // MEMENTOS_AGENT when --agent is omitted; declare the identity so saves
-    // resolve on CI, which has no ~/.hasna/conversations/agent-id.
+    // resolve on CI, which has no the conversations data root/agent-id.
     extra: { ...blankLlmProviderEnv(), MEMENTOS_AGENT: "e2e-test-agent" },
   });
 }

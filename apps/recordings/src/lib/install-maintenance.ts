@@ -132,7 +132,7 @@ function pathIsWithin(root: string, candidate: string): boolean {
 /**
  * Return whether a path can be changed by the global Recordings state
  * transaction. Both lexical and existing-prefix canonical paths are checked so
- * an alias into ~/.hasna/recordings cannot silently bypass maintenance.
+ * an alias into the recordings data root cannot silently bypass maintenance.
  */
 export function isGlobalRecordingsStatePath(
   path: string,

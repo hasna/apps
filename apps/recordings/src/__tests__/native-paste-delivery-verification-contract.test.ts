@@ -349,7 +349,7 @@ describe("native paste delivery verification contract", () => {
      * A fixed denylist of eight identifier substrings is not a leak guard, it is a spelling test:
      * `let fieldContents = observed.value` followed by `log("field=\(fieldContents)")` writes the
      * target app's focused-field text — password fields included — into
-     * `~/.hasna/recordings/Recordings.log` in plaintext, and every assertion stayed green because
+     * `the recordings data root/Recordings.log` in plaintext, and every assertion stayed green because
      * `fieldContents` is not on the list. One `let` breaks the chain.
      *
      * So the taint is propagated instead: seeded from the denylist plus any `.value` read (the AX

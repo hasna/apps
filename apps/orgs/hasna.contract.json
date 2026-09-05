@@ -3,7 +3,7 @@
   "name": "orgs",
   "class": "library",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
+  "kitVersion": "1.0.0",
   "description": "Open organization graph and delegation-context layer for agentic systems.",
   "hosting": [
     "user-hosted"

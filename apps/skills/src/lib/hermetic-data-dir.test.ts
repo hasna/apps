@@ -13,7 +13,7 @@ useDefaultTestTimeout();
  * Guards test hermeticity with respect to the user's real data directory.
  *
  * Before this guard, ten tests across registry/skillinfo/validation failed on any
- * machine that had portable skills installed under ~/.hasna/skills, because
+ * machine that had portable skills installed under the skills data root, because
  * loadRegistry() merges that directory and lets a same-named custom skill shadow
  * the bundled official entry. The failures were ambient - they tracked the
  * developer's home directory, not the code - which is exactly the signal you
@@ -49,7 +49,7 @@ const envAtModuleScope = process.env[DATA_DIR_ENV];
 describe("data directory isolation outside test bodies", () => {
   test("the override is already set before any test body runs", () => {
     // If this regresses, every describe body, beforeAll, and afterAll in the
-    // suite silently reads the developer's real ~/.hasna/skills.
+    // suite silently reads the developer's real the skills data root.
     expect(envAtModuleScope).toBeDefined();
     expect(envAtModuleScope).not.toBe("");
     expect(envAtModuleScope).not.toContain(join(".hasna", "skills"));
@@ -65,7 +65,7 @@ describe("data directory isolation outside test bodies", () => {
 
 describe("data directory isolation", () => {
   test("the preload gives each test its own data dir", () => {
-    // If this fails, every other test in the suite is reading the real ~/.hasna/skills.
+    // If this fails, every other test in the suite is reading the real the skills data root.
     const dir = process.env[DATA_DIR_ENV];
     expect(dir).toBeDefined();
     expect(getDataDir()).toBe(dir!);

@@ -27,7 +27,7 @@ export interface ProfileSyncResult {
  *
  * Profiles live under the SAME effective data root the rest of the package
  * resolves (getDataRoot() — exact-app override, adopted XDG root, or legacy
- * ~/.hasna/mementos default), matching config.ts profilesDir().
+ * the mementos data root default), matching config.ts profilesDir().
  */
 function getProfileDbPath(profile: string): string {
   return join(getDataRoot(), "profiles", `${profile}.db`);

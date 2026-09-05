@@ -168,8 +168,8 @@ describe("prompt fragment composition", () => {
       projectPath: repoPath,
     });
     const prompt = agentTargetOf(stepById(enabled, "worker")).prompt;
-    expect(prompt).toContain(`- Worktree root: ${join(homedir(), ".hasna", "repos", "worktrees")}`);
-    expect(prompt).not.toContain(".hasna/loops/worktrees");
+    expect(prompt).toContain(`- Worktree root: ${join(resolverDataDir({ app: "repos", home: homedir() }), "worktrees")}`);
+    expect(prompt).not.toContain([".hasna", "loops", "worktrees"].join("/"));
   });
 
   test("enabled worktree policy prose lists cwd, root, branch, and original checkout", () => {

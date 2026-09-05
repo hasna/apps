@@ -105,7 +105,7 @@ function workerVerifierAgentVariables(opts: { addDirs: boolean; branchNoun: stri
     { name: "safetyReason", description: "Auditable reason required for advisory restrictions or relaxed sandbox access." },
     { name: "manualBreakGlass", default: "false", description: "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only." },
     { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
-    { name: "worktreeRoot", default: "~/.hasna/repos/worktrees", description: "Base directory for Loops-managed git worktrees (canonical root per global-worktree-placement)." },
+    { name: "worktreeRoot", default: "the repos worktrees root", description: "Base directory for Loops-managed git worktrees (canonical root per global-worktree-placement; resolve it with the repos CLI)." },
     { name: "worktreeBranchPrefix", default: "openloops", description: `Branch prefix for generated ${opts.branchNoun} worktree branches.` },
     agentTimeoutVariable(),
     verifierIdleTimeoutVariable(),

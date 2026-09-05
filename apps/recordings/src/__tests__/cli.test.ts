@@ -13,6 +13,12 @@ import {
 } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { homedir } from "os";
+import { dataDir as resolverDataDir } from "@hasna/contracts/paths";
+
+function recordingsDataRoot(): string {
+  return resolverDataDir({ app: "recordings", home: process.env["HOME"] || homedir() });
+}
 import {
   createInstallerEnvironment,
   resolveInstallBunExecutable,
@@ -258,7 +264,7 @@ describe("recordings CLI", () => {
     expect(status.app_code_hash === null || typeof status.app_code_hash === "string").toBe(true);
     expect(typeof status.microphone_permission).toBe("string");
     expect(typeof status.accessibility_permission).toBe("string");
-    expect(status.log_path).toContain(".hasna/recordings/Recordings.log");
+    expect(status.log_path).toContain(join(recordingsDataRoot(), "Recordings.log"));
     expect(status.signing_identifier).toBeNull();
     expect(status.team_identifier).toBeNull();
     expect(status.designated_requirement).toBeNull();
@@ -895,7 +901,7 @@ describe("recordings CLI", () => {
     expect(cli).toContain("function resolveInstalledAppPath");
     expect(cli).toContain("resolveInstalledAppPath(home, canonicalAppPath, legacyInstallPaths)");
     // Bundle choice must not be lexicographic: sorting let /Applications answer for a grant
-    // held by the bundle in ~/.hasna/recordings.
+    // held by the bundle in the recordings data root.
     expect(cli).not.toContain("legacyInstallPaths[0] ?? canonicalAppPath");
     // A grant is only reported for a bundle that exists; otherwise the service is passed null.
     expect(cli).toContain("installedAppPathForGrants");
@@ -1004,7 +1010,7 @@ describe("recordings CLI", () => {
     expect(typeof permissions.accessibility).toBe("string");
     expect(typeof permissions.ad_hoc_signed).toBe("boolean");
     expect(permissions.app_code_hash === null || typeof permissions.app_code_hash === "string").toBe(true);
-    expect(permissions.log_path).toContain(".hasna/recordings/Recordings.log");
+    expect(permissions.log_path).toContain(join(recordingsDataRoot(), "Recordings.log"));
   });
 
   test("app help advertises permission request command", async () => {

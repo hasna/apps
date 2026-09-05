@@ -101,7 +101,7 @@
   "author": "Hasna",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "^0.12.0",
+    "@hasna/contracts": "1.0.0",
     "postgres": "^3.4.7"
   },
   "peerDependencies": {

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { adoptResolverHome, getDefaultConfigPath, resolverHome } from "./app-home.js";
+import { getDefaultConfigPath, resolverHome } from "./app-home.js";
 
 export interface DomainContact {
   first_name?: string;
@@ -61,7 +61,7 @@ export interface LegacyConfigMigrationReport {
 /**
  * One-time migration from the previous XDG config default
  * ($XDG_CONFIG_HOME/open-domains/config.json) into the canonical
- * ~/.hasna/domains/config.json. Copies, verifies by size and sha256, records a
+ * the domains data root's config.json. Copies, verifies by size and sha256, records a
  * receipt, never deletes the source, never overwrites existing canonical data,
  * and is idempotent (receipt + canonical file both skip it). dryRun reports
  * whether the config would be copied and writes nothing.
@@ -72,7 +72,7 @@ export function migrateLegacyConfig(
 ): LegacyConfigMigrationReport {
   const report: LegacyConfigMigrationReport = { dryRun, wouldCopy: false, copied: false };
   const home = canonicalHome(env);
-  const canonicalDir = join(home, ".hasna", "domains");
+  const canonicalDir = resolverHome(env);
   const newPath = join(canonicalDir, "config.json");
   if (existsSync(newPath)) return report;
   if (existsSync(join(canonicalDir, ".migrated-from-xdg-config.receipt.json"))) return report;
@@ -112,7 +112,7 @@ export function migrateLegacyConfig(
 
 /**
  * The default config location — `config.json` at the root of the effective
- * domains home, resolved through `@hasna/paths` (legacy `~/.hasna/domains`
+ * domains data root, resolved through the paths resolver
  * until the XDG data home is adopted). Env overrides (DOMAINS_CONFIG_PATH /
  * DOMAINS_CONFIG_DIR) are honored unchanged and win over the default.
  */
@@ -122,10 +122,8 @@ export function getConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   if (dir) return join(dir, "config.json");
 
   // The one-time migration from the previous XDG config default targets the
-  // legacy home; when the resolver home is adopted it is unnecessary.
-  if (!adoptResolverHome(resolverHome(env), env)) {
-    migrateLegacyConfig(env);
-  }
+  // resolver data root (ruling #1668).
+  migrateLegacyConfig(env);
   return getDefaultConfigPath(env);
 }
 

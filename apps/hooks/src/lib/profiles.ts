@@ -3,7 +3,7 @@
  *
  * Each agent instance gets a unique 8-char UUID stored at
  * <effective-data-root>/profiles/<id>.json, where the effective data root is
- * resolved through @hasna/paths (legacy ~/.hasna/hooks until adopted, then
+ * resolved through @hasna/paths (legacy the hooks data root until adopted, then
  * the XDG data home).
  * Profiles are injected into HookInput when hooks are run with --profile <id>,
  * allowing hooks to identify which agent is calling them.

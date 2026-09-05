@@ -137,7 +137,7 @@ describe("setConfig", () => {
         secretAccessKey: "secret",
         endpoint: "https://ep.example.com",
       },
-      storage: { backend: "auto", localDir: "~/.hasna/attachments/objects", maxSizeBytes: 10 * 1024 * 1024 * 1024 },
+      storage: { backend: "auto", localDir: "/tmp/attachments-objects", maxSizeBytes: 10 * 1024 * 1024 * 1024 },
       server: { port: 4000, host: "localhost", baseUrl: "https://attachments.example.com", publicPath: "/a" },
       defaults: { expiry: "30d", linkType: "server" },
       client: {

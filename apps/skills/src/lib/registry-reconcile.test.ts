@@ -4,7 +4,7 @@
  *
  * The corpus is redirected with `rootDir` rather than by moving $HOME: these tests must
  * be identical on a clean machine and on a developer's, and a suite that reads the real
- * ~/.hasna/skills would pass or fail depending on what the operator happens to have
+ * the skills data root would pass or fail depending on what the operator happens to have
  * written there.
  */
 import { describe, expect, test } from "bun:test";
@@ -490,7 +490,7 @@ describe("reconcileRegistry", () => {
     // dir, merges legacy ~/.skills content and copies ~/.skillsrc as config.json. The
     // dry run must resolve the same client against the same files without any of that
     // (review P1: client resolution ran unconditionally before the read-only corpus
-    // branch, so a stored-auth `sync --dry-run` still wrote ~/.hasna/skills).
+    // branch, so a stored-auth `sync --dry-run` still wrote the skills data root).
     //
     // The ORIGIN comes from the legacy ~/.skillsrc, not from the environment: the
     // write-free resolution must read the legacy config file directly, exactly as the

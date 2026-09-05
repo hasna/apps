@@ -11,7 +11,7 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 useDefaultTestTimeout();
 
 describe("CLI portable skills", () => {
-  test("new, list, show, validate, and run work against ~/.hasna/skills", async () => {
+  test("new, list, show, validate, and run work against the skills data root", async () => {
     const home = mkdtempSync(join(tmpdir(), "cli-portable-home-"));
     const cwd = mkdtempSync(join(tmpdir(), "cli-portable-cwd-"));
     try {

@@ -1,7 +1,7 @@
 /**
  * `skills sync` — the last mile: write skills from this machine's corpus
- * (the migrated owner-layout cache ~/.hasna/skills/skills/<name>/, or the
- * legacy ~/.hasna/skills/installed/<name>/ when not migrated) into each coding
+ * (the migrated owner-layout cache <skills data root>/skills/<name>/, or the
+ * legacy <skills data root>/installed/<name>/ when not migrated) into each coding
  * agent's global skills directory, per-tool adapted, so an agent auto-loads
  * them.
  *
@@ -209,7 +209,7 @@ interface SyncSource {
  *   2. `$SKILLS_SOURCE`      - the ambient spelling of the same thing
  *   3. the installed cache   - `getPortableSkillsRoot()` (what `skills pull` writes),
  *      resolved through `resolveCorpusRoot` so a migrated owner layout
- *      (~/.hasna/skills/skills/) is read in preference to `installed/`. This cache is
+ *      (<skills data root>/skills/) is read in preference to `installed/`. This cache is
  *      also where private agent-workflow skills arrive from the per-station store
  *      (fleet-resources) and get synced into agent folders.
  *

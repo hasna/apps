@@ -109,16 +109,16 @@ export declare function globalKnowledgeHome(): string;
  * The canonical project-scoped knowledge home: <knowledge-home>/projects/<key>.
  * Project-scoped stores live in a per-project sub-root of the knowledge app's
  * own home (the effective data home resolved through @hasna/paths — legacy
- * `~/.hasna/knowledge` until the XDG data home is adopted) rather than inside
+ * `the knowledge data root` until the XDG data home is adopted) rather than inside
  * the checked-out repository. An explicit `home` base (used by tests to inject
- * an isolated home) keeps the legacy `~/.hasna/knowledge/projects/<key>`
+ * an isolated home) keeps the legacy `the knowledge data root/projects/<key>`
  * construction; production callers use the resolver-resolved knowledge home.
  */
 export declare function projectKnowledgeHome(cwd?: string, home?: string | undefined): string;
 /**
  * The previous project-scoped knowledge home: <cwd>/.hasna/knowledge. This is
  * the pre-canonical default that a one-time migration moves into
- * ~/.hasna/knowledge/projects/<key>.
+ * the knowledge data root/projects/<key>.
  */
 export declare function previousProjectKnowledgeHome(cwd?: string): string;
 export declare function legacyGlobalKnowledgeHome(): string;

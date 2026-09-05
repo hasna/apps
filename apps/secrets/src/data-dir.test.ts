@@ -34,7 +34,7 @@ function envOf(home: string, extra: Record<string, string> = {}): NodeJS.Process
 }
 
 describe("operator data-dir resolution through @hasna/paths", () => {
-  it("defaults to the legacy ~/.hasna/secrets home until adoption", () => {
+  it("defaults to the legacy the secrets data root home until adoption", () => {
     const home = tempHome();
     const env = envOf(home);
 

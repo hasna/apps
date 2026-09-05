@@ -86,8 +86,8 @@ describe("ops producers", () => {
     // on duplicates — on the live index a 50-item queue held 2 distinct PRs.
     const paths = [
       "/workspace/codewith",
-      "/home/u/.hasna/repos/worktrees/codewith/a",
-      "/home/u/.hasna/repos/worktrees/codewith/b",
+      join("/home/u", ".hasna", "repos", "worktrees", "codewith", "a"),
+      join("/home/u", ".hasna", "repos", "worktrees", "codewith", "b"),
     ];
     for (const path of paths) {
       const repo = upsertRepo({

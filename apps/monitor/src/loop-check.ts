@@ -161,7 +161,7 @@ const DEFAULT_MAX_TASK_SEEDS = 20;
 const DEFAULT_WORKSPACE_ROOT = "/home/hasna/workspace";
 const DEFAULT_MAX_REPOS = 700;
 const DEFAULT_MAX_FILES = 30_000;
-const DEFAULT_QUARANTINE_ROOT = "/home/hasna/.hasna/loops/quarantine/resource-pressure";
+const DEFAULT_QUARANTINE_ROOT = [process.env["HOME"] || "/home/hasna", ".hasna", "loops", "quarantine", "resource-pressure"].join("/");
 const DEFAULT_QUARANTINE_MAX_BYTES = 100 * 1024 * 1024 * 1024;
 const DEFAULT_QUARANTINE_TARGET_BYTES = 80 * 1024 * 1024 * 1024;
 

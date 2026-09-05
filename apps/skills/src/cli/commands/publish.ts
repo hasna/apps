@@ -84,7 +84,7 @@ export class PushSkillError extends Error {
 export function registerPublish(parent: Command) {
   parent
     .command("push")
-    .argument("<name>", "Name of a skill in the local corpus (~/.hasna/skills/installed or the migrated ~/.hasna/skills/skills)")
+    .argument("<name>", "Name of a skill in the local corpus (<skills data root>/installed or the migrated <skills data root>/skills)")
     .option("--version <version>", "Override the version recorded on the instance")
     .option("--force-new-version", "If name@version already exists with different content, publish as the next patch version", false)
     .option("--dry-run", "Pack and validate without uploading", false)

@@ -14,7 +14,6 @@ import {
   serialiseFeedbackJsonl,
 } from "./storage.base.js";
 import {
-  DEFAULT_DATA_DIR,
   DEFAULT_FEEDBACK_FILE,
   ENV_PREFIX,
   readStorageEnv,
@@ -23,7 +22,7 @@ import {
 } from "./storage.paths.js";
 import { SqliteFeedbackStore, resolveFeedbackSqlitePath } from "./storage.sqlite.js";
 
-export { DEFAULT_DATA_DIR, DEFAULT_FEEDBACK_FILE, ENV_PREFIX, resolveFeedbackDataDir, resolveFeedbackFilePath };
+export { DEFAULT_FEEDBACK_FILE, ENV_PREFIX, resolveFeedbackDataDir, resolveFeedbackFilePath };
 export {
   DEFAULT_SQLITE_FILE,
   SqliteFeedbackStore,

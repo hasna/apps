@@ -20,92 +20,17 @@ var __require = import.meta.require;
 import { Database } from "bun:sqlite";
 
 // src/workspace.ts
-import { chmodSync, existsSync as existsSync2, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { homedir as homedir2 } from "os";
-import { dirname, join as join2, resolve as resolve2 } from "path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { homedir } from "os";
+import { dirname, join, resolve as resolve2 } from "path";
 
 // src/paths.ts
-import { existsSync } from "fs";
-import { homedir } from "os";
-import { join, resolve } from "path";
-import { homedir as pathsResolverHomedir } from "os";
-import { join as pathsResolverJoin } from "path";
-var PATHS_RESOLVER_KIND_ENV = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME"
-};
-var PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-function pathsResolverAssertApp(app) {
-  if (typeof app !== "string" || app.length === 0) {
-    throw new TypeError("paths: app must be a non-empty string");
-  }
-  if (!PATHS_RESOLVER_APP_SLUG_RE.test(app)) {
-    throw new TypeError(`paths: invalid app slug "${app}" \u2014 expected lowercase kebab-case ([a-z0-9]+(-[a-z0-9]+)*)`);
-  }
-}
-function pathsResolverAssertKind(kind) {
-  if (!Object.keys(PATHS_RESOLVER_KIND_ENV).includes(kind)) {
-    throw new TypeError(`paths: invalid path kind "${kind}" \u2014 expected one of ${Object.keys(PATHS_RESOLVER_KIND_ENV).join(", ")}`);
-  }
-}
-function pathsResolverBaseDir(kind, options) {
-  pathsResolverAssertKind(kind);
-  const env = options.env ?? process.env;
-  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
-  if (typeof override === "string" && override.length > 0)
-    return override;
-  const home = options.home ?? pathsResolverHomedir();
-  const platform = options.platform ?? process.platform;
-  if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
-  }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
-}
-function pathsResolverResolve(kind, options) {
-  pathsResolverAssertApp(options.app);
-  const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
-  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
-}
-function dataDir(options) {
-  return pathsResolverResolve("data", options);
-}
+import { resolve } from "path";
+import { dataDir as resolverDataDir, effectiveHome as resolveEffectiveHome } from "@hasna/contracts/paths";
+var getHomeDir = resolveEffectiveHome;
 var KNOWLEDGE_DATA_HOME_ENV = "HASNA_KNOWLEDGE_HOME";
-function getHomeDir(env = process.env) {
-  const home = env.HOME || env.USERPROFILE || homedir();
-  if (!home)
-    throw new Error("Could not resolve the user home directory");
-  return home;
-}
 function getResolverDataHome(env = process.env) {
-  return dataDir({ app: "knowledge", home: getHomeDir(env), env });
-}
-function getLegacyDataHome(env = process.env) {
-  return join(getHomeDir(env), ".hasna", "knowledge");
-}
-function adoptResolverDataHome(resolved, env = process.env) {
-  const dataOverride = env.HASNA_DATA_HOME;
-  if (typeof dataOverride === "string" && dataOverride.trim().length > 0)
-    return true;
-  return existsSync(join(resolved, "knowledge.db")) || existsSync(join(resolved, "config.json"));
+  return resolverDataDir({ app: "knowledge", home: getHomeDir(env), env });
 }
 function getExactDataHome(env = process.env) {
   const dir = env[KNOWLEDGE_DATA_HOME_ENV]?.trim();
@@ -117,13 +42,12 @@ function getDataHome(env = process.env) {
   const exact = getExactDataHome(env);
   if (exact)
     return exact;
-  const resolved = getResolverDataHome(env);
-  return adoptResolverDataHome(resolved, env) ? resolve(resolved) : getLegacyDataHome(env);
+  return resolve(getResolverDataHome(env));
 }
 
 // src/workspace.ts
-var HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "knowledge");
-var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join2(".hasna", "apps", "knowledge");
+var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
+var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
 function projectKey(cwd = process.cwd()) {
   const slugified = resolve2(cwd).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
   return slugified || "project";
@@ -165,20 +89,20 @@ function canonicalExampleKnowledgeStorage() {
   };
 }
 function legacyGlobalStorePath() {
-  return join2(homedir2(), ".open-knowledge", "db.json");
+  return join(homedir(), ".open-knowledge", "db.json");
 }
 function globalKnowledgeHome() {
   return getDataHome();
 }
 function projectKnowledgeHome(cwd = process.cwd(), home = undefined) {
-  const knowledgeRoot = home === undefined ? globalKnowledgeHome() : join2(home, ".hasna", "knowledge");
-  return join2(knowledgeRoot, "projects", projectKey(cwd));
+  const knowledgeRoot = home === undefined ? globalKnowledgeHome() : join(home, ".hasna", "knowledge");
+  return join(knowledgeRoot, "projects", projectKey(cwd));
 }
 function previousProjectKnowledgeHome(cwd = process.cwd()) {
   return resolve2(cwd, HASNA_KNOWLEDGE_APP_PATH);
 }
 function legacyGlobalKnowledgeHome() {
-  return join2(homedir2(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+  return join(homedir(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
 }
 function legacyProjectKnowledgeHome(cwd = process.cwd()) {
   return resolve2(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
@@ -192,17 +116,17 @@ function resolveLegacyScopedWorkspace(scope, cwd = process.cwd()) {
 function workspaceForHome(home) {
   return {
     home,
-    configPath: join2(home, "config.json"),
-    jsonStorePath: join2(home, "db.json"),
-    knowledgeDbPath: join2(home, "knowledge.db"),
-    artifactsDir: join2(home, "artifacts"),
-    cacheDir: join2(home, "cache"),
-    exportsDir: join2(home, "exports"),
-    indexesDir: join2(home, "indexes"),
-    logsDir: join2(home, "logs"),
-    runsDir: join2(home, "runs"),
-    schemasDir: join2(home, "schemas"),
-    wikiDir: join2(home, "wiki")
+    configPath: join(home, "config.json"),
+    jsonStorePath: join(home, "db.json"),
+    knowledgeDbPath: join(home, "knowledge.db"),
+    artifactsDir: join(home, "artifacts"),
+    cacheDir: join(home, "cache"),
+    exportsDir: join(home, "exports"),
+    indexesDir: join(home, "indexes"),
+    logsDir: join(home, "logs"),
+    runsDir: join(home, "runs"),
+    schemasDir: join(home, "schemas"),
+    wikiDir: join(home, "wiki")
   };
 }
 function defaultKnowledgeConfig() {
@@ -274,7 +198,7 @@ function ensureKnowledgeWorkspace(home) {
   ]) {
     mkdirSync(dir, { recursive: true, mode: 448 });
   }
-  if (!existsSync2(workspace.configPath)) {
+  if (!existsSync(workspace.configPath)) {
     writeFileSync(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}
 `, { mode: 384 });
     chmodSync(workspace.configPath, 384);

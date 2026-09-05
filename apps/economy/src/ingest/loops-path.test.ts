@@ -35,7 +35,7 @@ function isolateHome(): string {
 }
 
 describe('loops store path — resolver with a legacy-read fallback', () => {
-  test('falls back to the legacy ~/.hasna/loops/loops.db when the resolver root has no store', () => {
+  test('falls back to the legacy the loops data root/loops.db when the resolver root has no store', () => {
     const home = isolateHome()
     expect(defaultLoopsDbPath()).toBe(join(home, '.hasna', 'loops', 'loops.db'))
   })

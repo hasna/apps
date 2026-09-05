@@ -39,7 +39,7 @@ function err(error: unknown) {
  * `file_organization_events`) exists ONLY on-box: the hosted server has no
  * schema and no routes for these tables (server/migrate.ts, pg-store.ts,
  * v1.ts), and the producer — `sync_google_drive` — is itself local-only
- * (machine-bound Drive OAuth tokens in ~/.hasna/files) and refuses in api
+ * (machine-bound Drive OAuth tokens in the files data root) and refuses in api
  * mode, as do the downstream FTS refresh and knowledge-outbox consumers.
  * A server-side port with no hosted producer would be a vacuous data plane
  * (bootstrap scans an empty table); moving the Drive sync server-side would

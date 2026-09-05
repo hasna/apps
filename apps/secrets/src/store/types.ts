@@ -6,7 +6,7 @@
 //
 //   • LocalStore — the on-box encrypted SQLite vault (resolved through
 //     @hasna/paths dataDir({app:"secrets"}) with gated legacy adoption —
-//     ~/.hasna/secrets/vault.db until the store is migrated to the XDG data
+//     the secrets data root's vault.db until the store is migrated to the XDG data
 //     home; see src/data-dir.ts).
 //   • ApiStore   — the HTTP API at `<API_URL>/v1` with a bearer key. Delegates
 //     to the vendored @hasna/contracts storage client.

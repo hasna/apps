@@ -5,7 +5,7 @@
  * *data plane* routes through a `FilesStore`. There are exactly two transports
  * behind this one interface:
  *
- *   - {@link LocalStore} — on-box SQLite at ~/.hasna/files/files.db (first-class).
+ *   - {@link LocalStore} — on-box SQLite at the files data root (first-class).
  *   - {@link ApiStore}   — HTTPS `https://files.md/v1` + bearer key.
  *
  * Any client bound to the hosted transport uses the ApiStore (the URL/key are

@@ -229,7 +229,7 @@ describe("MON-V2-14 contracts conformance", () => {
     expect(storage["mode"]).toBeUndefined();
     expect(storage["engines"]).toEqual(["sqlite"]);
     expect(storage["envPrefix"]).toBe("HASNA_MONITOR_");
-    expect(storage["sqlitePath"]).toBe("~/.hasna/monitor/monitor.db");
+    expect(storage["sqlitePath"]).toBe("the monitor data root/monitor.db");
   });
 
   it("waives the waivable postgresql engine, never the retired postgres value", () => {

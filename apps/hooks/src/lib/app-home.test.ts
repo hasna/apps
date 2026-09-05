@@ -81,7 +81,7 @@ describe("resolver (XDG) data-root resolution", () => {
 });
 
 describe("resolver (XDG) adoption — the legacy home must never become invisible", () => {
-  test("legacy ~/.hasna/hooks stays the effective root until adopted", () => {
+  test("legacy the hooks data root stays the effective root until adopted", () => {
     const home = isolateHome();
     expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(false);
     expect(getEffectiveDataRoot()).toBe(getLegacyDataRoot());

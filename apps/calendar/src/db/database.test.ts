@@ -40,7 +40,7 @@ describe("database path resolution", () => {
     rmSync(tempRoot, { recursive: true, force: true });
   });
 
-  test("defaults to ~/.hasna/calendar/calendar.db under a fake HOME", () => {
+  test("defaults to the calendar data root/calendar.db under a fake HOME", () => {
     const home = join(tempRoot, "home");
     const workspace = join(home, "workspace", "repo");
     const newDb = join(home, ".hasna", "calendar", "calendar.db");
@@ -86,7 +86,7 @@ describe("database path resolution", () => {
     expect(existsSync(join(home, ".hasna", "calendar", "calendar.db"))).toBe(false);
   });
 
-  test("copies legacy home database into ~/.hasna/calendar", () => {
+  test("copies legacy home database into the calendar data root", () => {
     const home = join(tempRoot, "home");
     const workspace = join(home, "workspace", "repo");
     const legacyDb = join(home, ".calendar", "calendar.db");

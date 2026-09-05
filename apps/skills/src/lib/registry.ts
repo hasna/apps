@@ -143,7 +143,7 @@ function registryRootKey(): string {
  * extension checkout and global custom skills from the canonical local corpus
  * — <app folder>/installed/<name>/ before the owner-layout migration, <app
  * folder>/skills/<name>/ after it (resolveCorpusRoot(), the one resolution
- * every discovery path shares) — plus the legacy ~/.hasna/skills/custom/<name>/
+ * every discovery path shares) — plus the legacy <skills data root>/custom/<name>/
  * migration safety net.
  *
  * Custom skills take precedence over extensions, which take precedence over

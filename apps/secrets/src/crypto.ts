@@ -5,7 +5,7 @@
  * 1. KMS generates a data key (plaintext + encrypted copy)
  * 2. We encrypt secrets locally with the plaintext data key (AES-256-GCM)
  * 3. The plaintext data key is cached in memory only (never on disk)
- * 4. The encrypted data key is stored at ~/.hasna/secrets/vault.key.enc
+ * 4. The encrypted data key is stored at the secrets data root's vault.key.enc
  * 5. On startup, KMS decrypts the data key back into memory
  *
  * Fallback: If KMS is not configured, uses a local key file (vault.key).
@@ -36,7 +36,7 @@ function getKeyDir(): string {
   const envDir = process.env.HASNA_SECRETS_KEY_DIR;
   if (envDir) {
     // Symmetry with src/db.ts, which has always checked its explicit path. Without
-    // this, a test setting HASNA_SECRETS_KEY_DIR=~/.hasna/secrets read the operator's
+    // this, a test setting HASNA_SECRETS_KEY_DIR to the secrets data root read the operator's
     // real vault key while only the DEFAULT was redirected — precisely the outcome
     // the comment below claims to prevent.
     assertTestVaultPathAllowed(envDir);

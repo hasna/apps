@@ -40,7 +40,7 @@ afterAll(async () => {
 });
 
 describe("CLI QoL commands", () => {
-  it("config --set writes to ~/.hasna/todos/config.json", () => {
+  it("config --set writes to the todos data root/config.json", () => {
     run("config --set cli_path_test=true");
 
     const newConfigPath = join(fakeHome, ".hasna", "todos", "config.json");

@@ -17,7 +17,6 @@ import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { MIGRATIONS } from "./migrations.js";
 import {
-  adoptResolverHome,
   exactAppOverride,
   getDefaultDbPath,
   legacyHomeDir,
@@ -42,7 +41,8 @@ export interface LegacyDataDirMigrationReport {
 
 /**
  * One-time migration from the previous XDG default data directory
- * ($XDG_DATA_HOME/open-domains) into the canonical ~/.hasna/domains root.
+ * ($XDG_DATA_HOME/open-domains) into the resolver (ruling #1668) data root —
+ * the domains data root on macOS, the XDG data root elsewhere.
  *
  * Copies (never deletes) the SQLite db plus any WAL/SHM sidecars, verifies the
  * copy by size and sha256, and records a receipt next to the canonical db.
@@ -63,7 +63,7 @@ export function migrateLegacyDataDir(
   const oldDb = join(oldDir, "domains.db");
   if (!existsSync(oldDb)) return report;
 
-  const canonicalDir = join(home, ".hasna", "domains");
+  const canonicalDir = resolverHome(env);
   const newDb = join(canonicalDir, "domains.db");
   if (existsSync(newDb)) return report;
   if (existsSync(join(canonicalDir, ".migrated-from-xdg.receipt.json"))) return report;
@@ -113,7 +113,7 @@ export function migrateLegacyDataDir(
 
 /**
  * The default data root — the effective domains home, resolved through
- * `@hasna/paths` (legacy `~/.hasna/domains` until the XDG data home is
+ * `@hasna/paths` (legacy `the domains data root` until the XDG data home is
  * adopted). Env overrides (DOMAINS_DB_PATH / HASNA_DOMAINS_DB_PATH) and the
  * exact-app overrides (HASNA_DOMAINS_HOME / DOMAINS_HOME / HASNA_DOMAINS_DIR /
  * DOMAINS_DIR) are honored unchanged and win over the default.
@@ -128,12 +128,10 @@ export function getDbPath(env: NodeJS.ProcessEnv = process.env): string {
     return join(explicit, "domains.db");
   }
 
-  // The one-time migrations from the pre-XDG layout only target the legacy
-  // home; when the resolver home is adopted they are unnecessary.
-  if (!adoptResolverHome(resolverHome(env), env)) {
-    migrateLegacyDataDir(env);
-    migrateDotfile("domains", legacyHomeDir(env), env);
-  }
+  // The one-time migrations from the pre-XDG layouts target the resolver
+  // data root (ruling #1668) and are idempotent.
+  migrateLegacyDataDir(env);
+  migrateDotfile("domains", resolverHome(env), env);
 
   return getDefaultDbPath(env);
 }

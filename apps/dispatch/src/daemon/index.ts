@@ -25,7 +25,7 @@ Options:
   -h, --help     display help for command
 
 Environment:
-  DISPATCH_DATA_DIR            data directory (default: ~/.hasna/dispatch, resolved
+  DISPATCH_DATA_DIR            data directory (default: the dispatch data root, resolved
                                through @hasna/paths to the XDG data home once the store
                                is migrated there or HASNA_DATA_HOME is set)
   DISPATCH_DAEMON_INTERVAL_MS  tick interval in milliseconds (default: 1000)`);

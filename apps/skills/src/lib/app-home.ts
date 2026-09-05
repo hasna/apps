@@ -1,188 +1,43 @@
 /**
- * Skills app-home resolution through the @hasna/paths resolver.
- *
- * Skills keeps its global config (`config.json`), auth (`auth.json`), the
- * default SQLite database (`server.db`), the corpus cache (`skills/`), and the
- * portable-skill tree (`installed/`, `custom/`) under one data root.
- * Historically that root was `~/.hasna/skills`. This module resolves the root
- * through `@hasna/paths` (XDG / macOS home layout) with a gated legacy
- * adoption: the legacy `~/.hasna/skills` stays the effective data root until
- * the store is physically migrated to the XDG data home (`server.db` or
- * `config.json` present there) or the operator sets the data-kind override
- * `HASNA_DATA_HOME`. An existing live store never becomes invisible on
- * upgrade. The exact-app overrides win unconditionally, in this order:
- * `HASNA_SKILLS_DIR` (the shipped override), then the wave-convention aliases
- * `HASNA_SKILLS_HOME` and `SKILLS_HOME`.
- *
- * Nothing moves on disk in this phase — the package just resolves the new
- * paths.
+ * skills data-root resolution — thin app wrapper over the single paths
+ * resolver in `@hasna/contracts` (ruling hasna/apps#1668). The resolver owns
+ * platform placement (`the skills data root` on macOS, XDG data root on Linux)
+ * and the `HASNA_{CONFIG,DATA,STATE,CACHE}_HOME` kind overrides; this module
+ * layers the skills-specific exact-app override on top.
  */
-
-import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { join } from "node:path";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-// --- Local path resolver -------------------------------------------------
-// @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
-// implementation preserves the resolver contract (XDG / macOS home layout
-// honoring HASNA_{CONFIG,DATA,STATE,CACHE}_HOME, with the same env-override
-// and home-override semantics the deleted package had).
-import { homedir as pathsResolverHomedir } from "node:os";
-import { join as pathsResolverJoin } from "node:path";
+import { existsSync } from "node:fs";
+import { dataDir as resolverDataDir, effectiveHome as resolveEffectiveHome, kindEnv } from "@hasna/contracts/paths";
 
-export type PathKind = "config" | "data" | "state" | "cache";
-
-const PATHS_RESOLVER_KIND_ENV: Record<PathKind, string> = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME",
-};
-
-export interface PathsResolverOptions {
-  app: string;
-  internal?: boolean;
-  platform?: string;
-  home?: string;
-  env?: Record<string, string | undefined>;
-}
-
-const PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-function pathsResolverAssertApp(app: string): void {
-  if (typeof app !== "string" || app.length === 0) {
-    throw new TypeError("paths: app must be a non-empty string");
-  }
-  if (!PATHS_RESOLVER_APP_SLUG_RE.test(app)) {
-    throw new TypeError(
-      `paths: invalid app slug "${app}" — expected lowercase kebab-case ([a-z0-9]+(-[a-z0-9]+)*)`,
-    );
-  }
-}
-
-function pathsResolverAssertKind(kind: PathKind): void {
-  if (!(Object.keys(PATHS_RESOLVER_KIND_ENV) as string[]).includes(kind)) {
-    throw new TypeError(
-      `paths: invalid path kind "${kind}" — expected one of ${Object.keys(PATHS_RESOLVER_KIND_ENV).join(", ")}`,
-    );
-  }
-}
-
-function pathsResolverBaseDir(kind: PathKind, options: PathsResolverOptions): string {
-  pathsResolverAssertKind(kind);
-  const env: Record<string, string | undefined> = options.env ?? process.env;
-  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
-  if (typeof override === "string" && override.length > 0) return override;
-  const home = options.home ?? pathsResolverHomedir();
-  const platform = options.platform ?? process.platform;
-  if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
-  }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
-}
-
-function pathsResolverResolve(kind: PathKind, options: PathsResolverOptions): string {
-  pathsResolverAssertApp(options.app);
-  const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
-  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
-}
-export function dataDir(options: PathsResolverOptions): string {
-  return pathsResolverResolve("data", options);
-}
-
-/** Env var that relocates the skills data directory (the shipped override). */
+/** Resolve the user's home directory: $HOME, then $USERPROFILE, then the OS user database. */
+export const effectiveHome = resolveEffectiveHome;
 export const DATA_DIR_ENV = "HASNA_SKILLS_DIR";
-
-/** Wave-convention exact-app home aliases, honoured after HASNA_SKILLS_DIR. */
 export const HASNA_SKILLS_HOME_ENV = "HASNA_SKILLS_HOME";
 export const SKILLS_HOME_ENV = "SKILLS_HOME";
-
-/** Filename of the default SQLite database inside the skills data directory. */
 export const DEFAULT_SQLITE_FILENAME = "server.db";
-
-/** Filename of the global config file inside the skills data directory. */
 export const GLOBAL_CONFIG_FILENAME = "config.json";
 
 /**
- * The effective user home, mirroring the pre-existing skills resolution
- * (`HOME` || `USERPROFILE` || `os.homedir()`). Read at call time so a runtime
- * `HOME` reassignment (e.g. a test temp home) is honoured — `os.homedir()`
- * snapshots `HOME` at process start and, under Bun, ignores later changes.
- */
-export function effectiveHome(): string {
-  return process.env["HOME"] || process.env["USERPROFILE"] || homedir() || "/tmp";
-}
-
-/** The legacy (pre-XDG) data root: `~/.hasna/skills`. */
-export function legacyDataRoot(): string {
-  return join(effectiveHome(), ".hasna", "skills");
-}
-
-/**
- * The @hasna/paths-resolved (XDG / macOS home layout) data root for skills:
- * `~/.local/share/hasna/skills` on Linux, `~/Library/Application
- * Support/Hasna/skills` on macOS. The home override mirrors the pre-existing
- * `$HOME`-first resolution so the resolver follows the same home the legacy
- * path does.
- *
- * `env` is forwarded to the resolver: an injected env (e.g. `{}` for a
- * staged home mirror) suppresses the process-level `HASNA_*_HOME` overrides,
- * which describe THIS machine's live store and must not relocate a mirror.
- * `@hasna/paths` applies env overrides before the injected home, so without
- * this the resolver would ignore the mirror home whenever `HASNA_DATA_HOME`
- * is set.
+ * The resolver skills data root: kind overrides honored,
+ * `the skills data root` on macOS, `~/.local/share/hasna/skills` on Linux.
  */
 export function resolverDataRoot(
   home: string = effectiveHome(),
   env?: Record<string, string | undefined>,
 ): string {
-  return dataDir({ app: "skills", home, env });
+  return resolverDataDir({ app: "skills", home, env });
 }
 
 /**
- * Whether the resolver (XDG) data root should be adopted as the effective
- * data root. The resolver root is adopted only when the operator has set
- * `HASNA_DATA_HOME` (the data-kind override — a deliberate opt-in to the XDG
- * layout) or the store has already been physically migrated there (`server.db`
- * — the default SQLite store — or `config.json` exists). A machine that only
- * redirects another kind (e.g. cache to tmpfs) must NOT have its data home
- * moved, and a live store at the legacy home must never become invisible on
- * upgrade.
+ * The pre-ruling legacy root (`the skills data root`). On macOS this equals the
+ * resolver root; elsewhere it is kept only for historical-data migration.
  */
-export function adoptResolverDataRoot(
-  resolved: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  const dataOverride = env.HASNA_DATA_HOME;
-  if (typeof dataOverride === "string" && dataOverride.trim().length > 0) return true;
-  return (
-    existsSync(join(resolved, DEFAULT_SQLITE_FILENAME)) ||
-    existsSync(join(resolved, GLOBAL_CONFIG_FILENAME))
-  );
+export function legacyDataRoot(): string {
+  return join(effectiveHome(), ".hasna", "skills");
 }
 
-/**
- * The exact-app override root, when set: the shipped `HASNA_SKILLS_DIR` wins,
- * then the wave-convention aliases `HASNA_SKILLS_HOME` and `SKILLS_HOME`.
- * First non-blank override wins; a blank or whitespace-only primary must not
- * shadow a valid secondary (nullish `??` does not fall through on `""`).
- */
 export function exactDataRoot(): string | undefined {
   for (const key of [DATA_DIR_ENV, HASNA_SKILLS_HOME_ENV, SKILLS_HOME_ENV] as const) {
     const dir = process.env[key]?.trim();
@@ -191,7 +46,17 @@ export function exactDataRoot(): string | undefined {
   return undefined;
 }
 
-/** Whether an exact-app override root is set (used to skip legacy migration). */
+/**
+ * The effective skills data root: an exact-app override wins
+ * unconditionally; otherwise the resolver data root (ruling #1668 — the
+ * resolver root IS the convention on every platform).
+ */
+export function getDataRoot(): string {
+  const exact = exactDataRoot();
+  if (exact) return exact;
+  return resolve(resolverDataRoot());
+}
+
 export function hasExactOverride(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
     Boolean(env[DATA_DIR_ENV]?.trim()) ||
@@ -199,62 +64,41 @@ export function hasExactOverride(env: NodeJS.ProcessEnv = process.env): boolean 
     Boolean(env[SKILLS_HOME_ENV]?.trim())
   );
 }
-
-/**
- * Whether the operator named a data root at all — an exact-app override or the
- * data-kind `HASNA_DATA_HOME`. Used to decide when the legacy `~/.skills` /
- * `~/.skillsrc` migration must be skipped: copying a stray legacy tree into an
- * operator-chosen directory would be a surprising write.
- */
 export function hasOperatorOverride(env: NodeJS.ProcessEnv = process.env): boolean {
-  return hasExactOverride(env) || Boolean(env.HASNA_DATA_HOME?.trim());
+  return hasExactOverride(env) || Boolean(env[kindEnv("data")]?.trim());
 }
-
 /**
- * The effective data root: an exact-app override (`HASNA_SKILLS_DIR`, then
- * `HASNA_SKILLS_HOME` / `SKILLS_HOME`) wins unconditionally; otherwise the
- * resolver (XDG) data root once adopted; otherwise the legacy `~/.hasna/skills`
- * default. Write-free: callers that need the directory to exist create it.
+ * Whether the resolver (XDG) data root should be adopted as the effective
+ * data root. The resolver root is adopted only when the operator has set
+ * the data-kind override (`HASNA_DATA_HOME` — a deliberate opt-in to the
+ * ruled layout) or the store has already been physically migrated there
+ * (`server.db` — the default SQLite store — or `config.json` exists). A
+ * machine that only redirects another kind (e.g. cache to tmpfs) must NOT
+ * have its data home moved, and a live store at the legacy home must never
+ * become invisible on upgrade. Read through the resolver's `kindEnv` so the
+ * kind override stays the resolver's own seam (paths conformance).
  */
-export function getDataRoot(): string {
-  const exact = exactDataRoot();
-  if (exact) return exact;
-  const resolved = resolverDataRoot();
-  return adoptResolverDataRoot(resolved) ? resolve(resolved) : resolve(legacyDataRoot());
+export function adoptResolverDataRoot(
+  resolved: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const dataOverride = env[kindEnv("data")];
+  if (typeof dataOverride === "string" && dataOverride.trim().length > 0) return true;
+  return (
+    existsSync(join(resolved, DEFAULT_SQLITE_FILENAME)) ||
+    existsSync(join(resolved, GLOBAL_CONFIG_FILENAME))
+  );
 }
-
-/**
- * The skills app data root for an explicit home root, mirroring getDataRoot()
- * with the home injected. Used by the sync-home snapshot mapping to enumerate
- * the skills corpus under a staged home mirror (`homesRoot`) or the real home.
- *
- * Process-level overrides (`HASNA_SKILLS_DIR` / `HASNA_SKILLS_HOME` /
- * `SKILLS_HOME`, and the data-kind `HASNA_DATA_HOME`) describe THIS machine's
- * live store. They apply only when the requested home IS the process's own
- * effective home; a staged mirror (a different home, e.g. an rsync'd
- * remote-station `homesRoot`) must resolve its own layout — the mirror's XDG
- * data root once the mirror itself carries a migrated store there, else the
- * mirror's legacy `~/.hasna/skills` — never the local process's live data
- * root. Snapshotting a staged home with the local `HASNA_DATA_HOME` set would
- * otherwise read live local data instead of the supplied mirror.
- */
 export function skillsDataRootForHome(home: string): string {
   const isOwnHome =
     resolve(home) === resolve(effectiveHome()) || resolve(home) === resolve(homedir());
   if (isOwnHome) {
     const exact = exactDataRoot();
     if (exact) return exact;
-    const resolved = resolverDataRoot(home);
-    return adoptResolverDataRoot(resolved) ? resolve(resolved) : resolve(join(home, ".hasna", "skills"));
+    return resolve(resolverDataRoot(home));
   }
   // A staged home mirror (e.g. an rsync'd remote-station `homesRoot`):
   // process-level overrides describe THIS machine's live store and must not
-  // leak into the mirror's resolution. Resolve with a scrubbed env so the
-  // mirror's own layout decides: its XDG data root once the mirror itself
-  // carries a migrated store there (`server.db` / `config.json`), else the
-  // mirror's legacy `~/.hasna/skills`. Snapshotting a staged home with the
-  // local `HASNA_DATA_HOME` / `HASNA_SKILLS_DIR` set would otherwise read
-  // live local data instead of the supplied mirror.
-  const resolved = resolverDataRoot(home, {});
-  return adoptResolverDataRoot(resolved, {}) ? resolve(resolved) : resolve(join(home, ".hasna", "skills"));
+  // leak into the mirror's resolution, so resolve with a scrubbed env.
+  return resolve(resolverDataRoot(home, {}));
 }

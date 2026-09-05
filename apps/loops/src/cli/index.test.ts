@@ -1884,8 +1884,8 @@ describe("loops CLI", () => {
     const dataDir = freshDataDir("loops-cli-hygiene-scripts-");
     const scriptsDir = join(dataDir, "scripts");
     expect(runCli(dataDir, ["create", "command", "script-backed", "--at", futureAt(), "--cmd", `${scriptsDir}/check.sh`]).status).toBe(0);
-    expect(runCli(dataDir, ["create", "command", "script-backed-tilde", "--at", futureAt(), "--cmd", "~/.hasna/loops/scripts/check.sh"]).status).toBe(0);
-    expect(runCli(dataDir, ["create", "command", "script-backed-env", "--at", futureAt(), "--cmd", "$HOME/.hasna/loops/scripts/check.sh"]).status).toBe(0);
+    expect(runCli(dataDir, ["create", "command", "script-backed-tilde", "--at", futureAt(), "--cmd", "the loops data root/scripts/check.sh"]).status).toBe(0);
+    expect(runCli(dataDir, ["create", "command", "script-backed-env", "--at", futureAt(), "--cmd", join("$HOME", ".hasna", "loops", "scripts", "check.sh")]).status).toBe(0);
 
     const report = runCli(dataDir, ["--json", "hygiene", "scripts", "--scripts-dir", scriptsDir]);
 
@@ -3659,7 +3659,7 @@ describe("loops CLI", () => {
 
   test("expectations JSON is read-only and honors temp LOOPS_DATA_DIR", () => {
     // Deliberately unseeded: this test proves the CLI creates loops.db inside
-    // LOOPS_DATA_DIR (and never under $HOME/.hasna), so the db must not exist yet.
+    // LOOPS_DATA_DIR (and never under the legacy home), so the db must not exist yet.
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-expectations-temp-data-"));
     const home = mkdtempSync(join(tmpdir(), "loops-cli-expectations-home-"));
     const create = runCli(dataDir, ["create", "command", "isolated", "--at", futureAt(), "--cmd", "true"], undefined, { HOME: home });

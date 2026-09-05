@@ -20,7 +20,7 @@ import { getPackageVersion } from "../lib/version.js";
  * entering the daemon path (positive), and a plain start must STILL take the
  * daemon path — the "[dispatch-daemon] started" bind marker appears, then the
  * process is killed (negative). The negative probe runs with DISPATCH_DATA_DIR
- * pointed at a throwaway directory so it never touches live ~/.hasna/dispatch
+ * pointed at a throwaway directory so it never touches live the dispatch data root
  * state and never collides with a running daemon.
  */
 

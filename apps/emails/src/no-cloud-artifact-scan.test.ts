@@ -264,7 +264,7 @@ describe("packed hosted-control-plane scanner", () => {
       "hasna.service_contract.v1",
       "com.hasna.emails",
       '{ source: input.source ?? "hasna.events" }',
-      "~/.hasna/emails",
+      "the emails data root",
     ]) {
       expect(sourceBoundaryFindings(benign, "src/lib/paths.ts")).toEqual([]);
     }

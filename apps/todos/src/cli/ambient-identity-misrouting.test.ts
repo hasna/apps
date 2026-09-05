@@ -8,7 +8,7 @@ import { localRoutingTestEnv } from "../test/local-routing-env.fixture.test.js";
  * Regression: the persisted identity file is MACHINE-GLOBAL, and `todos add`
  * routed other sessions' work with it (todos task 64131fb1).
  *
- * `~/.hasna/todos/identity.json` is keyed on $HOME, and this fleet runs many
+ * `the todos data root/identity.json` is keyed on $HOME, and this fleet runs many
  * named agent sessions per station under one HOME. `todos init` refuses to
  * clobber a foreign identity — but nothing guarded the READ side, so every
  * session that had not registered silently inherited whichever agent had run
@@ -52,7 +52,7 @@ const FOREIGN = "titus-skill-corpus";
 
 /**
  * The suite that tests the shared-identity defect must not itself touch the shared
- * identity. `~/.hasna/todos/identity.json` is the very file under discussion: it is
+ * identity. `the todos data root/identity.json` is the very file under discussion: it is
  * keyed on $HOME, every agent on a station shares one HOME, and a test that reads it
  * would pass or fail according to whichever agent registered last — while a test that
  * WROTE it would stamp a fixture name onto every other agent's tasks.
@@ -167,7 +167,7 @@ describe("todos add — a foreign session's persisted identity must not route wo
     // including rows whose true filer confirmed the misattribution directly.
     //
     // created_by gets the exact same treatment as assigned_to and agent_id now:
-    // an identity read back from ~/.hasna/todos/identity.json is DISPLAYABLE
+    // an identity read back from the todos data root/identity.json is DISPLAYABLE
     // (see resolveCreatorIdentity, still used for --inbox diagnostics) but must
     // never be WRITTEN into a task, because it identifies the STATION, not the
     // caller. `resolveWritableIdentity` already enforces exactly this for the

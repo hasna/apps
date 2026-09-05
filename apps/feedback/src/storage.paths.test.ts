@@ -1,141 +1,131 @@
-import { afterAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { dataDir } from "@hasna/contracts/paths";
+import { DEFAULT_FEEDBACK_FILE, readStorageEnv, resolveFeedbackDataDir, resolveFeedbackFilePath } from "./storage.paths.js";
 import {
-  adoptResolverDataRoot,
-  exactDataRoot,
-  getDataDir,
   legacyDataRoot,
-  resolveFeedbackDataDir,
-  resolveFeedbackFilePath,
   resolverDataRoot,
+  getDataDir,
+  effectiveHome,
 } from "./storage.paths.js";
 
-// Isolate the resolver to a throwaway HOME so the assertions never depend on
-// whether this machine already has a migrated store under the real home.
-const testHome = mkdtempSync(join(tmpdir(), `feedback-paths-test-`));
-const savedHome = process.env.HOME;
-process.env.HOME = testHome;
-
 const ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "HASNA_DATA_HOME",
+  "HASNA_CACHE_HOME",
+  "HASNA_CONFIG_HOME",
+  "HASNA_STATE_HOME",
   "HASNA_FEEDBACK_HOME",
   "FEEDBACK_HOME",
-  "HASNA_DATA_HOME",
   "HASNA_FEEDBACK_DATA_DIR",
   "FEEDBACK_DATA_DIR",
 ] as const;
-const previous = new Map<string, string | undefined>();
 
-beforeEach(() => {
-  for (const key of ENV_KEYS) {
-    previous.set(key, process.env[key]);
-    delete process.env[key];
-  }
-  // Remove any resolver-home store a prior test may have planted.
-  rmSync(join(resolverDataRoot(), "feedback.db"), { force: true });
-  rmSync(join(resolverDataRoot(), "feedback.jsonl"), { force: true });
-});
+let saved: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
+let tempHome: string | null = null;
+const cleanups: string[] = [];
 
-afterAll(() => {
-  process.env.HOME = savedHome;
+afterEach(() => {
   for (const key of ENV_KEYS) {
-    const value = previous.get(key);
+    const value = saved[key];
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  rmSync(testHome, { recursive: true, force: true });
+  saved = {};
+  for (const dir of cleanups.splice(0)) rmSync(dir, { recursive: true, force: true });
+  if (tempHome !== null) {
+    rmSync(tempHome, { recursive: true, force: true });
+    tempHome = null;
+  }
 });
 
-describe("feedback data-dir resolution", () => {
-  it("defaults to ~/.hasna/feedback until the XDG store exists or HASNA_DATA_HOME is set", () => {
-    expect(legacyDataRoot()).toBe(join(testHome, ".hasna", "feedback"));
-    expect(resolverDataRoot()).toBe(join(testHome, ".local", "share", "hasna", "feedback"));
-    expect(adoptResolverDataRoot(resolverDataRoot())).toBe(false);
-    expect(getDataDir()).toBe(legacyDataRoot());
-    expect(resolveFeedbackDataDir()).toBe(legacyDataRoot());
-    expect(resolveFeedbackFilePath()).toBe(join(legacyDataRoot(), "feedback.jsonl"));
+function isolateHome(): string {
+  if (tempHome !== null) throw new Error("isolateHome called twice without afterEach");
+  for (const key of ENV_KEYS) {
+    saved[key] = process.env[key];
+    delete process.env[key];
+  }
+  tempHome = mkdtempSync(join(tmpdir(), "feedback-paths-"));
+  process.env.HOME = tempHome;
+  delete process.env.USERPROFILE;
+  return tempHome;
+}
+
+describe("paths resolver wiring (single resolver in @hasna/contracts, ruling #1668)", () => {
+  test("home resolves HOME first", () => {
+    const home = isolateHome();
+    expect(effectiveHome()).toBe(home);
   });
 
-  it("adopts the resolver data root when HASNA_DATA_HOME is set", () => {
-    const dataHome = join(testHome, "xdg-data");
-    process.env["HASNA_DATA_HOME"] = dataHome;
-    expect(adoptResolverDataRoot(resolverDataRoot())).toBe(true);
-    expect(getDataDir()).toBe(join(dataHome, "feedback"));
+  test("the resolver data root is the contracts resolver root for this machine", () => {
+    const home = isolateHome();
+    expect(resolverDataRoot()).toBe(dataDir({ app: "feedback", home, env: process.env }));
   });
 
-  it("adopts the resolver data root once the store has been migrated there (sqlite)", () => {
-    const resolved = resolverDataRoot();
-    mkdirSync(resolved, { recursive: true });
-    writeFileSync(join(resolved, "feedback.db"), "");
-    expect(adoptResolverDataRoot(resolverDataRoot())).toBe(true);
-    expect(getDataDir()).toBe(resolved);
-    expect(resolveFeedbackDataDir()).toBe(resolved);
+  test("on macOS the resolver (and therefore the effective) root is ~/.hasna/feedback", () => {
+    const home = isolateHome();
+    const mac = dataDir({ app: "feedback", home, platform: "darwin", env: process.env });
+    expect(mac).toBe(join(home, ".hasna", "feedback"));
+    expect(resolverDataRoot()).toBe(mac);
+    expect(getDataDir()).toBe(mac);
   });
 
-  it("adopts the resolver data root once the store has been migrated there (jsonl)", () => {
-    const resolved = resolverDataRoot();
-    mkdirSync(resolved, { recursive: true });
-    writeFileSync(join(resolved, "feedback.jsonl"), "");
-    expect(adoptResolverDataRoot(resolverDataRoot())).toBe(true);
-    expect(getDataDir()).toBe(resolved);
+  test("on Linux the resolver root is the XDG data root", () => {
+    const home = isolateHome();
+    expect(dataDir({ app: "feedback", home, platform: "linux", env: process.env })).toBe(
+      join(home, ".local", "share", "hasna", "feedback"),
+    );
   });
 
-  it("lets the exact-app HASNA_FEEDBACK_HOME override win over the resolver", () => {
-    process.env["HASNA_DATA_HOME"] = join(testHome, "xdg-data");
-    process.env["HASNA_FEEDBACK_HOME"] = "/tmp/feedback-home";
-    expect(exactDataRoot()).toBe("/tmp/feedback-home");
-    expect(getDataDir()).toBe("/tmp/feedback-home");
-    expect(resolveFeedbackDataDir()).toBe("/tmp/feedback-home");
+  test("the effective root is the resolver root", () => {
+    const home = isolateHome();
+    expect(getDataDir()).toBe(dataDir({ app: "feedback", home, env: process.env }));
   });
 
-  it("lets the FEEDBACK_HOME override win too", () => {
-    process.env["HASNA_FEEDBACK_HOME"] = "/tmp/feedback-home-a";
-    process.env["FEEDBACK_HOME"] = "/tmp/feedback-home-b";
-    expect(exactDataRoot()).toBe("/tmp/feedback-home-a");
+  test("HASNA_DATA_HOME kind override moves the data root (app segment kept)", () => {
+    isolateHome();
+    const base = mkdtempSync(join(tmpdir(), "feedback-data-home-")); cleanups.push(base);
+    process.env.HASNA_DATA_HOME = base;
+    expect(getDataDir()).toBe(join(base, "feedback"));
   });
 
-  it("treats blank or whitespace-only HASNA_FEEDBACK_HOME as unset", () => {
-    process.env["HASNA_FEEDBACK_HOME"] = "";
-    expect(exactDataRoot()).toBeUndefined();
-    expect(getDataDir()).toBe(legacyDataRoot());
-    process.env["HASNA_FEEDBACK_HOME"] = "   ";
-    expect(exactDataRoot()).toBeUndefined();
-    expect(getDataDir()).toBe(legacyDataRoot());
+  test("a non-data kind override (HASNA_CACHE_HOME) must NOT move the data home", () => {
+    const home = isolateHome();
+    const cache = mkdtempSync(join(tmpdir(), "feedback-cache-home-")); cleanups.push(cache);
+    process.env.HASNA_CACHE_HOME = cache;
+    expect(getDataDir()).toBe(dataDir({ app: "feedback", home, env: process.env }));
   });
 
-  it("falls through to FEEDBACK_HOME when HASNA_FEEDBACK_HOME is blank or whitespace-only", () => {
-    // Restore immediately (try/finally): the afterAll restore only replays the
-    // last beforeEach-saved value, which can re-leak a value set mid-file into
-    // sibling test files running in the same process.
-    process.env["FEEDBACK_HOME"] = "/tmp/feedback-home-b";
-    try {
-      process.env["HASNA_FEEDBACK_HOME"] = "";
-      expect(exactDataRoot()).toBe("/tmp/feedback-home-b");
-      expect(getDataDir()).toBe("/tmp/feedback-home-b");
-      process.env["HASNA_FEEDBACK_HOME"] = "   ";
-      expect(exactDataRoot()).toBe("/tmp/feedback-home-b");
-      expect(getDataDir()).toBe("/tmp/feedback-home-b");
-    } finally {
-      delete process.env["HASNA_FEEDBACK_HOME"];
-      delete process.env["FEEDBACK_HOME"];
-    }
+  test("the pre-ruling legacy root is spelled under ~/.hasna/feedback", () => {
+    const home = isolateHome();
+    expect(legacyDataRoot()).toBe(join(home, ".hasna", "feedback"));
+  });
+});
+
+describe("exact-app overrides and store layering", () => {
+  test("exact-app overrides win over the resolver root", () => {
+    isolateHome();
+    const override = mkdtempSync(join(tmpdir(), "feedback-hasna-home-")); cleanups.push(override);
+    process.env.HASNA_FEEDBACK_HOME = override;
+    expect(getDataDir()).toBe(resolve(override));
+    expect(resolveFeedbackFilePath()).toBe(join(resolve(override), DEFAULT_FEEDBACK_FILE));
   });
 
-  it("trims valid HASNA_FEEDBACK_HOME values", () => {
-    process.env["HASNA_FEEDBACK_HOME"] = "  /tmp/feedback-home  ";
-    expect(exactDataRoot()).toBe("/tmp/feedback-home");
-    expect(getDataDir()).toBe("/tmp/feedback-home");
+  test("HASNA_FEEDBACK_DATA_DIR names the data dir directly and wins", () => {
+    isolateHome();
+    const override = mkdtempSync(join(tmpdir(), "feedback-data-dir-")); cleanups.push(override);
+    process.env.HASNA_FEEDBACK_DATA_DIR = override;
+    expect(resolveFeedbackDataDir()).toBe(override);
+    expect(resolveFeedbackFilePath()).toBe(join(override, DEFAULT_FEEDBACK_FILE));
   });
 
-  it("keeps the explicit HASNA_FEEDBACK_DATA_DIR / FEEDBACK_DATA_DIR override winning", () => {
-    process.env["HASNA_DATA_HOME"] = join(testHome, "xdg-data");
-    process.env["HASNA_FEEDBACK_HOME"] = "/tmp/feedback-home";
-    process.env["HASNA_FEEDBACK_DATA_DIR"] = "/tmp/feedback-data-dir";
-    expect(resolveFeedbackDataDir()).toBe("/tmp/feedback-data-dir");
-    expect(resolveFeedbackFilePath()).toBe(join("/tmp/feedback-data-dir", "feedback.jsonl"));
-    delete process.env["HASNA_FEEDBACK_DATA_DIR"];
-    process.env["FEEDBACK_DATA_DIR"] = "/tmp/feedback-data-dir-legacy";
-    expect(resolveFeedbackDataDir()).toBe("/tmp/feedback-data-dir-legacy");
+  test("readStorageEnv reads the prefixed name, then legacy aliases", () => {
+    const env = { HASNA_FEEDBACK_X: "  ", FEEDBACK_X: "y" };
+    expect(readStorageEnv(env, "X")).toBe("y");
+    expect(readStorageEnv({}, "X")).toBeUndefined();
   });
+
 });

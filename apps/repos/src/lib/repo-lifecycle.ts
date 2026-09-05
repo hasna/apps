@@ -380,7 +380,7 @@ async function cloneAndRegister(credential: ResolvedCredential, spec: RepoSpec):
     });
   }
   // The org segment of the computed destination is not created by the
-  // install-time `~/.hasna/repos` bootstrap; create the parent explicitly
+  // install-time `the repos data root` bootstrap; create the parent explicitly
   // (idempotent) so a first-use clone never depends on the clone tool's own
   // parent-directory behavior.
   mkdirSync(dirname(destination), { recursive: true });

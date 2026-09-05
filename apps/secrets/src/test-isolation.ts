@@ -183,7 +183,7 @@ export const guardedFetch = (input: string, init?: RequestInit): Promise<Respons
  * The on-box vault a real operator uses. Never touched from a test process.
  * Routes through `data-dir.ts` so the guard follows the SAME effective data
  * dir the operator's reads/writes use (the `@hasna/paths` XDG data home once
- * adopted, otherwise the legacy `~/.hasna/secrets` default).
+ * adopted, otherwise the legacy `the secrets data root` default).
  */
 export function operatorVaultDir(): string {
   return effectiveOperatorDataDir();

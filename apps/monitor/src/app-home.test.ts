@@ -48,7 +48,7 @@ beforeEach(() => {
 });
 
 describe("monitor home resolution — legacy default must never become invisible", () => {
-  it("keeps the legacy ~/.hasna/monitor default until the XDG store exists or an override is set", () => {
+  it("keeps the legacy the monitor data root default until the XDG store exists or an override is set", () => {
     expect(legacyHomeDir()).toBe(join(testHome, ".hasna", "monitor"));
     // No overrides and no store migrated to the resolver home:
     // the effective home MUST stay on the legacy layout.

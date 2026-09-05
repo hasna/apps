@@ -96,7 +96,7 @@
     "@aws-sdk/client-sqs": "^3.1072.0",
     "@aws-sdk/client-sts": "^3.1072.0",
     "@aws-sdk/credential-provider-ini": "^3.972.55",
-    "@hasna/contracts": "0.13.4",
+    "@hasna/contracts": "1.0.0",
     "@hasna/domains": "0.0.44",
     "@hasna/events": "^0.1.16",
     "@modelcontextprotocol/sdk": "^1.29.0",

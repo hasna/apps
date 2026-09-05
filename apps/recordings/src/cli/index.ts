@@ -2909,9 +2909,9 @@ function buildPermissionWarnings(status: MacOSAppStatus): string[] {
 ///
 /// The order is deliberate rather than lexicographic: sorting picked whichever path sorted
 /// first, so `/Applications/HasnaRecordings.app` could silently answer for a grant held by the
-/// bundle in `~/.hasna/recordings`. Preference follows the installer's own policy —
+/// bundle in `the recordings data root`. Preference follows the installer's own policy —
 /// `install_macos_app.sh` installs to `$HOME/Applications` and classifies the
-/// `~/.hasna/recordings` copy as a duplicate to archive — so a real install location wins over
+/// `the recordings data root` copy as a duplicate to archive — so a real install location wins over
 /// one the installer treats as stale. Callers must still surface `ambiguous_installations`:
 /// this returns a defensible choice, not a certainty.
 function resolveInstalledAppPath(

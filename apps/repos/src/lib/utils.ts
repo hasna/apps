@@ -455,7 +455,7 @@ export function importFromOrg(org: string, opts: { onProgress?: (msg: string) =>
       }
       opts.onProgress?.(`  Cloning ${ghRepo.name}...`);
       // The org segment of the computed destination is not created by the
-      // install-time `~/.hasna/repos` bootstrap, and a first-use import must
+      // install-time `the repos data root` bootstrap, and a first-use import must
       // not depend on the clone tool's own parent-directory behavior. Create
       // the parent explicitly; the destination itself is the clone's job.
       mkdirSync(dirname(dest), { recursive: true });

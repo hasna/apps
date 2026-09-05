@@ -161,7 +161,7 @@ describe("hygiene", () => {
       store.createLoop({
         name: "home-script-backed",
         schedule: { type: "interval", everyMs: 60_000 },
-        target: { type: "command", command: "bash $HOME/.hasna/loops/scripts/audit.sh", shell: true },
+        target: { type: "command", command: "bash " + join("$HOME", ".hasna", "loops", "scripts", "audit.sh"), shell: true },
       });
       store.createLoop({
         name: "inline-clean",

@@ -327,6 +327,11 @@ import { createHash } from "crypto";
 
 // src/workspace.ts
 import { dirname, join, resolve } from "path";
+
+// src/paths.ts
+import { dataDir as resolverDataDir, effectiveHome as resolveEffectiveHome } from "@hasna/contracts/paths";
+
+// src/workspace.ts
 var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
 var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
 

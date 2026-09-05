@@ -3,7 +3,7 @@
   "name": "servers",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.13.4",
+  "kitVersion": "1.0.0",
   "description": "Server management for AI coding agents — CLI + MCP server over a local SQLite store.",
   "bins": ["servers", "servers-mcp"],
   "hosting": ["user-hosted"],
