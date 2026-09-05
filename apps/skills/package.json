@@ -59,8 +59,7 @@
     "verify:release": "bun run scripts/release-guard.ts",
     "prepare": "bun run build:js",
     "prepack": "bun run build && bun run verify:release",
-    "prepublishOnly": "bun run typecheck && bun run test",
-    "postinstall": "mkdir -p $HOME/.hasna/skills/custom 2>/dev/null || true"
+    "prepublishOnly": "bun run typecheck && bun run test"
   },
   "keywords": [
     "skills",

@@ -57,8 +57,13 @@
       "properties": [
         "args",
         "detail",
+        "files",
+        "idempotency_key",
         "input",
-        "name"
+        "maxCostCents",
+        "maxCredits",
+        "name",
+        "remote"
       ]
     },
     "validate_tool_primitives": {

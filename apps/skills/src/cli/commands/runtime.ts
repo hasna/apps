@@ -3,8 +3,8 @@
  */
 
 import chalk from "chalk";
-import { mkdirSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { basename, dirname, join } from "path";
 import { createInterface } from "readline";
 import type { Command } from "commander";
 import { getSkill, findSimilarSkills } from "../../lib/registry.js";
@@ -15,7 +15,7 @@ import {
 } from "../../lib/blog-article.js";
 import { loadConfig } from "../../lib/config.js";
 import { saveApiUrl } from "../../lib/auth-store.js";
-import { normalizeSkillsApiOrigin, resolveSkillsFleet, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
+import { normalizeSkillsApiOrigin, resolveSkillsFleet, resolveSkillsApiOrigin, SkillsFleetCredentialError, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../../sdk/runs.js";
 import {
   completeSkillRun,
@@ -36,6 +36,9 @@ import {
   showingLabel,
 } from "../../lib/compact-output.js";
 import { resolveConfiguredRunRouting } from "../../lib/run-routing.js";
+import { RemoteSkillsClient } from "../../lib/remote-client.js";
+import { execute as executeRemote } from "./remote-account.js";
+import { describeRemoteFiles, type RemoteInputFile } from "../../lib/remote-files.js";
 
 export function registerRuntime(parent: Command) {
   // Run
@@ -46,6 +49,10 @@ export function registerRuntime(parent: Command) {
     .allowUnknownOption(true)
     .passThroughOptions(true)
     .option("--json", "Output result as JSON", false)
+    .option("--remote", "Run on the configured server, using its catalog and quote", false)
+    .option("--yes", "Approve the server's quoted credit cost for this run", false)
+    .option("--idempotency-key <key>", "Reuse this key when retrying the same remote submission")
+    .option("--file <path>", "Attach a local input file to a remote run (repeatable)", (value: string, prior: string[]) => [...prior, value], [] as string[])
     .option("--wait", "Poll remote runs until a terminal status", false)
     .option("--poll-interval-ms <ms>", "Remote polling interval in milliseconds", "1000")
     .option("--poll-timeout-ms <ms>", "Maximum time to wait for a remote run", "300000")
@@ -58,11 +65,22 @@ export function registerRuntime(parent: Command) {
 
   runs
     .command("list")
+    .option("--remote", "List runs on the configured server", false)
     .option("--json", "Output as JSON", false)
     .option("--limit <n>", "Maximum number of runs", "20")
     .option("--cursor <n>", "Numeric offset for human-output pagination", "0")
     .description("List recent skill runs")
-    .action((options: { json: boolean; limit: string; cursor?: string }) => handleRunsList(options));
+    .action((options: { json: boolean; limit: string; cursor?: string; remote?: boolean }) => options.remote
+      ? executeRemote(options, client => client.listRuns(Number(options.limit))) : handleRunsList(options));
+
+  runs.command("logs").argument("<run-id>").option("--json", "Output as JSON", false)
+    .action((id: string, options: { json: boolean }) => executeRemote(options, client => client.getRunLogs(id)));
+  runs.command("cancel").argument("<run-id>").option("--json", "Output as JSON", false)
+    .action((id: string, options: { json: boolean }) => executeRemote(options, client => client.cancelRun(id)));
+  runs.command("resume").argument("<run-id>").option("--json", "Output as JSON", false)
+    .action((id: string, options: { json: boolean }) => executeRemote(options, client => client.resumeRun(id)));
+  runs.command("artifacts").argument("<run-id>").option("--json", "Output as JSON", false)
+    .action((id: string, options: { json: boolean }) => executeRemote(options, client => client.getRunArtifacts(id)));
 
   runs
     .command("show")
@@ -218,8 +236,10 @@ async function handleSetup(options: SetupCommandOptions) {
   }
 
   let requested = options.apiUrl?.trim();
-  if (!requested && process.stdin.isTTY && process.stdout.isTTY) {
-    requested = (await promptLine("Skills API URL (blank to leave unchanged): ")).trim();
+  if (!requested && !options.json && process.stdin.isTTY && process.stdout.isTTY) {
+    const answer = await promptLine("Skills API URL (blank to leave unchanged): ");
+    if (answer === null) { process.exitCode = 130; return; }
+    requested = answer.trim();
   }
 
   let saved: string | null = null;
@@ -253,10 +273,16 @@ async function handleSetup(options: SetupCommandOptions) {
       authenticated = true;
     }
   } catch (err) {
-    // A configured authority with no credential is a real failure, and setup is
-    // exactly where an operator should see it.
-    error = (err as Error).message;
-    configured = saved;
+    // Setup configures an instance before login. Missing authentication is
+    // expected here; malformed configuration and a mismatched saved key still fail.
+    if (err instanceof SkillsFleetCredentialError && err.code === "MISSING_API_CREDENTIAL") {
+      const authority = resolveSkillsApiOrigin();
+      configured = authority?.origin ?? saved;
+      source = authority?.source ?? null;
+    } else {
+      error = (err as Error).message;
+      configured = saved;
+    }
   }
 
   const next = error
@@ -318,25 +344,39 @@ function requireHttpUrl(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
-function promptLine(question: string): Promise<string> {
+function promptLine(question: string): Promise<string | null> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
-    rl.question(chalk.bold(question), (answer) => {
+    let settled = false;
+    const finish = (answer: string | null) => {
+      if (settled) return;
+      settled = true;
       rl.close();
-      resolve(answer.trim());
+      resolve(answer);
+    };
+    rl.once("SIGINT", () => finish(null));
+    rl.once("close", () => finish(null));
+    rl.question(chalk.bold(question), (answer) => {
+      finish(answer.trim());
     });
   });
 }
 
 interface RunCommandOptions {
   json: boolean;
+  remote?: boolean;
+  yes?: boolean;
+  idempotencyKey?: string;
+  file?: string[];
   wait?: boolean;
   pollIntervalMs?: string;
   pollTimeoutMs?: string;
 }
 
 async function handleRun(name: string, args: string[], options: RunCommandOptions) {
-  const skill = getSkill(name);
+  // An explicit remote selection uses the server catalog. A private or newly
+  // published skill need not exist in this package's local instruction corpus.
+  const skill = options.remote ? { name, serverOwned: true } : getSkill(name);
   if (!skill) {
     const similar = findSimilarSkills(name);
     if (options.json) {
@@ -349,7 +389,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   }
 
   const prompt = extractPrompt(args);
-  if (skill.name === ARTICLE_GENERATION_SLUG) {
+  if (!options.remote && skill.name === ARTICLE_GENERATION_SLUG) {
     const validation = validateBlogArticleRunOptions({}, args, { requireTopic: true });
     if (!validation.ok) {
       writeBlogArticleValidationError(validation.errors, options.json);
@@ -357,11 +397,51 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
     }
   }
   const routing = await resolveConfiguredRunRouting(skill);
+  if (routing.route !== "remote" && options.file?.length) {
+    const error = "File uploads require an explicitly remote run";
+    if (options.json) console.log(JSON.stringify({ error })); else console.error(error);
+    process.exitCode = 1;
+    return;
+  }
+  let client: RemoteSkillsClient | undefined;
+  let approvedCredits = 0;
+  let inputFiles: RemoteInputFile[] = [];
+  if (routing.route === "remote") {
+    try {
+      // Validate polling settings before creating a remote run or a credit hold.
+      parsePollingOptions(options);
+      inputFiles = (options.file ?? []).map(path => {
+        const info = lstatSync(path);
+        if (!info.isFile() || info.size > 20 * 1024 * 1024) throw new Error("Input must be a regular file no larger than 20 MiB");
+        return { name: basename(path), bytes: new Uint8Array(readFileSync(path)) };
+      });
+      describeRemoteFiles(inputFiles);
+      client = new RemoteSkillsClient(routing.apiKey, routing.apiOrigin);
+      const quote = await client.quoteRun(skill.name, {}, args);
+      approvedCredits = quote.pricing.costCents;
+      if (approvedCredits > 0 && !options.yes) {
+        if (options.json || !process.stdin.isTTY || !process.stdout.isTTY) {
+          throw new Error(`CREDIT_APPROVAL_REQUIRED: This run costs ${approvedCredits} credits. Review skills quote, then rerun with --yes before the skill name.`);
+        }
+        const answer = await promptLine(`Approve ${approvedCredits} credits for ${quote.skill}? (y/N) `);
+        if (answer === null) { process.exitCode = 130; return; }
+        if (!/^(y|yes)$/i.test(answer)) { process.exitCode = 1; return; }
+      }
+      skill.name = quote.skill;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Remote quote failed";
+      if (options.json) console.log(JSON.stringify({ skill: name, exitCode: 1, remote: true, error: message }));
+      else console.error(message);
+      process.exitCode = 1;
+      return;
+    }
+  }
   const runContext = createSkillRun({
     skill: skill.name,
     args,
     prompt,
     remote: routing.route === "remote",
+    ...(routing.route === "remote" ? { remoteApiOrigin: routing.apiOrigin } : {}),
   });
 
   if (routing.route === "error") {
@@ -376,9 +456,10 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
 
   if (routing.route === "remote") {
       try {
-        const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
-        const client = new RemoteSkillsClient(routing.apiKey);
-        const run = await client.submitRun(skill.name, {}, args);
+        const run = await client!.submitQuotedRunWithFiles(skill.name, {}, args, inputFiles, {
+          maxCredits: approvedCredits,
+          idempotencyKey: options.idempotencyKey ?? runContext.record.id,
+        });
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
           const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error) });
@@ -391,7 +472,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         const nextActions = remoteRunNextActions(remoteRunId);
         const polling = parsePollingOptions(options);
         const polled: PollRemoteRunResult = options.wait && remoteRunId && !isTerminalRemoteStatus(run.status)
-          ? await pollRemoteRun(client, remoteRunId, polling)
+          ? await pollRemoteRun(client!, remoteRunId, polling)
           : { run, attempts: 0, waited: false };
         const remoteRun = polled.run ?? run;
         const status = normalizeRemoteStatus(remoteRun.status);
@@ -401,7 +482,7 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
         const exitCode = timedOutError ? 124 : remoteExitCode(remoteRun, status);
         const error = timedOutError ?? remoteRunError(remoteRun);
         const localRun = await persistRemoteRun({
-          client,
+          client: client!,
           context: runContext,
           remoteRun,
           remoteRunId,
@@ -533,7 +614,7 @@ function handleRunsShow(runId: string, options: { json: boolean }) {
 
 async function handleRunsStatus(runId: string, options: { json: boolean }) {
   const { skillsCredentialOrReason } = await import("../../lib/fleet-credentials.js");
-  const { apiKey, reason } = await skillsCredentialOrReason();
+  const { apiKey, apiOrigin, reason } = await skillsCredentialOrReason();
   if (!apiKey) {
     const error = reason ?? "Remote run status requires API access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
@@ -554,7 +635,8 @@ async function handleRunsStatus(runId: string, options: { json: boolean }) {
 
   try {
     const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
-    const client = new RemoteSkillsClient(apiKey);
+    if (localRun?.remoteApiOrigin && localRun.remoteApiOrigin !== apiOrigin) throw new Error("This run belongs to another Skills instance; select its credential profile");
+    const client = new RemoteSkillsClient(apiKey, apiOrigin!);
     const run = await client.getRun(remoteRunId);
     if (!run) {
       const error = `Remote run '${remoteRunId}' not found`;
@@ -622,7 +704,7 @@ async function handleExportsOpen(runId: string, options: { json: boolean }) {
 
 async function handleExportsDownload(runId: string, options: { json: boolean }) {
   const { skillsCredentialOrReason } = await import("../../lib/fleet-credentials.js");
-  const { apiKey, reason } = await skillsCredentialOrReason();
+  const { apiKey, apiOrigin, reason } = await skillsCredentialOrReason();
   if (!apiKey) {
     const error = reason ?? "Remote artifact downloads require API access. Run: skills auth login";
     if (options.json) console.log(JSON.stringify({ error }, null, 2));
@@ -633,7 +715,7 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
 
   try {
     const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
-    const client = new RemoteSkillsClient(apiKey);
+    const client = new RemoteSkillsClient(apiKey, apiOrigin!);
     const remoteRun = await client.getRun(runId);
     if (!remoteRun) {
       const error = `Remote run '${runId}' not found`;
@@ -655,17 +737,15 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
     for (const artifact of artifacts) {
       const artifactId = String(artifact.id || "");
       if (!artifactId) continue;
-      const response = await client.downloadRunArtifact(runId, artifactId);
-      if (!response.ok) throw new Error(`download failed for artifact ${artifactId}: ${response.status}`);
+      const verified = await client.getVerifiedRunArtifact(runId, artifactId);
       const relativePath = safeArtifactRelativePath(
         typeof artifact.relativePath === "string" ? artifact.relativePath : artifact.fileName,
         String(artifact.fileName || artifactId),
       );
       const outputPath = join(exportDir, relativePath);
-      mkdirSync(dirname(outputPath), { recursive: true });
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      writeFileSync(outputPath, bytes);
-      downloaded.push({ id: artifactId, path: outputPath, byteSize: bytes.byteLength });
+      ensureSafeExportParent(exportDir, relativePath);
+      writeFileSync(outputPath, verified.bytes, { flag: "wx", mode: 0o600 });
+      downloaded.push({ id: artifactId, path: outputPath, byteSize: verified.byteSize });
     }
 
     const payload = {
@@ -691,10 +771,21 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
 function safeArtifactRelativePath(value: unknown, fallback: string): string {
   const raw = typeof value === "string" && value.trim() ? value : fallback;
   const parts = raw.split(/[\\/]+/).filter((part) => part && part !== ".");
-  if (parts.length === 0 || parts.some((part) => part === "..")) {
-    return fallback.replace(/[\\/\r\n"]/g, "_");
-  }
+  if (raw.startsWith("/") || /^[A-Za-z]:/.test(raw) || parts.length === 0 || parts.some((part) => part === ".." || /[\x00-\x1f\x7f]/.test(part))) throw new Error("Unsafe artifact path");
   return parts.join("/");
+}
+
+function ensureSafeExportParent(root: string, relativePath: string): void {
+  const parts = relativePath.split("/").slice(0, -1);
+  let parent = root;
+  for (const part of ["", ...parts]) {
+    if (part) parent = join(parent, part);
+    try { if (!lstatSync(parent).isDirectory() || lstatSync(parent).isSymbolicLink()) throw new Error("Unsafe artifact directory"); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      mkdirSync(parent, { mode: 0o700 });
+    }
+  }
 }
 
 interface RemoteRunApiClient {

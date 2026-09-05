@@ -158,6 +158,13 @@ function isHostedMetadataSkill(
   return false;
 }
 
+function frontmatterString(raw: string): string {
+  if (raw.startsWith('"') && raw.endsWith('"')) {
+    try { const decoded: unknown = JSON.parse(raw); if (typeof decoded === "string") return decoded; } catch {}
+  }
+  return raw.replace(/^["']|["']$/g, "");
+}
+
 export function parseSkillFrontmatter(content: string): SkillFrontmatter | null {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return null;
@@ -177,13 +184,13 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter | null 
       const tags: string[] = [];
       while (i + 1 < lines.length && /^\s+-\s+/.test(lines[i + 1])) {
         i++;
-        tags.push(lines[i].replace(/^\s+-\s+/, "").trim());
+        tags.push(frontmatterString(lines[i].replace(/^\s+-\s+/, "").trim()));
       }
       result.tags = tags;
       continue;
     }
 
-    const value = rawValue.replace(/^["']|["']$/g, "");
+    const value = frontmatterString(rawValue);
     if (!value) continue;
 
     if (key === "name") result.name = value;

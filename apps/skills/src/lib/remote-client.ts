@@ -1,6 +1,8 @@
 import { getApiUrl } from "./auth-store.js";
-import { resolveSkillsApiKey, resolveSkillsFleet } from "./fleet-credentials.js";
+import { normalizeSkillsApiOrigin, resolveSkillsConnection } from "./fleet-credentials.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
+import { creditCount, parseRemoteBillingStatus, parseRemoteCheckout, parseRemoteCreditPacks, parseRemoteRunQuote, RemoteCreditApprovalError, type RemoteCreditPack, type RemoteRunApproval, type RemoteRunQuote } from "./remote-account.js";
+import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES, type RemoteInputFile } from "./remote-files.js";
 
 /**
  * A server that predates this client's pin/tag/incremental-sync routes answered
@@ -77,15 +79,18 @@ export interface UpdatedSincePage {
 export class RemoteSkillsClient {
   private apiUrl: string;
   private apiKey: string;
+  private capabilities?: Promise<{ contractVersion: 1; apiVersion: 1; capabilities: string[]; billing?: { boundedRunApproval?: boolean; unit?: string } }>;
 
   constructor(apiKey: string, apiUrl = getApiUrl()) {
     this.apiKey = apiKey;
-    this.apiUrl = apiUrl.replace(/\/$/, "");
+    this.apiUrl = normalizeSkillsApiOrigin(apiUrl);
   }
 
   private async request(path: string, options?: RequestInit): Promise<Response> {
     return fetch(`${this.apiUrl}${path}`, {
       ...options,
+      redirect: "error",
+      signal: options?.signal ?? AbortSignal.timeout(15_000),
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
@@ -137,8 +142,7 @@ export class RemoteSkillsClient {
   }
 
   async listSkills(): Promise<any[]> {
-    const res = await this.request("/api/v1/skills");
-    return res.json();
+    return this.arrayResponse("/api/v1/skills");
   }
 
   async getSkillMd(slug: string): Promise<string | null> {
@@ -170,41 +174,187 @@ export class RemoteSkillsClient {
     return { status: res.status, body };
   }
 
-  async submitRun(slug: string, input?: Record<string, unknown>, args?: string[]): Promise<RemoteSkillRunContract> {
-    const res = await this.request(`/api/v1/runs/${slug}`, {
+  /** Low-level admission transport; interactive surfaces use submitQuotedRun. */
+  async submitRun(slug: string, input?: Record<string, unknown>, args?: string[], approval: RemoteRunApproval = {}): Promise<RemoteSkillRunContract> {
+    if (approval.idempotencyKey !== undefined && !/^[A-Za-z0-9._:-]{1,128}$/.test(approval.idempotencyKey)) throw new Error("Idempotency key must be 1-128 URL-safe characters");
+    if (approval.maxCostCents !== undefined) creditCount(approval.maxCostCents);
+    if (approval.maxCredits !== undefined) creditCount(approval.maxCredits);
+    if (approval.maxCredits !== undefined && approval.maxCostCents !== undefined && approval.maxCredits !== approval.maxCostCents) throw new Error("Credit approval fields disagree");
+    const res = await this.request(`/api/v1/runs/${encodeURIComponent(slug)}`, {
       method: "POST",
-      body: JSON.stringify({ input, args }),
+      body: JSON.stringify({ input, args,
+        ...(approval.maxCredits !== undefined ? { maxCredits: approval.maxCredits } : {}),
+        ...(approval.maxCostCents !== undefined ? { maxCostCents: approval.maxCostCents } : {}),
+        ...(approval.idempotencyKey !== undefined ? { idempotencyKey: approval.idempotencyKey } : {}),
+        ...(approval.inputFiles !== undefined ? { files: approval.inputFiles } : {}),
+      }),
     });
     return normalizeRemoteSkillRunContract(await res.json(), slug);
   }
 
+  async quoteRun(slug: string, input: Record<string, unknown> = {}, args: string[] = []): Promise<RemoteRunQuote> {
+    const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/quote`, {
+      method: "POST", body: JSON.stringify({ input, args }),
+    });
+    return parseRemoteRunQuote(await response.json());
+  }
+
+  getCapabilities() {
+    if (!this.capabilities) this.capabilities = (async () => {
+      const value = await (await this.requestNewRoute("/api/v1/capabilities")).json() as Record<string, unknown>;
+      if (value.contractVersion !== 1 || value.apiVersion !== 1 || !Array.isArray(value.capabilities) || value.capabilities.some(item => typeof item !== "string")) throw new Error("Unsupported Skills server capability contract");
+      const billing = value.billing as { boundedRunApproval?: boolean; unit?: string } | undefined;
+      return { contractVersion: 1 as const, apiVersion: 1 as const, capabilities: value.capabilities as string[], ...(billing ? { billing } : {}) };
+    })();
+    return this.capabilities;
+  }
+
+  /** Quote first and fail closed when the caller has not approved the required credits. */
+  async submitQuotedRun(slug: string, input: Record<string, unknown> = {}, args: string[] = [], approval: RemoteRunApproval = {}): Promise<RemoteSkillRunContract> {
+    const maximum = creditCount(approval.maxCredits ?? approval.maxCostCents ?? 0);
+    if (approval.maxCostCents !== undefined && approval.maxCostCents !== maximum) throw new Error("Credit approval fields disagree");
+    const quote = await this.quoteRun(slug, input, args);
+    if (quote.pricing.costCents > maximum) throw new RemoteCreditApprovalError(quote.pricing.costCents, maximum);
+    const capabilities = await this.getCapabilities();
+    if (!capabilities.capabilities.includes("runs.submit") || capabilities.billing?.boundedRunApproval !== true || capabilities.billing.unit !== "credits") {
+      throw new Error("The configured server does not support bounded credit approval; refusing remote submission");
+    }
+    return this.submitRun(quote.skill, input, args, { ...approval, maxCredits: maximum, maxCostCents: maximum });
+  }
+
+  async getIdentity(): Promise<Record<string, unknown>> {
+    return (await this.requestNewRoute("/api/auth/whoami")).json();
+  }
+  async listApiKeys(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/auth/keys"); }
+  async createApiKey(name: string, scopes?: string[]): Promise<{ key: string; [field: string]: unknown }> {
+    if (!name.trim() || name.length > 100) throw new Error("API key name must be 1-100 characters");
+    const value = await (await this.requestNewRoute("/api/auth/keys", { method: "POST", body: JSON.stringify({ name, ...(scopes ? { scopes } : {}) }) })).json() as { key?: unknown };
+    if (!value || typeof value.key !== "string" || !value.key.trim()) throw new Error("The server did not return a created API key");
+    return value as { key: string; [field: string]: unknown };
+  }
+  async revokeApiKey(keyId: string): Promise<Record<string, unknown>> {
+    return (await this.requestNewRoute(`/api/auth/keys/${encodeURIComponent(keyId)}`, { method: "DELETE" })).json();
+  }
+
+  async getBillingStatus() {
+    return parseRemoteBillingStatus(await (await this.requestNewRoute("/api/v1/billing/status")).json());
+  }
+
+  async listCreditPacks(): Promise<RemoteCreditPack[]> {
+    return parseRemoteCreditPacks(await (await this.requestNewRoute("/api/v1/billing/credits")).json());
+  }
+
+  async createCreditCheckout(packId: string): Promise<{ url: string }> {
+    const packs = await this.listCreditPacks();
+    if (!packs.some(pack => pack.id === packId)) throw new Error("Choose a credit pack returned by skills credits packs");
+    return parseRemoteCheckout(await (await this.requestNewRoute("/api/v1/billing/credits", {
+      method: "POST", body: JSON.stringify({ packId }),
+    })).json());
+  }
+
+  async getUsage(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/v1/billing/usage"); }
+  async listInvoices(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/v1/billing/invoices"); }
+  async createBillingCheckout(): Promise<{ url: string }> { return this.checkoutResponse("/api/v1/billing/checkout"); }
+  async createBillingPortal(): Promise<{ url: string }> { return this.checkoutResponse("/api/v1/billing/portal"); }
+  async cancelRun(runId: string): Promise<RemoteSkillRunContract> { return this.controlRun(runId, "cancel"); }
+  async resumeRun(runId: string): Promise<RemoteSkillRunContract> { return this.controlRun(runId, "resume"); }
+
+  private async controlRun(runId: string, action: "cancel" | "resume") {
+    const response = await this.requestNewRoute(`/api/v1/runs/${encodeURIComponent(runId)}/${action}`, { method: "POST", body: "{}" });
+    return normalizeRemoteSkillRunContract(await response.json());
+  }
+
+  private async checkoutResponse(path: string) {
+    return parseRemoteCheckout(await (await this.requestNewRoute(path, { method: "POST", body: "{}" })).json());
+  }
+
+  private async arrayResponse(path: string): Promise<Record<string, unknown>[]> {
+    const rows: unknown = await (await this.requestNewRoute(path)).json();
+    if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== "object" || Array.isArray(row))) throw new Error("Invalid Skills server list response");
+    return rows;
+  }
+
   async getRun(runId: string): Promise<RemoteSkillRunContract | null> {
-    const res = await this.request(`/api/v1/runs/${runId}`);
-    if (!res.ok) return null;
+    const path = `/api/v1/runs/${encodeURIComponent(runId)}`;
+    const res = await this.request(path);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new RemoteRequestError(path, res.status, res.statusText);
     return normalizeRemoteSkillRunContract(await res.json());
   }
 
   async getRunLogs(runId: string): Promise<any[]> {
-    const res = await this.request(`/api/v1/runs/${runId}/logs`);
-    if (!res.ok) return [];
-    const payload = await res.json();
-    return Array.isArray(payload) ? payload : [];
+    return this.arrayResponse(`/api/v1/runs/${encodeURIComponent(runId)}/logs`);
   }
 
   async listRuns(limit = 20): Promise<any[]> {
-    const res = await this.request(`/api/v1/runs?limit=${limit}`);
-    return res.json();
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("Run limit must be an integer from 1 to 100");
+    return this.arrayResponse(`/api/v1/runs?limit=${limit}`);
   }
 
   async getRunArtifacts(runId: string): Promise<any[]> {
-    const res = await this.request(`/api/v1/runs/${runId}/artifacts`);
-    return res.json();
+    return this.arrayResponse(`/api/v1/runs/${encodeURIComponent(runId)}/artifacts`);
   }
 
   async downloadRunArtifact(runId: string, artifactId: string): Promise<Response> {
-    return this.request(`/api/v1/runs/${runId}/artifacts/${artifactId}/download`, {
+    return this.request(`/api/v1/runs/${encodeURIComponent(runId)}/artifacts/${encodeURIComponent(artifactId)}/download`, {
       method: "GET",
     });
+  }
+
+  async getVerifiedRunArtifact(runId: string, artifactId: string, maximumBytes = MAX_REMOTE_FILE_BYTES) {
+    const artifacts = await this.getRunArtifacts(runId);
+    const artifact = artifacts.find(row => row.id === artifactId);
+    if (!artifact) throw new Error("Run artifact not found");
+    if (!Number.isSafeInteger(artifact.byteSize) || artifact.byteSize < 0 || artifact.byteSize > maximumBytes ||
+        typeof artifact.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(artifact.sha256)) throw new Error("The server does not provide valid artifact integrity metadata");
+    const response = await this.downloadRunArtifact(runId, artifactId);
+    if (!response.ok) throw new RemoteRequestError("artifact download", response.status, response.statusText);
+    const bytes = await readBoundedResponse(response, artifact.byteSize);
+    if (bytes.byteLength !== artifact.byteSize || sha256(bytes) !== artifact.sha256) throw new Error("Artifact integrity verification failed");
+    return { id: artifactId, fileName: String(artifact.fileName ?? artifactId), bytes, byteSize: bytes.byteLength, sha256: artifact.sha256 };
+  }
+
+  async submitQuotedRunWithFiles(slug: string, input: Record<string, unknown>, args: string[], files: RemoteInputFile[], approval: RemoteRunApproval = {}) {
+    const inputFiles = describeRemoteFiles(files);
+    if (files.length && !(await this.getCapabilities()).capabilities.includes("runs.uploads")) throw new Error("The configured server does not support input uploads");
+    const run = await this.submitQuotedRun(slug, input, args, { ...approval, inputFiles });
+    if (run.error || !run.id || !files.length) return run;
+    // A replay may already have advanced beyond the upload phase. Never upload
+    // again or cancel completed work just because its upload route now refuses.
+    const pastUploads = (status: unknown) => typeof status === "string" && [
+      "running", "completed", "failed", "cancelled", "expired", "pending_approval", "approved", "waiting",
+    ].includes(status);
+    if (pastUploads(run.status)) return run;
+    try { await this.uploadRunFiles(run.id, files); }
+    catch {
+      // Another retry can finish uploads and start the worker after admission
+      // returned queued. Re-read before requesting cancellation of that run.
+      try {
+        const current = await this.getRun(run.id);
+        if (current && pastUploads(current.status)) return current;
+      } catch {}
+      let cancellationRequested = false;
+      try { await this.cancelRun(run.id); cancellationRequested = true; } catch {}
+      throw new Error(`Input upload failed for run ${run.id}; ${cancellationRequested ? "cancellation requested" : "check its status and cancel the run"}`);
+    }
+    return run;
+  }
+
+  async uploadRunFiles(runId: string, files: RemoteInputFile[]): Promise<void> {
+    const descriptors = describeRemoteFiles(files);
+    const response = await this.requestNewRoute(`/api/v1/runs/${encodeURIComponent(runId)}/uploads`, { method: "POST", body: JSON.stringify({ files: descriptors }) });
+    const payload = await response.json() as { files?: Array<{ name: string; uploadUrl: string }> };
+    if (!Array.isArray(payload.files) || payload.files.length !== files.length || new Set(payload.files.map(file => file.name)).size !== files.length) throw new Error("Invalid input upload response");
+    for (const file of files) {
+      const upload = payload.files.find(row => row.name === file.name);
+      if (!upload) throw new Error("Missing input upload URL");
+      const url = new URL(upload.uploadUrl);
+      if (url.username || url.password || url.hash || (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) throw new Error("Unsafe input upload URL");
+      // Storage receives only file bytes and their type, never the account credential.
+      const uploaded = await fetch(url, { method: "PUT", body: file.bytes as BodyInit, headers: { "Content-Type": file.contentType ?? "application/octet-stream" }, redirect: "error", signal: AbortSignal.timeout(60_000) });
+      if (!uploaded.ok) throw new Error("Input upload failed");
+      await uploaded.body?.cancel();
+    }
   }
 
   /**
@@ -236,6 +386,8 @@ export class RemoteSkillsClient {
       method: "POST",
       headers,
       body: form,
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
     });
   }
 
@@ -318,14 +470,15 @@ export class RemoteSkillsClient {
     if (!Array.isArray(payload)) {
       throw new Error("Remote tags payload did not match the expected contract (expected an array of tag names)");
     }
-    // Fail-closed: a malformed element is rejected, never silently dropped —
-    // a filtered tag list would quietly disagree with the instance.
-    for (const tag of payload) {
-      if (typeof tag !== "string" || tag.trim().length === 0) {
-        throw new Error("Remote tags payload did not match the expected contract (every element must be a non-empty tag name)");
-      }
+    // Instances expose either names or counted tag records. Accept one whole
+    // contract at a time; filtering malformed or mixed rows would hide drift.
+    const isName = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
+    if (payload.every(isName)) return payload;
+    if (payload.every(tag => tag !== null && typeof tag === "object" && !Array.isArray(tag)
+      && isName(tag.name) && Number.isSafeInteger(tag.count) && tag.count >= 0)) {
+      return payload.map(tag => tag.name as string);
     }
-    return payload as string[];
+    throw new Error("Remote tags payload did not match the expected contract (every element must be a non-empty tag name, or every element must be a counted tag record)");
   }
 
   /** List the skills carrying a tag on the instance. */
@@ -458,16 +611,8 @@ function normalizeUpdatedSincePage(payload: unknown): UpdatedSincePage {
 export async function createRemoteSkillsClient(
   env: Record<string, string | undefined> = process.env,
 ): Promise<RemoteSkillsClient | null> {
-  const fleet = resolveSkillsFleet(env);
-  if (fleet.mode !== "hosted") return null;
-  const apiKey = await resolveSkillsApiKey(env);
-  if (!apiKey) {
-    // Unreachable: resolveSkillsApiKey returns null only in local mode, which
-    // the check above already took. Kept so no future change can build an
-    // unauthenticated client here.
-    throw new Error("A Skills authority resolved but no API key did. Sign in with: skills auth login");
-  }
-  return new RemoteSkillsClient(apiKey, fleet.apiOrigin);
+  const connection = await resolveSkillsConnection(env);
+  return connection ? new RemoteSkillsClient(connection.apiKey, connection.apiOrigin) : null;
 }
 
 /**

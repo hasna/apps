@@ -1,14 +1,14 @@
 # Package Naming And Publishing Policy
 
-This policy keeps the open `hasna/skills` package, the `skills` CLI, and MCP
+This policy keeps the open `hasna/apps` package at `apps/skills`, the `skills` CLI, and MCP
 setup from colliding with hosted wrappers.
 
 ## Canonical Names
 
 | Surface | Name | Owner | Publish Target |
 | --- | --- | --- | --- |
-| Open repository | `hasna/skills` | Hasna | GitHub |
-| Open package | `@hasna/skills` | `hasna/skills` | Public npm package |
+| Open repository | `hasna/apps` (`apps/skills`) | Hasna | GitHub |
+| Open package | `@hasna/skills` | `hasna/apps` (`apps/skills`) | Public npm package |
 | Main CLI | `skills` | `@hasna/skills` | `bin/index.js` |
 | MCP CLI | `skills-mcp` | `@hasna/skills` | `bin/mcp.js` |
 | Optional hosted API | `skills.md` or compatible URL | Hosted wrapper | Explicit config |
@@ -16,6 +16,13 @@ setup from colliding with hosted wrappers.
 No hosted wrapper or private module should publish to npm as `@hasna/skills`.
 Wrappers consume `@hasna/skills` as a normal dependency and keep their service
 identity separate.
+
+The public CLI, MCP and SDK share reusable client operations for customer
+authentication, account and billing administration, credit approval, and hosted
+run lifecycle requests against an explicitly configured compatible API. The
+hosted service owns tenancy, authoritative pricing, ledger settlement, and
+provider execution; those server implementations do not belong in the public
+package.
 
 ## Versioning Rules
 
@@ -50,9 +57,9 @@ Only publish from a clean public-package branch:
 13. Verify `skills --version`, `skills --help`, `skills setup --json`, and
     `skills-mcp --help`.
 
-Do not publish private cloud dependencies, protected hosted source, account
-state, billing logic, tenant logic, or deployment assumptions in the public npm
-package.
+Do not publish private cloud dependencies, protected hosted source, customer
+credentials or account data, authoritative billing or tenant server logic, or
+deployment assumptions in the public npm package.
 
 ## Local Install Refresh
 

@@ -465,3 +465,7 @@ export {
   type SyncHomeDefinition,
   type WalkEntry,
 } from "./lib/portable-snapshot-filter.js";
+
+export { RemoteCreditApprovalError, type RemoteRunApproval, type RemoteRunQuote, type RemoteCreditPack } from "./lib/remote-account.js";
+
+export { RemoteSkillsAuthClient, HostedApiError } from "./lib/remote-auth.js";

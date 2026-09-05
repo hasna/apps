@@ -15,6 +15,7 @@ import {
   validatePortableSkillDirectory,
 } from "./portable-skills";
 
+import { parseSkillFrontmatter } from "./skill-validation.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
@@ -61,6 +62,21 @@ describe("portable skills", () => {
     }
   });
 
+  test("scaffold rendering preserves quoted metadata without injecting frontmatter fields", () => {
+    const root = mkdtempSync(join(tmpdir(), "portable-quoted-scaffold-"));
+    try {
+      const description = 'Example: "quoted"\nsource: remote';
+      const tags = ["true", 'tag: "quoted"', "line\nbreak"];
+      for (const kind of ["executable", "instruction"] as const) {
+        const result = scaffoldPortableSkill(`quoted-${kind}`, { rootDir: root, kind, description, category: "false", tags });
+        const metadata = parseSkillFrontmatter(readFileSync(join(result.path, "SKILL.md"), "utf8"));
+        expect(metadata?.description).toBe(description);
+        expect(metadata?.source).not.toBe("remote");
+        if (kind === "instruction") expect(metadata).toMatchObject({ category: "false", tags });
+        expect(validatePortableSkillDirectory(result.name, result.path).valid).toBe(true);
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
   test("ports an existing skill folder into the portable standard", () => {
     const home = mkdtempSync(join(tmpdir(), "portable-skill-home-"));
     const sourceRoot = mkdtempSync(join(tmpdir(), "portable-skill-source-"));

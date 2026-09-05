@@ -25,8 +25,13 @@ program
   .description("Discover and run AI agent skills through the Skills CLI/MCP")
   .version(pkg.version)
   .option("--verbose", "Enable verbose logging", false)
+  .option("--profile <name>", "Use an isolated Skills instance credential profile")
   .option("--no-color", "Disable colored output (also respects NO_COLOR env var)")
   .enablePositionalOptions();
+program.hook("preAction", () => {
+  const profile = program.opts<{ profile?: string }>().profile;
+  if (profile !== undefined) process.env.HASNA_PROFILE = profile;
+});
 
 // ── Interactive TUI (default) ──
 program
@@ -78,6 +83,9 @@ registerDiagnostic(program);
 
 const { registerRuntime } = await import("./commands/runtime.js");
 registerRuntime(program);
+
+const { registerRemoteAccount } = await import("./commands/remote-account.js");
+registerRemoteAccount(program);
 
 const { registerCompletion } = await import("./commands/completion.js");
 registerCompletion(program);

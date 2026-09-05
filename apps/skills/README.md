@@ -11,7 +11,7 @@ Skills library for AI coding agents — discover, pin, and run reusable capabili
 bun install -g @hasna/skills
 ```
 
-Requires [Bun](https://bun.sh/) 1.0+.
+Requires [Bun](https://bun.sh/) 1.3+.
 
 ## Quick Start
 
@@ -175,7 +175,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills billing status` | | Show server account plan and balance |
 | `skills billing checkout` | | Create a checkout session when billing is enabled |
 | `skills billing portal` | | Create a customer portal session when billing is enabled |
-| `skills credits buy <amount>` | | Create a credit-pack checkout session when billing is enabled |
+| `skills credits buy <pack-id>` | | Create a credit-pack checkout session when billing is enabled |
 | `skills setup-info` | | Version, pinned skills, agent configs, paths |
 | `skills export` | | Export pinned skills as JSON |
 | `skills import <file>` | | Pin skills from a JSON export |
@@ -366,16 +366,100 @@ skills mcp --register all       # Register with all supported agents
 
 ## Skills API
 
+Use a named profile for each independently operated instance. A commercial Skills instance
+and an internal instance have separate credentials, accounts,
+credits and data. Selecting one does not change another profile or the fleet
+resolver's existing defaults.
+
 ```bash
-skills setup --api-url https://skills.example.com   # only for your own instance
-skills auth login --api-key "$HASNA_SKILLS_API_KEY"
-skills billing status
+# Configure the commercial instance before signing in.
+skills --profile customer setup --api-url https://skills.example.com/api/v1 --json
+skills --profile customer auth signup --email you@example.com --json
+skills --profile customer auth login --email you@example.com --code <CODE> --json
+skills --profile customer auth whoami --json
+skills --profile customer capabilities --json
+skills --profile customer list --remote --json
+
+# Quote without spending. Put CLI flags before the skill name.
+skills --profile customer quote --json blog-article --topic "Your topic"
+skills --profile customer run --remote --yes --wait --json --idempotency-key article-001 blog-article --topic "Your topic"
+skills --profile customer runs status <run-id> --json
+skills --profile customer runs logs <run-id> --json
+skills --profile customer runs artifacts <run-id> --json
+skills --profile customer exports download <run-id> --json
+
+skills --profile customer billing status --json
+skills --profile customer billing usage --json
+skills --profile customer billing invoices --json
+skills --profile customer credits packs --json
+skills --profile customer credits buy <pack-id> --json
+skills --profile customer billing portal --json
+skills --profile customer auth keys list --email you@example.com --code <FRESH-CODE> --json
+# Request a fresh OTP, then create a separately scoped key (shown once).
+skills --profile customer auth signup --email you@example.com --json
+skills --profile customer auth keys create automation --email you@example.com --code <CODE> --scope runs:read --json
+skills --profile customer auth logout --json
 ```
 
-Account, run, log, artifact, and optional billing commands use the configured
-Skills API. The public package stores only local configuration
-and CLI credentials. Artifacts can be stored in S3 when `HASNA_SKILLS_S3_BUCKET`
-is configured.
+An origin, a full `/api/v1` base and a base with a path prefix normalize to the
+same routes. `HASNA_PROFILE=customer` selects the same profile as `--profile`.
+`HASNA_SKILLS_API_URL` (or the compatible `SKILLS_API_URL`) is an explicit URL
+override, not permission to send a saved key to a different instance. Stored
+keys retain their original instance binding; sign in to a separate profile to
+switch instances. `HASNA_HOME` / `HASNA_CONFIG_HOME` isolate credential state;
+`HASNA_SKILLS_DIR` separately isolates corpus/configuration data. They do not
+require changing `HOME`.
+
+A paid remote run requires explicit approval. Interactive runs ask before
+submission; JSON and other noninteractive runs require `--yes`. The approved
+quote becomes the server-enforced credit ceiling. A changed price above that
+ceiling fails before admission. A compatible server must advertise bounded
+approval; older or unsupported APIs return errors, not local results. Reuse the
+same idempotency key only for an identical submission to safely recover an
+interrupted response. `runs cancel` and `runs resume` call the server's lifecycle
+operations and can be refused when the current state does not allow them.
+
+`run --remote --file input.txt ...` declares upload hashes before admission and
+uploads bytes without forwarding the account key to storage. Failed uploads
+request cancellation. Upload support must be advertised by the server.
+Downloads verify authenticated size and SHA-256 metadata before writing files;
+existing files and unsafe paths are refused. CLI/SDK downloads are bounded to
+64 MiB; MCP inline artifacts and input files are limited to 1 MiB. Listing, creating and revoking API keys require fresh email OTP reauthentication; an existing
+API key cannot grant new key authority. Checkout
+commands return external links; payment confirmation remains in the browser.
+
+The MCP server uses the same account, quote, run and artifact client. Agent
+hosts must launch `skills-mcp --stdio`; the standalone default is loopback HTTP.
+Configure its environment with the selected `HASNA_PROFILE` and isolated state
+paths. `run_skill` accepts `remote:true`, `maxCredits`, `idempotency_key`, and
+optional inline `files:[{name,base64,contentType}]`. An omitted ceiling permits
+only free execution. `quote_skill` never submits a run.
+
+```ts
+import { RemoteSkillsAuthClient, createRemoteSkillsClient } from "@hasna/skills/sdk";
+
+// Auth transports never write credentials; the embedding application owns storage.
+const auth = new RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+await auth.requestCode("you@example.com");
+// await auth.verifyCode("you@example.com", code);
+
+// Uses the same selected profile and credential binding as CLI/MCP.
+const client = await createRemoteSkillsClient(process.env);
+if (!client) throw new Error("Configure an instance and sign in first");
+const quote = await client.quoteRun("blog-article", {}, ["--topic", "Your topic"]);
+// Obtain explicit user approval of quote.pricing.costCents before this call.
+const run = await client.submitQuotedRun("blog-article", {}, ["--topic", "Your topic"], {
+  maxCredits: quote.pricing.costCents,
+  idempotencyKey: "article-001",
+});
+```
+
+`submitRun` remains a low-level compatibility transport. New paid integrations
+should use `submitQuotedRun` or `submitQuotedRunWithFiles` so capability and
+approval checks run before submission. Credit counts are integers; `maxCostCents`
+is a legacy spelling for the same credit ceiling. Missing billing capabilities
+on an internal instance are explicit unsupported responses; this package does
+not add a billing engine to the OSS server.
 
 ### Server database
 
@@ -516,7 +600,7 @@ skills/                      # Public skill contracts and local OSS skills
 |---|---|---|
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 37 | `tools/list` against a live `buildServer()` |
+| MCP tools | 56 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather

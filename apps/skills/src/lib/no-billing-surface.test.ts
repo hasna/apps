@@ -8,25 +8,8 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
-/**
- * Guard: the OSS product ships no billing / payments / credits / marketplace
- * surface. This asserts the banned command/word set is absent from the SHIPPED
- * SERIALIZED SURFACES an operator or agent actually sees — the CLI `--help`
- * output, the MCP contract JSON, and the server route table (the router source).
- *
- * Why not a raw source grep: the words legitimately appear elsewhere in the tree
- * for non-billing reasons — `git checkout` in comments, the `api-docs-portal`
- * skill, `-pack` skill names, Stripe *dependency detection* in skillinfo.ts, and
- * docs/tests that discuss the removed history. A grep over `src/**` would
- * false-positive on all of those. The serialized surfaces below enumerate
- * commands, tools, and routes — never the skill catalog or provider-detection
- * tables — so they are clean of those legitimate uses and a reappearance here is
- * unambiguous.
- *
- * Each banned token is matched on a word boundary so `credits` never matches
- * `credentials` and `checkout` never matches unrelated substrings. Bytes are read
- * with `readFileSync` (not `grep`), so a NUL byte cannot silently truncate a scan.
- */
+/** Public clients expose generic customer account requests. Hosted billing
+ * machinery and provider integration remain outside the self-hosted server. */
 const BANNED_PATTERNS: Array<{ label: string; re: RegExp }> = [
   { label: "billing", re: /\bbilling\b/i },
   { label: "credits", re: /\bcredits\b/i },
@@ -85,7 +68,7 @@ function serverRouteSurface(): string {
   return readFileSync(join(repoRoot(), "src", "server", "app.ts")).toString("utf8");
 }
 
-describe("no billing surface", () => {
+describe("customer client and hosted billing boundary", () => {
   test("the scanner actually detects billing vocabulary (positive control)", () => {
     const decoy = "run `skills billing checkout`, `credits packs`, buy credits with Stripe on the pro plan via the customer portal (subscription)";
     const hits = findBanned(decoy);
@@ -95,22 +78,26 @@ describe("no billing surface", () => {
     );
   });
 
-  test("CLI --help exposes no billing/payments vocabulary", () => {
+  test("CLI exposes generic customer account commands without provider administration", () => {
     const surface = cliHelpSurface();
     // Positive control: prove the surface was actually captured, so an empty
     // read cannot masquerade as a clean pass.
     expect(surface).toContain("auth");
     expect(surface).toContain("run");
     expect(surface.length).toBeGreaterThan(200);
-    expect(findBanned(surface)).toEqual([]);
+    expect(surface).toContain("billing");
+    expect(surface).toContain("credits");
+    expect(surface).not.toMatch(/stripe|webhook|provision/i);
   }, 60000);
 
-  test("MCP contract JSON exposes no billing/payments vocabulary", () => {
+  test("MCP exposes credit approval and customer account operations without billing machinery", () => {
     const surface = mcpContractSurface();
     expect(surface).toContain("run_skill");
     expect(surface).toContain("hosted-auth");
-    expect(surface).not.toContain("quote_skill");
-    expect(findBanned(surface)).toEqual([]);
+    expect(surface).toContain("quote_skill");
+    expect(surface).toContain("create_credit_checkout");
+    expect(surface).toContain("maxCredits");
+    expect(surface).not.toMatch(/stripe[-_ ](?:secret|webhook|price)|provision_billing/i);
   });
 
   test("server route table exposes no billing/payments vocabulary", () => {

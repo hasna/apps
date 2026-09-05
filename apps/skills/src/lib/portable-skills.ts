@@ -286,12 +286,12 @@ export function scaffoldPortableSkill(name: string, options: ScaffoldPortableSki
   const description = options.description ?? `${displayName(skillName)} skill`;
 
   if (kind === "instruction") {
-    const manifest = createInstructionManifest(skillName, { description });
+    const manifest = createInstructionManifest(skillName, { description, category: options.category, tags: options.tags });
     writeInstructionSkillTemplate(skillPath, manifest);
     return { name: skillName, path: skillPath, manifest, created: true };
   }
 
-  const manifest = createPortableManifest(skillName, { description });
+  const manifest = createPortableManifest(skillName, { description, category: options.category, tags: options.tags });
   writePortableSkillTemplate(skillPath, manifest);
   return { name: skillName, path: skillPath, manifest, created: true };
 }

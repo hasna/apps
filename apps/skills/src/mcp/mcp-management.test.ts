@@ -393,7 +393,7 @@ describe("MCP Server management and resources", () => {
       const searchResult = JSON.parse(searchResponse.result.content[0].text);
       expect(searchResult.schemaVersion).toBe(1);
       expect(searchResult.tools).toContain("validate_skill");
-      expect(searchResult.tools).not.toContain("quote_skill");
+      expect(searchResult.tools).toContain("quote_skill");
       expect(searchResult.tools).toContain("run_skill");
 
       const storageSearchResponse = await client.request("tools/call", {

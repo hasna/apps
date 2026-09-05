@@ -34,6 +34,8 @@ export interface SkillRunRecord {
   durationMs?: number;
   remote: boolean;
   remoteRunId?: string;
+  /** Exact configured instance that owns a remote run; absent on historical records. */
+  remoteApiOrigin?: string;
   costCents?: number;
   error?: string;
   artifacts: SkillRunArtifact[];
@@ -59,6 +61,7 @@ export function createSkillRun(
     prompt?: string;
     remote?: boolean;
     remoteRunId?: string;
+    remoteApiOrigin?: string;
     costCents?: number;
     status?: SkillRunStatus;
   },
@@ -85,6 +88,7 @@ export function createSkillRun(
     startedAt: now.toISOString(),
     remote: params.remote ?? false,
     ...(params.remoteRunId ? { remoteRunId: params.remoteRunId } : {}),
+    ...(params.remoteApiOrigin ? { remoteApiOrigin: params.remoteApiOrigin } : {}),
     ...(params.costCents !== undefined ? { costCents: params.costCents } : {}),
     artifacts: [],
     paths: {

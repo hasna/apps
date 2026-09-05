@@ -25,7 +25,8 @@ MCP server for ${pkg.name}
 Options:
   -V, --version  output the version number
   -h, --help     display help for command
-  --http         run Streamable HTTP transport on 127.0.0.1 (default port 8836)
+  --stdio        run newline-delimited JSON-RPC for agent hosts
+  --http         run Streamable HTTP transport on 127.0.0.1 (default; port 8836)
   --port <n>     HTTP port (--http or MCP_HTTP=1)`);
 }
 

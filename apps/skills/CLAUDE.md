@@ -137,7 +137,7 @@ There is no `dashboard/` directory and no `src/server/serve.ts`.
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
 | Instruction-kind skills | 20 | `SKILLS` entries with `kind: "instruction"` |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 37 | `tools/list` against a live `buildServer()` |
+| MCP tools | 56 | `tools/list` against a live `buildServer()` |
 | MCP resources | 4 | `resources/list` + `resources/templates/list` (3 static + 1 template) |
 | Published bins | 6 | `bin` in `package.json` |
 | bun build invocations | 6 | the `build` script in `package.json` |
@@ -525,7 +525,7 @@ when built. It falls back silently to `<__dirname>/../skills` if nothing matches
 
 ## MCP tool reference
 
-38 tools. Grouped by registrar; required parameters in **bold**.
+Tools are grouped by registrar; required parameters in **bold**.
 
 **`discovery-tools.ts`** — `list_skills` (category, profile, detail, limit, offset) ·
 `list_pinned_skills` (directory) · `search_skills` (**query**, profile, detail, limit,
@@ -561,7 +561,7 @@ There are no `install_skill` / `remove_skill` tools; they are `pin_skill` /
 
 `src/lib/mcp-contracts.ts` holds a parallel machine-readable contract manifest for the
 same tools and resources, served by `get_mcp_contracts` and pinned against a
-compatibility fixture in `src/lib/fixtures/`. It currently lists the same 38 tools and
+compatibility fixture in `src/lib/fixtures/`. It lists the registered tools and
 4 resources, but **nothing enforces that**: `mcp-contracts.test.ts` compares the
 manifest against a hand-picked subset fixture, and `describeMcpToolContracts()` returns
 `{ known: false, description: "Unknown tool" }` for anything missing. So adding a tool

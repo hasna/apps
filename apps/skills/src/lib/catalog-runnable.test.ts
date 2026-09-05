@@ -229,6 +229,7 @@ describe("run routing resolves from configuration, credential, and the server-ow
     expect(resolveRunRouting(serverOwnedSkill, MOCK_CREDENTIAL, MOCK_ORIGIN)).toEqual({
       route: "remote",
       apiKey: MOCK_CREDENTIAL,
+      apiOrigin: MOCK_ORIGIN,
     });
   });
 

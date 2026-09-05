@@ -51,3 +51,8 @@ export * from "./events.js";
 export * from "./spend.js";
 export * from "./offline.js";
 export * from "./execution/index.js";
+export { RemoteSkillsClient, createRemoteSkillsClient, RemoteRequestError, RemoteRouteUnsupportedError } from "../lib/remote-client.js";
+export { RemoteCreditApprovalError, type RemoteRunApproval, type RemoteRunQuote, type RemoteCreditPack } from "../lib/remote-account.js";
+export { type RemoteInputFile, type RemoteInputFileDescriptor } from "../lib/remote-files.js";
+
+export { RemoteSkillsAuthClient, HostedApiError } from "../lib/remote-auth.js";

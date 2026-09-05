@@ -60,8 +60,9 @@ describe("MCP contract manifest", () => {
       input: { type: "object", additionalProperties: true },
       args: { type: "array", items: { type: "string" } },
     });
-    // The billing quote tool has been removed from the OSS contract surface.
-    expect(byName.has("quote_skill")).toBe(false);
+    // Customer quotes and numerical approval are transport contracts, without a billing engine.
+    expect(byName.has("quote_skill")).toBe(true);
+    expect(byName.get("run_skill")?.inputSchema.properties).toHaveProperty("maxCredits");
     expect(byName.get("run_skill")?.inputSchema.properties).not.toHaveProperty("approved");
     expect(byName.get("validate_skill")?.outputSchema.properties).toHaveProperty("issues");
 

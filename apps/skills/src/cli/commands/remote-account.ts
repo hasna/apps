@@ -1,0 +1,51 @@
+import type { Command } from "commander";
+import { createRemoteSkillsClient } from "../../lib/remote-client.js";
+
+/** These commands expose the configured server's account contract, without local prices. */
+export function registerRemoteAccount(parent: Command) {
+  parent.command("capabilities").option("--json", "Output as JSON", false)
+    .description("Inspect the selected server's supported API contract")
+    .action((options: { json: boolean }) => execute(options, client => client.getCapabilities()));
+  parent.command("quote").argument("<skill>").argument("[args...]")
+    .allowUnknownOption(true).passThroughOptions(true)
+    .option("--json", "Output the server quote as JSON", false)
+    .description("Quote a skill on the configured server without submitting it")
+    .action((skill: string, args: string[], options: { json: boolean }) => execute(options, async client => client.quoteRun(skill, {}, args)));
+
+  const billing = parent.command("billing").description("Inspect the configured server's billing account");
+  billing.command("status").option("--json", "Output as JSON", false)
+    .action((options: { json: boolean }) => execute(options, client => client.getBillingStatus()));
+  billing.command("usage").option("--json", "Output as JSON", false)
+    .action((options: { json: boolean }) => execute(options, client => client.getUsage()));
+  billing.command("invoices").option("--json", "Output as JSON", false)
+    .action((options: { json: boolean }) => execute(options, client => client.listInvoices()));
+  billing.command("checkout").option("--json", "Output as JSON", false)
+    .description("Create an external subscription checkout link")
+    .action((options: { json: boolean }) => execute(options, client => client.createBillingCheckout()));
+  billing.command("portal").option("--json", "Output as JSON", false)
+    .description("Create an external customer billing portal link")
+    .action((options: { json: boolean }) => execute(options, client => client.createBillingPortal()));
+
+  const credits = parent.command("credits").description("Inspect and purchase credits from the configured server");
+  credits.command("packs").option("--json", "Output as JSON", false)
+    .action((options: { json: boolean }) => execute(options, client => client.listCreditPacks()));
+  credits.command("buy").argument("<pack-id>", "An ID returned by credits packs")
+    .option("--json", "Output as JSON", false)
+    .description("Create an external checkout link; payment is confirmed in the browser")
+    .action((packId: string, options: { json: boolean }) => execute(options, client => client.createCreditCheckout(packId)));
+}
+
+export async function execute(options: { json: boolean }, action: (client: NonNullable<Awaited<ReturnType<typeof createRemoteSkillsClient>>>) => Promise<unknown>) {
+  try {
+    const client = await createRemoteSkillsClient();
+    if (!client) throw new Error("Configure a Skills server with skills setup --api-url <url>, then skills auth login");
+    const result = await action(client);
+    // Structured output is also readable at a terminal; it never invokes a returned URL or command.
+    console.log(JSON.stringify(result, null, 2));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The Skills server request failed";
+    if (options.json) console.log(JSON.stringify({ error: message }));
+    else console.error(message);
+    process.exitCode = 1;
+  }
+}
