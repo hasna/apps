@@ -235,6 +235,38 @@ describe("listCommand", () => {
     }
   });
 
+  it("outputs JSON when --json is used (#1602)", async () => {
+    mockFindAll.mockImplementation(() => [
+      makeAttachment({ id: "att_json_flag" }),
+    ]);
+    const capture = captureOutput();
+    try {
+      const program = buildListCmd();
+      await program.parseAsync(["list", "--json"], { from: "user" });
+      const parsed = JSON.parse(capture.out.join(""));
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed[0].id).toBe("att_json_flag");
+    } finally {
+      capture.restore();
+    }
+  });
+
+  it("--json wins over a conflicting --format (alias semantics, #1602)", async () => {
+    mockFindAll.mockImplementation(() => [
+      makeAttachment({ id: "att_json_wins" }),
+    ]);
+    const capture = captureOutput();
+    try {
+      const program = buildListCmd();
+      await program.parseAsync(["list", "--format", "table", "--json"], { from: "user" });
+      const parsed = JSON.parse(capture.out.join(""));
+      expect(Array.isArray(parsed)).toBe(true);
+      expect(parsed[0].id).toBe("att_json_wins");
+    } finally {
+      capture.restore();
+    }
+  });
+
   it("outputs table format when --format table is used", async () => {
     mockFindAll.mockImplementation(() => [
       makeAttachment({ id: "att_tbl", filename: "table.txt", size: 512 }),

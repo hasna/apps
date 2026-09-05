@@ -28,13 +28,22 @@ program
   .description("Telephony platform for AI agents — SMS, WhatsApp, voice, TTS/STT")
   .version(pkg.version);
 
+/**
+ * Accept `--json` on a data command. Every telephony data command already
+ * prints JSON, so the flag is a no-op — but scripts pass it on any
+ * list/read/whoami surface and commander rejects unknown options
+ * (hasna/apps#1602).
+ */
+function withJsonFlag(cmd: Command): Command {
+  return cmd.option("--json", "Output as JSON (already the only output format)");
+}
+
 // ---------------------------------------------------------------------------
 // SMS
 // ---------------------------------------------------------------------------
 const smsCmd = program.command("sms").description("SMS messaging");
 
-smsCmd
-  .command("send")
+withJsonFlag(smsCmd.command("send"))
   .description("Send an SMS")
   .requiredOption("--to <number>", "Recipient phone number")
   .requiredOption("--body <text>", "Message body")
@@ -46,8 +55,7 @@ smsCmd
     console.log(JSON.stringify(msg, null, 2));
   });
 
-smsCmd
-  .command("list")
+withJsonFlag(smsCmd.command("list"))
   .description("List SMS messages")
   .option("--agent <id>", "Filter by agent")
   .option("--project <id>", "Filter by project")
@@ -57,8 +65,7 @@ smsCmd
     console.log(JSON.stringify(msgs, null, 2));
   });
 
-smsCmd
-  .command("search <query>")
+withJsonFlag(smsCmd.command("search <query>"))
   .description("Search messages")
   .option("--limit <n>", "Limit results", "50")
   .action(async (query, opts) => {
@@ -71,8 +78,7 @@ smsCmd
 // ---------------------------------------------------------------------------
 const waCmd = program.command("whatsapp").description("WhatsApp messaging");
 
-waCmd
-  .command("send")
+withJsonFlag(waCmd.command("send"))
   .description("Send a WhatsApp message")
   .requiredOption("--to <number>", "Recipient phone number")
   .requiredOption("--body <text>", "Message body")
@@ -83,8 +89,7 @@ waCmd
     console.log(JSON.stringify(msg, null, 2));
   });
 
-waCmd
-  .command("send-audio")
+withJsonFlag(waCmd.command("send-audio"))
   .description("Send a WhatsApp audio message")
   .requiredOption("--to <number>", "Recipient")
   .requiredOption("--media-url <url>", "Audio URL")
@@ -95,8 +100,7 @@ waCmd
     console.log(JSON.stringify(msg, null, 2));
   });
 
-waCmd
-  .command("list")
+withJsonFlag(waCmd.command("list"))
   .description("List WhatsApp messages")
   .option("--agent <id>", "Filter by agent")
   .option("--limit <n>", "Limit", "50")
@@ -110,8 +114,7 @@ waCmd
 // ---------------------------------------------------------------------------
 const callCmd = program.command("call").description("Voice calls");
 
-callCmd
-  .command("make")
+withJsonFlag(callCmd.command("make"))
   .description("Make a call")
   .requiredOption("--to <number>", "Number to call")
   .option("--from <number>", "Caller ID")
@@ -122,8 +125,7 @@ callCmd
     console.log(JSON.stringify(call, null, 2));
   });
 
-callCmd
-  .command("list")
+withJsonFlag(callCmd.command("list"))
   .description("List calls")
   .option("--agent <id>", "Filter by agent")
   .option("--limit <n>", "Limit", "50")
@@ -137,8 +139,7 @@ callCmd
 // ---------------------------------------------------------------------------
 const vmCmd = program.command("voicemail").description("Voicemail management");
 
-vmCmd
-  .command("list")
+withJsonFlag(vmCmd.command("list"))
   .description("List voicemails")
   .option("--agent <id>", "Filter by agent")
   .option("--unheard", "Only unheard")
@@ -171,8 +172,7 @@ vmCmd
 // ---------------------------------------------------------------------------
 const numCmd = program.command("number").description("Phone number management");
 
-numCmd
-  .command("search-available")
+withJsonFlag(numCmd.command("search-available"))
   .description("Search available phone numbers")
   .option("--country <code>", "Country code", "US")
   .option("--area-code <code>", "Area code")
@@ -182,8 +182,7 @@ numCmd
     console.log(JSON.stringify(numbers, null, 2));
   });
 
-numCmd
-  .command("provision <number>")
+withJsonFlag(numCmd.command("provision <number>"))
   .description("Buy a phone number")
   .option("--agent <id>", "Assign to agent")
   .option("--project <id>", "Assign to project")
@@ -201,8 +200,7 @@ numCmd
     console.log("Number released.");
   });
 
-numCmd
-  .command("list")
+withJsonFlag(numCmd.command("list"))
   .description("List phone numbers")
   .option("--agent <id>", "Filter by agent")
   .option("--project <id>", "Filter by project")
@@ -221,8 +219,7 @@ numCmd
     console.log("Number assigned.");
   });
 
-numCmd
-  .command("twilio-list")
+withJsonFlag(numCmd.command("twilio-list"))
   .description("List numbers from Twilio account")
   .action(async () => {
     const numbers = await listTwilioNumbers();
@@ -245,8 +242,7 @@ numCmd
 // ---------------------------------------------------------------------------
 const agentCmd = program.command("agent").description("Agent management");
 
-agentCmd
-  .command("register")
+withJsonFlag(agentCmd.command("register"))
   .description("Register an agent")
   .requiredOption("--name <name>", "Agent name")
   .option("--description <desc>", "Description")
@@ -257,8 +253,7 @@ agentCmd
     console.log(JSON.stringify(result, null, 2));
   });
 
-agentCmd
-  .command("list")
+withJsonFlag(agentCmd.command("list"))
   .description("List agents")
   .option("--project <id>", "Filter by project")
   .action(async (opts) => {
@@ -266,16 +261,14 @@ agentCmd
     console.log(JSON.stringify(agents, null, 2));
   });
 
-agentCmd
-  .command("get <id>")
+withJsonFlag(agentCmd.command("get <id>"))
   .description("Get agent details")
   .action(async (id) => {
     const agent = (await getStore().getAgent(id)) || (await getStore().getAgentByName(id));
     console.log(JSON.stringify(agent, null, 2));
   });
 
-agentCmd
-  .command("heartbeat <id>")
+withJsonFlag(agentCmd.command("heartbeat <id>"))
   .description("Send agent heartbeat")
   .action(async (id) => {
     const agent = await getStore().heartbeat(id);
@@ -295,8 +288,7 @@ agentCmd
 // ---------------------------------------------------------------------------
 const projCmd = program.command("project").description("Project management");
 
-projCmd
-  .command("create")
+withJsonFlag(projCmd.command("create"))
   .description("Create a project")
   .requiredOption("--name <name>", "Project name")
   .requiredOption("--path <path>", "Project path")
@@ -306,15 +298,13 @@ projCmd
     console.log(JSON.stringify(proj, null, 2));
   });
 
-projCmd
-  .command("list")
+withJsonFlag(projCmd.command("list"))
   .description("List projects")
   .action(async () => {
     console.log(JSON.stringify(await getStore().listProjects(), null, 2));
   });
 
-projCmd
-  .command("get <id>")
+withJsonFlag(projCmd.command("get <id>"))
   .description("Get project details")
   .action(async (id) => {
     console.log(JSON.stringify(await getStore().getProject(id), null, 2));
@@ -333,8 +323,7 @@ projCmd
 // ---------------------------------------------------------------------------
 const schedCmd = program.command("schedule").description("Cron schedules");
 
-schedCmd
-  .command("create")
+withJsonFlag(schedCmd.command("create"))
   .description("Create a schedule")
   .requiredOption("--name <name>", "Schedule name")
   .requiredOption("--cron <expr>", "Cron expression (5-field)")
@@ -354,8 +343,7 @@ schedCmd
     console.log(JSON.stringify(sched, null, 2));
   });
 
-schedCmd
-  .command("ai <description>")
+withJsonFlag(schedCmd.command("ai <description>"))
   .description("Create schedule from natural language (Cerebras AI)")
   .option("--agent <id>", "Agent ID")
   .action(async (description, opts) => {
@@ -372,8 +360,7 @@ schedCmd
     console.log("Created:", JSON.stringify(sched, null, 2));
   });
 
-schedCmd
-  .command("list")
+withJsonFlag(schedCmd.command("list"))
   .description("List schedules")
   .option("--agent <id>", "Filter by agent")
   .action(async (opts) => {
@@ -392,8 +379,7 @@ schedCmd
   .command("delete <id>")
   .action(async (id) => { await getStore().deleteSchedule(id); console.log("Deleted."); });
 
-schedCmd
-  .command("run")
+withJsonFlag(schedCmd.command("run"))
   .description("Run all due schedules now")
   .action(async () => {
     const results = await tick();
@@ -414,8 +400,7 @@ program
     console.log("Audio saved:", result.path, `(${result.size} bytes)`);
   });
 
-program
-  .command("stt")
+withJsonFlag(program.command("stt"))
   .description("Speech-to-text (ElevenLabs)")
   .requiredOption("--file <path>", "Audio file path")
   .action(async (opts) => {
@@ -438,8 +423,7 @@ program
 // ---------------------------------------------------------------------------
 const contactCmd = program.command("contact").description("Contact management");
 
-contactCmd
-  .command("add")
+withJsonFlag(contactCmd.command("add"))
   .requiredOption("--name <name>", "Contact name")
   .requiredOption("--phone <number>", "Phone number")
   .option("--email <email>", "Email")
@@ -450,15 +434,13 @@ contactCmd
     console.log(JSON.stringify(c, null, 2));
   });
 
-contactCmd
-  .command("list")
+withJsonFlag(contactCmd.command("list"))
   .option("--agent <id>", "Filter by agent")
   .action(async (opts) => {
     console.log(JSON.stringify(await getStore().listContacts({ agent_id: opts.agent }), null, 2));
   });
 
-contactCmd
-  .command("search <query>")
+withJsonFlag(contactCmd.command("search <query>"))
   .action(async (query) => {
     console.log(JSON.stringify(await getStore().searchContacts(query), null, 2));
   });
@@ -472,8 +454,7 @@ contactCmd
 // ---------------------------------------------------------------------------
 const whCmd = program.command("webhook").description("Webhook management");
 
-whCmd
-  .command("create")
+withJsonFlag(whCmd.command("create"))
   .requiredOption("--url <url>", "Webhook URL")
   .option("--events <events>", "Comma-separated events")
   .option("--secret <secret>", "Signing secret")
@@ -482,7 +463,7 @@ whCmd
     console.log(JSON.stringify(wh, null, 2));
   });
 
-whCmd.command("list").action(async () => { console.log(JSON.stringify(await getStore().listWebhooks(), null, 2)); });
+withJsonFlag(whCmd.command("list")).action(async () => { console.log(JSON.stringify(await getStore().listWebhooks(), null, 2)); });
 whCmd.command("delete <id>").action(async (id) => { await getStore().deleteWebhook(id); console.log("Deleted."); });
 
 // ---------------------------------------------------------------------------
@@ -502,8 +483,7 @@ program
 // ---------------------------------------------------------------------------
 // Conversation
 // ---------------------------------------------------------------------------
-program
-  .command("conversation <phone>")
+withJsonFlag(program.command("conversation <phone>"))
   .description("View conversation with a phone number")
   .option("--limit <n>", "Limit", "50")
   .action(async (phone, opts) => {
@@ -514,8 +494,7 @@ program
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-program
-  .command("config")
+withJsonFlag(program.command("config"))
   .description("Show current configuration")
   .action(() => {
     const config = getConfig();
