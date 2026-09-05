@@ -29,6 +29,10 @@ Resolve credentials through the shared `@hasna/contracts` client ladder
   `auth.json` in the data directory and `~/.skills/auth.json` are retired and no
   longer read. `skills auth whoami` reports which tier supplied the key, and
   `skills auth logout` says when a credential still resolves from elsewhere.
+- `skills setup-info` reports where the install stands: mode, the resolved API
+  URL and what decided it, the tier and SOURCE of the key (an env key name, a
+  Keychain item reference, or a path — never a value), and the credentials
+  file's permission bits.
 - `apiUrl` is retired as a config key: `skills setup --api-url <origin>` writes
   the credentials file instead (the address is per-user, so `--global` is
   accepted and ignored), and `skills config unset apiUrl` clears it.
