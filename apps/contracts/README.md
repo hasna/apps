@@ -527,10 +527,6 @@ contracts issue-key --app todos --scopes 'todos:read' --no-store --json
 
 Signing secret is read from `HASNA_<APP>_API_SIGNING_KEY` (then `HASNA_API_SIGNING_KEY`);
 the record store uses `HASNA_<APP>_DATABASE_URL` (or `--database-url-env`).
-The signing secret is normalized (whitespace-trimmed) before signing: fleet
-provisioning stores `api-key-signing-secret` values that carry a trailing
-newline, and both `issue-key` and every fleet server trim at their env read, so
-a raw stored value and its trimmed copy sign — and verify — identically.
 
 The hashed record always lands in PostgreSQL. Client-transport configuration
 (`HASNA_<APP>_API_URL`, `HASNA_<APP>_API_KEY`) selects
@@ -559,6 +555,80 @@ idempotent on kid plus token hash, so a committed activation whose response is
 lost is recognized without creating another credential. `--agent` remains a
 claim inside the signed token, not authentication for the caller; the consuming
 service must keep its authenticated-principal authorization checks.
+
+### Signing secrets are trimmed on read
+
+A string signing secret is **whitespace-normalized before it keys the HMAC**:
+`mintApiKey` and `verifyApiKeyToken` both end at the same conversion in
+`src/auth/keys.ts`, which trims a string and leaves byte views byte-exact.
+Provisioning tooling wrote these secrets as 64 hex characters plus a trailing
+newline; `issue-key` and every fleet server also trim at their env read, so a
+raw stored value and its trimmed copy sign — and verify — identically, wherever
+the secret enters (hasna/apps#1543, #1638). Binary secrets are never trimmed:
+bytes handed over are the bytes that key the HMAC.
+
+The shared read for callers that want the env-key precedence in one place is
+`resolveSigningSecret(app, env)` from `@hasna/contracts/auth`
+(`HASNA_<APP>_API_SIGNING_KEY`, then the shared `HASNA_API_SIGNING_KEY`), with
+`normalizeSigningSecret` and `signingSecretHasSurroundingWhitespace` as the
+in-process helpers.
+
+Trimming makes the stored byte harmless; it does not make it correct. The
+provisioning check that refuses a whitespace-wrapped secret ships as a command —
+the deploy/provision lane runs it against the stored value, and a secret that
+needs trimming exits non-zero:
+
+```bash
+HASNA_PROJECTS_API_SIGNING_KEY="$(aws secretsmanager get-secret-value \
+  --secret-id hasna/oss/projects/api-key-signing-secret \
+  --query SecretString --output text)" \
+  contracts check-signing-secret --app projects
+# exit 1: HASNA_PROJECTS_API_SIGNING_KEY carries leading or trailing whitespace
+```
+
+Pass the value through the environment, never as an argument: an argv is
+world-readable in `ps`. The command prints the env key NAME, the raw and trimmed
+byte counts, and a sha256 prefix of the trimmed bytes — never the secret — and
+`--json` emits the same metadata. A secret it cannot find is exit 2, not a pass.
+
+### Operator key lifecycle route (`createKeyLifecycleRoutes`)
+
+A hosted service is unusable from a station until a **client** key exists for
+it, and minting one used to require the app's signing secret *and* its owner
+Postgres URL — reachable only inside the VPC. So deploys did not provision keys,
+and services ran with none (hasna/apps#1595). The serve kit now exposes an
+operator-only lifecycle route:
+
+```ts
+import { ApiKeyStore, createKeyLifecycleRoutes } from "@hasna/contracts/auth";
+
+const store = new ApiKeyStore(queryClient);
+const keys = createKeyLifecycleRoutes({
+  app: "messages",
+  signingSecret: process.env.HASNA_MESSAGES_API_SIGNING_KEY!,
+  store,
+  keyStatus: store.keyStatus,
+});
+
+// Any framework: hand it method + path + headers + body.
+if (keys.matches(url.pathname)) {
+  const { status, body } = await keys.handle({ method, path: url.pathname + url.search, headers, body });
+  return Response.json(body, { status });
+}
+```
+
+| Route | Effect |
+| --- | --- |
+| `POST /v1/admin/keys` | Mint a client key. Body: `agent` (required), `scopes` (default `<app>:read`, `<app>:write`), `tid`, `ttl_days` (default 365, `null` = no expiry). Returns the plaintext **once**. |
+| `GET /v1/admin/keys` | List keys (`?include_revoked=1`, `?tid=`). Metadata only — never `token_hash`. |
+| `GET /v1/admin/keys/<kid>` | Read one key's metadata. |
+| `DELETE /v1/admin/keys/<kid>` / `POST /v1/admin/keys/<kid>/revoke` | Revoke, with an optional `reason`. |
+
+Every route is gated by `verifyApiKey` requiring `<app>:keys.admin`, which a
+bootstrap key (`<app>:*`) satisfies and an ordinary client key does not. Scopes
+naming another app, and the `*` superuser grant, are refused. A key whose record
+cannot be stored is **discarded rather than returned**: an unrecorded key is
+both irrevocable and refused as `unknown_key` by every verifier.
 
 Services that expose API, MCP, CLI-token, dashboard, worker, sync/export, or
 provider webhook surfaces must also follow the shared
@@ -651,7 +721,8 @@ defaults are applied; output aliases such as `EvidenceRef` describe parsed data.
   such as todos, files, mailery, conversations, knowledge, mementos, reports,
   actions, render, contracts, or a custom provider.
 - `hasna.project_manifest.v1`: canonical agent-managed project manifest with
-  slug, classification, `.hasna/projects` layout, integrations, render manifests,
+  slug, classification, an explicit project-relative `layout` (no defaults —
+  supplied by `projects` from the workspace root), integrations, render manifests,
   resource refs, and evidence refs.
 - `hasna.project_panel.v1`: compact provider output for a dashboard panel,
   including state, freshness, metrics, items, safe action refs, evidence, and an
@@ -957,7 +1028,8 @@ helpers. Owning packages still own storage and behavior.
 - `knowledge` owns durable knowledge records and promotion workflows under
   `.hasna/knowledge`.
 - `files` owns artifact storage, file indexing, and dereference logic.
-- `projects` owns project folder discovery, `.hasna/projects` conventions,
+- `projects` owns project folder discovery, the `.hasna/projects/` and
+  `.hasna/projects/workspaces/<wks_id>/` conventions,
   dashboard snapshot assembly, render manifest loading, and the local dashboard
   viewer. It validates project manifests, panels, snapshots, and render
   manifests with `@hasna/contracts`.

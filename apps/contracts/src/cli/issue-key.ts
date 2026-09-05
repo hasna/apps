@@ -537,13 +537,19 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
 
   const table = optTable ?? "api_keys";
   const dbEnvName = databaseUrlEnvName(app, optDatabaseUrlEnv);
+  // The database URL is TRIMMED here, at the env boundary, before it ever
+  // reaches the pg driver, for the same reason the signing secret is: fleet
+  // provisioning stores both values with a trailing newline, and the server
+  // side trims at its env read (`resolveDatabaseUrl` in server-backend.ts), so
+  // `issue-key` must hand the driver the same bytes the server connects with.
+  const databaseUrl = env[dbEnvName]?.trim();
   const expiresAt = minted.claims.exp === null ? null : new Date(minted.claims.exp * 1000).toISOString();
   const issuedAt = new Date(minted.claims.iat * 1000).toISOString();
 
   if (secretsReference) {
     const secretsRef = secretsReference.resolve(minted.kid);
     const createdBy = agent as string;
-    const connectionString = env[dbEnvName];
+    const connectionString = databaseUrl;
     if (!connectionString) {
       deps.report({ json }, `No database URL found. Set ${dbEnvName}.`, {
         code: "missing_database_url",
@@ -825,7 +831,7 @@ export async function runIssueKey(options: Record<string, unknown>, deps: IssueK
   let stored = false;
   if (optStore !== false) {
     const createdBy = agent ?? "issue-key";
-    const connectionString = env[dbEnvName];
+    const connectionString = databaseUrl;
     if (!connectionString) {
       reportStoreFailure(
         `No database URL found. Set ${dbEnvName}, or pass --no-store to skip persistence.`,

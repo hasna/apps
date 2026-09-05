@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Database } from "bun:sqlite";
 import { LocalConfigStore } from "../data/config-store";
 import { createConfig, getConfig } from "../db/configs";
@@ -18,6 +18,15 @@ beforeEach(() => {
   resetDatabase();
   process.env["HASNA_INSTRUCTIONS_DB_PATH"] = ":memory:";
   db = getDatabase();
+});
+// `bun test` runs every file of this package in ONE process, so a
+// HASNA_INSTRUCTIONS_DB_PATH left on `process.env` is inherited by every test
+// file that runs later — including the CLI suites, which spawn the CLI with
+// `{ ...process.env }` and whose store this override silently wins over
+// (src/db/database.ts getDbPath consults it BEFORE HASNA_CONFIGS_HOME). Restore
+// it, exactly as every other file that sets it does (hasna/apps#1641).
+afterEach(() => {
+  delete process.env["HASNA_INSTRUCTIONS_DB_PATH"];
 });
 
 describe("dangerous operation guard standard", () => {

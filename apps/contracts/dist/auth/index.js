@@ -541,11 +541,17 @@ class ApiKeyStore {
       return status !== "active";
     };
   }
-  async revoke(kid, reason, atMs = Date.now()) {
+  async revoke(kid, reason, atMs = Date.now(), options = {}) {
+    const params = [kid, new Date(atMs).toISOString(), reason ?? null];
+    let scope = "";
+    if (options.app !== undefined) {
+      params.push(options.app);
+      scope = ` AND app = $${params.length}`;
+    }
     const row = await this.client.get(`UPDATE ${this.table}
           SET revoked_at = COALESCE(revoked_at, $2), revoked_reason = COALESCE(revoked_reason, $3)
-        WHERE kid = $1
-      RETURNING kid`, [kid, new Date(atMs).toISOString(), reason ?? null]);
+        WHERE kid = $1${scope}
+      RETURNING kid`, params);
     return row !== null;
   }
   async touchLastUsed(kid, atMs = Date.now()) {
@@ -1217,13 +1223,316 @@ function isPlausibleAuthority(authority) {
   const port = Number(match[2]);
   return port >= 1 && port <= 65535 && String(port) === match[2];
 }
+// src/auth/signing-secret.ts
+function signingSecretEnvKeys(app) {
+  return [`HASNA_${envToken(app)}_API_SIGNING_KEY`, "HASNA_API_SIGNING_KEY"];
+}
+
+class SigningSecretError extends Error {
+  attempted;
+  constructor(message, attempted) {
+    super(message);
+    this.name = "SigningSecretError";
+    this.attempted = Object.freeze([...attempted]);
+  }
+}
+function normalizeSigningSecret(secret) {
+  return typeof secret === "string" ? secret.trim() : secret;
+}
+function signingSecretHasSurroundingWhitespace(value) {
+  return value !== value.trim();
+}
+function resolveSigningSecret(app, env, options = {}) {
+  const keys = options.envName ? [options.envName] : signingSecretEnvKeys(app);
+  for (const key of keys) {
+    const raw = env[key];
+    if (raw === undefined)
+      continue;
+    const value = raw.trim();
+    if (!value)
+      continue;
+    return { value, source: key, trimmed: signingSecretHasSurroundingWhitespace(raw) };
+  }
+  throw new SigningSecretError(`No signing secret found. Set ${keys.join(" or ")} (openssl rand -hex 32).`, keys);
+}
+// src/auth/key-lifecycle.ts
+var KEY_LIFECYCLE_BASE_PATH = "/v1/admin/keys";
+var KEY_LIFECYCLE_SCOPE_ACTION = "keys.admin";
+function keyLifecycleScope(app) {
+  return `${app}:${KEY_LIFECYCLE_SCOPE_ACTION}`;
+}
+var DEFAULT_CLIENT_KEY_TTL_DAYS = 365;
+function ownField(bag, name) {
+  if (typeof bag !== "object" || bag === null)
+    return;
+  return Object.hasOwn(bag, name) ? bag[name] : undefined;
+}
+function fail(status, reason, message) {
+  return { status, body: { error: message, reason } };
+}
+function publicRecord(record, nowMs) {
+  return {
+    kid: record.kid,
+    app: record.app,
+    agent: record.agent,
+    tid: record.tid,
+    scopes: record.scopes,
+    issued_at: record.issuedAt,
+    expires_at: record.expiresAt,
+    revoked_at: record.revokedAt,
+    revoked_reason: record.revokedReason,
+    last_used_at: record.lastUsedAt,
+    created_by: record.createdBy,
+    status: recordStatus(record, nowMs)
+  };
+}
+function recordStatus(record, nowMs) {
+  if (record.revokedAt)
+    return "revoked";
+  if (record.expiresAt && new Date(record.expiresAt).getTime() <= nowMs)
+    return "expired";
+  return "active";
+}
+function parseBody(body) {
+  if (body === undefined || body === null || body === "")
+    return {};
+  if (typeof body === "string") {
+    try {
+      const parsed = JSON.parse(body);
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof body === "object" && !Array.isArray(body))
+    return body;
+  return null;
+}
+function createKeyLifecycleRoutes(options) {
+  const app = options.app;
+  if (!/^[a-z][a-z0-9-]*$/.test(app)) {
+    throw new Error(`Invalid app slug '${app}'. Expected a lowercase DNS-style slug.`);
+  }
+  const basePath = (options.basePath ?? KEY_LIFECYCLE_BASE_PATH).replace(/\/+$/, "");
+  if (!basePath.startsWith("/")) {
+    throw new Error("Key lifecycle basePath must be an absolute path.");
+  }
+  const operatorScope = options.operatorScope ?? keyLifecycleScope(app);
+  const maxTtlDays = options.maxTtlDays ?? DEFAULT_CLIENT_KEY_TTL_DAYS;
+  if (!Number.isFinite(maxTtlDays) || maxTtlDays <= 0) {
+    throw new Error("maxTtlDays must be a positive number.");
+  }
+  const clock = options.nowMs ?? Date.now;
+  const verifier = verifyApiKey({
+    app,
+    signingSecret: options.signingSecret,
+    requiredScopes: [operatorScope],
+    ...options.keyStatus !== undefined ? { keyStatus: options.keyStatus } : {},
+    ...options.allowUnregisteredKeys !== undefined ? { allowUnregisteredKeys: options.allowUnregisteredKeys } : {},
+    ...options.audit !== undefined ? { audit: options.audit } : {},
+    ...options.nowMs !== undefined ? { nowMs: options.nowMs } : {}
+  });
+  function routePath(path) {
+    const withoutQuery = path.split(/[?#]/, 1)[0] ?? "";
+    return withoutQuery.replace(/\/+$/, "") || "/";
+  }
+  function matches(path) {
+    const resolved = routePath(path);
+    return resolved === basePath || resolved.startsWith(`${basePath}/`);
+  }
+  function subPath(path) {
+    const resolved = routePath(path);
+    return resolved === basePath ? "" : resolved.slice(basePath.length);
+  }
+  async function mint(body, createdBy) {
+    const rawAgent = ownField(body, "agent");
+    if (typeof rawAgent !== "string" || rawAgent.trim().length === 0) {
+      return fail(400, "invalid_agent", "Provide 'agent': the subject this key is issued to.");
+    }
+    const agent = rawAgent.trim();
+    const rawScopes = ownField(body, "scopes");
+    const scopes = rawScopes === undefined ? [`${app}:read`, `${app}:write`] : rawScopes;
+    if (!Array.isArray(scopes) || scopes.length === 0 || !scopes.every((s) => typeof s === "string")) {
+      return fail(400, "invalid_scopes", "'scopes' must be a non-empty array of scope strings.");
+    }
+    for (const scope of scopes) {
+      if (!isValidScope(scope)) {
+        return fail(400, "invalid_scopes", `Invalid scope '${scope}'. Expected '<app>:<action>'.`);
+      }
+      if (scope === "*" || !scope.startsWith(`${app}:`)) {
+        return fail(400, "invalid_scopes", `Scope '${scope}' is not for app '${app}'. This route mints keys for '${app}' only.`);
+      }
+    }
+    const rawTid = ownField(body, "tid");
+    let tid;
+    if (rawTid !== undefined && rawTid !== null) {
+      try {
+        tid = normalizeTenantId(String(rawTid));
+      } catch (error) {
+        return fail(400, "invalid_tid", error instanceof Error ? error.message : "Invalid 'tid'.");
+      }
+    }
+    const ttlField = Object.hasOwn(body, "ttl_days") ? "ttl_days" : Object.hasOwn(body, "ttlDays") ? "ttlDays" : null;
+    const rawTtl = ttlField === null ? undefined : ownField(body, ttlField);
+    let ttlSeconds;
+    if (rawTtl === null) {
+      ttlSeconds = null;
+    } else if (rawTtl === undefined) {
+      ttlSeconds = Math.floor(DEFAULT_CLIENT_KEY_TTL_DAYS * 86400);
+    } else {
+      const days = Number(rawTtl);
+      if (!Number.isFinite(days) || days <= 0 || days > maxTtlDays) {
+        return fail(400, "invalid_ttl", `'ttl_days' must be a positive number no greater than ${maxTtlDays}, or null for no expiry.`);
+      }
+      ttlSeconds = Math.floor(days * 86400);
+    }
+    let minted;
+    try {
+      minted = mintApiKey({
+        app,
+        scopes: [...scopes],
+        signingSecret: options.signingSecret,
+        ttlSeconds,
+        agent,
+        nowMs: clock(),
+        ...tid !== undefined ? { tid } : {}
+      });
+    } catch (error) {
+      return fail(400, "mint_failed", error instanceof Error ? error.message : "Could not mint key.");
+    }
+    try {
+      await options.store.insertMinted(minted, createdBy);
+    } catch {
+      return fail(503, "record_not_stored", "The key was minted but its record could not be stored, so it was discarded. Retry.");
+    }
+    return {
+      status: 201,
+      body: {
+        key: minted.token,
+        kid: minted.kid,
+        app,
+        agent,
+        tid: tid ?? null,
+        scopes: [...scopes],
+        issued_at: new Date(minted.claims.iat * 1000).toISOString(),
+        expires_at: minted.claims.exp === null ? null : new Date(minted.claims.exp * 1000).toISOString()
+      }
+    };
+  }
+  async function list(path) {
+    const query = new URLSearchParams(path.includes("?") ? path.slice(path.indexOf("?") + 1) : "");
+    const includeRevoked = query.get("include_revoked") === "1" || query.get("include_revoked") === "true";
+    const rawTid = query.get("tid");
+    let records;
+    try {
+      records = await options.store.list({
+        app,
+        includeRevoked,
+        ...rawTid !== null ? { tid: rawTid } : {}
+      });
+    } catch (error) {
+      return fail(400, "invalid_filter", error instanceof Error ? error.message : "Invalid list filter.");
+    }
+    const now = clock();
+    return { status: 200, body: { keys: records.map((record) => publicRecord(record, now)) } };
+  }
+  async function ownedByApp(kid) {
+    if (options.store.findByKid) {
+      const record = await options.store.findByKid(kid);
+      return record !== null && record.app === app;
+    }
+    if (typeof options.store.list === "function") {
+      const records = await options.store.list({ app, includeRevoked: true });
+      return records.some((record) => record.kid === kid && record.app === app);
+    }
+    return null;
+  }
+  async function revoke(kid, body) {
+    const rawReason = ownField(body, "reason");
+    const reason = typeof rawReason === "string" && rawReason.trim() ? rawReason.trim() : "revoked_by_operator";
+    let owned;
+    try {
+      owned = await ownedByApp(kid);
+    } catch {
+      return fail(503, "ownership_unresolved", "Could not read the key's record to confirm it belongs to this app. Retry.");
+    }
+    if (owned === null) {
+      return fail(501, "not_implemented", "This key store cannot establish which app a key belongs to.");
+    }
+    if (!owned)
+      return fail(404, "unknown_key", `No key with kid '${kid}' is recorded for '${app}'.`);
+    const revoked = await options.store.revoke(kid, reason, clock(), { app });
+    if (!revoked)
+      return fail(404, "unknown_key", `No key with kid '${kid}' is recorded for '${app}'.`);
+    return { status: 200, body: { kid, revoked: true, reason } };
+  }
+  async function handle(request) {
+    const method = String(request.method ?? "").toUpperCase();
+    const path = String(request.path ?? "");
+    if (!matches(path))
+      return fail(404, "not_found", "No such route.");
+    const rest = subPath(path).split(/[?#]/, 1)[0] ?? "";
+    const decision = await verifier.authenticate(request.headers, {
+      method,
+      path: routePath(path),
+      requiredScopes: [operatorScope]
+    });
+    if (!decision.ok) {
+      return { status: decision.status, body: { error: decision.message, reason: decision.reason } };
+    }
+    if (!hasScope(decision.principal.scopes, operatorScope)) {
+      return fail(403, "insufficient_scope", `This route requires the '${operatorScope}' scope.`);
+    }
+    const createdBy = decision.principal.agent ?? decision.principal.kid;
+    const body = parseBody(request.body);
+    if (body === null)
+      return fail(400, "invalid_body", "Request body must be a JSON object.");
+    if (rest === "") {
+      if (method === "POST")
+        return mint(body, createdBy);
+      if (method === "GET")
+        return list(path);
+      return fail(405, "method_not_allowed", "Use POST to mint a key or GET to list keys.");
+    }
+    const segments = rest.split("/").filter(Boolean);
+    const kid = segments[0] ?? "";
+    if (!/^[A-Za-z0-9_-]+$/.test(kid)) {
+      return fail(400, "invalid_kid", "Key id must be url-safe (letters, digits, '_' or '-').");
+    }
+    if (segments.length === 1) {
+      if (method === "DELETE")
+        return revoke(kid, body);
+      if (method === "GET") {
+        if (!options.store.findByKid) {
+          return fail(501, "not_implemented", "This key store cannot look a key up by kid.");
+        }
+        const record = await options.store.findByKid(kid);
+        if (!record || record.app !== app) {
+          return fail(404, "unknown_key", `No key with kid '${kid}' is recorded for '${app}'.`);
+        }
+        return { status: 200, body: { key: publicRecord(record, clock()) } };
+      }
+      return fail(405, "method_not_allowed", "Use GET to read a key or DELETE to revoke it.");
+    }
+    if (segments.length === 2 && segments[1] === "revoke") {
+      if (method === "POST")
+        return revoke(kid, body);
+      return fail(405, "method_not_allowed", "Use POST to revoke a key.");
+    }
+    return fail(404, "not_found", "No such route.");
+  }
+  return { basePath, operatorScope, matches, handle };
+}
 export {
   verifyFleetToken,
   verifyApiKeyToken,
   verifyApiKey,
   tenantIdsEqual,
+  signingSecretHasSurroundingWhitespace,
+  signingSecretEnvKeys,
   scopeMatches,
   resolveTenantOrg,
+  resolveSigningSecret,
   resolveIdentityConfig,
   parseFleetJwks,
   parseApiKey,
@@ -1231,8 +1540,10 @@ export {
   ownScopesClaim,
   ownAgentClaim,
   normalizeTenantId,
+  normalizeSigningSecret,
   normalizeScopes,
   mintApiKey,
+  keyLifecycleScope,
   isValidTenantId,
   isValidScope,
   isUuidTenantId,
@@ -1245,18 +1556,23 @@ export {
   generateKid,
   extractToken,
   expressApiKey,
+  createKeyLifecycleRoutes,
   createIdentityVerifier,
   canonicalizeTenantId,
   apiKeyPrefix,
   apiKeyMigrations,
   TENANT_ID_PATTERN,
+  SigningSecretError,
   PRINCIPAL_TYPES,
   MAX_TENANT_ID_LENGTH,
   MAX_IDENTIFIER_LENGTH,
   MAX_FLEET_TOKEN_TTL_SECONDS,
   MAX_FLEET_TOKEN_LEEWAY_SECONDS,
+  KEY_LIFECYCLE_SCOPE_ACTION,
+  KEY_LIFECYCLE_BASE_PATH,
   FLEET_TOKEN_TYP,
   FLEET_TOKEN_ALG,
+  DEFAULT_CLIENT_KEY_TTL_DAYS,
   DEFAULT_API_KEY_TTL_SECONDS,
   DEFAULT_API_KEYS_TABLE,
   ApiKeyStore,

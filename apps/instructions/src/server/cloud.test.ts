@@ -8,11 +8,13 @@
 // wrong database while reporting healthy.
 import net from "node:net";
 import { describe, expect, test } from "bun:test";
+import { Hono } from "hono";
 import { mintApiKey, verifyApiKey, type ApiKeyStatus } from "@hasna/contracts/auth";
 import {
   INSTRUCTIONS_APP_SLUG,
   closeCloud,
   ensureCloudSchema,
+  getApiKeyStore,
   getCloudVerifier,
   getHonoAuthMiddleware,
   isPostgresBackendEnabled,
@@ -224,6 +226,67 @@ describe("ensureCloudSchema failure recovery (row 6f6fdf2b)", () => {
       server.close();
       if (hadUrl) process.env.HASNA_INSTRUCTIONS_DATABASE_URL = oldUrl;
       else delete process.env.HASNA_INSTRUCTIONS_DATABASE_URL;
+    }
+  });
+});
+
+// ── closeCloud() must reset the Hono middleware cache too ────────────────────
+// The scope-keyed `honoMiddlewareCache` was the one module-level cache
+// closeCloud() did not clear. A cached middleware closes over the keyStatus of
+// the ApiKeyStore alive when it was BUILT, so after a closeCloud() the next
+// caller got a checker bound to a closed pool and a stale signing secret: its
+// own registered, active key came back 401 while the same key passed through
+// getCloudVerifier(), which closeCloud DID reset.
+//
+// This is the exact sequence that turned "build + test (affected)" red on
+// hasna/apps#1641 (run 33880366492), where Linux ran this file before
+// src/server/cloud-auth.test.ts. The assertion is the OUTCOME (an active key
+// authenticates through a freshly built middleware), not the cache's identity —
+// a middleware rebuilt for any other reason still has to pass.
+describe("closeCloud() resets the Hono middleware cache (hasna/apps#1641)", () => {
+  test("a middleware built after closeCloud() uses the CURRENT key store", async () => {
+    const staleSecret = "stale-signing-secret-not-a-real-secret";
+    const freshSecret = Buffer.alloc(32, 7).toString("hex");
+    const previousUrl = process.env["HASNA_INSTRUCTIONS_DATABASE_URL"];
+    const previousSecret = process.env["HASNA_INSTRUCTIONS_API_SIGNING_KEY"];
+    try {
+      // 1. Warm the cache for this scope set under the first configuration.
+      await closeCloud();
+      process.env["HASNA_INSTRUCTIONS_DATABASE_URL"] = "postgresql://repro:repro@127.0.0.1:1/stale";
+      process.env["HASNA_INSTRUCTIONS_API_SIGNING_KEY"] = staleSecret;
+      expect(typeof getHonoAuthMiddleware(["instructions:read"])).toBe("function");
+
+      // 2. Reconfigure exactly as a serve process (or a later suite) does.
+      await closeCloud();
+      process.env["HASNA_INSTRUCTIONS_DATABASE_URL"] = "postgresql://127.0.0.1:1/fresh";
+      process.env["HASNA_INSTRUCTIONS_API_SIGNING_KEY"] = freshSecret;
+
+      const active = mintApiKey({
+        app: INSTRUCTIONS_APP_SLUG,
+        scopes: ["instructions:read"],
+        signingSecret: freshSecret,
+        kid: "closecloud-active-key",
+        nowMs: Date.UTC(2026, 0, 1),
+        ttlSeconds: null,
+      });
+      Object.defineProperty(getApiKeyStore(), "keyStatus", {
+        configurable: true,
+        value: async (kid: string): Promise<ApiKeyStatus> => (kid === active.kid ? "active" : "unknown"),
+      });
+
+      const app = new Hono();
+      app.use("/v1/*", getHonoAuthMiddleware(["instructions:read"]));
+      app.get("/v1/ping", (context) => context.json({ ok: true }));
+
+      // With the stale cache this is 401: the key checker still belongs to the
+      // store and secret from step 1.
+      expect((await app.request("/v1/ping", { headers: { "x-api-key": active.token } })).status).toBe(200);
+    } finally {
+      await closeCloud();
+      if (previousUrl === undefined) delete process.env["HASNA_INSTRUCTIONS_DATABASE_URL"];
+      else process.env["HASNA_INSTRUCTIONS_DATABASE_URL"] = previousUrl;
+      if (previousSecret === undefined) delete process.env["HASNA_INSTRUCTIONS_API_SIGNING_KEY"];
+      else process.env["HASNA_INSTRUCTIONS_API_SIGNING_KEY"] = previousSecret;
     }
   });
 });
