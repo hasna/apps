@@ -3,13 +3,12 @@
  */
 
 import chalk from "chalk";
-import { existsSync, writeFileSync, mkdirSync } from "fs";
+import { existsSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import type { Command } from "commander";
 import { loadConfig, saveConfig, unsetConfig, getConfigPath } from "../../lib/config.js";
 import { readStoredApiUrl, saveApiUrl } from "../../lib/auth-store.js";
-import { getPortableSkillsRoot } from "../../lib/portable-skills.js";
+import { scaffoldPortableSkill } from "../../lib/portable-skills.js";
 import { clearRegistryCache } from "../../lib/registry.js";
 import {
   resolveSyncAgents,
@@ -189,39 +188,24 @@ export function registerCreateSync(parent: Command) {
 }
 
 function handleCreate(name: string, options: { category: string; description?: string; tags?: string; global: boolean; json: boolean }) {
-  const bare = name.trim();
-  const dirName = bare;
-  // The corpus, not the legacy custom/ folder, and resolved rather than rebuilt
-  // from homedir() so this honours $HASNA_SKILLS_DIR like every other write path.
-  const baseDir = getPortableSkillsRoot();
-  const skillDir = join(baseDir, dirName);
-
-  if (existsSync(skillDir)) {
-    console.log(options.json ? JSON.stringify({ error: `Skill '${bare}' already exists at ${skillDir}` }) : chalk.red(`Skill '${bare}' already exists at ${skillDir}`));
-    process.exitCode = 1; return;
-  }
-
-  const description = options.description || `${bare} skill`;
-  const tags = options.tags ? options.tags.split(",").map((t: string) => t.trim()).filter(Boolean) : [bare];
-  const displayName = bare.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-
-  mkdirSync(join(skillDir, "src"), { recursive: true });
-  writeFileSync(join(skillDir, "SKILL.md"), [
-    "---", `name: ${bare}`, `description: ${description}`, `displayName: ${displayName}`, `category: ${options.category}`, `tags: [${tags.join(", ")}]`, "",
-    `# ${displayName}`, "", description, "", "## Usage", "", "```bash", `${bare} --help`, "```", "",
-  ].join("\n"));
-  writeFileSync(join(skillDir, "src", "index.ts"), [`#!/usr/bin/env bun`, `/**`, ` * ${displayName} — ${description}`, ` */`, "", `console.log("${displayName}");`, ""].join("\n"));
-  writeFileSync(join(skillDir, "package.json"), JSON.stringify({ name: bare, version: "0.1.0", description, bin: { [bare]: "./src/index.ts" }, scripts: { dev: `bun src/index.ts` }, dependencies: {} }, null, 2) + "\n");
-  writeFileSync(join(skillDir, "tsconfig.json"), JSON.stringify({ compilerOptions: { target: "ES2022", module: "ESNext", moduleResolution: "bundler", strict: true, outDir: "dist" }, include: ["src/**/*.ts"] }, null, 2) + "\n");
-
-  clearRegistryCache();
-  if (options.json) console.log(JSON.stringify({ created: true, name: bare, path: skillDir, category: options.category, tags }));
-  else {
-    console.log(chalk.green(`✓ Created custom skill '${bare}' at ${skillDir}`));
-    console.log(chalk.dim(`  Category: ${options.category}`));
-    console.log(chalk.dim(`  Tags: ${tags.join(", ")}`));
-    console.log(`  ${chalk.cyan("Edit:")} ${join(skillDir, "src", "index.ts")}`);
-    console.log(`  ${chalk.cyan("Run:")}  bun ${join(skillDir, "src", "index.ts")}`);
+  try {
+    const tags = options.tags?.split(",").map(tag => tag.trim()).filter(Boolean);
+    const result = scaffoldPortableSkill(name, {
+      description: options.description, category: options.category, tags,
+    });
+    clearRegistryCache();
+    if (options.json) console.log(JSON.stringify({ created: result.created, name: result.name, path: result.path, category: result.manifest.category, tags: result.manifest.tags }));
+    else {
+      console.log(chalk.green(`✓ Created custom skill '${result.name}' at ${result.path}`));
+      console.log(chalk.dim(`  Category: ${result.manifest.category}`));
+      console.log(chalk.dim(`  Tags: ${result.manifest.tags?.join(", ")}`));
+      console.log(`  ${chalk.cyan("Edit:")} ${join(result.path, "src", "index.ts")}`);
+      console.log(`  ${chalk.cyan("Run:")}  skills run ${result.name} --help`);
+    }
+  } catch (error) {
+    const message = (error as Error).message;
+    console.log(options.json ? JSON.stringify({ error: message }) : chalk.red(message));
+    process.exitCode = 1;
   }
 }
 

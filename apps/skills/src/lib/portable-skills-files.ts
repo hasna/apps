@@ -161,7 +161,7 @@ export function readDeclaredSkillVersion(skillPath: string): string | undefined 
   return stringField(jsonManifest, "version") ?? frontmatter?.version ?? stringValue(pkg?.version);
 }
 
-export function createInstructionManifest(name: string, options: { description: string }): PortableSkillManifest {
+export function createInstructionManifest(name: string, options: { description: string; category?: string; tags?: string[] }): PortableSkillManifest {
   return {
     $schema: PORTABLE_SKILL_SCHEMA,
     standard: PORTABLE_SKILL_STANDARD,
@@ -169,8 +169,8 @@ export function createInstructionManifest(name: string, options: { description: 
     description: options.description,
     version: PORTABLE_SKILL_DEFAULT_VERSION,
     displayName: displayName(name),
-    category: "Development Tools",
-    tags: ["custom", name],
+    category: options.category ?? "Development Tools",
+    tags: options.tags ?? ["custom", name],
     kind: "instruction",
     inputs: [],
     commands: [],
@@ -187,12 +187,12 @@ export function writeInstructionSkillTemplate(skillPath: string, manifest: Porta
 
 function renderInstructionSkillMd(manifest: PortableSkillManifest): string {
   const tags = manifest.tags?.length
-    ? `tags:\n${manifest.tags.map((tag) => `  - ${tag}`).join("\n")}\n`
+    ? `tags:\n${manifest.tags.map((tag) => `  - ${yamlString(tag)}`).join("\n")}\n`
     : "";
-  return `---\nname: ${manifest.name}\ndescription: ${manifest.description}\nkind: instruction\nversion: ${manifest.version}\nsource: custom\ncategory: ${manifest.category ?? "Development Tools"}\n${tags}---\n\n# ${manifest.displayName ?? displayName(manifest.name)}\n\n${manifest.description}\n\n## Instructions\n\nWrite the agent-facing prose for this skill here. Instruction skills are consumed\nby agents through skill renderers and MCP docs; they are not executed locally.\n`;
+  return `---\nname: ${manifest.name}\ndescription: ${yamlString(manifest.description)}\nkind: instruction\nversion: ${manifest.version}\nsource: custom\ncategory: ${yamlString(manifest.category ?? "Development Tools")}\n${tags}---\n\n# ${manifest.displayName ?? displayName(manifest.name)}\n\n${manifest.description}\n\n## Instructions\n\nWrite the agent-facing prose for this skill here. Instruction skills are consumed\nby agents through skill renderers and MCP docs; they are not executed locally.\n`;
 }
 
-export function createPortableManifest(name: string, options: { description: string }): PortableSkillManifest {
+export function createPortableManifest(name: string, options: { description: string; category?: string; tags?: string[] }): PortableSkillManifest {
   return {
     $schema: PORTABLE_SKILL_SCHEMA,
     standard: PORTABLE_SKILL_STANDARD,
@@ -200,8 +200,8 @@ export function createPortableManifest(name: string, options: { description: str
     description: options.description,
     version: PORTABLE_SKILL_DEFAULT_VERSION,
     displayName: displayName(name),
-    category: "Development Tools",
-    tags: ["custom", name],
+    category: options.category ?? "Development Tools",
+    tags: options.tags ?? ["custom", name],
     inputs: DEFAULT_INPUTS,
     commands: [{
       name,
@@ -419,10 +419,15 @@ function isExcludedCopyEntry(name: string, isFirstSegment: boolean): boolean {
   return false;
 }
 
+// JSON string literals are valid YAML scalars and cannot create new fields.
+function yamlString(value: string): string {
+  return JSON.stringify(value);
+}
+
 function renderSkillMd(manifest: PortableSkillManifest): string {
   // Consumer frontmatter stays minimal (name + description only): portable
   // metadata lives in skill.json (hasna.skill.v1). See docs/authoring-rule-amendment.md.
-  return `---\nname: ${manifest.name}\ndescription: ${manifest.description}\n---\n\n# ${manifest.displayName ?? displayName(manifest.name)}\n\n${manifest.description}\n\n## Usage\n\n\`\`\`bash\nskills run ${manifest.name} --help\n\`\`\`\n`;
+  return `---\nname: ${manifest.name}\ndescription: ${yamlString(manifest.description)}\n---\n\n# ${manifest.displayName ?? displayName(manifest.name)}\n\n${manifest.description}\n\n## Usage\n\n\`\`\`bash\nskills run ${manifest.name} --help\n\`\`\`\n`;
 }
 
 export function renderSkillJson(manifest: PortableSkillManifest): string {

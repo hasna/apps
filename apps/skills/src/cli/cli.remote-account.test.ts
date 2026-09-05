@@ -64,6 +64,23 @@ async function cli(args: string[], origin: string, options: { key?: boolean; dat
 }
 
 describe("built public CLI server account and spending", () => {
+  test("CLI creation shares the portable scaffold, validates metadata and contains invalid names", async () => fixture(async (origin, calls) => {
+    const description = 'Example: "quoted" text\nkind: instruction';
+    const created = await cli(["create", "Public QA CLI", "--description", description, "--category", "Development Tools", "--tags", "qa,testing", "--json"], origin);
+    expect(created.exitCode).toBe(0);
+    const payload = JSON.parse(created.stdout);
+    expect(payload).toMatchObject({ created: true, name: "public-qa-cli", category: "Development Tools", tags: ["qa", "testing"] });
+    expect(JSON.parse(readFileSync(join(payload.path, "skill.json"), "utf8"))).toMatchObject({ description, tags: ["qa", "testing"] });
+    const validation = await cli(["validate", "public-qa-cli", "--json"], origin, { data: created.cwd });
+    expect(validation.exitCode).toBe(0);
+    expect(JSON.parse(validation.stdout)).toMatchObject({ valid: true, issues: [] });
+    const duplicate = await cli(["create", "public-qa-cli", "--json"], origin, { data: created.cwd });
+    expect(duplicate.exitCode).toBe(1);
+    const invalid = await cli(["create", "../escape", "--json"], origin, { data: created.cwd });
+    expect(invalid.exitCode).toBe(1);
+    expect(existsSync(join(created.cwd, "escape"))).toBe(false);
+    expect(calls).toEqual([]);
+  }));
   test("a new unauthenticated profile can finish setup without making a request", async () => fixture(async (origin, calls) => {
     const result = await cli(["setup", "--api-url", `${origin}/prefix/api/v1`, "--json"], `${origin}/prefix`, { key: false, profile: "new-customer" });
     expect(result.exitCode).toBe(0);

@@ -132,6 +132,8 @@ export interface PortableSkillOptions {
 
 export interface ScaffoldPortableSkillOptions extends PortableSkillOptions {
   description?: string;
+  category?: string;
+  tags?: string[];
   overwrite?: boolean;
   kind?: SkillKind;
 }
