@@ -4,8 +4,8 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-05T13:39:04.576066+00:00"
-status: "active"
+updated_at: "2026-09-05T15:00:05.316596+00:00"
+status: "released"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
@@ -137,6 +137,8 @@ Run package typecheck/tests/build/contract checks and repository-required gates.
 - Branch: `codex/fixer/2026-09-05-universal-harness-switcher`.
 - Implementation worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/implementation`.
 - Existing canonical-checkout untracked files are preserved.
-- Implementation is complete and release verification is in progress. See `RELEASE.md` for actual tests and remaining release steps.
+- Implementation shipped through [PR #1797](https://github.com/hasna/apps/pull/1797), merged as `b117b6bd95c1d374dec97ebe840dfef083025834`.
+- Public [`@hasna/switcher@0.1.0`](https://www.npmjs.com/package/@hasna/switcher/v/0.1.0) was published at `2026-09-05T14:50:10.495Z`. Registry timestamp, tarball integrity and all 19 built-file hashes were verified.
+- The exact registry release passed Node SDK/CLI/server/MCP smoke, all four native harness read-only tool loops on SQLite, and PostgreSQL with a second model. See `RELEASE.md` for evidence and limitations.
 - Tracking task: `e0be8c8c-9588-4b7b-9996-382f113736e3`.
-- The build/ship/publish/live-test goal remains active until PR merge, npm verification and registry-artifact live tests finish.
+- Build, PR merge, publication and registry live acceptance are complete. Task/goal closure follows final evidence delivery. Optional product extensions and maintenance follow-ups remain explicit in `TODOS.md`.
