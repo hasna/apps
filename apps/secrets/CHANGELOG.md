@@ -1,5 +1,81 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- 653f79e: Resolve the client credential and API base URL through the `@hasna/contracts`
+  resolver (hasna/apps#1720, #1668, #1690).
+
+  The package's vendored copy of the contracts client (`src/store/contracts-client/`,
+  ~750 lines pinned at the v0.5.0 shape) is deleted and replaced by
+  `@hasna/contracts` 1.0.1. The CLI, the MCP server and the SDK now share the fleet
+  credential chain, resolved fresh on every call: an explicit argument, then
+  `HASNA_SECRETS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_SECRETS_API_KEY_REF`,
+  then the macOS Keychain item `hasna.credentials.secrets.api-key` (account
+  `HASNA_STATION`, else the short hostname, else `$USER`), then
+  `~/.hasna/secrets/config/credentials` (0400/0600, `HASNA_HOME` /
+  `HASNA_CONFIG_HOME` overrides, XDG never), then `HASNA_SECRETS_API_KEY`. The base
+  URL follows `HASNA_SECRETS_API_URL`, the Keychain `api-url` item and the
+  credentials file, and otherwise defaults to the fleet gateway
+  `https://api.hasna.com/secrets`, so a key alone is enough to reach the fleet.
+
+  Behaviour changes:
+
+  - A station whose key lives only in the Keychain or in
+    `~/.hasna/secrets/config/credentials` now works with no environment at all;
+    previously it failed closed.
+  - The SDK's `createSecretsClientFromEnv` no longer reads `SECRETS_API_URL` /
+    `SECRETS_API_KEY` ahead of the canonical `HASNA_SECRETS_*` names — that
+    shadowing is gone. Both remain accepted as a silent alias inside the shared
+    resolver for one release. `SecretsClientOptions.apiKey` also accepts a
+    credential provider, so a long-lived client picks up a rotation.
+  - Retired `*_MODE` / `*_STORAGE_MODE` variables are now inert rather than a hard
+    error: the transport is decided by the credential and the authority alone.
+  - A local run (`HASNA_SECRETS_LOCAL_VAULT=1`) prints one line on stderr saying it
+    is local, and yields to a resolved credential so an opted-in station that holds
+    a hosted key stays hosted. Hosted mode with no credential still fails closed
+    with a non-zero exit and no SQLite file opened.
+
+### Patch Changes
+
+- 6ade7ec: Keep the published TYPE surface installable, and hold the local vault lane to
+  the whole ruling (follow-up to #1778, hasna/apps#1720).
+
+  `bun build --target bun` inlines `@hasna/contracts`, so the shipped bundles
+  import node builtins only — but `tsc --emitDeclarationOnly` inlines nothing.
+  Deleting the vendored `src/store/contracts-client/` copy moved
+  `import ... from "@hasna/contracts/client"` onto `dist/sdk.d.ts`, the `.` and
+  `./sdk` type entry, while `@hasna/contracts` is a devDependency a consumer never
+  installs: `npm pack` + `tsc` in a clean consumer project returned 7 x TS2307
+  "Cannot find module '@hasna/contracts/client'". The runtime was unaffected.
+
+  The contracts client types that cross the published boundary are now spelled in
+  `src/store/client-types.ts` — declarations only, no logic, no resolver, no
+  second credential chain — and `src/store/client-types.test.ts` asserts each one
+  is mutually assignable with the real `@hasna/contracts` declaration, so a shape
+  that drifts fails the build. `@hasna/contracts` stays a build-time dependency:
+  promoting it would put 20 MB and an unsatisfiable
+  `contracts -> peer @hasna/secrets` cycle into every consumer's tree to ship
+  types alone.
+
+  `tests/published-types-self-contained.test.ts` is the gate that was missing: it
+  walks the declaration graph from every `exports[*].types` entry and fails when a
+  reachable `.d.ts` imports anything but a node builtin or a declared runtime
+  dependency.
+
+  The local-vault lane now yields to a configured AUTHORITY as well as to a
+  resolved credential. `HASNA_SECRETS_LOCAL_VAULT=1` selected the on-box vault
+  whenever no key resolved, even with `HASNA_SECRETS_API_URL` set, the Keychain
+  `api-url` item present, or an authority in
+  `~/.hasna/secrets/config/credentials` — so a station whose Keychain lookup
+  missed (locked keychain, wrong `HASNA_STATION`) read a different vault instead
+  of failing. The ruling is "no url AND no key"; a half-applied hosted run now
+  fails closed with the opt-in exactly as it does without it, and the error no
+  longer advises an opt-in that does not apply.
+
+- 77aa5d4: Switch @hasna/secrets local path reads/writes through the in-package resolver (XDG/macOS home layout). The operator vault data dir (vault.db, key material, aws.json, aws-sync-state.json) now resolves through `dataDir({app:"secrets"})` with gated legacy adoption: the legacy `~/.hasna/secrets` home stays the effective default until the store has actually been migrated to the XDG data home (`~/.local/share/hasna/secrets` on Linux, `~/Library/Application Support/Hasna/secrets` on macOS) or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local vault never becomes invisible on upgrade. The `~/.secrets` env-file bridge (import-env/export-env) is a separate legacy credential store and is deliberately unchanged. Install-time dir creation (postinstall) follows the same resolution. The wave-wide resolver dependency (`@hasna/paths@0.1.0`) was deleted 2026-09-03 (hasna/apps#1535); the resolver is now implemented locally in-package.
+
 ## 0.3.13
 
 ### Patch Changes
@@ -93,9 +169,6 @@
 ### Patch Changes
 
 - 8de5bb5: Release-line reconciliation: main is bumped to the registry-latest 0.3.0 (published by the release lane 2026-08-14 ahead of main). No functional changes — this patch establishes main/registry parity and clears the KNOWN_NPM_DRIFT and changelog-mismatch records (reconcile task 3ab02291).
-- Updated dependencies [b630c48]
-  - @hasna/events@0.1.16
-
 ## 0.3.0 — 2026-08-14
 
 - Release-line reconciliation: main is bumped to the registry-latest 0.3.0 (published by the release lane 2026-08-14T14:23:49Z ahead of main; the release commit did not land on main). No functional changes to the tree; this entry records the version parity and clears the KNOWN_NPM_DRIFT and changelog-mismatch records (reconcile task 3ab02291).
