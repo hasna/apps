@@ -12,9 +12,11 @@ import { Command } from "commander";
 import { createLoopsApiServer } from "../api/index.js";
 import { TenantApiAuthenticator } from "../lib/auth/tenant-auth.js";
 import type { PoolQueryClient, TypedQueryClient } from "../generated/storage-kit/query.js";
+import { BundleArtifactStorage } from "../lib/bundle/artifact-storage.js";
 import { PgPoolExecutor } from "../lib/storage/pg-executor.js";
 import { PostgresStorage } from "../lib/storage/postgres.js";
 import { createPostgresLoopStorage } from "../lib/storage/postgres-loop-storage.js";
+import { runRevisionBackfillCommand } from "../lib/storage/revision-backfill.js";
 import { runSharedToDedicatedTransfer } from "../lib/storage/shared-database-transfer.js";
 import {
   POSTGRES_MIGRATION_ADVISORY_LOCK_SQL,
@@ -1167,6 +1169,36 @@ program
   });
 
 program
+  .command("backfill-revisions")
+  .description(
+    "one-shot P3 job: append bundle revision 1 for every legacy loop that has no revision yet (current definition, bundle_name derived from the loop name when safe and free, else skipped and reported — never invented); idempotent and resumable",
+  )
+  .option("--dry-run", "classify, name and digest every loop, but write nothing anywhere")
+  .option("--limit <n>", "stop after this many revisions (or would-be revisions under --dry-run); skips are free", (value) => Number(value))
+  .option("--batch-size <n>", "loops per tenant-scoped transaction (default: 100)", (value) => Number(value))
+  .option("--tenant-id <id>", "restrict the run to one tenant (default: every tenant)")
+  .action(async (opts: { dryRun?: boolean; limit?: number; batchSize?: number; tenantId?: string }) => {
+    const executor = buildExecutor("loops-backfill-revisions", "migrator");
+    try {
+      const result = await runRevisionBackfillCommand(
+        executor,
+        // Same seam the API uses: HASNA_LOOPS_ARTIFACTS_BUCKET for S3, or the
+        // local data-dir fallback when the bucket is not configured yet.
+        new BundleArtifactStorage(),
+        {
+          dryRun: opts.dryRun,
+          ...(opts.limit === undefined ? {} : { limit: opts.limit }),
+          ...(opts.batchSize === undefined ? {} : { batchSize: opts.batchSize }),
+          ...(opts.tenantId === undefined ? {} : { tenantId: opts.tenantId }),
+        },
+      );
+      console.log(JSON.stringify({ evt: "backfill_revisions", ...result }));
+    } finally {
+      await executor.close();
+    }
+  });
+
+program
   .command("version")
   .description("print { status, version, storage }")
   .action(() => console.log(JSON.stringify({ status: "ok", version: packageVersion(), storage: runtimeStorage() })));
@@ -1183,6 +1215,7 @@ if (import.meta.main) {
     "provision-runner-key",
     "db-credentials",
     "shared-to-dedicated-transfer",
+    "backfill-revisions",
     "version",
     "help",
   ]);
