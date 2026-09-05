@@ -76,8 +76,8 @@ the very app that motivated it. `messages` is covered only by the daily drift
 check (`tooling/fleet/hosted-apps.json`, `tooling/fleet/fleet-key.ts`), which
 will name it as failing until an out-of-repo deploy carries this gate with
 `API_KEY_SIGNING_SECRET` set and the key is minted in-VPC — that is the check
-working, not a broken check. Sequence and tracking: `tooling/fleet/README.md`,
-hasna-internal/infra-live#46, hasna/apps#1768.
+working, not a broken check. Sequence and tracking: `tooling/fleet/README.md`
+(which links the infra-side issue) and hasna/apps#1768.
 
 **`HASNA_MESSAGES_API_KEY` is deprecated.** The single static string is still
 accepted for one more release so stations can rotate, and the server warns once
