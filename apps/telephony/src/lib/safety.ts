@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { resolvePublicOrigin } from "./request-origin.js";
 
 export type TelephonyProviderMode = "fixture" | "sandbox" | "read_only_live" | "live_mutating";
 export type TelephonyOperation =
@@ -364,10 +365,21 @@ export function computeTwilioSignature(url: string, params: Record<string, strin
 
 function canonicalTwilioUrl(req: Request): string {
   const url = new URL(req.url);
-  const proto = req.headers.get("x-forwarded-proto");
-  const host = req.headers.get("x-forwarded-host") || req.headers.get("host");
-  if (proto) url.protocol = `${proto}:`;
-  if (host) url.host = host;
+  // The origin behind the gateway/ALB only learns the public URL from the
+  // forwarding headers, so they are honored — but sanitized: only http/https
+  // is accepted as protocol and the host is validated before it replaces the
+  // transport host, so a malformed or hostile header can neither crash the
+  // canonicalization nor change the signature domain (see request-origin.ts).
+  const origin = resolvePublicOrigin({
+    headers: req.headers,
+    trustForwardedHost: true,
+    defaultHost: url.host,
+    defaultProtocol: url.protocol === "https:" ? "https" : "http",
+  });
+  if (!origin) return url.toString();
+  const rebuilt = new URL(origin);
+  url.protocol = rebuilt.protocol;
+  url.host = rebuilt.host;
   return url.toString();
 }
 

@@ -18,6 +18,7 @@ import type { Task } from "../types/index.js";
 import type { RouteContext, FilteredClient } from "./routes.js";
 import * as handlers from "./routes.js";
 import { env } from "../lib/env.js";
+import { resolveRequestClientIp, resolveTrustProxy, trustedProxiesFromEnv } from "./client-ip.js";
 
 export const SECURITY_HEADERS: Record<string, string> = {
   "X-Content-Type-Options": "nosniff",
@@ -117,13 +118,12 @@ function resolveClientIp(
   req: Request,
   server: { requestIP(req: Request): { address: string } | null },
 ): string {
-  const trustProxy = env.trustProxy() === "1" || env.trustProxy() === "true";
-  if (trustProxy) {
-    const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-      || req.headers.get("x-real-ip")?.trim();
-    if (forwarded) return forwarded;
-  }
-  return server.requestIP(req)?.address || "unknown";
+  return resolveRequestClientIp({
+    headers: req.headers,
+    socketAddress: server.requestIP(req)?.address,
+    trustProxy: resolveTrustProxy(),
+    trustedProxies: trustedProxiesFromEnv(),
+  }) ?? "unknown";
 }
 
 function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {

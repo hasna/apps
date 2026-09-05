@@ -2,6 +2,7 @@ import { createFeedbackStore, FeedbackStoreBusyError } from "./storage.js";
 import type { FeedbackListFilter, FeedbackStatus, FeedbackStore } from "./types.js";
 import { parseFeedbackInput, parseFeedbackStatus, validationErrorMessage } from "./validation.js";
 import { VERSION } from "./version.js";
+import { resolveRequestClientIp, resolveTrustProxy, trustedProxiesFromEnv } from "./client-ip.js";
 
 export type FeedbackApiScope = "submit" | "read" | "triage" | "export";
 
@@ -13,6 +14,19 @@ export interface FeedbackApiOptions {
   sharedDeployment?: boolean;
   rateLimit?: { windowMs?: number; maxSubmissions?: number };
   corsOrigin?: string;
+  /**
+   * Trust `x-forwarded-for` & friends when keying the rate limiter (true only
+   * when this service genuinely sits behind the trusted proxies — e.g. the
+   * api.hasna.com gateway + ALB). Defaults to FEEDBACK_TRUST_PROXY env; off by
+   * default, so local/dev behavior is unchanged (socket peer keying).
+   */
+  trustProxy?: boolean;
+  /**
+   * Exact IPs / CIDRs of proxies operated in front of this service. Hops
+   * matching these are stepped over when identifying a caller. Defaults to
+   * FEEDBACK_TRUSTED_PROXIES (comma separated).
+   */
+  trustedProxies?: readonly string[];
 }
 
 interface RateBucket {
@@ -95,10 +109,27 @@ function authorize(request: Request, scope: FeedbackApiScope, auth: ReturnType<t
   return authTokenFromRequest(request) === required ? null : errorResponse(401, "Unauthorized");
 }
 
-function clientKey(request: Request): string {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-    || request.headers.get("cf-connecting-ip")
-    || "local";
+/**
+ * Rate-limit bucket key for a submission. The raw leftmost X-Forwarded-For
+ * entry is attacker-controlled (rotating it mints a fresh bucket per guess),
+ * so it is only consulted — validated, right-to-left, skipping trusted
+ * proxies — when the operator explicitly trusts the forwarding hop
+ * (FEEDBACK_TRUST_PROXY), and only ever with the socket peer as the fallback
+ * that no header can forge (see ./client-ip.ts). Produces "local" as the last
+ * resort for in-process test requests.
+ */
+function clientKey(
+  request: Request,
+  peer: string | null | undefined,
+  trustProxy: boolean,
+  trustedProxies: readonly string[],
+): string {
+  return resolveRequestClientIp({
+    headers: request.headers,
+    socketAddress: peer,
+    trustProxy,
+    trustedProxies,
+  }) ?? "local";
 }
 
 function isSpammy(input: { message?: unknown; appId?: unknown }): boolean {
@@ -153,16 +184,29 @@ function listFilterFromUrl(url: URL): FeedbackListFilter {
   };
 }
 
-export function createFeedbackHandler(options: FeedbackApiOptions = {}): (request: Request) => Promise<Response> {
+export interface FeedbackRequestContext {
+  /** Socket peer address (`server.requestIP`); never a client header. */
+  peer?: string | null;
+}
+
+export function createFeedbackHandler(options: FeedbackApiOptions = {}): (
+  request: Request,
+  context?: FeedbackRequestContext,
+) => Promise<Response> {
   const store = options.store ?? createFeedbackStore();
   const auth = resolveAuth(options);
   const corsOrigin = options.corsOrigin ?? process.env["FEEDBACK_CORS_ORIGIN"] ?? "*";
+  const trustProxy = options.trustProxy ?? resolveTrustProxy();
+  const trustedProxies = options.trustedProxies ?? trustedProxiesFromEnv();
   const buckets = new Map<string, RateBucket>();
   const recentFingerprints = new Map<string, number>();
   const windowMs = options.rateLimit?.windowMs ?? defaultRateWindowMs;
   const maxSubmissions = options.rateLimit?.maxSubmissions ?? defaultMaxSubmissions;
 
-  return async function handleFeedbackRequest(request: Request): Promise<Response> {
+  return async function handleFeedbackRequest(
+    request: Request,
+    context?: FeedbackRequestContext,
+  ): Promise<Response> {
     const url = new URL(request.url);
     const pathname = url.pathname.replace(/\/+$/, "") || "/";
 
@@ -178,7 +222,7 @@ export function createFeedbackHandler(options: FeedbackApiOptions = {}): (reques
         if (denied) return withCors(denied, corsOrigin);
         const rawInput = await request.json();
         if (isSpammy(rawInput as Record<string, unknown>)) return withCors(errorResponse(400, "Feedback failed spam validation"), corsOrigin);
-        const bucketKey = clientKey(request);
+        const bucketKey = clientKey(request, context?.peer, trustProxy, trustedProxies);
         const now = Date.now();
         const current = buckets.get(bucketKey);
         if (!current || current.resetAt <= now) buckets.set(bucketKey, { count: 1, resetAt: now + windowMs });
