@@ -135,9 +135,10 @@ export function assertOutboundRequestAllowed(
   throw new KnowledgeNetworkGuardError(
     `knowledge: refused a non-loopback ${url.protocol.replace(':', '')} request while ${NETWORK_GUARD_ENV}=test `
       + '(target host withheld on purpose). This process selected the HTTP API under test, which means a '
-      + 'read or write was about to leave the machine and reach the live store. Set '
-      + 'HASNA_KNOWLEDGE_LOCAL=1 to select the on-box store under test, or point HASNA_KNOWLEDGE_API_URL '
-      + 'at 127.0.0.1 for a hermetic test.',
+      + 'read or write was about to leave the machine and reach the live store. Clear every credential tier '
+      + 'from the test environment (the suite preload does this, and the Keychain tier is off while this '
+      + 'guard is armed) to stay on the on-box store, or point HASNA_KNOWLEDGE_API_URL at 127.0.0.1 for a '
+      + 'hermetic test.',
     { scheme: url.protocol.replace(':', ''), port: url.port },
   );
 }

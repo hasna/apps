@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
+import { resetKnowledgeLocalModeNotice } from '../src/client-transport';
 import {
   KNOWLEDGE_APP_SLUG,
   KNOWLEDGE_BOUNDED_QUERY_CAPABILITY,
@@ -29,40 +30,43 @@ describe('knowledge HTTP store resolver', () => {
     expect(KNOWLEDGE_RESOURCE).toBe('notes');
   });
 
-  test('fails closed when neither hosted API config nor the explicit on-box opt-in is present', () => {
-    expect(() => resolveKnowledgeHttpStore(CLEAN_ENV)).toThrow(/no hosted API configuration/);
-    expect(() => resolveKnowledgeHttpStore(CLEAN_ENV)).toThrow(/HASNA_KNOWLEDGE_API_URL/);
-    expect(() => resolveKnowledgeHttpStore(CLEAN_ENV)).toThrow(/HASNA_KNOWLEDGE_LOCAL=1/);
-  });
-
-  test('returns null for the on-box transport under the explicit local opt-in', () => {
-    expect(resolveKnowledgeHttpStore({
-      HASNA_KNOWLEDGE_LOCAL: '1',
-    } as NodeJS.ProcessEnv)).toBeNull();
+  test('returns null (the on-box store) when nothing configures a client', () => {
+    // An env object with no credential in any tier and no HOME to anchor the
+    // credentials file is an unhosted install: the caller uses the on-box
+    // store. It is the CONFIGURED-authority-without-a-credential case that
+    // fails loudly, exercised below.
+    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(resolveKnowledgeHttpStore(CLEAN_ENV)).toBeNull();
+    } finally {
+      errSpy.mockRestore();
+      resetKnowledgeLocalModeNotice();
+    }
   });
 
   test('fails closed when the canonical API URL is present without its key', () => {
     expect(() =>
       resolveKnowledgeHttpStore({
-        HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
+        HASNA_KNOWLEDGE_API_URL: 'https://knowledge.example.test',
       } as NodeJS.ProcessEnv),
-    ).toThrow(/HASNA_KNOWLEDGE_API_KEY/);
+    ).toThrow(/no API key could be resolved/);
   });
 
   test('canonical API URL plus key selects the HTTP store', () => {
     const store = resolveKnowledgeHttpStore({
-      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.md',
+      HASNA_KNOWLEDGE_API_URL: 'https://knowledge.example.test',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
     } as NodeJS.ProcessEnv);
     expect(store).not.toBeNull();
-    expect(store!.baseUrl).toBe('https://knowledge.md/v1');
+    expect(store!.baseUrl).toBe('https://knowledge.example.test/v1');
   });
 
-  test('the unprefixed API URL alias is ignored and the process still fails closed', () => {
-    expect(() => resolveKnowledgeHttpStore({
-      KNOWLEDGE_API_URL: 'https://knowledge.md',
+  test('the unprefixed API URL alias is the documented silent fallback', () => {
+    const store = resolveKnowledgeHttpStore({
+      KNOWLEDGE_API_URL: 'https://knowledge.example.test',
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-    } as NodeJS.ProcessEnv)).toThrow(/HASNA_KNOWLEDGE_API_URL/);
+    } as NodeJS.ProcessEnv);
+    expect(store!.baseUrl).toBe('https://knowledge.example.test/v1');
   });
 
   test('retired selector variables fail loudly and name both replacements', () => {
@@ -71,16 +75,11 @@ describe('knowledge HTTP store resolver', () => {
     } as NodeJS.ProcessEnv)).toThrow(/HASNA_KNOWLEDGE_STORAGE_MODE.*HASNA_KNOWLEDGE_API_URL.*HASNA_KNOWLEDGE_DATABASE_URL/s);
   });
 
-  test('an API key without the canonical URL fails closed, and needs the explicit opt-in to go on-box', () => {
-    expect(() => resolveKnowledgeHttpStore({
+  test('an API key alone reaches the fleet gateway — a URL never needs configuring', () => {
+    const store = resolveKnowledgeHttpStore({
       HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-    } as NodeJS.ProcessEnv)).toThrow(/no hosted API configuration/);
-    expect(
-      resolveKnowledgeHttpStore({
-        HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
-        HASNA_KNOWLEDGE_LOCAL: '1',
-      } as NodeJS.ProcessEnv),
-    ).toBeNull();
+    } as NodeJS.ProcessEnv);
+    expect(store!.baseUrl).toBe('https://api.hasna.com/knowledge/v1');
   });
 
   test('list sends exactly one bounded producer request with repeated tags and uses producer total', async () => {

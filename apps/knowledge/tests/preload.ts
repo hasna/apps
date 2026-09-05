@@ -5,32 +5,62 @@ import { join } from 'node:path';
 import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
-  KNOWLEDGE_LOCAL_ENV,
+  KNOWLEDGE_APP_SLUG,
+  RETIRED_KNOWLEDGE_LOCAL_ENV,
   RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS,
 } from '../src/client-transport';
+import {
+  CREDENTIAL_PROFILE_ENV_KEY,
+  credentialOverrideEnvKey,
+  credentialPointerEnvKey,
+  HASNA_CONFIG_HOME_ENV_KEY,
+  HASNA_HOME_ENV_KEY,
+} from '@hasna/contracts/client';
 
 /**
  * Bun loads this module before every test file through bunfig.toml. Keep the
  * parent test process on the hermetic on-box store even when the developer's
- * login shell selects a production API/PostgreSQL route.
+ * login shell — or their macOS login keychain — selects a production route.
  *
- * The client transport now FAILS CLOSED without hosted API config: the on-box
- * store is served only under the explicit HASNA_KNOWLEDGE_LOCAL=1 opt-in, so
- * this preload sets that opt-in for the whole suite and deletes every route
- * var that could point a child at production. Fail-closed tests pass an env
- * with neither the hosted pair nor the opt-in and assert the rejection.
+ * Credentials now resolve through the shared @hasna/contracts chain, which has
+ * FIVE tiers, so hermeticity needs all five closed rather than two variables
+ * cleared:
  *
- * Tests that exercise routing pass an explicit env object or set and restore
- * process.env inside their own lifecycle. The outbound network guard remains
- * the primary safety control; this preload removes machine-dependent suite
- * behavior rather than substituting for that guard.
+ *   - the env tiers (canonical, alias, override, vault pointer, profile) are
+ *     deleted below, and re-deleted from any env a test builds via
+ *     {@link knowledgeTestEnv};
+ *   - the DISK tier is anchored to a throwaway HOME (and HASNA_HOME /
+ *     HASNA_CONFIG_HOME are cleared), so `~/.hasna/knowledge/config/credentials`
+ *     resolves inside the temp dir and is simply absent;
+ *   - the KEYCHAIN tier is off for the whole suite because `NODE_ENV=test`
+ *     arms the outbound network guard, and `knowledgeKeychainTierOptions`
+ *     turns tier 3 off whenever that guard is armed. A developer machine with
+ *     a real `hasna.credentials.knowledge.api-key` item therefore measures the
+ *     same thing CI does.
+ *
+ * With every tier closed the transport resolves to the on-box store — the
+ * package's local mode — so no opt-in variable is set or needed. Tests that
+ * exercise routing pass an explicit env object (which never reaches the
+ * Keychain) or set and restore process.env inside their own lifecycle. The
+ * outbound network guard remains the primary safety control; this preload
+ * removes machine-dependent suite behavior rather than substituting for it.
  */
 export const KNOWLEDGE_TEST_ROUTE_ENV_KEYS = [
   ...KNOWLEDGE_API_URL_ENV_KEYS,
   ...KNOWLEDGE_API_KEY_ENV_KEYS,
   ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS,
+  RETIRED_KNOWLEDGE_LOCAL_ENV,
+  credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG),
+  credentialPointerEnvKey(KNOWLEDGE_APP_SLUG),
+  CREDENTIAL_PROFILE_ENV_KEY,
+  HASNA_HOME_ENV_KEY,
+  HASNA_CONFIG_HOME_ENV_KEY,
   'HASNA_KNOWLEDGE_DATABASE_URL',
 ] as const;
+
+// The Keychain tier keys off this exact value; `bun test` sets it, and a
+// runner that did not would otherwise let tier 3 read the login keychain.
+process.env.NODE_ENV ??= 'test';
 
 export function knowledgeTestEnv(
   overrides: Record<string, string> = {},
@@ -45,14 +75,6 @@ const savedKnowledgeRouteEnv = new Map<string, string | undefined>(
 );
 
 for (const key of KNOWLEDGE_TEST_ROUTE_ENV_KEYS) delete process.env[key];
-
-/**
- * Explicit on-box opt-in for the suite (the resolver refuses to serve the
- * on-box store without it). Restored in afterAll so the developer's own value
- * survives the run.
- */
-const savedKnowledgeLocalEnv = process.env[KNOWLEDGE_LOCAL_ENV];
-process.env[KNOWLEDGE_LOCAL_ENV] = '1';
 
 /**
  * The canonical project-scoped knowledge home resolves under the HOME root
@@ -72,8 +94,6 @@ afterAll(() => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  if (savedKnowledgeLocalEnv === undefined) delete process.env[KNOWLEDGE_LOCAL_ENV];
-  else process.env[KNOWLEDGE_LOCAL_ENV] = savedKnowledgeLocalEnv;
   if (savedHome === undefined) delete process.env.HOME;
   else process.env.HOME = savedHome;
   if (savedUserProfile === undefined) delete process.env.USERPROFILE;

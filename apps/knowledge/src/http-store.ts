@@ -3,9 +3,10 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  *
- * When the canonical API URL and key are present, all knowledge-item reads and
- * writes use the server HTTP API. Without the canonical URL, callers use the
- * on-box store. A client never opens PostgreSQL directly.
+ * When a credential resolves through the shared @hasna/contracts client chain,
+ * all knowledge-item reads and writes use the server HTTP API. With nothing
+ * configured anywhere, callers use the on-box store. A client never opens
+ * PostgreSQL directly.
  *
  * SAFETY: never logs, returns, or embeds the API key. The key lives only inside
  * the HTTP transport created by @hasna/contracts. Every transport this module
@@ -18,15 +19,15 @@ import {
   type HasnaStorageClient,
 } from '@hasna/contracts/client/storage';
 import {
-  createHasnaHttpTransport,
+  createClientTransport,
   CREDENTIAL_PROFILE_ENV_KEY,
   credentialOverrideEnvKey,
+  credentialPointerEnvKey,
 } from '@hasna/contracts/client';
 import type { KnowledgeItem, KnowledgeItemVersion, KnowledgeItemVersionList } from './store';
 import {
-  KNOWLEDGE_API_KEY_ENV,
-  KNOWLEDGE_API_URL_ENV,
   KNOWLEDGE_APP_SLUG,
+  knowledgeKeychainTierOptions,
   resolveKnowledgeClientTransport,
 } from './client-transport.js';
 import { guardedFetch, isNetworkGuardActive } from './net-guard.js';
@@ -409,9 +410,11 @@ function isNotFound(error: unknown): boolean {
 }
 
 /**
- * Resolve the HTTP knowledge store from the environment. The canonical API URL
- * selects HTTP; without it the caller uses the on-box db.json store. An API URL
- * without its key fails closed.
+ * Resolve the HTTP knowledge store from the environment. A credential from any
+ * tier of the shared @hasna/contracts chain selects HTTP (against the fleet
+ * gateway unless an authority is configured); with nothing configured anywhere
+ * the caller uses the on-box db.json store. A configured authority whose
+ * credential does not resolve throws rather than falling back.
  */
 export function resolveKnowledgeHttpStore(env: NodeJS.ProcessEnv = process.env): KnowledgeHttpStore | null {
   const client = resolveKnowledgeHttpClient(env);
@@ -436,32 +439,32 @@ export function resolveKnowledgeGuardedTransport(
 function guardedTransportEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const guardedEnv = { ...env };
   // FCAME-1 producers are handed an explicit transport env for one authority.
-  // Do not let broader process credential tiers (profile, override, or HOME
-  // disk lookup) outrank that supplied env and authenticate as another tenant.
+  // Do not let broader process credential tiers (profile, override, vault
+  // pointer, or the HOME-anchored disk and Keychain lookups) outrank that
+  // supplied env and authenticate as another tenant. Copying the env into a
+  // plain object is itself part of the fence: the shared resolver runs its
+  // Keychain tier only for the live `process.env`, so a caller-built env like
+  // this one never reaches the machine's login keychain.
   delete guardedEnv.HOME;
   delete guardedEnv.USERPROFILE;
   delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY];
   delete guardedEnv[credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG)];
+  delete guardedEnv[credentialPointerEnvKey(KNOWLEDGE_APP_SLUG)];
   return guardedEnv;
 }
 
 function resolveKnowledgeHttpClient(env: NodeJS.ProcessEnv, options: { guarded?: boolean } = {}): HasnaStorageClient | null {
-  if (resolveKnowledgeClientTransport(env).transport !== 'http') return null;
   const transportEnv = options.guarded ? guardedTransportEnv(env) : env;
-  const apiUrl = transportEnv[KNOWLEDGE_API_URL_ENV]?.trim();
-  const apiKey = transportEnv[KNOWLEDGE_API_KEY_ENV]?.trim();
-  if (!apiUrl || !apiKey) {
-    throw new Error('knowledge HTTP transport configuration changed during resolution');
-  }
-  return createHasnaStorageClient(
-    KNOWLEDGE_APP_SLUG,
-    createHasnaHttpTransport({
-      name: KNOWLEDGE_APP_SLUG,
-      baseUrl: apiUrl,
-      apiKey,
-      ...transportOverrides(transportEnv),
-    }),
-  );
+  if (resolveKnowledgeClientTransport(transportEnv).transport !== 'http') return null;
+  // The shared factory re-resolves the authority/credential pair for EVERY
+  // request rather than capturing a key at construction, so a rotation on the
+  // Keychain or in ~/.hasna/knowledge/config/credentials heals a long-lived
+  // process without restarting it. The key never passes through this module.
+  const { client } = createClientTransport(KNOWLEDGE_APP_SLUG, transportEnv, {
+    ...transportOverrides(transportEnv),
+    credentials: { keychain: knowledgeKeychainTierOptions(transportEnv) },
+  });
+  return createHasnaStorageClient(KNOWLEDGE_APP_SLUG, client);
 }
 
 /**

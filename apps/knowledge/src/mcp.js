@@ -38,8 +38,8 @@ function resolveStorePath(storePath, scope) {
 
 /**
  * Resolve the unified knowledge-item Store for an MCP item tool. When no
- * explicit `store_path` is given and the canonical API URL selects HTTP
- * transport, item reads/writes route to the app API with the bearer key;
+ * explicit `store_path` is given and the shared @hasna/contracts credential
+ * chain selects HTTP transport, item reads/writes route to the app API;
  * otherwise the on-box JSON store. An explicit `store_path` always pins local.
  * Every MCP item tool routes through this Store — never the JSON file directly.
  */
@@ -502,8 +502,9 @@ async function getKnowledgeRecord(kind, id, options = {}) {
     if (normalized !== 'auto' && normalized !== 'item') {
       throw new Error(
         `knowledge: reading a '${normalized}' record targets the on-box sqlite RAG catalog, which is not available to the HTTP client `
-          + `(HASNA_KNOWLEDGE_API_URL + HASNA_KNOWLEDGE_API_KEY set). The shared corpus is the server knowledge-items; `
-          + `use kind 'item' (or 'auto'). Unset the API env to read the full local catalog.`,
+          + `(a credential resolved through the @hasna/contracts chain). The shared corpus is the server `
+          + `knowledge-items; use kind 'item' (or 'auto'), or pass an explicit store_path to read the full `
+          + `local catalog.`,
       );
     }
     const store = itemStoreFor(options.store_path, options.scope);

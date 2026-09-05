@@ -215,12 +215,16 @@ export {
   KNOWLEDGE_API_URL_ENV,
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_DATABASE_URL_ENV,
-  KNOWLEDGE_LOCAL_ENV,
+  KNOWLEDGE_DEFAULT_API_URL,
+  RETIRED_KNOWLEDGE_LOCAL_ENV,
   RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS,
   RetiredKnowledgeStorageSelectorError,
   assertNoRetiredKnowledgeStorageSelector,
+  knowledgeKeychainTierOptions,
+  resetKnowledgeLocalModeNotice,
   resolveKnowledgeClientTransport,
   type KnowledgeClientTransport,
+  type KnowledgeClientTransportOptions,
   type KnowledgeClientTransportReport,
 } from './client-transport.js';
 export {

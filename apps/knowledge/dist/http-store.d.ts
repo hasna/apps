@@ -3,9 +3,10 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  *
- * When the canonical API URL and key are present, all knowledge-item reads and
- * writes use the server HTTP API. Without the canonical URL, callers use the
- * on-box store. A client never opens PostgreSQL directly.
+ * When a credential resolves through the shared @hasna/contracts client chain,
+ * all knowledge-item reads and writes use the server HTTP API. With nothing
+ * configured anywhere, callers use the on-box store. A client never opens
+ * PostgreSQL directly.
  *
  * SAFETY: never logs, returns, or embeds the API key. The key lives only inside
  * the HTTP transport created by @hasna/contracts. Every transport this module
@@ -133,9 +134,11 @@ export interface KnowledgeHttpStore {
     } | null>;
 }
 /**
- * Resolve the HTTP knowledge store from the environment. The canonical API URL
- * selects HTTP; without it the caller uses the on-box db.json store. An API URL
- * without its key fails closed.
+ * Resolve the HTTP knowledge store from the environment. A credential from any
+ * tier of the shared @hasna/contracts chain selects HTTP (against the fleet
+ * gateway unless an authority is configured); with nothing configured anywhere
+ * the caller uses the on-box db.json store. A configured authority whose
+ * credential does not resolve throws rather than falling back.
  */
 export declare function resolveKnowledgeHttpStore(env?: NodeJS.ProcessEnv): KnowledgeHttpStore | null;
 /**

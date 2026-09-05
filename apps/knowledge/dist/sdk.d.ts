@@ -4,10 +4,10 @@ import type { ItemStore, ItemCreateInput, ItemPatch, ItemListOptions, ItemListRe
 import type { KnowledgeProjectInverseRequest, KnowledgeProjectItemBindingRequest, KnowledgeProjectReceiptLookupRequest, KnowledgeProjectRegistrationRequest, KnowledgeProjectResourceKind, KnowledgeProjectResourceListOptions } from './project-links.js';
 /**
  * The unified knowledge-item Store surface, mirrored on the SDK so app code
- * routes item CRUD through the SAME Store as the CLI and MCP: sqlite uses the
- * on-box db.json store, while the canonical API URL selects HTTP. No SDK item method
- * touches sqlite or the raw HTTP client directly — transport is resolved from
- * the environment by the Store.
+ * routes item CRUD through the SAME Store as the CLI and MCP: the on-box
+ * db.json store, or HTTP whenever the shared @hasna/contracts credential chain
+ * resolves a key. No SDK item method touches sqlite or the raw HTTP client
+ * directly — the Store resolves the transport, freshly, per call.
  */
 export interface KnowledgeItemsSdk {
     /** The resolved Store for this scope (`kind: 'local' | 'api'`). */

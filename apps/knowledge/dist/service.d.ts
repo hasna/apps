@@ -375,11 +375,11 @@ export declare class KnowledgeService {
     jsonStorePath(): string;
     /**
      * The single knowledge-item Store for this scope. One interface, two
-     * transports resolved from the environment: ApiItemStore (HTTP `/v1` +
-     * bearer key) when selected, LocalItemStore (on-box db.json) only under the
-     * explicit HASNA_KNOWLEDGE_LOCAL=1 opt-in or an explicit --store override —
-     * never as the no-config default. EVERY item read/write — CLI, MCP, and SDK
-     * — routes through this one surface, so no path touches sqlite or the raw
+     * transports resolved through the shared @hasna/contracts credential chain:
+     * ApiItemStore (HTTP `/v1` + bearer key) whenever a credential resolves in
+     * any tier, LocalItemStore (on-box db.json) when none does or under an
+     * explicit --store override. EVERY item read/write — CLI, MCP, and SDK —
+     * routes through this one surface, so no path touches sqlite or the raw
      * HTTP client directly.
      */
     itemStore(): ItemStore;
@@ -552,7 +552,7 @@ export declare class KnowledgeService {
     modelRegistry(): ModelRegistryEntry[];
     embeddingStatus(): import("./embeddings").EmbeddingStatusResult;
     indexEmbeddings(options?: Omit<EmbeddingIndexOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").EmbeddingIndexResult>;
-    /** True when canonical client configuration resolves to HTTP transport. */
+    /** True when the shared credential chain resolves this process onto HTTP. */
     private usesHttpTransport;
     private httpStore;
     /** Fetch the entire shared knowledge-item corpus from the HTTP API. */
