@@ -128,6 +128,14 @@ export interface MintedApiKey {
  * over bytes. Deliberately Node's own `BinaryLike` minus `KeyObject`, because
  * `createHmac` — which every path here ends at — takes exactly these.
  *
+ * STRING SECRETS ARE WHITESPACE-NORMALIZED (trimmed) BEFORE KEYING. The fleet
+ * provisioning pipeline stores `api-key-signing-secret` values that carry a
+ * trailing newline (64 hex characters plus '\n'), and `issue-key` and every
+ * fleet server trim at their env read; this layer is the convergence point that
+ * makes raw and trimmed values sign and verify identically even when a caller
+ * skips its own trim. Byte views are NOT normalized — they are deliberate key
+ * material and their bytes are used exactly as given.
+ *
  * WHY THIS IS WIDER THAN `string | Buffer`, WHICH IS WHAT IT SAID BEFORE.
  * `verifyApiKeyToken` never narrowed: it hands the secret straight to
  * `createHmac`, so a `Uint8Array` secret has always verified and still does.

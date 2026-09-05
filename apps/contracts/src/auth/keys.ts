@@ -204,6 +204,14 @@ function base64urlEncode(input: Buffer | string): string {
  * over bytes. Deliberately Node's own `BinaryLike` minus `KeyObject`, because
  * `createHmac` — which every path here ends at — takes exactly these.
  *
+ * STRING SECRETS ARE WHITESPACE-NORMALIZED (trimmed) BEFORE KEYING. The fleet
+ * provisioning pipeline stores `api-key-signing-secret` values that carry a
+ * trailing newline (64 hex characters plus '\n'), and `issue-key` and every
+ * fleet server trim at their env read; this layer is the convergence point that
+ * makes raw and trimmed values sign and verify identically even when a caller
+ * skips its own trim. Byte views are NOT normalized — they are deliberate key
+ * material and their bytes are used exactly as given.
+ *
  * WHY THIS IS WIDER THAN `string | Buffer`, WHICH IS WHAT IT SAID BEFORE.
  * `verifyApiKeyToken` never narrowed: it hands the secret straight to
  * `createHmac`, so a `Uint8Array` secret has always verified and still does.
@@ -292,6 +300,19 @@ function viewWindow(view: ArrayBufferView): [ArrayBufferLike, number, number] {
 /**
  * Convert a signing secret to the bytes that will actually key the HMAC.
  *
+ * STRING SECRETS ARE TRIMMED FIRST, AND THAT IS A NORMALIZATION, NOT A LENGTH
+ * LIE. A signing secret can only pick up surrounding whitespace on the way in
+ * from env/a vault file, and a stored value that carries a trailing newline
+ * (the fleet `api-key-signing-secret` shape) must key the HMAC with the same
+ * bytes a trimmed copy does — `mintApiKey` and `verifyApiKeyToken` both end at
+ * this function, so both halves converge without coordination. `mintApiKey`'s
+ * entropy floor runs AFTER this call, so the floor measures the bytes that
+ * actually become the key, including here: a 64-hex-character secret plus its
+ * newline measures 64 bytes, not 65. Byte views are deliberately NOT trimmed:
+ * they are exact key material, and whitespace bytes in a binary key are as
+ * meaningful as any other byte. The asymmetry is stated in the `SigningSecret`
+ * type doc so a caller who relies on it is not surprised.
+ *
  * THE RETURNED BUFFER'S `length` IS ALWAYS A FACT ABOUT THIS FUNCTION'S OWN
  * ALLOCATION, NEVER A NUMBER THE CALLER SUPPLIED. That is the entire contract,
  * and every caller of the entropy floor depends on it: the floor in
@@ -318,7 +339,10 @@ function viewWindow(view: ArrayBufferView): [ArrayBufferLike, number, number] {
  * the window mandatory rather than defensive.
  */
 function toBuffer(secret: SigningSecret): Buffer {
-  if (typeof secret === "string") return Buffer.from(secret, "utf8");
+  // Strings are whitespace-normalized before conversion so that a stored value
+  // carrying a trailing newline keys the HMAC identically to its trimmed copy.
+  // See the header comment above for why byte views stay byte-exact.
+  if (typeof secret === "string") return Buffer.from(secret.trim(), "utf8");
   if (ArrayBuffer.isView(secret)) {
     // `ArrayBuffer.isView` reads an internal slot and is NOT forgeable by
     // prototype grafting — measured: `Object.create(Uint8Array.prototype)`

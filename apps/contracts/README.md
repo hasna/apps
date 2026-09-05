@@ -527,6 +527,10 @@ contracts issue-key --app todos --scopes 'todos:read' --no-store --json
 
 Signing secret is read from `HASNA_<APP>_API_SIGNING_KEY` (then `HASNA_API_SIGNING_KEY`);
 the record store uses `HASNA_<APP>_DATABASE_URL` (or `--database-url-env`).
+The signing secret is normalized (whitespace-trimmed) before signing: fleet
+provisioning stores `api-key-signing-secret` values that carry a trailing
+newline, and both `issue-key` and every fleet server trim at their env read, so
+a raw stored value and its trimmed copy sign — and verify — identically.
 
 The hashed record always lands in PostgreSQL. Client-transport configuration
 (`HASNA_<APP>_API_URL`, `HASNA_<APP>_API_KEY`) selects

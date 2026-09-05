@@ -45,9 +45,9 @@ export function generateApiKey() {
  */
 export function resolveSigningSecret(env = process.env) {
   const secret =
-    env.HASNA_NOTES_API_SIGNING_KEY ??
-    env.API_KEY_SIGNING_SECRET ??
-    env.HASNA_API_SIGNING_KEY;
+    env.HASNA_NOTES_API_SIGNING_KEY?.trim() ||
+    env.API_KEY_SIGNING_SECRET?.trim() ||
+    env.HASNA_API_SIGNING_KEY?.trim();
   if (!secret) {
     throw new Error(
       'notes server requires an API signing secret for the postgresql backend: set HASNA_NOTES_API_SIGNING_KEY ' +

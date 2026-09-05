@@ -37,7 +37,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { ApiKeyVerifier } from "@hasna/contracts/auth";
-import { closeCloud, getCloudVerifier } from "./cloud.js";
+import { closeCloud, getCloudVerifier, resolveSigningSecret } from "./cloud.js";
 
 const SIGNING_SECRET_ENV_VARS = [
   "HASNA_TODOS_API_SIGNING_KEY",
@@ -141,5 +141,21 @@ describe("real /v1 verifier wiring (src/server/cloud.ts)", () => {
     expect(decision.ok).toBe(false);
     expect(decision.status).toBe(403);
     expect(decision.reason).toBe("insufficient_scope");
+  });
+});
+
+describe("resolveSigningSecret", () => {
+  it("trims a trailing newline from a stored signing secret (hasna/apps#1543)", () => {
+    // The fleet stores api-key-signing-secret values with a trailing newline
+    // (64 hex chars + '\n'); the server verify path must key the HMAC with the
+    // same bytes issue-key signs with, so every candidate is trimmed at read.
+    const stored = "a1".repeat(32) + "\n";
+    expect(resolveSigningSecret({ HASNA_TODOS_API_SIGNING_KEY: stored })).toBe(stored.trim());
+    expect(resolveSigningSecret({ HASNA_API_SIGNING_KEY: stored })).toBe(stored.trim());
+    expect(resolveSigningSecret({ API_KEY_SIGNING_SECRET: stored })).toBe(stored.trim());
+  });
+
+  it("stays undefined when no signing secret is configured", () => {
+    expect(resolveSigningSecret({})).toBeUndefined();
   });
 });

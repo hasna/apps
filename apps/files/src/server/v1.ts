@@ -62,7 +62,8 @@ function activityQuery(url: URL): store.ActivityQuery {
 }
 
 function signingSecret(): string {
-  const s = process.env.HASNA_FILES_API_SIGNING_KEY ?? process.env.HASNA_API_SIGNING_KEY;
+  const s =
+    process.env.HASNA_FILES_API_SIGNING_KEY?.trim() || process.env.HASNA_API_SIGNING_KEY?.trim();
   if (!s) throw new Error("HASNA_FILES_API_SIGNING_KEY (or HASNA_API_SIGNING_KEY) is not set — API-key auth cannot start.");
   return s;
 }
