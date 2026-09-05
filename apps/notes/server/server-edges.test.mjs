@@ -128,7 +128,7 @@ describe('OTP login edges', () => {
   test('OTP login is rate limited per IP after 5 requests; other IPs unaffected', async () => {
     const { app } = await makeApp();
     // Distinct addresses per request, so this exercises the per-IP dimension
-    // only — the per-email limit (#1542) is covered by its own test below.
+    // only — the per-address controls (#1542) have their own tests below.
     let last = null;
     for (let i = 0; i < 5; i += 1) {
       last = await call(app, 'POST', '/api/v1/auth/login', { body: { email: `rl${i}@example.com` } });
@@ -231,41 +231,141 @@ describe('OTP login edges', () => {
     expect(pending.n).toBe(2);
   });
 
-  test('verify: wrong codes across IPs burn the CODE, not the account (#1542 review)', async () => {
+  test('login: the process-wide mint budget refuses NEW codes at 429, never a request for a code already outstanding', async () => {
+    const { app } = await makeApp({ otpMintBudget: 3 });
+    const first = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'budget1@example.com' }, env: { ip: '10.4.0.1' } });
+    expect(first.status).toBe(200);
+    const firstBody = await first.json();
+    for (const i of [2, 3]) {
+      const res = await call(app, 'POST', '/api/v1/auth/login', { body: { email: `budget${i}@example.com` }, env: { ip: `10.4.0.${i}` } });
+      expect(res.status).toBe(200);
+    }
+    // A fourth mint inside the minute is refused for everyone — a circuit
+    // breaker on volume the caller cannot pick, not a per-address key.
+    const fourth = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'budget4@example.com' }, env: { ip: '10.4.0.4' } });
+    expect(fourth.status).toBe(429);
+    expect((await fourth.json()).error.code).toBe('rate_limited');
+    // An address whose code is outstanding still gets its envelope: that
+    // request mints nothing, so it spends nothing.
+    const again = await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'budget1@example.com' }, env: { ip: '10.4.0.5' } });
+    expect(again.status).toBe(200);
+    expect(await again.json()).toEqual(firstBody);
+    // And the budget is a knob: 0 disables it.
+    const { app: unbounded } = await makeApp({ otpMintBudget: 0 });
+    for (let i = 0; i < 6; i += 1) {
+      const res = await call(unbounded, 'POST', '/api/v1/auth/login', { body: { email: `free${i}@example.com` }, env: { ip: `10.4.1.${i}` } });
+      expect(res.status).toBe(200);
+    }
+  });
+
+  test('invariant: N distinct IPs requesting codes for X and guessing at them cannot prevent X from logging in with a valid code (#1770 review)', async () => {
+    // The shape the #1770 review reproduced against the code-burning limiter:
+    // owner mints, ten attacker IPs send one wrong code each, the owner's
+    // correct code is refused (the burn), repeated for as long as the attacker
+    // cares to. Here the code is never burned and nothing keyed on the
+    // address refuses a request before the code is checked, so the owner logs
+    // in every round — during the attacker's pause and outside it — while
+    // every attacker request is answered 401 or 429 and never 200.
     const { app } = await makeApp();
+    const victim = 'target@example.com';
+    const owner = { ip: '198.51.100.7' };
+    const attackerIps = Array.from({ length: 25 }, (_, i) => `203.0.113.${i + 1}`);
+    const attackerStatuses = new Set();
+    const attack = async (ip, guesses) => {
+      // Each attacker IP first requests a code for the victim (a coalesced
+      // envelope, never a refusal) and then guesses at it.
+      const minted = await call(app, 'POST', '/api/v1/auth/login', { body: { email: victim }, env: { ip } });
+      expect(minted.status).toBe(200);
+      for (let g = 0; g < guesses; g += 1) {
+        const res = await call(app, 'POST', '/api/v1/auth/verify', {
+          body: { email: victim, code: String(g).padStart(6, '0') },
+          env: { ip },
+        });
+        attackerStatuses.add(res.status);
+        expect(res.status).not.toBe(200);
+      }
+    };
+
+    // Round 1: the owner mints; 25 IPs × 3 wrong codes — seven times the
+    // budget that used to burn the code.
+    const started = await call(app, 'POST', '/api/v1/auth/login', { body: { email: victim }, env: owner });
+    expect(started.status).toBe(200);
+    const { devCode } = await started.json();
+    for (const ip of attackerIps) await attack(ip, 3);
+    const verified = await call(app, 'POST', '/api/v1/auth/verify', { body: { email: victim, code: devCode }, env: owner });
+    expect(verified.status).toBe(200);
+    expect((await verified.json()).token).toBeString();
+
+    // Rounds 2–5: the review's exact repro, ten IPs × one wrong code between
+    // the owner's mint and the owner's verify.
+    for (let round = 2; round <= 5; round += 1) {
+      const mint = await call(app, 'POST', '/api/v1/auth/login', { body: { email: victim }, env: owner });
+      expect(mint.status).toBe(200);
+      const { devCode: code } = await mint.json();
+      expect(code).toMatch(/^\d{6}$/);
+      for (const ip of attackerIps.slice(0, 10)) await attack(ip, 1);
+      const ok = await call(app, 'POST', '/api/v1/auth/verify', { body: { email: victim, code }, env: owner });
+      expect(ok.status).toBe(200);
+      expect((await ok.json()).token).toBeString();
+    }
+    // The attacker saw only wrong-code verdicts, and did hit the pause.
+    expect([...attackerStatuses].sort()).toEqual([401, 429]);
+  });
+
+  test('verify: past 5 wrong codes, further wrong codes are 429 for a short pause, then 401 again; a correct code is accepted throughout', async () => {
+    const lines = [];
+    const { app } = await makeApp({ otpFailureCooldownMs: 600, log: (line) => lines.push(String(line)) });
     const email = 'guessme@example.com';
     const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
-    // Ten wrong guesses, each from its own address: bounded per issued code,
-    // and never answered with a rate-limit that would also hit the owner.
-    for (let i = 0; i < 10; i += 1) {
-      const res = await call(app, 'POST', '/api/v1/auth/verify', {
-        body: { email, code: '000000' },
-        env: { ip: `10.2.0.${i + 1}` },
-      });
+    const guess = (code, ip) => call(app, 'POST', '/api/v1/auth/verify', { body: { email, code }, env: { ip } });
+    for (let i = 1; i <= 4; i += 1) expect((await guess('000000', `10.2.0.${i}`)).status).toBe(401);
+    // The fifth arms the pause and is itself answered 429, with the wait.
+    const fifth = await guess('000000', '10.2.0.5');
+    expect(fifth.status).toBe(429);
+    const fifthBody = await fifth.json();
+    expect(fifthBody.error.code).toBe('rate_limited');
+    expect(fifthBody.error.details.retryAfterMs).toBeGreaterThan(0);
+    expect(fifthBody.error.details.retryAfterMs).toBeLessThanOrEqual(600);
+    // Wrong codes inside the pause are refused and do NOT extend it: the pause
+    // is a fixed breather, not a sliding lock a caller can hold open.
+    await Bun.sleep(150);
+    expect((await guess('000000', '10.2.0.6')).status).toBe(429);
+    await Bun.sleep(150);
+    expect((await guess('000000', '10.2.0.7')).status).toBe(429);
+    // The operator sees the pressure — the address, never a code.
+    const armed = lines.filter((l) => l.includes('wrong login codes for'));
+    expect(armed).toHaveLength(1);
+    expect(armed[0]).toContain(email);
+    expect(armed[0]).not.toMatch(/\b\d{6}\b/);
+    // It lapses on its own (600 ms after arming, whatever landed meanwhile)
+    // and the count starts over at 401s.
+    await Bun.sleep(450);
+    expect((await guess('000000', '10.2.0.8')).status).toBe(401);
+    // Arm it again, then prove the pause never touches the CODE: the owner's
+    // correct code logs in while wrong ones are being refused.
+    for (let i = 9; i <= 12; i += 1) await guess('000000', `10.2.0.${i}`);
+    expect((await guess('000000', '10.2.0.13')).status).toBe(429);
+    const ok = await guess(started.devCode, '198.51.100.9');
+    expect(ok.status).toBe(200);
+    expect((await ok.json()).token).toBeString();
+    // The code is spent by its owner (not burned by strangers) and success
+    // cleared the pause: a wrong code is an ordinary 401 again.
+    expect((await guess(started.devCode, '198.51.100.9')).status).toBe(401);
+  });
+
+  test('verify: the pause is a knob — otpFailureCooldownMs 0 keeps answering wrong codes 401 and still never burns the code', async () => {
+    const { app } = await makeApp({ otpFailureCooldownMs: 0 });
+    const email = 'nopause@example.com';
+    const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
+    for (let i = 1; i <= 12; i += 1) {
+      const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: '000000' }, env: { ip: `10.5.0.${i}` } });
       expect(res.status).toBe(401);
     }
-    // The budget belonged to the CODE: it is dead, even for the real holder.
-    const burned = await call(app, 'POST', '/api/v1/auth/verify', {
-      body: { email, code: started.devCode },
-      env: { ip: '198.51.100.9' },
-    });
-    expect(burned.status).toBe(401);
-    // The ACCOUNT is untouched: one more login mints immediately (the burn
-    // clears the min-interval) and the owner logs in.
-    const again = await (await call(app, 'POST', '/api/v1/auth/login', {
-      body: { email },
-      env: { ip: '198.51.100.9' },
-    })).json();
-    expect(again.devCode).toMatch(/^\d{6}$/);
-    expect(again.devCode).not.toBe(started.devCode);
-    const ok = await call(app, 'POST', '/api/v1/auth/verify', {
-      body: { email, code: again.devCode },
-      env: { ip: '198.51.100.9' },
-    });
+    const ok = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode } });
     expect(ok.status).toBe(200);
   });
 
-  test('verify: a successful login clears the guess counter and the min-interval', async () => {
+  test('verify: a successful login clears the failure count, the pause and the min-interval', async () => {
     const { app } = await makeApp();
     const email = 'recovers@example.com';
     const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
@@ -274,16 +374,19 @@ describe('OTP login edges', () => {
         body: { email, code: '000000' },
         env: { ip: `10.3.0.${i + 1}` },
       });
-      expect(res.status).toBe(401);
+      expect(res.status).toBe(i < 4 ? 401 : 429);
     }
-    // The 10th attempt is the owner's, with the real code: it succeeds, so the
-    // code is never burned and the counter is cleared.
+    // The tenth attempt is the owner's, with the real code, inside the pause:
+    // it succeeds, and the code was never burned.
     const ok = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode } });
     expect(ok.status).toBe(200);
-    // And the spent code's interval is cleared, so logging in again is instant.
+    // The spent code's interval is cleared, so logging in again is instant …
     const next = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
     expect(next.devCode).toMatch(/^\d{6}$/);
     expect(next.devCode).not.toBe(started.devCode);
+    // … and so is the pause: a wrong code for the new one is an ordinary 401.
+    const wrong = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: '000000' }, env: { ip: '10.3.0.20' } });
+    expect(wrong.status).toBe(401);
     const verified = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: next.devCode } });
     expect(verified.status).toBe(200);
   });
