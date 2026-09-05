@@ -70,11 +70,23 @@ todos fail <id> --reason "Auth bug in middleware" --retry  # Auto-creates retry 
 
 ## REST API (for cross-process use)
 
-Default port: **19427** — set `TODOS_URL=http://localhost:19427`
+`createClient()` resolves its authority and credential through the one
+`@hasna/contracts` chain, per call (hasna/apps#1720) — `TODOS_URL` is gone.
+
+- **Hosted** (the fleet): a credential from `HASNA_TODOS_API_KEY`, the Keychain
+  item `hasna.credentials.todos.api-key`, or `~/.hasna/todos/config/credentials`
+  is enough; the authority defaults to `https://api.hasna.com/todos`. Set
+  `HASNA_TODOS_API_URL` only to point somewhere else.
+- **Local** (on-box `todos-serve`, default port **19427**): set
+  `HASNA_TODOS_LOCAL=1` with no authority and no credential configured. The run
+  prints one line on stderr saying it is local.
+
+With nothing configured at all, the CLI and MCP server exit non-zero rather than
+serving local rows behind your back.
 
 ```typescript
 import { createClient } from "@hasna/todos";
-const todos = createClient(); // reads TODOS_URL
+const todos = createClient(); // resolves per call: Keychain → credentials file → env
 
 await todos.claimNextTask("my-agent");
 await todos.getStatus();
@@ -99,7 +111,7 @@ Events: `task.created`, `task.started`, `task.completed`, `task.failed`, `task.a
 ## Cross-Tool Integration
 
 - **Evidence on completion**: `todos done <id> --attach-ids <attachment-id>` (from @hasna/attachments)
-- **Session linking**: set `TODOS_URL` in sessions; `sessions show --tasks` surfaces task IDs
+- **Session linking**: set `HASNA_TODOS_API_URL` in sessions; `sessions show --tasks` surfaces task IDs
 - **Email notifications**: `todos webhook create --url <emails-webhook-url> --events task.assigned`
 - **Memory context**: Use the default `TODOS_PROFILE=minimal` + mementos `format=compact` for minimum context overhead
 

@@ -2,7 +2,12 @@
 
 import { TodosClient } from "@hasna/todos/sdk";
 
-const client = new TodosClient({ baseUrl: process.env.TODOS_URL ?? "http://localhost:19427" });
+// No baseUrl: the client resolves its authority and credential through the one
+// @hasna/contracts chain, per call. Export HASNA_TODOS_API_KEY (or use the
+// Keychain / ~/.hasna/todos/config/credentials) to run this against the fleet;
+// export HASNA_TODOS_LOCAL=1 with nothing else set to run it against a local
+// `todos serve`, which announces itself on stderr.
+const client = new TodosClient();
 
 const project = await client.projects.create({
   name: "Agent Demo",

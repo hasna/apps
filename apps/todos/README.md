@@ -17,7 +17,14 @@ The CLI, the MCP server and the `./sdk` client all resolve their credential
 through one resolver — the client chain in `@hasna/contracts` — so there is
 exactly one place to put a key and exactly one precedence to learn. Resolution
 happens **on every call**, never once at process start, so rotating a key heals
-a long-running shell or MCP server without restarting it.
+a long-running shell, MCP server or agent without restarting it: a `TodosClient`
+built at startup and held for hours re-reads the Keychain and the credentials
+file on each request and picks up the new key on the next one.
+
+Two things are deliberately *not* re-resolved. An explicit `apiKey` argument is
+tier 1 — a pin the caller owns — and the **service authority is fixed for the
+life of a client**, because a credential written for one authority must never be
+sent to another; build a new client to point somewhere else.
 
 **Credential, highest to lowest:**
 
@@ -56,10 +63,20 @@ printf 'HASNA_TODOS_API_KEY=%s\n' "$KEY" > ~/.hasna/todos/config/credentials
 chmod 600 ~/.hasna/todos/config/credentials
 ```
 
-**Hosted mode fails closed.** With no credential the CLI exits non-zero and says
-which tiers it consulted. It never falls back to the local SQLite store, because
-serving local rows while authentication is broken prints healthy output for a
-broken system.
+**Hosted mode fails closed.** With no credential the CLI and the MCP server exit
+non-zero (`REMOTE_API_CONFIG_MISSING`) and say which tiers they consulted. They
+never fall back to the local SQLite store, because serving local rows while
+authentication is broken prints healthy output for a broken system.
+
+The `./sdk` surface answers "nothing is configured" differently *on purpose*,
+and only for that one case: `new TodosClient()` targets the on-box
+`todos-serve` at `http://localhost:19427` and prints the local-mode line, since
+that client speaks the same `/api/*` plane a workstation serve exposes and local
+is a real mode for it. `createTodosV1Client()` is hosted-only and throws
+(`TODOS_CREDENTIAL_MISSING`). Every *other* refusal is a throw on all three
+surfaces — a blank variable, aliases that disagree, an unreadable credential
+file, a URL with no key — because those are misconfigurations, not an absence of
+configuration.
 
 **Local mode is deliberate, and it says so.** `@hasna/todos` is usable entirely
 offline against an on-box SQLite store — set `HASNA_TODOS_LOCAL=1` (alias
