@@ -4,16 +4,20 @@ import { resolveContactsAuthority } from "./index.js";
 
 describe("projects-serve Contacts authority construction", () => {
   test("leaves the unrelated server surface available when no Contacts configuration exists", () => {
+    // A caller-built env is hermetic in the shared seam: no Keychain, no disk.
     expect(resolveContactsAuthority({})).toBeUndefined();
   });
 
-  test("fails closed on partial Contacts configuration", () => {
+  test("a declared Contacts authority with no resolvable key fails closed", () => {
     expect(() => resolveContactsAuthority({
       HASNA_CONTACTS_API_URL: "https://contacts.example.test",
     })).toThrow("HASNA_CONTACTS_API_KEY");
-    expect(() => resolveContactsAuthority({
-      HASNA_CONTACTS_API_KEY: "test-key",
-    })).toThrow("HASNA_CONTACTS_API_URL");
+  });
+
+  test("a key with no URL reaches the default fleet gateway — URLs never need configuring", () => {
+    const authority = resolveContactsAuthority({ HASNA_CONTACTS_API_KEY: "test-key" });
+    expect(authority).toBeDefined();
+    expect((authority as unknown as { baseUrl: string }).baseUrl).toBe("https://api.hasna.com/contacts/v1");
   });
 
   test("constructs the concrete production adapter when URL and API key are configured", () => {

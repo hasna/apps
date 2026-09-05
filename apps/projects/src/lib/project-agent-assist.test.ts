@@ -11,7 +11,7 @@ import {
 } from "../db/workspaces.js";
 import type { JsonObject, Workspace } from "../types/workspace.js";
 import { closeDatabase, getDatabase, PROJECTS_DB_PATH_ENV } from "../db/database.js";
-import { resolveProjectStore, PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore, type ProjectStore } from "../store/project-store.js";
+import { resolveProjectStore, __resetProjectStore, type ProjectStore } from "../store/project-store.js";
 import { PROJECTS_HOME_ENV } from "./project-store-paths.js";
 import {
   buildProjectAgentContext,
@@ -22,16 +22,15 @@ import {
   suggestProjectNextActions,
   toAgentText,
 } from "./project-agent-assist.js";
+import { silenceHostedApiEnv } from "../testing/spawn-env.js";
 
 // The agent-assist surfaces route every registry read through the active
 // ProjectStore. These tests drive the LocalProjectStore backed by a fresh
 // in-memory sqlite (via HASNA_PROJECTS_DB_PATH=:memory:) so each case is
 // isolated and exercises the real store seam — not a bespoke db handle.
 beforeEach(() => {
+  silenceHostedApiEnv();
   process.env[PROJECTS_DB_PATH_ENV] = ":memory:";
-  delete process.env["HASNA_PROJECTS_API_URL"];
-  delete process.env["HASNA_PROJECTS_API_KEY"];
-  process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
   closeDatabase();
   __resetProjectStore();
 });
@@ -42,7 +41,7 @@ afterEach(() => {
 });
 
 function localStore(): ProjectStore {
-  return resolveProjectStore({ [PROJECTS_LOCAL_REGISTRY_ENV]: "1" });
+  return resolveProjectStore({});
 }
 
 function makeProject(overrides: {

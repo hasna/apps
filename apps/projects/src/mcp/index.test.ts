@@ -6,8 +6,13 @@ import { join } from "node:path";
 import { runMigrations } from "../db/schema.js";
 import { createWorkspace, recordWorkspaceEvent } from "../db/workspaces.js";
 import { PROJECT_REDACTED_VALUE } from "../lib/redaction.js";
-import { PROJECTS_LOCAL_REGISTRY_ENV } from "../store/project-store.js";
-import { HOSTED_API_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
+import {
+  HOSTED_API_ENV_KEYS,
+  TEST_HASNA_HOME,
+  TEST_KEYCHAIN_STATION,
+  testSpawnEnv,
+  withoutUnhostedNotice,
+} from "../testing/spawn-env.js";
 
 function runMcpCli(args: string[]) {
   return Bun.spawnSync({
@@ -21,25 +26,20 @@ function runMcpCli(args: string[]) {
 }
 
 function runMcpSession(messages: unknown[], env: Record<string, string>) {
-  // Api-mode selectors are blanked in the passed env itself, not only in
-  // process.env: a call site passing raw process.env must not be able to
-  // reach an api transport through this helper, and the shared seam's disk
-  // tier must not route the child to the real backend either (an explicitly
-  // DEFINED-but-blank URL is the seam's "select the local store" escape
-  // hatch). testSpawnEnv() keeps keys present in `overrides`, so it cannot
-  // express that here.
+  // The hosted selectors are dropped from the PASSED env, not only from
+  // process.env: a call site handing this helper raw process.env must not be
+  // able to reach the HTTP transport through it. testSpawnEnv() keeps keys
+  // present in `overrides`, so it cannot express that. The Keychain and disk
+  // tiers are silenced the same way testSpawnEnv() does it, which leaves the
+  // session on the on-box SQLite registry these tests exercise.
   const isolated: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
-    if ((HOSTED_API_ENV_KEYS as readonly string[]).includes(key)) {
-      isolated[key] = "";
-      continue;
-    }
+    if ((HOSTED_API_ENV_KEYS as readonly string[]).includes(key)) continue;
     isolated[key] = value;
   }
-  // With the hosted selectors blanked, store resolution fails closed (no
-  // silent local fallback). These sessions deliberately run the on-box SQLite
-  // registry, so they explicitly opt in to it.
-  if (!(PROJECTS_LOCAL_REGISTRY_ENV in isolated)) isolated[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
+  isolated["HASNA_HOME"] = TEST_HASNA_HOME;
+  isolated["HASNA_STATION"] = TEST_KEYCHAIN_STATION;
+  delete isolated["HASNA_CONFIG_HOME"];
   return Bun.spawnSync({
     cmd: ["node", "src/testing/mcp-stdio-client.mjs", JSON.stringify(messages)],
     stdout: "pipe",
@@ -94,7 +94,7 @@ describe("projects-mcp CLI flags", () => {
       testSpawnEnv({ HASNA_PROJECTS_DB_PATH: join(root, "projects.db") }),
     );
     const stdout = Buffer.from(result.stdout).toString("utf-8");
-    const stderr = Buffer.from(result.stderr).toString("utf-8");
+    const stderr = withoutUnhostedNotice(Buffer.from(result.stderr).toString("utf-8"));
     rmSync(root, { recursive: true, force: true });
 
     expect(result.exitCode).toBe(0);
@@ -184,15 +184,15 @@ describe("projects-mcp project-first surface", () => {
         env: testSpawnEnv({
           HASNA_PROJECTS_DB_PATH: dbPath,
           HASNA_PROJECTS_API_URL: `http://127.0.0.1:${server.port}`,
-          // Deliberate loopback credential via the seam's override tier: the
-          // shared contracts seam reads HASNA_PROJECTS_API_KEY_OVERRIDE before
-          // the disk file and never emits the legacy-env deprecation warning
-          // to stderr (CI has no disk credential, so a plain env key warns).
-          HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
+          // Loopback credential through the canonical plain env tier. Tier 5 of
+          // the shared @hasna/contracts ladder is LEGITIMATE and silent: with
+          // the Keychain and disk tiers hushed by testSpawnEnv() it resolves
+          // cleanly and prints nothing, so stderr-clean assertions hold.
+          HASNA_PROJECTS_API_KEY: "test-key",
         }),
       });
       const stdout = await new Response(proc.stdout).text();
-      const stderr = await new Response(proc.stderr).text();
+      const stderr = withoutUnhostedNotice(await new Response(proc.stderr).text());
       await proc.exited;
 
       expect(proc.exitCode).toBe(0);
@@ -285,7 +285,7 @@ describe("projects-mcp project-first surface", () => {
       testSpawnEnv({ HASNA_PROJECTS_DB_PATH: join(root, "projects.db") }),
     );
     const stdout = Buffer.from(result.stdout).toString("utf-8");
-    const stderr = Buffer.from(result.stderr).toString("utf-8");
+    const stderr = withoutUnhostedNotice(Buffer.from(result.stderr).toString("utf-8"));
     rmSync(root, { recursive: true, force: true });
 
     expect(result.exitCode).toBe(0);
@@ -411,7 +411,7 @@ describe("projects-mcp project-first surface", () => {
         }),
       );
       expect(result.exitCode).toBe(0);
-      expect(Buffer.from(result.stderr).toString("utf-8")).toBe("");
+      expect(withoutUnhostedNotice(Buffer.from(result.stderr).toString("utf-8"))).toBe("");
 
       const db = new Database(dbPath);
       const rows = db.query(
@@ -481,7 +481,7 @@ describe("projects-mcp project-first surface", () => {
       // would strip the selectors before the wrapper runs and pass trivially.
       const result = runMcpSession(messages, { ...process.env, HASNA_PROJECTS_DB_PATH: dbPath });
       expect(result.exitCode).toBe(0);
-      expect(Buffer.from(result.stderr).toString("utf-8")).toBe("");
+      expect(withoutUnhostedNotice(Buffer.from(result.stderr).toString("utf-8"))).toBe("");
 
       const db = new Database(dbPath);
       const row = db.query("SELECT slug FROM workspaces WHERE slug = ?").get("mcp-hermetic-create");
@@ -550,7 +550,7 @@ describe("projects-mcp project-first surface", () => {
         }),
       );
       expect(result.exitCode).toBe(0);
-      expect(Buffer.from(result.stderr).toString("utf-8")).toBe("");
+      expect(withoutUnhostedNotice(Buffer.from(result.stderr).toString("utf-8"))).toBe("");
 
       const db = new Database(dbPath);
       const row = db.query(
@@ -615,7 +615,7 @@ describe("projects-mcp project-first surface", () => {
     ];
     const result = runMcpSession(messages, testSpawnEnv({ HASNA_PROJECTS_DB_PATH: dbPath }));
     const stdout = Buffer.from(result.stdout).toString("utf-8");
-    const stderr = Buffer.from(result.stderr).toString("utf-8");
+    const stderr = withoutUnhostedNotice(Buffer.from(result.stderr).toString("utf-8"));
     rmSync(root, { recursive: true, force: true });
 
     expect(result.exitCode).toBe(0);

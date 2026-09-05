@@ -8,35 +8,30 @@ import { buildServer } from "./index.js";
 import { handleMcpRequest, resolveMcpHttpPort, DEFAULT_MCP_HTTP_PORT } from "./http.js";
 import { closeDatabase } from "../db/database.js";
 import { createWorkspace } from "../db/workspaces.js";
-import { PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore } from "../store/project-store.js";
-import { HOSTED_API_ENV_KEYS } from "../testing/spawn-env.js";
+import { __resetProjectStore } from "../store/project-store.js";
+import { HOSTED_API_ENV_KEYS, silenceHostedApiEnv } from "../testing/spawn-env.js";
 
 describe("projects MCP HTTP transport", () => {
   let httpServer: ReturnType<typeof Bun.serve>;
   let port: number;
   let root: string;
   let previousDbPath: string | undefined;
-  let previousLocalOptIn: string | undefined;
-  let previousApiEnv: Partial<Record<(typeof HOSTED_API_ENV_KEYS)[number], string | undefined>>;
+  let previousHasnaHome: string | undefined;
+  let previousStation: string | undefined;
+  let previousApiEnv: Record<string, string | undefined>;
 
 
   beforeAll(() => {
     root = mkdtempSync(join(tmpdir(), "projects-mcp-http-"));
     previousDbPath = process.env.HASNA_PROJECTS_DB_PATH;
     previousApiEnv = {};
-    for (const key of HOSTED_API_ENV_KEYS) {
-      previousApiEnv[key] = process.env[key];
-      // Blank, not delete: the shared @hasna/contracts seam reads fleet
-      // app-config files on disk when the environment is silent, and an
-      // explicitly DEFINED-but-blank URL is its "select the local store"
-      // escape hatch that beats any disk pointer.
-      process.env[key] = "";
-    }
-    // Store resolution fails closed with the hosted selectors blanked (no
-    // silent local fallback); this fixture runs the on-box SQLite registry
-    // and explicitly opts in to it.
-    previousLocalOptIn = process.env[PROJECTS_LOCAL_REGISTRY_ENV];
-    process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
+    for (const key of HOSTED_API_ENV_KEYS) previousApiEnv[key] = process.env[key];
+    previousHasnaHome = process.env["HASNA_HOME"];
+    previousStation = process.env["HASNA_STATION"];
+    // Silence all five tiers of the shared @hasna/contracts resolver, so this
+    // fixture takes the unhosted OSS path onto the on-box SQLite registry
+    // instead of the operator's real fleet credential.
+    silenceHostedApiEnv();
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
     __resetProjectStore();
     closeDatabase();
@@ -72,11 +67,10 @@ describe("projects MCP HTTP transport", () => {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    if (previousLocalOptIn === undefined) {
-      delete process.env[PROJECTS_LOCAL_REGISTRY_ENV];
-    } else {
-      process.env[PROJECTS_LOCAL_REGISTRY_ENV] = previousLocalOptIn;
-    }
+    if (previousHasnaHome === undefined) delete process.env["HASNA_HOME"];
+    else process.env["HASNA_HOME"] = previousHasnaHome;
+    if (previousStation === undefined) delete process.env["HASNA_STATION"];
+    else process.env["HASNA_STATION"] = previousStation;
 
     __resetProjectStore();
     rmSync(root, { recursive: true, force: true });

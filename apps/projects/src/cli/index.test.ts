@@ -11,8 +11,15 @@ import { closeDatabase } from "../db/database.js";
 import { deriveWorkspaceRegistryFields } from "../lib/workspace-plan.js";
 import { PROJECT_REGISTRATION_DEPENDENCY_TASKS } from "../lib/project-registration.js";
 import { registerWorkspaceCommands } from "./commands/workspaces.js";
-import { HOSTED_API_ENV_KEYS, testSpawnEnv } from "../testing/spawn-env.js";
-import { PROJECTS_LOCAL_REGISTRY_ENV, __resetProjectStore } from "../store/project-store.js";
+import {
+  HOSTED_API_ENV_KEYS,
+  TEST_HASNA_HOME,
+  TEST_KEYCHAIN_STATION,
+  UNHOSTED_MODE_NOTICE_PREFIX,
+  testSpawnEnv,
+  withoutUnhostedNotice,
+} from "../testing/spawn-env.js";
+import { __resetProjectStore } from "../store/project-store.js";
 import type { Root, WorkspaceKind } from "../types/workspace.js";
 
 setDefaultTimeout(15_000);
@@ -99,23 +106,26 @@ async function runWorkspaceCommandInProcess(args: string[], env: Record<string, 
   registerWorkspaceCommands(program);
 
   const previousEnv = new Map<string, string | undefined>();
-  // Same reasoning as testSpawnEnv(): an operator shell that exports the hosted backend
-  // selectors would otherwise silently turn these in-process local-store runs
-  // into hosted-backend runs against the real backend. Blank, not delete: the
-  // shared @hasna/contracts seam reads fleet app-config files on disk when the
-  // environment is silent, and an explicitly DEFINED-but-blank URL is its
-  // "select the local store" escape hatch that beats any disk pointer.
+  // Same reasoning as testSpawnEnv(): an operator shell (or login Keychain, or
+  // ~/.hasna credentials file) would otherwise silently turn these in-process
+  // local-registry runs into runs against the real fleet. Silence all five
+  // tiers of the shared @hasna/contracts resolver: delete the env names, point
+  // HASNA_HOME at a path this suite never creates, and pin HASNA_STATION to a
+  // Keychain account with no items. A DEFINED-but-blank URL is NOT an escape
+  // hatch any more — the seam refuses it as a configuration error.
   for (const key of HOSTED_API_ENV_KEYS) {
     if (key in env) continue;
     previousEnv.set(key, process.env[key]);
-    process.env[key] = "";
+    delete process.env[key];
   }
-  // Store resolution fails closed without the hosted API env (no silent local
-  // fallback). These in-process runs exercise the on-box SQLite registry, so
-  // they explicitly opt in to it.
-  if (!(PROJECTS_LOCAL_REGISTRY_ENV in env)) {
-    previousEnv.set(PROJECTS_LOCAL_REGISTRY_ENV, process.env[PROJECTS_LOCAL_REGISTRY_ENV]);
-    process.env[PROJECTS_LOCAL_REGISTRY_ENV] = "1";
+  for (const [key, value] of [["HASNA_HOME", TEST_HASNA_HOME], ["HASNA_STATION", TEST_KEYCHAIN_STATION]] as const) {
+    if (key in env) continue;
+    previousEnv.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+  if (!("HASNA_CONFIG_HOME" in env)) {
+    previousEnv.set("HASNA_CONFIG_HOME", process.env["HASNA_CONFIG_HOME"]);
+    delete process.env["HASNA_CONFIG_HOME"];
   }
   for (const [key, value] of Object.entries(env)) {
     previousEnv.set(key, process.env[key]);
@@ -187,7 +197,10 @@ async function readStreamChunk(stream: ReadableStream<Uint8Array> | null, timeou
 }
 
 function text(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("utf-8");
+  // The unhosted-mode notice is a required, deliberate line; it is not part of
+  // what any command under test writes, so it is stripped here and asserted
+  // directly where it IS the subject.
+  return withoutUnhostedNotice(Buffer.from(bytes).toString("utf-8"));
 }
 
 function reserveFreePort(): number {
@@ -258,11 +271,11 @@ function cloudDoctorFixture() {
     HASNA_PROJECTS_DB_PATH: dbPath,
     HASNA_PROJECTS_HOME: join(root, "home"),
     HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-    // Deliberate loopback credential via the shared contracts seam's override
-    // tier: a plain HASNA_PROJECTS_API_KEY in the spawned env is read as the
-    // legacy tier, which warns on stderr (DEPRECATED) whenever the disk tier
-    // holds no key — CI has none — breaking every stderr-clean assertion.
-    HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
+    // Loopback credential through the canonical plain env tier. Tier 5 of the
+    // shared @hasna/contracts ladder is LEGITIMATE and silent: with the
+    // Keychain and disk tiers hushed by testSpawnEnv() it resolves cleanly and
+    // prints nothing, so stderr-clean assertions hold.
+    HASNA_PROJECTS_API_KEY: "test-key",
   };
   const runDoctor = async (extraArgs: string[]) => {
     const proc = Bun.spawn({
@@ -985,7 +998,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: join(root, "home"),
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
+      HASNA_PROJECTS_API_KEY: "test-key",
     };
     const forwardProof = [{
       created_by_operation: true,
@@ -2144,7 +2157,7 @@ describe("project-first CLI surface", () => {
       // disk. The plain HASNA_CONTACTS_API_KEY legacy tier would lose to that
       // disk credential on machines that have one, sending the real key to
       // this test server instead of the test key.
-      HASNA_CONTACTS_API_KEY_OVERRIDE: "test-contact-key",
+      HASNA_CONTACTS_API_KEY: "test-contact-key",
       HASNA_CONTACTS_SERVICE_INSTANCE: "urn:hasna:contacts:test",
     };
 
@@ -2972,7 +2985,7 @@ describe("project-first CLI surface", () => {
     const env = {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${server.port}`,
-      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
+      HASNA_PROJECTS_API_KEY: "test-key",
     };
     try {
       const record = await runProjectsAsync([
@@ -3808,7 +3821,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: join(root, "home"),
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
+      HASNA_PROJECTS_API_KEY: "test-key",
     };
     try {
       const proc = Bun.spawn({
@@ -3897,7 +3910,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: projectsHome,
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
+      HASNA_PROJECTS_API_KEY: "test-key",
     };
     const runWhy = async (target: string) => {
       const proc = Bun.spawn({
@@ -4011,7 +4024,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: projectsHome,
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
+      HASNA_PROJECTS_API_KEY: "test-key",
     };
     const runEnsure = async (target: string, extraArgs: string[] = []) => {
       const proc = Bun.spawn({
@@ -4207,7 +4220,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: join(root, "home"),
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
+      HASNA_PROJECTS_API_KEY: "test-key",
       PROJECTS_CONVERSATIONS_BIN: conversationsBin,
     };
     const runEnsure = async () => {
@@ -4305,7 +4318,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: join(root, "home"),
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
+      HASNA_PROJECTS_API_KEY: "test-key",
     };
     const targetPath = join(root, "cloud-flag-probe");
     const runCreate = async (args: string[]) => {
@@ -4484,7 +4497,7 @@ describe("project-first CLI surface", () => {
       HASNA_PROJECTS_DB_PATH: join(root, "projects.db"),
       HASNA_PROJECTS_HOME: home,
       HASNA_PROJECTS_API_URL: `http://127.0.0.1:${port}`,
-      HASNA_PROJECTS_API_KEY_OVERRIDE: "test-key",
+      HASNA_PROJECTS_API_KEY: "test-key",
     };
     const runCreate = async (args: string[]) => {
       const proc = Bun.spawn({
@@ -4611,16 +4624,16 @@ describe("project-first CLI surface", () => {
 
 });
 
-describe("projects store resolution fails closed without hosted API env", () => {
-  test("a registry command without the hosted API env exits non-zero, names the required env, and creates no local db", () => {
+describe("projects store resolution routes on URL + key only", () => {
+  cliProcessTest("a declared authority with no resolvable credential exits non-zero and creates no local db", () => {
     const root = mkdtempSync(join(tmpdir(), "projects-cli-fail-closed-"));
     const dbPath = join(root, "never-created.db");
-    // Explicitly decline the test harness's local-registry opt-in: this run
-    // must NOT fall back to the on-box SQLite registry.
+    // A URL is hosted INTENT. With no key resolvable from any tier this must
+    // fail loud, not quietly open the on-box registry.
     const env = {
       HASNA_PROJECTS_DB_PATH: dbPath,
       HASNA_PROJECTS_HOME: join(root, "home"),
-      [PROJECTS_LOCAL_REGISTRY_ENV]: "",
+      HASNA_PROJECTS_API_URL: "https://projects.test.invalid",
     };
 
     const result = runProjects(["roots", "list", "--json"], env);
@@ -4629,19 +4642,45 @@ describe("projects store resolution fails closed without hosted API env", () => 
     const stderr = text(result.stderr);
     expect(stderr).toContain("HASNA_PROJECTS_API_URL");
     expect(stderr).toContain("HASNA_PROJECTS_API_KEY");
-    expect(stderr).toContain("no silent local fallback");
+    expect(stderr).toContain("never fall back to SQLite");
     expect(existsSync(dbPath)).toBe(false);
     expect(existsSync(join(root, "home"))).toBe(false);
   });
 
-  test("the same registry command works when the local registry is explicitly opted into", () => {
-    const root = mkdtempSync(join(tmpdir(), "projects-cli-local-opt-in-"));
-    const dbPath = join(root, "opted.db");
-    const env = { HASNA_PROJECTS_DB_PATH: dbPath, [PROJECTS_LOCAL_REGISTRY_ENV]: "1" };
+  cliProcessTest("a completely silent environment runs unhosted and says so in one line", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-unhosted-"));
+    const dbPath = join(root, "unhosted.db");
+    const env = { HASNA_PROJECTS_DB_PATH: dbPath };
 
     const result = runProjects(["roots", "list", "--json"], env);
 
     expect(result.exitCode).toBe(0);
     expect(existsSync(dbPath)).toBe(true);
+    const rawStderr = Buffer.from(result.stderr).toString("utf-8");
+    const notices = rawStderr.split("\n").filter((line) => line.startsWith(UNHOSTED_MODE_NOTICE_PREFIX));
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!).toContain("projects: local mode");
+    expect(notices[0]!).toContain(dbPath);
+  });
+
+  cliProcessTest("a credentials file on disk selects the hosted store with no URL configured", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-disk-cred-"));
+    const dbPath = join(root, "never-created.db");
+    const configDir = join(root, "hasna-home", "projects", "config");
+    mkdirSync(configDir, { recursive: true });
+    const credentials = join(configDir, "credentials");
+    writeFileSync(credentials, "HASNA_PROJECTS_API_KEY=disk-tier-key\n");
+    chmodSync(credentials, 0o600);
+
+    // No URL anywhere: the default fleet gateway applies, so the command tries
+    // to REACH it and fails on the network, never on a local read.
+    const result = runProjects(["roots", "list", "--json"], {
+      HASNA_PROJECTS_DB_PATH: dbPath,
+      HASNA_HOME: join(root, "hasna-home"),
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(text(result.stderr)).not.toContain("local mode");
+    expect(existsSync(dbPath)).toBe(false);
   });
 });

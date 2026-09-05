@@ -11,6 +11,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ApiKeyStore } from "@hasna/contracts/auth";
 import { resolveClientTransport } from "@hasna/contracts/client";
+import { unconfiguredForHostedUse } from "../lib/client-configuration.js";
 import { createPgPool, createQueryClient } from "../generated/storage-kit/index.js";
 import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import { ProjectsPgStore } from "./pg-store.js";
@@ -106,16 +107,18 @@ export function resolvePort(argv: string[], env: NodeJS.ProcessEnv = process.env
 export function resolveContactsAuthority(
   env: NodeJS.ProcessEnv = process.env,
 ): ContactsHttpProjectMembershipAuthority | undefined {
-  const resolution = resolveClientTransport("contacts", env);
-  // Any Contacts configuration at all (a URL selecting http, a key, or a
-  // fully paired transport) warrants the authority; a completely silent
-  // environment gets none. Half-paired configuration still fails closed with
-  // a throw inside createContactsProjectMembershipAuthorityFromEnv.
-  const anyContactsConfig =
-    resolution.transport === "http" ||
-    resolution.apiUrlSource !== null ||
-    resolution.apiKeyPresent;
-  if (!anyContactsConfig) return undefined;
+  // Any Contacts declaration at all warrants the authority — a URL, a key from
+  // any of the five tiers, the Keychain item, the credentials file. A
+  // COMPLETELY silent environment gets none: this server simply does not offer
+  // the contact-membership surface then. Everything in between (a URL with no
+  // resolvable key, an unreadable Keychain item, a world-readable credentials
+  // file) is a LOUD failure, so the seam's error propagates unchanged.
+  try {
+    resolveClientTransport("contacts", env);
+  } catch (error) {
+    if (unconfiguredForHostedUse("contacts", env)) return undefined;
+    throw error;
+  }
   return createContactsProjectMembershipAuthorityFromEnv(env);
 }
 
