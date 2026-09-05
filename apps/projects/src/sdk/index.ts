@@ -8,7 +8,7 @@
 //
 // PRECEDENCE (resolved fresh on every call, five tiers, see
 // @hasna/contracts/client):
-//   1. an explicit argument           — `overrides.apiKey`
+//   1. an explicit argument           — `overrides.apiKey` / `overrides.profile`
 //   2. a deliberate env pointer       — HASNA_PROJECTS_API_KEY_OVERRIDE,
 //                                       HASNA_PROFILE, HASNA_PROJECTS_API_KEY_REF
 //   3. the macOS Keychain             — hasna.credentials.projects.api-key,

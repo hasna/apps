@@ -358,7 +358,7 @@ rotated key is picked up without restarting a shell.
 
 | # | Tier | Where it comes from |
 | --- | --- | --- |
-| 1 | argument | an explicit key passed to the SDK, or `--api-key` |
+| 1 | argument | an explicit key or profile passed to `createProjectsClientFromEnv()` / `resolveProjectStore()` |
 | 2 | deliberate env pointer | `HASNA_PROJECTS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_PROJECTS_API_KEY_REF` (a secrets-vault ITEM KEY, never a value) |
 | 3 | macOS Keychain | generic-password item `hasna.credentials.projects.api-key`, account `HASNA_STATION`, else `hostname -s`, else `USER` |
 | 4 | disk | `~/.hasna/projects/config/credentials`, mode 0400 or 0600, read at call time |
