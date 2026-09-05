@@ -73,7 +73,7 @@ import {
   type KeychainTierOptions,
   type ResolvedCredential,
 } from "@hasna/contracts/client";
-import { readSkillsInstanceMetadata, selectedSkillsProfile, skillsProfileCredentialFiles } from "./instance-credentials.js";
+import { captureSkillsCredentialFiles, readSkillsInstanceMetadata, selectedSkillsProfile, skillsProfileCredentialFiles } from "./instance-credentials.js";
 
 /** The app slug: the Keychain service, the `~/.hasna/<app>` folder, the gateway path. */
 export const SKILLS_APP = "skills";
@@ -371,6 +371,7 @@ function snapshotSkillsOptions(env: Env, options: SkillsFleetOptions): SkillsFle
 }
 
 function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): SkillsFleet {
+  const assertFilesUnchanged = captureSkillsCredentialFiles(skillsProfileCredentialFiles(env, options.credentials?.profile));
   const configured = configuredSkillsApiUrl(env, options.credentials?.keychain, options.credentials?.profile);
   // The released shared resolver owns every credential tier. Resolve it once.
   const credential = resolveCredential(SKILLS_APP, env, options.credentials);
@@ -387,6 +388,7 @@ function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): Skill
   // /api/v1 while retaining normalized instance binding and original provenance.
   toV1BaseUrl(apiOrigin);
   assertCredentialInstance(credential, apiOrigin, env, options);
+  assertFilesUnchanged();
   const base = {
     mode: "hosted" as const,
     apiOrigin,

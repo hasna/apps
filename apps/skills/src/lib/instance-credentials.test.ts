@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { clearAuthConfig, getAuthFilePath, getAuthIdentity, saveApiUrl, saveAuthConfig } from "./auth-store.js";
 import { resolveSkillsFleet, resolveSkillsConnection } from "./fleet-credentials.js";
+import { readSkillsInstanceMetadata } from "./instance-credentials.js";
 import { createRemoteSkillsClient } from "./remote-client.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
@@ -35,6 +36,38 @@ describe("Skills instance-bound profile credentials", () => {
       get HASNA_SKILLS_API_URL() { reads++; this.HASNA_SKILLS_API_KEY_OVERRIDE = "fixture-after"; return "http://127.0.0.1:4001"; } };
     await expect(resolveSkillsConnection(rotating)).rejects.toThrow("Accessor-backed");
     expect(reads).toBe(0);
+  });
+  test("an atomic file replacement during shared credential resolution refuses the mixed pair", () => {
+    const child = Bun.spawnSync([process.execPath, join(import.meta.dir, "instance-credentials-race.fixture.ts")], {
+      env: { PATH: process.env.PATH, HASNA_HOME: join(root, "race-child"), HASNA_STATION: "isolated-race" },
+      timeout: 10_000, stdout: "pipe", stderr: "pipe",
+    });
+    expect(child.exitCode).toBe(0);
+    expect(JSON.parse(child.stdout.toString())).toMatchObject({ rotated: true, refused: true });
+    expect(child.stdout.toString()).not.toContain("wrongInstanceCredentialPair");
+  });
+  test("profile routing rejects symlinks, oversized files and unsafe permissions before credential resolution", () => {
+    const base = { ...env("unsafe-metadata"), HASNA_PROFILE: "customer" };
+    const path = getAuthFilePath(base);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    const target = `${path}.target`;
+    writeFileSync(target, "HASNA_SKILLS_API_URL=https://skills.example.test\n", { mode: 0o600 });
+    symlinkSync(target, path);
+    expect(() => resolveSkillsFleet(base)).toThrow("safely read");
+    rmSync(path);
+    writeFileSync(path, "x".repeat(64 * 1024 + 1), { mode: 0o600 });
+    expect(() => readSkillsInstanceMetadata(path)).toThrow("bounded owner-only");
+    rmSync(path);
+    writeFileSync(path, "HASNA_SKILLS_API_URL=https://skills.example.test\n", { mode: 0o644 });
+    expect(() => readSkillsInstanceMetadata(path)).toThrow("bounded owner-only");
+    rmSync(path);
+    if (process.platform !== "win32") {
+      const fifo = Bun.spawnSync(["mkfifo", "-m", "600", path]);
+      expect(fifo.exitCode).toBe(0);
+      const started = performance.now();
+      expect(() => readSkillsInstanceMetadata(path)).toThrow("bounded owner-only");
+      expect(performance.now() - started).toBeLessThan(1000);
+    }
   });
   test("a completed connection keeps its original bound pair across later profile rotation", async () => {
     const base = { ...env("rotation"), HASNA_PROFILE: "customer" };
