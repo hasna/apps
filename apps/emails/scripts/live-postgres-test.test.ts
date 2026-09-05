@@ -103,9 +103,9 @@ describe("PostgreSQL evidence must be complete", () => {
     expect(() => assertSuiteInventory([...actual, actual[0]!])).toThrow();
     expect(LIVE_POSTGRES_SUITES).toContain(suite);
     expect(Object.keys(MINIMUM_PASS_COUNTS)).toEqual(LIVE_POSTGRES_SUITES);
-    expect(MINIMUM_PASS_COUNTS["multi-tenancy.integration.test.ts"]).toBe(36);
-    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0)).toBe(164);
-    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0) + Object.keys(OPTIONAL_SKIPS).length).toBe(166);
+    expect(MINIMUM_PASS_COUNTS["multi-tenancy.integration.test.ts"]).toBe(34);
+    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0)).toBe(162);
+    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0) + Object.keys(OPTIONAL_SKIPS).length).toBe(164);
   });
 
   test("accepts complete non-skipped successful evidence", () => {
