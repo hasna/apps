@@ -26,6 +26,7 @@
     "mcp/notes-mcp.mjs",
     "server/index.mjs",
     "server/app.mjs",
+    "server/client-ip.mjs",
     "server/auth.mjs",
     "server/paths.mjs",
     "server/sql.mjs",
