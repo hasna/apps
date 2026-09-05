@@ -14,12 +14,8 @@
  */
 
 export * from "./sdk/client.js";
-import {
-  resolveClientTransport,
-  resolveCredential,
-  type CredentialChainOptions,
-  type ResolvedCredential,
-} from "./store/client.js";
+import { resolveClientTransport, resolveCredential } from "./store/client.js";
+import type { CredentialChainOptions, ResolvedCredential } from "./store/client-types.js";
 import { SecretsClient, type SecretsClientOptions } from "./sdk/client.js";
 
 /**

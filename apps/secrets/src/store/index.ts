@@ -7,9 +7,9 @@
 // hasna/apps#1720). The decision is:
 //
 //   • HASNA_SECRETS_LOCAL_VAULT=1 (explicit opt-in)  => LocalStore (sqlite),
-//     announced on stderr with one clear line, and ONLY when no credential
-//     resolves — a station that has a hosted credential is never silently
-//     served local data.
+//     announced on stderr with one clear line, and ONLY when NO url and NO key
+//     resolve — a station that has a hosted credential, or that merely points at
+//     a hosted authority, is never silently served local data.
 //   • otherwise                                       => ApiStore, with the
 //     credential and the authority resolved by @hasna/contracts (five tiers:
 //     argument, env pointer, macOS Keychain, ~/.hasna/secrets/config/credentials,
@@ -30,17 +30,20 @@
 // `HASNA_SECRETS_LOCAL_VAULT=1` is a deliberate operator act, the local-lane
 // equivalent of passing `--api-key`; it never routes a hosted run, it cannot be
 // set by the fleet profile, and (unlike the retired mode variables) it selects
-// nothing when a credential resolves.
+// nothing when a credential OR an authority is configured.
 
 import {
   ClientTransportConfigurationError,
   clientTransportEnvKeys,
   credentialDiskSources,
+  hostedAuthorityConfigured,
   resolveCredential,
   resolveSecretsStorageClient,
-  type ClientTransportResolution,
-  type SecretsClientResolutionOptions,
 } from "./client.js";
+// TYPES come from the published spelling, never from @hasna/contracts directly:
+// this module's declarations are reachable from the `./storage` export, and a
+// build-time-only import there breaks every TS consumer (see ./client-types.ts).
+import type { ClientTransportResolution, SecretsClientResolutionOptions } from "./client-types.js";
 import { ApiStore } from "./api.js";
 import { LocalStore } from "./local.js";
 import { assertTestNetworkTargetAllowed } from "../test-isolation.js";
@@ -85,18 +88,28 @@ export function localVaultNotice(): string {
  */
 export function credentialRequiredError(env: NodeJS.ProcessEnv, cause?: unknown): Error {
   const keys = clientTransportEnvKeys(APP_NAME);
+  const clientEnv = env as Record<string, string | undefined>;
   const detail =
     cause instanceof Error
       ? cause.message
       : `No API key could be resolved for '${APP_NAME}'. Looked in the Keychain (macOS only), then for a ` +
-        `credential file at ${credentialDiskSources(APP_NAME, env as Record<string, string | undefined>).join(" or ") || "<no HOME set>"}, ` +
+        `credential file at ${credentialDiskSources(APP_NAME, clientEnv).join(" or ") || "<no HOME set>"}, ` +
         `then for ${keys.apiKeyKeys[0]} in the environment.`;
+  // Only offer the unhosted lane when it is actually available. With an
+  // authority configured the run IS a hosted run missing its other half, and
+  // naming the opt-in there would advise an operator to read a different vault
+  // instead of fixing the credential.
+  const wayOut = hostedAuthorityConfigured(APP_NAME, clientEnv)
+    ? `${keys.apiUrlKeys[0]} (or the Keychain hasna.credentials.${APP_NAME}.api-url item, or ` +
+      `~/.hasna/${APP_NAME}/config/credentials) selects a hosted vault, so ${LOCAL_VAULT_OPT_IN_ENV_KEY} does ` +
+      `not apply; unset the authority to use the local vault.`
+    : `Or set ${LOCAL_VAULT_OPT_IN_ENV_KEY}=1 to explicitly opt into the local vault.`;
   return new Error(
     `${detail} ` +
       `Set ${keys.apiKeyKeys[0]} (or store the key in the Keychain item ` +
       `hasna.credentials.${APP_NAME}.api-key, or in ~/.hasna/${APP_NAME}/config/credentials) to use the ` +
-      `hosted secrets vault at ${keys.apiUrlKeys[0]} or the default gateway, ` +
-      `or set ${LOCAL_VAULT_OPT_IN_ENV_KEY}=1 to explicitly opt into the local vault.`,
+      `hosted secrets vault at ${keys.apiUrlKeys[0]} or the default gateway. ` +
+      wayOut,
   );
 }
 
@@ -115,9 +128,11 @@ export interface StoreResolution {
  * with no visibility of the switch.
  *
  * FAILS CLOSED: a `local` outcome is only returned when the caller explicitly
- * opted in via {@link LOCAL_VAULT_OPT_IN_ENV_KEY} AND no credential resolves.
- * Without a credential and without the opt-in this throws an actionable error
- * naming every tier that was consulted, and no local SQLite file is ever opened.
+ * opted in via {@link LOCAL_VAULT_OPT_IN_ENV_KEY} AND nothing configures a
+ * hosted run — no credential from any tier and no authority from the env, the
+ * Keychain or the credentials file (owner ruling 2026-09-04: "no url and no
+ * key"). Anything else throws an actionable error naming every tier that was
+ * consulted, and no local SQLite file is ever opened.
  */
 export function getStoreWithResolution(
   env: NodeJS.ProcessEnv = process.env,
@@ -126,10 +141,23 @@ export function getStoreWithResolution(
   const clientEnv = env as Record<string, string | undefined>;
 
   // The local lane is checked first ONLY to answer "is this an unhosted run?" —
-  // it still yields to a credential, so an opted-in station that also holds a
-  // hosted key keeps talking to the hosted vault rather than quietly diverging
-  // from it.
-  if (localVaultOptedIn(env) && resolveCredential(APP_NAME, clientEnv, options.credentials) === null) {
+  // it still yields to EVERY hosted signal, so an opted-in station that is also
+  // configured for the fleet keeps talking to the fleet rather than quietly
+  // diverging from it.
+  //
+  // BOTH halves are required by the owner ruling (2026-09-04): the unhosted lane
+  // is available only when NO url and NO key resolve. Gating on the key alone
+  // was a hole with a real shape — a station that exports HASNA_SECRETS_API_URL
+  // and keeps its key in the Keychain reads a DIFFERENT vault the moment the
+  // Keychain lookup misses (a locked keychain, a wrong HASNA_STATION account)
+  // and HASNA_SECRETS_LOCAL_VAULT=1 sits in the profile. A configured authority
+  // with no credential is a half-applied hosted run, and it must fail loudly
+  // exactly as it does without the opt-in.
+  if (
+    localVaultOptedIn(env) &&
+    !hostedAuthorityConfigured(APP_NAME, clientEnv, options) &&
+    resolveCredential(APP_NAME, clientEnv, options.credentials) === null
+  ) {
     return { store: new LocalStore(), resolution: null, notice: localVaultNotice() };
   }
 

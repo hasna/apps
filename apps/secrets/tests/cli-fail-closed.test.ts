@@ -133,10 +133,37 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     expect(res.stdout).toContain("1 secret(s)");
     // An opted-in local run says, in ONE line on stderr, that it is local — the
     // ruling's replacement for the old silent fallback. stdout stays clean, so
-    // `--json` consumers are unaffected.
+    // `--json` consumers are unaffected. Assert that on the run this block is
+    // about (`res`, the read) as well as on the write above it: the assertion
+    // used to name `set` under this comment, so `res`'s own stdout — the one
+    // the comment is describing — was never checked.
     expect(res.stderr).toContain("local vault mode");
     expect(res.stderr).not.toContain("secrets-local-fallback");
+    expect(res.stdout).not.toContain("local vault mode");
     expect(set.stdout).not.toContain("local vault mode");
+  });
+
+  it("fails closed on API URL + local opt-in with no key — the opt-in is not an override", () => {
+    // Owner ruling 2026-09-04: the unhosted lane is available only when NO url
+    // and NO key resolve. A station that exports HASNA_SECRETS_API_URL and keeps
+    // its key in the Keychain must not silently read the on-box vault the day
+    // the Keychain lookup misses (locked keychain, wrong HASNA_STATION) just
+    // because HASNA_SECRETS_LOCAL_VAULT=1 sits in the profile — that is the
+    // incident-715558 shape with an extra step.
+    const res = runSecrets(["list"], {
+      HASNA_SECRETS_API_URL: "http://127.0.0.1:1",
+      HASNA_SECRETS_LOCAL_VAULT: "1",
+    });
+
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr).toContain("HASNA_SECRETS_API_KEY");
+    expect(res.stderr).not.toContain("local vault mode");
+    expect(res.stdout).not.toContain("Vault is empty.");
+    // The error does not advise the opt-in here: with an authority configured
+    // it is not the way out, and naming it would send an operator to a
+    // different vault instead of to the missing credential.
+    expect(res.stderr).toContain("does not apply");
+    expect(existsSync(join(testDir, "vault.db"))).toBe(false);
   });
 
   it("leaves utility surfaces available without any env", () => {
