@@ -63,10 +63,11 @@ describe("CLI runtime and misc commands", () => {
           tmpDir,
           { HOME: tmpDir },
         );
-        expect(exitCode).not.toBe(0); // an authority with no credential is loud
+        expect(exitCode).toBe(0); // setup configures the instance before login
         const data = JSON.parse(stdout);
         expect(data).toMatchObject({ saved: "https://skills.example.com" });
-        expect(data.error).toContain("no API key resolved");
+        expect(data.error).toBeUndefined();
+        expect(data.authenticated).toBe(false);
         expect(data.next).toContain("skills auth login");
 
         const credentials = join(tmpDir, ".hasna", "skills", "config", "credentials");
@@ -177,7 +178,7 @@ describe("CLI runtime and misc commands", () => {
         mkdirSync(join(tmpDir, ".hasna", "skills", "config"), { recursive: true });
         writeFileSync(
           join(tmpDir, ".hasna", "skills", "config", "credentials"),
-          "HASNA_SKILLS_API_KEY=sk_setup_test_only\n",
+          "HASNA_SKILLS_API_KEY=sk_setup_test_only\nHASNA_SKILLS_API_URL=https://from-the-environment.example\n",
           { mode: 0o600 },
         );
         const { stdout, exitCode } = await runCliInCwd(["setup", "--json"], tmpDir, {
@@ -192,7 +193,7 @@ describe("CLI runtime and misc commands", () => {
         expect(data.authenticated).toBe(true);
         // Untouched by a read-only invocation.
         expect(readFileSync(join(tmpDir, ".hasna", "skills", "config", "credentials"), "utf8").trim())
-          .toBe("HASNA_SKILLS_API_KEY=sk_setup_test_only");
+          .toBe("HASNA_SKILLS_API_KEY=sk_setup_test_only\nHASNA_SKILLS_API_URL=https://from-the-environment.example");
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -337,10 +338,10 @@ describe("CLI runtime and misc commands", () => {
   });
 
   describe("hosted account command namespaces", () => {
-    test("no longer exposes billing or credits command namespaces", async () => {
+    test("exposes generic customer account commands", async () => {
       const help = await runCli(["--help"]);
-      expect(help.stdout).not.toContain("billing");
-      expect(help.stdout).not.toContain("credits");
+      expect(help.stdout).toContain("billing");
+      expect(help.stdout).toContain("credits");
     });
   });
 

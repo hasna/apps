@@ -32,7 +32,7 @@ describe("MCP Server discovery", () => {
       expect(toolNames).toContain("unpin_skill");
       expect(toolNames).toContain("list_categories");
       expect(toolNames).toContain("get_requirements");
-      expect(toolNames).not.toContain("quote_skill");
+      expect(toolNames).toContain("quote_skill");
       expect(toolNames).toContain("run_skill");
       expect(toolNames).toContain("get_run_status");
       expect(toolNames).toContain("get_mcp_contracts");

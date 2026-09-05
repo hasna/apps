@@ -145,6 +145,7 @@ describe("CLI server auth", () => {
     });
 
     try {
+      writeFileSync(join(configDir, "credentials"), `HASNA_SKILLS_API_KEY=stored_fixture_key\nHASNA_SKILLS_API_URL=http://127.0.0.1:${server.port}\n`, { mode: 0o600 });
       const result = await runCliInCwd(["auth", "whoami", "--json"], tmpDir, {
         HOME: tmpDir,
         SKILLS_API_URL: `http://127.0.0.1:${server.port}`,

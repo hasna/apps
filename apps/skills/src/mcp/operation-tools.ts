@@ -270,9 +270,14 @@ export function registerOperationTools(server: McpServer): void {
       input: z.record(z.string(), z.unknown()).optional(),
       args: z.array(z.string()).optional(),
       detail: z.boolean().optional(),
+      maxCostCents: z.number().int().min(0).max(2_147_483_647).optional().describe("Maximum integer credits explicitly approved by the user for a remote run; omitted permits only free runs"),
+      maxCredits: z.number().int().min(0).max(2_147_483_647).optional(),
+      remote: z.boolean().optional().describe("Use the configured server catalog, including skills not installed locally"),
+      idempotency_key: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional().describe("Reuse for the same approved submission after an interrupted response"),
+      files: z.array(z.object({ name: z.string(), base64: z.string().max(1_398_104), contentType: z.string().optional() })).max(10).optional().describe("Inline remote inputs, at most 1 MiB combined; use CLI or SDK for larger files"),
     },
-  }, async ({ name, input, args, detail }) => {
-    const skill = getSkill(name);
+  }, async ({ name, input, args, detail, maxCostCents, maxCredits, remote, idempotency_key, files }) => {
+    const skill = remote ? { name, serverOwned: true } : getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
     }
@@ -284,7 +289,7 @@ export function registerOperationTools(server: McpServer): void {
     const skillName = skill.name;
     const runInput = input || {};
     const runArgs = args || [];
-    if (skillName === ARTICLE_GENERATION_SLUG) {
+    if (!remote && skillName === ARTICLE_GENERATION_SLUG) {
       const validation = validateBlogArticleRunOptions(runInput, runArgs, { requireTopic: true });
       if (!validation.ok) {
         return mcpError("INVALID_BLOG_ARTICLE_OPTIONS", validation.errors.join(" "));
@@ -292,10 +297,15 @@ export function registerOperationTools(server: McpServer): void {
     }
 
     const routing = await resolveConfiguredRunRouting(skill);
+    if (files?.length && routing.route !== "remote") return mcpError("REMOTE_REQUIRED", "Inline inputs require a remote run");
+    let inputFiles;
+    try { inputFiles = (await import("../lib/remote-files.js")).decodeRemoteFiles(files ?? []); }
+    catch (error) { return mcpError("INVALID_INPUT_FILES", (error as Error).message); }
     const runContext = createSkillRun({
       skill: skillName,
       args: runArgs,
       remote: routing.route === "remote",
+      ...(routing.route === "remote" ? { remoteApiOrigin: routing.apiOrigin } : {}),
     });
 
 
@@ -312,8 +322,8 @@ export function registerOperationTools(server: McpServer): void {
     if (routing.route === "remote") {
       try {
         const { RemoteSkillsClient } = await import("../lib/remote-client.js");
-        const client = new RemoteSkillsClient(routing.apiKey);
-        const run = await client.submitRun(skillName, runInput, runArgs);
+        const client = new RemoteSkillsClient(routing.apiKey, routing.apiOrigin);
+        const run = await client.submitQuotedRunWithFiles(skillName, runInput, runArgs, inputFiles, { maxCredits, maxCostCents, idempotencyKey: idempotency_key ?? runContext.record.id });
         if (run.error) {
           writeRunLogs(runContext, "", String(run.error) + "\n");
           const localRun = completeSkillRun(runContext, { status: "failed", error: String(run.error) });
@@ -375,7 +385,7 @@ export function registerOperationTools(server: McpServer): void {
     },
   }, async ({ run_id, detail }) => {
     const { skillsCredentialOrReason } = await import("../lib/fleet-credentials.js");
-    const { apiKey, reason } = await skillsCredentialOrReason();
+    const { apiKey, apiOrigin, reason } = await skillsCredentialOrReason();
     if (!apiKey) {
       // A configured authority with no credential carries the ladder's own
       // message. It is still a refusal — this tool never answers locally.
@@ -394,7 +404,8 @@ export function registerOperationTools(server: McpServer): void {
 
     try {
       const { RemoteSkillsClient } = await import("../lib/remote-client.js");
-      const client = new RemoteSkillsClient(apiKey);
+      if (localRun?.remoteApiOrigin && localRun.remoteApiOrigin !== apiOrigin) return mcpError("INSTANCE_MISMATCH", "This run belongs to another Skills instance; select its credential profile");
+      const client = new RemoteSkillsClient(apiKey, apiOrigin!);
       const run = await client.getRun(remoteRunId);
       if (!run) return mcpError("RUN_NOT_FOUND", `Remote run '${remoteRunId}' not found`);
       const payload = {

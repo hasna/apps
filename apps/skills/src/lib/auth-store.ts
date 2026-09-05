@@ -26,7 +26,9 @@
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { defaultFleetGatewayBaseUrl } from "@hasna/contracts/client";
+import { SKILLS_BOUND_API_URL, selectedSkillsProfile } from "./instance-credentials.js";
 
 import {
   requireSkillsApiOrigin,
@@ -35,8 +37,11 @@ import {
   skillsCredentialFilePath,
   SKILLS_API_KEY_ENV,
   SKILLS_API_URL_ENV,
+  normalizeSkillsApiOrigin,
+  resolveSkillsApiOrigin,
   type SkillsFleetOptions,
 } from "./fleet-credentials.js";
+import { resolveCredential } from "@hasna/contracts/client";
 
 export { normalizeSkillsApiOrigin } from "./fleet-credentials.js";
 
@@ -60,7 +65,8 @@ export function getAuthFilePathReadOnly(env: Env = process.env): string {
 
 /** The display identity file beside the credential. Never holds a secret. */
 export function getIdentityFilePath(env: Env = process.env): string {
-  return join(dirname(skillsCredentialFilePath(env)), "identity.json");
+  const file = skillsCredentialFilePath(env);
+  return join(dirname(file), basename(file).replace(/^credentials/, "identity") + ".json");
 }
 
 /**
@@ -107,6 +113,9 @@ function readIdentity(env: Env = process.env): AuthIdentity {
     const parsed = JSON.parse(readFileSync(getIdentityFilePath(env), "utf-8")) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     const record = parsed as Record<string, unknown>;
+    const selected = resolveSkillsApiOrigin(env)?.origin;
+    const bound = typeof record.apiUrl === "string" ? record.apiUrl : readCredentialValue(SKILLS_BOUND_API_URL, env) ?? readStoredApiUrl(env) ?? defaultFleetGatewayBaseUrl("skills");
+    if (selected && normalizeSkillsApiOrigin(bound) !== selected) return {};
     const identity: AuthIdentity = {};
     for (const field of ["email", "orgId", "orgSlug", "userId"] as const) {
       const value = record[field];
@@ -206,13 +215,14 @@ function readCredentialValue(key: string, env: Env = process.env): string | null
  * Returns the file it wrote, so the CLI can name the real path rather than a
  * path it assumed.
  */
-export function saveAuthConfig(config: StoredAuthConfig, env: Env = process.env): string {
+export function saveAuthConfig(config: StoredAuthConfig, env: Env = process.env, authenticatedOrigin?: string): string {
   const apiKey = config.apiKey.trim();
   if (!apiKey) throw new Error("Refusing to store an empty Skills API key.");
   if (/[^\t\x20-\x7e]/.test(apiKey)) {
     throw new Error("Refusing to store a Skills API key containing control characters or non-ASCII bytes.");
   }
-  const file = writeCredentialValues({ [SKILLS_API_KEY_ENV]: apiKey }, env);
+  const apiUrl = authenticatedOrigin ? normalizeSkillsApiOrigin(authenticatedOrigin) : resolveSkillsApiOrigin(env)?.origin ?? defaultFleetGatewayBaseUrl("skills");
+  const file = writeCredentialValues({ SKILLS_API_KEY: null, SKILLS_API_URL: null, [SKILLS_API_KEY_ENV]: apiKey, [SKILLS_BOUND_API_URL]: apiUrl, [SKILLS_API_URL_ENV]: apiUrl }, env);
 
   const identity: AuthIdentity = {};
   for (const field of ["email", "orgId", "orgSlug", "userId"] as const) {
@@ -221,7 +231,8 @@ export function saveAuthConfig(config: StoredAuthConfig, env: Env = process.env)
   }
   const identityFile = getIdentityFilePath(env);
   if (Object.keys(identity).length > 0) {
-    writeFileSync(identityFile, JSON.stringify(identity, null, 2) + "\n", { mode: 0o600 });
+    writeFileSync(identityFile, JSON.stringify({ ...identity, apiUrl }, null, 2) + "\n", { mode: 0o600 });
+    chmodSync(identityFile, 0o600);
   } else {
     try { unlinkSync(identityFile); } catch {}
   }
@@ -230,12 +241,20 @@ export function saveAuthConfig(config: StoredAuthConfig, env: Env = process.env)
 
 /** Store (or clear, with null) the API URL beside the credential. */
 export function saveApiUrl(apiUrl: string | null, env: Env = process.env): string {
-  return writeCredentialValues({ [SKILLS_API_URL_ENV]: apiUrl }, env);
+  const next = apiUrl === null ? null : normalizeSkillsApiOrigin(apiUrl);
+  const values: Record<string, string | null> = { [SKILLS_API_URL_ENV]: next, SKILLS_API_URL: null };
+  // Preserve the PREVIOUS file authority before editing a legacy unbound key.
+  // A new URL must never retroactively bind an old credential to another server.
+  if (!readCredentialValue(SKILLS_BOUND_API_URL, env) &&
+      (readCredentialValue(SKILLS_API_KEY_ENV, env) || readCredentialValue("SKILLS_API_KEY", env))) {
+    values[SKILLS_BOUND_API_URL] = normalizeSkillsApiOrigin(readStoredApiUrl(env) ?? defaultFleetGatewayBaseUrl("skills"));
+  }
+  return writeCredentialValues(values, env);
 }
 
 /** The API URL recorded in the credentials file, or null. */
 export function readStoredApiUrl(env: Env = process.env): string | null {
-  return readCredentialValue(SKILLS_API_URL_ENV, env);
+  return readCredentialValue(SKILLS_API_URL_ENV, env) ?? readCredentialValue("SKILLS_API_URL", env);
 }
 
 /**
@@ -247,7 +266,7 @@ export function readStoredApiUrl(env: Env = process.env): string | null {
  */
 export function clearAuthConfig(env: Env = process.env): { stillResolves: boolean } {
   try {
-    writeCredentialValues({ [SKILLS_API_KEY_ENV]: null }, env);
+    writeCredentialValues({ [SKILLS_API_KEY_ENV]: null, SKILLS_API_KEY: null, [SKILLS_BOUND_API_URL]: null }, env);
   } catch {
     // No home, or nothing to clear.
   }
@@ -259,9 +278,11 @@ export function clearAuthConfig(env: Env = process.env): { stillResolves: boolea
   // "clear it there to finish signing out" line honest.
   let stillResolves: boolean;
   try {
-    stillResolves = resolveSkillsFleet(env).mode === "hosted";
+    stillResolves = resolveCredential("skills", env) !== null;
   } catch {
-    stillResolves = true;
+    const emptyProfile = selectedSkillsProfile(env) && !env.HASNA_SKILLS_API_KEY_OVERRIDE && !env.HASNA_SKILLS_API_KEY_REF &&
+      !readCredentialValue(SKILLS_API_KEY_ENV, env) && !readCredentialValue("SKILLS_API_KEY", env);
+    stillResolves = !emptyProfile;
   }
   return { stillResolves };
 }

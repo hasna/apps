@@ -325,7 +325,7 @@ for (const backend of backends) {
         // Ownership is enforced on every read, not only the two the original test
         // covered. Logs and the artifact list are the paths that would leak a run's
         // contents to the wrong tenant if the org predicate were dropped from a JOIN.
-        expect(await orgB.getRunLogs(submitted.id!)).toEqual([]);
+        await expect(orgB.getRunLogs(submitted.id!)).rejects.toMatchObject({ status: 404 });
         const crossArtifacts = await fetch(`${ctx.baseUrl}/api/v1/runs/${submitted.id}/artifacts`, {
           headers: { authorization: "Bearer sk_test_org_b" },
         });

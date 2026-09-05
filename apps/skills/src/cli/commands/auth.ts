@@ -2,34 +2,15 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { createInterface } from "readline";
 import { getAuthConfig, getAuthIdentity, saveAuthConfig, clearAuthConfig, getApiUrl, getAuthFilePath } from "../../lib/auth-store.js";
-import { resolveSkillsFleet, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
+import { resolveSkillsFleet, resolveSkillsConnection, SKILLS_API_KEY_ENV, SKILLS_API_URL_ENV } from "../../lib/fleet-credentials.js";
+
 
 const isTTY = process.stdin.isTTY && process.stdout.isTTY;
 const DEFAULT_DEVICE_POLL_TIMEOUT_MS = 10 * 60 * 1000;
 
-const MAX_ERROR_DETAIL_LENGTH = 200;
+import { HostedApiError, RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
 const CONFIG_HINT_STATUSES = new Set([401, 403, 404, 405, 501]);
 
-class HostedApiError extends Error {
-  readonly status?: number;
-  readonly code?: string;
-  readonly detail?: string;
-  readonly endpoint?: string;
-  readonly apiUrl?: string;
-
-  constructor(
-    message: string,
-    options: { status?: number; code?: string; detail?: string; endpoint?: string; apiUrl?: string } = {},
-  ) {
-    super(message);
-    this.name = "HostedApiError";
-    this.status = options.status;
-    this.code = options.code;
-    this.detail = options.detail;
-    this.endpoint = options.endpoint;
-    this.apiUrl = options.apiUrl;
-  }
-}
 
 function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -41,78 +22,10 @@ function prompt(question: string): Promise<string> {
   });
 }
 
-// The configured API URL may embed credentials (https://user:pass@host); never echo those.
-function redactUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    if (!parsed.username && !parsed.password) return url;
-    parsed.username = "";
-    parsed.password = "";
-    return parsed.toString().replace(/\/+$/, "");
-  } catch {
-    return url;
-  }
+async function apiRequest(path: string, options?: RequestInit, instance?: string) {
+  const origin = instance ?? getApiUrl(`${(options?.method || "GET").toUpperCase()} ${path}`);
+  return new RemoteSkillsAuthClient(origin).request(path, options);
 }
-
-async function apiRequest(path: string, options?: RequestInit) {
-  // Throws MissingApiUrlError when nothing is configured. Credentials are never
-  // sent to a default host, so the command fails before any request is made.
-  const url = getApiUrl(`${(options?.method || "GET").toUpperCase()} ${path}`);
-  const safeUrl = redactUrl(url);
-  const endpoint = `${(options?.method || "GET").toUpperCase()} ${safeUrl}${path}`;
-  let res: Response;
-  try {
-    res = await fetch(`${url}${path}`, {
-      ...options,
-      headers: { "Content-Type": "application/json", ...options?.headers },
-    });
-  } catch (err) {
-    throw new HostedApiError(`Unable to reach the Skills API: ${(err as Error).message}`, {
-      endpoint,
-      apiUrl: safeUrl,
-    });
-  }
-
-  const text = await res.text();
-  const body = text ? parseJsonBody(text) : {};
-  if (!res.ok) {
-    const record = isRecord(body) ? body : {};
-    const detail = typeof record.detail === "string" ? record.detail : undefined;
-    const error = typeof record.error === "string" ? record.error : undefined;
-    const code = typeof record.code === "string" ? record.code : undefined;
-    throw new HostedApiError(detail || error || `${res.status} ${res.statusText}`, {
-      status: res.status,
-      code,
-      detail,
-      endpoint,
-      apiUrl: safeUrl,
-    });
-  }
-
-  return body as any;
-}
-
-function parseJsonBody(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { detail: condenseErrorBody(text) };
-  }
-}
-
-// Error bodies are frequently HTML pages from a proxy/CDN rather than API JSON.
-// Dumping the raw page hides the real message, so keep a short single-line summary.
-function condenseErrorBody(text: string): string {
-  const stripped = /<[a-z!/]/i.test(text)
-    ? text
-        .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
-        .replace(/<[^>]*>/g, " ")
-    : text;
-  const collapsed = stripped.replace(/\s+/g, " ").trim();
-  if (collapsed.length <= MAX_ERROR_DETAIL_LENGTH) return collapsed;
-  return `${collapsed.slice(0, MAX_ERROR_DETAIL_LENGTH - 1).trimEnd()}…`;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -235,19 +148,19 @@ function openBrowser(url: string): void {
   } catch {}
 }
 
-async function ensureApiKey(loginResult: any): Promise<string | undefined> {
+async function ensureApiKey(loginResult: any, origin: string): Promise<string | undefined> {
   if (loginResult.apiKey) return loginResult.apiKey;
   if (!loginResult.token) return undefined;
   const keyRes = await apiRequest("/api/auth/keys", {
     method: "POST",
     headers: { Authorization: `Bearer ${loginResult.token}` },
     body: JSON.stringify({ name: "cli" }),
-  });
+  }, origin);
   return keyRes.key;
 }
 
-async function persistLoginResult(loginResult: any): Promise<string | undefined> {
-  const storedKey = await ensureApiKey(loginResult);
+async function persistLoginResult(loginResult: any, origin: string, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  const storedKey = await ensureApiKey(loginResult, origin);
   if (!storedKey) return undefined;
 
   saveAuthConfig({
@@ -256,7 +169,7 @@ async function persistLoginResult(loginResult: any): Promise<string | undefined>
     orgId: loginResult.organization.id,
     orgSlug: loginResult.organization.slug,
     userId: loginResult.user.id,
-  });
+  }, env, origin);
 
   return storedKey;
 }
@@ -282,6 +195,10 @@ function printLoginSuccess(loginResult: any, json: boolean) {
 }
 
 async function doLogin(email: string, code?: string, json?: boolean) {
+  const env = { ...process.env };
+  let origin: string;
+  try { origin = getApiUrl("Sign in"); }
+  catch (error) { writeCommandError(error, "Configure a Skills API before signing in", json); return; }
   if (!email || !email.includes("@")) {
     writeCommandError(new Error("Invalid email"), "Invalid email", json);
     process.exitCode = 1;
@@ -295,7 +212,7 @@ async function doLogin(email: string, code?: string, json?: boolean) {
       sendRes = await apiRequest("/api/auth/login", {
         method: "POST",
         body: JSON.stringify({ email }),
-      });
+      }, origin);
     } catch (err) {
       writeCommandError(err, "Failed to request login code", json);
       return;
@@ -321,7 +238,7 @@ async function doLogin(email: string, code?: string, json?: boolean) {
     verifyRes = await apiRequest("/api/auth/verify", {
       method: "POST",
       body: JSON.stringify({ email, code }),
-    });
+    }, origin);
   } catch (err) {
     writeCommandError(err, "Failed to verify login code", json);
     return;
@@ -334,7 +251,7 @@ async function doLogin(email: string, code?: string, json?: boolean) {
 
   let storedKey: string | undefined;
   try {
-    storedKey = await persistLoginResult(verifyRes);
+    storedKey = await persistLoginResult(verifyRes, origin, env);
   } catch (err) {
     writeCommandError(err, "Login succeeded but API key creation failed", json);
     return;
@@ -348,6 +265,10 @@ async function doLogin(email: string, code?: string, json?: boolean) {
 }
 
 async function doApiKeyLogin(apiKey: string, json?: boolean) {
+  const env = { ...process.env };
+  let origin: string;
+  try { origin = getApiUrl("Verify API key"); }
+  catch (error) { writeCommandError(error, "Configure a Skills API before signing in", json); return; }
   const trimmed = apiKey.trim();
   if (!trimmed) {
     writeCommandError(new Error("API key required"), "API key required", json);
@@ -358,7 +279,7 @@ async function doApiKeyLogin(apiKey: string, json?: boolean) {
   try {
     whoami = await apiRequest("/api/auth/whoami", {
       headers: { Authorization: `Bearer ${trimmed}` },
-    });
+    }, origin);
   } catch (err) {
     writeCommandError(err, "Failed to verify API key", json);
     return;
@@ -380,7 +301,7 @@ async function doApiKeyLogin(apiKey: string, json?: boolean) {
     ...(orgId ? { orgId } : {}),
     ...(orgSlug ? { orgSlug } : {}),
     ...(userId ? { userId } : {}),
-  });
+  }, env, origin);
 
   if (json || !isTTY) {
     console.log(JSON.stringify({ ...identity, status: "authenticated" }, null, 2));
@@ -398,12 +319,16 @@ interface DeviceLoginOptions {
 }
 
 async function doDeviceLogin(options: DeviceLoginOptions) {
+  const env = { ...process.env };
+  let origin: string;
+  try { origin = getApiUrl("Device sign in"); }
+  catch (error) { writeCommandError(error, "Configure a Skills API before signing in", options.json); return; }
   let start: any;
   try {
     start = await apiRequest("/api/auth/device/start", {
       method: "POST",
       body: JSON.stringify({ client: "skills-cli" }),
-    });
+    }, origin);
   } catch (err) {
     writeCommandError(err, "Failed to start device login", options.json);
     return;
@@ -457,7 +382,7 @@ async function doDeviceLogin(options: DeviceLoginOptions) {
       tokenRes = await apiRequest("/api/auth/device/token", {
         method: "POST",
         body: JSON.stringify({ deviceCode: start.deviceCode }),
-      });
+      }, origin);
     } catch (err) {
       writeCommandError(err, "Failed to poll device login", options.json);
       return;
@@ -475,7 +400,7 @@ async function doDeviceLogin(options: DeviceLoginOptions) {
 
     let storedKey: string | undefined;
     try {
-      storedKey = await persistLoginResult(tokenRes);
+      storedKey = await persistLoginResult(tokenRes, origin, env);
     } catch (err) {
       writeCommandError(err, "Login succeeded but API key creation failed", options.json);
       return;
@@ -500,6 +425,34 @@ export function registerAuth(parent: Command) {
     .command("auth")
     .description("Manage account authentication");
 
+  const keys = auth.command("keys").description("Manage API keys on the configured instance");
+  keys.command("list").option("--json", "Output as JSON", false)
+    .requiredOption("--email <email>", "Account email for fresh reauthentication")
+    .requiredOption("--code <code>", "Fresh OTP requested through auth signup/login")
+    .action(async (options: { json: boolean; email: string; code: string }) => {
+      try { console.log(JSON.stringify(await new RemoteSkillsAuthClient(getApiUrl("List API keys")).listApiKeys(options.email, options.code), null, 2)); }
+      catch (error) { writeCommandError(error, "Failed to list API keys", options.json); }
+    });
+  keys.command("create").argument("<name>").option("--scope <scope>", "Limit key scope (repeatable)", (value: string, all: string[]) => [...all, value], [] as string[])
+    .option("--json", "Output the newly created key as JSON", false)
+    .requiredOption("--email <email>", "Account email for fresh reauthentication")
+    .requiredOption("--code <code>", "Fresh OTP requested through auth signup/login")
+    .description("Create a key; the returned secret is shown once and must be stored securely")
+    .action(async (name: string, options: { json: boolean; scope: string[]; email: string; code: string }) => {
+      try {
+        const client = new RemoteSkillsAuthClient(getApiUrl("Create API key"));
+        const created = await client.createApiKey(options.email, options.code, name, options.scope.length ? options.scope : undefined);
+        console.log(JSON.stringify(created, null, 2));
+      } catch (error) { writeCommandError(error, "Failed to create API key", options.json); }
+    });
+  keys.command("revoke").argument("<key-id>").option("--json", "Output as JSON", false)
+    .requiredOption("--email <email>", "Account email for fresh reauthentication")
+    .requiredOption("--code <code>", "Fresh OTP requested through auth signup/login")
+    .action(async (id: string, options: { json: boolean; email: string; code: string }) => {
+      try { console.log(JSON.stringify(await new RemoteSkillsAuthClient(getApiUrl("Revoke API key")).revokeApiKey(options.email, options.code, id), null, 2)); }
+      catch (error) { writeCommandError(error, "Failed to revoke API key", options.json); }
+    });
+
   auth
     .command("login")
     .description("Sign in with browser/device code or email code")
@@ -523,7 +476,7 @@ export function registerAuth(parent: Command) {
 
       let email = options.email;
 
-      if (!email && isTTY) {
+      if (!email && isTTY && !options.json) {
         const existing = getAuthConfig();
         if (existing) {
           console.log(chalk.dim(`Already signed in as ${existing.email}`));
@@ -534,8 +487,7 @@ export function registerAuth(parent: Command) {
       }
 
       if (!email) {
-        console.error(chalk.red("Email required. Use: skills auth login --email you@example.com"));
-        process.exitCode = 1;
+        writeCommandError(new Error("Email required. Use: skills auth login --email you@example.com"), "Email required", options.json);
         return;
       }
 
@@ -547,10 +499,11 @@ export function registerAuth(parent: Command) {
     .description("Create or sign in with your email (passwordless)")
     .option("--email <email>", "Email address (non-interactive)")
     .option("--code <code>", "Verification code (non-interactive)")
-    .action(async (options: { email?: string; code?: string }) => {
+    .option("--json", "Output result as JSON without prompting", false)
+    .action(async (options: { email?: string; code?: string; json?: boolean }) => {
       let email = options.email;
 
-      if (!email && isTTY) {
+      if (!email && isTTY && !options.json) {
         const existing = getAuthConfig();
         if (existing) {
           console.log(chalk.dim(`Already signed in as ${existing.email}`));
@@ -561,36 +514,25 @@ export function registerAuth(parent: Command) {
       }
 
       if (!email) {
-        console.error(chalk.red("Email required. Use: skills auth signup --email you@example.com"));
+        const error = "Email required. Use: skills auth signup --email you@example.com";
+        if (options.json) console.log(JSON.stringify({ error })); else console.error(chalk.red(error));
         process.exitCode = 1;
         return;
       }
 
-      await doLogin(email, options.code);
+      await doLogin(email, options.code, options.json);
     });
 
   auth
     .command("logout")
-    .description("Sign out and remove stored credentials")
-    .action(() => {
-      const existing = getAuthConfig();
-      if (!existing) {
-        console.log(chalk.dim("Not signed in"));
-        return;
-      }
+    .description("Remove this profile's stored credentials; injected keys remain configured")
+    .option("--json", "Output as JSON", false)
+    .action((options: { json?: boolean }) => {
       const { stillResolves } = clearAuthConfig();
-      console.log(chalk.green(`✓ Signed out${existing.email ? ` (was ${existing.email})` : ""}`));
-      if (stillResolves) {
-        // Only the file this command owns was cleared. Saying "signed out" while
-        // a key still resolves from the environment or the machine's Keychain
-        // would be a lie the next command exposes.
-        console.log(
-          chalk.yellow(
-            `A Skills credential still resolves from ${credentialSource() ?? "another source"}; ` +
-              `clear it there to finish signing out.`,
-          ),
-        );
-      }
+      if (options.json) console.log(JSON.stringify({ status: stillResolves ? "credential_still_configured" : "signed_out", stillResolves }));
+      else console.log(stillResolves
+        ? "Stored credential removed. A credential is still configured by the environment, profile selection, or Keychain; clear it there to finish signing out."
+        : "Signed out; this profile has no stored credential.");
     });
 
   auth
@@ -598,14 +540,14 @@ export function registerAuth(parent: Command) {
     .description("Show current account info")
     .option("--json", "Output as JSON", false)
     .action(async (options: { json?: boolean }) => {
-      let fleet: ReturnType<typeof resolveSkillsFleet>;
+      let fleet: Awaited<ReturnType<typeof resolveSkillsConnection>>;
       try {
-        fleet = resolveSkillsFleet();
+        fleet = await resolveSkillsConnection();
       } catch (err) {
         writeCommandError(err, "Failed to resolve the Skills credential", options.json);
         return;
       }
-      if (fleet.mode !== "hosted") {
+      if (!fleet) {
         const payload = {
           status: "unauthenticated",
           error: `Not signed in. Run: skills auth login, or set ${SKILLS_API_KEY_ENV}`,
@@ -619,12 +561,12 @@ export function registerAuth(parent: Command) {
       // key in effect came from anywhere else — an env var, the Keychain, an
       // override — that identity describes a different principal, and showing it
       // would attribute one key's session to another key's account.
-      const cached = fleet.apiKeyTier === "disk" ? getAuthIdentity() : null;
+      const cached = (fleet.apiKeyTier === "disk" || fleet.apiKeyTier === "profile") ? getAuthIdentity() : null;
       const authSource = fleet.apiKeySource;
       try {
         const res = await apiRequest("/api/auth/whoami", {
           headers: { Authorization: `Bearer ${fleet.apiKey}` },
-        });
+        }, fleet.apiOrigin);
         const payload = authIdentityPayload(authSource, res, cached);
         if (options.json) {
           console.log(JSON.stringify(payload, null, 2));
@@ -632,7 +574,7 @@ export function registerAuth(parent: Command) {
           printWhoami(payload);
         }
       } catch (err) {
-        if (cached && Object.keys(cached).length > 0) {
+        if (cached && Object.keys(cached).length > 0 && !(err instanceof HostedApiError && err.status !== undefined && err.status < 500)) {
           const payload = authIdentityPayload(authSource, {}, cached, true);
           if (options.json) console.log(JSON.stringify(payload, null, 2));
           else printWhoami(payload);

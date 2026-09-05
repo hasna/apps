@@ -6,6 +6,7 @@ import { registerOperationTools } from "./operation-tools.js";
 import { registerResourceMetaTools } from "./resource-meta-tools.js";
 import { registerScheduleTools } from "./schedule-tools.js";
 import { registerStorageTools } from "./storage-tools.js";
+import { registerRemoteCustomerTools } from "./remote-customer-tools.js";
 
 export function buildServer(): McpServer {
   const server = new McpServer({
@@ -18,6 +19,7 @@ export function buildServer(): McpServer {
   registerScheduleTools(server);
   registerStorageTools(server);
   registerResourceMetaTools(server);
+  registerRemoteCustomerTools(server);
 
   return server;
 }

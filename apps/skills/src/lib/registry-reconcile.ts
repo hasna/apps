@@ -447,7 +447,9 @@ export async function reconcileRegistry(options: ReconcileRegistryOptions = {}):
   // page, or a truncated body — never "the registry is empty". An empty registry read as
   // real would plan every local skill as a push into the void and make a dead credential
   // look like convergence.
-  const remoteRowsPayload = await client.listSkills();
+  const remoteRowsPayload = await client.listSkills().catch(() => {
+    throw new Error("Registry listing failed: the server refused or could not return the catalog.");
+  });
   if (!Array.isArray(remoteRowsPayload)) {
     const shape = remoteRowsPayload && typeof remoteRowsPayload === "object"
       ? `object with keys [${Object.keys(remoteRowsPayload as object).join(", ")}]`

@@ -254,7 +254,8 @@ describe("CLI import export and env checks", () => {
                 fileName: "report.md",
                 relativePath: "nested/report.md",
                 contentType: "text/markdown",
-                byteSize: 15,
+                byteSize: 16,
+                sha256: "d8d8b50c89c07504e548b4668d64fd205bcf623d7a8ec006a93ac910a10ab1cf",
               },
             ]);
           }
@@ -317,7 +318,8 @@ describe("CLI import export and env checks", () => {
                 fileName: "manifest.json",
                 relativePath: "manifest.json",
                 contentType: "application/json",
-                byteSize: 37,
+                byteSize: 25,
+                sha256: "5fd5ac2973fad0913457fb574b095fb9ce05aa809a7569cc03ea5a39cd2e83d1",
               },
             ]);
           }

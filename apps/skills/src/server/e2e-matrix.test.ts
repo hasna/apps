@@ -688,8 +688,7 @@ for (const backend of backends) {
           // A wrong key: the 401 body is never an array (an empty listing would
           // read as "no skills"), and the sync surface refuses it outright.
           const impostor = new RemoteSkillsClient("sk_matrix_wrong_key", apiUrl);
-          const bad = await impostor.listSkills();
-          expect(Array.isArray(bad)).toBe(false);
+          await expect(impostor.listSkills()).rejects.toMatchObject({ status: 401 });
           const root = scratchDir("skills-e2e-failclosed-");
           try {
             await expect(reconcileRegistry({ rootDir: root, client: impostor })).rejects.toThrow(/Registry listing failed/);

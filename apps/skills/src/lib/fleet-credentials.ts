@@ -63,10 +63,9 @@ import {
   appConfigDiskValue,
   clientTransportEnvKeys,
   completePointerCredential,
-  credentialDiskSources,
+  defaultFleetGatewayBaseUrl,
   credentialPointerEnvKey,
   keychainConfigValue,
-  resolveClientTransport,
   resolveCredential,
   toV1BaseUrl,
   type CredentialChainOptions,
@@ -74,6 +73,7 @@ import {
   type KeychainTierOptions,
   type ResolvedCredential,
 } from "@hasna/contracts/client";
+import { readSkillsInstanceMetadata, selectedSkillsProfile, skillsProfileCredentialFiles } from "./instance-credentials.js";
 
 /** The app slug: the Keychain service, the `~/.hasna/<app>` folder, the gateway path. */
 export const SKILLS_APP = "skills";
@@ -142,7 +142,7 @@ export interface LocalSkillsFleet {
 export type SkillsFleet = HostedSkillsFleet | LocalSkillsFleet;
 
 /** Machine-readable reasons a hosted resolution was refused. */
-export type SkillsFleetErrorCode = "MISSING_API_CREDENTIAL" | "INVALID_API_URL";
+export type SkillsFleetErrorCode = "MISSING_API_CREDENTIAL" | "INVALID_API_URL" | "INSTANCE_CREDENTIAL_MISMATCH";
 
 /**
  * A configured install could not produce a usable hosted client.
@@ -213,6 +213,10 @@ function asSkillsFleetCredentialError(error: unknown): SkillsFleetCredentialErro
  */
 export function normalizeSkillsApiOrigin(apiUrl: string): string {
   const url = new URL(apiUrl);
+  if (url.username || url.password || url.search || url.hash ||
+      (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)))) {
+    throw new SkillsFleetCredentialError("A Skills API URL must use HTTPS (or loopback HTTP), without credentials, query or fragment", "INVALID_API_URL");
+  }
   const pathname = url.pathname.replace(/\/+$/, "");
   if (pathname === "/api" || pathname === "/api/v1") {
     url.pathname = "/";
@@ -242,10 +246,21 @@ export interface ConfiguredSkillsApiUrl {
 export function configuredSkillsApiUrl(
   env: Env = process.env,
   keychain?: KeychainTierOptions,
+  profile?: string,
 ): ConfiguredSkillsApiUrl | null {
-  for (const key of SKILLS_API_URL_ENV_KEYS) {
-    const value = env[key]?.trim();
-    if (value) return { value, source: key };
+  const declared = SKILLS_API_URL_ENV_KEYS.filter(key => env[key] !== undefined).map(key => ({ key, value: env[key]! }));
+  for (const entry of declared) {
+    if (!entry.value.trim() || /[\x00-\x1f\x7f]/.test(entry.value)) throw new SkillsFleetCredentialError(`${entry.key} is blank or contains control characters`, "INVALID_API_URL");
+  }
+  const normalized = declared.map(entry => ({ value: normalizeSkillsApiOrigin(entry.value), source: entry.key }));
+  if (new Set(normalized.map(entry => entry.value)).size > 1) throw new SkillsFleetCredentialError("Skills API URL aliases disagree", "INVALID_API_URL");
+  if (normalized[0]) return normalized[0];
+  if (selectedSkillsProfile(env, profile)) {
+    for (const file of skillsProfileCredentialFiles(env, profile)) {
+      const metadata = readSkillsInstanceMetadata(file);
+      if (metadata.apiUrl || metadata.binding) return { value: metadata.apiUrl ?? metadata.binding!, source: file };
+    }
+    return { value: defaultFleetGatewayBaseUrl(SKILLS_APP), source: "default" };
   }
   const fromKeychain = keychainConfigValue(SKILLS_APP, env, keychain);
   if (fromKeychain) return { value: fromKeychain.value.trim(), source: fromKeychain.source };
@@ -266,7 +281,7 @@ export function configuredSkillsApiUrl(
 
 /** The credential file paths consulted, for a message that has to name them. */
 export function skillsCredentialFiles(env: Env = process.env): string[] {
-  return credentialDiskSources(SKILLS_APP, env);
+  return skillsProfileCredentialFiles(env);
 }
 
 /**
@@ -319,7 +334,10 @@ export function resetLocalSkillsModeNotice(): void {
  */
 export function resolveSkillsFleet(env: Env = process.env, options: SkillsFleetOptions = {}): SkillsFleet {
   try {
-    return resolveSkillsFleetOrThrow(env, options);
+    const snapshot = snapshotSkillsEnvironment(env);
+    const resolved = resolveSkillsFleetOrThrow(snapshot, snapshotSkillsOptions(env, options));
+    if (resolved.mode === "local" && env === process.env) noticeLocalSkillsMode();
+    return resolved;
   } catch (error) {
     // Every exit from this function speaks in this package's vocabulary, so the
     // helpers that turn a refusal into data (skillsCredentialOrReason,
@@ -331,59 +349,51 @@ export function resolveSkillsFleet(env: Env = process.env, options: SkillsFleetO
   }
 }
 
-function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): SkillsFleet {
-  let resolution;
-  try {
-    resolution = resolveClientTransport(SKILLS_APP, env, { credentials: options.credentials });
-  } catch (error) {
-    if (!isClientTransportConfigurationError(error)) throw error;
-    // The seam declined. Two very different reasons hide behind one error, and
-    // they must not be collapsed: an operator who configured something and got
-    // it wrong needs the failure, while an install that configured nothing is
-    // simply an offline OSS install.
-    const configured = configuredSkillsApiUrl(env, options.credentials?.keychain);
-    const credential = resolveCredential(SKILLS_APP, env, options.credentials);
-    if (!configured && !credential) {
-      // Say it, once, and only for the ambient environment: a caller that built
-      // its own env object is a library consumer deciding for itself, and a
-      // notice on stderr is not that caller's to emit.
-      if (env === process.env) noticeLocalSkillsMode();
-      return { mode: "local", apiOrigin: null, apiKey: null };
+/** Capture data properties only; accessor-backed inputs must not rotate routing mid-read. */
+function snapshotSkillsEnvironment(env: Env): Env {
+  const snapshot: Env = {};
+  for (const [key, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(env))) {
+    if (!("value" in descriptor)) {
+      if (/^(?:HASNA_|SKILLS_|HOME$|USER$)/.test(key)) throw new SkillsFleetCredentialError("Accessor-backed Skills configuration is unsupported");
+      continue; // Bun exposes unrelated proxy/timezone runtime properties as accessors.
     }
-    if (configured && !credential) {
-      throw new SkillsFleetCredentialError(
-        `${configured.source} points this CLI at a Skills service but no API key resolved — ` +
-          `refusing to run locally instead. Looked in the Keychain item ` +
-          `hasna.credentials.${SKILLS_APP}.api-key, then ${skillsCredentialFiles(env).join(" or ") || "no credentials file (no HOME)"}, ` +
-          `then ${SKILLS_API_KEY_ENV}. Sign in with: skills auth login`,
-      );
-    }
-    throw error;
+    snapshot[key] = descriptor.value;
   }
+  return Object.freeze(snapshot);
+}
+function snapshotSkillsOptions(env: Env, options: SkillsFleetOptions): SkillsFleetOptions {
+  // contracts enables the real Keychain only for the ambient environment.
+  // Preserve that decision when passing an immutable copy of its values.
+  if (env !== process.env) return options;
+  return { ...options, credentials: { ...options.credentials, keychain: {
+    ...options.credentials?.keychain, enabled: options.credentials?.keychain?.enabled ?? true,
+  } } };
+}
 
-  const configured = configuredSkillsApiUrl(env, options.credentials?.keychain);
-  // The origin is composed from the CONFIGURED value rather than from the seam's
-  // `<authority>/v1` base: this server serves `/api/v1`, and re-deriving from the
-  // v1 base would append a second path segment to an operator's own base URL.
-  const apiOrigin = configured
-    ? normalizeSkillsApiOrigin(configured.value)
-    : stripV1(resolution.baseUrl);
+function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): SkillsFleet {
+  const configured = configuredSkillsApiUrl(env, options.credentials?.keychain, options.credentials?.profile);
+  // The released shared resolver owns every credential tier. Resolve it once.
   const credential = resolveCredential(SKILLS_APP, env, options.credentials);
   if (!credential) {
-    // Unreachable: resolveClientTransport throws without one. Kept as a refusal
-    // rather than a `!`, because a future seam change must not silently produce
-    // an unauthenticated hosted client here.
+    if (!configured) return { mode: "local", apiOrigin: null, apiKey: null };
     throw new SkillsFleetCredentialError(
-      `A Skills authority resolved but no API key did. Sign in with: skills auth login`,
+      `${configured.source} points this CLI at a Skills service but no API key resolved — refusing to run locally instead. ` +
+        `Looked in hasna.credentials.skills.api-key, ${skillsCredentialFiles(env).join(" or ") || "no credentials file"}, and ${SKILLS_API_KEY_ENV}. Sign in with: skills auth login`,
     );
   }
+  const apiOrigin = normalizeSkillsApiOrigin(configured?.value ?? defaultFleetGatewayBaseUrl(SKILLS_APP));
+  // Validate through the released URL primitive. Its transport resolver compares
+  // raw /v1 URLs and rereads credentials, so Skills adapts this captured pair to
+  // /api/v1 while retaining normalized instance binding and original provenance.
+  toV1BaseUrl(apiOrigin);
+  assertCredentialInstance(credential, apiOrigin, env, options);
   const base = {
     mode: "hosted" as const,
     apiOrigin,
-    apiUrlSource: resolution.apiUrlSource ?? (configured?.source ?? "default"),
-    apiKeySource: resolution.apiKeySource ?? credential.source,
-    apiKeyTier: resolution.apiKeyTier,
-    warning: resolution.warning,
+    apiUrlSource: configured?.source ?? "default",
+    apiKeySource: credential.source,
+    apiKeyTier: credential.tier,
+    warning: credential.warning,
   };
 
   if (credential.tier === "pointer") {
@@ -410,6 +420,19 @@ function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): Skill
   return { ...base, apiKey: credential.apiKey, apiKeyPointer: null };
 }
 
+function assertCredentialInstance(credential: ResolvedCredential, apiOrigin: string, env: Env, options: SkillsFleetOptions): void {
+  let bound: string | undefined;
+  if (credential.tier === "disk" || credential.tier === "profile") {
+    const metadata = readSkillsInstanceMetadata(credential.source);
+    bound = metadata.binding ?? metadata.apiUrl ?? defaultFleetGatewayBaseUrl(SKILLS_APP);
+  } else if (credential.tier === "keychain") {
+    bound = keychainConfigValue(SKILLS_APP, env, options.credentials?.keychain)?.value ?? defaultFleetGatewayBaseUrl(SKILLS_APP);
+  }
+  if (bound && normalizeSkillsApiOrigin(bound) !== apiOrigin) {
+    throw new SkillsFleetCredentialError("The selected Skills API does not match this credential's instance. Select its profile or sign in to the new instance; no credential was sent.", "INSTANCE_CREDENTIAL_MISMATCH");
+  }
+}
+
 /**
  * The usable API key for this process, completing a vault pointer if that is
  * the tier that won.
@@ -427,9 +450,19 @@ export async function resolveSkillsApiKey(
   env: Env = process.env,
   options: SkillsFleetOptions = {},
 ): Promise<string | null> {
-  const fleet = resolveSkillsFleet(env, options);
+  return (await resolveSkillsConnection(env, options))?.apiKey ?? null;
+}
+
+/** Resolve the URL and credential once, including any asynchronous vault lookup. */
+export async function resolveSkillsConnection(
+  env: Env = process.env,
+  options: SkillsFleetOptions = {},
+): Promise<(HostedSkillsFleet & { apiKey: string }) | null> {
+  const snapshotEnv = snapshotSkillsEnvironment(env);
+  const fleet = resolveSkillsFleet(snapshotEnv, snapshotSkillsOptions(env, options));
+  if (fleet.mode === "local" && env === process.env) noticeLocalSkillsMode();
   if (fleet.mode !== "hosted") return null;
-  if (fleet.apiKey) return fleet.apiKey;
+  if (fleet.apiKey) return { ...fleet, apiKey: fleet.apiKey };
 
   const pointer = fleet.apiKeyPointer;
   if (!pointer) {
@@ -442,7 +475,7 @@ export async function resolveSkillsApiKey(
 
   let completed: ResolvedCredential;
   try {
-    completed = await completePointerCredential(SKILLS_APP, pointer, env);
+    completed = await completePointerCredential(SKILLS_APP, pointer, snapshotEnv);
   } catch (error) {
     const translated = asSkillsFleetCredentialError(error);
     if (translated) throw translated;
@@ -454,7 +487,7 @@ export async function resolveSkillsApiKey(
         `refusing to send an unauthenticated request.`,
     );
   }
-  return completed.apiKey;
+  return { ...fleet, apiKey: completed.apiKey, apiKeyPointer: null };
 }
 
 /** The usable API key, or throw naming what is missing. Use on every send path. */
@@ -466,11 +499,6 @@ export async function requireSkillsApiKey(
   const apiKey = await resolveSkillsApiKey(env, options);
   if (!apiKey) throw new MissingSkillsFleetError(action);
   return apiKey;
-}
-
-/** `<origin>/v1` back to `<origin>`, for the gateway default. */
-function stripV1(baseUrl: string): string {
-  return baseUrl.replace(/\/v1$/, "").replace(/\/+$/, "");
 }
 
 /**
@@ -485,16 +513,16 @@ function stripV1(baseUrl: string): string {
 export async function skillsCredentialOrReason(
   env: Env = process.env,
   options: SkillsFleetOptions = {},
-): Promise<{ apiKey: string; reason: null } | { apiKey: null; reason: string | null }> {
+): Promise<{ apiKey: string; apiOrigin: string; reason: null } | { apiKey: null; apiOrigin: null; reason: string | null }> {
   try {
     // The async resolver, because a vault pointer is only a credential once it
     // has been completed: a surface that reports refusals as data must report
     // a broken pointer as a refusal, not as "not signed in".
-    const apiKey = await resolveSkillsApiKey(env, options);
-    return apiKey ? { apiKey, reason: null } : { apiKey: null, reason: null };
+    const connection = await resolveSkillsConnection(env, options);
+    return connection ? { apiKey: connection.apiKey, apiOrigin: connection.apiOrigin, reason: null } : { apiKey: null, apiOrigin: null, reason: null };
   } catch (error) {
     if (error instanceof SkillsFleetCredentialError || (error as Error)?.name === "SkillsFleetCredentialError") {
-      return { apiKey: null, reason: (error as Error).message };
+      return { apiKey: null, apiOrigin: null, reason: (error as Error).message };
     }
     throw error;
   }
@@ -513,7 +541,7 @@ export function resolveSkillsApiOrigin(
   env: Env = process.env,
   options: SkillsFleetOptions = {},
 ): { origin: string; source: string } | null {
-  const configured = configuredSkillsApiUrl(env, options.credentials?.keychain);
+  const configured = configuredSkillsApiUrl(env, options.credentials?.keychain, options.credentials?.profile);
   if (configured) {
     // Validated by the shared normalizer (HTTPS anywhere, HTTP for an exact
     // loopback authority only) so a bad URL is refused here rather than at the

@@ -78,6 +78,7 @@ describe("the credential this CLI writes", () => {
       expect(existsSync(identityFile)).toBe(true);
       const identity = JSON.parse(readFileSync(identityFile, "utf-8"));
       expect(identity).toEqual({
+        apiUrl: "https://api.hasna.com/skills",
         email: SAMPLE_CONFIG.email,
         orgId: SAMPLE_CONFIG.orgId,
         orgSlug: SAMPLE_CONFIG.orgSlug,
@@ -109,7 +110,7 @@ describe("the credential this CLI writes", () => {
     withFleetHome((env) => {
       saveAuthConfig(SAMPLE_CONFIG, env);
       expect(clearAuthConfig(env)).toEqual({ stillResolves: false });
-      expect(getApiKey(env)).toBeNull();
+      expect(() => getApiKey(env)).toThrow("no API key resolved");
       expect(existsSync(getIdentityFilePath(env))).toBe(false);
 
       // A key injected by the environment belongs to the machine, not to this
