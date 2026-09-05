@@ -104,6 +104,16 @@ describe("fleet credential ladder", () => {
     });
   });
 
+  test("a blank or malformed URL in the credentials file is refused, not skipped", () => {
+    withTempDir((home) => {
+      writeCredentialsFile(home, `${SKILLS_API_URL_ENV}=""\n${SKILLS_API_KEY_ENV}=${KEY}\n`);
+      // Skipping it would silently demote a configured install to the gateway
+      // default, which is the class of silence this ladder exists to remove.
+      expect(() => resolveSkillsFleet({ HOME: home })).toThrow(/blank or malformed/);
+      expect(() => configuredSkillsApiUrl({ HOME: home })).toThrow(/blank or malformed/);
+    });
+  });
+
   test("a credentials file readable by anyone else is refused, never treated as absent", () => {
     withTempDir((home) => {
       writeCredentialsFile(home, `${SKILLS_API_KEY_ENV}=${KEY}\n`, 0o644);
@@ -274,4 +284,52 @@ function databaseFilesUnder(root: string): string[] {
   };
   walk(root);
   return found;
+}
+
+describe("skills setup-info reports where the credential came from, never its value", () => {
+  test("names the tier and the file mode, and says local when nothing is configured", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skills-setup-info-"));
+    try {
+      const configDir = join(home, ".hasna", "skills", "config");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, "credentials"), `${SKILLS_API_KEY_ENV}=${KEY}\n`, { mode: 0o600 });
+
+      const hosted = await runSetupInfo(home, {});
+      expect(hosted.credential).toMatchObject({
+        mode: "hosted",
+        apiUrl: "https://api.hasna.com/skills",
+        apiUrlSource: "default",
+        apiKeyTier: "disk",
+        credentialsFileMode: "0600",
+      });
+      expect(hosted.credential.apiKeySource).toBe(join(configDir, "credentials"));
+      expect(JSON.stringify(hosted)).not.toContain(KEY);
+
+      rmSync(join(configDir, "credentials"));
+      const local = await runSetupInfo(home, {});
+      expect(local.credential).toMatchObject({ mode: "local", apiUrl: null, apiKeySource: null });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+/** `skills setup-info --json` under a throwaway home, with no ambient credential. */
+async function runSetupInfo(home: string, extra: Record<string, string>): Promise<any> {
+  const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "setup-info", "--json"], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: home,
+      NO_COLOR: "1",
+      SKILLS_TEST_MODE: "1",
+      HASNA_STATION: "skills-suite-no-such-keychain-account",
+      ...extra,
+    },
+  });
+  const stdout = await new Response(proc.stdout).text();
+  await new Response(proc.stderr).text();
+  await proc.exited;
+  return JSON.parse(stdout);
 }

@@ -178,7 +178,16 @@ export function configuredSkillsApiUrl(
   const fromKeychain = keychainConfigValue(SKILLS_APP, env, keychain);
   if (fromKeychain) return { value: fromKeychain.value.trim(), source: fromKeychain.source };
   const fromDisk = appConfigDiskValue(SKILLS_APP, env, SKILLS_API_URL_ENV_KEYS);
-  if (fromDisk && !fromDisk.unusable) return { value: fromDisk.value.trim(), source: fromDisk.path };
+  if (fromDisk?.unusable) {
+    // Declared but blank or malformed. Skipping it would silently demote a
+    // configured install to the gateway default — or to local mode — which is
+    // the class of silence this ladder exists to remove.
+    throw new SkillsFleetCredentialError(
+      `${fromDisk.key} in ${fromDisk.path} is declared but blank or malformed; ` +
+        `a Skills authority must be a valid https URL (or an exact loopback http URL).`,
+    );
+  }
+  if (fromDisk) return { value: fromDisk.value.trim(), source: fromDisk.path };
   return null;
 }
 
