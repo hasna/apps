@@ -62,7 +62,7 @@
 // belongs with the ingestion, whose signature it is; doing it here would change a published type
 // while both implementations behind it still take a `Database`.
 
-import { getEmailsMode } from "./mode.js";
+import { getClientMode } from "./mode.js";
 import { loadConfig, saveConfig } from "./config.js";
 // `export type *` re-exports but creates NO local binding, so the shapes these four functions
 // are written against are imported explicitly as well. Both arms still declare them; the arms'
@@ -257,7 +257,7 @@ export function retireS3Source(sourceIdOrBucket: string): S3MailSource {
  * nothing and the exported signature is unchanged.
  */
 export async function syncS3Inbox(opts: S3SyncOptions): Promise<S3SyncResult> {
-  const implementation = getEmailsMode() === "self_hosted"
+  const implementation = getClientMode() === "self_hosted"
     ? await import("./s3-sync.remote.js")
     : await import("./s3-sync.local.js");
   return implementation.syncS3Inbox(opts);

@@ -220,7 +220,6 @@ describe("emails-mcp HTTP transport", () => {
     });
     servers.push(inventoryServer);
     const inheritedProcessEnv = { ...process.env };
-    process.env.EMAILS_MODE = "self_hosted";
     process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${inventoryServer.port}`;
     process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-http-test-key";
     resetSelfHostedConfigCache();
@@ -316,7 +315,6 @@ describe("emails-mcp HTTP transport", () => {
     });
     servers.push(inventoryServer);
     const inheritedProcessEnv = { ...process.env };
-    process.env.EMAILS_MODE = "self_hosted";
     process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${inventoryServer.port}`;
     process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-http-test-key";
     resetSelfHostedConfigCache();

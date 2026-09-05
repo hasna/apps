@@ -609,19 +609,21 @@ async function startLoopbackServer(): Promise<{ server: Subprocess; baseUrl: str
 }
 
 function applySelfHostedEnv(): void {
-  process.env["EMAILS_MODE"] = "self_hosted";
+  // Storage configuration alone routes this arm (hasna/apps#1566): the loopback
+  // origin and key select the self-hosted store — the deployment word is removed
+  // and never set (a carried-forward value is refused by the retired guard).
   process.env["EMAILS_SELF_HOSTED_URL"] = baseUrl;
   process.env["EMAILS_SELF_HOSTED_API_KEY"] = "loopback-test-key";
   resetSelfHostedConfigCache();
   resetMailDataSource();
 }
 
-// `bun test` shares one process across every test file, and the harness sets
-// local mode exactly once for that process. Deleting these keys rather
+// `bun test` shares one process across every test file, and each file's harness
+// flips the self-hosted env keys for that process. Deleting these keys rather
 // than restoring them leaves every file that runs after this one falling
-// through the mode resolver to EMAILS_CLIENT_ENV_SECRET or the
-// on-disk config, which resolves to self_hosted and fails unrelated suites.
-// Restore the values this process started with instead.
+// through the storage resolver to the on-disk config or an inherited database
+// path, which routes to the wrong arm and fails unrelated suites. Restore the
+// values this process started with instead.
 const MODE_ENV_KEY = ["EMAILS", "MODE"].join("_");
 const SELF_HOSTED_ENV_KEYS = [
   MODE_ENV_KEY,

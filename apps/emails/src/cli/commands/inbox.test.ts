@@ -192,7 +192,6 @@ function useAttachmentInventoryPages(
   pages: Array<[cursor: string, page: { items: Array<Record<string, unknown>>; next_cursor: string | null }]>,
 ): void {
   attachmentInventoryPages = new Map(pages);
-  process.env.EMAILS_MODE = "self_hosted";
   process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
   process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
   resetSelfHostedConfigCache();
@@ -1002,7 +1001,11 @@ describe("inbox links", () => {
 // ─── inbox attachments inventory ─────────────────────────────────────────────
 
 describe("inbox attachments", () => {
-  it("honors config-file-only self_hosted mode without opening usable SQLite", async () => {
+  it("refuses a config file that still declares a mode, without touching the API", async () => {
+    // Deployment modes are removed (hasna/apps#1566): a config file that still
+    // declares `emails_mode` must fail resolution loudly — even beside a complete
+    // API configuration and a database path — rather than let the stale key pick
+    // a store. The inventory command therefore never reaches the API.
     attachmentInventoryPages = new Map([["", { items: [], next_cursor: null }]]);
     const configHome = mkdtempSync(join(tmpdir(), "emails-config-only-inventory-"));
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-config-only-poison-db-"));
@@ -1023,10 +1026,10 @@ describe("inbox attachments", () => {
       process.env.EMAILS_DB_PATH = poisonDbDir;
       resetSelfHostedConfigCache();
 
-      const result = await runInboxCommand(["--json", "inbox", "attachments"]);
-
-      expect(result.data).toEqual({ items: [], next_cursor: null });
-      expect(attachmentInventoryRequests).toHaveLength(1);
+      await expect(runInboxCommand(["--json", "inbox", "attachments"])).rejects.toThrow(
+        "'emails_mode' in the Emails config file was removed",
+      );
+      expect(attachmentInventoryRequests).toHaveLength(0);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;
       else process.env.HOME = previousHome;
@@ -1057,41 +1060,53 @@ describe("inbox attachments", () => {
       }],
       next_cursor: "opaque/+==",
     }]]);
+    const { data } = await runInboxCommand([
+      "--json",
+      "inbox",
+      "attachments",
+      "--limit",
+      "1",
+      "--direction",
+      "inbound",
+      "--since",
+      "2026-07-24T10:00:00+02:00",
+    ]);
+    expect(data).toEqual({
+      items: [{
+        message_id: "message-1",
+        attachment_index: 0,
+        filename: "invoice.pdf",
+        content_type: "application/pdf",
+        size_bytes: 2048,
+        sha256: "a".repeat(64),
+        content_available: true,
+        direction: "inbound",
+        received_at: "2026-07-24T08:00:00.000Z",
+      }],
+      next_cursor: "opaque/+==",
+    });
+    expect(Object.keys(data as Record<string, unknown>).sort()).toEqual(["items", "next_cursor"]);
+    expect(JSON.stringify(data)).not.toContain("content_base64");
+    expect(attachmentInventoryRequests).toHaveLength(1);
+    expect(attachmentInventoryRequests[0]?.searchParams.get("limit")).toBe("1");
+    expect(attachmentInventoryRequests[0]?.searchParams.get("direction")).toBe("inbound");
+    expect(attachmentInventoryRequests[0]?.searchParams.get("since")).toBe("2026-07-24T08:00:00.000Z");
+  });
+
+  it("refuses a configured database path beside the API instead of falling back to local SQLite", async () => {
+    // The fail-closed contract (hasna/apps#1566): an API origin AND a database
+    // path is a two-configured contradiction that refuses to boot, so the
+    // inventory command never reaches the API while a local store is also
+    // configured — there is no precedence rule and no silent fallback.
+    useAttachmentInventoryPages([["", { items: [], next_cursor: null }]]);
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-no-local-inventory-"));
     const previousDbPath = process.env.EMAILS_DB_PATH;
     process.env.EMAILS_DB_PATH = poisonDbDir;
     try {
-      const { data } = await runInboxCommand([
-        "--json",
-        "inbox",
-        "attachments",
-        "--limit",
-        "1",
-        "--direction",
-        "inbound",
-        "--since",
-        "2026-07-24T10:00:00+02:00",
-      ]);
-      expect(data).toEqual({
-        items: [{
-          message_id: "message-1",
-          attachment_index: 0,
-          filename: "invoice.pdf",
-          content_type: "application/pdf",
-          size_bytes: 2048,
-          sha256: "a".repeat(64),
-          content_available: true,
-          direction: "inbound",
-          received_at: "2026-07-24T08:00:00.000Z",
-        }],
-        next_cursor: "opaque/+==",
-      });
-      expect(Object.keys(data as Record<string, unknown>).sort()).toEqual(["items", "next_cursor"]);
-      expect(JSON.stringify(data)).not.toContain("content_base64");
-      expect(attachmentInventoryRequests).toHaveLength(1);
-      expect(attachmentInventoryRequests[0]?.searchParams.get("limit")).toBe("1");
-      expect(attachmentInventoryRequests[0]?.searchParams.get("direction")).toBe("inbound");
-      expect(attachmentInventoryRequests[0]?.searchParams.get("since")).toBe("2026-07-24T08:00:00.000Z");
+      await expect(runInboxCommand(["--json", "inbox", "attachments"])).rejects.toThrow(
+        /two configured places[\s\S]*UNSET ONE/,
+      );
+      expect(attachmentInventoryRequests).toHaveLength(0);
     } finally {
       if (previousDbPath === undefined) delete process.env.EMAILS_DB_PATH;
       else process.env.EMAILS_DB_PATH = previousDbPath;
@@ -1450,7 +1465,6 @@ describe("inbox attachment", () => {
     const inheritedProcessEnv = { ...process.env };
 
     try {
-      process.env.EMAILS_MODE = "self_hosted";
       process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${legacyServer.port}`;
       process.env.EMAILS_SELF_HOSTED_API_KEY = "legacy-attachment-test-key";
       resetSelfHostedConfigCache();

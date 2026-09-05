@@ -88,7 +88,8 @@ function harnessIsStoreNeutral(): void {
 
   // Direction 2: the runner script must not assign, export or scrub any store setting
   // itself — it delegates to the env builder and nothing else. (It used to pin
-  // EMAILS_DB_PATH=:memory: and EMAILS_MODE=local inline; that shape must not return.)
+  // EMAILS_DB_PATH=:memory: inline — before deployment modes were removed it also
+  // pinned the mode variable there; that shape must not return.)
   const runner = readFileSync(join(import.meta.dir, "..", "scripts", "run-hermetic-tests.sh"), "utf8");
   for (const setting of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS, API_SETTINGS_POINTER]) {
     if (new RegExp(`\\b${setting}=`).test(runner) || new RegExp(`-u ${setting}\\b`).test(runner)) {

@@ -34,7 +34,9 @@ emails domain check example.com                       # what is actually publish
 `emails provision *` are NOT implemented in this build. Running any of them
 prints what is missing and which command to use instead.
 
-Self-hosted API clients must explicitly configure `EMAILS_MODE=self_hosted`,
-`EMAILS_SELF_HOSTED_URL`, and one of `EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`,
-or `EMAILS_SELF_HOSTED_API_KEY`. No endpoint, account, database, bucket or secret
-path is supplied by the package.
+Self-hosted API clients configure `EMAILS_SELF_HOSTED_URL` and one of
+`EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or `EMAILS_SELF_HOSTED_API_KEY`
+(deployment modes are removed — hasna/apps#1566 — so the origin and one
+credential alone select the arm; a carried-forward deployment-mode variable is
+refused by name).
+No endpoint, account, database, bucket or secret path is supplied by the package.

@@ -1,5 +1,7 @@
-// Self-hosted HTTP storage bridge. It is selected only by an explicit
-// EMAILS_MODE=self_hosted setting plus an operator-supplied URL and credential.
+// Self-hosted HTTP storage bridge — the HTTP half of the client store choice. It
+// is selected by STORAGE configuration alone: an operator-supplied API URL plus a
+// credential (see src/store-resolution.ts). The deployment-mode variable that
+// used to select it is retired and refused, never read here.
 //
 //   list   -> GET    /v1/<resource>            -> { <resource>: [...] }
 //   get    -> GET    /v1/<resource>/<id>       -> { <singular>: <entity> } | 404
@@ -26,7 +28,7 @@ import {
   type EmailsClientCredentialCandidate,
   type EmailsClientCredentialSetting,
 } from "../lib/client-env.js";
-import { getEmailsMode } from "../lib/mode.js";
+import { getClientMode } from "../lib/mode.js";
 import {
   parseSelfHostedErrorJson,
   parseSelfHostedSuccessJson,
@@ -34,7 +36,6 @@ import {
   SelfHostedResponseSizeError,
   validateSelfHostedSdkSuccessResponse,
 } from "../lib/self-hosted-wire.js";
-import { redactStructuredDiagnosticValue } from "../lib/redaction.js";
 
 const APP = "emails";
 
@@ -84,36 +85,39 @@ let _cachedSignature: string | null = null;
 let _cachedConfig: SelfHostedConfig | null = null;
 
 const CONFIG_HELP =
-  "Configure the client via EMAILS_CLIENT_ENV_SECRET (an encrypted client env file), " +
-  "or set EMAILS_MODE=self_hosted with EMAILS_SELF_HOSTED_URL and EMAILS_SELF_HOSTED_API_KEY.";
+  "Set EMAILS_SELF_HOSTED_URL and one of EMAILS_SESSION_TOKEN, EMAILS_IDP_TOKEN or " +
+  "EMAILS_SELF_HOSTED_API_KEY (or point EMAILS_CLIENT_ENV_SECRET at a vault entry that " +
+  "carries them) to use the API.";
 
 /**
  * Resolve strict self-hosted client configuration. This function is called only
- * after self_hosted has been selected; local mode never loads a client-env
- * secret and never needs an HTTP endpoint.
+ * after the storage plan selected the API arm — local storage never loads a
+ * client-env secret and never needs an HTTP endpoint — and the caller must say
+ * so: `selectedMode` is REQUIRED, because there is no deployment-mode variable
+ * left to infer it from.
  */
 export function resolveSelfHostedConfig(
   env: NodeJS.ProcessEnv = process.env,
-  options: { selectedMode?: "self_hosted" } = {},
+  options: { selectedMode: "self_hosted" },
 ): SelfHostedConfig {
-  let modeRaw = env["EMAILS_MODE"]?.trim() ?? env["HASNA_EMAILS_MODE"]?.trim() ?? options.selectedMode;
-  if (modeRaw === "local") {
-    throw new Error(`${APP}: self-hosted configuration was requested while EMAILS_MODE=local.`);
-  }
-  if (modeRaw === "self_hosted" || env["EMAILS_CLIENT_ENV_SECRET"]?.trim()) {
-    loadEmailsClientEnvSecret(env);
-    modeRaw = env["EMAILS_MODE"]?.trim() ?? env["HASNA_EMAILS_MODE"]?.trim() ?? options.selectedMode ?? modeRaw;
-  }
+  // The caller's `selectedMode` declaration is consumed at the TYPE level: it pins
+  // this bridge to the API arm — there is no deployment-mode variable left that
+  // could mean anything else — so the value itself is deliberately never read.
+  void options;
+  // Delivering the client-env pointer first turns a pointer-only environment into
+  // one the API settings are present in. Loading is an early no-op without the
+  // pointer, and a no-op again when the canonical settings are already present.
+  loadEmailsClientEnvSecret(env);
   const apiUrl = env["EMAILS_SELF_HOSTED_URL"]?.trim();
   const candidates = resolveEmailsClientCredentialCandidates(env);
   // Credential precedence: an explicit user session first, then the caller's
   // own idp identity token (ADR-0002 — an agent uses ITS identity even when
   // an operator API key is also present in the env), then the operator key.
   // The server maps whichever credential to its tenant; the client never sends one.
-  const signature = `${modeRaw ?? ""}|${apiUrl ?? ""}|${credentialSettingsSignature(candidates)}`;
+  const signature = `self_hosted|${apiUrl ?? ""}|${credentialSettingsSignature(candidates)}`;
   if (signature === _cachedSignature && _cachedConfig) return _cachedConfig;
 
-  const config = computeConfig(modeRaw, apiUrl, candidates);
+  const config = computeConfig(apiUrl, candidates);
   _cachedSignature = signature;
   _cachedConfig = config;
   return config;
@@ -128,23 +132,10 @@ function credentialSettingsSignature(candidates: readonly EmailsClientCredential
   return candidates.map((candidate) => markers[candidate.setting]).join("");
 }
 
-function assertSupportedMode(modeRaw: string | undefined): void {
-  if (modeRaw !== "self_hosted") {
-    const received = modeRaw
-      ? `received '${redactStructuredDiagnosticValue(modeRaw)}'`
-      : "no explicit mode was selected";
-    throw new Error(
-      `${APP}: self-hosted configuration requires EMAILS_MODE=self_hosted; ${received}. ${CONFIG_HELP}`,
-    );
-  }
-}
-
 function computeConfig(
-  modeRaw: string | undefined,
   apiUrl: string | undefined,
   candidates: readonly EmailsClientCredentialCandidate[],
 ): SelfHostedConfig {
-  assertSupportedMode(modeRaw);
   if (!apiUrl || candidates.length === 0) {
     const missing = [
       !apiUrl ? "EMAILS_SELF_HOSTED_URL" : null,
@@ -176,7 +167,6 @@ function resolveSelfHostedBaseUrlLenient(env: NodeJS.ProcessEnv = process.env): 
   } catch (error) {
     loadError = error;
   }
-  assertSupportedMode(env["EMAILS_MODE"]?.trim() ?? env["HASNA_EMAILS_MODE"]?.trim());
   const apiUrl = env["EMAILS_SELF_HOSTED_URL"]?.trim();
   if (!apiUrl) {
     if (loadError) throw loadError;
@@ -198,7 +188,7 @@ export function resetSelfHostedConfigCache(): void {
  * canonical process mode as the CLI/MCP data-source seam.
  */
 export function isSelfHostedMode(): boolean {
-  return getEmailsMode() === "self_hosted";
+  return getClientMode() === "self_hosted";
 }
 
 interface CurlResult {
@@ -435,7 +425,7 @@ function encodeQuery(query?: Record<string, string | number | boolean | undefine
  * configuration throws before any request is attempted.
  */
 export function selfHostedStoreFor(resource: string): SelfHostedResourceStore {
-  const config = resolveSelfHostedConfig();
+  const config = resolveSelfHostedConfig(process.env, { selectedMode: "self_hosted" });
   const clean = resource.replace(/^\/+|\/+$/g, "");
   const base = `/${clean}`;
   const singular = singularOf(clean);
@@ -526,7 +516,7 @@ export function selfHostedApiRequest(
   const requireCredential = options.requireCredential !== false;
   let config: SelfHostedConfig;
   if (requireCredential) {
-    config = resolveSelfHostedConfig();
+    config = resolveSelfHostedConfig(process.env, { selectedMode: "self_hosted" });
   } else {
     // Base URL discovery may load a client-env vault entry, but public auth
     // requests must remain credentialless even when that load populates an
@@ -560,7 +550,7 @@ export function selfHostedApiRequest(
  * answers `reauthenticate` to must not shadow a valid API key here either.
  */
 export function selfHostedProbe(path: string): SelfHostedApiResult {
-  const config = resolveSelfHostedConfig();
+  const config = resolveSelfHostedConfig(process.env, { selectedMode: "self_hosted" });
   const origin = config.baseUrl.replace(/\/v1$/, "");
   const { status, body } = httpRequest({ ...config, baseUrl: origin }, "GET", path);
   const json = status >= 200 && status < 300

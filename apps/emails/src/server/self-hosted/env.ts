@@ -1,5 +1,5 @@
 import { createPgPool, createQueryClient, type PoolQueryClient } from "../../storage-kit/index.js";
-import { assertNoLegacyHostedEnvironment } from "../../lib/mode.js";
+import { assertNoLegacyHostedEnvironment } from "../../lib/retired-deployment-mode.js";
 import {
   SERVER_DATABASE_URL_SETTING,
   resolveServerStorageBackend,

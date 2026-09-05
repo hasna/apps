@@ -24,7 +24,6 @@ let server: ReturnType<typeof startHttpServer> | null = null;
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  process.env["EMAILS_MODE"] = "local";
   process.env["EMAILS_DB_PATH"] = ":memory:";
   resetDatabase();
 });

@@ -6,7 +6,7 @@ import { getProvider } from '../../db/providers.js';
 import { getAdapter } from '../../providers/index.js';
 import { AGENT_WRITABLE_CONFIG_KEYS, loadConfig, getConfigValue, setAgentConfigValue } from '../../lib/config.js';
 import { normalizeRoute53RegistrationContact } from '../../lib/route53-contact.js';
-import { resolveEmailsMode } from '../../lib/mode.js';
+import { resolveClientMode } from '../../lib/mode.js';
 import { formatError, resolveId, ProviderNotFoundError } from '../helpers.js';
 
 const MAX_MCP_S3_SYNC_LIMIT = 10000;
@@ -54,13 +54,14 @@ const MAX_DOMAIN_REGISTRATION_YEARS = 10;
  * `auth_error` whose remedy points at provider credentials.
  */
 function assertProvisioningInfraAllowed(toolName: string): void {
-  if (resolveEmailsMode().mode !== "self_hosted") return;
+  if (resolveClientMode().mode !== "self_hosted") return;
   throw new Error(
     `MCP tool ${toolName} is disabled in self_hosted mode: it would mutate cloud infrastructure ` +
       "(SES identity, Cloudflare DNS records, SES receipt rules) using the ambient AWS/Cloudflare " +
       "environment of this client machine while recording the result in the operator's shared " +
       "domain state, and the self-hosted server exposes no route that performs provisioning. " +
-      "Run it in local mode (EMAILS_MODE=local) against cloud accounts this machine owns.",
+      "Run it in a local-database configuration (HASNA_EMAILS_DB_PATH or EMAILS_DB_PATH set to a " +
+      "database file, API settings unset) against cloud accounts this machine owns.",
   );
 }
 

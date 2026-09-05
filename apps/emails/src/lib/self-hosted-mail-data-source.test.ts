@@ -2440,8 +2440,10 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
 });
 
 describe("resolveMailDataSource — self-hosted seam selection", () => {
-  it("selects self_hosted only from explicit mode, URL, and key", () => {
-    process.env["EMAILS_MODE"] = "self_hosted";
+  it("selects the self-hosted source from the API origin and key alone", () => {
+    // Storage configuration alone routes this arm (hasna/apps#1566): the API
+    // origin and credential select the self-hosted source — the deployment word
+    // is removed and never set.
     process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
     process.env["EMAILS_SELF_HOSTED_API_KEY"] = "k";
     resetSelfHostedConfigCache();
@@ -2452,8 +2454,8 @@ describe("resolveMailDataSource — self-hosted seam selection", () => {
     expect(resolveSelfHostedMailDataSource()).toBeInstanceOf(SelfHostedMailDataSource);
   });
 
-  it("does not construct a self-hosted client while local mode is selected", () => {
-    process.env["EMAILS_MODE"] = "local";
+  it("does not construct a self-hosted client while a database path selects local storage", () => {
+    process.env["EMAILS_DB_PATH"] = ":memory:";
     resetSelfHostedConfigCache();
     resetMailDataSource();
     expect(resolveSelfHostedMailDataSource()).toBeNull();

@@ -42,9 +42,10 @@ function isolatedEnv(): NodeJS.ProcessEnv {
 }
 
 function selfHostedEnv(): NodeJS.ProcessEnv {
+  // The API arm is configured by origin plus credential alone (hasna/apps#1566);
+  // isolatedEnv() already scrubbed every retired deployment-mode spelling.
   return {
     ...isolatedEnv(),
-    EMAILS_MODE: "self_hosted",
     EMAILS_SELF_HOSTED_URL: stub.baseUrl,
     EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
   };
@@ -68,7 +69,7 @@ function rejectedClientEnvPointer(): { env: NodeJS.ProcessEnv; sentinel: string 
   };
 }
 
-function loadedClientEnvWithInvalidStructuredMode(): {
+function vaultEntryCarryingRetiredModeVariable(): {
   env: NodeJS.ProcessEnv;
   sentinel: string;
   invalidMode: string;
@@ -118,7 +119,6 @@ function localModeWithStructuredClientEnv(): {
   return {
     env: {
       ...env,
-      [MODE_ENV_KEYS[1]]: "local",
       EMAILS_CLIENT_ENV_SECRET: clientEnv,
       EMAILS_DB_PATH: join(env.HOME!, "local.db"),
       HASNA_EMAILS_DB_PATH: join(env.HOME!, "local.db"),
@@ -243,9 +243,13 @@ describe("CLI JSON output safety", () => {
 });
 
 describe("CLI self-hosted bootstrap failures", () => {
-  it("redacts invalid structured mode loaded from client-env on human and JSON stderr", () => {
+  it("refuses a client-env entry that still carries a retired mode variable, never leaking its payload", () => {
+    // A vault entry written against the older contract carries the word next to
+    // the settings (hasna/apps#1566). The loader refuses the whole entry with the
+    // guard's sentence, which names the variable and never echoes its value — so
+    // a secret-shaped payload stays out of both stderr forms.
     for (const json of [false, true]) {
-      const { env, sentinel, invalidMode } = loadedClientEnvWithInvalidStructuredMode();
+      const { env, sentinel, invalidMode } = vaultEntryCarryingRetiredModeVariable();
       const result = runCli(json ? ["--json", "status"] : ["status"], env);
       const stdout = text(result.stdout);
       const stderr = text(result.stderr);
@@ -254,38 +258,36 @@ describe("CLI self-hosted bootstrap failures", () => {
       expect(stdout).toBe("");
       expect(stderr).not.toContain(sentinel);
       expect(stderr).not.toContain(invalidMode);
-      expect(stderr).toContain("***");
+      expect(stderr).toContain("was removed");
+      expect(stderr).toContain("Deployment modes no longer exist in Emails");
 
       if (json) {
         const parsed = JSON.parse(stderr) as { error: { message: string } };
-        expect(parsed.error.message).toContain("self-hosted configuration requires");
-        expect(parsed.error.message).toContain("***");
-      } else {
-        expect(stderr).toContain("self-hosted configuration requires");
+        expect(parsed.error.message).toContain("Deployment modes no longer exist in Emails");
       }
     }
   });
 
-  it("redacts structured EMAILS_CLIENT_ENV_SECRET from local-mode warnings on human and JSON stdout", () => {
+  it("fails closed on a structured EMAILS_CLIENT_ENV_SECRET without leaking it", () => {
+    // The local-mode warning that used to accompany a structured client-env
+    // value is gone with the mode contract (hasna/apps#1566): the pointer is
+    // vault-path-shaped or it is not, and a non-path value fails the vault load
+    // loudly. The structured payload must stay out of both stderr forms.
     for (const json of [false, true]) {
       const { env, sentinel, clientEnv } = localModeWithStructuredClientEnv();
       const result = runCli(json ? ["--json", "status"] : ["status"], env);
       const stdout = text(result.stdout);
       const stderr = text(result.stderr);
 
-      expect(result.exitCode, stderr).toBe(0);
-      expect(stderr).toBe("");
-      expect(stdout).not.toContain(sentinel);
-      expect(stdout).not.toContain(clientEnv);
-      expect(stdout).toContain("***");
+      expect(result.exitCode, stderr).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).not.toContain(sentinel);
+      expect(stderr).not.toContain(clientEnv);
+      expect(stderr).toContain("EMAILS_CLIENT_ENV_SECRET failed to load from the secrets vault");
 
       if (json) {
-        const parsed = JSON.parse(stdout) as { mode: { warning: string | null } };
-        expect(parsed.mode.warning).toContain("is overriding");
-        expect(parsed.mode.warning).toContain("***");
-      } else {
-        expect(stdout).toContain("Mode note:");
-        expect(stdout).toContain("is overriding");
+        const parsed = JSON.parse(stderr) as { error: { message: string } };
+        expect(parsed.error.message).toContain("EMAILS_CLIENT_ENV_SECRET failed to load");
       }
     }
   });
@@ -315,7 +317,10 @@ describe("CLI self-hosted bootstrap failures", () => {
     }
   });
 
-  it("keeps ordinary nonsecret configuration diagnostics descriptive", () => {
+  it("refuses any carried-forward mode value with the descriptive retired-variable diagnostic", () => {
+    // There is no mode vocabulary left to validate against (hasna/apps#1566):
+    // whatever value the retired variable carries — even an old "valid" one — the
+    // guard refuses it in its own sentence, and the value is never echoed back.
     const modeSetting = ["EMAILS", "MODE"].join("_");
     for (const json of [false, true]) {
       const result = runCli(
@@ -329,35 +334,46 @@ describe("CLI self-hosted bootstrap failures", () => {
       if (json) {
         const parsed = JSON.parse(stderr) as { error: { code: string; message: string } };
         expect(parsed.error.code).toBe("error");
-        expect(parsed.error.message).toContain("Unknown Emails mode 'staging'");
-        expect(parsed.error.message).toContain("Use exactly local or self_hosted");
+        expect(parsed.error.message).toContain("Deployment modes no longer exist in Emails");
+        expect(parsed.error.message).toContain("Delete EMAILS_MODE");
+        expect(parsed.error.message).not.toContain("staging");
       } else {
-        expect(stderr).toContain("Unknown Emails mode 'staging'");
-        expect(stderr).toContain("Use exactly local or self_hosted");
+        expect(stderr).toContain("Deployment modes no longer exist in Emails");
+        expect(stderr).toContain("Delete EMAILS_MODE");
+        expect(stderr).not.toContain("staging");
       }
     }
   });
 
-  it("returns one structured JSON error and creates no local SQLite state for missing or invalid configuration", () => {
+  it("returns one structured JSON error and creates no local SQLite state for invalid configuration", () => {
     const cases = [
       {
-        name: "missing",
+        // A carried-forward deployment-mode variable is refused by the guard
+        // before any store is opened — even beside a fully configured local path.
+        name: "retired-mode",
         env: { EMAILS_MODE: "self_hosted" },
-        message: "self-hosted client is not configured",
+        withDbPath: true,
+        message: "was removed",
       },
       {
-        name: "invalid",
+        // Storage configuration alone routes now (hasna/apps#1566): a non-http(s)
+        // API origin fails the seam's scheme validation without any local store.
+        name: "bad-url",
         env: {
-          EMAILS_MODE: "self_hosted",
           EMAILS_SELF_HOSTED_URL: "ftp://emails.example.invalid",
           EMAILS_SELF_HOSTED_API_KEY: "not-a-real-key",
         },
-        message: "API URL must use http or https",
+        withDbPath: false,
+        message: "must be an http or https URL",
       },
     ] as const;
 
     for (const testCase of cases) {
       const env = isolatedEnv();
+      // The hermetic runner may inherit a database path; each case decides
+      // explicitly which storage row it configures.
+      delete env["EMAILS_DB_PATH"];
+      delete env["HASNA_EMAILS_DB_PATH"];
       const dbDir = join(env.HOME!, "sqlite");
       const dbPath = join(dbDir, `${testCase.name}.db`);
       const result = runCli(
@@ -365,8 +381,7 @@ describe("CLI self-hosted bootstrap failures", () => {
         {
           ...env,
           ...testCase.env,
-          EMAILS_DB_PATH: dbPath,
-          HASNA_EMAILS_DB_PATH: dbPath,
+          ...(testCase.withDbPath ? { EMAILS_DB_PATH: dbPath, HASNA_EMAILS_DB_PATH: dbPath } : {}),
         },
       );
 

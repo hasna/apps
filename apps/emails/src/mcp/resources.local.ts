@@ -7,7 +7,7 @@ import { countValue } from "../db/scalars.js";
 import { assessDomainReadiness } from "../lib/domain-readiness.js";
 import { domainInboundReadinessSignals } from "../lib/domain-inbound-evidence.js";
 import { loadConfig } from "../lib/config.js";
-import { resolveEmailsMode } from "../lib/mode.js";
+import { resolveClientMode } from "../lib/mode.js";
 import { listMailboxSources, listMailboxStatus } from "../cli/tui/data.js";
 
 const RECENT_ERROR_LIMIT_PER_COMPONENT = 50;
@@ -50,7 +50,7 @@ export async function domainsResourcePayload(db: Database = getDatabase()): Prom
   const domains = visibleDomains.map((domain) => {
     const ready_addresses = readyAddressCounts.get(domain.id) ?? 0;
     const provisioning = domainProvisioning.get(domain.id) ?? null;
-    const mode = resolveEmailsMode();
+    const mode = resolveClientMode();
     return {
       ...domain,
       provisioning,

@@ -877,7 +877,7 @@ describe("the collapsed module", () => {
     // Named indirectly on purpose: this file is inside the ratchet's own scanned corpus.
     for (const fragment of [
       ["isSelfHosted", "Mode"].join(""),
-      ["get", "EmailsMode"].join(""),
+      ["get", "ClientMode"].join(""),
       ["EMAILS", "_MODE"].join(""),
       ["email-digests", ".local.js"].join(""),
       ["email-digests", ".remote.js"].join(""),

@@ -14,18 +14,12 @@ export interface PullResult { pulled: number; ok: boolean; reason?: string; conf
 export interface PullOpts { s3?: boolean; limit?: number; forwarding?: boolean }
 
 export async function autoPull(opts?: PullOpts): Promise<PullResult> {
-  const explicitMode = process.env["EMAILS_MODE"]?.trim() || process.env["HASNA_EMAILS_MODE"]?.trim();
-  if (explicitMode === "self_hosted") {
-    return {
-      pulled: 0,
-      ok: true,
-      configured: false,
-      reason: "self_hosted API-only mode: local S3 autopull and forwarding are disabled",
-    };
-  }
-
-  const { resolveEmailsMode } = await import("../../lib/mode.js");
-  if (resolveEmailsMode().mode === "self_hosted") {
+  // Best-effort is about storage and credentials, not about which store this
+  // process reads: an environment whose mode cannot resolve is a boot error
+  // (fail-closed ruling) and is reported as one, so local S3 autopull can never
+  // run against a configuration that reads the API.
+  const { resolveClientMode } = await import("../../lib/mode.js");
+  if (resolveClientMode().mode === "self_hosted") {
     return {
       pulled: 0,
       ok: true,

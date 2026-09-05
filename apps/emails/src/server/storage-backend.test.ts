@@ -161,7 +161,7 @@ describe("emails-serve storage backend", () => {
     );
     expect(answer).toContain("SERVER_DATABASE_URL_SETTING");
     expect(answer).not.toMatch(/RETIRED_SERVER_MODE_SETTINGS|RETIRED_VALUE_BACKENDS/);
-    expect(source).not.toMatch(/\bresolveEmailsMode/);
+    expect(source).not.toMatch(/\bresolveClientMode/);
     expect(source).not.toMatch(/\bisSelfHostedMode\b/);
   });
 
@@ -169,9 +169,9 @@ describe("emails-serve storage backend", () => {
     // A POSITIVE CONTROL for the absence claim: the same scan run against a fixture that DOES
     // contain the offending read must find it, or this assertion proves nothing. A one-character
     // typo in the pattern would otherwise pass over every file in silence.
-    const offending = 'const mode = resolveEmailsModeSelection().mode;\nif (mode === "self_hosted") {}';
+    const offending = 'const mode = resolveClientModeSelection().mode;\nif (mode === "self_hosted") {}';
     const scan = (text: string): boolean =>
-      /resolveEmailsMode(?:Selection)?\(/.test(text) || /\bgetEmailsMode\(/.test(text);
+      /resolveClientMode(?:Selection)?\(/.test(text) || /\bgetClientMode\(/.test(text);
     expect(scan(offending)).toBe(true);
 
     for (const relative of [

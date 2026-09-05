@@ -3,7 +3,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { extname, join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
-import { normalizeEmailsMode } from "./lib/mode.js";
 import {
   BOUNDARY_SCOPES,
   boundaryPatternTable,
@@ -288,11 +287,15 @@ describe("no hosted control plane", () => {
   });
 
   it("ships exactly local and self_hosted without hosted aliases", () => {
-    expect(normalizeEmailsMode("local")).toBe("local");
-    expect(normalizeEmailsMode("self_hosted")).toBe("self_hosted");
-    for (const value of ["cloud", "remote", "hybrid", "self-hosted", "selfhosted"]) {
-      expect(() => normalizeEmailsMode(value)).toThrow();
-    }
+    // The deployment-mode variable is retired (hasna/apps#1566): no runtime value
+    // is accepted any more — a carried-forward value is refused by name and the
+    // guard prints the exact key to delete. The only-two-plans promise therefore
+    // lives in the ClientMode type declaration, pinned here against drift.
+    const modeSource = readFileSync(join(root, "src/lib/mode.ts"), "utf8");
+    const clientModeTypeLine = modeSource
+      .split("\n")
+      .find((line) => line.startsWith("export type ClientMode ="));
+    expect(clientModeTypeLine).toBe('export type ClientMode = "local" | "self_hosted";');
   });
 
   it("has no hosted client, command, export, package bin, or environment loader", () => {

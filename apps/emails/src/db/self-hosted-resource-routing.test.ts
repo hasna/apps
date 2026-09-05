@@ -71,7 +71,11 @@ afterAll(() => proc?.kill());
 
 beforeEach(() => {
   captureInheritedProcessEnv();
-  process.env.EMAILS_MODE = "self_hosted";
+  // Storage configuration alone routes this arm (hasna/apps#1566): the API
+  // origin and credential select the self-hosted store — the deployment word
+  // is removed, so any inherited spelling is scrubbed rather than set.
+  delete process.env.EMAILS_MODE;
+  delete process.env.HASNA_EMAILS_MODE;
   process.env.EMAILS_SELF_HOSTED_URL = baseUrl;
   process.env.EMAILS_SELF_HOSTED_API_KEY = "test_key";
   resetSelfHostedConfigCache();

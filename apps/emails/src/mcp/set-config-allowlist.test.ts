@@ -2,10 +2,12 @@
 //
 // The tool took `key: z.string()` with no allowlist, and `saveConfig` re-seeds
 // the in-process cache so a write takes effect immediately. So an agent could
-// rewrite anything in ~/.hasna/emails/config.json — including `emails_mode`,
-// which decides whether this process talks to local SQLite or the operator's
-// self-hosted API (mid-session), and every credential-bearing key, which points
-// an integration wherever the agent likes.
+// rewrite anything in ~/.hasna/emails/config.json — including the retired
+// deployment-mode spellings (`emails_mode` and the `mode`/`storage_mode`/
+// `mailery_mode` keys), which no longer select a store and instead trip the
+// retired-config refusal at the next mode resolution (hasna/apps#1566), and
+// every credential-bearing key, which points an integration wherever the agent
+// likes.
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -20,14 +22,13 @@ import {
   setAgentConfigValue,
   setConfigValue,
 } from "../lib/config.js";
-import { EMAILS_MODE_CONFIG_KEY } from "../lib/mode.js";
 import { isSensitiveKey } from "../lib/redaction.js";
 import { startHttpServer } from "./http.js";
 
 // Keys whose write would change what datastore the process talks to, or hand an
 // agent a credential. None may ever become writable through the agent surface.
 const FORBIDDEN_KEYS = [
-  EMAILS_MODE_CONFIG_KEY,
+  "emails_mode",
   "mode",
   "storage_mode",
   "mailery_mode",
@@ -187,9 +188,10 @@ describe("agent-writable config allowlist", () => {
 
   it("leaves the operator/library path unrestricted", () => {
     // `setConfigValue` is the operator path; the gate belongs at the agent
-    // boundary, not on the whole config file.
-    setConfigValue(EMAILS_MODE_CONFIG_KEY, "local");
-    expect(loadConfig()[EMAILS_MODE_CONFIG_KEY]).toBe("local");
+    // boundary, not on the whole config file. Even the retired deployment-mode
+    // key may be written there — nothing reads it as a selector any more.
+    setConfigValue("emails_mode", "local");
+    expect(loadConfig()["emails_mode"]).toBe("local");
   });
 });
 
@@ -227,12 +229,12 @@ describe("set_config MCP tool", () => {
     }
   }
 
-  it("refuses emails_mode instead of switching the datastore mid-session", async () => {
+  it("refuses emails_mode instead of planting a retired-config key mid-session", async () => {
     await withClient(async (client) => {
-      const result = await callSetConfig(client, EMAILS_MODE_CONFIG_KEY, "self_hosted");
+      const result = await callSetConfig(client, "emails_mode", "self_hosted");
 
       expect(result.isError).toBe(true);
-      expect(loadConfig()[EMAILS_MODE_CONFIG_KEY]).toBeUndefined();
+      expect(loadConfig()["emails_mode"]).toBeUndefined();
     });
   });
 
@@ -265,7 +267,7 @@ describe("set_config MCP tool", () => {
       const schema = tool?.inputSchema as { properties?: { key?: { enum?: string[] } } } | undefined;
 
       expect(schema?.properties?.key?.enum?.sort()).toEqual([...AGENT_WRITABLE_CONFIG_KEYS].sort());
-      expect(schema?.properties?.key?.enum).not.toContain(EMAILS_MODE_CONFIG_KEY);
+      expect(schema?.properties?.key?.enum).not.toContain("emails_mode");
       expect(tool?.description).toContain("Writable keys");
     });
   });

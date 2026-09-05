@@ -21,7 +21,7 @@ import { findDomainsByName } from "../../db/domains.local.js";
 import { listAddressProvisioningByIds, listDomainProvisioningByIds, listReadyAddressCountsByDomains } from "../../db/provisioning.js";
 import { assessDomainReadiness } from "../../lib/domain-readiness.js";
 import { domainInboundReadinessSignals } from "../../lib/domain-inbound-evidence.js";
-import { resolveEmailsMode } from "../../lib/mode.js";
+import { resolveClientMode } from "../../lib/mode.js";
 import { resolveMailDataSource, type MailDataSource } from "../../lib/mail-data-source.js";
 import { readableMessageText, renderReadableEmailDocument } from "../tui/format.js";
 import { renderEmailToPdfBytes } from "../tui/pdf.js";
@@ -611,7 +611,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
             }),
             domains: domainRows.map((domain) => {
               const readyAddresses = readyAddressCounts.get(domain.id) ?? 0;
-              const mode = resolveEmailsMode();
+              const mode = resolveClientMode();
               const readiness = assessDomainReadiness(domain, domainProvisioning.get(domain.id) ?? null, {
                 ...domainInboundReadinessSignals(domain, mode),
                 ready_addresses: readyAddresses,

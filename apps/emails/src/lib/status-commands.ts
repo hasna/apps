@@ -26,7 +26,7 @@
 // list alone still let `emails status` propose it in LOCAL mode, where it refuses
 // just as hard.
 
-import type { EmailsMode } from "./mode.js";
+import type { ClientMode } from "./mode.js";
 
 /**
  * Command prefixes that refuse in EVERY mode because the feature does not ship in
@@ -133,7 +133,7 @@ export const LOCAL_REFUSED_COMMANDS: readonly string[] = [
   "emails serve",
 ];
 
-function refusedFor(mode: EmailsMode): readonly string[] {
+function refusedFor(mode: ClientMode): readonly string[] {
   const modeSpecific = mode === "self_hosted" ? SELF_HOSTED_REFUSED_COMMANDS : LOCAL_REFUSED_COMMANDS;
   return [...NEVER_AVAILABLE_COMMANDS, ...modeSpecific];
 }
@@ -144,13 +144,13 @@ function refusedFor(mode: EmailsMode): readonly string[] {
  * `emails provision status` matches the `emails provision` entry while
  * `emails provisioning-report` would not.
  */
-export function isCommandAvailableInMode(command: string, mode: EmailsMode): boolean {
+export function isCommandAvailableInMode(command: string, mode: ClientMode): boolean {
   const normalized = command.trim();
   return !refusedFor(mode).some((prefix) =>
     normalized === prefix || normalized.startsWith(`${prefix} `));
 }
 
 /** Drop every suggestion that would refuse in `mode`, preserving order. */
-export function keepAvailableCommands(commands: string[], mode: EmailsMode): string[] {
+export function keepAvailableCommands(commands: string[], mode: ClientMode): string[] {
   return commands.filter((command) => isCommandAvailableInMode(command, mode));
 }

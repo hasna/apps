@@ -7,7 +7,7 @@ import { getTemplate, renderTemplate } from "../../db/templates.js";
 import { getGroupByName, listMemberSummaries } from "../../db/groups.js";
 import { suppressedRecipientsAmong } from "../../db/contacts.js";
 import { handleError } from "../utils.js";
-import { getEmailsMode } from "../../lib/mode.js";
+import { getClientMode } from "../../lib/mode.js";
 import {
   describeSendAttachmentLimits,
   LOCAL_SEND_ATTACHMENT_LIMITS,
@@ -268,7 +268,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           // local mode it announced "(self-hosted)", quoted the server's
           // attachment caps, and predicted that scheduling would fail — none of
           // which applies to a local send, which does support scheduling.
-          const mode = getEmailsMode();
+          const mode = getClientMode();
           const selfHosted = mode === "self_hosted";
           const limits = selfHosted ? SELF_HOSTED_SEND_ATTACHMENT_LIMITS : LOCAL_SEND_ATTACHMENT_LIMITS;
           console.log(chalk.bold(`\n[DRY RUN] Would send (${selfHosted ? "self-hosted" : "local"}):`));

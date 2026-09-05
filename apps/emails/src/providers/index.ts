@@ -1,7 +1,7 @@
 import type { DnsPublishingSupport, DnsRecord, DnsStatus, Provider, SendEmailOptions, Stats } from "../types/index.js";
 import { ProviderConfigError } from "../types/index.js";
 import { applyDurableCredentials } from "../db/providers.js";
-import { getEmailsMode } from "../lib/mode.js";
+import { getClientMode } from "../lib/mode.js";
 import type { ProviderAdapter, RemoteAddress, RemoteDomain, RemoteEvent } from "./interface.js";
 
 class LazyProviderAdapter implements ProviderAdapter {
@@ -149,7 +149,7 @@ export function getAdapter(provider: Provider): ProviderAdapter {
   // a SYNCHRONOUS HTTP round-trip per provider that adds nothing — 500 providers
   // × ~400ms serialized curl ≈ 200s, the unbounded `emails provider status`
   // hang. Skip it when the store cannot supply credentials.
-  const executable = provider.id && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(provider.id) && getEmailsMode() !== "self_hosted"
+  const executable = provider.id && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(provider.id) && getClientMode() !== "self_hosted"
     ? applyDurableCredentials(provider)
     : provider;
   assertProviderConfig(executable);

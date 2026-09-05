@@ -76,7 +76,7 @@ function installCapturingSecretsCommand(): string {
 ENV_PATH=${JSON.stringify(envPath)}
 env | sort > "$ENV_PATH"
 if [ "$1" = "get" ] && [ "$2" = "hasna/test/opensource/emails/prod/client-env" ]; then
-  printf '%s\\n' '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid","EMAILS_SELF_HOSTED_API_KEY":"loaded-client-key"}'
+  printf '%s\\n' '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid","EMAILS_SELF_HOSTED_API_KEY":"loaded-client-key"}'
   exit 0
 fi
 exit 2
@@ -242,7 +242,8 @@ describe("Emails client-env loader", () => {
       loaded: true,
       ready: true,
     });
-    expect(process.env["EMAILS_MODE"]).toBe("self_hosted");
+    // The vault entry expands ONLY the canonical API settings — the retired
+    // deployment-mode variable is never merged into the environment.
     expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBe("https://emails.example.invalid");
     expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe("loaded-client-key");
 
@@ -276,7 +277,7 @@ describe("Emails client-env loader", () => {
 
   it("loads an optional EMAILS_SESSION_TOKEN from the vault entry when present", () => {
     installStaticSecretsCommand(
-      '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid",' +
+      '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid",' +
         '"EMAILS_SELF_HOSTED_API_KEY":"loaded-client-key","EMAILS_SESSION_TOKEN":"emss_from_vault"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
@@ -289,7 +290,7 @@ describe("Emails client-env loader", () => {
 
   it("accepts a session-token-only vault entry (no API key required)", () => {
     installStaticSecretsCommand(
-      '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid",' +
+      '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid",' +
         '"EMAILS_SESSION_TOKEN":"emss_only"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
@@ -307,9 +308,6 @@ describe("Emails client-env loader", () => {
     // was EMAILS_IDP_TOKEN — a valid credential refused at the door.
     installStaticSecretsCommand(
       JSON.stringify({
-        // Assembled, not spelled, so this addition contributes nothing to the axis
-        // ratchet this file sits inside.
-        [["EMAILS", "MODE"].join("_")]: "self_hosted",
         EMAILS_SELF_HOSTED_URL: "https://emails.example.invalid",
         [EMAILS_IDP_TOKEN_ENV]: "emid_identity_only",
       }),
@@ -326,7 +324,7 @@ describe("Emails client-env loader", () => {
 
   it("fails loud when the vault entry carries NO credential of any kind", () => {
     installStaticSecretsCommand(
-      '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid"}',
+      '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
 
@@ -338,7 +336,7 @@ describe("Emails client-env loader", () => {
 
   it("persists a session token into env and merges it into the vault entry", () => {
     const { storePath, argvLogPath } = installVaultBackedSecretsCommand(
-      '{"EMAILS_MODE":"self_hosted","EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid","EMAILS_SELF_HOSTED_API_KEY":"op-key"}',
+      '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid","EMAILS_SELF_HOSTED_API_KEY":"op-key"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
 
@@ -377,10 +375,9 @@ describe("Emails client-env loader", () => {
     const dir = mkdtempSync(join(tmpdir(), "emails-client-env-guard-"));
     tempDirs.push(dir);
     const bin = join(dir, "secrets");
-    // Assembled, not spelled, so this addition contributes nothing to the axis
-    // ratchet this file sits inside.
+    // Canonical API settings only: the vault entry contract has no mode word any
+    // more, and an entry that still carries one is refused at load.
     const guardedEntry = JSON.stringify({
-      [["EMAILS", "MODE"].join("_")]: "self_hosted",
       EMAILS_SELF_HOSTED_URL: "https://emails.example.invalid",
       EMAILS_SELF_HOSTED_API_KEY: "guarded-client-key",
     });
@@ -413,11 +410,10 @@ exit 2
     const dir = mkdtempSync(join(tmpdir(), "emails-client-env-legacy-"));
     tempDirs.push(dir);
     const storePath = join(dir, "store.json");
-    // Assembled key: keeps this fixture out of the axis-ratchet count.
+    // Canonical API settings only — the vault entry contract has no mode word.
     writeFileSync(
       storePath,
       JSON.stringify({
-        [["EMAILS", "MODE"].join("_")]: "self_hosted",
         EMAILS_SELF_HOSTED_URL: "https://emails.example.invalid",
         EMAILS_SELF_HOSTED_API_KEY: "op-key",
       }),

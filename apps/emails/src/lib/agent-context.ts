@@ -27,7 +27,7 @@
 // `gaps` — see src/lib/status-availability.ts for why `null` and not `0`/`[]`.
 
 import { resolveMailDataSource } from "./mail-data-source.js";
-import { getEmailsMode, resolveEmailsMode, type EmailsMode } from "./mode.js";
+import { getClientMode, resolveClientMode, type ClientMode } from "./mode.js";
 import { collectStatusFacts } from "./status-facts.js";
 import { isCommandAvailableInMode } from "./status-commands.js";
 import {
@@ -83,7 +83,7 @@ function isZero(value: number | null): boolean {
  */
 function buildNextActions(
   status: Omit<EmailSystemStatus, "next_actions">,
-  mode: EmailsMode,
+  mode: ClientMode,
 ): NextAction[] {
   const candidates: NextAction[] = [];
   const push = (command: string, reason: string): void => {
@@ -138,7 +138,7 @@ function buildNextActions(
 }
 
 async function buildSystemStatus(): Promise<EmailSystemStatus> {
-  const mode = resolveEmailsMode();
+  const mode = resolveClientMode();
   const ds = resolveMailDataSource();
   const [counts, mailboxes, mailboxSources] = await Promise.all([
     ds.mailboxCounts(),
@@ -582,7 +582,7 @@ function buildAgentContext(status: EmailSystemStatus): Record<string, unknown> {
   // src/cli/commands/address.ts serverOnly()s in both modes — a workflow whose
   // second step cannot be run is worse than no workflow.
   const runnable = (steps: string[]): string[] => {
-    const mode = getEmailsMode();
+    const mode = getClientMode();
     return steps.filter((command) => isCommandAvailableInMode(command, mode));
   };
   return {

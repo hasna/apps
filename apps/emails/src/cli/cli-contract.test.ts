@@ -32,7 +32,6 @@ function cliEnv(): NodeJS.ProcessEnv {
   for (const key of LEGACY_ENV_KEYS) delete base[key];
   return {
     ...base,
-    EMAILS_MODE: "self_hosted",
     EMAILS_SELF_HOSTED_URL: stub.baseUrl,
     EMAILS_SELF_HOSTED_API_KEY: stub.apiKey,
     HOME: homePath,

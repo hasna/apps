@@ -14,7 +14,7 @@
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
 import { selfHostedApiRequest } from "../../db/self-hosted-store.js";
-import { getEmailsMode } from "../../lib/mode.js";
+import { getClientMode } from "../../lib/mode.js";
 import { handleError, parseCliNonNegativeIntOption, parseCliPositiveIntOption } from "../utils.js";
 
 type OutputFn = (data: unknown, formatted: string) => void;
@@ -31,7 +31,7 @@ export interface UncertainSendIntentRow {
 }
 
 function assertSelfHosted(command: string): void {
-  if (getEmailsMode() === "self_hosted") return;
+  if (getClientMode() === "self_hosted") return;
   throw new Error(
     `${command} operates on the self-hosted send-intent ledger, which only exists in self_hosted mode. `
       + "Local mode sends synchronously and records no uncertain state.",

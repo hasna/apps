@@ -4,7 +4,7 @@ import { listDomains } from "../db/domains.js";
 import { listDomainProvisioningByIds, listReadyAddressCountsByDomains } from "../db/provisioning.js";
 import { assessDomainReadiness } from "../lib/domain-readiness.js";
 import { domainInboundReadinessSignals } from "../lib/domain-inbound-evidence.js";
-import { resolveEmailsMode } from "../lib/mode.js";
+import { resolveClientMode } from "../lib/mode.js";
 import { resolveMailDataSource } from "../lib/mail-data-source.js";
 import { fetchIdentitySafe } from "../lib/whoami.js";
 import { statusUnavailable } from "../lib/status-availability.js";
@@ -37,7 +37,7 @@ function selfHostedApiStatus(error?: unknown): Record<string, unknown> {
 
 export async function domainsResourcePayloadForRuntime(): Promise<Record<string, unknown>> {
   try {
-    const mode = resolveEmailsMode();
+    const mode = resolveClientMode();
     const domainRows = listDomains(undefined, { limit: DOMAIN_RESOURCE_LIMIT + 1, offset: 0 });
     const truncated = domainRows.length > DOMAIN_RESOURCE_LIMIT;
     const sample = domainRows.slice(0, DOMAIN_RESOURCE_LIMIT);

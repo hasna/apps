@@ -4,7 +4,7 @@ import { writeSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { resolveResourceId, listResourceIdMatches } from "../db/self-hosted-store.js";
 import { getDatabase, listPartialIdMatches, resolvePartialIdOrThrow } from "../db/database.js";
-import { getEmailsMode, type EmailsMode } from "../lib/mode.js";
+import { getClientMode, type ClientMode } from "../lib/mode.js";
 import { keepAvailableCommands } from "../lib/status-commands.js";
 import { redactSecrets } from "../lib/redaction.js";
 
@@ -218,9 +218,9 @@ function fixCommands(message: string): string[] {
     return ["emails status --json", "emails doctor --json"];
   })();
 
-  let mode: EmailsMode;
+  let mode: ClientMode;
   try {
-    mode = getEmailsMode();
+    mode = getClientMode();
   } catch {
     // Mode resolution itself failed (e.g. the very error being reported). Do not
     // guess a mode and do not promise a command we cannot vouch for.
@@ -279,7 +279,7 @@ function resourceForTable(table: string): string {
 }
 
 export function resolveId(table: string, partialId: string): string {
-  if (getEmailsMode() === "local") {
+  if (getClientMode() === "local") {
     try {
       return resolvePartialIdOrThrow(getDatabase(), table, partialId);
     } catch (error) {
@@ -300,7 +300,7 @@ export function resolveId(table: string, partialId: string): string {
 
 function getIdSuggestions(resource: string, partialId: string): string[] {
   try {
-    if (getEmailsMode() === "local") {
+    if (getClientMode() === "local") {
       const table = Object.entries(TABLE_TO_RESOURCE).find(([, mapped]) => mapped === resource)?.[0] ?? resource;
       return listPartialIdMatches(getDatabase(), table, partialId, ID_ERROR_SUGGESTION_LIMIT);
     }

@@ -34,7 +34,7 @@ import { createSqliteEmailStore } from "../../store-sqlite/index.js";
 import { getInboundBuckets, loadConfig, saveConfig } from "../../lib/config.js";
 import { assessDomainReadiness } from "../../lib/domain-readiness.js";
 import { domainInboundReadinessSignals } from "../../lib/domain-inbound-evidence.js";
-import { resolveEmailsMode } from "../../lib/mode.js";
+import { resolveClientMode } from "../../lib/mode.js";
 import { listS3Sources } from "../../lib/s3-sync.js";
 import { createSentEmailLedger, setSentEmailThreading, storeSentEmailContent } from "../../lib/sent-ledger.local.js";
 import { buildThreadingHeaders, generateMessageId, parseReferences } from "../../lib/threading.js";
@@ -1661,7 +1661,7 @@ export async function listDomainSummaries(optsOrDb?: ListDomainSummaryOptions | 
   const provisioningById = await listDomainProvisioningByIds(domainIds, store);
   const readyAddressesByDomain = await listReadyAddressCountsByDomains(domainIds, store);
   const countsByDomain = allDomainMailCounts(d, domains.map((domain) => domain.domain));
-  const mode = resolveEmailsMode();
+  const mode = resolveClientMode();
   return domains
     .map((domain) => {
       const key = domain.domain.toLowerCase();

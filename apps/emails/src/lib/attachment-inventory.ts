@@ -166,12 +166,12 @@ export async function listSelfHostedAttachments(
   input: AttachmentInventoryQueryInput = {},
 ): Promise<SafeAttachmentInventoryPage> {
   const query = normalizeAttachmentInventoryQuery(input);
-  const [{ resolveSelfHostedConfig }, { resolveEmailsModeSelection }, { EmailsSelfHostClient }] = await Promise.all([
+  const [{ resolveSelfHostedConfig }, { resolveClientModeSelection }, { EmailsSelfHostClient }] = await Promise.all([
     import("../db/self-hosted-store.js"),
     import("./mode.js"),
     import("../selfhost.js"),
   ]);
-  const selectedMode = resolveEmailsModeSelection().mode;
+  const selectedMode = resolveClientModeSelection().mode;
   if (selectedMode !== "self_hosted") {
     throw new Error("attachment inventory is available only in self_hosted mode");
   }

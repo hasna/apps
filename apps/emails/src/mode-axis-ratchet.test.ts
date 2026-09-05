@@ -71,7 +71,7 @@ const root = join(import.meta.dir, "..");
  * src/self-hosted-wire-regression.test.ts, one in src/mcp/http.test.ts) and that the
  * ratchet caught on rebase — the guard working, not the guard yielding, and the last
  * time the number may move UP. The three that came off here, together with the one
- * off `resolveEmailsModeReferences` (74 -> 73), are the mode guards deleted from
+ * off `resolveClientModeReferences` (74 -> 73), are the mode guards deleted from
  * src/mcp/tools/{domains-impl,misc-ops,sequences}.ts: `assertAliasLocalStateAllowed`,
  * `assertGroupMemberStateAllowed` and `assertSequenceSubledgerAllowed` each read the
  * mode variable and each named it again in the refusal text they no longer emit.
@@ -105,7 +105,7 @@ const root = join(import.meta.dir, "..");
  * re-add exactly as many branches as the gap is wide, with the guard still green — so
  * every phase that lowers a count has to lower its ceiling to match, or it has only
  * half-landed. Two prior collapses left slack behind: #108 (the batch family) left
- * `twoArmFamilies` and `remoteArmModules` one wide each and `getEmailsModeReferences`
+ * `twoArmFamilies` and `remoteArmModules` one wide each and `getClientModeReferences`
  * two wide, and #83's own note above records `emailsModeEnvReferences` sitting three
  * under its ceiling. All of it is reclaimed here.
  *
@@ -116,8 +116,8 @@ const root = join(import.meta.dir, "..");
  * numbers: `twoArmFamilies` 42 -> 41 and `remoteArmModules` 42 -> 41 (its two arms are
  * deleted), `routedFacadeDefinitions` 30 -> 29 and `routedCallExpressions` 293 -> 290
  * (its facade's dispatch helper and three dispatched exports), plus
- * `getEmailsModeReferences` 76 -> 74 (the facade's import and its one call) and
- * `resolveEmailsModeReferences` 73 -> 71 (the local arm's import and its one call,
+ * `getClientModeReferences` 76 -> 74 (the facade's import and its one call) and
+ * `resolveClientModeReferences` 73 -> 71 (the local arm's import and its one call,
  * which fed the domain inbound-readiness signals).
  *
  * A consequence worth stating for the next agent in this phase: with zero slack, a
@@ -136,7 +136,7 @@ const root = join(import.meta.dir, "..");
  * The two collapses move DISJOINT sets of counters, which is why the merge is a real
  * tightening rather than a pick-one:
  *   - status-facts moved `twoArmFamilies` and `remoteArmModules` by one, and
- *     `getEmailsModeReferences` and `resolveEmailsModeReferences` by two each; its own
+ *     `getClientModeReferences` and `resolveClientModeReferences` by two each; its own
  *     dispatch used neither the helper nor a dispatched export.
  *   - verification-code moves `twoArmFamilies` and `remoteArmModules` by one more, 39 -> 38
  *     (its two
@@ -151,14 +151,14 @@ const root = join(import.meta.dir, "..");
  * tree. Analytics deletes its two arms, so `twoArmFamilies` and `remoteArmModules` fall
  * by one each; its facade's dispatch helper and two dispatched exports take
  * `routedFacadeDefinitions` by one and `routedCallExpressions` by two; and the deleted
- * facade's mode import plus its one dispatch read take `getEmailsModeReferences` by two.
- * `resolveEmailsModeReferences` does not move — the deleted arms resolved no mode of
+ * facade's mode import plus its one dispatch read take `getClientModeReferences` by two.
+ * `resolveClientModeReferences` does not move — the deleted arms resolved no mode of
  * their own, the local arm read SQLite directly and the second arm was a throwing stub.
  *
  * AND HERE IS WHY THE RESOLUTION MUST BE A MEASUREMENT AND NOT ARITHMETIC. The obvious
  * way to settle a conflict in this block is to take the smaller of the two sides per
  * metric. It is wrong, and this rebase is the proof: main and this branch BOTH carried
- * `getEmailsModeReferences: 68`, so a per-metric minimum keeps 68 — while the merged tree
+ * `getClientModeReferences: 68`, so a per-metric minimum keeps 68 — while the merged tree
  * measures 66, because the two collapses removed DISJOINT references and a minimum cannot
  * see that. Two units of slack would have been pinned as "zero slack", which is exactly
  * the licence this whole paragraph exists to deny. Zero every number, then measure.
@@ -176,8 +176,8 @@ const root = join(import.meta.dir, "..");
  * branch is not evidence about the tree you are merging into.
  *
  * This collapse moves five. `twoArmFamilies` and `remoteArmModules` by one each (the doctor
- * family's two arms are deleted); `getEmailsModeReferences` by two (the deleted facade's
- * import and its one dispatch read); `resolveEmailsModeReferences` by four (BOTH deleted arms
+ * family's two arms are deleted); `getClientModeReferences` by two (the deleted facade's
+ * import and its one dispatch read); `resolveClientModeReferences` by four (BOTH deleted arms
  * imported the resolver and each called it once); and `emailsModeEnvReferences` by three (the
  * deleted family's test fixture had to scrub three deployment-word settings and no longer has
  * a mode to set). Its facade dispatched inline rather than through the helper, so
@@ -187,7 +187,7 @@ const root = join(import.meta.dir, "..");
  * eleven live counts already equalled their declared ceilings, so nothing landed on top of the
  * block above without re-pinning and there is no inherited slack to reclaim. Five ceilings move
  * and all five are paid for here: `twoArmFamilies` 38 -> 37, `remoteArmModules` 38 -> 37,
- * `getEmailsModeReferences` 70 -> 68, `resolveEmailsModeReferences` 69 -> 65,
+ * `getClientModeReferences` 70 -> 68, `resolveClientModeReferences` 69 -> 65,
  * `emailsModeEnvReferences` 238 -> 235. The other six were already exact and stay put. Corpus
  * of this change: 668 tracked, 667 scanned, 8,745,666 characters.
  *
@@ -198,7 +198,7 @@ const root = join(import.meta.dir, "..");
  * where all eleven live counts equalled their declared ceilings): `twoArmFamilies` and
  * `remoteArmModules` by one each (the digest family's two arms are deleted);
  * `routedFacadeDefinitions` by one and `routedCallExpressions` by four (its facade held a
- * dispatch helper and four dispatched exports); and `getEmailsModeReferences` by two — that
+ * dispatch helper and four dispatched exports); and `getClientModeReferences` by two — that
  * dispatcher read the process-wide setting directly rather than through the client-side
  * predicate, which is also why `isSelfHostedModeReferences` does not move. Its arms carried
  * no resource branches, so neither `selfHostedResource*` counter moves.
@@ -213,7 +213,7 @@ const root = join(import.meta.dir, "..");
  * SAME value, git auto-merges the line with NO conflict marker, and the result is exactly the
  * per-metric minimum. On the rebase onto the analytics collapse that happened to four of the
  * eleven at once — `twoArmFamilies` and `remoteArmModules` (both sides 36, merged tree 35),
- * `routedFacadeDefinitions` (both 27, merged tree 26) and `getEmailsModeReferences` (both 66,
+ * `routedFacadeDefinitions` (both 27, merged tree 26) and `getClientModeReferences` (both 66,
  * merged tree 64) — and only ONE counter conflicted loudly. A rebase that resolves the
  * visible conflict and trusts the rest therefore ships five counters between one and two
  * wide with the guard green. The only safe procedure is to RE-MEASURE every counter on the
@@ -237,8 +237,8 @@ const root = join(import.meta.dir, "..");
  *
  * THE NUMBERS BELOW WERE RE-MEASURED ON THE MERGED TREE AFTER THIS REBASE, and the paragraph
  * above about the silent half is why. Only ONE line conflicted here
- * (`isSelfHostedModeReferences` / `getEmailsModeReferences`, where the two sides genuinely
- * disagreed); `resolveEmailsModeReferences`, `normalizeEmailsModeReferences` and
+ * (`isSelfHostedModeReferences` / `getClientModeReferences`, where the two sides genuinely
+ * disagreed); `resolveClientModeReferences`, `normalizeClientModeReferences` and
  * `emailsModeEnvReferences` sit BELOW the conflict region and were auto-merged with no marker
  * at all. Trusting that silence is how a counter ships wide with the guard green.
  *
@@ -273,7 +273,7 @@ const root = join(import.meta.dir, "..");
  * all eleven live counts equalled the ceilings declared above) and the merged tree:
  * `twoArmFamilies` and `remoteArmModules` by one each (that family's two arms are deleted);
  * `routedFacadeDefinitions` by one and `routedCallExpressions` by two (its facade held a
- * dispatch helper and dispatched its two exports through it); and `getEmailsModeReferences` by
+ * dispatch helper and dispatched its two exports through it); and `getClientModeReferences` by
  * two — that dispatcher read the process-wide setting directly rather than through the
  * client-side predicate, which is also why `isSelfHostedModeReferences` does not move. Neither
  * arm carried a resource branch, called either mode resolver, or named the environment
@@ -329,7 +329,7 @@ const root = join(import.meta.dir, "..");
  * those six were PURE functions that touch no storage and were byte-identical in both arms, so
  * the deployment word decided nothing about them at all); `isSelfHostedModeReferences`
  * 64 -> 62 (the deleted facade imported the client-side predicate and called it once, which is
- * also why `getEmailsModeReferences` does NOT move — this dispatcher went through the predicate
+ * also why `getClientModeReferences` does NOT move — this dispatcher went through the predicate
  * rather than reading the process-wide setting directly); and `selfHostedResourceReferences`
  * 192 -> 188 (the deleted second arm's four generic-resource calls).
  * `selfHostedResourceBranches` does NOT move even though a `*.local.*` module was deleted:
@@ -419,7 +419,7 @@ const root = join(import.meta.dir, "..");
  * it); `selfHostedResourceReferences` 188 -> 183 (the deleted second arm reached the generic
  * resource store five times); and `isSelfHostedModeReferences` 62 -> 60 (the deleted facade
  * imported the client-side predicate and called it once, which is also why
- * `getEmailsModeReferences` does NOT move — this dispatcher went through the predicate rather
+ * `getClientModeReferences` does NOT move — this dispatcher went through the predicate rather
  * than reading the process-wide setting). `selfHostedResourceBranches` does NOT move even though
  * a `*.local.*` module was deleted, for the reason recorded for the digest-row collapse: that
  * metric counts a local arm asking whether it is really the local arm, and this one never did —
@@ -496,9 +496,9 @@ const root = join(import.meta.dir, "..");
  *   twoArmFamilies      29  both `s3-sync.local.ts` and `s3-sync.remote.ts` still exist. A reduced
  *   remoteArmModules    29  `routedCallExpressions` must NOT be read as this family being done —
  *                           these two are the counters that say it is not, and they are correct.
- *   getEmailsModeReferences  62  the facade still imports the process-wide read and still calls it
+ *   getClientModeReferences  62  the facade still imports the process-wide read and still calls it
  *                                once, for the one export that is still routed.
- *   isSelfHostedModeReferences 58 · resolveEmailsModeReferences 65 · normalizeEmailsModeReferences 16
+ *   isSelfHostedModeReferences 58 · resolveClientModeReferences 65 · normalizeClientModeReferences 16
  *   selfHostedResourceBranches 44 · selfHostedResourceReferences 180 · emailsModeEnvReferences 235
  *                           nothing in the registry half resolved, normalized or named the setting,
  *                           and nothing in it reached the generic resource store.
@@ -527,7 +527,7 @@ const root = join(import.meta.dir, "..");
  * `routedFacadeDefinitions` 19 -> 18 and `routedCallExpressions` 245 -> 244 (its facade held a
  * dispatch helper and dispatched its ONE export through it — the smallest facade in the
  * programme so far, and why the call-expression counter moves by one rather than by several);
- * and `getEmailsModeReferences` 62 -> 60 (the deleted facade imported the process-wide read and
+ * and `getClientModeReferences` 62 -> 60 (the deleted facade imported the process-wide read and
  * called it once, which is also why `isSelfHostedModeReferences` does NOT move — this
  * dispatcher read the setting directly rather than through the client-side predicate). The
  * other six do not move: neither deleted arm carried a resource branch, called either resolver,
@@ -612,7 +612,7 @@ const root = join(import.meta.dir, "..");
  * FIVE DO NOT MOVE, and each absence is a fact rather than an omission.
  * `selfHostedResourceBranches` stays at 44 even though a `*.local.*` module was deleted: that
  * metric counts a local arm asking whether it is really the local arm, and this one never did —
- * it talked to SQLite directly. `getEmailsModeReferences` stays at 60 and the two resolver/parser
+ * it talked to SQLite directly. `getClientModeReferences` stays at 60 and the two resolver/parser
  * counters stay at 65 and 16, because this dispatcher went through the predicate rather than
  * reading or parsing the process-wide setting. And `emailsModeEnvReferences` stays at 235,
  * which took deliberate care: the most natural way to prove the deleted second arm's clamped-page
@@ -669,7 +669,7 @@ const root = join(import.meta.dir, "..");
  *
  *   twoArmFamilies               27 -> 26   both arm modules deleted, so the facade has no
  *   remoteArmModules             27 -> 26   siblings left. THE PAIR THAT SAYS A FAMILY IS DONE.
- *   getEmailsModeReferences      60 -> 58   the facade's import of the process-wide read, and its
+ *   getClientModeReferences      60 -> 58   the facade's import of the process-wide read, and its
  *                                           one call.
  *
  * EIGHT DO NOT MOVE, and two of those absences are facts a reviewer should not have to re-derive.
@@ -1451,32 +1451,38 @@ const CEILINGS: Record<string, number> = {
   routedCallExpressions: 115,
   selfHostedResourceBranches: 9,
   selfHostedResourceReferences: 36,
-  isSelfHostedModeReferences: 31,
-  // 2026-08-27, row O15-04143: 55 -> 57. ARGUED RAISE: the provider adapter
-  // registry (src/providers/index.ts) gained one import and one read of the
-  // process-wide mode predicate to SKIP the durable-credential overlay in the
-  // self-hosted arm, whose records are credential-free by design. That overlay
-  // was a synchronous HTTP round-trip per provider — 500 providers × ~400ms
-  // serialized curl ≈ 200s, the unbounded `emails provider status` hang the
-  // row fixes. The reads add no mode branch and no second implementation;
-  // they REMOVE a per-provider cost the existing self-hosted branch imposed.
-  getEmailsModeReferences: 57,
-  resolveEmailsModeReferences: 64,
-  normalizeEmailsModeReferences: 16,
-  // 2026-08-29, row O15-04946: 203 -> 213. MEASURED RE-PIN, not this change's
-  // doing: pristine origin/main 99ed28878 already measures 213 (the ratchet
-  // fails on main before this PR's diff is applied; this PR's diff adds zero
-  // occurrences of the counted variable). The ten references landed on main
-  // via merged mode/env work (O15-04143 #1328 and the env-var naming pass)
-  // that did not re-pin this ceiling. The ARGUED RAISE precedent in this
-  // file's header (232 -> 242, ten references that landed on main while the
-  // ratchet was being written) covers exactly this shape: the guard caught
-  // the drift, and re-pinning to the measured live count is what keeps the
-  // guard operative — shrinking the axis back down is the tracked
-  // mode-deletion program, not a Dockerfile pin fix. Re-measured on this
-  // branch: 213. (The variable's name is not spelled here on purpose — this
-  // file sits inside its own corpus and must contribute zero to the count.)
-  emailsModeEnvReferences: 213,
+  // 2026-09-05, hasna/apps#1566: 31 -> 36. ARGUED RAISE: the five extra reads
+  // are guard-coverage seam probes in src/db/self-hosted-store.test.ts that
+  // drive the kept client-side mode predicate at the retired-key guard's
+  // refusal boundaries — a carried-forward selector value, legacy Mailery-era
+  // keys, the fail-closed nothing-configured row and the two-configured
+  // contradiction — and they disappear with the guard in the follow-up
+  // deletion PR, not before.
+  isSelfHostedModeReferences: 36,
+  // 2026-09-05, hasna/apps#1566: MEASURED RE-PIN 57 -> 56 — the mode-word
+  // deletion removed one read (the earlier argued raise, 55 -> 57 for the
+  // provider registry's mode-predicate read, row O15-04143, stays on the
+  // books for the reads that remain).
+  getClientModeReferences: 56,
+  // 2026-09-05, hasna/apps#1566: MEASURED RE-PIN 64 -> 66 — the retired-key
+  // guard's refusal-path tests exercise the resolver directly with
+  // carried-forward-selector and config-key inputs, alongside the kept
+  // call sites.
+  resolveClientModeReferences: 66,
+  // 2026-09-05, hasna/apps#1566: CORRECTED RE-PIN to 67. The measurement that
+  // produced 63 predated the retired-key guard module's final form: the module
+  // alone carries the four occurrences the pin was short by (its exported key
+  // array of the two env spellings and its top-of-module prose naming them),
+  // so the residue composition stated below is unchanged — guard key arrays,
+  // test scrub lists and refusal assertions, the server rollout tolerance and
+  // its control-surface tests, and the no-cloud scan control fixture — and all
+  // of it falls to zero when the guard and the tolerance are deleted with the
+  // axis. Re-measured 2026-09-05 over the real `git ls-files` corpus (736
+  // tracked / 735 scanned) after CI reported the final tree at 67, exactly the
+  // guard's four over the pin. (The selector's name is not spelled here on
+  // purpose — this file sits inside its own corpus and must contribute zero
+  // to the count.)
+  emailsModeEnvReferences: 67,
 };
 
 // 649 files are tracked and 648 scanned today, totalling ~9.7M characters. (The figures in
@@ -1592,7 +1598,7 @@ describe("deployment-mode axis ratchet", () => {
       );
     }
     // The ratchet is not exempt from itself. It names its metrics with suffixed keys
-    // (`getEmailsModeReferences`, never the bare identifier) precisely so it can sit
+    // (`getClientModeReferences`, never the bare identifier) precisely so it can sit
     // inside the scanned corpus and contribute nothing to it — which also means mode
     // code cannot be parked in this file to dodge a count.
     const selfPath = relative(root, import.meta.path);

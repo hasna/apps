@@ -58,7 +58,8 @@ beforeEach(() => {
   for (const key of TOUCHED_ENV) delete process.env[key];
   homeScratch = mkdtempSync(join(tmpdir(), "emails-status-facts-home-"));
   process.env[HOME_ENV] = homeScratch;
-  process.env[MODE_ENV] = "local";
+  // The deployment-mode variable is retired (hasna/apps#1566): the database path
+  // alone routes the local arm.
   process.env[DB_PATH_ENV] = ":memory:";
   resetDatabase();
 });
