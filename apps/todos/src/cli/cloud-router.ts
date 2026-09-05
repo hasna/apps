@@ -69,7 +69,7 @@ import {
   TODOS_LOCAL_OPT_IN_ENV_KEYS,
   isTodosLocalOptIn,
   selectsTodosLocalStore,
-  todosResolverEnv,
+  todosResolverInputs,
 } from "../lib/local-opt-in.js";
 
 type Env = Record<string, string | undefined>;
@@ -283,12 +283,15 @@ export function resolveTodosCliTransport(
     return { transport: "sqlite", selected: false, source: "local-opt-in", authority: null };
   }
   let authority: ClientTransportResolution;
+  // Normalising blanks hands the resolver a copy, and a copy is not the ambient
+  // environment its Keychain tier gates on — so the gate travels with the env
+  // as `keychain.enabled` rather than being silently lost (see
+  // `todosResolverInputs`).
+  const resolverInputs = todosResolverInputs(env, options.credentials);
   try {
-    authority = resolveClientTransport(
-      "todos",
-      todosResolverEnv(env),
-      options.credentials ? { credentials: options.credentials } : {},
-    );
+    authority = resolveClientTransport("todos", resolverInputs.env, {
+      credentials: resolverInputs.credentials,
+    });
   } catch (error) {
     rethrowAuthorityFailure(error);
   }
@@ -299,10 +302,6 @@ export function resolveTodosCliTransport(
     source: `${authority.apiKeySource ?? authority.apiKeyTier}+${authority.apiUrlSource ?? "default"}`,
     authority,
   };
-}
-
-function requestedTransport(env: Env, options: TodosClientResolveOptions): TodosCliTransport {
-  return resolveTodosCliTransport(env, options).transport;
 }
 
 export function getTodosRemoteAuthorityConfigStatus(
@@ -575,17 +574,32 @@ export function getTodosCloudClient(
   requestTimeoutMs: number = REMOTE_REQUEST_TIMEOUT_MS,
   options: TodosClientResolveOptions = {},
 ): HasnaStorageClient | null {
-  // Resolving first is what makes the throw arms reachable: the unhosted
-  // opt-in is the only path that returns null, and anything the contracts
-  // chain refuses has already thrown by the time we get here.
-  if (requestedTransport(env, options) !== "http") return null;
-  const resolved = resolveStorageClient("todos", todosResolverEnv(env), {
-    fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
-    // Align the transport's own per-request timer with the CLI's bounded
-    // request budget so no request can outlive the deadline (task 9b050845).
-    timeoutMs: requestTimeoutMs,
-    ...(options.credentials ? { credentials: options.credentials } : {}),
-  });
+  // ONE pass through the chain, not two. The unhosted opt-in is the only path
+  // that returns null and it is answered from the env dictionary alone — no
+  // Keychain item and no credential file is read for it — so asking
+  // `resolveTodosCliTransport` first would only re-run the whole chain that
+  // `resolveStorageClient` is about to run: on darwin that is a second pair of
+  // `/usr/bin/security` spawns (four per client, measured) and a second chance
+  // to prompt, before a single request goes out. The refusals that made the
+  // pre-check look load-bearing are re-created exactly where they were: the
+  // contracts failures still come back through `rethrowAuthorityFailure` as the
+  // CLI's REMOTE_API_* errors, and the authority shape is still asserted before
+  // the client is handed to a caller.
+  if (selectsTodosLocalStore(env)) return null;
+  const storageInputs = todosResolverInputs(env, options.credentials);
+  let resolved: ReturnType<typeof resolveStorageClient>;
+  try {
+    resolved = resolveStorageClient("todos", storageInputs.env, {
+      fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
+      // Align the transport's own per-request timer with the CLI's bounded
+      // request budget so no request can outlive the deadline (task 9b050845).
+      timeoutMs: requestTimeoutMs,
+      credentials: storageInputs.credentials,
+    });
+  } catch (error) {
+    rethrowAuthorityFailure(error);
+  }
+  assertTodosAuthorityShape(resolved.client.baseUrl);
   // `cloud-http` is the pinned @hasna/contracts generation's transport name;
   // `http` is the post-removal generation's. Both mean "authenticated /v1".
   // The installed typings declare one transport name or the other depending on

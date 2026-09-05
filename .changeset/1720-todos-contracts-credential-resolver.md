@@ -15,7 +15,12 @@ same ladder — `HASNA_TODOS_API_URL`, the Keychain `api-url` item, the
 credentials file — and now DEFAULTS to the fleet gateway
 `https://api.hasna.com/todos` once a credential resolves, so a key alone is a
 complete configuration. Resolving per call is what makes a key rotation heal a
-long-lived shell or MCP server without restarting it.
+long-lived shell, MCP server or agent without restarting it: a `TodosClient`
+held for hours re-resolves the credential on every request, so the next request
+after a rotation carries the new key. The two deliberate exceptions are an
+explicit `apiKey` argument (tier 1, a pin the caller owns) and the service
+authority, which is fixed for the life of a client so a credential written for
+one authority is never sent to another.
 
 What this removes:
 
@@ -53,7 +58,22 @@ Behaviour worth knowing about:
 
 - Hosted mode with no credential still fails closed — non-zero exit, no SQLite
   fallback, no local-fallback event — and the message now names every tier it
-  consulted, so the remedy is in the error.
+  consulted, so the remedy is in the error. The `./sdk` surface differs for that
+  ONE case by design: `new TodosClient()` falls to the local `todos-serve` with
+  a stderr line, `createTodosV1Client()` throws. Every other refusal throws on
+  every surface.
+- The bundled `@hasna/todos-sdk` package (`apps/todos/sdk`, published separately
+  and NOT a workspace member, so it carries no changeset of its own — see
+  hasna/apps#1787) now documents the environment variables it reads and prints
+  one line when it falls back to the local `todos-serve`. Its canonical
+  `HASNA_TODOS_*` names always win; the unprefixed spellings are legacy and are
+  accepted for one release only.
+- A declared-but-blank `*TODOS_*` variable no longer disables the Keychain tier.
+  Removing a blank means handing the resolver a COPY of the environment, and
+  @hasna/contracts gates its ambient tiers on object identity, so the copy used
+  to switch tier 3 off for the whole run — silently dropping a station from its
+  Keychain identity to the next one in the chain. The gate is now decided before
+  normalising and carried across as `keychain.enabled`.
 - Local mode (`HASNA_TODOS_LOCAL=1`, alias `TODOS_LOCAL=1`) is honoured only
   when the environment configures no authority and no credential, and is
   answered BEFORE the resolver runs, so an unhosted run reads neither the

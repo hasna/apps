@@ -46,7 +46,7 @@ import {
   type ResolveClientTransportOptions,
 } from "@hasna/contracts/client";
 import { TodosV1Client, type TodosV1ClientOptions } from "./v1.generated.js";
-import { selectsTodosLocalStore, todosResolverEnv } from "../lib/local-opt-in.js";
+import { selectsTodosLocalStore, todosResolverInputs } from "../lib/local-opt-in.js";
 
 /** The unhosted `todos-serve` a workstation runs. Never a hosted authority. */
 export const TODOS_LOCAL_SERVE_URL = "http://localhost:19427";
@@ -112,9 +112,16 @@ function announceLocal(notice: ((line: string) => void) | undefined, reason: str
 export function resolveTodosSdkTransport(
   options: ResolveTodosSdkTransportOptions = {},
 ): TodosSdkTransport {
-  const env: Env = todosResolverEnv(
-    options.env ?? (typeof process !== "undefined" ? (process.env as Env) : {}),
-  );
+  const rawEnv: Env = options.env ?? (typeof process !== "undefined" ? (process.env as Env) : {});
+  // The credential options the chain will see, assembled BEFORE the env is
+  // normalised: dropping a declared-but-blank variable hands the resolver a
+  // copy, and a copy is not the ambient environment its Keychain tier gates on,
+  // so the gate has to travel with it (see `todosResolverInputs`).
+  const requestedCredentials: CredentialChainOptions = {
+    ...options.credentials,
+    ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
+  };
+  const { env, credentials } = todosResolverInputs(rawEnv, requestedCredentials);
 
   // Tier 1, and the only way to reach an arbitrary authority: an explicit
   // argument is a deliberate selection, so it is never resolved around.
@@ -141,16 +148,7 @@ export function resolveTodosSdkTransport(
     };
   }
 
-  const chainOptions: ResolveClientTransportOptions = {
-    ...(options.credentials || options.apiKey !== undefined
-      ? {
-          credentials: {
-            ...options.credentials,
-            ...(options.apiKey !== undefined ? { apiKey: options.apiKey } : {}),
-          },
-        }
-      : {}),
-  };
+  const chainOptions: ResolveClientTransportOptions = { credentials };
 
   let resolution: ClientTransportResolution;
   try {
@@ -223,10 +221,33 @@ export function createTodosV1Client(
         "hasna.credentials.todos.api-key, ~/.hasna/todos/config/credentials, then HASNA_TODOS_API_KEY.",
     );
   }
+  // PER-CALL, NOT PER-CLIENT. `TodosV1Client` is generated from the OpenAPI
+  // document and stores whatever `apiKey` it is handed, so a client built once
+  // and held for hours would keep sending the key that happened to resolve at
+  // startup — the staleness the fresh-per-call chain exists to remove. Rather
+  // than fork the generated file, the credential is refreshed in a `fetch`
+  // wrapper: the generated request has already set `x-api-key` from its stored
+  // value by the time we see it, and we overwrite that header with the key the
+  // chain resolves NOW. A re-resolution that throws or comes back empty leaves
+  // the generated header in place, so a transient unreadable Keychain cannot
+  // turn a working client into a failing one mid-flight.
+  const baseFetch = options.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
+  const fetchWithFreshCredential = ((input: RequestInfo | URL, init?: RequestInit) => {
+    // The generated client always hands us a plain record; keep that shape so a
+    // caller-supplied `fetch` sees the headers it has always seen.
+    const headers: Record<string, string> = { ...((init?.headers as Record<string, string>) ?? {}) };
+    try {
+      const fresh = resolveTodosSdkTransport(options).apiKey;
+      if (fresh) headers["x-api-key"] = fresh;
+    } catch {
+      // keep the credential the client was constructed with
+    }
+    return baseFetch(input, { ...init, headers });
+  }) as typeof fetch;
   return new TodosV1Client({
     baseUrl: resolved.baseUrl,
     apiKey: resolved.apiKey,
-    ...(options.fetch ? { fetch: options.fetch } : {}),
+    fetch: fetchWithFreshCredential,
     ...(options.headers ? { headers: options.headers } : {}),
   });
 }
