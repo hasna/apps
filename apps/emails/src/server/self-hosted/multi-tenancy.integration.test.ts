@@ -63,7 +63,7 @@ function makeDeps(): { deps: SelfHostedServiceDeps; sent: Captured[] } {
     client: pgClient!,
     store: new EmailsSelfHostedStore(pgClient!),
     verifier: verifyApiKeyWithAliases(
-      { signingSecret: SIGNING_SECRET },
+      { signingSecret: SIGNING_SECRET, keyStatus: async () => "active" },
       [SELF_HOSTED_APP, ...SELF_HOSTED_APP_ALIASES],
     ),
     sender: {
@@ -521,7 +521,9 @@ describe.skipIf(!pgClient)("central outbound enforcement", () => {
       },
     });
     expect(quota).toMatchObject({ status: 429, body: { reason: "address_quota_exceeded" } });
-    expect(sent).toHaveLength(1);
+    // Cumulative across the two successful sends above: a quota block must not
+    // add a provider call, so the count stays at 2.
+    expect(sent).toHaveLength(2);
 
     await register("unverified@policy.example", { verified: false });
     const unverified = await call(deps, "POST", "/v1/messages/send", {
@@ -534,7 +536,7 @@ describe.skipIf(!pgClient)("central outbound enforcement", () => {
       },
     });
     expect(unverified).toMatchObject({ status: 403, body: { reason: "sender_unverified" } });
-    expect(sent).toHaveLength(1);
+    expect(sent).toHaveLength(2);
   });
 });
 
