@@ -26,6 +26,7 @@ import {
   credentialPointerEnvKey,
   CREDENTIAL_PROFILE_ENV_KEY,
 } from "@hasna/contracts/client";
+import type { CredentialChainOptions } from "@hasna/contracts/client";
 
 /** The deliberate unhosted opt-in, canonical name first. */
 export const TODOS_LOCAL_OPT_IN_ENV_KEYS = ["HASNA_TODOS_LOCAL", "TODOS_LOCAL"] as const;
@@ -101,4 +102,78 @@ export function todosResolverEnv<T extends TodosLocalOptInEnv>(env: T): T {
   const next = { ...env } as T;
   for (const key of blanks) delete next[key];
   return next;
+}
+
+/**
+ * @hasna/contracts marks the LIVE process environment with this symbol so its
+ * ambient tiers — the macOS Keychain `api-key` and `api-url` items, which
+ * belong to the machine rather than to any env object — know they were handed
+ * the real environment and not a caller-built one. It is a registry symbol
+ * precisely so a normaliser like ours can read it without importing internals.
+ */
+const CONTRACTS_AMBIENT_ENVIRONMENT = Symbol.for("hasna:contracts:ambientClientEnvironment");
+
+/**
+ * Is this the environment the machine's ambient credential stores belong to?
+ *
+ * The same test @hasna/contracts performs, run on the env BEFORE we normalise
+ * it — which is the whole point of asking here.
+ */
+function isAmbientTodosEnv(env: TodosLocalOptInEnv): boolean {
+  if (typeof process !== "undefined" && (env as unknown) === (process.env as unknown)) return true;
+  return (env as unknown as Record<symbol, unknown>)[CONTRACTS_AMBIENT_ENVIRONMENT] === true;
+}
+
+/** The env object and credential options a Todos surface hands @hasna/contracts. */
+export interface TodosResolverInputs<T extends TodosLocalOptInEnv> {
+  /** The environment with every declared-but-blank authority variable removed. */
+  env: T;
+  /** The chain options, with the Keychain tier's ambient gate already decided. */
+  credentials: CredentialChainOptions;
+}
+
+/**
+ * Build the resolver's inputs: the normalised environment AND the credential
+ * options that keep the machine's Keychain tier reachable across it.
+ *
+ * WHY THIS IS NOT JUST {@link todosResolverEnv}. Blanking a variable and
+ * deleting it are not the same operation to @hasna/contracts, because dropping
+ * a key forces us to hand the resolver a COPY, and the resolver gates its
+ * ambient tiers on OBJECT IDENTITY (`env === process.env`, or the registry
+ * symbol its own snapshot carries). A copy is, by that test, a caller-built
+ * world — the hermetic seam — so the Keychain is outside it and tier 3 turns
+ * itself off. Silently: there is no error, no warning and no diagnostic,
+ * because from the resolver's side nothing went wrong.
+ *
+ * The consequence is the one failure this whole ruling exists to prevent. On a
+ * station whose Keychain holds `hasna.credentials.todos.api-key`, ONE
+ * declared-but-blank authority variable — any name in
+ * {@link todosAuthorityEnvKeys}, canonical or legacy; the shape a scrubbed
+ * fixture leaves behind, and the shape a wrapper spelling
+ * `HASNA_TODOS_API_URL="${MAYBE_UNSET}"` produces — dropped the run from the
+ * Keychain identity to whatever came next:
+ * to `~/.hasna/todos/config/credentials`, a DIFFERENT principal, with no
+ * notice; or, with nothing on disk, to a bare REMOTE_API_CONFIG_MISSING on a
+ * station that is in fact configured. A deliberate tier must never fall
+ * through to another identity, so the gate is decided HERE, on the original
+ * env, and carried across the copy as the documented `keychain.enabled`
+ * control rather than being left to an identity test the copy cannot pass.
+ *
+ * An explicit `enabled` from the caller still wins, and an injected `run`
+ * (which @hasna/contracts already treats as "enabled") is left alone, so the
+ * hermetic seam tests rely on is untouched. When there is no blank to remove
+ * the inputs pass through by identity, exactly as before.
+ */
+export function todosResolverInputs<T extends TodosLocalOptInEnv>(
+  env: T,
+  credentials: CredentialChainOptions = {},
+): TodosResolverInputs<T> {
+  const normalised = todosResolverEnv(env);
+  // Identity survived: the resolver can run its own ambient test as usual.
+  if (normalised === env) return { env: normalised, credentials };
+  const keychain = { ...credentials.keychain };
+  if (keychain.enabled === undefined && keychain.run === undefined) {
+    keychain.enabled = isAmbientTodosEnv(env);
+  }
+  return { env: normalised, credentials: { ...credentials, keychain } };
 }
