@@ -1,8 +1,8 @@
 {
   "generatorVersion": "1.0.0",
-  "identityDigest": "76ae38ffac189e6044971d7ef736a6c52fe7286b2093dbb7c950054f985dd3e2",
+  "identityDigest": "fc3cdd5745dda2036fe525593a86995caeedaa67bd36edf5ae7c5160b308bab2",
   "manifestVersion": "1",
-  "outputContractDigest": "84ff3d0baefd1218fc2422c2fa411dd549d490197fdab6573f35c4f3bc724d40",
+  "outputContractDigest": "3906a27a62314858c8ee0e09f5eaa4489db6908659a4de837d03dec762ca35db",
   "schema": "hasna.todos.generator_provenance.v1",
   "sourceFreeze": {
     "contracts": {
@@ -36,7 +36,7 @@
       "module": "src/todos/capabilities.ts"
     },
     {
-      "contentDigest": "b76e7fcfc885e994f6b7b26251c6ed89adaa71a1baf3e9f495b893bd823da6e7",
+      "contentDigest": "448c22ffaacaa242f131e192bbe9cd69e7b6d2567eff83bc20d5ce500e5a3d5d",
       "module": "src/todos/schema-foundation.ts"
     },
     {
