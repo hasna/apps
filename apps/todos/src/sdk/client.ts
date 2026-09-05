@@ -518,9 +518,13 @@ class PrGroupsResource {
 export class TodosClient {
   readonly baseUrl: string;
   readonly timeout: number;
-  readonly apiKey: string | null;
   readonly maxRetries: number;
   readonly retryDelay: number;
+
+  /** Tier 1: an `apiKey` argument is a deliberate pin and is never re-resolved. */
+  private readonly explicitApiKey: string | undefined;
+  /** The credential the chain produced at construction — the floor, never the answer. */
+  private readonly constructedApiKey: string | null;
 
   /** Namespaced resource accessors */
   readonly tasks: TasksResource;
@@ -543,7 +547,8 @@ export class TodosClient {
     });
     this.baseUrl = resolved.baseUrl;
     this.timeout = options.timeout ?? 10000;
-    this.apiKey = resolved.apiKey;
+    this.explicitApiKey = options.apiKey;
+    this.constructedApiKey = resolved.apiKey;
     this.maxRetries = options.maxRetries ?? 0;
     this.retryDelay = options.retryDelay ?? 1000;
 
@@ -579,9 +584,46 @@ export class TodosClient {
     }
   }
 
+  /**
+   * The credential to send RIGHT NOW, re-resolved through the @hasna/contracts
+   * chain rather than read from a snapshot.
+   *
+   * The chain is defined as fresh-per-call precisely so a rotation takes effect
+   * inside a long-lived process: an agent that built one `TodosClient` at start
+   * up and holds it for hours must pick up the new key from the Keychain or
+   * `~/.hasna/todos/config/credentials` without being restarted. Snapshotting
+   * here would reintroduce exactly the staleness the ruling removed.
+   *
+   * Two things are deliberately NOT re-resolved. An explicit `apiKey` argument
+   * is tier 1 — a deliberate pin the caller owns — and the authority is fixed
+   * for the life of the client, because a credential written for one authority
+   * must never be sent to another; rebuild the client to change it.
+   *
+   * A re-resolution that throws or comes back empty falls back to the
+   * credential this client was built with: a transient unreadable Keychain must
+   * not turn a working client into a failing one mid-flight, and the request
+   * itself still surfaces a 401 if the old key is genuinely dead.
+   */
+  private currentApiKey(): string | null {
+    if (this.explicitApiKey !== undefined) return this.explicitApiKey;
+    try {
+      const fresh = resolveTodosSdkTransport({ notice: () => {} }).apiKey;
+      if (fresh) return fresh;
+    } catch {
+      // fall through to the constructed credential
+    }
+    return this.constructedApiKey;
+  }
+
+  /** The credential this client would send now. Re-resolved, never a stale snapshot. */
+  get apiKey(): string | null {
+    return this.currentApiKey();
+  }
+
   private _buildHeaders(existing?: HeadersInit): Record<string, string> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    const apiKey = this.currentApiKey();
+    if (apiKey) headers["x-api-key"] = apiKey;
     if (existing) {
       if (existing instanceof Headers) {
         existing.forEach((v, k) => { headers[k] = v; });

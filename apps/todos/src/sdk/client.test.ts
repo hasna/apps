@@ -130,6 +130,95 @@ describe("TodosClient local API config", () => {
     }
   });
 
+  test("a rotation heals a LIVE client: the credential is re-resolved per request", async () => {
+    // `test/setup.ts` sets the local opt-in on this process, and a configured
+    // ENVIRONMENT is what outranks it — the disk tier alone does not. Declaring
+    // a decoy env key routes hosted; the disk tier still outranks it.
+    process.env["HASNA_TODOS_API_KEY"] = "env-token";
+
+    // The README and the 2026-09-04 ruling both promise resolution on every
+    // call, not once at process start. A long-lived agent holds one client for
+    // hours; if the key it snapshotted at startup were the key it kept sending,
+    // every rotation would take an agent restart to land — the exact staleness
+    // the fresh-per-call chain exists to remove.
+    const file = join(fakeHome, ".hasna", "todos", "config", "credentials");
+    mkdirSync(dirname(file), { recursive: true });
+    const write = (token: string) => {
+      writeFileSync(file, `HASNA_TODOS_API_KEY=${token}\nHASNA_TODOS_API_URL=https://disk.todos.example\n`, { mode: 0o600 });
+      chmodSync(file, 0o600);
+    };
+    const sent: (string | undefined)[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push((init?.headers as Record<string, string> | undefined)?.["x-api-key"]);
+      return new Response(JSON.stringify([]), { status: 200 });
+    }) as typeof fetch;
+
+    write("token-before-rotation");
+    const client = new TodosClient();
+    await client.tasks.list();
+
+    write("token-after-rotation");
+    await client.tasks.list();
+
+    expect(sent).toEqual(["token-before-rotation", "token-after-rotation"]);
+    // The property agrees with what the wire saw; it is not a stale snapshot.
+    expect(client.apiKey).toBe("token-after-rotation");
+    delete process.env["HASNA_TODOS_API_KEY"];
+  });
+
+  test("an explicit apiKey is a pin: it is never re-resolved away", async () => {
+    // `test/setup.ts` sets the local opt-in on this process, and a configured
+    // ENVIRONMENT is what outranks it — the disk tier alone does not. Declaring
+    // a decoy env key routes hosted; the disk tier still outranks it.
+    process.env["HASNA_TODOS_API_KEY"] = "env-token";
+
+    const file = join(fakeHome, ".hasna", "todos", "config", "credentials");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "HASNA_TODOS_API_KEY=disk-token\nHASNA_TODOS_API_URL=https://disk.todos.example\n", { mode: 0o600 });
+    chmodSync(file, 0o600);
+    const sent: (string | undefined)[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push((init?.headers as Record<string, string> | undefined)?.["x-api-key"]);
+      return new Response(JSON.stringify([]), { status: 200 });
+    }) as typeof fetch;
+
+    const client = new TodosClient({ apiKey: "option-token" });
+    await client.tasks.list();
+
+    expect(sent).toEqual(["option-token"]);
+    expect(client.apiKey).toBe("option-token");
+    delete process.env["HASNA_TODOS_API_KEY"];
+  });
+
+  test("a credential that stops resolving mid-flight does not break a working client", async () => {
+    // `test/setup.ts` sets the local opt-in on this process, and a configured
+    // ENVIRONMENT is what outranks it — the disk tier alone does not. Declaring
+    // a decoy env key routes hosted; the disk tier still outranks it.
+    process.env["HASNA_TODOS_API_KEY"] = "env-token";
+
+    // A transient unreadable store must not convert a live client into a
+    // failing one; the request still carries the credential it was built with,
+    // and a genuinely dead key surfaces as the server's 401.
+    const file = join(fakeHome, ".hasna", "todos", "config", "credentials");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "HASNA_TODOS_API_KEY=disk-token\nHASNA_TODOS_API_URL=https://disk.todos.example\n", { mode: 0o600 });
+    chmodSync(file, 0o600);
+    const sent: (string | undefined)[] = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      sent.push((init?.headers as Record<string, string> | undefined)?.["x-api-key"]);
+      return new Response(JSON.stringify([]), { status: 200 });
+    }) as typeof fetch;
+
+    const client = new TodosClient();
+    await client.tasks.list();
+    // Make the file unsafe: the chain now REFUSES rather than resolving.
+    chmodSync(file, 0o644);
+    await client.tasks.list();
+
+    expect(sent).toEqual(["disk-token", "disk-token"]);
+    delete process.env["HASNA_TODOS_API_KEY"];
+  });
+
   test("constructor options are tier 1 and outrank every resolved tier", () => {
     process.env["HASNA_TODOS_API_URL"] = "https://env.todos.example";
     process.env["HASNA_TODOS_API_KEY"] = "env-token";
