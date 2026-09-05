@@ -166,8 +166,10 @@ describe("skills app-home resolution — legacy default must never become invisi
   it("skillsDataRootForHome mirrors the effective root for an explicit home", () => {
     // With no store at the explicit home's XDG root, the legacy path is used.
     expect(skillsDataRootForHome(testHome)).toBe(join(testHome, ".hasna", "skills"));
-    // Once the store exists at the XDG root, that root is used.
-    const xdg = join(testHome, ".local", "share", "hasna", "skills");
+    // Once the store exists at the resolver root, that root is used (the
+    // resolver is darwin-aware: ~/Library/Application Support/Hasna on macOS,
+    // ~/.local/share/hasna on Linux - never hardcode the Linux layout).
+    const xdg = resolverDataRoot(testHome);
     mkdirSync(xdg, { recursive: true });
     writeFileSync(join(xdg, "server.db"), "");
     try {
@@ -205,7 +207,9 @@ describe("skills app-home resolution — legacy default must never become invisi
       expect(skillsDataRootForHome(stagedHome)).toBe(join(stagedHome, ".hasna", "skills"));
       // Once the mirror itself carries a migrated store at its XDG root, that
       // root wins — still not the live data root.
-      const stagedXdg = join(stagedHome, ".local", "share", "hasna", "skills");
+      // env-suppressed form: the ambient HASNA_DATA_HOME must not redirect
+      // where we plant the staged store (that is the leak under test).
+      const stagedXdg = resolverDataRoot(stagedHome, {});
       mkdirSync(stagedXdg, { recursive: true });
       writeFileSync(join(stagedXdg, "server.db"), "");
       expect(skillsDataRootForHome(stagedHome)).toBe(stagedXdg);

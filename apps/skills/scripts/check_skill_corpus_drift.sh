@@ -49,7 +49,8 @@ base_dirs="$tmp_dir/base_dirs.txt"
 registry_names="$tmp_dir/registry_names.txt"
 registry_dirs="$tmp_dir/registry_dirs.txt"
 
-find skills -maxdepth 1 -mindepth 1 -type d -printf '%f\n' \
+# -printf is GNU-only; BSD/macOS find rejects it. -exec basename is portable.
+find skills -maxdepth 1 -mindepth 1 -type d -exec basename {} \; \
   | sed 's/^skill-//' \
   | grep -v '^_' \
   | sort > "$local_dirs"
