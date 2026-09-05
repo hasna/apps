@@ -211,11 +211,7 @@
     },
     "apps/contracts": {
       "name": "@hasna/contracts",
-<<<<<<< HEAD
       "version": "1.0.1",
-=======
-      "version": "2.0.0",
->>>>>>> 9aab6ad38 (fix(contracts): scope key revocation by app, keep the gateway prefix everywhere, release as a major)
       "bin": {
         "contracts": "dist/cli/index.js",
         "contracts-cli": "dist/cli/contracts-cli.js",

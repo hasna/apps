@@ -24278,11 +24278,17 @@ class ApiKeyStore {
       return status !== "active";
     };
   }
-  async revoke(kid, reason, atMs = Date.now()) {
+  async revoke(kid, reason, atMs = Date.now(), options = {}) {
+    const params = [kid, new Date(atMs).toISOString(), reason ?? null];
+    let scope = "";
+    if (options.app !== undefined) {
+      params.push(options.app);
+      scope = ` AND app = $${params.length}`;
+    }
     const row = await this.client.get(`UPDATE ${this.table}
           SET revoked_at = COALESCE(revoked_at, $2), revoked_reason = COALESCE(revoked_reason, $3)
-        WHERE kid = $1
-      RETURNING kid`, [kid, new Date(atMs).toISOString(), reason ?? null]);
+        WHERE kid = $1${scope}
+      RETURNING kid`, params);
     return row !== null;
   }
   async touchLastUsed(kid, atMs = Date.now()) {
@@ -24658,12 +24664,13 @@ async function runIssueKey(options, deps) {
   }
   const table = optTable ?? "api_keys";
   const dbEnvName = databaseUrlEnvName(app, optDatabaseUrlEnv);
+  const databaseUrl = env[dbEnvName]?.trim();
   const expiresAt = minted.claims.exp === null ? null : new Date(minted.claims.exp * 1000).toISOString();
   const issuedAt = new Date(minted.claims.iat * 1000).toISOString();
   if (secretsReference) {
     const secretsRef = secretsReference.resolve(minted.kid);
     const createdBy = agent;
-    const connectionString = env[dbEnvName];
+    const connectionString = databaseUrl;
     if (!connectionString) {
       deps.report({ json }, `No database URL found. Set ${dbEnvName}.`, {
         code: "missing_database_url",
@@ -24911,7 +24918,7 @@ async function runIssueKey(options, deps) {
   let stored = false;
   if (optStore !== false) {
     const createdBy = agent ?? "issue-key";
-    const connectionString = env[dbEnvName];
+    const connectionString = databaseUrl;
     if (!connectionString) {
       reportStoreFailure(`No database URL found. Set ${dbEnvName}, or pass --no-store to skip persistence.`, "missing_database_url", { databaseUrlEnv: dbEnvName });
       return;
@@ -27792,6 +27799,90 @@ function runVerifyWriteCli(targetId, argv, options, io = defaultIo, run = runCap
   return writeResult(result, Boolean(options.json), io);
 }
 
+// src/cli/check-signing-secret.ts
+import { createHash as createHash7 } from "crypto";
+
+// src/auth/signing-secret.ts
+function signingSecretEnvKeys(app) {
+  return [`HASNA_${envToken(app)}_API_SIGNING_KEY`, "HASNA_API_SIGNING_KEY"];
+}
+
+class SigningSecretError extends Error {
+  attempted;
+  constructor(message, attempted) {
+    super(message);
+    this.name = "SigningSecretError";
+    this.attempted = Object.freeze([...attempted]);
+  }
+}
+function signingSecretHasSurroundingWhitespace(value) {
+  return value !== value.trim();
+}
+
+// src/cli/check-signing-secret.ts
+function own(options, key) {
+  if (!Object.hasOwn(options, key))
+    return "";
+  const value = options[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+function fingerprint(value) {
+  return `sha256:${createHash7("sha256").update(value, "utf8").digest("hex").slice(0, 12)}`;
+}
+function checkSigningSecret(options, deps = {}) {
+  const env = deps.env ?? process.env;
+  const app = own(options, "app");
+  if (!app) {
+    return { exitCode: 2, payload: { ok: false, code: "app_required", error: "--app is required" } };
+  }
+  const envName = own(options, "signingSecretEnv");
+  const keys = envName ? [envName] : signingSecretEnvKeys(app);
+  for (const key of keys) {
+    const raw = env[key];
+    if (raw === undefined)
+      continue;
+    const trimmed = raw.trim();
+    if (!trimmed)
+      continue;
+    const untrimmed = signingSecretHasSurroundingWhitespace(raw);
+    return {
+      exitCode: untrimmed ? 1 : 0,
+      payload: {
+        ok: !untrimmed,
+        app,
+        source: key,
+        raw_bytes: Buffer.byteLength(raw, "utf8"),
+        trimmed_bytes: Buffer.byteLength(trimmed, "utf8"),
+        fingerprint: fingerprint(trimmed),
+        ...untrimmed ? {
+          code: "signing_secret_untrimmed",
+          error: `${key} carries leading or trailing whitespace. Rewrite the stored ` + `api-key-signing-secret without it (hasna/apps#1543): every reader ` + `that does not trim signs with different bytes than the server verifies.`
+        } : {}
+      }
+    };
+  }
+  const error2 = new SigningSecretError(`No signing secret found. Set ${keys.join(" or ")} (openssl rand -hex 32).`, keys);
+  return {
+    exitCode: 2,
+    payload: { ok: false, code: "signing_secret_missing", error: error2.message, app, attempted: keys }
+  };
+}
+function runCheckSigningSecret(options, deps = {}) {
+  const log = deps.log ?? ((line) => console.log(line));
+  const errorLog = deps.errorLog ?? ((line) => console.error(line));
+  const { exitCode, payload } = checkSigningSecret(options, deps);
+  if (Object.hasOwn(options, "json") && options.json) {
+    log(JSON.stringify(payload, null, 2));
+    return exitCode;
+  }
+  if (exitCode === 0) {
+    log(`${payload["source"]}: no surrounding whitespace (${payload["trimmed_bytes"]} bytes, ${payload["fingerprint"]})`);
+    return exitCode;
+  }
+  errorLog(String(payload["error"] ?? "signing secret check failed"));
+  return exitCode;
+}
+
 // src/cli/index.ts
 function collectJsonFiles(root) {
   const stat = statSync5(root);
@@ -28167,6 +28258,9 @@ function createContractsProgram() {
   });
   program2.command("verify-write").description("Cheaper than rendering a stored body: compare byte length and SHA-256; prevents appended capability content from reaching output").argument("<target>", "Exact object ID requested from the fetch command").argument("[command...]", "The fetch command to run after --; it must return one JSON object").requiredOption("--authored <file>", "File containing the exact payload the caller authored").option("--id-path <path>", "Dotted path to the fetched object's ID", "id").option("--content-path <path>", "Dotted path to the fetched stored content", "body").option("-j, --json", "Output metadata-only JSON").action((target, command, options) => {
     process.exitCode = runVerifyWriteCli(target, command ?? [], options);
+  });
+  program2.command("check-signing-secret").description("Provisioning check (hasna/apps#1543): fail when an app's API-key signing secret carries surrounding whitespace. Reads the value from the environment and never prints it").requiredOption("--app <app>", "App slug whose signing secret is checked (e.g. projects)").option("--signing-secret-env <name>", "Env var holding the secret (default HASNA_<APP>_API_SIGNING_KEY, then HASNA_API_SIGNING_KEY)").option("-j, --json", "Output JSON (metadata only: env key, byte lengths, sha256 prefix)").action((options) => {
+    process.exitCode = runCheckSigningSecret(options);
   });
   program2.command("issue-key").description("Mint an API key: disclose it once, or deliver it silently to an exact Hasna Secrets reference").requiredOption("--app <app>", "App slug the key authenticates (e.g. todos)").option("--agent <agent>", "Issued-to agent/subject (informational)").option("--tid <tenant>", "Tenant/organization the key acts for (UUID, ULID, slug, or prefixed id). Omit for an untenanted key").option("--scopes <csv>", "Comma-separated scopes, e.g. 'todos:read,todos:write' or 'todos:*'").option("--ttl-days <days>", "Days until expiry (default 90)").option("--no-expiry", "Mint a non-expiring key").option("--bootstrap", "Mint a bootstrap admin key (scopes default to '<app>:*', agent 'bootstrap')").option("--signing-secret-env <name>", "Env var holding the HMAC signing secret (default HASNA_<APP>_API_SIGNING_KEY, then HASNA_API_SIGNING_KEY); the value is normalized (whitespace-trimmed) before signing, so a stored secret carrying a trailing newline signs identically to one without").option("--database-url-env <name>", "Env var holding the Postgres URL for the record store (default HASNA_<APP>_DATABASE_URL)").option("--table <name>", "api-keys table name (default api_keys)").option("--secrets-ref <template>", "Deliver without plaintext output; template must contain separate {agent} and {kid} path segments").option("--issuance-id <id>", "Stable key id for idempotent retry with --secrets-ref").option("--no-store", "Do not persist the hashed record (print secret + hash only)").option("-j, --json", "Output JSON").action(async (options) => {
     await runIssueKey(options, { report: reportCliError });

@@ -500,45 +500,6 @@ The short aliases `<APP>_API_URL` and `<APP>_API_KEY` remain supported after the
 canonical `HASNA_` names. Client configuration uses an HTTP API URL, never a
 database DSN or server-backend setting.
 
-**Gateway-shaped base URLs (`resolveApiBase`).** The fleet gateway addresses
-every app as `<host>/<app>/v1/...`, so a client must accept a base URL that
-already carries a path prefix and append `/v1` itself. `resolveApiBase(url)` is
-the one implementation:
-
-```ts
-import { joinApiPath, resolveApiBase } from "@hasna/contracts/client";
-
-const base = resolveApiBase("https://api.example.test/todos");
-base.origin; // "https://api.example.test"
-base.prefix; // "/todos"      <- what `.origin` drops
-base.base;   // "https://api.example.test/todos"
-base.v1;     // "https://api.example.test/todos/v1"
-joinApiPath(base, "/tasks"); // "https://api.example.test/todos/v1/tasks"
-```
-
-It accepts the authority root, the exact `/v1` root, `<prefix>`, and
-`<prefix>/v1`, and rejects `/api/v1`, any deeper path, userinfo, query strings,
-fragments, IDN/punycode hosts, non-canonical ports, and plaintext `http` off an
-exact loopback authority — throwing `ApiBaseUrlError` (`code:
-"REMOTE_API_URL_INVALID"`). Never compose `${baseUrl.origin}/v1/...`: `.origin`
-drops the app prefix and the request lands where the gateway cannot route it
-(hasna/apps#1601).
-
-**Uniform status output (hasna/apps#1588).** Every CLI prints the resolved
-versioned root the same way:
-
-```ts
-import { apiStatusFields, renderApiStatus, resolveClientTransport } from "@hasna/contracts/client";
-
-const fields = apiStatusFields("todos", resolveClientTransport("todos", process.env));
-console.log(renderApiStatus(fields));          // "API: https://api.example.test/todos/v1" first
-console.log(renderApiStatus(fields, { json: true })); // { api_url, api_base, transport, ... }
-```
-
-`API: <base>/v1` is always the first line — never the bare base, never the
-origin alone — and `--json` carries `api_url` with that same `/v1` root plus
-`api_base` for the configured authority.
-
 Scope grammar is `<app>:<action>` with wildcards (`*`, `<app>:*`, `*:<action>`).
 
 ### Issuing keys
@@ -597,18 +558,25 @@ service must keep its authenticated-principal authorization checks.
 
 ### Signing secrets are trimmed on read
 
-`HASNA_<APP>_API_SIGNING_KEY` is read through `resolveSigningSecret(app, env)`,
-which **trims** the value, and a string handed to `mintApiKey`/`verifyApiKeyToken`
-is trimmed at the same choke point. Provisioning tooling wrote these secrets as
-64 hex characters plus a trailing newline; servers that trimmed before verifying
-accepted only keys signed with the trimmed value, while an out-of-band
-`issue-key` signed with the raw one and minted keys every server rejected
-`unknown_key` (hasna/apps#1543). Raw and trimmed spellings are now the same key
-by construction.
+A string signing secret is **whitespace-normalized before it keys the HMAC**:
+`mintApiKey` and `verifyApiKeyToken` both end at the same conversion in
+`src/auth/keys.ts`, which trims a string and leaves byte views byte-exact.
+Provisioning tooling wrote these secrets as 64 hex characters plus a trailing
+newline; `issue-key` and every fleet server also trim at their env read, so a
+raw stored value and its trimmed copy sign — and verify — identically, wherever
+the secret enters (hasna/apps#1543, #1638). Binary secrets are never trimmed:
+bytes handed over are the bytes that key the HMAC.
+
+The shared read for callers that want the env-key precedence in one place is
+`resolveSigningSecret(app, env)` from `@hasna/contracts/auth`
+(`HASNA_<APP>_API_SIGNING_KEY`, then the shared `HASNA_API_SIGNING_KEY`), with
+`normalizeSigningSecret` and `signingSecretHasSurroundingWhitespace` as the
+in-process helpers.
 
 Trimming makes the stored byte harmless; it does not make it correct. The
-provisioning check that refuses it ships as a command — the deploy/provision lane
-runs it against the stored value, and a secret that needs trimming exits non-zero:
+provisioning check that refuses a whitespace-wrapped secret ships as a command —
+the deploy/provision lane runs it against the stored value, and a secret that
+needs trimming exits non-zero:
 
 ```bash
 HASNA_PROJECTS_API_SIGNING_KEY="$(aws secretsmanager get-secret-value \
@@ -622,11 +590,6 @@ Pass the value through the environment, never as an argument: an argv is
 world-readable in `ps`. The command prints the env key NAME, the raw and trimmed
 byte counts, and a sha256 prefix of the trimmed bytes — never the secret — and
 `--json` emits the same metadata. A secret it cannot find is exit 2, not a pass.
-`signingSecretHasSurroundingWhitespace(value)` is the same predicate for callers
-that want it in-process.
-
-Binary secrets are never trimmed: bytes handed over are the bytes that key the
-HMAC.
 
 ### Operator key lifecycle route (`createKeyLifecycleRoutes`)
 

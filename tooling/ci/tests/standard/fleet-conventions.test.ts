@@ -15,8 +15,8 @@
  *     URL's origin plus `/v1`. The fleet gateway addresses each app as
  *     `https://api.example.test/<app>`, and the origin drops that prefix, so the
  *     request lands on a path the gateway cannot route and fails as a 404 that
- *     reads like an outage. `@hasna/contracts` owns the grammar
- *     (`resolveApiBase` / `joinApiPath` in src/client/api-base.ts); packages
+ *     reads like an outage. `@hasna/contracts` owns the grammar (the URL
+ *     validation and `/v1` composition in `src/client/transport.ts`); packages
  *     still on the published 0.x line reproduce it, and this check is what keeps
  *     either copy from regressing.
  *
@@ -52,6 +52,19 @@ const SKIP_DIRECTORIES = new Set([
  */
 function isExempt(relativePath: string): boolean {
   return path.basename(relativePath) === "CHANGELOG.md";
+}
+
+/**
+ * A layout-migration module names the layout it migrates FROM by definition —
+ * its purpose is to erase the retired directory, so its source and tests must
+ * be allowed to spell it. `apps/projects`' one-time migration
+ * (`src/lib/project-layout-migration.ts`) documents itself as the ONLY place
+ * that still mentions the singular directory and never reads it for anything
+ * but the migration. The origin-v1 check keeps no such carve-out: no code,
+ * migration or not, may compose a request root from an origin.
+ */
+function isMigrationModule(relativePath: string): boolean {
+  return relativePath.includes("project-layout-migration");
 }
 
 function walk(root: string, onFile: (absolute: string, relative: string) => void, base = root): void {
@@ -112,8 +125,9 @@ function scanTree(appsDir: string): ConventionScan {
     const inSrc = `${path.sep}${relative}`.includes(`${path.sep}src${path.sep}`);
     const isCode = /\.(ts|tsx)$/.test(relative);
     const lines = text.split("\n");
+    const retirementExempt = isExempt(relative) || isMigrationModule(relative);
     lines.forEach((line, index) => {
-      if (RETIRED_LAYOUT_PATTERNS.some((pattern) => pattern.test(line))) {
+      if (!retirementExempt && RETIRED_LAYOUT_PATTERNS.some((pattern) => pattern.test(line))) {
         retiredLayout.push(`${relative}:${index + 1}: ${line.trim()}`);
       }
       if (!inSrc || !isCode) return;
@@ -187,10 +201,17 @@ describe("standard-adherence: fleet conventions", () => {
       fs.rmSync(path.join(src, "bad.ts"));
       fs.rmSync(path.join(src, "bad-join.ts"));
       fs.rmSync(path.join(src, "bad-context.ts"));
+      // A migration module may name the layout it migrates from — it is the
+      // sanctioned place that erases the retired directory. But it still may
+      // NOT compose a request root from an origin.
+      fs.writeFileSync(
+        path.join(src, "project-layout-migration.ts"),
+        'const segments = [".hasna", "project"] as const;\nconst base = `${url.origin}/v1`;\n',
+      );
       fs.writeFileSync(
         path.join(src, "good.ts"),
         [
-          'const base = joinApiPath(resolveApiBase(url), "/keys");',
+          'const base = `${url.origin}${prefix}/v1`;',
           'const dir = ".hasna/projects/workspaces/wks_1";',
           'const manifest = ".hasna/projects/project-context-manifest.json";',
           'const cache = join(root, ".hasna", "projects", "project-context-cache.json");',
@@ -199,7 +220,8 @@ describe("standard-adherence: fleet conventions", () => {
         ].join("\n"),
       );
       expect(retiredProjectLayoutViolations(root)).toEqual([]);
-      expect(originV1Violations(root)).toEqual([]);
+      expect(originV1Violations(root)).toEqual(["member/src/project-layout-migration.ts:2: const base = `${url.origin}/v1`;"]);
+      fs.rmSync(path.join(src, "project-layout-migration.ts"));
 
       // A CHANGELOG entry is history, not a live instruction.
       fs.writeFileSync(path.join(root, "member", "CHANGELOG.md"), "- rewrote `.hasna/project/dashboard/render.json`\n");

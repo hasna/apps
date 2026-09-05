@@ -78,37 +78,51 @@ describe("canonical client transport", () => {
       HASNA_TODOS_API_KEY: "test-key",
     });
     expect(resolution.baseUrl).toBe("https://api.example.test/todos/v1");
-    expect(resolution.apiBase).toBe("https://api.example.test/todos");
+    expect(resolution.apiUrlSource).toBe("HASNA_TODOS_API_URL");
     expect(resolution.apiKeyTier).toBe("env");
   });
 
   test("the keychain supplies BOTH halves when the process has no environment (#1513)", () => {
-    const reader = {
-      platform: "darwin",
-      run(args: readonly string[]) {
-        const service = args[args.indexOf("-s") + 1];
-        if (service === "hasna.credentials.todos.api-url") {
-          return { status: 0, stdout: "https://api.example.test/todos\n" };
+    // A fake `security` runner; the api-url item may be absent (44) so an env
+    // authority can take over the URL while the Keychain still holds the key.
+    const runner =
+      (apiUrl: string | null) =>
+      (argv: readonly string[]) => {
+        if (argv.includes("hasna.credentials.todos.api-url")) {
+          return apiUrl === null
+            ? { status: 44, stdout: "", stderr: "not found" }
+            : { status: 0, stdout: `${apiUrl}\n`, stderr: "" };
         }
-        if (service === "hasna.credentials.todos.api-key") return { status: 0, stdout: "keychain-key\n" };
-        return { status: 44, stdout: "" };
-      },
-    };
-    const resolution = resolveClientTransport("todos", { HASNA_STATION: "station-fixture-01" }, { keychain: { reader } });
+        if (argv.includes("hasna.credentials.todos.api-key")) return { status: 0, stdout: "keychain-key\n", stderr: "" };
+        return { status: 44, stdout: "", stderr: "not found" };
+      };
+    const keychain = (apiUrl: string | null) => ({
+      platform: "darwin",
+      hostname: () => "fixture-host",
+      run: runner(apiUrl),
+    });
+
+    const resolution = resolveClientTransport(
+      "todos",
+      { HASNA_STATION: "station-fixture-01" },
+      { credentials: { keychain: keychain("https://api.example.test/todos") } },
+    );
     expect(resolution.baseUrl).toBe("https://api.example.test/todos/v1");
-    expect(resolution.apiUrlSource).toBe("keychain:hasna.credentials.todos.api-url");
-    expect(resolution.apiKeySource).toBe("keychain:hasna.credentials.todos.api-key");
+    expect(resolution.apiUrlSource).toBe("keychain:hasna.credentials.todos.api-url@station-fixture-01");
+    expect(resolution.apiKeySource).toBe("keychain:hasna.credentials.todos.api-key@station-fixture-01");
     expect(resolution.apiKeyTier).toBe("keychain");
     expect(JSON.stringify(resolution)).not.toContain("keychain-key");
 
-    // An environment authority still wins over the keychain one.
+    // An environment authority still supplies the URL; the Keychain item
+    // remains the key's source.
     const fromEnv = resolveClientTransport(
       "todos",
       { HASNA_STATION: "station-fixture-01", HASNA_TODOS_API_URL: "https://todos.example.test" },
-      { keychain: { reader } },
+      { credentials: { keychain: keychain(null) } },
     );
     expect(fromEnv.baseUrl).toBe("https://todos.example.test/v1");
     expect(fromEnv.apiUrlSource).toBe("HASNA_TODOS_API_URL");
+    expect(fromEnv.apiKeySource).toBe("keychain:hasna.credentials.todos.api-key@station-fixture-01");
   });
 
   test("conflicting authority aliases fail closed", () => {
