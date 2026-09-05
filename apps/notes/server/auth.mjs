@@ -307,23 +307,6 @@ export async function startOtpLogin(db, config, input) {
   return { sent: true, email, expiresAt, ...(config.devMode ? { devCode: code } : {}) };
 }
 
-/**
- * Invalidate every live login code for an address.
- *
- * Called when too many wrong codes are submitted for that address (app.mjs).
- * The guess budget belongs to the CODE, not to the account: the outstanding
- * code dies and the owner simply asks for a new one. Nothing about the
- * account is disabled, so a stranger who knows an address can cost its owner
- * one extra round trip and nothing more (issue #1542 review).
- */
-export async function expireOtpRequests(db, email) {
-  const normalized = normalizeEmail(email);
-  if (!isValidEmail(normalized)) return;
-  await db
-    .query("UPDATE otp_login_requests SET status = 'consumed', consumed_at = ? WHERE email = ? AND status = 'pending'")
-    .run(nowIso(), normalized);
-}
-
 export async function verifyOtp(db, config, input) {
   const email = normalizeEmail(input.email);
   const code = String(input.code ?? '').trim();

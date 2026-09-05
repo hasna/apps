@@ -11,7 +11,7 @@ import { ApiError, errorBody, mapError, bearer, parseLimit } from './http.mjs';
 import { getMeta, setMeta } from './sql.mjs';
 import { serverEnv } from './env.mjs';
 import {
-  approveDeviceAuth, autoApproveDeviceAuth, exchangeDeviceAuth, expireOtpRequests, getTenant, getUser,
+  approveDeviceAuth, autoApproveDeviceAuth, exchangeDeviceAuth, getTenant, getUser,
   insertApiKey, isValidEmail, listApiKeys, normalizeEmail, pollDeviceAuth, resolveSigningSecret,
   revokeSession, startDeviceAuth, startOtpLogin, validateApiKey, validateSession, verifyOtp,
 } from './auth.mjs';
@@ -180,41 +180,60 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
   //
   // A per-IP limit alone still lets a distributed caller mint unlimited live
   // login codes for ONE address, and grind its 6-digit code from as many
-  // addresses as it likes. The target address therefore needs a limit of its
-  // own — but NOT an hourly quota.
+  // addresses as it likes. The target address therefore needs controls of its
+  // own — shaped so that NO remote party can keep the owner out. The rule every
+  // branch below follows: the only thing that ever decides whether a login
+  // succeeds is the code itself. Nothing keyed on the address (which the
+  // caller chooses) refuses a request outright, burns a code, or disables an
+  // account. The server cannot tell the owner from a stranger except by the
+  // code, so any address-keyed refusal-before-checking would be a lockout
+  // primitive in the hands of whoever knows the address.
   //
-  // A quota counted on a key the CALLER chooses (someone else's email) is an
-  // account-lockout primitive: anyone who knows an address spends its budget
-  // from throwaway IPs and keeps the owner out for the rest of the window,
-  // renewably, for as long as they care to. That trades a code flood for a
-  // sustained denial of login on every account, which is the worse of the two.
-  // Both dimensions below are shaped to bound an attacker's volume without
-  // ever refusing the address owner:
+  //   MINTING (/auth/login) is bounded by what the caller cannot pick:
+  //     - per source IP, 5 per hour (the caller's own address);
+  //     - process-wide, `otpMintBudget` minted codes per minute — a circuit
+  //       breaker for the database, the log and delivery under a distributed
+  //       flood. When it trips, requests that would MINT answer 429 until the
+  //       minute rolls over; a request for an address whose code is already
+  //       outstanding is still answered with that envelope.
+  //     Per target address there is only a MIN-INTERVAL between minted codes
+  //     (`otpCooldownMs`): inside it the request is answered 200 with the
+  //     envelope of the code already outstanding, and nothing new is minted,
+  //     logged or delivered. Every code for an address is delivered only to
+  //     that address, so its owner already holds a usable one and the caller
+  //     learns nothing it did not already know. Never a 429 on this key.
   //
-  //   /auth/login   a MIN-INTERVAL between minted codes (`otpCooldownMs`).
-  //     Inside the interval the request is answered 200 with the envelope of
-  //     the code that is already outstanding; nothing new is minted, logged or
-  //     delivered. Every code for an address is delivered only to that address,
-  //     so its owner already holds a usable one and the caller learns nothing
-  //     it did not already know. Mint rate: 1 per interval, not unbounded.
+  //   VERIFICATION (/auth/verify) counts, per address, only FAILED attempts
+  //     (a wrong or stale code) — never requests, never mints. Every request
+  //     is checked against the live code FIRST; a correct code logs in, full
+  //     stop. Past OTP_MAX_FAILED_ATTEMPTS wrong codes, further WRONG codes
+  //     for that address are answered 429 instead of 401 for
+  //     `otpFailureCooldownMs`, without being counted; when the pause lapses
+  //     the count starts over. The pause is back-pressure and an operator
+  //     signal (arming it is logged), not a gate: the code is never burned and
+  //     the address is never refused, so strangers submitting wrong codes for
+  //     an address — from one IP or a thousand — cost its owner nothing.
   //
-  //   /auth/verify  consecutive wrong codes are counted per address across all
-  //     source IPs and BURN THE CODE (never the account) at
-  //     OTP_MAX_FAILED_ATTEMPTS. Guessing is bounded at that many tries per
-  //     issued code — far tighter than any per-hour cap — and the owner
-  //     recovers with one more /auth/login: the burn clears the cooldown, so
-  //     the next request mints immediately. A successful verify clears both
-  //     counters.
+  //     What bounds guessing is therefore the per-IP verify quota (20 per
+  //     hour), the 6-digit space and the 10-minute lifetime: a distributed
+  //     guess of one code at coin-flip odds needs ~25k source IPs inside ten
+  //     minutes. That is the trade the #1770 review asked for — the earlier
+  //     shape burned the code after ten wrong guesses across all IPs, which
+  //     bounded guessing tighter but let ten throwaway IPs deny login for any
+  //     address they chose, renewably, for as long as they cared to.
   //
-  // Both maps, like every rate bucket above, live in THIS process: behind
-  // several tasks the ceilings are per task. They are keyed only by addresses
-  // that already passed validation (capped at 254 chars) and every entry
-  // expires, so a caller cannot grow them with junk.
-  const OTP_MAX_FAILED_ATTEMPTS = 10;
+  // All state here lives in THIS process: behind several tasks the ceilings
+  // are per task. The maps are keyed only by addresses that already passed
+  // validation (capped at 254 chars) and every entry expires, so a caller
+  // cannot grow them with junk.
+  const OTP_MAX_FAILED_ATTEMPTS = 5;
   const OTP_FAILURE_WINDOW_MS = 10 * 60 * 1000; // the code's own lifetime
+  const OTP_MINT_WINDOW_MS = 60 * 1000;
   const otpCooldownMs = Number.isFinite(cfg.otpCooldownMs) ? cfg.otpCooldownMs : 60 * 1000;
+  const otpFailureCooldownMs = Number.isFinite(cfg.otpFailureCooldownMs) ? cfg.otpFailureCooldownMs : 30 * 1000;
+  const otpMintBudget = Number.isFinite(cfg.otpMintBudget) ? cfg.otpMintBudget : 300;
   const otpOutstanding = new Map(); // email -> { expiresAt, response }
-  const otpFailures = new Map(); // email -> { expiresAt, count }
+  const otpFailures = new Map(); // email -> { expiresAt, count, cooldownUntil }
 
   const pruneExpired = (map, now) => {
     if (map.size <= 10000) return;
@@ -233,22 +252,30 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     otpFailures.delete(email);
   };
 
-  const countFailedOtp = async (email) => {
+  /**
+   * Record one failed verification for `email`. Returns 0 when the caller
+   * should see the ordinary 401, or the milliseconds left on the address's
+   * pause when wrong codes are currently answered 429. Only ever consulted
+   * AFTER the submitted code has been checked and found wrong.
+   */
+  const countFailedOtp = (email) => {
     const now = Date.now();
     const current = otpFailures.get(email);
     const bucket = current && current.expiresAt > now
       ? current
-      : { count: 0, expiresAt: now + OTP_FAILURE_WINDOW_MS };
+      : { count: 0, expiresAt: now + OTP_FAILURE_WINDOW_MS, cooldownUntil: 0 };
+    pruneExpired(otpFailures, now);
+    otpFailures.set(email, bucket);
+    // Inside the pause: refused (as a wrong code), not counted.
+    if (bucket.cooldownUntil > now) return bucket.cooldownUntil - now;
     bucket.count += 1;
-    if (bucket.count < OTP_MAX_FAILED_ATTEMPTS) {
-      pruneExpired(otpFailures, now);
-      otpFailures.set(email, bucket);
-      return;
-    }
-    // Budget spent: kill the authenticator, not the account, and clear the
-    // cooldown so the owner's very next /auth/login mints a fresh code.
-    forgetOtpState(email);
-    await expireOtpRequests(db, email);
+    if (bucket.count < OTP_MAX_FAILED_ATTEMPTS || otpFailureCooldownMs <= 0) return 0;
+    // Budget spent: pause wrong codes for a while and start the count over.
+    // The code stays live and a correct one still logs in (see above).
+    bucket.count = 0;
+    bucket.cooldownUntil = now + otpFailureCooldownMs;
+    cfg.log(`[${SERVICE}] ${OTP_MAX_FAILED_ATTEMPTS} wrong login codes for ${email}; wrong codes answered 429 for ${Math.ceil(otpFailureCooldownMs / 1000)}s (a correct code still logs in)`);
+    return otpFailureCooldownMs;
   };
 
   const jsonBody = (c) => c.req.json().catch(() => ({}));
@@ -259,19 +286,18 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
       rateLimit(c, 'otp', 5);
       const body = await jsonBody(c);
       const email = loginEmail(body?.email);
+      if (!email) throw new ApiError('bad_request', 'a valid email is required', 400);
       const now = Date.now();
-      const outstanding = email ? otpOutstanding.get(email) : undefined;
+      const outstanding = otpOutstanding.get(email);
       // Inside the min-interval: hand back the outstanding code's envelope
-      // without minting a second one. The owner is never refused (see above).
+      // without minting a second one. The owner is never refused (see above),
+      // and nothing is minted, so the mint budget is untouched.
       if (outstanding && outstanding.expiresAt > now) return c.json(outstanding.response);
+      if (otpMintBudget > 0) countAgainst('otp_mint:global', otpMintBudget, OTP_MINT_WINDOW_MS);
       const response = await startOtpLogin(db, cfg, body);
-      if (email) {
-        // A fresh code carries a fresh guess budget.
-        otpFailures.delete(email);
-        if (otpCooldownMs > 0) {
-          pruneExpired(otpOutstanding, now);
-          otpOutstanding.set(email, { expiresAt: now + otpCooldownMs, response });
-        }
+      if (otpCooldownMs > 0) {
+        pruneExpired(otpOutstanding, now);
+        otpOutstanding.set(email, { expiresAt: now + otpCooldownMs, response });
       }
       return c.json(response);
     });
@@ -280,16 +306,30 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
       const body = await jsonBody(c);
       const email = loginEmail(body?.email);
       try {
+        // The code is always checked: nothing keyed on the address runs first.
         const result = await verifyOtp(db, cfg, body);
-        // Possession proven: drop the guess counter and the spent code's
-        // cooldown, so neither a burst of wrong guesses nor this login can
-        // delay the owner's next one. Clear this source's verify bucket too.
+        // Possession proven: drop the failure count (and any pause) and the
+        // spent code's min-interval, so neither a burst of wrong guesses nor
+        // this login can delay the owner's next one. Clear this source's
+        // verify bucket too.
         forgetOtpState(email);
         rateBuckets.delete(`otp_verify:${c.env?.ip || 'unknown'}`);
         return c.json(result);
       } catch (error) {
-        // 401 is "no live code, or the wrong one" — a guess against the code.
-        if (email && error instanceof ApiError && error.status === 401) await countFailedOtp(email);
+        // 401 is "no live code, or the wrong one" — one failed attempt against
+        // the address. Past the budget it is answered 429 for the pause; the
+        // code was already checked above, so a correct one never gets here.
+        if (email && error instanceof ApiError && error.status === 401) {
+          const retryAfterMs = countFailedOtp(email);
+          if (retryAfterMs > 0) {
+            throw new ApiError(
+              'rate_limited',
+              `too many wrong login codes for this address; wrong codes are refused for ${Math.ceil(retryAfterMs / 1000)}s (a correct code still logs in)`,
+              429,
+              { retryAfterMs },
+            );
+          }
+        }
         throw error;
       }
     });
