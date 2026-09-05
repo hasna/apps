@@ -260,3 +260,40 @@ describe("contracts key store", () => {
     expect(body.error).toBeTruthy();
   });
 });
+
+describe("a contracts gate with no revocation store says so, once, at startup", () => {
+  test("warns when the signing secret is configured but no store could be built", () => {
+    const warnings: string[] = [];
+    createAuthGate({ env: { API_KEY_SIGNING_SECRET: SECRET }, queryClient: null, warn: (m) => warnings.push(m) });
+    // The failure this guards is a hosted deployment whose DSN is unset: the
+    // gate still authenticates, so nothing looks wrong from outside, while the
+    // revocation capability #1595 was filed to gain is silently absent.
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("HASNA_MESSAGES_DATABASE_URL");
+    expect(warnings[0]).toContain("revocation");
+    expect(warnings[0]).not.toContain(SECRET);
+  });
+
+  test("does NOT warn when a store is present — the warning must mean something", () => {
+    const warnings: string[] = [];
+    createAuthGate({
+      env: { API_KEY_SIGNING_SECRET: SECRET },
+      queryClient: {
+        many: async () => [] as never,
+        get: async () => null as never,
+        execute: async () => {},
+      },
+      warn: (m) => warnings.push(m),
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  test("does NOT warn in static-only or open mode — neither claims a key store", () => {
+    const staticWarnings: string[] = [];
+    createAuthGate({ env: { [STATIC_KEY_ENV]: "sekrit" }, warn: (m) => staticWarnings.push(m) });
+    expect(staticWarnings).toEqual([]);
+    const openWarnings: string[] = [];
+    createAuthGate({ env: {}, warn: (m) => openWarnings.push(m) });
+    expect(openWarnings).toEqual([]);
+  });
+});

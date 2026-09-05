@@ -31,6 +31,12 @@
  * compared) alongside contracts tokens, and the server warns once on first
  * use. Remove the static branch in the release after the fleet key exists.
  *
+ * REVOCATION NEEDS THE DATABASE. Authenticity is stateless, but revocation and
+ * expiry live in the `api_keys` table. With no usable
+ * `HASNA_MESSAGES_DATABASE_URL` the gate verifies signatures only and cannot
+ * refuse a revoked kid, so it warns once at startup rather than degrading in
+ * silence — an unnoticed degradation here looks exactly like a working gate.
+ *
  * When NEITHER a signing secret nor a static key is configured the server is
  * in trusted-loopback mode and /v1/* is open — `assertSafeBind` in
  * serve-entry.ts is what keeps that mode on the loopback interface.
@@ -155,8 +161,14 @@ function json(body: unknown, status: number): Response {
 
 /**
  * Build an {@link AuthQueryClient} over the app's Postgres, or `null` when no
- * database is configured. `pg` is imported lazily so a SQLite-backed local
- * server never pays for it.
+ * database is configured.
+ *
+ * `pg` is a STATIC import at the top of this file, deliberately: postgres-store
+ * imports it statically too, so a lazy import here would buy nothing on the
+ * server path. What keeps a SQLite-backed local run from paying for it is that
+ * the CLI reaches serve-entry only through `await import` — this module is not
+ * loaded at all unless the server is. (An earlier version of this comment
+ * claimed the import was lazy. It never was.)
  */
 export function makeAuthQueryClient(env: Env): AuthQueryClient | null {
   const dsn = env.HASNA_MESSAGES_DATABASE_URL?.trim();
@@ -214,6 +226,20 @@ export function createAuthGate(options: AuthGateOptions = {}): AuthGate {
       schemaReady = store.ensureSchema().catch((e: unknown) => {
         warn(`[messages-serve] api_keys ensureSchema failed: ${e instanceof Error ? e.message : String(e)}`);
       });
+    } else {
+      // Say it once, at startup, loudly. Without a store the verifier can only
+      // check that a token was signed by this secret: it cannot see revocation
+      // or registration, so a leaked key stays valid until the signing secret
+      // itself is rotated — which is precisely the capability hasna/apps#1595
+      // was filed to gain. This is legitimate for a loopback/SQLite server; on
+      // a hosted one it means the DSN is missing or misconfigured, and that is
+      // invisible from the outside because authentication still succeeds.
+      warn(
+        `[messages-serve] auth mode "contracts" with NO revocation store: ` +
+          `HASNA_MESSAGES_DATABASE_URL is unset or unusable, so any correctly signed token is ` +
+          `accepted and revoked keys CANNOT be refused. Expected for a local/SQLite server; on a ` +
+          `hosted deployment set HASNA_MESSAGES_DATABASE_URL.`,
+      );
     }
     verifier = verifyApiKey({
       app: APP,

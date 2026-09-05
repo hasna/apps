@@ -69,9 +69,15 @@ Revocation is checked against the `api_keys` table in the app's own Postgres
 (`HASNA_MESSAGES_DATABASE_URL`); without a database the server still verifies
 tokens cryptographically but cannot see revocations.
 
-The client key lives in Secrets Manager at `hasna/oss/messages/api-key` and is
-provisioned by the deploy lane — see `tooling/fleet/hosted-apps.json` and
-`tooling/fleet/fleet-key.ts` (hasna/apps#1595).
+The client key lives in Secrets Manager at `hasna/oss/messages/api-key`. It is
+**not** provisioned by a deploy lane: `messages` has no deploy lane in this
+repository, so the on-deploy provisioning added for hasna/apps#1595 cannot cover
+the very app that motivated it. `messages` is covered only by the daily drift
+check (`tooling/fleet/hosted-apps.json`, `tooling/fleet/fleet-key.ts`), which
+will name it as failing until an out-of-repo deploy carries this gate with
+`API_KEY_SIGNING_SECRET` set and the key is minted in-VPC — that is the check
+working, not a broken check. Sequence and tracking: `tooling/fleet/README.md`
+(which links the infra-side issue) and hasna/apps#1768.
 
 **`HASNA_MESSAGES_API_KEY` is deprecated.** The single static string is still
 accepted for one more release so stations can rotate, and the server warns once

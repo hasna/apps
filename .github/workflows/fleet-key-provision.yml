@@ -16,11 +16,34 @@ name: fleet-key-provision
 # production service. A red `provision-key` next to a green `deploy` says
 # exactly what happened.
 #
-# The lane's own `<app>-prod-gha-deploy` role is reused. It needs, beyond what
-# the deploy already uses:
-#   secretsmanager:GetSecretValue on hasna/oss/<app>/api-key
-#   ecs:RunTask / ecs:DescribeTasks for the mint task family (already held for
-#     the migration task) and iam:PassRole for that task's roles
+# WHAT IT WILL AND WILL NOT WRITE. It mints when the secret is MISSING. It does
+# NOT overwrite a secret that exists and was merely refused: that one value is
+# what every station copied by hand into its Keychain, and a keyed 403 is also
+# what a valid key outside the probed path's scope returns. A refusal is
+# reported (red job + notice) and a human decides; `allow_rotate: true` opts in,
+# and then only after a second confirming probe, with a rotation notice
+# published to the job summary. See `planMint` in tooling/fleet/key-provisioning.ts.
+#
+# ROLLOUT SWITCH (temporary, hasna/apps#1595). AWS-side prerequisites for this
+# job live in infra-live, not here, and none of them exists yet — verified
+# against infra-live@1ab5ad4, where infra/modules/deploy-oidc-role (which
+# conversations, mementos, projects and skills all instantiate) grants NO
+# secretsmanager action at all and scopes ecs:RunTask to the migration family.
+# They are TRACKED, not merely disclosed: hasna-internal/infra-live#46 is the
+# infra work, hasna/apps#1768 is flipping these switches on and deleting them.
+#   * the `<app>-prod-gha-deploy` role must carry secretsmanager:GetSecretValue
+#     on hasna/oss/<app>/api-key, plus ecs:RunTask / ecs:DescribeTasks and
+#     iam:PassRole for the mint task family;
+#   * the SSM deploy manifest /hasna/deploy/<app> must carry
+#     "mint_key_task_family" (the hasna-ops-mint-key-<app> family).
+# Until those land, this job would paint every production deploy red for a
+# reason the deploy did not cause. So it runs only when the repository (or
+# environment) variable FLEET_KEY_PROVISION_ENABLED is exactly "true"; when it
+# is not, the job still RUNS and says loudly, on every deploy, that the fleet
+# key is unchecked — a disabled check that is silent is the failure this whole
+# change exists to end. DELETE this switch (and the notice step) once the roles
+# and manifests are in place.
+#
 # The key VALUE never leaves the runner process: it is read into the checking
 # process and sent as a header, never echoed, written or exported.
 
@@ -39,6 +62,13 @@ on:
         required: false
         type: string
         default: us-east-1
+      allow_rotate:
+        description: >-
+          Permit REPLACING a key that exists and was refused. Off by default:
+          overwriting invalidates every station's hand-copied Keychain value.
+        required: false
+        type: boolean
+        default: false
     secrets:
       AWS_ACCOUNT_ID:
         required: true
@@ -47,6 +77,9 @@ jobs:
   provision:
     name: provision or verify ${{ inputs.app }} client key
     runs-on: ubuntu-latest
+    # Required, not incidental: the <app>-prod-gha-deploy role trusts the OIDC
+    # subject repo:hasna/apps:environment:production, so dropping this would
+    # break the credential exchange before any AWS call.
     environment: production
     timeout-minutes: 20
     permissions:
@@ -59,43 +92,91 @@ jobs:
           ref: ${{ inputs.source_sha }}
           persist-credentials: false
 
+      # Loud, every run, until the AWS prerequisites land: the whole point of
+      # #1595 is that nobody could see an unprovisioned key.
+      - name: Say that key provisioning is not enabled yet
+        if: ${{ vars.FLEET_KEY_PROVISION_ENABLED != 'true' }}
+        env:
+          APP: ${{ inputs.app }}
+        run: |
+          set -Eeuo pipefail
+          echo "::warning title=fleet key unchecked::${APP} deployed without provisioning or verifying hasna/oss/${APP}/api-key (FLEET_KEY_PROVISION_ENABLED is not 'true')"
+          {
+            echo "## ${APP} client API key — NOT CHECKED"
+            echo
+            echo "This deploy did **not** verify \`hasna/oss/${APP}/api-key\`. The service may be"
+            echo "running, routed and healthy while no station can call it — the hasna/apps#1595"
+            echo "failure itself."
+            echo
+            echo "To turn the check on, once infra-live has landed the prerequisites:"
+            echo
+            echo "1. \`${APP}-prod-gha-deploy\` carries \`secretsmanager:GetSecretValue\` on"
+            echo "   \`hasna/oss/${APP}/api-key\`, \`ecs:RunTask\`/\`ecs:DescribeTasks\` and"
+            echo "   \`iam:PassRole\` for the mint task;"
+            echo "2. \`/hasna/deploy/${APP}\` (SSM) carries \`mint_key_task_family\`;"
+            echo "3. set the repository variable \`FLEET_KEY_PROVISION_ENABLED=true\`."
+            echo
+            echo "Tracked: hasna-internal/infra-live#46 (the infra) and hasna/apps#1768 (turning"
+            echo "this on and deleting the switch). If either issue is closed and this warning is"
+            echo "still here, the switch was forgotten — that is the bug, not the notice."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       # Pinned to the same commit and the same toolchain version the deploy
       # lanes use, and placed BEFORE any AWS credential is configured so a
       # third-party action never runs inside the credentialed window.
       - name: Set up Bun
+        if: ${{ vars.FLEET_KEY_PROVISION_ENABLED == 'true' }}
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.3.14 # in lockstep with the root package.json "packageManager"
 
       - name: Configure AWS credentials
+        if: ${{ vars.FLEET_KEY_PROVISION_ENABLED == 'true' }}
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ inputs.app }}-prod-gha-deploy
           aws-region: ${{ inputs.region }}
           role-session-name: gha-fleet-key-${{ inputs.app }}-${{ github.run_id }}
 
+      # The manifest name is derived from the app and nothing else. It used to
+      # accept an override from a repository-scoped Actions variable — and this
+      # workflow is called for five different apps, so that one variable would
+      # have pointed every lane at one app's SSM manifest and minted through the
+      # wrong task family. There is no override.
       - name: Provision or verify the client API key
+        if: ${{ vars.FLEET_KEY_PROVISION_ENABLED == 'true' }}
+        id: provision
         env:
           APP: ${{ inputs.app }}
           REGION: ${{ inputs.region }}
-          DEPLOY_MANIFEST: ${{ vars.DEPLOY_MANIFEST || format('/hasna/deploy/{0}', inputs.app) }}
+          DEPLOY_MANIFEST: /hasna/deploy/${{ inputs.app }}
+          ALLOW_ROTATE: ${{ inputs.allow_rotate }}
         run: |
           set -Eeuo pipefail
-          bun tooling/fleet/fleet-key.ts provision \
-            --app "${APP}" \
-            --manifest "${DEPLOY_MANIFEST}" \
-            --region "${REGION}"
+          args=(provision --app "${APP}" --manifest "${DEPLOY_MANIFEST}" --region "${REGION}")
+          if [[ "${ALLOW_ROTATE}" == "true" ]]; then args+=(--allow-rotate); fi
+          bun tooling/fleet/fleet-key.ts "${args[@]}"
 
+      # Every interpolation goes through env: — a `run:` body that pastes an
+      # expression straight into the shell is the standard Actions injection
+      # shape, even when today's only callers pass a gate-verified sha.
       - name: Publish provisioning summary
-        if: ${{ always() }}
+        if: ${{ always() && vars.FLEET_KEY_PROVISION_ENABLED == 'true' }}
         env:
           APP: ${{ inputs.app }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          OUTCOME: ${{ job.status }}
+          ROTATED: ${{ steps.provision.outputs.rotated }}
         run: |
           set -Eeuo pipefail
           {
             echo "## ${APP} client API key"
             echo
             echo "- secret: \`hasna/oss/${APP}/api-key\`"
-            echo "- source SHA: \`${{ inputs.source_sha }}\`"
-            echo "- outcome: \`${{ job.status }}\`"
+            echo "- source SHA: \`${SOURCE_SHA}\`"
+            echo "- outcome: \`${OUTCOME}\`"
+            echo "- rotated: \`${ROTATED:-false}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
+          if [[ "${ROTATED}" == "true" ]]; then
+            echo "::warning title=fleet key rotated::hasna/oss/${APP}/api-key was replaced; every station's Keychain copy is now stale and must be re-pulled"
+          fi

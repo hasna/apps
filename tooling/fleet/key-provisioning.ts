@@ -223,23 +223,46 @@ export type ProbeVerdict =
   /** The unkeyed call was NOT refused: /v1/* is not credential-gated at all. */
   | "ungated"
   /** One of the two calls did not complete: nothing can be concluded. */
-  | "unreachable";
+  | "unreachable"
+  /** A call completed with a status that answers nothing about the credential. */
+  | "inconclusive";
 
 function isRefusal(status: number): boolean {
   return (REFUSAL_STATUSES as readonly number[]).includes(status);
 }
 
 /**
+ * Statuses that say nothing about the credential presented.
+ *
+ * A 5xx is the origin failing before or independently of the gate, and a 429 is
+ * the request never being judged at all. Reading either as "not a refusal, so
+ * the key works" is how a rate-limited or broken origin reports a green key —
+ * exactly the "a check that cannot fail is worse than none" failure the unkeyed
+ * control exists to prevent, arriving through the other half of the probe.
+ */
+export function isInconclusiveStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+/**
  * Classify a two-sided probe. `null` means the request did not complete.
  *
- * Order matters: `unreachable` outranks everything (an incomplete probe proves
- * nothing), and `ungated` outranks `authenticated` (a service that accepts an
- * unkeyed call would make ANY key look valid).
+ * Order matters:
+ *   - `unreachable` outranks everything (an incomplete probe proves nothing);
+ *   - an inconclusive UNKEYED status outranks `ungated`, because "not a 401"
+ *     from a 503 is not evidence that /v1/* is unguarded;
+ *   - `ungated` outranks the keyed reading entirely (a service that accepts an
+ *     unkeyed call would make ANY key look valid);
+ *   - a refusal is a refusal, but anything else must still be a status the
+ *     origin actually judged before it counts as `authenticated`.
  */
 export function classifyProbe(withoutKey: number | null, withKey: number | null): ProbeVerdict {
   if (withoutKey === null || withKey === null) return "unreachable";
+  if (isInconclusiveStatus(withoutKey)) return "inconclusive";
   if (!isRefusal(withoutKey)) return "ungated";
-  return isRefusal(withKey) ? "rejected" : "authenticated";
+  if (isRefusal(withKey)) return "rejected";
+  if (isInconclusiveStatus(withKey)) return "inconclusive";
+  return "authenticated";
 }
 
 export type KeyState =
@@ -302,6 +325,14 @@ export function assessKey(input: AssessInput): KeyAssessment {
       };
     case "unreachable":
       return { app, state: "unverifiable", detail: `${app} did not answer the probe${seen}` };
+    case "inconclusive":
+      return {
+        app,
+        state: "unverifiable",
+        detail:
+          `${app} answered the probe with a status that judges no credential (5xx or 429), ` +
+          `so neither half of the check proved anything${seen}`,
+      };
   }
 }
 
@@ -377,6 +408,113 @@ export interface Io {
 /** Sentinel AWS error meaning "no such secret" — the `missing` case, not a fault. */
 const NOT_FOUND = /ResourceNotFoundException|Secrets Manager can't find the specified secret/i;
 
+/** AWS's several ways of saying "this role may not do that". */
+const ACCESS_DENIED = /AccessDenied|UnauthorizedOperation|is not authorized to perform|AuthorizationError/i;
+
+/** AWS's ways of saying "the thing you named does not exist". */
+const NO_SUCH_TARGET =
+  /ClusterNotFoundException|TaskDefinitionNotFoundException|Unable to describe task definition|ParameterNotFound/i;
+
+/**
+ * The AWS side of this checker is NOT in this repository.
+ *
+ * Every grant and every task definition it needs lives in
+ * hasna-internal/infra-live (tracked in hasna-internal/infra-live#46; the
+ * rollout switches that keep the lanes off until it lands are hasna/apps#1768).
+ * Verified absent at infra-live@1ab5ad4: `infra/modules/deploy-oidc-role` —
+ * which conversations, mementos, projects and skills all instantiate — grants
+ * NO secretsmanager action at all and scopes `ecs:RunTask` to
+ * `${migration_task_family}:*`, and no `hasna-ops-mint-key-*` task definition
+ * exists anywhere.
+ *
+ * So the failure this code will actually meet first is `AccessDeniedException`,
+ * not a broken key. An `AccessDeniedException` re-raised as a generic error
+ * reads, in a deploy lane's log, exactly like the app's key being unreadable —
+ * one is a missing IAM statement a human must add once, the other is an
+ * incident. This error type keeps them apart and says which grant is missing.
+ */
+export class FleetKeyPrerequisiteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FleetKeyPrerequisiteError";
+  }
+}
+
+/** stderr and message together: an injected Io throws plain Errors, execFile attaches stderr. */
+function awsErrorText(e: unknown): string {
+  const stderr = (e as { stderr?: string }).stderr ?? "";
+  const message = e instanceof Error ? e.message : String(e);
+  return `${stderr}\n${message}`;
+}
+
+/** The message shown when the lane's role cannot read a client key at all. */
+export function secretReadDeniedMessage(secretId: string): string {
+  return [
+    `this role may not read ${secretId} (AccessDenied).`,
+    "That is a missing IAM statement, not a missing or dead key: nothing has been proved about the",
+    "key itself and nothing has been written.",
+    `Grant secretsmanager:GetSecretValue on arn:aws:secretsmanager:<region>:<account>:secret:${secretId}-*`,
+    "to the role this lane assumes — infra/modules/deploy-oidc-role for a deploy lane, the",
+    "fleet-key-audit-gha role for the daily drift lane. Tracked in hasna-internal/infra-live#46;",
+    "the rollout switches are hasna/apps#1768.",
+  ].join("\n");
+}
+
+/** The message shown when the lane's role may not read the app's deploy manifest. */
+export function manifestReadDeniedMessage(manifestName: string): string {
+  return [
+    `this role may not read the SSM deploy manifest ${manifestName} (AccessDenied).`,
+    "Nothing was minted and no secret was written.",
+    `Grant ssm:GetParameter on parameter${manifestName} to the role this lane assumes.`,
+    "Tracked in hasna-internal/infra-live#46.",
+  ].join("\n");
+}
+
+/** The message shown when the lane's role may not start the mint task. */
+export function mintDeniedMessage(taskFamily: string, cluster: string): string {
+  return [
+    `this role may not run the mint task ${taskFamily} in ${cluster} (AccessDenied).`,
+    "Nothing was minted and no secret was written.",
+    `Grant ecs:RunTask on task-definition/${taskFamily}:* (conditioned on this cluster),`,
+    "ecs:DescribeTasks, and iam:PassRole for the mint task's task and execution roles.",
+    "infra/modules/deploy-oidc-role scopes ecs:RunTask to the migration family only today.",
+    "Tracked in hasna-internal/infra-live#46.",
+  ].join("\n");
+}
+
+/** The message shown when the mint task definition or cluster does not exist. */
+export function mintTargetMissingMessage(taskFamily: string, cluster: string): string {
+  return [
+    `the mint task ${taskFamily} does not exist in ${cluster}.`,
+    "Nothing was minted and no secret was written.",
+    `Register the in-VPC one-off task definition ${taskFamily} — it runs "@hasna/contracts issue-key"`,
+    "and writes the result straight to Secrets Manager, so the plaintext never leaves the VPC.",
+    "Tracked in hasna-internal/infra-live#46.",
+  ].join("\n");
+}
+
+/**
+ * Re-raise an AWS failure as a prerequisite error when it is one.
+ *
+ * `denied` and `missing` are built lazily so a caller pays nothing on the happy
+ * path. Anything else is re-thrown untouched — this must not swallow a real
+ * fault into a reassuring message.
+ */
+export async function withPrerequisiteContext<T>(
+  run: () => Promise<T>,
+  messages: { denied: () => string; missing?: () => string },
+): Promise<T> {
+  try {
+    return await run();
+  } catch (e) {
+    if (e instanceof FleetKeyPrerequisiteError) throw e;
+    const text = awsErrorText(e);
+    if (ACCESS_DENIED.test(text)) throw new FleetKeyPrerequisiteError(messages.denied());
+    if (messages.missing && NO_SUCH_TARGET.test(text)) throw new FleetKeyPrerequisiteError(messages.missing());
+    throw e;
+  }
+}
+
 export function createIo(options: { timeoutMs?: number } = {}): Io {
   const timeoutMs = options.timeoutMs ?? 15_000;
   const aws = async (args: readonly string[]): Promise<string> => {
@@ -406,7 +544,11 @@ export function createIo(options: { timeoutMs?: number } = {}): Io {
         return value.length > 0 ? value : null;
       } catch (e) {
         const stderr = (e as { stderr?: string }).stderr ?? "";
+        // "no such secret" is the `missing` case the whole lane exists to fix.
         if (NOT_FOUND.test(stderr)) return null;
+        // "you may not look" is a missing IAM statement, and saying so is the
+        // difference between a one-line infra fix and a hunt for a dead key.
+        if (ACCESS_DENIED.test(stderr)) throw new FleetKeyPrerequisiteError(secretReadDeniedMessage(secretId));
         throw new Error(`reading ${secretId} failed: ${firstLine(stderr) || (e as Error).message}`);
       }
     },
@@ -496,6 +638,7 @@ export function missingMintTargetMessage(app: string, manifestName: string): str
     `one-off task definition that runs "@hasna/contracts issue-key" for ${app} and writes the`,
     `result to ${keySecretIdFor(app)} (the hasna-ops-mint-key-${app} family). The deploy itself`,
     "succeeded; the service is running without a usable client key until this is done.",
+    "Neither the task family nor the grant to start it exists yet — hasna-internal/infra-live#46.",
   ].join("\n");
 }
 
@@ -509,48 +652,166 @@ export async function runMintTask(target: MintTarget, io: Io, region: string, st
   const network =
     `awsvpcConfiguration={subnets=[${target.subnets.join(",")}],` +
     `securityGroups=[${target.securityGroups.join(",")}],assignPublicIp=${target.assignPublicIp}}`;
+  // Both prerequisites this call depends on are absent from infra-live today
+  // (see FleetKeyPrerequisiteError): the deploy role's ecs:RunTask is scoped to
+  // the migration family, and no hasna-ops-mint-key-* task definition exists.
+  // Whichever lands last, the operator must be told WHICH — not "mint task
+  // failed to start".
   const taskArn = (
-    await io.aws([
-      "ecs",
-      "run-task",
-      "--region",
-      region,
-      "--cluster",
-      target.cluster,
-      "--task-definition",
-      target.taskFamily,
-      "--launch-type",
-      "FARGATE",
-      "--count",
-      "1",
-      "--started-by",
-      startedBy,
-      "--network-configuration",
-      network,
-      "--query",
-      "tasks[0].taskArn",
-      "--output",
-      "text",
-    ])
+    await withPrerequisiteContext(
+      () =>
+        io.aws([
+          "ecs",
+          "run-task",
+          "--region",
+          region,
+          "--cluster",
+          target.cluster,
+          "--task-definition",
+          target.taskFamily,
+          "--launch-type",
+          "FARGATE",
+          "--count",
+          "1",
+          "--started-by",
+          startedBy,
+          "--network-configuration",
+          network,
+          "--query",
+          "tasks[0].taskArn",
+          "--output",
+          "text",
+        ]),
+      {
+        denied: () => mintDeniedMessage(target.taskFamily, target.cluster),
+        missing: () => mintTargetMissingMessage(target.taskFamily, target.cluster),
+      },
+    )
   ).trim();
   if (!taskArn || taskArn === "None") throw new Error("mint task failed to start");
   await io.aws(["ecs", "wait", "tasks-stopped", "--region", region, "--cluster", target.cluster, "--tasks", taskArn]);
   const exit = (
-    await io.aws([
-      "ecs",
-      "describe-tasks",
-      "--region",
-      region,
-      "--cluster",
-      target.cluster,
-      "--tasks",
-      taskArn,
-      "--query",
-      "tasks[0].containers[0].exitCode",
-      "--output",
-      "text",
-    ])
+    await withPrerequisiteContext(
+      () =>
+        io.aws([
+          "ecs",
+          "describe-tasks",
+          "--region",
+          region,
+          "--cluster",
+          target.cluster,
+          "--tasks",
+          taskArn,
+          "--query",
+          "tasks[0].containers[0].exitCode",
+          "--output",
+          "text",
+        ]),
+      { denied: () => mintDeniedMessage(target.taskFamily, target.cluster) },
+    )
   ).trim();
   const code = Number(exit);
   return Number.isFinite(code) ? code : 1;
+}
+
+// --------------------------------------------------------------------------
+// Rotation policy — when provisioning may OVERWRITE an existing secret.
+// --------------------------------------------------------------------------
+
+/**
+ * WHY THIS IS NOT "mint whenever the probe is unhappy".
+ *
+ * `hasna/oss/<app>/api-key` holds ONE shared client key, and stations do not
+ * read it live: an operator copies it by hand into the macOS Keychain
+ * (`hasna.credentials.<app>.api-key`, see ~/.claude/rules). Overwriting that
+ * secret therefore invalidates every station's copy of it, silently, until
+ * somebody re-pulls — so an automatic overwrite is a fleet-wide outage waiting
+ * for an unlucky probe.
+ *
+ * And the `rejected` verdict is a HEURISTIC, not a proof. It is reached from a
+ * keyed 401 **or 403**, and a 403 is exactly what a perfectly valid key that
+ * merely lacks the scope of the probed path returns (`loops` answers 403 on the
+ * default probe path today). Rotating on that reading would destroy a live key
+ * to fix a permission that was never broken.
+ *
+ * So the rule is asymmetric, and deliberately so:
+ *
+ *   missing      — no secret exists, nothing can be invalidated => MINT.
+ *   rejected     — a secret exists => REFUSE, report, and leave it alone. The
+ *                  lane goes red and a human decides, unless the caller opted
+ *                  in with `--allow-rotate` (and then only after a second,
+ *                  confirming probe, and with a rotation notice published).
+ *   unverifiable — the probe proved nothing => never touch the secret.
+ *
+ * The cost of refusing is a red job on a service whose key was genuinely dead.
+ * The cost of rotating wrongly is every station losing an app at once. The
+ * first is loud and cheap; the second is silent and expensive.
+ */
+
+/** What `provision` should do about one assessment. */
+export type MintPlan =
+  /** The key is fine (or documented-exempt): do nothing, exit clean. */
+  | { action: "none"; reason: string }
+  /** No secret exists: mint one. Nothing can be invalidated. */
+  | { action: "mint"; cause: "missing" }
+  /** A secret exists and was refused, and the caller opted into replacing it. */
+  | { action: "rotate"; cause: "rejected" }
+  /** Do not write: report and exit non-zero. */
+  | { action: "refuse"; reason: string };
+
+/** The message shown when a live secret is refused and rotation was not authorised. */
+export function rotationRefusedMessage(app: string): string {
+  return [
+    `${app} has a client key (${keySecretIdFor(app)}) that the origin refused.`,
+    "NOT re-minting: that secret is the one every station copied into its Keychain, and a keyed",
+    "403 is also what a valid key lacking the probed path's scope returns — overwriting on this",
+    "reading can take the app away from every station to fix a permission that was never broken.",
+    "Decide, then act:",
+    `  - the key really is dead  -> re-run this lane with --allow-rotate (workflow input`,
+    `    allow_rotate: true), or mint by hand with the hasna-ops-mint-key-${app} task, and tell`,
+    "    station operators to re-pull the secret into their Keychain;",
+    `  - the key is fine and the probe path is not in its scope -> give ${app} a probePath naming`,
+    "    a route the fleet key IS scoped for, in tooling/fleet/hosted-apps.json.",
+  ].join("\n");
+}
+
+/** The notice published whenever an existing key is actually replaced. */
+export function rotationNotice(app: string): string {
+  return [
+    `ROTATED ${keySecretIdFor(app)}: the previous client key for ${app} was refused by the origin and`,
+    "has been replaced. Every station still holds the OLD value in its Keychain and will fail against",
+    `${app} until it is re-pulled:`,
+    `  aws secretsmanager get-secret-value --secret-id ${keySecretIdFor(app)} --region us-east-1 \\`,
+    "    --query SecretString --output text  ->  security add-generic-password -U -a <station> \\",
+    `    -s hasna.credentials.${app}.api-key -w "$value"`,
+    "(move the value process-to-process; never print, echo or write it. See hasna/apps#1595.)",
+  ].join("\n");
+}
+
+/**
+ * Decide what provisioning may do, from the assessment alone.
+ *
+ * Pure on purpose: this is the rule that protects a live credential, so it is
+ * readable and testable without AWS, a network or a workflow.
+ */
+export function planMint(assessment: KeyAssessment, options: { allowRotate?: boolean } = {}): MintPlan {
+  switch (assessment.state) {
+    case "verified":
+      return { action: "none", reason: assessment.detail };
+    case "exempt":
+      return { action: "none", reason: assessment.detail };
+    case "missing":
+      return { action: "mint", cause: "missing" };
+    case "unverifiable":
+      // A probe that proved nothing must never be answered by writing a new
+      // credential over a possibly-good one.
+      return {
+        action: "refuse",
+        reason: `refusing to mint for ${assessment.app}: the probe proved nothing. ${assessment.detail}`,
+      };
+    case "rejected":
+      return options.allowRotate
+        ? { action: "rotate", cause: "rejected" }
+        : { action: "refuse", reason: rotationRefusedMessage(assessment.app) };
+  }
 }

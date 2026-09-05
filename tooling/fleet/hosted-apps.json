@@ -99,7 +99,8 @@
     },
     {
       "app": "messages",
-      "source": "monorepo"
+      "source": "monorepo",
+      "notes": "The app hasna/apps#1595 was filed for, and the one entry that will REPORT AS FAILING until its rollout finishes. messages has no deploy lane in this repository, so nothing here can provision its key: the contracts gate added in #1758 reaches production only through an out-of-repo deploy that puts API_KEY_SIGNING_SECRET in the task environment. Sequence: (1) deploy a build carrying src/server/auth.ts with the signing secret set, (2) mint hasna/oss/messages/api-key with the in-VPC hasna-ops-mint-key-messages task, (3) confirm this check turns green. Until (1) and (2), messages-prod still answers the old static-key error and the drift report will name it every day -- which is the correct behaviour, not a bug in the check."
     },
     {
       "app": "notes",
