@@ -36,6 +36,7 @@ AI coding cost tracker — `@hasna/economy`
 - `src/cli/index.ts` — CLI entry
 - `src/mcp/index.ts` — MCP server
 - `src/server/index.ts` — REST API
+- `src/lib/cloud-storage.ts` — the ONE client storage seam: `@hasna/contracts` 1.0.2 resolver (Keychain item `hasna.credentials.economy.api-key`, `~/.hasna/economy/config/credentials`, `HASNA_ECONOMY_API_KEY`, default gateway `https://api.hasna.com/economy`), fail-closed on no credential, local store only via `HASNA_ECONOMY_LOCAL=1` (prints `local` on stderr)
 - `menubar/Sources/EconomyBar` — native SwiftUI menu bar app
 
 ## Testing

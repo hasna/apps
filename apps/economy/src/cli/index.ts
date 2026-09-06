@@ -304,7 +304,7 @@ program
     if (isCloudStore()) {
       const cloud = economyCloudStorage()
       if (!cloud.active) {
-        console.log(chalk.yellow('cloud mode: sync transport unavailable (set HASNA_ECONOMY_API_URL and HASNA_ECONOMY_API_KEY)'))
+        console.log(chalk.yellow('cloud mode: sync transport unavailable (no credential resolved; set HASNA_ECONOMY_API_KEY or write ~/.hasna/economy/config/credentials)'))
         return
       }
       const result = await syncAllToCloud(cloud, {
@@ -1425,7 +1425,7 @@ billingCmd
     if (isCloudStore()) {
       const cloud = economyCloudStorage()
       if (!cloud.active) {
-        console.log(chalk.yellow('cloud mode: billing sync transport unavailable (set HASNA_ECONOMY_API_URL and HASNA_ECONOMY_API_KEY)'))
+        console.log(chalk.yellow('cloud mode: billing sync transport unavailable (no credential resolved; set HASNA_ECONOMY_API_KEY or write ~/.hasna/economy/config/credentials)'))
         return
       }
       const result = await billingSyncToCloud(cloud, { days, anthropic: opts.anthropic, openai: opts.openai, gemini: opts.gemini })

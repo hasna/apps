@@ -15,7 +15,7 @@
 //
 // SAFETY: no credential value ever touches this module. The provider admin keys
 // stay in the environment (read by the ingest modules), and the shared API key
-// stays inside the contracts transport.
+// stays inside the @hasna/contracts transport the storage seam resolved.
 
 import { join } from 'path'
 import { openDatabase, getDataDir } from '../db/database.js'

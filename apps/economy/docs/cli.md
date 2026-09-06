@@ -32,6 +32,7 @@ The supported coding-agent values are `claude`, `takumi`, `codex`, `gemini`, `op
 | `economy watch` | Poll recent costs, or use `--daemon` to sync watched local paths. Also accepts `--interval`, `--agent`, and macOS `--notify`. In cloud mode it streams the API and does not ingest local files. |
 | `economy status` | Print one-line spend, fleet, storage, top-agent, and available quota status. |
 | `economy doctor` | Check source paths/token availability, storage mode, pricing gaps, deduplication, and billing drift. |
+| `economy transport` | Report the resolved client transport and credential SOURCE (never the key): the `/v1` authority, the URL/key source names, and the credential tier from the `@hasna/contracts` chain; `--json` for the full report. Exits 0 even when unconfigured — the refusal is the report. |
 | `economy init` | Print first-run local and cloud-client setup hints. |
 
 Human output for high-cardinality commands is intentionally capped. Use the command's `--json`, `--verbose`, or `--limit` option when available. JSON output is complete; `--verbose` has command-specific semantics, so consult `--help`.

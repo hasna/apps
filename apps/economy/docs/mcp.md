@@ -24,7 +24,7 @@ Gemini settings:
 }
 ```
 
-`economy mcp --all` prints these snippets. The MCP server uses the same local-versus-cloud Store selection as the CLI; configure a shared API with `HASNA_ECONOMY_API_URL` and `HASNA_ECONOMY_API_KEY` as described in [configuration](configuration.md#climcp-cloud-client).
+`economy mcp --all` prints these snippets. The MCP server uses the same local-versus-cloud Store selection as the CLI; the credential resolves through the `@hasna/contracts` chain as described in [configuration](configuration.md#climcp-cloud-client).
 
 ## Streamable HTTP
 

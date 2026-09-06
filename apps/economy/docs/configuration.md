@@ -9,7 +9,7 @@ The default data directory is `~/.hasna/economy/` and the SQLite database is `~/
 | `HASNA_ECONOMY_DB_PATH` | SQLite path; takes precedence over `ECONOMY_DB`. |
 | `ECONOMY_DB` | Alternate SQLite path. `:memory:` is useful for tests. |
 | `HASNA_ECONOMY_CONFIG_PATH` | Path to `config.json`; defaults under the data directory. |
-| `ECONOMY_MACHINE_ID` | Machine identifier; otherwise Economy uses the normalized hostname. |
+| `HASNA_ECONOMY_MACHINE_ID` | Machine identifier; otherwise Economy uses the normalized hostname. |
 | `ECONOMY_TAG` | Fallback attribution tag on locally written sessions/requests. |
 
 `economy config` reads and writes `config.json`. The defaults are `port=3456`, `default-period=today`, `auto-sync=true`, `sync-interval=30`, `alert-thresholds=[5,10,25,50,100]`, and `webhook-url=null`. At present, `webhook-url` drives budget notifications and `activeModel` records the selected model used by AI analysis; the other stored values are compatibility/settings metadata. Binary ports, periods, and watch intervals still come from command options or the environment described below.
@@ -34,24 +34,27 @@ The same agent-specific pattern applies to all eight supported agents. Account k
 
 ## CLI/MCP cloud client
 
-The CLI and MCP server fail closed when the fleet API environment is absent: they never silently fall back to the on-box SQLite store. To route CLI and MCP data operations to a shared server, set:
+The CLI and MCP server resolve their credential through the `@hasna/contracts` 1.0.2 client resolver, FRESH ON EVERY CALL (and per request inside a long-lived MCP server, so a key rotation heals without a restart). The tiers, in order:
 
-```bash
-export HASNA_ECONOMY_API_URL=https://economy.example.com
-export HASNA_ECONOMY_API_KEY='...'
-```
+1. an explicit `--api-key` / `--profile` argument (CLI flags only)
+2. a deliberate env pointer — `HASNA_ECONOMY_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_ECONOMY_API_KEY_REF`
+3. the macOS Keychain — item `hasna.credentials.economy.api-key`, account `HASNA_STATION` → `hostname -s` → `$USER`
+4. disk — `~/.hasna/economy/config/credentials` (0600, `HASNA_ECONOMY_API_KEY=…`; `HASNA_HOME` / `HASNA_CONFIG_HOME` move the root; XDG locations are never read)
+5. `HASNA_ECONOMY_API_KEY` in the environment — legitimate, no deprecation notice
 
-URL plus key is the entire cloud signal: it routes CLI and MCP data operations to the HTTP API. Unprefixed `ECONOMY_API_URL`/`ECONOMY_API_KEY` aliases are accepted. An existing `/v1` suffix is normalized, otherwise it is appended. A URL without a key (or an invalid URL) fails rather than reading an unintended local dataset.
+The authority follows the same ladder — `HASNA_ECONOMY_API_URL`, the Keychain `api-url` item, the credentials file — and DEFAULTS to the fleet gateway `https://api.hasna.com/economy` once a credential resolves, so a key alone is a complete configuration. An existing `/v1` suffix is normalized, otherwise it is appended. The unprefixed `ECONOMY_API_URL` / `ECONOMY_API_KEY` spellings are legacy aliases, accepted for one release at lower precedence.
 
-Local mode (the on-box SQLite store at the default data directory above) is reachable only by explicit opt-in:
+**Fail closed (owner directive 2026-09-04).** A run without a credential from any tier exits non-zero, creates no SQLite file, and emits no `economy-local-fallback` event: an unconfigured client refuses to guess which dataset it serves. The error names every tier consulted.
+
+**Local mode (the on-box SQLite store) is reachable only by explicit opt-in:**
 
 ```bash
 export HASNA_ECONOMY_LOCAL=1
 ```
 
-The unprefixed `ECONOMY_LOCAL=1` alias is accepted. With neither the API environment nor the opt-in, data commands exit non-zero with an error naming the required variables, and no local database is created — a run that cannot prove which dataset it serves refuses to serve one.
+The unprefixed `ECONOMY_LOCAL=1` alias is accepted. The opt-in yields to every hosted signal (a URL, a key, or a pointer in the environment outranks it), and a local run prints one line on stderr — `economy: local mode (HASNA_ECONOMY_LOCAL=1) …` — so an unhosted run is never mistaken for a hosted one that came back empty.
 
-Retired `*_STORAGE_MODE` / `*_MODE` variables no longer exist as selectors: `HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`, plus the accounts variants `HASNA_ACCOUNTS_*_MODE`) are a hard error on the client too — delete them and let the URL + key pair do the routing.
+Retired `*_STORAGE_MODE` / `*_MODE` variables no longer exist as selectors: `HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`, plus the accounts variants `HASNA_ACCOUNTS_*_MODE`) are a hard error on the client — delete them and let the resolved credential do the routing.
 
 In cloud-client mode, data commands use the HTTP API, and local auto-sync, explicit `economy sync`, and `economy billing sync` are skipped. Clients never need or use a Postgres DSN.
 
@@ -64,7 +67,7 @@ economy serve --port 3456
 economy-serve --port 3456
 ```
 
-`ECONOMY_PORT` supplies the `economy-serve` default. `ECONOMY_BIND` (or `ECONOMY_HOST`) controls the local bind host. `ECONOMY_API_TOKEN` (or `HASNA_ECONOMY_API_TOKEN`) enables the local shared-token check; send it as `Authorization: Bearer ...` or `X-Economy-Token`.
+`ECONOMY_PORT` supplies the `economy-serve` default. `ECONOMY_BIND` (or `ECONOMY_HOST`) controls the local bind host. `HASNA_ECONOMY_API_TOKEN` enables the local shared-token check; send it as `Authorization: Bearer ...` or `X-Economy-Token`. (The unprefixed `ECONOMY_API_TOKEN` spelling is retired.)
 
 Without a local token, the current server defaults to `0.0.0.0` and API routes are unauthenticated. Set a token and an intentional bind address before exposing a local-mode server to another host.
 

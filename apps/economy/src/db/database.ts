@@ -132,7 +132,7 @@ function macHostMachineId(): string | null {
 }
 
 export function getMachineId(): string {
-  const envMachine = normalizeMachineId(process.env['ECONOMY_MACHINE_ID'])
+  const envMachine = normalizeMachineId(process.env['HASNA_ECONOMY_MACHINE_ID'])
   if (envMachine) return envMachine
   const hostMachine = normalizeMachineId(hostname()) ?? 'unknown'
   if (hostMachine === 'mac' || hostMachine === 'localhost') return macHostMachineId() ?? hostMachine

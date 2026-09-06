@@ -1,5 +1,13 @@
+// Serve-side client auth for economy-serve's /v1 API.
+//
+// The bearer token the server checks is the canonical HASNA_ECONOMY_API_TOKEN.
+// The unprefixed legacy ECONOMY_API_TOKEN spelling is retired (owner directive
+// 2026-09-04, hasna/apps#1720): the app's own credential chain is gone and the
+// hosted client authenticates through the @hasna/contracts resolver's
+// HASNA_ECONOMY_API_KEY instead.
+
 export function getServeApiToken(): string | undefined {
-  return process.env['ECONOMY_API_TOKEN'] ?? process.env['HASNA_ECONOMY_API_TOKEN']
+  return process.env['HASNA_ECONOMY_API_TOKEN']
 }
 
 export function getServeBindHost(): string {

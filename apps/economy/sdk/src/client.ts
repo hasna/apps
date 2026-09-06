@@ -57,15 +57,20 @@ export class EconomyClient {
   }
 
   /**
-   * Self-hosted client config: `ECONOMY_API_URL` + `ECONOMY_API_KEY`
-   * (never a DSN). Falls back to the legacy `ECONOMY_URL` for local dev.
+   * Self-hosted client config from the environment: canonical
+   * `HASNA_ECONOMY_API_URL` + `HASNA_ECONOMY_API_KEY` first (never a DSN). The
+   * unprefixed `ECONOMY_API_URL` / `ECONOMY_API_KEY` spellings (and the legacy
+   * `ECONOMY_URL`) are accepted as fallbacks for one release only. An explicit
+   * `baseUrl` + `apiKey` constructor pair is the only other way in: this class
+   * NEVER attaches the ambient fleet credential, so a client built with a
+   * `baseUrl` and no `apiKey` goes out with no key at all (hasna/apps#1794).
    */
   static fromEnv(): EconomyClient {
     const env = typeof process !== 'undefined' ? process.env : {}
     return new EconomyClient({
-      baseUrl: env['ECONOMY_API_URL'] ?? env['ECONOMY_URL'] ?? 'http://localhost:3456',
-      // hasna-credential-seam-waiver: @hasna/economy-sdk is a browser-targeted package whose shipped bundle must not load @hasna/contracts/client (that seam imports node:net, which no browser runtime resolves), so the SDK reads ECONOMY_API_KEY from its own environment.
-      apiKey: env['ECONOMY_API_KEY'],
+      baseUrl: env['HASNA_ECONOMY_API_URL'] ?? env['ECONOMY_API_URL'] ?? env['ECONOMY_URL'] ?? 'http://localhost:3456',
+      // hasna-credential-seam-waiver: @hasna/economy-sdk is a browser-targeted package whose shipped bundle must not load @hasna/contracts/client (that seam imports node:net, which no browser runtime resolves), so the SDK reads its API key from its own environment.
+      apiKey: env['HASNA_ECONOMY_API_KEY'] ?? env['ECONOMY_API_KEY'],
     })
   }
 
