@@ -43,12 +43,16 @@ describe("resolveCloudDatabaseUrl", () => {
     expect(resolveCloudDatabaseUrl({})).toBeUndefined();
   });
 
-  test("FAIL-LOUD: any retired storage-mode variable aborts resolution", () => {
-    for (const key of ["HASNA_INSTRUCTIONS_STORAGE_MODE", "INSTRUCTIONS_MODE"] as const) {
-      expect(() => resolveCloudDatabaseUrl({ [key]: "cloud", DATABASE_URL: "postgres://x" }), key).toThrow(
-        /was removed/,
-      );
-    }
+  test("retired storage-mode variables are no longer read (the mode vocabulary is gone)", () => {
+    // Pre-adoption these variables aborted resolution with "was removed".
+    // The retired-chain rejection module is deleted (hasna/apps#1720): the
+    // switch is simply never consulted, and what decides is what RESOLVES.
+    expect(
+      resolveCloudDatabaseUrl({ HASNA_INSTRUCTIONS_STORAGE_MODE: "cloud", DATABASE_URL: "postgres://x" }),
+    ).toBe("postgres://x");
+    expect(
+      resolveCloudDatabaseUrl({ INSTRUCTIONS_MODE: "cloud", DATABASE_URL: "postgres://x" }),
+    ).toBe("postgres://x");
   });
 });
 

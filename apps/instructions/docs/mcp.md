@@ -147,11 +147,17 @@ retained by the current implementation. Feedback uses the active config store.
 
 ## Storage selection
 
-MCP tools use the same store resolution as the CLI:
+MCP tools use the same store resolution as the CLI: the shared
+`@hasna/contracts` client resolver decides hosted (`/v1`) vs local, fresh on
+every tool call.
 
-- neither API variable set: local SQLite;
-- both `HASNA_INSTRUCTIONS_API_URL` and `HASNA_INSTRUCTIONS_API_KEY` set:
-  authenticated `/v1` API;
-- exactly one set: startup/tool use fails instead of silently using local data.
+- a hosted credential resolves (Keychain `hasna.credentials.instructions.api-key`,
+  `~/.hasna/instructions/config/credentials`, or `HASNA_INSTRUCTIONS_API_KEY`):
+  authenticated `/v1` API — and the server refuses to start when nothing
+  resolves and no opt-in is set;
+- `HASNA_INSTRUCTIONS_LOCAL=1` with no authority/credential configured: local
+  SQLite (opt-in only, announced once on stderr);
+- any hosted refusal: startup/tool use fails instead of silently using local
+  data. There is no local fallback and no local-fallback event.
 
 Filesystem operations still happen on the machine running the MCP process.

@@ -10,13 +10,11 @@
 import { verifyApiKey, honoApiKey, type ApiKeyVerifier, ApiKeyStore, type AuthQueryClient } from "@hasna/contracts/auth";
 import { createPgPool, createQueryClient, type PoolQueryClient } from "../generated/storage-kit/index.js";
 import { instructionsSchemaSql } from "../storage/schema.js";
-import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
 
 export const INSTRUCTIONS_APP_SLUG = "instructions";
 
 /** Resolve the remote DATABASE_URL from the supported env vars (priority order). */
 export function resolveCloudDatabaseUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  assertNoLegacyStorageMode(env);
   return (
     env.HASNA_INSTRUCTIONS_DATABASE_URL ||
     env.INSTRUCTIONS_DATABASE_URL ||

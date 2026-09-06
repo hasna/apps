@@ -102,7 +102,9 @@ describe("configs report output", () => {
     const result = runCli(["report", "--json"], dbPath, home);
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    // Local mode must say so on stderr (owner ruling 2026-09-04); the JSON on
+    // stdout stays parseable and unchanged.
+    expect(result.stderr).toContain("local mode");
     expect(JSON.parse(result.stdout)).toEqual({
       schema_version: 1,
       configs: {
@@ -135,7 +137,7 @@ describe("configs report output", () => {
     const result = runCli(["report"], dbPath, home);
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result.stderr).toContain("local mode");
     expect(result.stdout).toBe(
       "configs report\n" +
       "\n" +

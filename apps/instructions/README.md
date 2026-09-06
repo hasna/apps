@@ -145,27 +145,58 @@ contracts issue-key --app instructions --scopes 'instructions:*'
 
 Env: `HASNA_INSTRUCTIONS_DATABASE_URL` (DSN) and
 `HASNA_INSTRUCTIONS_API_SIGNING_KEY` (HMAC signing secret; `HASNA_API_SIGNING_KEY`
-and `API_KEY_SIGNING_SECRET` are also accepted). Client apps use
-`INSTRUCTIONS_API_URL` + `INSTRUCTIONS_API_KEY` — never a DSN.
+and `API_KEY_SIGNING_SECRET` are also accepted). Client apps never carry a DSN —
+they resolve `HASNA_INSTRUCTIONS_API_KEY` (or the Keychain / credentials-file
+tiers) through the one `@hasna/contracts` client resolver, and the authority
+defaults to the fleet gateway `https://api.hasna.com/instructions`.
 
 ## SDK
 
 `@hasna/instructions-sdk` ships a zero-dependency typed client. The versioned
 `InstructionsV1Client` is generated from the serve OpenAPI document
-(`bun run generate:sdk`).
+(`bun run generate:sdk`). The resolver-wired factory in
+`@hasna/instructions-sdk/resolve` (`createInstructionsV1ClientFromEnv`) resolves
+the credential through the same `@hasna/contracts` chain as the CLI and the MCP
+server — fresh on every request, so a rotated key heals a long-lived client
+without rebuilding it. An explicit `baseUrl` requires an explicit `apiKey`: the
+SDK never attaches the machine's fleet key to an authority the caller chose
+itself.
 
 ## Client transports
 
-Every CLI command, MCP tool, and SDK method routes through a single `ConfigStore`
-abstraction with two transports:
+Every CLI command, MCP tool, and SDK method resolves its credential and service
+authority through the ONE client resolver in `@hasna/contracts`
+(`hasna/apps#1720`) — the package owns no second chain. The tiers, fresh per
+call:
 
-- **api** — HTTP `/v1` + bearer key (`CloudConfigStore`). Activated by setting
-  **both** `HASNA_INSTRUCTIONS_API_URL` and `HASNA_INSTRUCTIONS_API_KEY`.
-- **local** — on-box SQLite (`LocalConfigStore`), opt-in only. Running without
-  the API env FAILS CLOSED (non-zero exit naming the required env) rather than
-  silently opening the on-box store; to use the local store explicitly, set
-  `HASNA_INSTRUCTIONS_LOCAL=1`. Setting exactly one of the two API vars also
-  errors (no silent local drift).
+| Tier | Credential | Authority |
+|---|---|---|
+| 1 — argument | `--api-key` / `--profile` | explicit `baseUrl` (SDK only) |
+| 2 — env pointer | `HASNA_INSTRUCTIONS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_INSTRUCTIONS_API_KEY_REF` | — |
+| 3 — macOS Keychain | `hasna.credentials.instructions.api-key` (account `HASNA_STATION` → `hostname -s` → `$USER`) | `hasna.credentials.instructions.api-url` |
+| 4 — disk | `~/.hasna/instructions/config/credentials` (owner-only 0400/0600; `HASNA_HOME` / `HASNA_CONFIG_HOME` move the root) | same file's `HASNA_INSTRUCTIONS_API_URL` |
+| 5 — env | `HASNA_INSTRUCTIONS_API_KEY` | `HASNA_INSTRUCTIONS_API_URL` |
+
+With a credential resolved and nothing configuring the authority, the default is
+the fleet gateway `https://api.hasna.com/instructions`. The unprefixed
+`INSTRUCTIONS_API_URL` / `INSTRUCTIONS_API_KEY` names are accepted for one
+release as silent aliases one rung below the canonical `HASNA_INSTRUCTIONS_*`
+names.
+
+The two transports behind `ConfigStore`:
+
+- **api** — HTTP `/v1` through the shared authenticated transport
+  (`CloudConfigStore`). Runs fail loud with no credential: non-zero exit naming
+  the tiers consulted, no SQLite fallback, no local-fallback event.
+- **local** — on-box SQLite (`LocalConfigStore`), **opt-in only**:
+  `HASNA_INSTRUCTIONS_LOCAL=1`, honoured only when the environment configures
+  no authority and no credential. Every local run says `local mode` once on
+  stderr.
+
+Retired locations (`~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`,
+`$XDG_CONFIG_HOME`, a `~/.instructions/config.json` key store) are inputs
+nowhere, and no `*_MODE` / `*_STORAGE_MODE` switch selects anything — the
+transport is decided by what resolves, never by a mode word.
 
 Clients never hold a database DSN. The raw Postgres connection is a server-only
 concern (`instructions-serve`), selected by `HASNA_INSTRUCTIONS_DATABASE_URL`.
