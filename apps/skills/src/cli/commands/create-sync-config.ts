@@ -12,6 +12,7 @@ import { scaffoldPortableSkill } from "../../lib/portable-skills.js";
 import { clearRegistryCache } from "../../lib/registry.js";
 import {
   resolveSyncAgents,
+  resolveSyncCorpus,
   SYNC_AGENTS,
   syncSkillsToAgents,
   type AgentSyncAction,
@@ -226,7 +227,7 @@ function handleSync(
     return;
   }
   if (options.check) {
-    handleSyncCheck(options.json);
+    handleSyncCheck(names, options);
     return;
   }
   if (options.adopt) {
@@ -350,14 +351,19 @@ function handleStationSnapshot(
   }
 }
 
-function handleSyncCheck(json: boolean): void {
-  const census = censusHomeDrift();
-  if (json) {
-    console.log(JSON.stringify(census, null, 2));
-  } else {
-    printCensusHuman(census);
+function handleSyncCheck(names: string[], options: { for: string; source?: string; json: boolean }): void {
+  try {
+    const agents = resolveSyncAgents(options.for);
+    const { roots } = resolveSyncCorpus({ sourceDir: options.source });
+    const census = censusHomeDrift({ rootDir: roots[0], agents, names });
+    if (options.json) console.log(JSON.stringify(census, null, 2));
+    else printCensusHuman(census);
+    if (!census.clean) process.exitCode = 1;
+  } catch (error) {
+    if (options.json) console.log(JSON.stringify({ error: (error as Error).message }));
+    else console.error(chalk.red((error as Error).message));
+    process.exitCode = 1;
   }
-  if (!census.clean) process.exitCode = 1;
 }
 
 function handleSyncAdopt(apply: boolean, json: boolean): void {
