@@ -1,84 +1,157 @@
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { prepareHarnessLaunch } from "../src/harnesses";
-import type { HarnessLaunchInput } from "../src/harness-types";
 
+const execFileAsync = promisify(execFile);
 const executable = process.env.SWITCHER_TEST_OMP_EXECUTABLE;
-if (!executable) throw new Error("Set SWITCHER_TEST_OMP_EXECUTABLE to the installed OMP executable. This check uses local fixtures only.");
-const scratch = process.env.SWITCHER_TEST_ROOT ?? join(homedir(), "Workspace", "scratch", "switcher-native-tests");
+if (!executable) throw new Error("Set SWITCHER_TEST_OMP_EXECUTABLE to the installed OMP executable.");
+const cli = join(import.meta.dir, "../src/cli.ts");
+const scratch = process.env.SWITCHER_TEST_ROOT ?? join(process.cwd(), "../../scratch/native-omp");
 await mkdir(scratch, { recursive: true, mode: 0o700 });
-const root = await mkdtemp(join(scratch, "omp-cli-"));
+const root = await mkdtemp(join(scratch, "run-"));
 const project = join(root, "project");
 const home = join(root, "home");
-const stateDir = join(root, "state");
-const sessionDir = join(root, "sessions");
-const credential = "fixture-omp-upstream-key";
-const authStyle = process.env.SWITCHER_TEST_OMP_AUTH_STYLE === "x-api-key" ? "x-api-key" : "bearer";
-const fileMarker = "OMP_READ_FILE_MARKER";
-const ruleMarker = "OMP_PROJECT_RULE_MARKER";
-const calls: Array<{path: string; model: string; hasReadTool: boolean; hasToolResult: boolean; hasRule: boolean; credentialMatches: boolean}> = [];
-
+const switcherHome = join(root, "switcher");
 await mkdir(project, { recursive: true, mode: 0o700 });
-await writeFile(join(project, "AGENTS.md"), `Project instruction ${ruleMarker}.\n`, { mode: 0o600 });
-await writeFile(join(project, "fixture-read.txt"), `${fileMarker}\n`, { mode: 0o600 });
-const chunk = (payload: Record<string, unknown>) => `data: ${JSON.stringify({ id: "fixture", object: "chat.completion.chunk", choices: [{ index: 0, ...payload }] })}\n\n`;
-const server = Bun.serve({
-  hostname: "127.0.0.1", port: 0,
-  async fetch(request) {
-    const url = new URL(request.url);
-    const credentialMatches = authStyle === "x-api-key"
-      ? request.headers.get("x-api-key") === credential
-      : request.headers.get("authorization") === `Bearer ${credential}`;
-    if (!credentialMatches) return new Response("Unauthorized", { status: 401 });
-    if (request.method !== "POST" || url.pathname !== "/v1/chat/completions") return new Response("Not found", { status: 404 });
-    const body = await request.json() as {model?: string; tools?: unknown[]; messages?: Array<{role?: string; content?: unknown}>};
-    const serialized = JSON.stringify(body);
-    const messages = body.messages ?? [];
-    const hasToolResult = serialized.includes(fileMarker) && messages.some(message => message.role === "tool");
-    calls.push({path: url.pathname, model: body.model ?? "", hasReadTool: body.tools?.some(tool => JSON.stringify(tool).includes('"name":"read"')) ?? false, hasToolResult, hasRule: serialized.includes(ruleMarker), credentialMatches});
-    if (!hasToolResult) return new Response(
-      chunk({ delta: { role: "assistant", content: "" } }) +
-      chunk({ delta: { tool_calls: [{ index: 0, id: "call_fixture", type: "function", function: { name: "read", arguments: JSON.stringify({ path: join(project, "fixture-read.txt") }) } }] } }) +
-      chunk({ delta: {}, finish_reason: "tool_calls" }) + "data: [DONE]\n\n",
-      { headers: { "content-type": "text/event-stream" } },
-    );
-    const text = serialized.includes("Resume the prior proof") ? "OMP_RESUME_DELETED_PROOF" : "OMP_TOOL_LOOP_PROOF";
-    return new Response(chunk({ delta: { role: "assistant", content: text } }) + chunk({ delta: {}, finish_reason: "stop" }) + "data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
-  },
-});
+await writeFile(join(project, "AGENTS.md"), "OMP_CLI_NATIVE_RULE: preserve this project instruction.\n", { mode: 0o600 });
+await writeFile(join(project, ".gitignore"), "\n", { mode: 0o600 });
+await execFileAsync("git", ["init", "-q", project]);
 
-const command = async (args: string[], env: Record<string, string>) => {
-  const child = Bun.spawn([process.execPath, executable!, ...args], { cwd: project, env: { PATH: process.env.PATH ?? "/Users/hasna/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin", HOME: home, ...env }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-  const timer = setTimeout(() => child.kill("SIGTERM"), 45_000);
-  try { const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]); return { code, stdout, stderr }; }
-  finally { clearTimeout(timer); }
-};
+ type Protocol = "openai-chat" | "openai-responses" | "anthropic-messages";
+ type AuthStyle = "bearer" | "x-api-key" | "none";
+ type Case = { protocol: Protocol; authStyle: AuthStyle; model: string; path: string; providerId: string };
+ type Call = { protocol: Protocol; path: string; model?: string; bearer: boolean; apiKey: boolean; marker: boolean; tool: boolean; toolResult: boolean; historyProof: boolean };
+ const cases: Case[] = [
+   { protocol: "openai-chat", authStyle: "bearer", model: "vendor/chat", path: "/v1/chat/completions", providerId: "fixture-chat-bearer" },
+   { protocol: "openai-chat", authStyle: "none", model: "vendor/chat-none", path: "/v1/chat/completions", providerId: "fixture-chat-none" },
+   { protocol: "openai-responses", authStyle: "bearer", model: "vendor/responses", path: "/v1/responses", providerId: "fixture-responses-bearer" },
+   { protocol: "openai-responses", authStyle: "none", model: "vendor/responses-none", path: "/v1/responses", providerId: "fixture-responses-none" },
+   { protocol: "anthropic-messages", authStyle: "x-api-key", model: "vendor/messages", path: "/v1/messages", providerId: "fixture-messages-key" },
+   { protocol: "anthropic-messages", authStyle: "none", model: "vendor/messages-none", path: "/v1/messages", providerId: "fixture-messages-none" },
+ ];
+ const key = "fixture-omp-key";
+ const proof = "OMP_READ_FILE_PROOF";
+ const calls: Call[] = [];
+ let current: (Case & { phase: 0 | 1; turn: number; proofPath: string }) | undefined;
 
-async function filesUnder(path: string): Promise<string[]> {
-  try {
-    const entries = await readdir(path, { withFileTypes: true });
-    const files: string[] = [];
-    for (const entry of entries) {
-      const child = join(path, entry.name);
-      if (entry.isDirectory()) files.push(...await filesUnder(child));
-      else if (entry.isFile()) files.push(child);
-    }
-    return files;
-  } catch { return []; }
-}
+ const sse = (type: string, value: unknown) => `event: ${type}\ndata: ${JSON.stringify(value)}\n\n`;
+ const stream = (body: string) => new Response(body, { headers: { "content-type": "text/event-stream" } });
+ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+   const path = new URL(request.url).pathname;
+   if (!current) return new Response("No active case", { status: 500 });
+   if (request.method === "GET" && path === "/v1/models") {
+     return Response.json({ object: "list", data: [
+       { id: current.model, name: "Selected", context_length: 64_000, max_output_tokens: 8_000 },
+       { id: `${current.model}-other`, name: "Other", context_length: 32_000, max_output_tokens: 4_000 },
+     ] });
+   }
+   if (request.method !== "POST" || path !== current.path) return new Response("Wrong provider route", { status: 404 });
+   const body = await request.json() as any;
+   current.turn++;
+   const serialized = JSON.stringify(body);
+   // A request advertises tools on every turn; only the first request of the
+   // initial launch is the fixture's actual tool-call turn. The resumed launch
+   // must use persisted history and must not trigger another read.
+   const tool = current.phase === 0 && current.turn === 1;
+   const toolResult = serialized.includes(proof) && (serialized.includes('"role":"tool"') || serialized.includes("function_call_output") || serialized.includes("tool_result"));
+   const historyProof = serialized.includes(proof);
+   const bearer = request.headers.get("authorization") === `Bearer ${key}`;
+   const apiKey = request.headers.get("x-api-key") === key;
+   calls.push({ protocol: current.protocol, path, model: body.model, bearer, apiKey, marker: serialized.includes("OMP_CLI_NATIVE_RULE"), tool, toolResult, historyProof });
+   const authOk = current.authStyle === "bearer" ? bearer && !apiKey : current.authStyle === "x-api-key" ? apiKey && !bearer : !bearer && !apiKey;
+   if (!authOk || !serialized.includes("OMP_CLI_NATIVE_RULE")) return new Response("Unauthorized or missing project instructions", { status: 401 });
+   if (current.phase === 0 && current.turn === 1) {
+     if (current.protocol === "openai-chat") {
+       const call = { index: 0, id: "call_read", type: "function", function: { name: "read", arguments: JSON.stringify({ path: current.proofPath }) } };
+       const chunk = (delta: unknown, finish_reason: unknown) => `data: ${JSON.stringify({ id: "chat-fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] })}\n\n`;
+       return stream(chunk({ role: "assistant", tool_calls: [call] }, null) + chunk({}, "tool_calls") + "data: [DONE]\n\n");
+     }
+     if (current.protocol === "openai-responses") {
+       const args = JSON.stringify({ path: current.proofPath });
+       const response = { id: "response-fixture", object: "response", status: "in_progress", model: body.model, output: [] };
+       const item = { id: "fc_read", type: "function_call", call_id: "call_read", name: "read", arguments: args, status: "completed" };
+       return stream([sse("response.created", { type: "response.created", response }), sse("response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "", status: "in_progress" } }), sse("response.function_call_arguments.delta", { type: "response.function_call_arguments.delta", item_id: item.id, output_index: 0, delta: args }), sse("response.function_call_arguments.done", { type: "response.function_call_arguments.done", item_id: item.id, output_index: 0, arguments: args }), sse("response.output_item.done", { type: "response.output_item.done", output_index: 0, item }), sse("response.completed", { type: "response.completed", response: { ...response, status: "completed", output: [item] } })].join(""));
+     }
+     const message = { id: "message-fixture", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } };
+     return stream([sse("message_start", { type: "message_start", message }), sse("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call_read", name: "read", input: {} } }), sse("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ path: current.proofPath }) } }), sse("content_block_stop", { type: "content_block_stop", index: 0 }), sse("message_delta", { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 1 } }), sse("message_stop", { type: "message_stop" })].join(""));
+   }
+   if (current.phase === 0 && current.turn === 2) {
+     await rm(current.proofPath, { force: true });
+     const text = toolResult ? "OMP_TOOL_LOOP_PROOF" : "OMP_TOOL_RESULT_MISSING";
+     if (current.protocol === "openai-chat") {
+       const chunk = (delta: unknown, finish_reason: unknown) => `data: ${JSON.stringify({ id: "chat-fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason }] })}\n\n`;
+       return stream(chunk({ role: "assistant", content: text }, "stop") + "data: [DONE]\n\n");
+     }
+     if (current.protocol === "openai-responses") {
+       const response = { id: "response-fixture", object: "response", status: "in_progress", model: body.model, output: [] };
+       const item = { id: "message-fixture", type: "message", status: "completed", role: "assistant", content: [{ type: "output_text", text, annotations: [] }] };
+       return stream([sse("response.created", { type: "response.created", response }), sse("response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { ...item, status: "in_progress", content: [] } }), sse("response.content_part.added", { type: "response.content_part.added", item_id: item.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }), sse("response.output_text.delta", { type: "response.output_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta: text }), sse("response.output_text.done", { type: "response.output_text.done", item_id: item.id, output_index: 0, content_index: 0, text }), sse("response.content_part.done", { type: "response.content_part.done", item_id: item.id, output_index: 0, content_index: 0, part: item.content[0] }), sse("response.output_item.done", { type: "response.output_item.done", output_index: 0, item }), sse("response.completed", { type: "response.completed", response: { ...response, status: "completed", output: [item] } })].join(""));
+     }
+     const message = { id: "message-fixture", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+     return stream([sse("message_start", { type: "message_start", message }), sse("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }), sse("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }), sse("content_block_stop", { type: "content_block_stop", index: 0 }), sse("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }), sse("message_stop", { type: "message_stop" })].join(""));
+   }
+   const text = current.phase === 1 && historyProof ? "OMP_RESUME_DELETED_PROOF" : "OMP_RESUME_HISTORY_MISSING";
+   if (current.protocol === "openai-chat") {
+     const chunk = `data: ${JSON.stringify({ id: "chat-fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`;
+     return stream(chunk);
+   }
+   if (current.protocol === "openai-responses") {
+     const response = { id: "response-fixture", object: "response", status: "in_progress", model: body.model, output: [] };
+     const item = { id: "message-fixture", type: "message", status: "completed", role: "assistant", content: [{ type: "output_text", text, annotations: [] }] };
+     return stream([sse("response.created", { type: "response.created", response }), sse("response.output_item.added", { type: "response.output_item.added", output_index: 0, item: { ...item, status: "in_progress", content: [] } }), sse("response.content_part.added", { type: "response.content_part.added", item_id: item.id, output_index: 0, content_index: 0, part: { type: "output_text", text: "", annotations: [] } }), sse("response.output_text.delta", { type: "response.output_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta: text }), sse("response.output_text.done", { type: "response.output_text.done", item_id: item.id, output_index: 0, content_index: 0, text }), sse("response.content_part.done", { type: "response.content_part.done", item_id: item.id, output_index: 0, content_index: 0, part: item.content[0] }), sse("response.output_item.done", { type: "response.output_item.done", output_index: 0, item }), sse("response.completed", { type: "response.completed", response: { ...response, status: "completed", output: [item] } })].join(""));
+   }
+   const message = { id: "message-fixture", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+   return stream([sse("message_start", { type: "message_start", message }), sse("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } }), sse("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } }), sse("content_block_stop", { type: "content_block_stop", index: 0 }), sse("message_delta", { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } }), sse("message_stop", { type: "message_stop" })].join(""));
+ } });
 
-try {
-  const input: HarnessLaunchInput = { harness: "omp", baseUrl: `${server.url.origin}/v1`, protocol: "openai-chat", authStyle, model: "vendor/fixture", models: [{ id: "vendor/fixture", name: "Fixture", contextWindow: 64_000, maxOutputTokens: 8_000, supportedParameters: ["tools"], outputModalities: ["text"] }, { id: "vendor/team/nested", name: "Nested", supportedParameters: ["tools"], outputModalities: ["text"] }], credential, executable, args: ["-p", "Read fixture-read.txt with the read tool and return its marker."], stateDir, cwd: project, version: "omp/18.1.11", sessionDir };
-  const prepared = await prepareHarnessLaunch(input);
-  const env = { ...prepared.env };
-  const first = await command(prepared.args, env);
-  const sessionFile = (await filesUnder(sessionDir)).find(path => path.endsWith(".jsonl"));
-  await rm(join(project, "fixture-read.txt"), { force: true });
-  const second = await command(["--model", "switcher/vendor/fixture", "--models", "switcher/**", "--session-dir", sessionDir, ...(sessionFile ? ["--resume", sessionFile] : ["--resume", "missing"]), "-p", "Resume the prior proof after the file was deleted."], env);
-  const sessionPresent = (await filesUnder(sessionDir)).length > 0;
-  const passed = first.code === 0 && second.code === 0 && first.stdout.includes("OMP_TOOL_LOOP_PROOF") && second.stdout.includes("OMP_RESUME_DELETED_PROOF") && calls.some(call => call.hasReadTool && !call.hasToolResult) && calls.some(call => call.hasToolResult) && calls.every(call => call.path === "/v1/chat/completions" && call.model === "vendor/fixture" && call.credentialMatches) && calls.some(call => call.hasRule) && sessionPresent && !(await readFile(join(prepared.configPaths[0]), "utf8")).includes(credential);
-  console.log(JSON.stringify({ executable, ompVersion: "18.1.11", authStyle, calls, firstExitCode: first.code, secondExitCode: second.code, firstStderr: first.stderr, secondStderr: second.stderr, sessionPresent, sessionFileFound: Boolean(sessionFile), passed }, null, 2));
-  if (!passed) process.exitCode = 1;
-  await prepared.cleanup?.();
-} finally { await server.stop(true); await rm(root, { recursive: true, force: true }); }
+ const envBase = { PATH: "/Users/hasna/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin", HOME: home, HASNA_SWITCHER_HOME: switcherHome, SWITCHER_PROVIDER_FIXTURE: key };
+ async function runCli(args: string[], extra: Record<string, string> = {}) {
+   const child = Bun.spawn([process.execPath, cli, ...args], { cwd: project, env: { ...process.env, ...envBase, ...extra }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+   const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+   return { code: await child.exited, stdout, stderr };
+ }
+ const results: Array<Record<string, unknown>> = [];
+ try {
+   for (const c of cases) {
+     const proofPath = join(project, "fixture-read.txt");
+     await writeFile(proofPath, proof, { mode: 0o600 });
+     current = { ...c, phase: 0, turn: 0, proofPath };
+     const addArgs = ["providers", "add", c.providerId, "--name", c.providerId, "--url", `${server.url.origin}/v1`, "--protocol", c.protocol, "--auth-style", c.authStyle === "none" ? "bearer" : c.authStyle];
+     if (c.authStyle !== "none") addArgs.push("--credential-env", "SWITCHER_PROVIDER_FIXTURE");
+     const add = await runCli(addArgs);
+     assert.equal(add.code, 0, `${c.protocol}/${c.authStyle} provider add failed: ${add.stderr}`);
+     const listed = await runCli(["models", c.providerId, "--refresh"]);
+     assert.equal(listed.code, 0, `${c.protocol}/${c.authStyle} catalog refresh failed: ${listed.stderr}`);
+     assert(listed.stdout.includes(c.model) && listed.stdout.includes(`${c.model}-other`), "source CLI catalog omitted a provider model");
+     const base = ["launch", "omp", "--provider", c.providerId, "--model", c.model, "--executable", executable, "--cwd", project, "--state-dir", join(root, c.providerId), "--timeout", "20", "--"];
+     const first = await runCli([...base, "-p", "Read fixture-read.txt with the read tool and return its marker."]);
+     assert.equal(first.code, 0, `${c.protocol}/${c.authStyle} first launch failed: ${first.stderr}`);
+     assert(first.stdout.includes("OMP_TOOL_LOOP_PROOF"), `${c.protocol}/${c.authStyle} did not complete a real tool loop`);
+     assert.equal(current.turn, 2, `${c.protocol}/${c.authStyle} expected tool request and tool-result request`);
+     current.phase = 1; current.turn = 0;
+     const sessionRoot = join(root, c.providerId, "sessions", "omp");
+     const sessionFiles: string[] = [];
+     async function walk(path: string) { try { for (const entry of await readdir(path, { withFileTypes: true })) { const child = join(path, entry.name); if (entry.isDirectory()) await walk(child); else if (entry.isFile() && child.endsWith(".jsonl")) sessionFiles.push(child); } } catch {} }
+     await walk(sessionRoot);
+     assert.equal(sessionFiles.length, 1, `${c.protocol}/${c.authStyle} expected one persisted native session`);
+     const second = await runCli([...base, "--resume", sessionFiles[0], "-p", "Resume the prior proof after the file was deleted."]);
+     assert.equal(second.code, 0, `${c.protocol}/${c.authStyle} resume launch failed: ${second.stderr}`);
+     assert(second.stdout.includes("OMP_RESUME_DELETED_PROOF"), `${c.protocol}/${c.authStyle} did not resume deleted-file history`);
+     assert.equal(current.turn, 1, `${c.protocol}/${c.authStyle} resume unexpectedly requested another read`);
+     const caseCalls = calls.filter(call => call.protocol === c.protocol && call.model === c.model);
+     assert(caseCalls.length >= 3 && caseCalls.filter(call => call.tool).length === 1 && caseCalls.some(call => call.toolResult) && caseCalls.some(call => call.historyProof), `${c.protocol}/${c.authStyle} call evidence incomplete`);
+     assert(caseCalls.every(call => call.marker && call.path === c.path), `${c.protocol}/${c.authStyle} route or AGENTS evidence failed`);
+     const authExpected = c.authStyle === "bearer" ? caseCalls.every(call => call.bearer && !call.apiKey) : c.authStyle === "x-api-key" ? caseCalls.every(call => call.apiKey && !call.bearer) : caseCalls.every(call => !call.bearer && !call.apiKey);
+     assert(authExpected, `${c.protocol}/${c.authStyle} upstream auth contract failed`);
+     results.push({ protocol: c.protocol, authStyle: c.authStyle, firstExit: first.code, resumeExit: second.code, toolLoop: true, deletedFile: true, persistedSession: sessionFiles.length === 1, catalogModels: [c.model, `${c.model}-other`], path: c.path });
+   }
+   const files: string[] = [];
+   async function walkAll(path: string) { try { for (const entry of await readdir(path, { withFileTypes: true, recursive: true })) if (entry.isFile()) files.push(join(path, entry.name)); } catch {} }
+   await walkAll(root);
+   const keyHits: string[] = [];
+   for (const path of files) { try { if ((await readFile(path, "utf8")).includes(key)) keyHits.push(path); } catch {} }
+   assert.equal(keyHits.length, 0, "credential appeared in a generated file");
+   console.log(JSON.stringify({ executable, cli, passed: true, results, calls: calls.map(call => ({ ...call, model: call.model })), keyHits }, null, 2));
+ } finally { await server.stop(true); await rm(root, { recursive: true, force: true }); }
