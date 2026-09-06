@@ -7,6 +7,21 @@ import { createRemoteSkillsClient, RemoteCapabilityUnavailableError, type Remote
 import { mcpError, mcpJson } from "./helpers.js";
 
 export function registerRemoteCustomerTools(server: McpServer) {
+  for (const kind of ["profile", "workspace"] as const) {
+    server.registerTool(kind === "profile" ? "update_account_profile" : "update_workspace_name", {
+      title: kind === "profile" ? "Update Account Display Name" : "Update Workspace Name",
+      description: "Update only the name on the explicitly selected Skills server using fresh email OTP. Workspace changes require an owner/admin. Saved credentials are unchanged.",
+      inputSchema: z.object({ name: z.string().min(1), email: z.string().email(), code: z.string().regex(/^\d{6}$/) }).strict(),
+    }, async ({ name, email, code }) => {
+      try {
+        const client = new RemoteSkillsAuthClient(getApiUrl("Update customer name"));
+        return mcpJson(kind === "profile" ? await client.updateProfile(email, code, { displayName: name })
+          : await client.updateCurrentWorkspace(email, code, { name }));
+      } catch {
+        return mcpError("NAME_UPDATE_FAILED", "Unable to update the name. Check the selected server, name, permissions and fresh verification code.");
+      }
+    });
+  }
   for (const operation of REMOTE_CUSTOMER_OPERATIONS) {
     const inputSchema: Record<string, ReturnType<typeof z.string>> = {};
     if (operation.parameter) inputSchema[operation.parameter] = z.string().min(1);

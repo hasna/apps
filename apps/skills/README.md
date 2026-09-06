@@ -657,7 +657,7 @@ skills/                      # Public skill contracts and local OSS skills
 |---|---|---|
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 56 | `tools/list` against a live `buildServer()` |
+| MCP tools | 58 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather
@@ -775,3 +775,26 @@ hand.
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE)
+
+### Account and workspace names on a compatible server
+
+`skills account update --display-name "Ana" --email you@example.com` and
+`skills workspace update --name "Studio" --email you@example.com` request a
+fresh verification email and prompt for the code without showing its digits.
+The current API selection still determines the server. These commands require
+that server to support the additive customer-name routes; they do not enable
+membership, billing or operator administration.
+
+For automation, first request a fresh code through `skills auth login --email you@example.com --json`,
+then pipe the code from your secure input source to the same command with
+`--code-stdin --json`. Do not put verification codes in command arguments or
+shell history. JSON/noninteractive updates require `--code-stdin`. Cancelling
+an interactive prompt exits with status130 before verification.
+
+`RemoteSkillsAuthClient.updateProfile(email, code, { displayName })` and
+`updateCurrentWorkspace(email, code, { name })` use a fresh session without
+replacing saved API keys or profile selection. `RemoteSkillsClient` exposes the
+same name operations for an explicitly supplied interactive session. Servers
+retain the final permission checks; ordinary API keys may be refused. MCP tools
+`update_account_profile` and `update_workspace_name` accept a name, email and
+fresh verification code, and return only the safe updated projection.

@@ -139,7 +139,7 @@ There is no `dashboard/` directory and no `src/server/serve.ts`.
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/index.ts`) |
 | Instruction-kind skills | 20 | `SKILLS` entries with `kind: "instruction"` |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 56 | `tools/list` against a live `buildServer()` |
+| MCP tools | 58 | `tools/list` against a live `buildServer()` |
 | MCP resources | 4 | `resources/list` + `resources/templates/list` (3 static + 1 template) |
 | Published bins | 6 | `bin` in `package.json` |
 | bun build invocations | 6 | the `build` script in `package.json` |

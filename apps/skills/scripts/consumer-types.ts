@@ -60,6 +60,17 @@ const wrongVersion: 2 = admission.contractVersion;
 const wrongStatus: "succeeded" = admission.status;
 const client = new RemoteSkillsClient("fixture", "https://skills.example.com/api/v1");
 const auth = new RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+declare const profile: Awaited<ReturnType<typeof client.updateProfile>>;
+const displayName: string | null = profile.user.displayName;
+const customerRole: "owner" | "admin" | "member" | "viewer" = profile.user.role;
+// @ts-expect-error Name updates do not accept a role assignment.
+client.updateProfile({ displayName: "Example", role: "owner" });
+// @ts-expect-error Name responses retain a concrete role, not any.
+const wrongCustomerRole: "superuser" = profile.user.role;
+declare const workspace: Awaited<ReturnType<typeof auth.updateCurrentWorkspace>>;
+const workspaceName: string = workspace.organization.name;
+// @ts-expect-error Workspace identity cannot be changed through this method.
+auth.updateCurrentWorkspace("reader@example.test", "000000", { name: "Example", id: "other" });
 const unavailable = new RemoteCapabilityUnavailableError();
 const rootError: RemoteCapabilityUnavailableError = new RootCapabilityError();
 const requestError: RemoteRequestError = unavailable;
