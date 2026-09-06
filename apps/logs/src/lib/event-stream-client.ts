@@ -10,9 +10,9 @@
  *   - The events catalog has no cloud data model (ApiStore surfaces it as
  *     `unsupported`); only a running logs HTTP server serves the live bus.
  *   - `--server <url>` addresses an explicit server the operator names, not the
- *     tier resolved from HASNA_LOGS_API_URL/KEY, so it can never cause the
- *     split-brain bug (silently reading/writing the wrong tier) the Store
- *     abstraction exists to prevent.
+ *     tier resolved through the @hasna/contracts credential chain, so it can
+ *     never cause the split-brain bug (silently reading/writing the wrong tier)
+ *     the Store abstraction exists to prevent.
  *
  * Confining the one raw `fetch` for this feature to this documented transport —
  * instead of inlining it in a CLI command body — keeps command handlers free of

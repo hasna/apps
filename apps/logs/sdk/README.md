@@ -28,14 +28,26 @@ import { initUniversalLogs } from "@hasna/logs-sdk"
 const controller = initUniversalLogs({
   projectId: "my-project",
   apiKey: process.env.HASNA_LOGS_API_KEY,
-  url: "https://logs.example.com",
+  url: process.env.HASNA_LOGS_API_URL, // or HASNA_LOGS_API_URL later in this file's env table
   environment: "production",
   captureExceptions: true,
   captureRejections: true,
 })
 ```
 
+This SDK is deliberately ZERO-DEPENDENCY: it pushes telemetry to a
+`@hasna/logs` collector (`logs-serve`) and reads NO environment of its own —
+every option is an explicit argument, and nothing is attached automatically.
+It is not a fleet client: it never resolves the `@hasna/contracts` credential
+chain, and the browser build must never hold a full fleet key (pass a
+write-scoped `browserToken` instead).
+
 The collector URL defaults to `http://localhost:3460` when `url` is omitted.
+That local collector requires the explicit local opt-in on the serve side
+(`HASNA_LOGS_LOCAL=1 logs-serve`); pointing the SDK at a REMOTE collector
+requires an API key via the `apiKey` option. The canonical env names to feed
+the options are `HASNA_LOGS_API_URL` / `HASNA_LOGS_API_KEY`; the unprefixed
+`LOGS_API_URL` / `LOGS_API_KEY` names are legacy aliases for one release.
 
 Pass `browserToken` instead of `apiKey` in front-end code, so a write-scoped
 token is shipped to the browser rather than a full API key.
