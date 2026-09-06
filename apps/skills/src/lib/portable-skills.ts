@@ -35,10 +35,12 @@ import {
   ensureInstructionSkillFiles,
   ensurePortableSkillFiles,
   hasPackageDependencies,
+  normalizeNewPortableSkillName,
   normalizePortableSkillName,
   parseSkillKind,
   readDeclaredSkillVersion,
   readPortableSkillManifest,
+  readPortableSkillManifestForImport,
   writeInstructionSkillTemplate,
   writePortableSkillTemplate,
   writeSkillJsonWithHash,
@@ -268,7 +270,7 @@ export function isOfficialSkillName(name: string): boolean {
 }
 
 export function scaffoldPortableSkill(name: string, options: ScaffoldPortableSkillOptions = {}): PortableSkillWriteResult {
-  const skillName = normalizePortableSkillName(name);
+  const skillName = normalizeNewPortableSkillName(name);
   const root = getPortableSkillsRoot(options);
   const skillPath = join(root, skillName);
   if (existsSync(skillPath)) {
@@ -366,9 +368,9 @@ export function portPortableSkill(sourcePath: string, options: PortPortableSkill
     throw new Error(`Skill source directory not found: ${sourcePath}`);
   }
 
-  const inferred = readPortableSkillManifest(absoluteSource, basename(absoluteSource));
+  const inferred = readPortableSkillManifestForImport(absoluteSource);
   const explicitName = options.name != null;
-  const skillName = normalizePortableSkillName(options.name ?? inferred.name);
+  const skillName = normalizeNewPortableSkillName(options.name ?? inferred.name);
 
   // Guard: refuse to silently shadow a bundled official skill. An import whose
   // (possibly inferred) name collides with the official corpus would take

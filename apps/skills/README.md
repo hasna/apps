@@ -332,6 +332,16 @@ skills show my-skill
 skills port ./existing-skill
 ```
 
+New and imported local skill names use hyphens: `MyHTTPTool` becomes
+`my-http-tool`, and `my_tool.v2` becomes `my-tool-v2`. Existing installed names
+and declared command names remain readable without renaming. Already joined
+lowercase words are not split automatically; supply `--name my-skill` when importing.
+An import updates name declarations in its copied files; original source files stay unchanged.
+
+Single-folder `port` / `add` reports validation after importing. If validation
+fails, both human and JSON output exit with status 1; the imported folder remains
+available for correction. Check `valid` and `issues` in JSON before using it.
+
 The scaffold includes `SKILL.md`, `skill.json`, `AGENTS.md`, `package.json`,
 `tsconfig.json`, and `src/index.ts`. `AGENTS.md` is written for coding agents:
 after `skills new my-skill`, an agent can open that file, implement the skill,
