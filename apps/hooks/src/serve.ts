@@ -13,7 +13,7 @@ import { resolveHook } from "./lib/resolve.js";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveApiKey } from "./config.js";
+import { resolveHooksServePublishKey } from "./lib/transport.js";
 import { secureEqual } from "./lib/secure-compare.js";
 import { openApiDocument } from "./openapi.js";
 import { SEMVER_PATTERN } from "./lib/semver.js";
@@ -244,14 +244,15 @@ export function startServeServer(options: {
   host?: string;
 }): ReturnType<typeof Bun.serve> {
   const { port, host } = resolveServeOptions(options);
-  // P1-8: env-only resolution — never a CLI flag carrying the value.
-  const apiKey = resolveApiKey();
-
+  // P1-8: env-only resolution — never a CLI flag carrying the value. The
+  // publish key resolves through the @hasna/contracts chain fresh on every
+  // request (hasna/apps#1720), so a key rotation heals the server without a
+  // restart and a deliberate tier that cannot be honoured refuses loudly.
   const server = Bun.serve({
     hostname: host,
     port,
     async fetch(req) {
-      return handleServeRequest(req, apiKey);
+      return handleServeRequest(req, resolveHooksServePublishKey());
     },
   });
 
@@ -260,9 +261,10 @@ export function startServeServer(options: {
 }
 
 // Direct execution — the `hooks-serve` bin. Starts the registry server with
-// environment-configured defaults (HASNA_HOOKS_API_KEY / HOOKS_API_KEY).
-// Supports --port/--host argv so scripts and packaging smoke tests can bind
-// an ephemeral port without colliding with the default.
+// environment-configured credentials (the publish key resolves through the
+// @hasna/contracts chain per request). Supports --port/--host argv so scripts
+// and packaging smoke tests can bind an ephemeral port without colliding with
+// the default.
 if (import.meta.main) {
   const argv = process.argv.slice(2);
   // Binds-before-help class: --help/--version must answer BEFORE any bind.

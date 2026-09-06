@@ -85,7 +85,7 @@ describe("bundled hook runs from an install prefix other than the build worktree
       expect(build.exitCode, build.stderr.toString()).toBe(0);
       expect(existsSync(join(prefix, "bin", "index.js"))).toBe(true);
 
-      const env = {
+      const env: Record<string, string> = {
         ...process.env,
         HASNA_HOOKS_DATA_DIR: join(prefix, "home", ".hasna", "hooks"),
         // Explicit local-mode opt-in (fleet fail-closed doctrine): this test
@@ -94,6 +94,22 @@ describe("bundled hook runs from an install prefix other than the build worktree
         HASNA_HOOKS_LOCAL: "1",
         NO_COLOR: "1",
       };
+      // Hermetic by OMISSION: bun test files share one process.env, and the
+      // env-isolation suites deliberately SEED credential-shaped variables
+      // (HASNA_HOOKS_API_KEY included) into it mid-run. A stray key would
+      // outrank the local opt-in and point this child at the real fleet
+      // gateway — a false-green sync against the wrong registry.
+      for (const key of [
+        "HASNA_HOOKS_API_URL",
+        "HOOKS_API_URL",
+        "HASNA_HOOKS_API_KEY",
+        "HOOKS_API_KEY",
+        "HASNA_HOOKS_API_KEY_OVERRIDE",
+        "HASNA_HOOKS_API_KEY_REF",
+        "HASNA_PROFILE",
+      ]) {
+        delete env[key];
+      }
 
       const sync = Bun.spawnSync(["bun", join(prefix, "bin", "index.js"), "sync"], {
         cwd: tmpdir(),
@@ -102,15 +118,11 @@ describe("bundled hook runs from an install prefix other than the build worktree
       expect(sync.exitCode, sync.stderr.toString()).toBe(0);
       expect(sync.stdout.toString()).toContain("Synced");
       const dataDir = join(prefix, "home", ".hasna", "hooks");
-      const prevDataDir = process.env.HASNA_HOOKS_DATA_DIR;
-      process.env.HASNA_HOOKS_DATA_DIR = dataDir;
-      try {
-        const lock = readLock();
-        expect(lock.hooks["pre-bash"]).toBeTruthy();
-      } finally {
-        if (prevDataDir === undefined) delete process.env.HASNA_HOOKS_DATA_DIR;
-        else process.env.HASNA_HOOKS_DATA_DIR = prevDataDir;
-      }
+      // Read the child's lock file directly: bun test runs files in one
+      // process with a SHARED process.env, so mutating the global data-dir
+      // env here would race the other files' store tests.
+      const lock = JSON.parse(readFileSync(join(dataDir, "hooks.lock"), "utf-8"));
+      expect(lock.hooks?.["pre-bash"]).toBeTruthy();
 
       const run = Bun.spawnSync(["bun", join(prefix, "bin", "index.js"), "run", "pre-bash"], {
         cwd: tmpdir(),

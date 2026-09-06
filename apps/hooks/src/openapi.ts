@@ -150,7 +150,7 @@ export const openApiDocument = {
       apiKey: {
         type: "http",
         scheme: "bearer",
-        description: "The registry API key (HASNA_HOOKS_API_KEY / HOOKS_API_KEY).",
+        description: "The registry API key — resolved by the client through the @hasna/contracts chain (HASNA_HOOKS_API_KEY, the Keychain item hasna.credentials.hooks.api-key, or ~/.hasna/hooks/config/credentials); the server compares the inbound bearer/x-api-key value.",
       },
     },
   },
