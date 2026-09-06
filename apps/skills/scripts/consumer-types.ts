@@ -30,15 +30,15 @@ try {
   const metadata = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   await writeFile(join(workspace, "package.json"), JSON.stringify({ private: true, type: "module",
     dependencies: { "@hasna/skills": `file:${join(workspace, filename)}` },
-    devDependencies: { typescript: "5.9.3", "@types/bun": metadata.devDependencies["@types/bun"], "@types/react": metadata.devDependencies["@types/react"] },
+    devDependencies: { typescript: "5.9.3", "@types/bun": metadata.devDependencies["@types/bun"] },
   }));
   await writeFile(join(workspace, "tsconfig.json"), JSON.stringify({ compilerOptions: {
     target: "ES2022", module: "ESNext", moduleResolution: "Bundler", strict: true,
-    skipLibCheck: false, noEmit: true, types: ["bun", "react"], allowSyntheticDefaultImports: true,
+    skipLibCheck: false, noEmit: true, types: ["bun"], allowSyntheticDefaultImports: true,
   }, files: ["consumer.ts"] }));
   await writeFile(join(workspace, "consumer.ts"), `
-import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore } from "@hasna/skills/sdk";
-import { RemoteSkillsClient, RemoteSkillsAuthClient } from "@hasna/skills";
+import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore, RemoteCapabilityUnavailableError, RemoteRequestError } from "@hasna/skills/sdk";
+import { RemoteSkillsClient, RemoteSkillsAuthClient, RemoteCapabilityUnavailableError as RootCapabilityError } from "@hasna/skills";
 declare const store: SkillsProductStore;
 const service = createRunService({ store });
 const admission = runAdmissionSchema.parse({});
@@ -53,7 +53,14 @@ const wrongVersion: 2 = admission.contractVersion;
 const wrongStatus: "succeeded" = admission.status;
 const client = new RemoteSkillsClient("fixture", "https://skills.example.com/api/v1");
 const auth = new RemoteSkillsAuthClient("https://skills.example.com/api/v1");
-void [service, version, status, terminalStatus, wrongVersion, wrongStatus, client, auth];
+const unavailable = new RemoteCapabilityUnavailableError();
+const rootError: RemoteCapabilityUnavailableError = new RootCapabilityError();
+const requestError: RemoteRequestError = unavailable;
+const unavailableCode: "SUBSCRIPTION_CHECKOUT_UNAVAILABLE" = unavailable.code;
+// @ts-expect-error Arbitrary server error codes are not part of this safe contract.
+const arbitraryCode: "ARBITRARY_SERVER_CODE" = unavailable.code;
+void [service, version, status, terminalStatus, wrongVersion, wrongStatus, client, auth,
+  rootError, requestError, unavailableCode, arbitraryCode];
 `);
   await run([process.execPath, "install", "--ignore-scripts", "--registry", "https://registry.npmjs.org"], workspace);
   await run([process.execPath, "node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], workspace);
