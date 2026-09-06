@@ -466,7 +466,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
  * 0.5.2/0.5.2/0.11.1 while their manifests now pin 0.13.4, and datasets was
  * recorded without its caret). The entries themselves all still hold — each
  * is a member whose kit claim cannot be moved to its pin without other work:
- * datasets and mementos pin BELOW their kit claim (aligning would downgrade
+ * datasets pins BELOW its kit claim (aligning would downgrade
  * the claim; the pin is held back because contracts 0.11.1 dropped the
  * parseContract export the code imports), and files/todos/hooks/orgs carry
  * pre-backend-schema-era manifests whose shape the newer kit does not
@@ -475,7 +475,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
   { member: "files", kitVersion: "0.4.2", pinned: "0.14.0" },
   { member: "todos", kitVersion: "0.11.1", pinned: "0.14.0" },
-  { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "orgs", kitVersion: "0.10.6", pinned: "0.11.1" },
   { member: "hooks", kitVersion: "0.8.4", pinned: "0.14.0" },
   // Version wave 2026-08-24 (c4622d9094) pinned 26 members to contracts
