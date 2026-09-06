@@ -72,12 +72,14 @@ function makeCorpus(skills: Record<string, Record<string, string>>): string {
   return root;
 }
 
-async function withServer(fn: (ctx: { baseUrl: string; store: MemorySkillsStore }) => Promise<void>): Promise<void> {
+async function withServer(fn: (ctx: { baseUrl: string; store: MemorySkillsStore }) => Promise<void>, port = 0): Promise<void> {
   const store = new MemorySkillsStore();
   await store.ensureBootstrapApiKey(pushAuth, PRINCIPAL);
   await store.ensureBootstrapApiKey("test-other-token", OTHER);
   const fetchHandler = await createSkillsFetchHandler({ store, config: { inlineWorker: false, allowEphemeralStore: true } });
-  const server = Bun.serve({ port: 0, fetch: fetchHandler });
+  // Match the IPv4 client authority. On macOS a default localhost listener may
+  // bind IPv6 while this port is already occupied by a different IPv4 service.
+  const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: fetchHandler });
   try {
     await fn({ baseUrl: `http://127.0.0.1:${server.port}`, store });
   } finally {
@@ -86,6 +88,18 @@ async function withServer(fn: (ctx: { baseUrl: string; store: MemorySkillsStore 
 }
 
 describe("skills push", () => {
+  test("the HTTP fixture refuses an occupied IPv4 port before calling its client", async () => {
+    let requests = 0, called = false, failure: unknown;
+    const occupied = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { requests++; return new Response("Owned unrelated listener"); } });
+    try {
+      try { await withServer(async () => { called = true; }, occupied.port); }
+      catch (error) { failure = error; }
+      expect((failure as { code?: string } | undefined)?.code).toBe("EADDRINUSE");
+      expect(called).toBe(false);
+      expect(requests).toBe(0);
+    } finally { occupied.stop(true); }
+  });
+
   test("packs, validates, uploads, and the skill is then served to a fresh client", async () => {
     const root = makeCorpus({ "release-notes": VALID_SKILL });
     try {
