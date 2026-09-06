@@ -4,84 +4,105 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T15:24:32.222793+00:00"
+updated_at: "2026-09-06T17:11:49.882018+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-The 0.1.2 release candidate is being rebuilt before publication. An independent error-path probe reproduced an operator-credential reflection in SDK/CLI remote API errors; the correction, bounded catalog retries and native installation guidance are being integrated and checked. Archive `453bc3d6180a523286ab10f0a0154316cbf75672` is retained as historical evidence and must not be published. New archive identity, combined verification, CI and registry acceptance remain pending.
+Switcher **0.1.2 is published, installed and live-tested**. [PR #1836](https://github.com/hasna/apps/pull/1836) merged reviewed source `61c0ca1b241043567bd7349a2810012db9c41b46` as `24681fa7552584c39c6bbcf7107faa6dd2f885e3` after all nine checks passed; the optional external review was skipped. npm publication at `2026-09-06T16:47:17.965Z` has SHA-1 `3952926c933700c8e5a56130bc3cb3c56bb01969`. All 50 installed package files match. Normal station commands report 0.1.2; ordinary npm resolution uses Contracts 1.0.2 without its optional Secrets/Events/Paths chain. The previous installation and quarantine policy remain intact.
 
-Switcher 0.1.1 is published and registry accepted. Expanded adapters are implemented and candidate-accepted for 0.1.2; they are not features of the published 0.1.1 package. This matrix distinguishes advertised wire contracts, controlled native tests and real-provider acceptance. It does not imply that every provider model works in every harness.
+This matrix distinguishes supported wire contracts, controlled native fixtures, real-provider execution and native catalog interfaces. A compatible endpoint does not establish every model's tool support, entitlement or reasoning behavior. M = Anthropic Messages; R = OpenAI Responses; C = OpenAI Chat Completions; G = native Gemini generateContent.
 
-## Published 0.1.1
+## Installed registry live matrix
 
-PR #1810 merged as `e63213ece8be8dff2e21cdcdbd9cdd6d9fb7f857`. Published source is `0bb3d62e28ba23acb76352a8dfad9f2d5d770e50`; npm publication time is `2026-09-06T13:22:44.352Z`. Registry SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed` matches the reviewed archive and all 38 installed files. Ordinary npm installation uses published Contracts 1.0.2 without the optional Secrets/Events/Paths chain. Earlier rejected archives remain withdrawn and are not current acceptance evidence. [Release record](../../release-candidate/switcher-release-completion.json), [registry identity](../../release-candidate/switcher-registry-consumer.json).
+All rows below used the normal installed `switcher` command, built-in credential resolution/discovery and task-owned ephemeral tmux. Each read an unseen proof file, then resumed in a fresh process after deletion with no new tools and the same native session. Aider instead verified its real file-context/edit/history interface: an actual target edit followed by history recall after deleting both files. Exit codes, run finalization and owned launch-state/process cleanup passed. Models/providers are the exact finite tested combinations.
 
-The actual registry-installed station command passed these seven bounded live paths. Every path performed an actual file read, then a fresh-process continuation after deleting the file; native session continuity and owned cleanup passed. M = Anthropic Messages, R = OpenAI Responses, C = OpenAI Chat Completions, G = native Gemini generateContent.
-
-| Harness / native version | Backend | Provider / selected model | Wire | Registry live result |
+| Harness / native version | Backend | Provider / selected model | Wire | Registry result |
 | --- | --- | --- | --- | --- |
 | Claude Code 2.1.263 | Direct | DeepSeek / deepseek-v4-flash | M | Read + deleted-file resume pass |
 | Codex 0.153.4 | Direct | OpenRouter / anthropic/claude-haiku-4.5 | R | Read + deleted-file resume pass |
 | Grok Build 1.0.13 | Direct | DeepSeek / deepseek-v4-flash | M | Read + deleted-file resume pass |
-| OpenCode 2 beta-19157 | Direct | DeepSeek / deepseek-v4-flash | M | Read + deleted-file resume pass; resumed answer contained the proof with additional formatting |
-| Pi 0.85.1 | Direct | DeepSeek / deepseek-v4-flash | C | Read + deleted-file same-session resume pass |
-| Codex 0.153.4 | Ori 0.12.1 | OpenRouter / anthropic/claude-haiku-4.5 | R | Read + deleted-file resume pass |
+| OpenCode 2 beta-19157 | Direct | DeepSeek / deepseek-v4-flash | M | Read + deleted-file resume pass; resumed proof had extra formatting |
+| Pi 0.85.1 | Direct | DeepSeek / deepseek-v4-flash | C | Read + same-session resume pass |
+| OMP 18.1.11 | Direct | DeepSeek / deepseek-v4-flash | C | Read + same-session resume pass |
+| DeepSeek Harness 0.1.2-rc.1 | Direct ACP | DeepSeek / deepseek-v4-flash | M | Permissioned read + same-session resume pass |
+| Cline 3.0.61 | Direct ACP | DeepSeek / deepseek-v4-flash | M | Permissioned read + same-session resume pass |
+| Hermes 0.21.0 | Direct | DeepSeek / deepseek-v4-flash | C | Read + same-session resume pass |
+| Prime Agent 0.9.2 | Direct | DeepSeek / deepseek-v4-flash | C | Native ipython read + same-session resume pass |
+| Legacy OpenCode 1.18.29 | Direct | DeepSeek / deepseek-v4-flash | C | Read + same-session resume pass |
+| Kilo 7.5.15 | Direct | DeepSeek / deepseek-v4-flash | C | Read + same-session resume pass |
+| Gemini CLI 0.58.0 | Direct | Gemini / gemini-3.1-flash-lite | G | Read + same-session resume pass |
+| Aider 0.86.2 | Direct | DeepSeek / deepseek-v4-flash | C | Target edit + deleted-file history recall pass |
+| Codex 0.153.4 | Ori 0.12.1 | OpenRouter / anthropic/claude-haiku-4.5 | R | Read + resume pass; first proof had extra formatting |
 | Grok Build 1.0.13 | Ori 0.12.1 | OpenRouter / anthropic/claude-haiku-4.5 | C | Read + deleted-file resume pass |
 
-Evidence: [six core/Ori paths](../../live/registry-0.1.1/live-matrix-C5F5th/result.json), [Pi](../../live/pi-registry-fJgCLY/result.json). Claude with non-Claude models remains unsupported by Anthropic. Native usage reports are not proof of provider billing prices.
+The proof-token checks and strict whole-answer checks are distinct. No response-format retry was used for the two passing core/Ori variations. Kilo's separately retained unsuccessful exact-answer attempt and stale tmux socket-node check were followed by a bounded corrected cell. Gemini's first isolated project was untrusted; a fresh owned fixture was explicitly trusted without changing global trust or permission policy, then passed. Legacy OpenCode's successful stage was retained. No credential or account rotation occurred. Native usage reports and Switcher profile/run model fields are not independent proof of provider billing.
 
-Registry-installed Codex returned exactly all **363 compatible IDs from 581 OpenRouter catalog entries** at the recorded refresh. These are dated observations, not fixed expected counts. OpenCode 2 exposed all three discovered DeepSeek IDs and selected Pro without inference. [Codex catalog](../../live/installed-codex-catalog-YUzaw0/result.json), [OpenCode picker](../parent-opencode2/picker-registry-bp732h83/result.json). Grok through Ori uses Ori's entitled OpenRouter catalog; Pi scopes its picker/cycling, while its diagnostic listing still exposes global definitions.
+Actual OMP and Prime native processes overlapped by 2.569 seconds using separate homes/databases and the same provider. Shared-database concurrency is covered by deterministic SQLite/PostgreSQL process fixtures; the paid overlap does not establish shared-database native concurrency. Owned acceptance resources were cleaned and the original user `switcher-deepseek` session was preserved.
 
-Node 26.8.1 and Bun 1.3.14 package CLI/API/SDK/server/standalone MCP surface tests pass from registry bytes; no MCP registration occurred. Reviewed identical candidate bytes also passed SQLite/PostgreSQL Compose persistence, 0.1.0 upgrade, rollback and re-upgrade on image `sha256:c515c2d85103d8e8fcb4aaccc5ef812725d3941196fa8ac1f775bf3ad950fd2d`. Published source includes the OpenCode 2 routing isolation, argument authority and unfinished-SSE cleanup fixes. These successes do not close later adapter-specific or cloud-provider work.
+## Catalog and native-interface boundaries
 
-## Expanded native adapters: candidate accepted, unpublished
+Switcher keeps the complete discovered provider inventory in its CLI/API and gives each harness the compatible subset through its supported native interface. It preserves exact IDs and metadata provenance; unknown capability fields remain unknown. These dated counts are observations, never constants:
 
-Source `ef217dd749c4628bead0df43c4a83b3dc8d11468` has independent reviews reconciled against 19 exact file hashes. The final 49-file archive SHA-1 is `453bc3d6180a523286ab10f0a0154316cbf75672`. Its ordinary npm installation, Node/Bun package surfaces, SQLite/PostgreSQL containers and source checks pass. PR [#1836](https://github.com/hasna/apps/pull/1836) CI and registry publication remain separate gates.
+- Registry Codex `model/list` returned exactly 363 compatible IDs from 581 OpenRouter entries. This is a native API observation, not a visual TUI inspection.
+- Registry OpenCode 2's visual picker displayed all three discovered DeepSeek IDs: `deepseek-v4-flash`, `deepseek-v4-flash-vision-exp` and `deepseek-v4-pro`. Selecting Pro changed the native status display without inference.
+- Registry Cline/DSH ACP returned all three DeepSeek models and confirmed another model before switching back for the paid request. Registry OMP/Prime API inventory and Flash/Pro plans also matched; Pro plans were dry-run only. Controlled native fixtures separately verify exact second-model requests.
+- Registry Kilo/legacy OpenCode discovered all three DeepSeek IDs. Their native catalog equality and second-request contracts have controlled fixture evidence; Switcher profile/run selection records are not relabeled as captured provider requests.
+- Registry Gemini retained all 54 authenticated provider models. Historical candidate `453bc3d6` additionally verified the native loader's 40 eligible IDs and retention of 14 explicitly incompatible generation-method entries in the API. The final source and registry package contract tests preserve that filtering; a visual Gemini TUI was not inspected. `generateContent` alone does not prove text output or tool capability.
+- Claude's compatible model mapping/picker and Grok's catalogs have native fixture coverage; Claude with third-party non-Claude models is outside Anthropic's official support. Ori owns its entitled OpenRouter catalog. Pi scopes native picker/cycling, while diagnostic listings can include global definitions.
+- Hermes keeps native free-provider/MOA rows visible alongside the selected-provider inventory. Aider's listings include built-in definitions. These native lists cannot truthfully be described as containing only the selected provider.
 
-All 14 native harnesses and both Ori paths passed real-provider requests and deleted-file fresh-process continuation on the installed baseline archive `8bbf262fe7b26d6ebc0141b7b262fe1bd16bad6e`. The subsequent final delta changes Gemini generation-method metadata/filtering and documentation; 14 adapter implementation files are byte-identical to that live baseline. Final Gemini acceptance is separately repeated below. Controlled native protocol fixtures establish additional routes; they do not establish untested provider entitlement.
+## Controlled native contracts and limits
 
-| Adapter / native version | Controlled native contract | Installed live baseline / material boundary |
+The required four adapters have parser-aware routing authority, process-scoped configuration and shared terminal/signal/timeout coverage. OpenCode 2 additionally covers hostile global/project/per-model/per-agent routing and preserved JSONC/YAML instructions/permissions. Grok's launch-state removal remains independent of bridge cleanup rejection. Native subscription credentials are never extracted or pooled. Credential diagnostics report observable missing/inaccessible/lookup and upstream authorization failures; distinguishing revoked from expired or stale/rotation metadata is a separately open diagnostic extension, not an inferred meaning of HTTP401/403.
+
+| Adapter | Additional controlled contract | Material boundary |
 | --- | --- | --- |
-| OMP 18.1.11 | C/R/M, six auth/no-auth paths, read/resume, exact RPC catalog and second-model requests | DeepSeek read + deleted-file resume pass. Literal api-key Messages uses the public launch bridge. |
-| DeepSeek Harness 0.1.2-rc.1 | C/R/M native ACP tools, catalog, second selection, history; web authentication/origin/cleanup | DeepSeek ACP read + deleted-file resume pass. Distinct from Claude using DeepSeek; headless one-shot starts a fresh task. Image attachment round-trip and Linux native behavior remain unverified. |
-| Cline 3.0.61 | C/R/M native permissioned ACP read/resume, complete catalog and session/set_model request | DeepSeek read + deleted-file resume pass with an exact-file ACP permission grant. Native permission requests remain active. |
-| Hermes 0.21.0 | C/R/M ordinary chat oneshot, native read/resume, selected-provider inventory and second selection | DeepSeek Chat read + deleted-file resume pass. Built-in free-provider/MOA rows remain visible. Auxiliary title generation can warn HTTP400 because native json_schema is unsupported by this Chat route; main inference and fallback naming succeed. |
-| Prime Agent 0.9.2 | C/R/M catalog/model selection, foreground supervisor/readiness, long-path fallback, native read/resume and RPC second request | DeepSeek native ipython read + deleted-file continue pass. Unix socket length limits remain enforced even after fallback. |
-| Legacy OpenCode 1.18.29 | C/R/M read/resume, exact native diagnostic catalog, JSONC/root/agent permissions and argument authority | DeepSeek native read + deleted-file continue pass. Uses a separate executable and schema from OpenCode 2. |
-| Kilo 7.5.15 | C/R/M read/resume/catalog, reviewed Yargs authority, native permissions, concurrent interruption/cleanup | DeepSeek native read + deleted-file continue pass. Project MCP can access the ephemeral bridge capability; the upstream key remains in the parent. |
-| Gemini CLI 0.58.0 | Native G; routing/config/trust/import controls, concurrency, timeout143 and exact native settings loader | Gemini gemini-3.1-flash-lite read + deleted-file resume pass on baseline and final archive. ACP and conflicting transport settings reject. Native private-home/context boundaries remain documented. |
-| Aider 0.86.2 | C/R/M, 16 native file-context/edit/history/catalog checks | DeepSeek actual target edit + deleted-file history recall pass. No autonomous read function or native session ID; Responses is buffered, and model listings also include native definitions. |
+| OMP | C/R/M; six auth/no-auth paths; native RPC catalog/read/resume/second requests | Literal api-key Messages uses the authenticated loopback bridge |
+| DeepSeek Harness | C/R/M native ACP; nine protocol/auth cells; web catalog/auth/origin/trust/shutdown | Headless one-shot starts a new task; SDK/custom profiles rejected; image attachment round-trip and Linux native behavior unverified |
+| Cline | C/R/M permissioned ACP read/resume/catalog/session-set-model | Native permission requests remain active; acceptance granted only the fixture-file operation |
+| Hermes | C/R/M ordinary chat, native read/resume, inventory/second selection | DeepSeek Chat auxiliary title generation can warn HTTP400 for unsupported json_schema; main tool loop/history and fallback naming succeed |
+| Prime Agent | C/R/M catalog/selection; foreground readiness; six signal orderings; long-path fallback | Native Unix socket length limits still apply |
+| Legacy OpenCode | C/R/M read/resume/catalog; JSONC/root/agent policy and argument authority | Separate executable/schema from OpenCode 2 |
+| Kilo | C/R/M read/resume/catalog; Yargs authority, native permissions and interruption/cleanup | Native project MCP can use the ephemeral bridge token; the upstream credential stays in the parent |
+| Gemini CLI | Native G; transport/config/import/trust negatives, concurrency and timeout143 | Exactly 0.58.0 is guarded; conflicting transport and ACP reject; native private-home/context boundaries apply |
+| Aider | C/R/M; 16 native context/edit/history/catalog checks | Exactly 0.86.2 is guarded; no autonomous Read function/native session ID; Responses is buffered |
 
-On the final archive, authenticated Gemini discovery retained all **54 models** and their generation methods. **40 compatible IDs** appeared in the native model definitions/resolutions; **14 explicitly incompatible method entries** remained in the API but were ineligible for coding selection. Native Gemini read the unseen marker, then a fresh process resumed the same session after deletion with zero tools. These counts are dated observations. Native loader/picker configuration was verified headlessly; no visual TUI rendering claim is made. `generateContent` does not independently establish tool or text-output capability.
+The common bridge forwards the chosen wire rather than translating between M/R/C. Tests cover changed boundaries, stream cancellation and tool/usage/reasoning preservation. This does not promise every provider's advanced parallel-tool, image or reasoning feature, nor cross-provider session migration. Raw native stdout/PTY belongs to the native client. POSIX lifecycle tests do not establish Windows parity, cleanup after parent SIGKILL or control of deliberately escaped process groups. [Adapter contribution contract](CONTRIBUTING-ADAPTERS.md).
 
-Final source verification: **152 package tests / 1,584 assertions** with real PostgreSQL and installed Pi/Ori/Gemini opt-ins, **147 root tests / 560 assertions**, **43 affected builds**, generated/manifest/secret/artifact guards and frozen locks. Final archive Node 26.8.1/Bun 1.3.14 surfaces and both Docker backends pass. Image `sha256:e2fccdf4c9e5fd80bfed936fb6b2dc24d87044a897dd53dc8eedfb9d8f43879d` preserves providers/profiles/catalogs/runs and generation methods through 0.1.1→0.1.2→0.1.1→0.1.2 and container recreation. Old 0.1.1 clients read stored data but refuse unsupported new harness writes and metadata-bearing provider updates. Owned containers, networks, volumes, tmux sessions and launch state were cleaned; the user's original session remains intact.
+## API, SDK and self-hosting acceptance
 
-The [evidence index](docs/verification-evidence.json) binds the current archive, exact review hashes, baseline live records and final Gemini/container/package reports. Historical failures remain retained in scratch evidence. Model-list APIs, native selection, visual pickers and actual inference requests remain separate claims.
+The published source passed 167 package tests / 1,799 assertions including PostgreSQL and native opt-ins, 147 root tests / 560 assertions, 43 affected builds, frozen locks and generated/manifest/secret/artifact guards. Registry Node 26.8.1 and Bun 1.3.14 CLI/API/SDK/server/standalone MCP surfaces passed; no Hasna MCP server was registered in a coding agent.
 
-## Providers and cloud access
+The exact reviewed runtime bytes passed SQLite/PostgreSQL Compose tests on image `sha256:2f0b14538018bd556ba92351a186910861dec28ec98ec1fbe1a2318f3a4a491f`. Both backends preserved two providers, eleven profiles and eleven run records plus generation-method metadata through 0.1.1→0.1.2→container recreation→0.1.1→0.1.2. Old clients read data but refuse unsupported new harness writes and metadata-bearing updates. Linux runtime credential injection and missing-value rejection passed; native macOS/Keychain-backed vault launches are separate evidence. Owned test containers/networks/volumes/listeners were removed; the user's VM and services were preserved.
 
-Published presets cover DeepSeek, OpenRouter, Anthropic, OpenAI, xAI, Ollama, LM Studio, Groq, Cerebras, Mistral, Together, Fireworks, Moonshot/Kimi, DashScope, Z.AI, MiniMax, SiliconFlow, vLLM, LiteLLM and generic M/R/C endpoints. The typed registry's per-route notes remain authoritative for protocol, auth, discovery and prefixes. Parser/auth/prefix fixtures establish those contracts; the seven live rows above establish live acceptance only for their specific paths.
+The local API is a same-version in-process service owned by each CLI command, using ephemeral loopback ports and in-memory operator credentials. Its connection idle timeout is not an automatic service shutdown timer. Explicit remote configuration never falls back silently. Self-hosting uses `switcher-serve`; the local launcher remains responsible for local native execution.
 
-Expanded Gemini provider routes remain distinct: native G uses x-goog-api-key; Google's OpenAI-compatible C endpoint uses Bearer and `/v1beta/openai`. Expanded Azure v1 C/R uses a user-specified `/openai/v1` resource URL and literal `api-key`; an actual Codex fixture emitted that header and exact deployment ID. **Azure requires real deployment names supplied manually or by an explicit deployment-aware catalog.** Its foundation-model listing is not a deployment inventory. Both provider additions have integrated contract checks. Native Gemini now has authenticated catalog and live tool/resume acceptance; Google-compatible Chat and Azure account/deployment acceptance remain separate.
+## Provider and account access
 
-| Access group | What the existing inventory establishes | Remaining prerequisite |
+The 24 presets cover DeepSeek, OpenRouter, Anthropic, OpenAI, xAI, Ollama, LM Studio, Groq, Cerebras, Mistral, Together, Fireworks, Moonshot/Kimi, DashScope, Z.AI, MiniMax, SiliconFlow, vLLM, LiteLLM, Gemini, Azure and explicit generic M/R/C endpoints. Registry notes define actual protocols, auth, prefixes and discovery. Deterministic parser/route/auth tests do not establish paid account entitlement.
+
+Gemini native G uses x-goog-api-key; Google's compatible Chat route uses Bearer at `/v1beta/openai`. Azure v1 C/R uses the operator's `/openai/v1` resource and literal `api-key`, verified by native Codex fixtures. **Azure requires actual deployment names**, supplied manually or through an explicit deployment-aware catalog. Foundation-model definitions are not deployment inventory. Bedrock/Vertex native identity adapters are not provided by generic gateways.
+
+| Provider group | Recorded acceptance | Remaining prerequisite or limit |
 | --- | --- | --- |
-| DeepSeek, OpenRouter | Actual protected vault resolution and registry live paths pass | Reuse bounded accepted paths for release regression; no new key setup inferred |
-| Anthropic, OpenAI, xAI, Groq, Cerebras, Mistral, Fireworks, Moonshot/Kimi, DashScope/Qwen, Z.AI/Zhipu, MiniMax | Candidate secret references exist; some are archived, notes or admin metadata | Validate a relevant authorized provider credential/account through the resolver; metadata is not proof of validity, entitlement or paid-call access. Fireworks also needs account scope; DashScope needs region/workspace; Z.AI needs a truthful explicit catalog contract |
-| Gemini | Built-in protected vault binding, authenticated 54-entry catalog and final native Flash-Lite read/resume pass | Other Google routes/models retain separate capability and entitlement requirements |
-| Together, SiliconFlow, Azure | No matching references in this inventory | Locate/provide a usable approved credential reference. Azure additionally needs resource endpoint and deployment inventory; absence in one inventory is not proof no key exists anywhere |
-| Bedrock | API-key/bearer-token and expiry/identifier metadata | Verify actual credential type/expiry, region, model access and invocation contract. Native cloud adapter is not implemented by these metadata records |
-| Vertex | OAuth client ID/secret metadata only | Establish an applicable runtime identity/token flow, project, location and model permissions. An OAuth client secret is not ADC or an access token; direct cloud adapter remains open |
-| Ollama, LM Studio, vLLM, LiteLLM/generic gateways | Explicit endpoint contracts/fixtures; no running deployment established by credential inventory | A reachable configured local/server deployment, actual model availability and required native tool parser/capabilities; auth where configured |
+| DeepSeek, OpenRouter, Gemini native | Published 0.1.2 registry live rows above and authenticated discovery | Only the listed models/routes were exercised |
+| OpenAI | Historical candidate 453bc3d6: authenticated 133-model catalog, Codex/gpt-5-nano read/fresh-resume pass; this provider test was not in tmux | Not a registry-3952926c OpenAI replay or all-model entitlement claim |
+| xAI | Historical candidate 453bc3d6: authenticated 12-model catalog, Grok/grok-4.20-0309-non-reasoning read/deleted-file resume in owned tmux | Not a registry-3952926c xAI replay |
+| Anthropic | Historical candidate: authenticated 11-model catalog; direct Claude inference returned insufficient credits before tools, cost zero | Funded purpose-appropriate account needed; no retry/account switch/billing change performed |
+| Groq, Mistral, Cerebras | Catalog-only observations: 14, 46 and 3 models respectively; first two refs belong to other projects, Cerebras ref is archived | Technical catalog access is not approved current paid access; provenance review required |
+| Fireworks, Moonshot/Kimi, DashScope/Qwen, Z.AI, MiniMax | Preset/schema and credential-reference inventory only where present | Usable purpose-appropriate credential, account/region/workspace and truthful catalog contract as applicable |
+| Together, SiliconFlow, Azure | No usable approved deployment/account established by this inventory | Credential; Azure also resource endpoint and deployment inventory |
+| Google-compatible Chat | Distinct route/auth contract fixtures | Account/model live acceptance on that route |
+| Bedrock, Vertex | Native cloud contracts explicitly separate; metadata alone is not runtime identity | Verified credential type/expiry, region or project/location, model access and native invocation adapter |
+| Ollama, LM Studio, vLLM, LiteLLM/generic gateways | Compatible endpoint/auth/prefix fixtures | Reachable deployment, installed model and required tool/parser capability; auth where configured |
 
-The original metadata-only inventory explicitly records `valuesRead:false`. Later DeepSeek, OpenRouter and Gemini runtime acceptance is identified separately; metadata-only rows are not authentication evidence. Missing cloud access is an external acceptance prerequisite, not a skipped success and not evidence that the provider parser is defective. Generic gateways may satisfy an explicitly configured compatible wire path; they do not silently add Bedrock/Vertex native authentication or cross-protocol translation.
+Unauthenticated controls for the historical Anthropic/OpenAI/xAI catalog probes returned HTTP401. No provider credential values were recorded. Scopes/expiry/account billing are not inferred from successful catalog calls. Missing access is an explicit external acceptance prerequisite, not a skipped success or evidence of a parser defect.
 
-A subsequent bounded catalog-only audit on the final candidate verified Anthropic (11 models), OpenAI (133) and xAI (12) with ordinary credential references; all three credential-free controls returned upstream HTTP401. No inference was made, and scopes, expiry, per-model entitlement and billing remain unverified. Separate Groq (14) and Mistral (46) catalog probes succeeded using references associated with other projects. Cerebras (3) responded using an explicitly archived reference; that observation establishes technical catalog access only, not current suitability for inference. No station/task-specific credential was established for those latter probes; further use is paused pending provenance/suitability review. These access observations supersede metadata-only status for exactly the stated checks.
+## Evidence and history
 
-## Finite remaining release acceptance
+The [evidence index](docs/verification-evidence.json) binds exact source/archive identity, independent reviews, package/container results and each registry live report. Paths resolve under `~/Workspace/scratch/universal-harness-switcher`; they are retained local evidence, not relative links to nonexistent public repository files. Historical snapshots keep their original identities.
 
-1. Complete PR #1836 required CI, merge the reviewed source and publish the exact accepted archive through the protected npm flow.
-2. Verify registry integrity/timestamp, install the released command without weakening quarantine, and repeat representative real-provider native task/resume and model catalog acceptance from registry bytes. Earlier baseline cells remain explicitly identified; immutable source binding carries unchanged adapter evidence.
-3. Validate provider-specific account/catalog access where purpose-appropriate authorized credentials exist. Record absent keys, deployments and native cloud identities as concrete prerequisites; do not require every provider × model × harness to receive paid inference or label shared protocol fixtures as live-provider success.
-4. Keep unsupported native interfaces and separately identified gateway/remote-worker/cloud-auth extensions explicit. Update PLAN/TODOS/evidence together without reopening completed historical releases.
+Release 0.1.1 passed its seven-path registry matrix under archive `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed` at `2026-09-06T13:22:44.352Z` ([PR #1810](https://github.com/hasna/apps/pull/1810)). Expanded baseline `8bbf262f` and rejected SDK-error candidate `453bc3d6` were never published. Their reports are historical; the latter's credential-reflection defect was corrected and independently rechecked before publishing `3952926c`.
+
+The release documentation follow-up remains subject to independent review and PR CI. External access prerequisites and optional native cloud-auth/translation/remote-worker extensions stay visible in [TODOS.md](TODOS.md); they are not silently counted as live successes.

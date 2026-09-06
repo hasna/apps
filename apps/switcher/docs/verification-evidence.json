@@ -1,346 +1,456 @@
 {
   "id": "switcher-current-release-evidence-20260906",
-  "title": "Switcher current candidate and historical verification evidence",
   "type": "verification-index",
   "owner": "fixer",
   "created_at": "2026-09-06T13:41:21Z",
-  "updated_at": "2026-09-06T15:24:32.222793+00:00",
-  "status": "candidate-revision-in-progress",
   "source_task": "01a07181-ca8d-70c1-99a2-b276dc5770f3",
   "canonical_directive": "/Users/hasna/Workspace/scratch/universal-harness-switcher/directives/2026-09-05-01a07181-complete-switcher-adapters.md",
   "evidenceRoot": "~/Workspace/scratch/universal-harness-switcher",
-  "finalReleaseCandidate": {
-    "updatedAt": "2026-09-06T14:30:54.357091+00:00",
-    "sourceCommit": "ef217dd749c4628bead0df43c4a83b3dc8d11468",
-    "sha1": "453bc3d6180a523286ab10f0a0154316cbf75672",
-    "published": false,
-    "files": 49,
-    "independentReviewBinding": "release-candidate/expanded-final-review-binding.json",
-    "packageVerification": "release-candidate/expanded-final-verify-corrected.log",
-    "rootVerification": "release-candidate/expanded-main-merge-check.log",
-    "nodeSurfaces": "release-candidate/surface-smoke/run-8zhukq/result.json",
-    "bunSurfaces": "release-candidate/surface-smoke/run-fsRDi2/result.json",
-    "containers": "reviews/expanded-container-final-453bc3d6/result.json",
-    "baselineLive": {
-      "coreOri": "live/expanded-0.1.2/live-matrix-jWULJV/result.json",
-      "pi": "live/pi-expanded-YtgGx2/result.json",
-      "clineDsh": "reviews/expanded-acp-live/identity.json",
-      "ompPrime": "live-acceptance-20260906/live-result-summary.json",
-      "kiloLegacy": "live/grok-resume-audit/2026-09-06-kilo-legacy-live-acceptance.md",
-      "geminiHermesAider": "live/expanded-parent-hq3bvhbl/result.json"
+  "title": "Switcher published 0.1.2 verification evidence",
+  "updated_at": "2026-09-06T17:11:49.882018+00:00",
+  "status": "published-registry-live-accepted",
+  "release": {
+    "root": "/Users/hasna/Workspace/scratch/universal-harness-switcher/release-candidate/expanded-candidate-ro2fp7pn",
+    "consumer": "/Users/hasna/.hasna/switcher/npm-releases/0.1.2",
+    "cli": "/Users/hasna/.bun/bin/switcher",
+    "archive": "/Users/hasna/Workspace/scratch/universal-harness-switcher/release-candidate/expanded-registry-26qsjhsn/hasna-switcher-0.1.2.tgz",
+    "switcherVersion": "0.1.2",
+    "version": "0.1.2",
+    "contractsVersion": "1.0.2",
+    "sha1": "3952926c933700c8e5a56130bc3cb3c56bb01969",
+    "integrity": "sha512-8m8MM8+iLnAAz326UNxXfCh08aed2LJpWo3nC55K5SyYveZHhaC8p9Jc3YPibFQfQSPyciA3ZK+2m1ZfhuEfuA==",
+    "sourceTree": "e488c7050f60a88530e49d06078d76722d6e6e1e",
+    "published": true,
+    "normalRegistryDependencyResolution": true,
+    "optionalChainAbsent": true,
+    "sourceCommit": "61c0ca1b241043567bd7349a2810012db9c41b46",
+    "registryVerified": true,
+    "publishedAt": "2026-09-06T16:47:17.965Z",
+    "verifiedAt": "2026-09-06T16:47:57.291828+00:00",
+    "versions": {
+      "switcher": "0.1.2",
+      "switcher-serve": "0.1.2",
+      "switcher-mcp": "0.1.2"
     },
-    "gemini": "live/grok-resume-audit/gemini-final-20260906T172505+0300/acceptance-evidence.json",
-    "providerCatalogAccess": "reviews/provider-access-final-453bc3d6/result.json",
-    "publishEligible": false,
-    "status": "historical-superseded-pending-new-candidate"
+    "allPackedFilesMatch": true,
+    "packedFileCount": 50,
+    "quarantineUnchanged": true,
+    "normalPathResolvedCLI": "/Users/hasna/.bun/bin/switcher",
+    "priorInstallPreserved": "/Users/hasna/.hasna/switcher/npm",
+    "priorBinTargets": {
+      "switcher": "/Users/hasna/.hasna/switcher/npm/node_modules/.bin/switcher",
+      "switcher-serve": "/Users/hasna/.hasna/switcher/npm/node_modules/.bin/switcher-serve",
+      "switcher-mcp": "/Users/hasna/.hasna/switcher/npm/node_modules/.bin/switcher-mcp"
+    },
+    "normalNpmInstall": true,
+    "mergeCommit": "24681fa7552584c39c6bbcf7107faa6dd2f885e3",
+    "pullRequest": "https://github.com/hasna/apps/pull/1836",
+    "ci": "release-candidate/expanded-ci-61c0-passed.json",
+    "publication": "release-candidate/expanded-registry-publication.json"
   },
-  "currentVerification": {
-    "tests": 152,
-    "assertions": 1584,
+  "verification": {
+    "packageTests": 167,
+    "packageAssertions": 1799,
     "rootTests": 147,
     "rootAssertions": 560,
     "affectedBuilds": 43,
-    "reviewedHashes": 19,
-    "unchangedAdapterSourceFiles": 14
+    "sourceLog": "release-candidate/expanded-revised-verify-short-home.log",
+    "rootGates": "release-candidate/expanded-revised-gate-results.json",
+    "review": "reviews/grok-resume-audit/2026-09-06-revised-artifact-review.md",
+    "nodeRegistry": "release-candidate/surface-smoke/run-OngvLB/result.json",
+    "bunRegistry": "release-candidate/surface-smoke/run-zd3zRL/result.json",
+    "containers": "reviews/expanded-container-revised-0.1.2/README.md",
+    "containerImage": "sha256:2f0b14538018bd556ba92351a186910861dec28ec98ec1fbe1a2318f3a4a491f",
+    "presetNegativeMatrix": "reviews/j03-j04-preset-matrix-20260906/j03-j04-preset-matrix.json",
+    "presetMatrixBoundary": "All24 source contracts are mapped to distinct or shared parser/auth/route/schema/negative fixtures. Dedicated hosted provider/deployment live coverage is explicitly separate; no full per-preset paid matrix claim.",
+    "finalRegistryAudit": "reviews/registry012-final-audit.json",
+    "documentationPackageIdentity": "release-candidate/release-docs-packed-identity.json",
+    "normalStationReadiness": "release-candidate/normal-cli-readiness.json",
+    "finalOwnedCleanup": "release-candidate/expanded-registry-final-cleanup.json"
+  },
+  "registryLive": {
+    "coreOri": "live/registry-0.1.2/live-matrix-03ADaF/result.json",
+    "pi": "live/pi-registry012-1EO9JB/result.json",
+    "hermesAider": "live/registry-parent-jmuqbqsa/result.json",
+    "clineDsh": "reviews/expanded-acp-registry-0.1.2-20260906/live-8UYCUZ/result.json",
+    "ompPrime": "reviews/registry-omp-prime-3952926c/registry-result-summary.json",
+    "codexCatalog": "live/installed-codex-catalog-oDJu36/result.json",
+    "opencode2VisualPicker": "reviews/parent-opencode2/picker-registry012-hybd8w89/result.json",
+    "kiloLegacyGemini": "live/grok-resume-audit/registry-0.1.2-final/final-live-aggregate.json",
+    "pathCount": 16,
+    "nativeAdapterCount": 14,
+    "limitations": [
+      "OpenCode2 resumed proof and Codex/Ori first proof include additional formatting; proof token matched.",
+      "Aider uses file-context/edit/history rather than autonomous Read/native session ID.",
+      "Kilo/legacy selected-model records are Switcher profile/run metadata; Gemini native usage also observes selected model."
+    ],
+    "acceptedFinalizedRuns": 32
+  },
+  "historicalProviderAcceptance": {
+    "archiveSHA1": "453bc3d6180a523286ab10f0a0154316cbf75672",
+    "published": false,
+    "openaiCodex": "live/grok-resume-audit/codex-openai-final-20260906T174357+0300/2026-09-06-openai-codex-final-live-acceptance.md",
+    "xaiGrok": "live/e14-xai-grok-20260906/2026-09-06-xai-grok-live-acceptance.md",
+    "anthropicCreditBlock": "reviews/anthropic-claude-final-453bc3d6/README.md",
+    "catalogAccess": "reviews/provider-access-final-453bc3d6/result.json"
   },
   "historicalSnapshots": [
     {
-      "id": "switcher-coverage-evidence-20260906",
+      "id": "switcher-current-release-evidence-20260906",
+      "title": "Switcher current candidate and historical verification evidence",
+      "type": "verification-index",
+      "owner": "fixer",
       "created_at": "2026-09-06T13:41:21Z",
-      "owner": "credential_runtime_review",
+      "updated_at": "2026-09-06T15:24:32.222793+00:00",
+      "status": "candidate-revision-in-progress",
       "source_task": "01a07181-ca8d-70c1-99a2-b276dc5770f3",
-      "status": "read-only-reconciliation",
       "canonical_directive": "/Users/hasna/Workspace/scratch/universal-harness-switcher/directives/2026-09-05-01a07181-complete-switcher-adapters.md",
-      "parent_head": "5e47250663f19b08e354af61e38aef39194fe388",
-      "parent_has_owned_uncommitted_integration": true,
-      "inputs": {
-        "release-candidate/switcher-release-completion.json": {
-          "sha256": "6d4fd015d52cc4efca8359472544e7fa06b5b2cf694ee7aeb168075c6830207b",
-          "bytes": 663
+      "evidenceRoot": "~/Workspace/scratch/universal-harness-switcher",
+      "finalReleaseCandidate": {
+        "updatedAt": "2026-09-06T14:30:54.357091+00:00",
+        "sourceCommit": "ef217dd749c4628bead0df43c4a83b3dc8d11468",
+        "sha1": "453bc3d6180a523286ab10f0a0154316cbf75672",
+        "published": false,
+        "files": 49,
+        "independentReviewBinding": "release-candidate/expanded-final-review-binding.json",
+        "packageVerification": "release-candidate/expanded-final-verify-corrected.log",
+        "rootVerification": "release-candidate/expanded-main-merge-check.log",
+        "nodeSurfaces": "release-candidate/surface-smoke/run-8zhukq/result.json",
+        "bunSurfaces": "release-candidate/surface-smoke/run-fsRDi2/result.json",
+        "containers": "reviews/expanded-container-final-453bc3d6/result.json",
+        "baselineLive": {
+          "coreOri": "live/expanded-0.1.2/live-matrix-jWULJV/result.json",
+          "pi": "live/pi-expanded-YtgGx2/result.json",
+          "clineDsh": "reviews/expanded-acp-live/identity.json",
+          "ompPrime": "live-acceptance-20260906/live-result-summary.json",
+          "kiloLegacy": "live/grok-resume-audit/2026-09-06-kilo-legacy-live-acceptance.md",
+          "geminiHermesAider": "live/expanded-parent-hq3bvhbl/result.json"
         },
-        "release-candidate/switcher-registry-consumer.json": {
-          "sha256": "9ab524f0e4180dccff6b3df9c85eda8d2fc7fd4ee226efa01814ee801b1196e2",
-          "bytes": 1039
+        "gemini": "live/grok-resume-audit/gemini-final-20260906T172505+0300/acceptance-evidence.json",
+        "providerCatalogAccess": "reviews/provider-access-final-453bc3d6/result.json",
+        "publishEligible": false,
+        "status": "historical-superseded-pending-new-candidate"
+      },
+      "currentVerification": {
+        "tests": 152,
+        "assertions": 1584,
+        "rootTests": 147,
+        "rootAssertions": 560,
+        "affectedBuilds": 43,
+        "reviewedHashes": 19,
+        "unchangedAdapterSourceFiles": 14
+      },
+      "historicalSnapshots": [
+        {
+          "id": "switcher-coverage-evidence-20260906",
+          "created_at": "2026-09-06T13:41:21Z",
+          "owner": "credential_runtime_review",
+          "source_task": "01a07181-ca8d-70c1-99a2-b276dc5770f3",
+          "status": "read-only-reconciliation",
+          "canonical_directive": "/Users/hasna/Workspace/scratch/universal-harness-switcher/directives/2026-09-05-01a07181-complete-switcher-adapters.md",
+          "parent_head": "5e47250663f19b08e354af61e38aef39194fe388",
+          "parent_has_owned_uncommitted_integration": true,
+          "inputs": {
+            "release-candidate/switcher-release-completion.json": {
+              "sha256": "6d4fd015d52cc4efca8359472544e7fa06b5b2cf694ee7aeb168075c6830207b",
+              "bytes": 663
+            },
+            "release-candidate/switcher-registry-consumer.json": {
+              "sha256": "9ab524f0e4180dccff6b3df9c85eda8d2fc7fd4ee226efa01814ee801b1196e2",
+              "bytes": 1039
+            },
+            "release-candidate/expanded-continuation-20260906.json": {
+              "sha256": "3acd3d7305b04dbdc1ff64e1e3ab1d995b19b30abf43a42ef165016acb705206",
+              "bytes": 1243
+            },
+            "research/provider-credential-inventory.json": {
+              "sha256": "50790261e82c424a9e4a83bc7cf540b63cf6ecdc2e968486db1bf2215a1e1e56",
+              "bytes": 8768
+            },
+            "live/registry-0.1.1/live-matrix-C5F5th/result.json": {
+              "sha256": "0f1ed8087eefadb122594c67bb5c00a6887e300bc07ea5b30dc02abf3c25cfd7",
+              "bytes": 10808
+            },
+            "live/pi-registry-fJgCLY/result.json": {
+              "sha256": "544d9be0fd7e0dd5b8dc455083461d3696b70cffd30dcad04655587173a066fc",
+              "bytes": 1944
+            },
+            "live/installed-codex-catalog-YUzaw0/result.json": {
+              "sha256": "10919ed672ebc054a5ae04f84d55df20bb381957056f583861ee719c99600a9e",
+              "bytes": 1771
+            },
+            "reviews/parent-opencode2/picker-registry-bp732h83/result.json": {
+              "sha256": "3af35d179d838d0ac0e305d5346924a429db4f7ab0d01e0dee2f57f81aa57199",
+              "bytes": 1564
+            },
+            "release-candidate/surface-smoke/run-rs85WK/result.json": {
+              "sha256": "56f70d8ad65747ec65b56f3b4af386450cfe5927ecb66d53e16535357a2506fd",
+              "bytes": 628
+            },
+            "release-candidate/surface-smoke/run-uSa0Ht/result.json": {
+              "sha256": "eaa016eae9d5f6a92329e068017a085c497b7557246124cbf09f411445bba2eb",
+              "bytes": 626
+            },
+            "reviews/parent-omp/2026-09-06-omp-658b-review.md": {
+              "sha256": "e1e20089327fb8de8d17f078644a2d726b9b12679a0a33cb558d08b1f1170bcb",
+              "bytes": 1907
+            },
+            "reviews/2026-09-06-parent-dsh-independent-review.md": {
+              "sha256": "c874f57405f613590f337c1f310d108838b8b956071537678d434614336e90f3",
+              "bytes": 2990
+            },
+            "reviews/parent-cline/2026-09-06-cline-86b-integration-review.md": {
+              "sha256": "80290497a304ababa0d4fcd448ec3508c85aef0390180eb0274ab679d2ea943c",
+              "bytes": 1473
+            },
+            "reviews/parent-hermes/2026-09-06-hermes-independent-review.md": {
+              "sha256": "c684c8ad40b34add07fa30bf67c7baee5b641217c88c4c03b925b9a536fc3eab",
+              "bytes": 3522
+            },
+            "reviews/parent-hermes/picker-expanded-XFu9X9/result.json": {
+              "sha256": "eba5995f94a3d7a527c126dcdc59114182a6596f0c5b23858955a7df8b2f8a11",
+              "bytes": 3271
+            },
+            "reviews/parent-prime/2026-09-06-prime-ecb093-cancellation-review.md": {
+              "sha256": "d8c9a47dbbb1dbe073119f94b0587190c3c0bb6a760fe278d052a5de6c7c1667",
+              "bytes": 1221
+            },
+            "reviews/parent-aider/2026-09-06-aider-33f985-review.md": {
+              "sha256": "baa3550e3ff6c1b0481eb4d1d8a5aeedf9d2d0600647e815252a821748f3b79e",
+              "bytes": 3395
+            },
+            "reviews/parent-g18/2026-09-06-legacy-3005-cli-review.md": {
+              "sha256": "ccf4ad5d4af30707ec399c1486f89376e9b2ee19047ad0f1201f7a08d9c37bb0",
+              "bytes": 1617
+            },
+            "reviews/parent-kilo/2026-09-06-kilo-bridge-design-audit.md": {
+              "sha256": "3c5b0f639101e77e009e34f7efe23bc9ef12b191b46942e32b30ddc6c17d566d",
+              "bytes": 7213
+            },
+            "reviews/credential-runtime/2026-09-06-gemini-hardening.md": {
+              "sha256": "0789a59dc864e093d8596e9c6cb0a500b9f040a5cbe6d120033b547965c32df1",
+              "bytes": 10993
+            },
+            "reviews/credential-runtime/2026-09-06-gemini-azure-review.md": {
+              "sha256": "19dbd743d1222c0f18074c711272788617d03f8146aa6702b94e9554e3f9a915",
+              "bytes": 4094
+            },
+            "worktrees/complete-adapters/apps/switcher/PLAN.md": {
+              "sha256": "bc9e67a587a87a27904150ddc3f753d6faffa0de716a4a3bea1a56e53305a639",
+              "bytes": 26583
+            },
+            "worktrees/complete-adapters/apps/switcher/TODOS.md": {
+              "sha256": "24b44c228899dc0c9b78b47929a0b5ecff87a99640c2822afde78bb253287971",
+              "bytes": 44043
+            },
+            "worktrees/complete-adapters/apps/switcher/COMPATIBILITY.md": {
+              "sha256": "abd7f8076491112616a912650d4d7ec404c97632e12e4735f11bc36ac5c20628",
+              "bytes": 12047
+            },
+            "reviews/parent-prime/fallback-cli-fixture.ts": {
+              "sha256": "edea234f6709e156d5af2308b29d9c7c6bee5c438e663d05834cc0cb9f61919c",
+              "bytes": 8854
+            },
+            "reviews/parent-prime/fallback-cli-fixture.log": {
+              "sha256": "e64afe129f6ac8d4a2e728c6fcda94ebc958201b1d82cec2c0ce29e07df35444",
+              "bytes": 16731
+            },
+            "reviews/parent-prime/expanded-catalog-shared-home.log": {
+              "sha256": "9e2ecc33d768274e901bdd86eb785268bc1f0e156e0566dd8e4251f738f67422",
+              "bytes": 270
+            },
+            "reviews/parent-prime/expanded-second-request.log": {
+              "sha256": "a1138ed3e662fec578e1a3fbc7bd4fed6f3ffa2432321ad0d557d41dad696e6a",
+              "bytes": 373
+            },
+            "reviews/parent-gemini/expanded/native.log": {
+              "sha256": "e95a067dedbcee9ebd090018f0c3529a441276a3c875e0085dcdef4a3b56feb6",
+              "bytes": 12924
+            },
+            "reviews/parent-gemini/expanded/args.log": {
+              "sha256": "343f5f49f3cb486b31137d124b8126d87f8e7f7a62c6bdc859670f0ba5513f13",
+              "bytes": 931
+            },
+            "reviews/parent-gemini/expanded/config.log": {
+              "sha256": "60f06c5b8b536aab20c36257fbed16c3fba45a9f98a52887fe407e1d478e5f23",
+              "bytes": 1070
+            },
+            "reviews/parent-gemini/expanded/trust.log": {
+              "sha256": "a2011ac4c07284beefea7b5c87abfc83d2109fc4f254a06413645aae9815e73f",
+              "bytes": 474
+            },
+            "reviews/parent-gemini/expanded/cancel.log": {
+              "sha256": "f2b8c276927a0bde5aa145eb7592e79ced1e5d4d085423df20342f0ca665e2e6",
+              "bytes": 903
+            },
+            "reviews/parent-gemini/expanded/native/source-cli-KkESw9/result.json": {
+              "sha256": "e95a067dedbcee9ebd090018f0c3529a441276a3c875e0085dcdef4a3b56feb6",
+              "bytes": 12924
+            },
+            "reviews/parent-gemini/expanded/counter-pID892/result.json": {
+              "sha256": "dba84e85b78e4946ad9b15e80b50859b2a007ece23ba52acf3998a61ecb7c30c",
+              "bytes": 990
+            },
+            "reviews/parent-gemini/expanded/config-counter-ZZNbkU/result.json": {
+              "sha256": "41ff56bbd5fc7b970c17d461e97749b8805d986b9d201f77d7d2b3ebfdb7d533",
+              "bytes": 1129
+            },
+            "reviews/parent-gemini/expanded/trust-counter-LGWBqY/result.json": {
+              "sha256": "c1ae18e58b17b5e0abcb197718850b0d03ebf001202081fc2499c978d242a6ee",
+              "bytes": 473
+            },
+            "reviews/parent-gemini/expanded/cancel-SuFlhF/result.json": {
+              "sha256": "a2f9fd3443951feaa4bbcc410698695614881075454b717eece04dd71b7bb153",
+              "bytes": 413
+            },
+            "reviews/current-coverage/prime-catalog-result.json": {
+              "sha256": "6cb97c5bf96dbac1bff9aedf6d4cf720e04ec01ca9dfa3160d9dd6df989c9ce3",
+              "bytes": 328
+            },
+            "reviews/current-coverage/prime-second-request-result.json": {
+              "sha256": "632584d91c9343f4990a1658800caebda766440ea9b4b5756fc14c673c46d3fe",
+              "bytes": 472
+            }
+          },
+          "credential_values_read": false,
+          "external_requests": false,
+          "notes": [
+            "Published release completion supersedes older publicationHeld fields.",
+            "Parent uncommitted integration is not approved by this documentation audit.",
+            "Evidence links are task-scratch provenance; re-home them if adopting prose into published package docs."
+          ],
+          "updated_at": "2026-09-06T13:50:35Z",
+          "superseding_evidence": {
+            "Prime": "Integrated long TMPDIR fallback and native catalog/second-request pass; replaces old three-failure checkpoint",
+            "Gemini": "Integrated six-launch/adversarial/trust and actual timeout143 pass; final combined commit identity pending",
+            "Kilo": "Parent reports96678360 integrating/review active; no final approval inferred"
+          },
+          "external_result_copy_provenance": {
+            "prime-catalog-result.json": "/Users/hasna/Workspace/scratch/pc-EGhysR/result.json",
+            "prime-second-request-result.json": "/Users/hasna/Workspace/scratch/pc-U498zS/result.json"
+          },
+          "outputs": {
+            "PLAN-current-status.md": {
+              "sha256": "46bd43f664d0fdda17321c81d5068cce29c9c70dfba261d83b6d2c185da9d0c7",
+              "bytes": 3717
+            },
+            "TODO-status-corrections.md": {
+              "sha256": "d3e038350b400664ce8aeef6c817c76bd1187c73388e5c9626fe05121f57ed37",
+              "bytes": 8584
+            },
+            "COMPATIBILITY.md": {
+              "sha256": "a1421b289ec3504673bc8d2244cd9390a316340e4124be2a7c767f8b48456b37",
+              "bytes": 14807
+            }
+          },
+          "finalIntegration": {
+            "at": "2026-09-06T14:02:36.227431+00:00",
+            "sourceReviewIdentity": "release-candidate/expanded-review-identity.json",
+            "tests": {
+              "passed": 149,
+              "failed": 0,
+              "assertions": 1568,
+              "log": "release-candidate/expanded-0.1.2-final-verify.log"
+            },
+            "affectedBuild": "release-candidate/expanded-0.1.2-final-affected-build.log",
+            "artifactScan": "release-candidate/expanded-0.1.2-final-artifact-scan.log",
+            "kiloNative": "reviews/parent-kilo/expanded/",
+            "ompLiteralAuth": "reviews/parent-omp/literal-auth/",
+            "publishedVersion": "0.1.1",
+            "candidateVersion": "0.1.2"
+          },
+          "historicalNotice": "Historical snapshot only. These hashes and status statements describe then-read input versions, not current worktree files or current release status."
+        }
+      ],
+      "revision": {
+        "priorArchiveSHA1": "453bc3d6180a523286ab10f0a0154316cbf75672",
+        "publishEligible": false,
+        "reason": "SDK operator-credential reflection regression; integrate error sanitation, catalog resilience and harness installation guidance",
+        "candidateIdentity": "pending",
+        "publication": "not-published",
+        "statusEvidence": "release-candidate/expanded-candidate-revision-status.json"
+      },
+      "historicalCandidateInputs": {
+        "release-candidate/expanded-final-review-binding.json": {
+          "sha256": "c7c3944d2fce344ce7574f6f227b6629ab17ff93aa2daafba78b640e4aabf25d",
+          "bytes": 6752
         },
-        "release-candidate/expanded-continuation-20260906.json": {
-          "sha256": "3acd3d7305b04dbdc1ff64e1e3ab1d995b19b30abf43a42ef165016acb705206",
-          "bytes": 1243
+        "release-candidate/expanded-final-verify-corrected.log": {
+          "sha256": "efcb79809a8befb543bcc56111a170f75d124038422219f5d3bd4acb6e61fd7d",
+          "bytes": 22446
         },
-        "research/provider-credential-inventory.json": {
-          "sha256": "50790261e82c424a9e4a83bc7cf540b63cf6ecdc2e968486db1bf2215a1e1e56",
-          "bytes": 8768
+        "release-candidate/expanded-main-merge-check.log": {
+          "sha256": "786f1d22723182571e2c0cbe06b63ea23f62440f4810de730430aaeea9931901",
+          "bytes": 45333
         },
-        "live/registry-0.1.1/live-matrix-C5F5th/result.json": {
-          "sha256": "0f1ed8087eefadb122594c67bb5c00a6887e300bc07ea5b30dc02abf3c25cfd7",
-          "bytes": 10808
+        "release-candidate/surface-smoke/run-8zhukq/result.json": {
+          "sha256": "72e66caf3c094474158ce1fa52f2d280728e8a762cdccfeb84e6fd569989317c",
+          "bytes": 744
         },
-        "live/pi-registry-fJgCLY/result.json": {
-          "sha256": "544d9be0fd7e0dd5b8dc455083461d3696b70cffd30dcad04655587173a066fc",
-          "bytes": 1944
+        "release-candidate/surface-smoke/run-fsRDi2/result.json": {
+          "sha256": "7599467f5ecc00a9129c4ed728c97ae71da8af5641a26c042ed91b96ac48fca0",
+          "bytes": 742
         },
-        "live/installed-codex-catalog-YUzaw0/result.json": {
-          "sha256": "10919ed672ebc054a5ae04f84d55df20bb381957056f583861ee719c99600a9e",
-          "bytes": 1771
+        "reviews/expanded-container-final-453bc3d6/result.json": {
+          "sha256": "078ae9feb869237dfd84456f1b512b185f6140880da00eaedb628bc02dfec794",
+          "bytes": 126786
         },
-        "reviews/parent-opencode2/picker-registry-bp732h83/result.json": {
-          "sha256": "3af35d179d838d0ac0e305d5346924a429db4f7ab0d01e0dee2f57f81aa57199",
-          "bytes": 1564
+        "live/grok-resume-audit/gemini-final-20260906T172505+0300/acceptance-evidence.json": {
+          "sha256": "fc18022c5e4ab510644c3fab18f7c2661c3581a6e54fffa631200d8ff959b78d",
+          "bytes": 1741
         },
-        "release-candidate/surface-smoke/run-rs85WK/result.json": {
-          "sha256": "56f70d8ad65747ec65b56f3b4af386450cfe5927ecb66d53e16535357a2506fd",
-          "bytes": 628
+        "live/expanded-0.1.2/live-matrix-jWULJV/result.json": {
+          "sha256": "a4952e4f9b5c5bc7e9a50313ac39d56c4f6ee59422f3c5a2a18c2bdf22951e35",
+          "bytes": 10722
         },
-        "release-candidate/surface-smoke/run-uSa0Ht/result.json": {
-          "sha256": "eaa016eae9d5f6a92329e068017a085c497b7557246124cbf09f411445bba2eb",
-          "bytes": 626
+        "live/pi-expanded-YtgGx2/result.json": {
+          "sha256": "70515c894dbf9ea309d864ebfcfd7d236d66ce184a93bf096d5d3cab4a784882",
+          "bytes": 1841
         },
-        "reviews/parent-omp/2026-09-06-omp-658b-review.md": {
-          "sha256": "e1e20089327fb8de8d17f078644a2d726b9b12679a0a33cb558d08b1f1170bcb",
-          "bytes": 1907
+        "reviews/expanded-acp-live/identity.json": {
+          "sha256": "d1fdc1b749a6403e612cfa2f1bbe8eec115abd3f389488e7f77fd5c8b7d27cab",
+          "bytes": 11856
         },
-        "reviews/2026-09-06-parent-dsh-independent-review.md": {
-          "sha256": "c874f57405f613590f337c1f310d108838b8b956071537678d434614336e90f3",
-          "bytes": 2990
+        "live-acceptance-20260906/live-result-summary.json": {
+          "sha256": "5e46ec500fe30f996664ca960c631c6b2d82e437aa30674923af15f3909120b9",
+          "bytes": 4896
         },
-        "reviews/parent-cline/2026-09-06-cline-86b-integration-review.md": {
-          "sha256": "80290497a304ababa0d4fcd448ec3508c85aef0390180eb0274ab679d2ea943c",
-          "bytes": 1473
+        "live/grok-resume-audit/2026-09-06-kilo-legacy-live-acceptance.md": {
+          "sha256": "c79d2e49cc6bc75986228b11e3c92200e5287494aacb998709d26272a0d9de82",
+          "bytes": 6479
         },
-        "reviews/parent-hermes/2026-09-06-hermes-independent-review.md": {
-          "sha256": "c684c8ad40b34add07fa30bf67c7baee5b641217c88c4c03b925b9a536fc3eab",
-          "bytes": 3522
-        },
-        "reviews/parent-hermes/picker-expanded-XFu9X9/result.json": {
-          "sha256": "eba5995f94a3d7a527c126dcdc59114182a6596f0c5b23858955a7df8b2f8a11",
-          "bytes": 3271
-        },
-        "reviews/parent-prime/2026-09-06-prime-ecb093-cancellation-review.md": {
-          "sha256": "d8c9a47dbbb1dbe073119f94b0587190c3c0bb6a760fe278d052a5de6c7c1667",
-          "bytes": 1221
-        },
-        "reviews/parent-aider/2026-09-06-aider-33f985-review.md": {
-          "sha256": "baa3550e3ff6c1b0481eb4d1d8a5aeedf9d2d0600647e815252a821748f3b79e",
-          "bytes": 3395
-        },
-        "reviews/parent-g18/2026-09-06-legacy-3005-cli-review.md": {
-          "sha256": "ccf4ad5d4af30707ec399c1486f89376e9b2ee19047ad0f1201f7a08d9c37bb0",
-          "bytes": 1617
-        },
-        "reviews/parent-kilo/2026-09-06-kilo-bridge-design-audit.md": {
-          "sha256": "3c5b0f639101e77e009e34f7efe23bc9ef12b191b46942e32b30ddc6c17d566d",
-          "bytes": 7213
-        },
-        "reviews/credential-runtime/2026-09-06-gemini-hardening.md": {
-          "sha256": "0789a59dc864e093d8596e9c6cb0a500b9f040a5cbe6d120033b547965c32df1",
-          "bytes": 10993
-        },
-        "reviews/credential-runtime/2026-09-06-gemini-azure-review.md": {
-          "sha256": "19dbd743d1222c0f18074c711272788617d03f8146aa6702b94e9554e3f9a915",
-          "bytes": 4094
+        "live/expanded-parent-hq3bvhbl/result.json": {
+          "sha256": "9466e21a5cddf5b6eb559a73480cb36da0dfe12cb5b38b31a7e9229d69ea3535",
+          "bytes": 9549
         },
         "worktrees/complete-adapters/apps/switcher/PLAN.md": {
-          "sha256": "bc9e67a587a87a27904150ddc3f753d6faffa0de716a4a3bea1a56e53305a639",
-          "bytes": 26583
+          "sha256": "ba6402eacb840aa519f19e6db5888a853e0012b3f27b9e324d05a27857b3b818",
+          "bytes": 21770
         },
         "worktrees/complete-adapters/apps/switcher/TODOS.md": {
-          "sha256": "24b44c228899dc0c9b78b47929a0b5ecff87a99640c2822afde78bb253287971",
-          "bytes": 44043
+          "sha256": "6bbeaa84afc129f976de69ace09471040db72f8bf7f67a0d7b412183052e332a",
+          "bytes": 36783
         },
         "worktrees/complete-adapters/apps/switcher/COMPATIBILITY.md": {
-          "sha256": "abd7f8076491112616a912650d4d7ec404c97632e12e4735f11bc36ac5c20628",
-          "bytes": 12047
+          "sha256": "323862fa1d5cd32479adda8dfc73f35ec3e7d15ef6a778b6c1426ad67a8ea0d9",
+          "bytes": 14890
         },
-        "reviews/parent-prime/fallback-cli-fixture.ts": {
-          "sha256": "edea234f6709e156d5af2308b29d9c7c6bee5c438e663d05834cc0cb9f61919c",
-          "bytes": 8854
-        },
-        "reviews/parent-prime/fallback-cli-fixture.log": {
-          "sha256": "e64afe129f6ac8d4a2e728c6fcda94ebc958201b1d82cec2c0ce29e07df35444",
-          "bytes": 16731
-        },
-        "reviews/parent-prime/expanded-catalog-shared-home.log": {
-          "sha256": "9e2ecc33d768274e901bdd86eb785268bc1f0e156e0566dd8e4251f738f67422",
-          "bytes": 270
-        },
-        "reviews/parent-prime/expanded-second-request.log": {
-          "sha256": "a1138ed3e662fec578e1a3fbc7bd4fed6f3ffa2432321ad0d557d41dad696e6a",
-          "bytes": 373
-        },
-        "reviews/parent-gemini/expanded/native.log": {
-          "sha256": "e95a067dedbcee9ebd090018f0c3529a441276a3c875e0085dcdef4a3b56feb6",
-          "bytes": 12924
-        },
-        "reviews/parent-gemini/expanded/args.log": {
-          "sha256": "343f5f49f3cb486b31137d124b8126d87f8e7f7a62c6bdc859670f0ba5513f13",
-          "bytes": 931
-        },
-        "reviews/parent-gemini/expanded/config.log": {
-          "sha256": "60f06c5b8b536aab20c36257fbed16c3fba45a9f98a52887fe407e1d478e5f23",
-          "bytes": 1070
-        },
-        "reviews/parent-gemini/expanded/trust.log": {
-          "sha256": "a2011ac4c07284beefea7b5c87abfc83d2109fc4f254a06413645aae9815e73f",
-          "bytes": 474
-        },
-        "reviews/parent-gemini/expanded/cancel.log": {
-          "sha256": "f2b8c276927a0bde5aa145eb7592e79ced1e5d4d085423df20342f0ca665e2e6",
-          "bytes": 903
-        },
-        "reviews/parent-gemini/expanded/native/source-cli-KkESw9/result.json": {
-          "sha256": "e95a067dedbcee9ebd090018f0c3529a441276a3c875e0085dcdef4a3b56feb6",
-          "bytes": 12924
-        },
-        "reviews/parent-gemini/expanded/counter-pID892/result.json": {
-          "sha256": "dba84e85b78e4946ad9b15e80b50859b2a007ece23ba52acf3998a61ecb7c30c",
-          "bytes": 990
-        },
-        "reviews/parent-gemini/expanded/config-counter-ZZNbkU/result.json": {
-          "sha256": "41ff56bbd5fc7b970c17d461e97749b8805d986b9d201f77d7d2b3ebfdb7d533",
-          "bytes": 1129
-        },
-        "reviews/parent-gemini/expanded/trust-counter-LGWBqY/result.json": {
-          "sha256": "c1ae18e58b17b5e0abcb197718850b0d03ebf001202081fc2499c978d242a6ee",
-          "bytes": 473
-        },
-        "reviews/parent-gemini/expanded/cancel-SuFlhF/result.json": {
-          "sha256": "a2f9fd3443951feaa4bbcc410698695614881075454b717eece04dd71b7bb153",
-          "bytes": 413
-        },
-        "reviews/current-coverage/prime-catalog-result.json": {
-          "sha256": "6cb97c5bf96dbac1bff9aedf6d4cf720e04ec01ca9dfa3160d9dd6df989c9ce3",
-          "bytes": 328
-        },
-        "reviews/current-coverage/prime-second-request-result.json": {
-          "sha256": "632584d91c9343f4990a1658800caebda766440ea9b4b5756fc14c673c46d3fe",
-          "bytes": 472
+        "reviews/provider-access-final-453bc3d6/result.json": {
+          "sha256": "1d56dec1c4b2083b4759cefe7359234c9d8a2719526dfee2d4a57602fd5b46d8",
+          "bytes": 14961
         }
-      },
-      "credential_values_read": false,
-      "external_requests": false,
-      "notes": [
-        "Published release completion supersedes older publicationHeld fields.",
-        "Parent uncommitted integration is not approved by this documentation audit.",
-        "Evidence links are task-scratch provenance; re-home them if adopting prose into published package docs."
-      ],
-      "updated_at": "2026-09-06T13:50:35Z",
-      "superseding_evidence": {
-        "Prime": "Integrated long TMPDIR fallback and native catalog/second-request pass; replaces old three-failure checkpoint",
-        "Gemini": "Integrated six-launch/adversarial/trust and actual timeout143 pass; final combined commit identity pending",
-        "Kilo": "Parent reports96678360 integrating/review active; no final approval inferred"
-      },
-      "external_result_copy_provenance": {
-        "prime-catalog-result.json": "/Users/hasna/Workspace/scratch/pc-EGhysR/result.json",
-        "prime-second-request-result.json": "/Users/hasna/Workspace/scratch/pc-U498zS/result.json"
-      },
-      "outputs": {
-        "PLAN-current-status.md": {
-          "sha256": "46bd43f664d0fdda17321c81d5068cce29c9c70dfba261d83b6d2c185da9d0c7",
-          "bytes": 3717
-        },
-        "TODO-status-corrections.md": {
-          "sha256": "d3e038350b400664ce8aeef6c817c76bd1187c73388e5c9626fe05121f57ed37",
-          "bytes": 8584
-        },
-        "COMPATIBILITY.md": {
-          "sha256": "a1421b289ec3504673bc8d2244cd9390a316340e4124be2a7c767f8b48456b37",
-          "bytes": 14807
-        }
-      },
-      "finalIntegration": {
-        "at": "2026-09-06T14:02:36.227431+00:00",
-        "sourceReviewIdentity": "release-candidate/expanded-review-identity.json",
-        "tests": {
-          "passed": 149,
-          "failed": 0,
-          "assertions": 1568,
-          "log": "release-candidate/expanded-0.1.2-final-verify.log"
-        },
-        "affectedBuild": "release-candidate/expanded-0.1.2-final-affected-build.log",
-        "artifactScan": "release-candidate/expanded-0.1.2-final-artifact-scan.log",
-        "kiloNative": "reviews/parent-kilo/expanded/",
-        "ompLiteralAuth": "reviews/parent-omp/literal-auth/",
-        "publishedVersion": "0.1.1",
-        "candidateVersion": "0.1.2"
-      },
-      "historicalNotice": "Historical snapshot only. These hashes and status statements describe then-read input versions, not current worktree files or current release status."
+      }
     }
   ],
-  "revision": {
-    "priorArchiveSHA1": "453bc3d6180a523286ab10f0a0154316cbf75672",
-    "publishEligible": false,
-    "reason": "SDK operator-credential reflection regression; integrate error sanitation, catalog resilience and harness installation guidance",
-    "candidateIdentity": "pending",
-    "publication": "not-published",
-    "statusEvidence": "release-candidate/expanded-candidate-revision-status.json"
-  },
-  "historicalCandidateInputs": {
-    "release-candidate/expanded-final-review-binding.json": {
-      "sha256": "c7c3944d2fce344ce7574f6f227b6629ab17ff93aa2daafba78b640e4aabf25d",
-      "bytes": 6752
-    },
-    "release-candidate/expanded-final-verify-corrected.log": {
-      "sha256": "efcb79809a8befb543bcc56111a170f75d124038422219f5d3bd4acb6e61fd7d",
-      "bytes": 22446
-    },
-    "release-candidate/expanded-main-merge-check.log": {
-      "sha256": "786f1d22723182571e2c0cbe06b63ea23f62440f4810de730430aaeea9931901",
-      "bytes": 45333
-    },
-    "release-candidate/surface-smoke/run-8zhukq/result.json": {
-      "sha256": "72e66caf3c094474158ce1fa52f2d280728e8a762cdccfeb84e6fd569989317c",
-      "bytes": 744
-    },
-    "release-candidate/surface-smoke/run-fsRDi2/result.json": {
-      "sha256": "7599467f5ecc00a9129c4ed728c97ae71da8af5641a26c042ed91b96ac48fca0",
-      "bytes": 742
-    },
-    "reviews/expanded-container-final-453bc3d6/result.json": {
-      "sha256": "078ae9feb869237dfd84456f1b512b185f6140880da00eaedb628bc02dfec794",
-      "bytes": 126786
-    },
-    "live/grok-resume-audit/gemini-final-20260906T172505+0300/acceptance-evidence.json": {
-      "sha256": "fc18022c5e4ab510644c3fab18f7c2661c3581a6e54fffa631200d8ff959b78d",
-      "bytes": 1741
-    },
-    "live/expanded-0.1.2/live-matrix-jWULJV/result.json": {
-      "sha256": "a4952e4f9b5c5bc7e9a50313ac39d56c4f6ee59422f3c5a2a18c2bdf22951e35",
-      "bytes": 10722
-    },
-    "live/pi-expanded-YtgGx2/result.json": {
-      "sha256": "70515c894dbf9ea309d864ebfcfd7d236d66ce184a93bf096d5d3cab4a784882",
-      "bytes": 1841
-    },
-    "reviews/expanded-acp-live/identity.json": {
-      "sha256": "d1fdc1b749a6403e612cfa2f1bbe8eec115abd3f389488e7f77fd5c8b7d27cab",
-      "bytes": 11856
-    },
-    "live-acceptance-20260906/live-result-summary.json": {
-      "sha256": "5e46ec500fe30f996664ca960c631c6b2d82e437aa30674923af15f3909120b9",
-      "bytes": 4896
-    },
-    "live/grok-resume-audit/2026-09-06-kilo-legacy-live-acceptance.md": {
-      "sha256": "c79d2e49cc6bc75986228b11e3c92200e5287494aacb998709d26272a0d9de82",
-      "bytes": 6479
-    },
-    "live/expanded-parent-hq3bvhbl/result.json": {
-      "sha256": "9466e21a5cddf5b6eb559a73480cb36da0dfe12cb5b38b31a7e9229d69ea3535",
-      "bytes": 9549
-    },
-    "worktrees/complete-adapters/apps/switcher/PLAN.md": {
-      "sha256": "ba6402eacb840aa519f19e6db5888a853e0012b3f27b9e324d05a27857b3b818",
-      "bytes": 21770
-    },
-    "worktrees/complete-adapters/apps/switcher/TODOS.md": {
-      "sha256": "6bbeaa84afc129f976de69ace09471040db72f8bf7f67a0d7b412183052e332a",
-      "bytes": 36783
-    },
-    "worktrees/complete-adapters/apps/switcher/COMPATIBILITY.md": {
-      "sha256": "323862fa1d5cd32479adda8dfc73f35ec3e7d15ef6a778b6c1426ad67a8ea0d9",
-      "bytes": 14890
-    },
-    "reviews/provider-access-final-453bc3d6/result.json": {
-      "sha256": "1d56dec1c4b2083b4759cefe7359234c9d8a2719526dfee2d4a57602fd5b46d8",
-      "bytes": 14961
-    }
+  "identityNotes": [
+    "Historical snapshots retain their then-current claims and hashes; only release/verification/registryLive describe the published 0.1.2 acceptance.",
+    "Local evidence locators resolve under evidenceRoot and are not public repository links.",
+    "All documentation changed in this follow-up is excluded by the npm files allowlist; immutable published package contents are not changed."
+  ],
+  "publicationThread": {
+    "initialIntent": "release-candidate/expanded-publish-intent.json",
+    "publication": "release-candidate/expanded-publish-confirm.json",
+    "matrixAcceptance": "release-candidate/expanded-registry-matrix-confirm.json",
+    "taskComment": "release-candidate/expanded-registry-matrix-todo.json"
   }
 }
