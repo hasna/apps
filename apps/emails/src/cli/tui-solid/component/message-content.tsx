@@ -1,9 +1,10 @@
-import { For, Show, createContext, createMemo, createSignal, onCleanup, useContext, type ParentProps } from "solid-js";
+import { For, Show, createContext, createEffect, createMemo, createSignal, onCleanup, useContext, type ParentProps } from "solid-js";
 import { SyntaxStyle, StyledText, TextRenderable, TextAttributes, infoStringToFiletype, type TextChunk, type BoxRenderable, type ScrollBoxRenderable } from "@opentui/core";
 import { marked, type Token } from "marked";
 import { useKeyboard, useRenderer } from "@opentui/solid";
 import { messageDocument, safeMailLink, safeMailText, type MessageBlock } from "../../tui/message-document.js";
 import { useTheme } from "../context/theme.js";
+import { useEmails } from "../context/emails-state.js";
 
 type DisclosureHandle = { header: BoxRenderable; toggle: () => void };
 const ReaderControls = createContext<{
@@ -60,11 +61,12 @@ export function ReaderControlsProvider(props: ParentProps<{ scroll: () => Scroll
   return <ReaderControls.Provider value={controls}>{props.children}</ReaderControls.Provider>;
 }
 
-export function Disclosure(props: ParentProps<{ label: string; detail?: string; initiallyOpen?: boolean }>) {
+export function Disclosure(props: ParentProps<{ label: string; detail?: string; initiallyOpen?: boolean; expanded?: boolean }>) {
   const theme = useTheme();
   const renderer = useRenderer();
   const controls = useContext(ReaderControls);
   const [open, setOpen] = createSignal(props.initiallyOpen ?? false);
+  createEffect(() => { if (props.expanded !== undefined) setOpen(props.expanded); });
   let handle: DisclosureHandle;
   let reveal = false;
   const toggle = () => { const next = !open(); reveal = next; setOpen(next); };
@@ -100,6 +102,7 @@ export function Disclosure(props: ParentProps<{ label: string; detail?: string; 
 }
 
 function Blocks(props: { blocks: MessageBlock[]; syntax: SyntaxStyle }) {
+  const emails = useEmails();
   const theme = useTheme();
   const renderer = useRenderer();
   // Use OpenTUI's custom-node API for immediate, selectable prose. The default
@@ -140,14 +143,14 @@ function Blocks(props: { blocks: MessageBlock[]; syntax: SyntaxStyle }) {
     <For each={props.blocks}>
       {(block) => {
         if (block.kind === "code") return (
-          <Disclosure label={block.language ? `Code · ${block.language}` : "Code"} detail={`${block.content.split("\n").length} lines`}>
+          <Disclosure expanded={emails.state.viewPreferences.expandCode} label={block.language ? `Code · ${block.language}` : "Code"} detail={`${block.content.split("\n").length} lines`}>
             <code content={block.content} filetype={infoStringToFiletype(block.language) || "text"} syntaxStyle={props.syntax}
               fg={theme.markdownCodeBlock} bg={theme.background} conceal={false} drawUnstyledText streaming={false}
               wrapMode="word" width="100%" flexShrink={0} />
           </Disclosure>
         );
         if (block.kind === "quote") return (
-          <Disclosure label="Quoted message" detail="Show / hide">
+          <Disclosure expanded={emails.state.viewPreferences.expandQuotes} label="Quoted message" detail="Show / hide">
             <MessageContent text={block.content} />
           </Disclosure>
         );

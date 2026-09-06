@@ -14,7 +14,16 @@ export function ReaderRoute() {
   return (
     <ReaderControlsProvider scroll={() => scroll} enabled={!emails.state.dialog && !emails.state.compose}>
       <box width="100%" height="100%" flexDirection="column" backgroundColor={theme.background} paddingTop={1} paddingLeft={2} paddingRight={2}>
-        <Show when={emails.selectedBody()} fallback={<EmptyState title="No message selected" detail="Choose a message from the inbox." />}>
+        <Show when={!emails.selectedBody.loading && emails.selectedBody()} fallback={
+          <EmptyState fill icon={emails.state.readerError ? "!" : "✉"}
+            title={emails.selectedBody.loading ? "Opening message" : emails.state.readerError ? "Couldn't open this message" : "Message not found"}
+            detail={emails.selectedBody.loading ? "Loading the conversation…" : emails.state.readerError ? "Check your connection and try again." : "It may have moved or been deleted."}>
+            <box flexDirection="row" columnGap={1}>
+              <Show when={!emails.selectedBody.loading && emails.state.readerError}><Button label="Try again" onPress={emails.actions.retryBody} /></Show>
+              <Button label="Back to inbox" onPress={emails.actions.backToList} />
+            </box>
+          </EmptyState>
+        }>
           {(body) => (
             <>
               <box flexDirection="row" width="100%" flexShrink={0} marginBottom={1} columnGap={1}>
@@ -60,7 +69,7 @@ export function ReaderRoute() {
                 <Button label="Reply" onPress={() => emails.selectedMessage() && emails.actions.startCompose("reply", emails.selectedMessage()!)} />
                 <Button label="Forward" onPress={() => emails.selectedMessage() && emails.actions.startCompose("forward", emails.selectedMessage()!)} />
                 <Show when={body().attachments.length > 0}><Button label="Attachments" onPress={() => emails.actions.openDialog("attachments")} /></Show>
-                <Button label="Links" onPress={() => emails.actions.openDialog("links")} />
+                <Show when={emails.links().length > 0}><Button label="Links" onPress={() => emails.actions.openDialog("links")} /></Show>
                 <Button label="Raw" onPress={() => emails.actions.openDialog("raw")} />
                 <Button label="Label" onPress={() => emails.actions.openDialog("labels")} />
               </box>

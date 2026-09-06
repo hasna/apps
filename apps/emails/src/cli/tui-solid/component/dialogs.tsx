@@ -1,19 +1,19 @@
-import { For, Show, createEffect, createMemo, createSignal, onMount, untrack } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, untrack } from "solid-js";
 import { useKeyboard } from "@opentui/solid";
-import { useEmails, COMMON_LABELS, MAILBOXES } from "../context/emails-state.js";
+import { useEmails, COMMON_LABELS } from "../context/emails-state.js";
 import { useCommands } from "../context/commands.js";
 import { labelColor, useTheme } from "../context/theme.js";
 import { useDialog } from "../context/dialog.js";
 import { SelectDialog, type SelectDialogItem } from "../ui/select-dialog.js";
 import { copyTextToClipboardAsync } from "../../tui/clipboard.js";
 import { useToast } from "../context/toast.js";
+import { SettingsDialog } from "./settings.js";
 import { Button, EmptyState, Row } from "../ui/primitives.js";
-import { addPrioritySenderRule, labelDisplayName, listPrioritySenderRules, mailboxGroupModeLabel, mailboxLabel, MAILBOX_GROUP_MODES, removePrioritySenderRule, type Mailbox, type MailboxGroupMode } from "../../tui/data.js";
+import { labelDisplayName, mailboxGroupModeLabel, MAILBOX_GROUP_MODES, type MailboxGroupMode } from "../../tui/data.js";
 import { formatDate, wrapText } from "../../tui/format.js";
 import { formatAttachmentSize, mergeAttachmentDetails, type AttachmentDetail, type AttachmentPathLike } from "../../../lib/attachment-actions.js";
 import { openLocalTarget } from "../../../lib/local-actions.js";
 import { emailDigestPeriodLabel, type EmailDigestPeriod } from "../../../db/email-digests.js";
-import { normalizePriorityRuleInput, type PrioritySenderRule, type PrioritySenderRuleKind } from "../../../lib/priority-senders.js";
 
 export function EmailsDialogs() {
   const emails = useEmails();
@@ -250,7 +250,7 @@ export function EmailsDialogs() {
     }
 
     if (kind === "settings") {
-      dialog.replace(() => <SettingsDialog close={close} />, { size: "large", onClose: emails.actions.closeDialog });
+      dialog.replace(() => <SettingsDialog close={close} />, { size: "xlarge", onClose: emails.actions.closeDialog });
       return;
     }
 
@@ -772,10 +772,6 @@ function formatReceiveStatus(value: string | undefined): string | undefined {
   return value.replace(/_/g, " ");
 }
 
-function boolText(value: boolean): string {
-  return value ? "On" : "Off";
-}
-
 function readinessLabel(value: string): string {
   switch (value) {
     case "ready_to_send_and_receive": return "Ready";
@@ -831,209 +827,9 @@ function DomainsDialog(props: { close: () => void }) {
 
       <box height={1} />
       <box height={1} flexDirection="row" columnGap={1}>
-        <Button label="Previous page" onPress={() => emails.actions.workspacePage(-1)} />
-        <Button label="Next page" active={emails.state.domainsHasMore} onPress={() => emails.actions.workspacePage(1)} />
+        <Show when={emails.state.domainsPage > 0}><Button label="Previous page" onPress={() => emails.actions.workspacePage(-1)} /></Show>
+        <Show when={emails.state.domainsHasMore}><Button label="Next page" onPress={() => emails.actions.workspacePage(1)} /></Show>
       </box>
-    </box>
-  );
-}
-
-type SettingsSection = "main" | "sync" | "defaults" | "display" | "priority";
-
-function settingsTitle(section: SettingsSection): string {
-  switch (section) {
-    case "sync": return "Settings / Sync";
-    case "defaults": return "Settings / Defaults";
-    case "display": return "Settings / Display";
-    case "priority": return "Settings / Priority Inbox";
-    default: return "Settings";
-  }
-}
-
-function SettingsMenuRow(props: { title: string; detail: string; onPress: () => void }) {
-  const theme = useTheme();
-  return (
-    <Row height={2} onPress={props.onPress}>
-      <box flexDirection="column" width="100%">
-        <text fg={theme.text}>{props.title}</text>
-        <text fg={theme.textMuted}>{props.detail}</text>
-      </box>
-    </Row>
-  );
-}
-
-function SettingsActionRow(props: { title: string; value: string; onPress: () => void }) {
-  const theme = useTheme();
-  return (
-    <Row onPress={props.onPress}>
-      <box flexDirection="row" width="100%" justifyContent="space-between">
-        <text fg={theme.text}>{props.title}</text>
-        <text fg={theme.textMuted}>{props.value}</text>
-      </box>
-    </Row>
-  );
-}
-
-function PriorityRulesSettings() {
-  const theme = useTheme();
-  const toast = useToast();
-  const [kind, setKind] = createSignal<PrioritySenderRuleKind>("address");
-  const [value, setValue] = createSignal("");
-  const [rules, setRules] = createSignal<PrioritySenderRule[]>([]);
-  const [error, setError] = createSignal<string | null>(null);
-
-  const refresh = () => {
-    try {
-      setRules(listPrioritySenderRules() as PrioritySenderRule[]);
-      setError(null);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    }
-  };
-
-  onMount(refresh);
-
-  const addRule = () => {
-    try {
-      const normalized = normalizePriorityRuleInput(kind(), value());
-      addPrioritySenderRule(normalized.kind, normalized.value);
-      setValue("");
-      setError(null);
-      refresh();
-      toast.show({ title: "Priority rule saved", message: `${normalized.kind}: ${normalized.value}`, tone: "success" });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    }
-  };
-
-  const removeRule = (rule: PrioritySenderRule) => {
-    try {
-      removePrioritySenderRule(rule.id);
-      refresh();
-      toast.show({ title: "Priority rule removed", message: `${rule.kind}: ${rule.value}`, tone: "success" });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
-    }
-  };
-
-  return (
-    <box flexDirection="column" width="100%" rowGap={1}>
-      <text fg={theme.textMuted}>Rules match inbound senders case-insensitively. Addresses match exactly; domains match the sender domain.</text>
-      <box flexDirection="row" columnGap={1}>
-        <Button label="Exact address" active={kind() === "address"} onPress={() => setKind("address")} />
-        <Button label="Sender domain" active={kind() === "domain"} onPress={() => setKind("domain")} />
-      </box>
-      <input
-        focused
-        value={value()}
-        placeholder={kind() === "address" ? "person@example.com" : "example.com"}
-        onInput={(next) => setValue(next)}
-        onSubmit={addRule}
-      />
-      <Button label="Add priority rule" onPress={addRule} />
-      <Show when={error()}>
-        {(message) => <text fg={theme.error}>Validation failed: {message()}</text>}
-      </Show>
-      <text fg={theme.text}>Current rules ({rules().length})</text>
-      <Show when={rules().length > 0} fallback={<text fg={theme.textMuted}>No priority sender rules.</text>}>
-        <scrollbox height={10} width="100%">
-          <For each={rules()}>
-            {(rule) => (
-              <Row>
-                <box flexDirection="row" width="100%" justifyContent="space-between">
-                  <text fg={theme.text}>★ {rule.kind === "address" ? "Address" : "Domain"}: {rule.value}</text>
-                  <Button label="Remove" onPress={() => removeRule(rule)} />
-                </box>
-              </Row>
-            )}
-          </For>
-        </scrollbox>
-      </Show>
-    </box>
-  );
-}
-
-function SettingsDialog(props: { close: () => void }) {
-  const emails = useEmails();
-  const [section, setSection] = createSignal<SettingsSection>("main");
-  const settings = () => emails.state.settings;
-  const goBack = () => {
-    if (section() === "main") props.close();
-    else setSection("main");
-  };
-  const cycleMailbox = () => {
-    const index = MAILBOXES.indexOf(settings().defaultMailbox);
-    emails.actions.setSetting("defaultMailbox", MAILBOXES[(index + 1) % MAILBOXES.length] as Mailbox);
-  };
-  const openInboxes = () => {
-    props.close();
-    emails.actions.openDialog("address");
-  };
-  const openCompose = () => {
-    props.close();
-    emails.actions.startCompose("new");
-  };
-
-  useKeyboard((key) => {
-    if (key.name !== "escape") return;
-    goBack();
-    key.preventDefault();
-    key.stopPropagation();
-  });
-
-  const theme = useTheme();
-  return (
-    <box flexDirection="column" width="100%" rowGap={1}>
-      <box height={1} flexDirection="row" justifyContent="space-between">
-        <text fg={theme.text}>{settingsTitle(section())}</text>
-        <Button label={section() === "main" ? "Close" : "Back"} onPress={goBack} />
-      </box>
-
-      <Show when={section() === "main"}>
-        <box flexDirection="column" width="100%" rowGap={1}>
-          <SettingsMenuRow title="Sync" detail="Auto-pull inbound mail" onPress={() => setSection("sync")} />
-          <SettingsMenuRow title="Defaults" detail="Inbox, folder, and sender" onPress={() => setSection("defaults")} />
-          <SettingsMenuRow title="Display" detail="Theme and read-state styling" onPress={() => setSection("display")} />
-          <SettingsMenuRow title="Priority Inbox" detail="Exact senders and domains" onPress={() => setSection("priority")} />
-        </box>
-      </Show>
-
-      <Show when={section() === "sync"}>
-        <box flexDirection="column" width="100%" rowGap={1}>
-          <SettingsActionRow
-            title="Auto-pull inbound"
-            value={boolText(settings().autoPull)}
-            onPress={() => emails.actions.setSetting("autoPull", !settings().autoPull)}
-          />
-        </box>
-      </Show>
-
-      <Show when={section() === "defaults"}>
-        <box flexDirection="column" width="100%" rowGap={1}>
-          <SettingsActionRow title="Default folder" value={mailboxLabel(settings().defaultMailbox)} onPress={cycleMailbox} />
-          <SettingsActionRow title="Default inbox" value={settings().defaultAddress ?? "All inboxes"} onPress={openInboxes} />
-          <SettingsActionRow title="Default From" value={settings().defaultFrom ?? "Automatic"} onPress={openCompose} />
-        </box>
-      </Show>
-
-      <Show when={section() === "display"}>
-        <box flexDirection="column" width="100%" rowGap={1}>
-          <SettingsActionRow
-            title="Dim read messages"
-            value={boolText(settings().dimRead)}
-            onPress={() => emails.actions.setSetting("dimRead", !settings().dimRead)}
-          />
-          <SettingsActionRow
-            title="Theme"
-            value={settings().theme}
-            onPress={() => emails.actions.setSetting("theme", settings().theme === "dark" ? "light" : "dark")}
-          />
-        </box>
-      </Show>
-
-      <Show when={section() === "priority"}>
-        <PriorityRulesSettings />
-      </Show>
     </box>
   );
 }

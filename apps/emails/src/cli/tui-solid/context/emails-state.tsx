@@ -90,6 +90,9 @@ export interface EmailsState {
   readerScroll: number;
   compose: ComposeState | null;
   settings: TuiSettings;
+  viewPreferences: { autoRefresh: boolean; expandCode: boolean; expandQuotes: boolean };
+  mailboxError: string | null;
+  readerError: string | null;
   now: number;
   loading: boolean;
   lastError: string | null;
@@ -207,6 +210,9 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     readerScroll: 0,
     compose: null,
     settings,
+    viewPreferences: { autoRefresh: true, expandCode: false, expandQuotes: false },
+    mailboxError: null,
+    readerError: null,
     now: Date.now(),
     loading: false,
     lastError: null,
@@ -215,13 +221,31 @@ function createEmailsStore(initialMailbox?: Mailbox) {
   const currentAddress = createMemo(() => selectedAddress(state));
   const currentSource = createMemo(() => selectedSource(state));
   const currentMessage = createMemo(() => selectedMessage(state));
-  const [currentBody] = createResource(currentMessage, async (message): Promise<MessageBody | null> => {
-    return message ? await ds.getMessageBody(message) : null;
+  // List refreshes replace message metadata. Keep the reader's immutable body
+  // and disclosure state mounted until the selection changes (or a retry).
+  const contentMessage = createMemo(() => currentMessage(), undefined, {
+    equals: (previous, next) => previous?.id === next?.id && previous?.kind === next?.kind,
+  });
+  let bodyGeneration = 0;
+  const [currentBody, { refetch: refetchBody }] = createResource(contentMessage, async (message): Promise<MessageBody | null> => {
+    const generation = ++bodyGeneration;
+    setState("readerError", null);
+    try {
+      return message ? await ds.getMessageBody(message) : null;
+    } catch (error) {
+      if (generation === bodyGeneration) setState("readerError", error instanceof Error ? error.message : String(error));
+      return null;
+    }
   });
   // Thread bodies flow through the seam so the reader's conversation view works in
   // both modes (self_hosted: listThread + per-message bodies; local: SQLite conversation).
-  const [conversationResource] = createResource(currentMessage, async (message): Promise<TuiThreadBody[]> => {
-    return message ? await ds.getConversationBodies(message, { limit: 12 }) : [];
+  const [conversationResource] = createResource(contentMessage, async (message): Promise<TuiThreadBody[]> => {
+    try {
+      return message ? await ds.getConversationBodies(message, { limit: 12 }) : [];
+    } catch {
+      // The individual message remains readable when thread expansion fails.
+      return [];
+    }
   });
   const currentConversation = createMemo<TuiThreadBody[]>(() => conversationResource() ?? []);
   const currentLinks = createMemo<ExtractedEmailLink[]>(() => {
@@ -298,7 +322,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
 
   const reload = async (options?: { preserveSelection?: boolean; addressSearch?: string }): Promise<void> => {
     const preserveSelection = options?.preserveSelection ?? true;
-    setState("loading", true);
+    setState({ loading: true, mailboxError: null });
     try {
       // Resolve the selected inbox cheaply (current in-memory list → DB) WITHOUT scanning the
       // full address list, so the message list — what the user is waiting for — paints first.
@@ -333,7 +357,8 @@ function createEmailsStore(initialMailbox?: Mailbox) {
       });
       scheduleSidebarMeta(source, options?.addressSearch);
     } catch (error) {
-      setState("lastError", error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setState({ lastError: message, mailboxError: message });
     } finally {
       setState("loading", false);
     }
@@ -696,9 +721,16 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     },
     sendCompose,
     setSetting<K extends keyof TuiSettings>(key: K, value: TuiSettings[K]) {
-      persistSetting(key, value);
+      // API-only installations deliberately have no local settings store. View
+      // preferences still work in memory; the settings screen states their lifetime.
+      if (ds.mode !== "self_hosted") persistSetting(key, value);
       setState("settings", key, value);
-      if (key === "defaultMailbox") setState("mailbox", value as Mailbox);
+    },
+    setViewPreference<K extends keyof EmailsState["viewPreferences"]>(key: K, value: EmailsState["viewPreferences"][K]) {
+      setState("viewPreferences", key, value);
+    },
+    retryBody() {
+      void refetchBody();
     },
     workspacePage(delta: number) {
       if (delta > 0 && !state.domainsHasMore) return;
@@ -724,7 +756,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     // the last. `loading` is set in reload()'s try and cleared in its finally, so
     // this can skip a tick but cannot wedge.
     const refresh = setInterval(() => {
-      if (!state.loading) reload({ preserveSelection: true });
+      if (state.viewPreferences.autoRefresh && !state.loading) reload({ preserveSelection: true });
     }, REFRESH_MS);
     const pull = setInterval(() => {
       if (state.settings.autoPull) void actions.pullNow();

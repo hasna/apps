@@ -174,8 +174,19 @@ The mailbox and source dialogs select scope; sidebar labels filter
 mailbox content, and mail categories show Primary, Social, Promotions, Updates,
 and Forums separately from custom labels. Reader dialogs expose attachments,
 links, and raw details. Composer writes **markdown** rendered to HTML on send.
-Settings controls sync, defaults, and display. Folders: Inbox · Unread ·
-Starred · Sent · Archived · Spam · Trash.
+Empty folders and searches show a helpful empty state with a relevant next action;
+message-only actions and unavailable page buttons are hidden.
+
+Settings uses a sidebar and descriptive controls for automatic refresh, mailbox
+selection, appearance, reading preferences, priority senders, and keyboard shortcuts.
+Use Ctrl+Left/Right to switch sections, Tab to focus controls, and Enter to change
+them. View preferences apply to the current session in API-only mode; priority
+sender rules are saved to the account. No local email database is created.
+Folders: Inbox · Priority Inbox · Unread · Starred · Sent · Archived · Spam · Trash.
+
+Developers can capture the native TUI with synthetic mail, without a live account:
+`bun scripts/capture-tui-review.tsx /tmp/emails-tui-review` from this package.
+This writes character frames and colored span JSON at normal and narrow sizes.
 
 ## Command Structure
 

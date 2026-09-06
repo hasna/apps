@@ -55,6 +55,7 @@ function createCommands(): Accessor<EmailsCommand[]> {
       id: "sources.open",
       title: "Sources",
       category: "Mail",
+      enabled: () => emails.state.sources.length > 1,
       run: () => emails.actions.openDialog("source"),
     },
     {
@@ -83,7 +84,7 @@ function createCommands(): Accessor<EmailsCommand[]> {
       id: "links.open",
       title: "Extract Links",
       category: "Mail",
-      enabled: () => !!emails.selectedMessage(),
+      enabled: () => emails.links().length > 0,
       run: () => emails.actions.openDialog("links"),
     },
     {
@@ -104,9 +105,11 @@ function createCommands(): Accessor<EmailsCommand[]> {
       id: "refresh.local",
       title: "Refresh",
       category: "Mail",
-      run: () => {
-        emails.actions.reload({ preserveSelection: true });
-        toast.show({ title: "Refreshed", message: "Local mailbox state reloaded.", tone: "success" });
+      run: async () => {
+        await emails.actions.reload({ preserveSelection: true });
+        toast.show(emails.state.mailboxError
+          ? { title: "Couldn't refresh", message: "Check your connection and try again.", tone: "error" }
+          : { title: "Refreshed", message: "Mail is up to date.", tone: "success" });
       },
     },
     // Pull Now was LOCAL S3->SQLite ingestion. The self-hosted seam exposes insert-only

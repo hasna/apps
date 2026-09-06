@@ -20,7 +20,7 @@ function MessageRow(props: { message: ReturnType<typeof useEmails>["state"]["mes
   const message = () => props.message;
   const unread = () => !message().is_read;
   const rowBg = () => props.selected ? theme.primary : undefined;
-  const rowFg = () => props.selected ? selectedForeground(theme, rowBg()) : theme.text;
+  const rowFg = () => props.selected ? selectedForeground(theme, rowBg()) : (!unread() && emails.state.settings.dimRead ? theme.textMuted : theme.text);
   const dateText = () => listDateTime(message().date, emails.state.now).padStart(props.columns.date);
 
   return (
@@ -55,11 +55,42 @@ export function MailboxRoute() {
   const emails = useEmails();
   const dimensions = useTerminalDimensions();
   const contentWidth = () => Math.max(24, dimensions().width - sidebarWidth(dimensions().width) - 6);
+  const hasFilters = () => !!emails.state.search || !!emails.state.activeLabel || !!emails.state.activeFilterId || emails.state.selectedSourceId !== "all";
+  const emptyTitle = () => {
+    if (emails.state.loading) return "Checking your mail";
+    if (emails.state.mailboxError) return "Couldn't load your mail";
+    if (hasFilters()) return "No matching messages";
+    if (emails.state.page > 0) return "No more messages";
+    switch (emails.state.mailbox) {
+      case "inbox": return "Your inbox is clear";
+      case "unread": return "You're all caught up";
+      case "starred": return "No starred messages";
+      case "sent": return "No sent messages yet";
+      case "archived": return "No archived messages";
+      case "spam": return "No spam here";
+      case "trash": return "Your trash is empty";
+      default: return "No priority messages";
+    }
+  };
   const emptyDetail = () => {
-    if (emails.state.search && emails.state.activeLabel) return "No messages match this search and label.";
-    if (emails.state.search) return "No messages match this search.";
-    if (emails.state.activeLabel) return `No messages match ${labelDisplayName(emails.state.activeLabel)}.`;
-    return "Choose another mailbox or refresh to check for new messages.";
+    if (emails.state.loading) return "New messages will appear here.";
+    if (emails.state.mailboxError) return "Check your connection and try again.";
+    if (hasFilters()) return "Try a different search or clear your filters.";
+    if (emails.state.page > 0) return "Return to the previous page to see your mail.";
+    switch (emails.state.mailbox) {
+      case "starred": return "Add the Starred label to keep important mail here.";
+      case "sent": return "Start a conversation with a new message.";
+      case "archived": return "Messages with the Archived label appear here.";
+      case "priority": return "Mail from your priority senders will appear here.";
+      default: return "Enjoy the quiet. New mail will appear here.";
+    }
+  };
+  const emptyAction = () => {
+    if (emails.state.mailboxError) return { label: "Try again", run: () => void emails.actions.reload() };
+    if (hasFilters()) return { label: "Clear filters", run: emails.actions.clearFilters };
+    if (emails.state.page > 0) return { label: "Previous page", run: () => emails.actions.page(-1) };
+    if (emails.state.mailbox === "sent") return { label: "Write a message", run: () => emails.actions.startCompose("new") };
+    return { label: "Check for new mail", run: () => void emails.actions.reload() };
   };
   const columns = (): MailboxColumns => {
     const width = contentWidth();
@@ -78,34 +109,42 @@ export function MailboxRoute() {
         <Button label="Filter" active={!!emails.state.search || !!emails.state.activeLabel || !!emails.state.activeFilterId || emails.state.mailbox !== "inbox" || emails.state.selectedSourceId !== "all"}
           onPress={() => emails.actions.openDialog("filter")} />
       </box>
-      <box width="100%" flexDirection="row" flexWrap="wrap" flexShrink={0} columnGap={1} rowGap={1} marginTop={1} marginBottom={1}>
-        <Button label={emails.state.sort === "newest" ? "Newest first" : "Oldest first"} onPress={() => emails.actions.cycleSort()} />
-        <Button label="Group" active={emails.state.groupMode !== "none"} onPress={() => emails.actions.openDialog("group")} />
-        <Button label="Sources" active={emails.state.selectedSourceId !== "all"} onPress={() => emails.actions.openDialog("source")} />
-        <Button label="Digest" onPress={() => emails.actions.openDialog("digest")} />
-        <text fg={theme.textMuted}>Page {emails.state.page + 1}</text>
-      </box>
-      <Show when={emails.state.selectedSourceId !== "all"}>
-        <text fg={theme.textMuted} flexShrink={0}>Source: {emails.selectedSource().label}</text>
+      <Show when={emails.state.messages.length > 0}>
+        <box width="100%" flexDirection="row" flexWrap="wrap" flexShrink={0} columnGap={1} rowGap={1} marginTop={1} marginBottom={1}>
+          <Button label={emails.state.sort === "newest" ? "Newest first" : "Oldest first"} onPress={() => emails.actions.cycleSort()} />
+          <Button label="Group" active={emails.state.groupMode !== "none"} onPress={() => emails.actions.openDialog("group")} />
+          <Show when={emails.state.sources.length > 1}><Button label="Sources" active={emails.state.selectedSourceId !== "all"} onPress={() => emails.actions.openDialog("source")} /></Show>
+          <Button label="Digest" onPress={() => emails.actions.openDialog("digest")} />
+          <Show when={emails.state.page > 0 || emails.state.hasMore}><text fg={theme.textMuted}>Page {emails.state.page + 1}</text></Show>
+        </box>
+        <Show when={emails.state.selectedSourceId !== "all"}>
+          <text fg={theme.textMuted} flexShrink={0}>Source: {emails.selectedSource().label}</text>
+        </Show>
+
+        <box height={1} flexDirection="row" columnGap={1} paddingLeft={1}>
+          <box width={2} flexShrink={0} />
+          <box width={columns().from} flexShrink={0}>
+            <text fg={theme.textMuted}>Sender</text>
+          </box>
+          <box width={columns().subject} flexShrink={0}>
+            <text fg={theme.textMuted}>Subject / preview</text>
+          </box>
+          <box width={columns().date} flexShrink={0}>
+            <text fg={theme.textMuted}>{"Date".padStart(columns().date)}</text>
+          </box>
+        </box>
+
       </Show>
-
-      <box height={1} flexDirection="row" columnGap={1} paddingLeft={1}>
-        <box width={2} flexShrink={0} />
-        <box width={columns().from} flexShrink={0}>
-          <text fg={theme.textMuted}>Sender</text>
-        </box>
-        <box width={columns().subject} flexShrink={0}>
-          <text fg={theme.textMuted}>Subject / preview</text>
-        </box>
-        <box width={columns().date} flexShrink={0}>
-          <text fg={theme.textMuted}>{"Date".padStart(columns().date)}</text>
-        </box>
-      </box>
-
-      <Show
-        when={emails.state.messages.length > 0}
-        fallback={<EmptyState title="No messages" detail={emptyDetail()} />}
-      >
+      <Show when={emails.state.messages.length > 0} fallback={
+        <EmptyState fill icon={emails.state.mailboxError ? "!" : "╭──────╮\n│ ╲  ╱ │\n╰──────╯"} title={emptyTitle()} detail={emptyDetail()}>
+          <Show when={!emails.state.loading}>
+            <box flexDirection="row" flexWrap="wrap" justifyContent="center" columnGap={1} rowGap={1}>
+              <Button label={emptyAction().label} tone="primary" onPress={() => emptyAction().run()} />
+              <Button label="Switch mailbox" onPress={() => emails.actions.openDialog("address")} />
+            </box>
+          </Show>
+        </EmptyState>
+      }>
         <scrollbox flexGrow={1} minHeight={0} width="100%" scrollX={false}>
           <For each={emails.groupedMessages()}>
             {(group) => (
@@ -128,11 +167,13 @@ export function MailboxRoute() {
         <text fg={theme.textMuted} wrapMode="none" width="100%" flexShrink={0} marginTop={1} marginBottom={1}>To: {emails.selectedMessage()?.to}</text>
       </Show>
       <box flexDirection="row" flexWrap="wrap" width="100%" flexShrink={0} columnGap={1} rowGap={1}>
-        <Button label="Previous page" onPress={() => emails.actions.page(-1)} />
-        <Button label="Next page" active={emails.state.hasMore} onPress={() => emails.actions.page(1)} />
-        <Button label="Open" onPress={() => emails.actions.openMessage()} />
-	        <Button label="Label" onPress={() => emails.actions.openDialog("labels")} />
-	        <Button label="Save filter" active={!!emails.state.activeFilterId} onPress={() => emails.actions.openDialog("save-filter")} />
+        <Show when={emails.state.messages.length > 0 && emails.state.page > 0}><Button label="Previous page" onPress={() => emails.actions.page(-1)} /></Show>
+        <Show when={emails.state.hasMore}><Button label="Next page" onPress={() => emails.actions.page(1)} /></Show>
+        <Show when={emails.selectedMessage()}>
+          <Button label="Open" onPress={() => emails.actions.openMessage()} />
+          <Button label="Label" onPress={() => emails.actions.openDialog("labels")} />
+        </Show>
+        <Show when={hasFilters() || emails.state.mailbox !== "inbox"}><Button label="Save filter" active={!!emails.state.activeFilterId} onPress={() => emails.actions.openDialog("save-filter")} /></Show>
       </box>
       <box height={1} flexDirection="row" columnGap={1}>
         <Show when={emails.state.search && !emails.state.activeFilterId}>
