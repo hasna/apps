@@ -27,7 +27,17 @@ export interface CreateProfileInput {
   name?: string;
 }
 
-function resolveProfilesDir(): string {
+/**
+ * The profiles directory under the effective data root.
+ *
+ * Resolved on every call, never snapshotted at module load: the effective
+ * data root is env-driven (HASNA_HOOKS_DATA_DIR / HASNA_HOOKS_HOME / the XDG
+ * adoption in app-home), and bun test runs test files in one process with a
+ * SHARED process.env — a module-load snapshot froze the dir to whatever the
+ * env held at import time, so a concurrent file pinning a data-root override
+ * silently moved every profile operation of this module with it.
+ */
+export function getProfilesDir(): string {
   const newDir = join(getEffectiveDataRoot(), "profiles");
   const oldDir = join(getHomeDir(), ".hooks", "profiles");
 
@@ -40,24 +50,19 @@ function resolveProfilesDir(): string {
   return newDir;
 }
 
-const PROFILES_DIR = resolveProfilesDir();
-
 function ensureProfilesDir(): void {
-  if (!existsSync(PROFILES_DIR)) {
-    mkdirSync(PROFILES_DIR, { recursive: true });
+  const dir = getProfilesDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 }
 
 function profilePath(id: string): string {
-  return join(PROFILES_DIR, `${id}.json`);
+  return join(getProfilesDir(), `${id}.json`);
 }
 
 function shortUuid(): string {
   return crypto.randomUUID().slice(0, 8);
-}
-
-export function getProfilesDir(): string {
-  return PROFILES_DIR;
 }
 
 export function createProfile(input: CreateProfileInput): AgentProfile {
@@ -93,15 +98,16 @@ export function getProfile(id: string): AgentProfile | null {
 }
 
 export function listProfiles(): AgentProfile[] {
-  if (!existsSync(PROFILES_DIR)) return [];
+  const dir = getProfilesDir();
+  if (!existsSync(dir)) return [];
 
   try {
-    const files = readdirSync(PROFILES_DIR).filter((f) => f.endsWith(".json"));
+    const files = readdirSync(dir).filter((f) => f.endsWith(".json"));
     const profiles: AgentProfile[] = [];
 
     for (const file of files) {
       try {
-        const content = readFileSync(join(PROFILES_DIR, file), "utf-8");
+        const content = readFileSync(join(dir, file), "utf-8");
         profiles.push(JSON.parse(content));
       } catch {
         // Skip corrupt files

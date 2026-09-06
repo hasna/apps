@@ -53,7 +53,9 @@ import { resolveHookMeta } from "../lib/resolve.js";
 import { getPinnedHook } from "../lib/store.js";
 import { SEMVER_PATTERN } from "../lib/semver.js";
 import { getReportedDbPath } from "../lib/app-home.js";
-import { getCustomHooksDir, isApiModeConfigured, isLocalModeOptedIn } from "../config.js";
+import { getCustomHooksDir } from "../config.js";
+import { hasHooksEnvAuthorityIntent, isHooksLocalOptIn } from "../lib/local-opt-in.js";
+import { announceHooksLocalMode, resolveHooksTransport } from "../lib/transport.js";
 
 const program = new Command();
 
@@ -222,31 +224,54 @@ program
   .option("--api-key <ref>", "Vault key NAME for the registry API key (never the value; with --cloudflare)")
   .action(async (options: { agent: string; name?: string; json: boolean; cloudflare: boolean; apiUrl?: string; apiKey?: string }) => {
     if (options.cloudflare) {
-      const { writeConfig } = await import("../config.js");
+      // Remote-registry configuration guidance. `~/.hasna/hooks/config.json`
+      // (api_url / api_key_ref) is a retired key store (hasna/apps#1720): the
+      // registry URL and key now resolve through @hasna/contracts — env,
+      // Keychain items `hasna.credentials.hooks.api-url` / `.api-key`, or the
+      // `~/.hasna/hooks/config/credentials` file — so this command prints the
+      // exact configuration to apply instead of writing a file the resolver
+      // no longer reads.
       if (!options.apiUrl) {
         const message = "--cloudflare requires --api-url <url>";
         if (options.json) console.log(JSON.stringify({ error: message }));
         else console.log(chalk.red(message));
         return;
       }
-      // api_key_ref names the vault key (never the value). Default to the
-      // documented live key so config.json always carries the reference
-      // (QA-3 deviation: v0.6.3 wrote api_url only).
+      // api_key_ref is the VAULT KEY NAME (never the value); it maps onto the
+      // resolver's deliberate env pointer HASNA_HOOKS_API_KEY_REF, which
+      // resolves through @hasna/secrets at request time.
       const apiKeyRef = options.apiKey ?? "hasna/hooks/live/api-key";
-      const config = { api_url: options.apiUrl.replace(/\/+$/, ""), api_key_ref: apiKeyRef };
-      const path = writeConfig(config);
+      const apiUrl = options.apiUrl.replace(/\/+$/, "");
       if (options.json) {
-        console.log(JSON.stringify({ ok: true, api_url: config.api_url, api_key_ref: config.api_key_ref, config_path: path }));
+        console.log(JSON.stringify({
+          ok: true,
+          api_url: apiUrl,
+          api_key_ref: apiKeyRef,
+          env: {
+            HASNA_HOOKS_API_URL: apiUrl,
+            HASNA_HOOKS_API_KEY_REF: apiKeyRef,
+          },
+          note: "config.json is retired; no file was written",
+        }));
         return;
       }
-      console.log(chalk.green(`\n✓ Remote registry configured\n`));
-      console.log(`  ${chalk.dim("API URL:")}    ${config.api_url}`);
-      console.log(`  ${chalk.dim("API key ref:")} ${config.api_key_ref}`);
-      console.log(`  ${chalk.dim("Config:")}      ${path}`);
+      console.log(chalk.green(`\n✓ Remote registry configuration for ${apiUrl}\n`));
+      console.log(`  ${chalk.dim("API URL:")}    ${apiUrl}`);
+      console.log(`  ${chalk.dim("API key ref:")} ${apiKeyRef}`);
       console.log();
-      console.log(chalk.dim("  Presence of an API URL selects the remote registry; absence means local."));
-      console.log(chalk.dim(`  Run the server with the key resolved from the vault, never the value:`));
-      console.log(`    secrets exec ${config.api_key_ref} --as HASNA_HOOKS_API_KEY -- hooks serve`);
+      console.log(chalk.dim("  ~/.hasna/hooks/config.json is retired (hasna/apps#1720); the registry"));
+      console.log(chalk.dim("  URL and key now resolve through @hasna/contracts, per call, in this order:"));
+      console.log(chalk.dim("    HASNA_HOOKS_API_URL / HASNA_HOOKS_API_KEY (env)"));
+      console.log(chalk.dim("    hasna.credentials.hooks.api-url / .api-key (macOS Keychain)"));
+      console.log(chalk.dim("    ~/.hasna/hooks/config/credentials (disk, owner-only)"));
+      console.log();
+      console.log(chalk.dim("  Configure the machine for this registry:"));
+      console.log(`    export HASNA_HOOKS_API_URL=${apiUrl}`);
+      console.log(`    export HASNA_HOOKS_API_KEY_REF=${apiKeyRef}   # resolved through the vault, never a value`);
+      console.log();
+      console.log(chalk.dim("  Run the server with the key resolved from the vault, never the value:"));
+      console.log(`    secrets exec ${apiKeyRef} --as HASNA_HOOKS_API_KEY -- hooks serve`);
+      console.log(chalk.dim("  (or store the Keychain item hasna.credentials.hooks.api-key)"));
       console.log();
       return;
     }
@@ -482,7 +507,7 @@ program
 
     const { isCustomSource, installCustomSource } = await import("../lib/custom-install.js");
     const { readCustomManifest, HOOK_NAME_RE } = await import("../lib/manifest.js");
-    const { resolveApiUrl } = await import("../config.js");
+    const { resolveHooksTransport } = await import("../lib/transport.js");
     const { sha256Of, pinInstalledHook } = await import("../lib/store.js");
     const { readFileSync: readFileSyncFs } = await import("fs");
 
@@ -592,14 +617,19 @@ program
     }
 
     // Pinned registry installs: fetch the exact version, verify the sha
-    // against the remote lock, then register in settings.
+    // against the remote lock, then register in settings. The registry
+    // authority and key resolve TOGETHER through the @hasna/contracts chain
+    // (strict pair, fresh per call) — a URL without a key is a refusal.
     const installedPinned: string[] = [];
     for (const { arg, pinned } of pinnedRequests) {
       try {
-        const apiUrl = resolveApiUrl();
-        if (!apiUrl) throw new Error(`Cannot install '${arg}': no remote registry configured (set api_url or HASNA_HOOKS_API_URL)`);
+        const transport = resolveHooksTransport();
+        if (transport.mode !== "remote" || !transport.authority) {
+          throw new Error(`Cannot install '${arg}': no remote registry configured (set HASNA_HOOKS_API_URL and HASNA_HOOKS_API_KEY, or opt into local mode with HASNA_HOOKS_LOCAL=1)`);
+        }
+        const { origin, apiKey } = transport.authority;
         const { fetchPinnedHook } = await import("../lib/sync.js");
-        const pinnedInstall = await fetchPinnedHook(pinned.name, pinned.version, apiUrl);
+        const pinnedInstall = await fetchPinnedHook(pinned.name, pinned.version, origin, apiKey);
         installedPinned.push(pinnedInstall.name);
         if (options.json) {
           console.log(JSON.stringify({ pinned: { request: arg, name: pinnedInstall.name, version: pinnedInstall.version, sha256: pinnedInstall.sha256, source: pinnedInstall.source } }));
@@ -1141,7 +1171,7 @@ program
     const { resolveHook } = await import("../lib/resolve.js");
     const { sha256File, setPinnedHook, upsertHookRecord } = await import("../lib/store.js");
     const { getDb } = await import("../db/index.js");
-    const { resolveApiUrl } = await import("../config.js");
+    const { resolveHooksTransport } = await import("../lib/transport.js");
     const { isCustomSource } = await import("../lib/custom-install.js");
     const { HOOK_NAME_RE } = await import("../lib/manifest.js");
 
@@ -1168,10 +1198,13 @@ program
         // Pinned-version update: fetch the exact version from the remote
         // registry, verify sha, pin, then re-register in settings (QA-2).
         try {
-          const apiUrl = resolveApiUrl();
-          if (!apiUrl) throw new Error(`Cannot update '${arg}': no remote registry configured (set api_url or HASNA_HOOKS_API_URL)`);
+          const transport = resolveHooksTransport();
+          if (transport.mode !== "remote" || !transport.authority) {
+            throw new Error(`Cannot update '${arg}': no remote registry configured (set HASNA_HOOKS_API_URL and HASNA_HOOKS_API_KEY, or opt into local mode with HASNA_HOOKS_LOCAL=1)`);
+          }
+          const { origin, apiKey } = transport.authority;
           const { fetchPinnedHook } = await import("../lib/sync.js");
-          const pinnedInstall = await fetchPinnedHook(pinned.name, pinned.version, apiUrl);
+          const pinnedInstall = await fetchPinnedHook(pinned.name, pinned.version, origin, apiKey);
           const registered = installHook(pinnedInstall.name, { scope, overwrite: true });
           if (!registered.success) {
             results.push({ hook: arg, success: false, error: registered.error ?? "registration failed" });
@@ -1805,7 +1838,7 @@ program
   .command("serve")
   .option("-p, --port <port>", "Port (default 39428)")
   .option("--host <host>", "Host to bind (default 127.0.0.1)")
-  .description("Serve the local hook registry over HTTP (catalog, artifacts, lock). The publish API key resolves from HASNA_HOOKS_API_KEY / HOOKS_API_KEY only — there is deliberately no --api-key flag (P1-8).")
+  .description("Serve the local hook registry over HTTP (catalog, artifacts, lock). The publish API key resolves from the @hasna/contracts chain per request (HASNA_HOOKS_API_KEY, the Keychain item hasna.credentials.hooks.api-key, or ~/.hasna/hooks/config/credentials) — there is deliberately no --api-key flag (P1-8).")
   .action(async (options: { port?: string; host?: string }) => {
     const { startServeServer } = await import("../serve.js");
     startServeServer({
@@ -1819,7 +1852,7 @@ program
   .command("sync")
   .option("--dry-run", "Print the plan without changing anything", false)
   .option("-j, --json", "Output as JSON", false)
-  .description("Sync local hooks with the remote registry (or bundled registry when no API URL is configured)")
+  .description("Sync local hooks with the remote registry (or bundled registry when no registry credential resolves and local mode is opted into)")
   .action(async (options: { dryRun: boolean; json: boolean }) => {
     const { syncHooks, planSync } = await import("../lib/sync.js");
     try {
@@ -1976,10 +2009,19 @@ registerEventsCommands(program, { source: "hooks" });
 // ── Fail-closed transport gate (fleet doctrine, 2026-09-04) ─────────────────
 //
 // The `hooks` CLI manages hook state for the hosted hooks registry API. A run
-// WITHOUT a configured registry API must FAIL CLOSED — never silently serve
-// the local SQLite store (~/.hasna/hooks/hooks.db) and exit 0 as a false
+// WITHOUT a resolved registry credential must FAIL CLOSED — never silently
+// serve the local SQLite store (~/.hasna/hooks/hooks.db) and exit 0 as a false
 // green. Local mode (bundled registry + local store) remains available, but
 // only as an explicit opt-in: HASNA_HOOKS_LOCAL=1 (alias HOOKS_LOCAL=1).
+//
+// The registry authority and its credential resolve through the ONE
+// @hasna/contracts chain (hasna/apps#1720), as a STRICT pair: a URL without a
+// key is a refusal, not half-open progress. The gate below is deliberately
+// cheap for the run-hot surfaces — it answers the env dictionary and the
+// opt-in without touching the Keychain, so `hooks run` (which agents invoke on
+// every hook event), `hooks mcp` and `hooks serve` never pay a per-invocation
+// `security` spawn. Commands that resolve the registry themselves (sync,
+// pinned install/update) re-resolve the full chain per call.
 //
 // Commands that are local/operator/runtime surfaces BY DESIGN never stand in
 // for the hosted API and may run without it:
@@ -1988,14 +2030,14 @@ registerEventsCommands(program, { source: "hooks" });
 //   - mcp            local MCP server for agent integration
 //   - cf             provision a Cloudflare registry (operator tooling)
 //   - migrate        apply PostgreSQL migrations to the storage database
-//   - init           register a local agent profile / configure the API URL
+//   - init           register a local agent profile / print registry config
 //   - profile-export/import   local agent-profile JSON files
 //   - channels, events        @hasna/events surfaces (own env contract)
 // Help/version output is informational and stays available.
 //
-// Everything else fails closed WITHOUT an API URL or opt-in — including
-// UNKNOWN tokens: `interactive` is registered with `isDefault: true`, so
-// commander routes any token that matches no command to the interactive TUI,
+// Everything else fails closed WITHOUT a resolved credential or opt-in —
+// including UNKNOWN tokens: `interactive` is registered with `isDefault: true`,
+// so commander routes any token that matches no command to the interactive TUI,
 // which browses the local catalog/store. An unknown token is therefore not a
 // commander "unknown command" error here; it would silently open local mode,
 // so it must fail closed like every other local-serving command.
@@ -2013,13 +2055,15 @@ const API_INDEPENDENT_COMMANDS = new Set([
   "events",
 ]);
 
-function failClosedForMissingApiEnv(): never {
+function failClosedForMissingApiEnv(detail?: string): never {
   console.error(
     chalk.red(
-      "hooks: no registry API configured and local mode is not explicitly enabled.\n"
-        + "Set HASNA_HOOKS_API_URL and HASNA_HOOKS_API_KEY (or HOOKS_API_URL / HOOKS_API_KEY, or the\n"
-        + "api_url field in config.json) to run against the hosted hooks registry, or set\n"
+      "hooks: no registry credential resolved and local mode is not explicitly enabled.\n"
+        + "The remote registry requires a STRICT pair — set HASNA_HOOKS_API_URL and HASNA_HOOKS_API_KEY, or the\n"
+        + "Keychain items hasna.credentials.hooks.api-url / .api-key, or ~/.hasna/hooks/config/credentials.\n"
+        + "config.json (api_url / api_key_ref) is RETIRED and no longer read. Or set\n"
         + "HASNA_HOOKS_LOCAL=1 to explicitly opt into local mode (bundled registry + local store).\n"
+        + (detail ? `${detail}\n` : "")
         + "Refusing to silently fall back to local storage.",
     ),
   );
@@ -2037,24 +2081,41 @@ function firstCommandToken(argv: string[]): string | null {
 }
 
 function enforceTransportGate(): void {
-  // Api mode or an explicit local opt-in: proceed.
-  if (isApiModeConfigured() || isLocalModeOptedIn()) return;
   const argv = process.argv.slice(2);
   // Help/version output is informational and never a false green. The "help"
   // token is commander's built-in help subcommand, handled before any default
   // command matching, so it also just prints help.
   if (argv.some((arg) => arg === "-h" || arg === "--help" || arg === "-V" || arg === "--version")) return;
   const token = firstCommandToken(argv);
-  if (token === null) {
-    // Bare `hooks` (or flags only) runs the default interactive command.
-    failClosedForMissingApiEnv();
-  }
   if (token === "help") return;
-  if (API_INDEPENDENT_COMMANDS.has(token)) return;
-  // Registered registry/local-store commands AND unknown tokens alike: an
-  // unknown token would fall through to the default `interactive` command
-  // (local catalog browsing), so it is just as forbidden without opt-in.
-  failClosedForMissingApiEnv();
+  if (token !== null && API_INDEPENDENT_COMMANDS.has(token)) return;
+
+  // A configured environment outranks the opt-in: hosted intent proceeds and
+  // the command's own resolution enforces the strict pair (a half-configured
+  // URL-only run fails loudly at the command, not here).
+  if (hasHooksEnvAuthorityIntent(process.env)) return;
+  // Local mode is the deliberate unhosted opt-in, answered WITHOUT the
+  // resolver so no Keychain item and no credential file is read for it. The
+  // run says so on stderr, once per process.
+  if (isHooksLocalOptIn(process.env)) {
+    announceHooksLocalMode();
+    return;
+  }
+
+  // Nothing in the env: the machine's ambient stores (Keychain / disk) may
+  // still configure hosted mode — a station needs no inline env prefix. Only
+  // registry commands pay for this consultation. A fully unconfigured
+  // environment resolves nothing and fails closed. Bare `hooks` (interactive)
+  // and unknown tokens fall through to `failClosedForMissingApiEnv` too.
+  try {
+    const transport = resolveHooksTransport(process.env);
+    if (transport.mode !== "remote" || !transport.authority) {
+      failClosedForMissingApiEnv();
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    failClosedForMissingApiEnv(message);
+  }
 }
 
 enforceTransportGate();

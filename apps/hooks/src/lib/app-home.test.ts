@@ -13,7 +13,6 @@ import {
   getResolverDataRoot,
 } from "./app-home.js";
 import {
-  getConfigPath,
   getCustomHooksDir,
   getHooksDataDir,
   getLockPath,
@@ -89,7 +88,8 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
     expect(getHooksDataDir()).toBe(join(home, ".hasna", "hooks"));
     expect(getCustomHooksDir()).toBe(join(home, ".hasna", "hooks", "hooks"));
     expect(getLockPath()).toBe(join(home, ".hasna", "hooks", "hooks.lock"));
-    expect(getConfigPath()).toBe(join(home, ".hasna", "hooks", "config.json"));
+    // config.json was the registry-config key store (api_url / api_key_ref);
+    // it is retired — the data root no longer exposes a config path for it.
     expect(getDbPath()).toBe(join(home, ".hasna", "hooks", "hooks.db"));
   });
 
@@ -102,7 +102,6 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
     expect(getHooksDataDir()).toBe(join(base, "hooks"));
     expect(getCustomHooksDir()).toBe(join(base, "hooks", "hooks"));
     expect(getLockPath()).toBe(join(base, "hooks", "hooks.lock"));
-    expect(getConfigPath()).toBe(join(base, "hooks", "config.json"));
     expect(getDbPath()).toBe(join(base, "hooks", "hooks.db"));
   });
 

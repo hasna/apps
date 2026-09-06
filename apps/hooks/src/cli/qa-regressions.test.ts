@@ -20,8 +20,12 @@ beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = join(TEST_HOME, ".hasna", "hooks");
   process.env.HASNA_HOOKS_DB_PATH = join(TEST_HOME, ".hasna", "hooks", "hooks.db");
   process.env.HASNA_HOOKS_LOCK_PATH = join(TEST_HOME, ".hasna", "hooks", "hooks.lock");
-  process.env.HASNA_HOOKS_CONFIG_PATH = join(TEST_HOME, ".hasna", "hooks", "config.json");
   process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH = join(TEST_HOME, ".claude", "settings.json");
+  // The pinned-install tests talk to a mock registry; the pair is provided
+  // through the env tier (strict pair, hasna/apps#1720). The fake HOME keeps
+  // the machine's real disk/Keychain credentials out of the resolution.
+  process.env.HASNA_HOOKS_API_KEY = "qa6-test-key";
+  process.env.HOME = TEST_HOME;
   // Explicit local-mode opt-in (fleet fail-closed doctrine): these CLI
   // subprocess tests exercise the bundled registry + local store on purpose.
   process.env.HASNA_HOOKS_LOCAL = "1";
@@ -34,8 +38,10 @@ afterAll(() => {
   delete process.env.HASNA_HOOKS_LOCK_PATH;
   delete process.env.HASNA_HOOKS_CONFIG_PATH;
   delete process.env.HASNA_HOOKS_CLAUDE_SETTINGS_PATH;
+  delete process.env.HASNA_HOOKS_API_KEY;
   delete process.env.HASNA_HOOKS_LOCAL;
   delete process.env.HASNA_HOOKS_API_URL;
+  delete process.env.HOME;
   delete process.env.NO_COLOR;
   rmSync(TEST_HOME, { recursive: true, force: true });
 });
@@ -401,20 +407,30 @@ describe("P2 #9 — hooks list surfaces custom/registry hooks (QA-4 A1 / bug e84
   });
 });
 
-describe("P3 #10 — hooks init --cloudflare writes api_key_ref (QA-3 deviation)", () => {
-  test("config.json carries api_url + api_key_ref (default vault key name when --api-key omitted)", async () => {
+describe("P3 #10 — hooks init --cloudflare prints the resolver configuration (hasna/apps#1720)", () => {
+  test("prints the env pair and no longer writes config.json (the key store is retired)", async () => {
     const res = await run("init", "--cloudflare", "--api-url", "https://registry.example.com");
     expect(res.exitCode).toBe(0);
-    const config = JSON.parse(readFileSync(join(TEST_HOME, ".hasna", "hooks", "config.json"), "utf-8"));
-    expect(config.api_url).toBe("https://registry.example.com");
-    expect(config.api_key_ref).toBe("hasna/hooks/live/api-key");
+    expect(res.stdout).toContain("HASNA_HOOKS_API_URL");
+    expect(res.stdout).toContain("https://registry.example.com");
+    expect(res.stdout).toContain("HASNA_HOOKS_API_KEY_REF");
+    expect(res.stdout).toContain("config.json is retired");
+    expect(existsSync(join(TEST_HOME, ".hasna", "hooks", "config.json"))).toBe(false);
   });
 
-  test("an explicit --api-key is stored as the reference", async () => {
+  test("an explicit --api-key reference is named in the output (a name, never a value)", async () => {
     const res = await run("init", "--cloudflare", "--api-url", "https://registry.example.com", "--api-key", "someorg/hooks/live/other-key");
     expect(res.exitCode).toBe(0);
-    const config = JSON.parse(readFileSync(join(TEST_HOME, ".hasna", "hooks", "config.json"), "utf-8"));
-    expect(config.api_key_ref).toBe("someorg/hooks/live/other-key");
+    expect(res.stdout).toContain("someorg/hooks/live/other-key");
+    expect(res.stdout).toContain("secrets exec");
+    const jsonRes = await run("init", "--cloudflare", "--api-url", "https://registry.example.com", "--api-key", "someorg/hooks/live/other-key", "--json");
+    const parsed = JSON.parse(jsonRes.stdout);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.api_url).toBe("https://registry.example.com");
+    expect(parsed.api_key_ref).toBe("someorg/hooks/live/other-key");
+    expect(parsed.env.HASNA_HOOKS_API_URL).toBe("https://registry.example.com");
+    expect(parsed.env.HASNA_HOOKS_API_KEY_REF).toBe("someorg/hooks/live/other-key");
+    expect(Object.keys(parsed)).not.toContain("config_path");
   });
 });
 

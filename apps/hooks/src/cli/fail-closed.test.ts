@@ -1,9 +1,10 @@
 /**
- * Fleet fail-closed doctrine (2026-09-04, hasna/apps#1613): a CLI run without
- * a registry API configuration must FAIL CLOSED — non-zero exit, actionable
- * error naming the required env, and no local SQLite fallback — unless local
- * mode was explicitly opted into (HASNA_HOOKS_LOCAL=1) or an API URL is
- * configured (env or config.json api_url).
+ * Fleet fail-closed doctrine (2026-09-04, hasna/apps#1613, #1720): a CLI run
+ * without a resolved registry credential must FAIL CLOSED — non-zero exit,
+ * actionable error naming the required env, and no local SQLite fallback —
+ * unless local mode was explicitly opted into (HASNA_HOOKS_LOCAL=1) or the
+ * @hasna/contracts chain resolves a STRICT pair (URL + key together; a URL
+ * without a key is a refusal, never half-open progress).
  *
  * These tests spawn the real CLI entrypoint in a sandboxed environment that
  * strips every transport env key and pins the data root into a fresh tmp dir.
@@ -18,12 +19,13 @@ const CLI = join(import.meta.dir, "index.tsx");
 const TRANSPORT_ENV_KEYS = [
   "HASNA_HOOKS_API_URL",
   "HOOKS_API_URL",
-  "HASNA_HOOKS_REGISTRY_URL",
-  "HOOKS_REGISTRY_URL",
-  "HASNA_HOOKS_LOCAL",
-  "HOOKS_LOCAL",
   "HASNA_HOOKS_API_KEY",
   "HOOKS_API_KEY",
+  "HASNA_HOOKS_API_KEY_OVERRIDE",
+  "HASNA_HOOKS_API_KEY_REF",
+  "HASNA_PROFILE",
+  "HASNA_HOOKS_LOCAL",
+  "HOOKS_LOCAL",
 ];
 
 const REFUSING = "Refusing to silently fall back to local storage.";
@@ -155,6 +157,8 @@ describe("hooks transport gate (fleet fail-closed)", () => {
     expect(list.timedOut).toBe(false);
     expect(list.exitCode).toBe(0);
     expect(list.stderr).not.toContain(REFUSING);
+    // Local mode SAYS so on stderr, once per process ("local on stderr").
+    expect(list.stderr).toMatch(/LOCAL mode/);
     // log tail opens the local SQLite store at the pinned data root.
     const tail = await runCli(["log", "tail"], env);
     expect(tail.timedOut).toBe(false);
@@ -163,12 +167,42 @@ describe("hooks transport gate (fleet fail-closed)", () => {
     expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(true);
   });
 
-  test("config.json api_url satisfies the gate (remote config is a deliberate selection)", async () => {
+  test("a STRICT env pair (URL + key) opens the gate: list runs without touching SQLite", async () => {
     const sb = makeSandbox();
     sandboxes.push(sb);
-    // api_url in config.json must open the gate: the CLI proceeds into its
-    // normal api-mode list path (bundled catalog listing until a registry key
-    // resolves) instead of refusing to run.
+    // The pair is the unit after the @hasna/contracts adoption: a URL alone is
+    // a refusal, URL+key together is a complete configuration.
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
+    env.HASNA_HOOKS_API_KEY = "gate-test-key";
+    const result = await runCli(["list"], env);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(REFUSING);
+    // No local SQLite store was opened as a side effect of the gate opening.
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+  });
+
+  test("a URL-only environment fails closed at the registry command — STRICT PAIR, no SQLite", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
+    const result = await runCli(["sync"], env);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("REMOTE_API_KEY_MISSING");
+    expect(result.stderr).toContain("HASNA_HOOKS_API_KEY");
+    expect(existsSync(sb.dataDir)).toBe(false);
+    expect(existsSync(join(sb.home, ".hasna"))).toBe(false);
+  });
+
+  test("the retired config.json api_url does NOT open the gate (key store removed)", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    // config.json (api_url / api_key_ref) was the app's own key store; it is
+    // retired (hasna/apps#1720) — the resolver never reads it, so a leftover
+    // file must not resurrect remote routing.
     mkdirSync(sb.dataDir, { recursive: true });
     writeFileSync(
       join(sb.dataDir, "config.json"),
@@ -177,10 +211,11 @@ describe("hooks transport gate (fleet fail-closed)", () => {
     const env = cleanEnv(sb);
     const result = await runCli(["list"], env);
     expect(result.timedOut).toBe(false);
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).not.toContain("HASNA_HOOKS_API_URL");
-    expect(result.stderr).not.toContain(REFUSING);
-    // No local SQLite store was opened as a side effect of the gate opening.
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("HASNA_HOOKS_API_URL");
+    expect(result.stderr).toContain("config.json (api_url / api_key_ref) is RETIRED");
+    expect(result.stderr).toContain(REFUSING);
+    // No local SQLite store was opened.
     expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
   });
 

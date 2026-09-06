@@ -12,6 +12,15 @@ import { handleServeRequest } from "../serve.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-sync-test-"));
 
+/**
+ * Hermetic registry env for the remote-registry tests: a caller-built
+ * dictionary (Keychain tier off) anchored on TEST_DIR (disk tier absent), so
+ * the machine's real credential stores can never leak into a sync run.
+ */
+function remoteSyncEnv(base: string, key = "test-sync-key"): Record<string, string> {
+  return { HOME: TEST_DIR, HASNA_HOOKS_API_URL: base, HASNA_HOOKS_API_KEY: key };
+}
+
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = ":memory:";
@@ -26,7 +35,7 @@ afterAll(() => {
 
 describe("sync from bundled registry (no API URL)", () => {
   test("plan lists bundled hooks as added when nothing is pinned", async () => {
-    const plan = await planSync();
+    const plan = await planSync({ env: { HOME: TEST_DIR, HASNA_HOOKS_LOCAL: "1" } });
     expect(plan.apiUrl).toBeNull();
     expect(plan.diff.added.length).toBeGreaterThanOrEqual(40);
     expect(plan.diff.added).toContain("gitguard");
@@ -34,7 +43,7 @@ describe("sync from bundled registry (no API URL)", () => {
   });
 
   test("sync pins all bundled hooks with correct hashes and DB records", async () => {
-    const plan = await syncHooks();
+    const plan = await syncHooks({ env: { HOME: TEST_DIR, HASNA_HOOKS_LOCAL: "1" } });
     expect(plan.diff.added.length).toBeGreaterThanOrEqual(40);
     const lock = readLock();
     expect(lock.hooks["gitguard"]?.source).toBe("bundled");
@@ -47,7 +56,7 @@ describe("sync from bundled registry (no API URL)", () => {
   });
 
   test("second sync reports unchanged", async () => {
-    const plan = await syncHooks();
+    const plan = await syncHooks({ env: { HOME: TEST_DIR, HASNA_HOOKS_LOCAL: "1" } });
     expect(plan.diff.added).toHaveLength(0);
     expect(plan.diff.updated).toHaveLength(0);
     expect(plan.diff.unchanged.length).toBeGreaterThanOrEqual(40);
@@ -55,19 +64,19 @@ describe("sync from bundled registry (no API URL)", () => {
 
   test("dry-run changes nothing and reports dryRun:true on both paths (P2-16a)", async () => {
     const lockBefore = JSON.stringify(readLock());
-    const plan = await syncHooks({ dryRun: true });
+    const plan = await syncHooks({ dryRun: true, env: { HOME: TEST_DIR, HASNA_HOOKS_LOCAL: "1" } });
     expect(plan.dryRun).toBe(true);
     expect(JSON.stringify(readLock())).toBe(lockBefore);
     // planSync with the dryRun flag must not hardcode false (the CLI used to
     // print "✓ Synced" during --dry-run because planSync returned dryRun:false).
-    const planned = await planSync({ dryRun: true });
+    const planned = await planSync({ dryRun: true, env: { HOME: TEST_DIR, HASNA_HOOKS_LOCAL: "1" } });
     expect(planned.dryRun).toBe(true);
     expect(planned.diff).toEqual(plan.diff);
   });
 
   test("a drifted lock pin is repaired as updated on next sync", async () => {
     setPinnedHook("checktests", { version: getHook("checktests")!.version, sha256: "deadbeef", source: "bundled" });
-    const plan = await syncHooks();
+    const plan = await syncHooks({ env: { HOME: TEST_DIR, HASNA_HOOKS_LOCAL: "1" } });
     expect(plan.diff.updated).toContain("checktests");
     const lock = readLock();
     expect(lock.hooks["checktests"]?.sha256).toBe(await sha256File(resolveScriptPath("checktests")!));
@@ -76,14 +85,13 @@ describe("sync from bundled registry (no API URL)", () => {
 
 describe("sync from remote registry (API URL configured)", () => {
   test("fail-closed: network failure exits with error and changes nothing", async () => {
-    process.env.HASNA_HOOKS_API_URL = "http://127.0.0.1:1";
     const lockBefore = JSON.stringify(readLock());
     try {
-      await expect(syncHooks()).rejects.toThrow();
+      // Strict pair: the URL is configured and the key resolves from the same
+      // hermetic env — the fetch itself then fails on the dead port.
+      await expect(syncHooks({ env: remoteSyncEnv("http://127.0.0.1:1") })).rejects.toThrow();
       expect(JSON.stringify(readLock())).toBe(lockBefore);
-    } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
-    }
+    } finally {}
   });
 
   test("stage failure leaves the store fully unchanged (P1-9)", async () => {
@@ -123,13 +131,11 @@ describe("sync from remote registry (API URL configured)", () => {
     const lockBefore = JSON.stringify(readLock());
     const dbBefore = JSON.stringify(getHookRecord(getDb(), "stage-ok"));
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
-      await expect(syncHooks()).rejects.toThrow(/failed with status 500/);
+      await expect(syncHooks({ env: remoteSyncEnv(base) })).rejects.toThrow(/failed with status 500/);
       expect(JSON.stringify(readLock())).toBe(lockBefore);
       expect(JSON.stringify(getHookRecord(getDb(), "stage-ok"))).toBe(dbBefore);
       expect(existsSync(join(TEST_DIR, "hooks", "stage-ok"))).toBe(false);
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       server.stop(true);
     }
   });
@@ -202,11 +208,9 @@ describe("sync from remote registry (API URL configured)", () => {
     const base = `http://127.0.0.1:${server.port}`;
     const lockBefore = JSON.stringify(readLock());
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
-      await expect(syncHooks()).rejects.toThrow(/ambiguous/);
+      await expect(syncHooks({ env: remoteSyncEnv(base) })).rejects.toThrow(/ambiguous/);
       expect(JSON.stringify(readLock())).toBe(lockBefore);
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       server.stop(true);
     }
   });
@@ -236,13 +240,11 @@ describe("sync from remote registry (API URL configured)", () => {
     const base = `http://127.0.0.1:${server.port}`;
     const lockBefore = JSON.stringify(readLock());
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
-      await expect(syncHooks()).rejects.toThrow(/escapes the hook directory/);
+      await expect(syncHooks({ env: remoteSyncEnv(base) })).rejects.toThrow(/escapes the hook directory/);
       expect(existsSync(join(TEST_DIR, "escape.sh"))).toBe(false);
       expect(existsSync(join(TEST_DIR, "hooks", "escape-demo"))).toBe(false);
       expect(JSON.stringify(readLock())).toBe(lockBefore);
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       server.stop(true);
     }
   });
@@ -271,8 +273,7 @@ describe("sync from remote registry (API URL configured)", () => {
     });
     const base = `http://127.0.0.1:${server.port}`;
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
-      const plan = await syncHooks();
+      const plan = await syncHooks({ env: remoteSyncEnv(base) });
       expect(plan.diff.added).toContain("inline-sync-demo");
       // The one-line inline body lands in script.ts — never a file named
       // after the script content (the round-2A ENOENT repro).
@@ -291,7 +292,6 @@ describe("sync from remote registry (API URL configured)", () => {
       expect(res.exitCode).toBe(0);
       expect((res.output as any).continue).toBe(true);
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       server.stop(true);
     }
   });
@@ -321,12 +321,10 @@ describe("sync from remote registry (API URL configured)", () => {
     const base = `http://127.0.0.1:${server.port}`;
     const lockBefore = JSON.stringify(readLock());
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
-      await expect(syncHooks()).rejects.toThrow(/declares a different version/);
+      await expect(syncHooks({ env: remoteSyncEnv(base) })).rejects.toThrow(/declares a different version/);
       expect(existsSync(join(TEST_DIR, "hooks", "version-lie-demo"))).toBe(false);
       expect(JSON.stringify(readLock())).toBe(lockBefore);
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       server.stop(true);
     }
   });
@@ -347,7 +345,6 @@ describe("sync from remote registry (API URL configured)", () => {
     const sha = createHash("sha256").update(script).digest("hex");
     setPinnedHook(name, { version: "1.0.0", sha256: sha, source: "custom" });
 
-    process.env.HASNA_HOOKS_API_KEY = "test-serve-key";
     const server = Bun.serve({
       port: 0,
       fetch(req) {
@@ -357,7 +354,7 @@ describe("sync from remote registry (API URL configured)", () => {
     const base = `http://127.0.0.1:${server.port}`;
     try {
       const { fetchPinnedHook } = await import("./sync.js");
-      const result = await fetchPinnedHook(name, "1.0.0", base);
+      const result = await fetchPinnedHook(name, "1.0.0", base, "test-serve-key");
       expect(result.scriptPath).toContain("script.ts");
       const { runHook } = await import("../index.js");
       const res = await runHook(name, {
@@ -369,7 +366,6 @@ describe("sync from remote registry (API URL configured)", () => {
       expect(res.exitCode).toBe(0);
       expect((res.output as any).continue).toBe(true);
     } finally {
-      delete process.env.HASNA_HOOKS_API_KEY;
       server.stop(true);
     }
   });
@@ -404,7 +400,7 @@ describe("fetchPinnedHook with a versioned registry (P1-4)", () => {
     const base = `http://127.0.0.1:${server.port}`;
     try {
       const { fetchPinnedHook } = await import("./sync.js");
-      const result = await fetchPinnedHook("pin-demo", "1.0.0", base);
+      const result = await fetchPinnedHook("pin-demo", "1.0.0", base, "test-sync-key");
       expect(result.version).toBe("1.0.0");
       expect(result.sha256).toBe(shaV1);
       expect(result.scriptPath).toContain("pin-demo");
@@ -435,7 +431,7 @@ describe("fetchPinnedHook with a versioned registry (P1-4)", () => {
     const base = `http://127.0.0.1:${server.port}`;
     try {
       const { fetchPinnedHook } = await import("./sync.js");
-      await expect(fetchPinnedHook("pin-demo", "9.9.9", base)).rejects.toThrow(/not in the remote registry/);
+      await expect(fetchPinnedHook("pin-demo", "9.9.9", base, "test-sync-key")).rejects.toThrow(/not in the remote registry/);
     } finally {
       server.stop(true);
     }
@@ -465,7 +461,7 @@ describe("fetchPinnedHook with a versioned registry (P1-4)", () => {
     const base = `http://127.0.0.1:${server.port}`;
     try {
       const { fetchPinnedHook } = await import("./sync.js");
-      await expect(fetchPinnedHook("pin-demo", "1.0.0", base)).rejects.toThrow(/sha256 header/);
+      await expect(fetchPinnedHook("pin-demo", "1.0.0", base, "test-sync-key")).rejects.toThrow(/sha256 header/);
     } finally {
       server.stop(true);
     }
@@ -501,11 +497,10 @@ describe("explicit older pins are preserved across sync (P2-9)", () => {
     });
     const base = `http://127.0.0.1:${server.port}`;
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
       // The user explicitly pinned 1.0.0 (fetchPinnedHook marks the lock
       // entry pinned:true).
       setPinnedHook("pin-preserve-demo", { version: "1.0.0", sha256: shaV1, source: "remote", pinned: true });
-      const plan = await syncHooks();
+      const plan = await syncHooks({ env: remoteSyncEnv(base) });
       expect(plan.diff.unchanged).toContain("pin-preserve-demo");
       expect(plan.diff.updated).not.toContain("pin-preserve-demo");
       const lock = readLock();
@@ -513,11 +508,10 @@ describe("explicit older pins are preserved across sync (P2-9)", () => {
       expect(lock.hooks["pin-preserve-demo"]?.sha256).toBe(shaV1);
       // An EXPLICIT update moves the pin to the latest.
       const { fetchPinnedHook } = await import("./sync.js");
-      await fetchPinnedHook("pin-preserve-demo", "2.0.0", base);
+      await fetchPinnedHook("pin-preserve-demo", "2.0.0", base, "test-sync-key");
       expect(readLock().hooks["pin-preserve-demo"]?.version).toBe("2.0.0");
       expect(readLock().hooks["pin-preserve-demo"]?.sha256).toBe(shaV2);
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       server.stop(true);
     }
   });
@@ -550,14 +544,12 @@ describe("explicit older pins are preserved across sync (P2-9)", () => {
     });
     const base = `http://127.0.0.1:${server.port}`;
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
       // An ordinary (sync-maintained) stale pin is still updated.
       setPinnedHook("pin-follow-demo", { version: "1.0.0", sha256: shaV1, source: "remote" });
-      const plan = await syncHooks();
+      const plan = await syncHooks({ env: remoteSyncEnv(base) });
       expect(plan.diff.updated).toContain("pin-follow-demo");
       expect(readLock().hooks["pin-follow-demo"]?.version).toBe("2.0.0");
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       server.stop(true);
     }
   });
@@ -592,34 +584,30 @@ describe("sync client sends the API key to a locked registry", () => {
     });
     const base = `http://127.0.0.1:${server.port}`;
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
-      process.env.HASNA_HOOKS_API_KEY = "test-sentinel";
-      const plan = await syncHooks();
+      const plan = await syncHooks({ env: remoteSyncEnv(base, "test-sentinel") });
       expect(plan.diff.added).toContain("locked-demo");
       expect(sawHeader).toBe(true);
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
-      delete process.env.HASNA_HOOKS_API_KEY;
       server.stop(true);
     }
   });
 
-  test("a 401 without a configured key fails with the clear registry-key error", async () => {
+  test("a URL-only configuration fails closed at resolution — the registry is never reached (STRICT PAIR)", async () => {
+    let hit = false;
     const server = Bun.serve({
       port: 0,
       fetch() {
+        hit = true;
         return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
       },
     });
     const base = `http://127.0.0.1:${server.port}`;
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
-      delete process.env.HASNA_HOOKS_API_KEY;
-      await expect(syncHooks()).rejects.toThrow(
-        /registry requires API key — set HASNA_HOOKS_API_KEY or HOOKS_API_KEY/,
+      await expect(syncHooks({ env: { HOME: TEST_DIR, HASNA_HOOKS_API_URL: base } })).rejects.toThrow(
+        /REMOTE_API_KEY_MISSING/,
       );
+      expect(hit).toBe(false);
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       server.stop(true);
     }
   });
@@ -633,14 +621,10 @@ describe("sync client sends the API key to a locked registry", () => {
     });
     const base = `http://127.0.0.1:${server.port}`;
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
-      process.env.HASNA_HOOKS_API_KEY = "wrong-sentinel";
-      await expect(syncHooks()).rejects.toThrow(
-        /registry requires API key — set HASNA_HOOKS_API_KEY or HOOKS_API_KEY/,
+      await expect(syncHooks({ env: remoteSyncEnv(base, "wrong-sentinel") })).rejects.toThrow(
+        /registry requires API key — set HASNA_HOOKS_API_KEY, the Keychain item/,
       );
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
-      delete process.env.HASNA_HOOKS_API_KEY;
       server.stop(true);
     }
   });

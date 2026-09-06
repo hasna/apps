@@ -9,12 +9,16 @@
 
 1. **Local by default.** A fresh install works entirely offline. Nothing is
    configured, uploaded, or synced unless you opt in.
-2. **One switch.** There are no deployment modes, no `local`/`cloud` mode
+2. **One strict pair.** There are no deployment modes, no `local`/`cloud` mode
    enums, and no placement vocabulary. The only thing that selects the remote
-   registry is whether an API URL is configured — via the `HASNA_HOOKS_API_URL`
-   environment variable or the `api_url` field in `config.json`. Unset means
-   local. Set means the client talks to that API for catalog, artifacts, and
-   lock state.
+   registry is the @hasna/contracts credential chain (hasna/apps#1720),
+   resolved fresh on every call: the registry URL (`HASNA_HOOKS_API_URL`, the
+   Keychain item `hasna.credentials.hooks.api-url`, or
+   `~/.hasna/hooks/config/credentials`) and the key that must resolve with it
+   — a URL without a key is a refusal, never half-open progress. Nothing else
+   is read: `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`,
+   `$XDG_CONFIG_HOME`, the retired `~/.hasna/hooks/config.json` key store, and
+   `*_MODE` / `*_STORAGE_MODE` switches are all gone.
 3. **Versions are pinned by digest.** A hook version's artifact lives at
    `name@version`; the sha256 of its script is what gets pinned, trusted, and
    verified. The digest, not a mutable pointer, is what sync and the run-time
@@ -33,7 +37,6 @@
 
 ```
 ~/.hasna/hooks/
-├── config.json          # client config: api_url (absent = local), api_key_ref
 ├── hooks.db             # SQLite database (owned by this package)
 ├── hooks.lock           # pin file: {"hooks": {"<name>": {"version","sha256","source"}}}
 ├── hooks/
@@ -41,6 +44,9 @@
 │       └── manifest.json
 └── profiles/            # per-profile hook sets (existing behaviour)
 ```
+
+(`config.json` — the retired `api_url` / `api_key_ref` key store — is no
+longer written or read; hasna/apps#1720.)
 
 The SQLite database (`hooks.db`) owns the hook state: the `hooks` table
 (`id`, `name`, `version`, `sha256`, `source_type`, `source_ref`,
@@ -58,8 +64,11 @@ run, or explicitly by `hooks sync`/`hooks update`/`hooks trust`.
 
 ### 2.2 Cloudflare registry (opt-in)
 
-Setting `HASNA_HOOKS_API_URL` (env) or `api_url` in `config.json` selects the
-remote registry. The client then talks to a Workers API that fronts:
+Setting `HASNA_HOOKS_API_URL` (or the Keychain item
+`hasna.credentials.hooks.api-url`, or `~/.hasna/hooks/config/credentials`)
+selects the remote registry, and a credential MUST resolve with it (the
+@hasna/contracts strict pair, hasna/apps#1720 — a URL without a key is a
+refusal). The client then talks to a Workers API that fronts:
 
 - **D1** — the registry catalog (a `hooks` table mirroring the SQLite
   subset, see §5).
@@ -200,9 +209,13 @@ enforces the pin.
 
 `hooks sync` reconciles a machine against the registry:
 
-1. Without an API URL: pin the bundled catalog (all bundled hooks with their
-   current versions and digests).
-2. With an API URL: pull the catalog and lock state from the API.
+1. Resolve the transport through @hasna/contracts (strict pair, fresh per
+   call): with a resolved credential + URL, the remote registry; under the
+   explicit `HASNA_HOOKS_LOCAL=1` opt-in (and nothing configured in the env),
+   the bundled catalog (all bundled hooks with their current versions and
+   digests). A URL without a key, or any other refusal, aborts — there is no
+   silent local fallback.
+2. With a remote URL: pull the catalog and lock state from the API.
 3. Compute the difference against the local `hooks` table and `hooks.lock`
    (added / updated / unchanged / skipped).
 4. Verify every fetched artifact's script sha256 against the lock entry before
@@ -215,11 +228,14 @@ enforces the pin.
 
 ## 9. Secrets handling
 
-- The API key value lives only in the environment (`HASNA_HOOKS_API_KEY` /
-  `HOOKS_API_KEY`, or the Worker's `HOOKS_API_KEY` secret binding). There is
-  deliberately no `--api-key` value flag on `hooks serve` — a secret on a CLI
-  flag is visible in process listings and shell history (P1-8). `config.json`
-  stores the **key name reference** (`api_key_ref`), never the value.
+- The API key value resolves through the @hasna/contracts chain (hasna/apps#1720)
+  fresh on every call: the Keychain item `hasna.credentials.hooks.api-key`,
+  `~/.hasna/hooks/config/credentials`, or `HASNA_HOOKS_API_KEY` (the Worker's
+  `HOOKS_API_KEY` secret binding is the server side of the same contract).
+  There is deliberately no `--api-key` value flag on `hooks serve` — a secret
+  on a CLI flag is visible in process listings and shell history (P1-8).
+  `config.json` (which used to hold the `api_url` / `api_key_ref` key store)
+  is retired and never read.
 - Never print, log, or commit an API key or token. See the operator guide's
   secrets hygiene section (`docs/cloudflare.md`).
 

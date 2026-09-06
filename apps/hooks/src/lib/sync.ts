@@ -10,7 +10,8 @@
 import { createHash } from "crypto";
 import { readFileSync } from "fs";
 import { HOOKS } from "./registry.js";
-import { resolveApiKey, resolveApiUrl } from "../config.js";
+import { resolveHooksTransport } from "./transport.js";
+import type { HooksCredentialOptions } from "./resolver-types.js";
 import { getDb } from "../db/index.js";
 import {
   type LockEntry,
@@ -22,6 +23,16 @@ import {
 } from "./store.js";
 import { parseManifest, scriptRelFor, shortManifestName, writeCustomHook, type HookManifest } from "./manifest.js";
 import { resolveScriptPath } from "./resolve.js";
+
+type Env = Record<string, string | undefined>;
+
+export interface HooksSyncOptions {
+  dryRun?: boolean;
+  /** Injectable environment (tests). Defaults to `process.env`. */
+  env?: Env;
+  /** Injectable credential-chain inputs (tests: fake `security` runner). */
+  credentials?: HooksCredentialOptions;
+}
 
 export interface SyncDiff {
   added: string[];
@@ -72,9 +83,13 @@ function collectBundledCatalog(): Array<{ name: string; version: string; sha256:
   return out;
 }
 
-async function fetchJson(base: string, path: string, opts?: { withHeader?: string }): Promise<unknown> {
+async function fetchJson(
+  base: string,
+  path: string,
+  apiKey: string | undefined,
+  opts?: { withHeader?: string },
+): Promise<unknown> {
   const headers: Record<string, string> = { accept: "application/json" };
-  const apiKey = resolveApiKey();
   if (apiKey) headers["x-api-key"] = apiKey;
   const res = await fetch(`${base}${path}`, {
     headers,
@@ -88,7 +103,8 @@ async function fetchJson(base: string, path: string, opts?: { withHeader?: strin
   });
   if (res.status === 401) {
     throw new Error(
-      "registry requires API key — set HASNA_HOOKS_API_KEY or HOOKS_API_KEY (vault-delivered, never stored)",
+      "registry requires API key — set HASNA_HOOKS_API_KEY, the Keychain item hasna.credentials.hooks.api-key, " +
+        "or ~/.hasna/hooks/config/credentials (resolved per call, never stored)",
     );
   }
   if (!res.ok) {
@@ -105,12 +121,12 @@ interface RemoteLock {
   hooks: Record<string, { version: string; sha256: string; source: string; versions?: string[] }>;
 }
 
-async function fetchRemoteState(apiUrl: string): Promise<{
+async function fetchRemoteState(apiUrl: string, apiKey: string): Promise<{
   catalog: Array<{ name: string; version: string; sha256: string }>;
   remoteLock: RemoteLock;
 }> {
-  const catalog = (await fetchJson(apiUrl, "/api/v1/catalog")) as { hooks?: Array<{ name: string; version: string; sha256: string }> };
-  const remoteLock = (await fetchJson(apiUrl, "/api/v1/lock")) as RemoteLock;
+  const catalog = (await fetchJson(apiUrl, "/api/v1/catalog", apiKey)) as { hooks?: Array<{ name: string; version: string; sha256: string }> };
+  const remoteLock = (await fetchJson(apiUrl, "/api/v1/lock", apiKey)) as RemoteLock;
   if (!catalog.hooks || !Array.isArray(catalog.hooks)) {
     throw new Error("remote catalog is malformed: missing hooks array");
   }
@@ -166,21 +182,26 @@ function computeDiff(catalog: Array<{ name: string; version: string; sha256: str
   return diff;
 }
 
-export async function planSync(options: { dryRun?: boolean } = {}): Promise<SyncPlan> {
-  const apiUrl = resolveApiUrl();
-  if (apiUrl) {
-    const { catalog, remoteLock } = await fetchRemoteState(apiUrl);
-    return { apiUrl, dryRun: options.dryRun ?? false, diff: computeDiff(catalog, remoteLock) };
+export async function planSync(options: HooksSyncOptions = {}): Promise<SyncPlan> {
+  const transport = resolveHooksTransport(options.env ?? process.env, {
+    credentials: options.credentials,
+  });
+  if (transport.mode === "remote" && transport.authority) {
+    const { origin, apiKey } = transport.authority;
+    const { catalog, remoteLock } = await fetchRemoteState(origin, apiKey);
+    return { apiUrl: origin, dryRun: options.dryRun ?? false, diff: computeDiff(catalog, remoteLock) };
   }
   const diff = computeDiff(collectBundledCatalog(), null);
   return { apiUrl: null, dryRun: options.dryRun ?? false, diff };
 }
 
-export async function syncHooks(options: { dryRun?: boolean } = {}): Promise<SyncPlan> {
-  const apiUrl = resolveApiUrl();
-  const plan = await planSync();
+export async function syncHooks(options: HooksSyncOptions = {}): Promise<SyncPlan> {
+  const transport = resolveHooksTransport(options.env ?? process.env, {
+    credentials: options.credentials,
+  });
+  const plan = await planSync(options);
   if (options.dryRun) return { ...plan, dryRun: true };
-  if (!apiUrl) {
+  if (transport.mode !== "remote" || !transport.authority) {
     const db = getDb();
     for (const entry of collectBundledCatalog()) {
       setPinnedHook(entry.name, { version: entry.version, sha256: entry.sha256, source: "bundled" });
@@ -196,11 +217,12 @@ export async function syncHooks(options: { dryRun?: boolean } = {}): Promise<Syn
     return plan;
   }
 
-  const { catalog, remoteLock } = await fetchRemoteState(apiUrl);
+  const { origin, apiKey } = transport.authority;
+  const { catalog, remoteLock } = await fetchRemoteState(origin, apiKey);
   const diff = computeDiff(catalog, remoteLock);
-  const staged = await stageSyncArtifacts(apiUrl, [...diff.added, ...diff.updated], remoteLock);
-  await commitSyncArtifacts(staged, apiUrl, remoteLock);
-  return { apiUrl, dryRun: false, diff };
+  const staged = await stageSyncArtifacts(origin, apiKey, [...diff.added, ...diff.updated], remoteLock);
+  await commitSyncArtifacts(staged, origin, remoteLock);
+  return { apiUrl: origin, dryRun: false, diff };
 }
 
 /**
@@ -225,6 +247,7 @@ export interface StagedSyncArtifact {
  */
 export async function stageSyncArtifacts(
   apiUrl: string,
+  apiKey: string,
   names: string[],
   remoteLock: RemoteLock,
 ): Promise<StagedSyncArtifact[]> {
@@ -232,7 +255,7 @@ export async function stageSyncArtifacts(
   for (const name of names) {
     const entry = remoteLock.hooks[name];
     if (!entry) continue;
-    const artifact = (await fetchJson(apiUrl, `/api/v1/hooks/${encodeURIComponent(name)}/${encodeURIComponent(entry.version)}`)) as ArtifactResponse;
+    const artifact = (await fetchJson(apiUrl, `/api/v1/hooks/${encodeURIComponent(name)}/${encodeURIComponent(entry.version)}`, apiKey)) as ArtifactResponse;
     if (!artifact.manifest || typeof artifact.script !== "string") {
       throw new Error(`artifact for '${name}@${entry.version}' is malformed`);
     }
@@ -361,8 +384,9 @@ export async function fetchPinnedHook(
   name: string,
   version: string,
   apiUrl: string,
+  apiKey: string,
 ): Promise<PinnedHookInstall> {
-  const remoteLock = (await fetchJson(apiUrl, "/api/v1/lock")) as RemoteLock;
+  const remoteLock = (await fetchJson(apiUrl, "/api/v1/lock", apiKey)) as RemoteLock;
   const entry = remoteLock.hooks?.[name];
   if (!entry) {
     throw new Error(`Hook '${name}' is not in the remote registry lock`);
@@ -373,7 +397,7 @@ export async function fetchPinnedHook(
       `Hook '${name}' version ${version} is not in the remote registry (available: ${[entry.version, ...(entry.versions ?? [])].join(", ")})`,
     );
   }
-  const artifact = (await fetchJson(apiUrl, `/api/v1/hooks/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, { withHeader: "_headerSha" })) as ArtifactResponse & { _headerSha?: string };
+  const artifact = (await fetchJson(apiUrl, `/api/v1/hooks/${encodeURIComponent(name)}/${encodeURIComponent(version)}`, apiKey, { withHeader: "_headerSha" })) as ArtifactResponse & { _headerSha?: string };
   if (!artifact.manifest || typeof artifact.script !== "string") {
     throw new Error(`artifact for '${name}@${version}' is malformed`);
   }
