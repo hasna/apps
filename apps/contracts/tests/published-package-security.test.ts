@@ -23,7 +23,7 @@ const root = join(import.meta.dir, "..");
 // surfaces (package.json, hasna.contract.json kitVersion, the
 // CONTRACTS_PACKAGE_VERSION constant) must all carry it. The version-integrity
 // gate (tests/version-integrity.test.ts) enforces the agreement.
-const expectedUnreleasedVersion = "1.0.1";
+const expectedUnreleasedVersion = "1.0.2";
 const forbiddenInternalDomains = [["hasna", "xyz"].join(".")];
 
 function commandText(bytes: Uint8Array): string {

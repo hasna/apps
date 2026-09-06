@@ -1,6 +1,6 @@
 {
   "name": "@hasna/contracts",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Shared schemas and validators for Hasna open-source agent infrastructure contracts.",
   "type": "module",
   "license": "Apache-2.0",
@@ -125,6 +125,7 @@
     "verify:release": "bun run todos:hygiene && bun run typecheck && bun run test && bun run conformance && rm -rf dist && bun run build && bun run src/cli/index.ts repo-conformance . && bun run smoke:dist && bun run smoke:todos-pack && bun run pack:check && bun run scan:artifact",
     "smoke:dist": "bun scripts/smoke-dist.ts",
     "smoke:todos-pack": "bun scripts/smoke-todos-pack.ts",
+    "smoke:optional-peer": "bun scripts/smoke-optional-peer.ts",
     "pack:check": "bun pm pack --dry-run --ignore-scripts",
     "todos:generate": "bun scripts/generate-todos-contract.ts",
     "todos:check": "bun scripts/generate-todos-contract.ts --check",
@@ -162,5 +163,10 @@
   },
   "peerDependencies": {
     "@hasna/secrets": "^0.3.10 || ^0.4.0"
+  },
+  "peerDependenciesMeta": {
+    "@hasna/secrets": {
+      "optional": true
+    }
   }
 }
