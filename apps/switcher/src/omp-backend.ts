@@ -67,7 +67,7 @@ export async function prepareOmpLaunch(input: HarnessLaunchInput): Promise<Prepa
   const selector = `switcher/${input.model}`;
   await writeFile(modelsPath, JSON.stringify({ providers: { switcher: provider } }, null, 2) + "\n", { mode: 0o600, flag: "wx" });
   await writeFile(configPath, JSON.stringify({
-    enabledModels: [selector],
+    enabledModels: ["switcher/**"],
     modelRoles: { default: selector, smol: selector, slow: selector, plan: selector },
   }, null, 2) + "\n", { mode: 0o600, flag: "wx" });
 
