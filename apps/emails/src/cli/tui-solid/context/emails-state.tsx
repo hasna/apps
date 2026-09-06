@@ -1,5 +1,5 @@
-import { createContext, createMemo, createResource, onCleanup, onMount, useContext, type ParentProps } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createContext, createEffect, createMemo, createResource, onCleanup, onMount, useContext, type ParentProps } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 import {
   ALL_ADDRESSES,
   addressChoiceByAddress,
@@ -239,7 +239,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
   });
   // Thread bodies flow through the seam so the reader's conversation view works in
   // both modes (self_hosted: listThread + per-message bodies; local: SQLite conversation).
-  const [conversationResource] = createResource(contentMessage, async (message): Promise<TuiThreadBody[]> => {
+  const [conversationResource] = createResource(currentMessage, async (message): Promise<TuiThreadBody[]> => {
     try {
       return message ? await ds.getConversationBodies(message, { limit: 12 }) : [];
     } catch {
@@ -247,7 +247,15 @@ function createEmailsStore(initialMailbox?: Mailbox) {
       return [];
     }
   });
-  const currentConversation = createMemo<TuiThreadBody[]>(() => conversationResource() ?? []);
+  // Refresh the thread with mailbox metadata, but preserve each message's store
+  // identity so existing disclosures stay mounted when replies arrive.
+  const [conversation, setConversation] = createStore<Array<TuiThreadBody & { key: string }>>([]);
+  createEffect(() => {
+    setConversation(reconcile((conversationResource() ?? []).map((entry) => ({
+      ...entry, key: `${entry.item.storage}:${entry.item.id}`,
+    })), { key: "key" }));
+  });
+  const currentConversation = () => conversation;
   const currentLinks = createMemo<ExtractedEmailLink[]>(() => {
     const body = currentBody();
     return body ? extractEmailLinks({ text: body.text, html: body.html, includeNonWeb: true, max: 200 }) : [];

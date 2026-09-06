@@ -24,6 +24,7 @@ import { App } from "../tui-solid/App.js";
 import { resolveAddressChoice } from "../tui-solid/context/emails-state.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 import { resolveMailDataSource } from "../../lib/mail-data-source.js";
+import { TextRenderable, TextTableRenderable, type Renderable, type TextChunk } from "@opentui/core";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {
@@ -432,6 +433,47 @@ describe("Emails Solid TUI", () => {
     expect(frame()).not.toContain("Previous deployment report");
     await clickText("Quoted message");
     expect(frame()).toContain("Previous deployment report");
+  });
+
+  it("allows only web and mail links in native message chunks, including tables and images", async () => {
+    seedMessage("Untrusted links", undefined, undefined, [], [], { text: [
+      "[Safe prose](https://example.com/prose) [Bad prose](file:///tmp/prose.txt)",
+      "| Action |\n| --- |\n| [Safe table](https://example.com/table) |\n| [Email](mailto:help@example.com) |\n| [Bad table](file:///tmp/test.txt) |\n| [App](custom-app://open) |\n| ![Unsafe image](file:///tmp/image.png) |\n| [Reference][bad] |",
+      "![Standalone image](custom-app://image)",
+      "<a href=\"file:///tmp/raw.txt\">Raw HTML</a>",
+      "[bad]: javascript:alert(1)",
+    ].join("\n\n") });
+    await renderApp();
+    await key("enter");
+    await flush();
+    const chunks: TextChunk[] = [];
+    const collect = (node: Renderable) => {
+      if (node instanceof TextTableRenderable) chunks.push(...node.content.flat(2).filter((chunk): chunk is TextChunk => !!chunk));
+      if (node instanceof TextRenderable) chunks.push(...node.chunks);
+      for (const child of node.getChildren()) collect(child);
+    };
+    collect(setup!.renderer.root);
+    const urls = [...new Set(chunks.flatMap((chunk) => chunk.link ? [chunk.link.url] : []))].sort();
+    expect(urls).toEqual(["https://example.com/prose", "https://example.com/table", "mailto:help@example.com"]);
+    expect(chunks.map((chunk) => chunk.text).join(" ")).toContain("Bad table");
+  });
+
+  it("refreshes replies in the selected thread without collapsing its expanded code", async () => {
+    seedMessage("Refresh thread", "2026-01-01T10:00:00.000Z", undefined, [], [], { text: "Earlier reply" });
+    seedMessage("Re: Refresh thread", "2026-01-02T10:00:00.000Z", undefined, [], [], { text: "Intro\n\n```sh\ncd keep-thread-open\n```" });
+    await renderApp();
+    await clickText("Re: Refresh");
+    await key("enter");
+    await clickText("Code · sh");
+    expect(frame()).toContain("cd keep-thread-open");
+    seedMessage("Re: Re: Refresh thread", "2026-01-03T10:00:00.000Z", undefined, [], [], { text: "New reply after refresh" });
+    bustScanCache();
+    await key("r", { ctrl: true });
+    await Bun.sleep(100);
+    await flush();
+    expect(frame()).toContain("cd keep-thread-open");
+    await clickText("Sender Re: Re: Refresh");
+    expect(frame()).toContain("New reply after refresh");
   });
 
   it("collapses older thread messages while keeping the selected message open", async () => {

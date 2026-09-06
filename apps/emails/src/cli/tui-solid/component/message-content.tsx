@@ -1,6 +1,6 @@
 import { For, Show, createContext, createEffect, createMemo, createSignal, onCleanup, useContext, type ParentProps } from "solid-js";
-import { SyntaxStyle, StyledText, TextRenderable, TextAttributes, infoStringToFiletype, type TextChunk, type BoxRenderable, type ScrollBoxRenderable } from "@opentui/core";
-import { marked, type Token } from "marked";
+import { SyntaxStyle, StyledText, TextRenderable, TextTableRenderable, TextAttributes, infoStringToFiletype, type TextChunk, type BoxRenderable, type ScrollBoxRenderable } from "@opentui/core";
+import type { Token, Tokens } from "marked";
 import { useKeyboard, useRenderer } from "@opentui/solid";
 import { messageDocument, safeMailLink, safeMailText, type MessageBlock } from "../../tui/message-document.js";
 import { useTheme } from "../context/theme.js";
@@ -105,13 +105,10 @@ function Blocks(props: { blocks: MessageBlock[]; syntax: SyntaxStyle }) {
   const emails = useEmails();
   const theme = useTheme();
   const renderer = useRenderer();
-  // Use OpenTUI's custom-node API for immediate, selectable prose. The default
-  // Markdown code renderer waits for an asynchronous grammar, even for plain mail.
-  // Tables and other block layout still use the built-in Markdown renderer.
-  const prose = (token: Token) => {
-    if (!["paragraph", "text", "heading"].includes(token.type)) return undefined;
+  // All prose and table cells share one link policy. Native Markdown's default
+  // linkification accepts arbitrary URI schemes; only horizontal rules use it.
+  const inlineChunks = (tokens: Token[], heading = false): TextChunk[] => {
     const chunks: TextChunk[] = [];
-    const heading = token.type === "heading";
     const initial = { fg: props.syntax.getStyle(heading ? "markup.heading" : "default")?.fg, attributes: heading ? TextAttributes.BOLD : 0 };
     const inline = (tokens: Token[], style: Pick<TextChunk, "fg" | "attributes" | "link">) => {
       for (const part of tokens) {
@@ -136,7 +133,27 @@ function Blocks(props: { blocks: MessageBlock[]; syntax: SyntaxStyle }) {
         }
       }
     };
-    inline("tokens" in token && Array.isArray(token.tokens) ? token.tokens : marked.lexer("text" in token ? String(token.text) : token.raw), initial);
+    inline(tokens, initial);
+    return chunks;
+  };
+  const renderNode = (token: Token) => {
+    if (token.type === "hr") return undefined;
+    if (token.type === "table") {
+      const table = token as Tokens.Table;
+      return new TextTableRenderable(renderer, {
+        content: [table.header, ...table.rows].map((row, index) =>
+          row.map((cell) => inlineChunks(cell.tokens, index === 0))),
+        width: "100%", flexShrink: 0, columnWidthMode: "full", columnFitter: "balanced",
+        wrapMode: "word", cellPaddingX: 1, cellPaddingY: 0, showBorders: true,
+        borderColor: theme.border, fg: theme.markdownText,
+      });
+    }
+    const tokens = "tokens" in token && Array.isArray(token.tokens) ? token.tokens : undefined;
+    const chunks = tokens ? inlineChunks(tokens, token.type === "heading") : [{
+      __isChunk: true as const,
+      text: safeMailText("text" in token ? String(token.text) : token.raw),
+      fg: props.syntax.getStyle("default")?.fg,
+    }];
     return new TextRenderable(renderer, { content: new StyledText(chunks), width: "100%", flexShrink: 0, wrapMode: "word", marginTop: 1 });
   };
   return (
@@ -170,9 +187,8 @@ function Blocks(props: { blocks: MessageBlock[]; syntax: SyntaxStyle }) {
           // 0.4.1's coalesced style refresh replaces custom nodes with code nodes.
           // Top-level mode preserves our immediate prose renderer across refreshes.
           internalBlockMode="top-level"
-          renderNode={prose}
-          fg={theme.markdownText} width="100%" flexShrink={0} marginBottom={1}
-          tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "word", cellPaddingX: 1, cellPaddingY: 0, borderColor: theme.border }} />;
+          renderNode={renderNode}
+          fg={theme.markdownText} width="100%" flexShrink={0} marginBottom={1} />;
       }}
     </For>
   );

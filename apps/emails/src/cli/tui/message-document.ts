@@ -70,15 +70,21 @@ function htmlMarkdown(html: string): string {
       if (node.attribs.width === "1" || node.attribs.height === "1") return "";
       return node.attribs.alt ? `[Image: ${escapeMarkdown(node.attribs.alt)}]` : "";
     }
-    const content = node.children.map((child) => render(child, depth + 1)).join("");
-    const emphasis = (marker: string) => content.trim()
-      ? `${/^\s/.test(content) ? " " : ""}${marker}${content.trim()}${marker}${/\s$/.test(content) ? " " : ""}` : content;
+    // Structural renderers visit only their chosen children. Eagerly rendering
+    // every child first makes nested tables/lists do exponential duplicate work.
+    let rendered: string | undefined;
+    const content = () => rendered ??= node.children.map((child) => render(child, depth + 1)).join("");
+    const emphasis = (marker: string) => {
+      const value = content();
+      return value.trim()
+        ? `${/^\s/.test(value) ? " " : ""}${marker}${value.trim()}${marker}${/\s$/.test(value) ? " " : ""}` : value;
+    };
     if (tag === "br") return "  \n";
     if (tag === "hr") return "\n\n---\n\n";
     if (tag === "blockquote" || /\b(gmail_quote|yahoo_quoted|moz-cite-prefix)\b/.test(node.attribs.class ?? "")) {
-      return `\n\n${content.trim().split("\n").map((line) => `> ${line}`).join("\n")}\n\n`;
+      return `\n\n${content().trim().split("\n").map((line) => `> ${line}`).join("\n")}\n\n`;
     }
-    if (/^h[1-6]$/.test(tag)) return `\n\n${"#".repeat(Number(tag[1]))} ${content.trim()}\n\n`;
+    if (/^h[1-6]$/.test(tag)) return `\n\n${"#".repeat(Number(tag[1]))} ${content().trim()}\n\n`;
     if (tag === "strong" || tag === "b") return emphasis("**");
     if (tag === "em" || tag === "i") return emphasis("*");
     if (tag === "s" || tag === "del") return emphasis("~~");
@@ -89,7 +95,7 @@ function htmlMarkdown(html: string): string {
     }
     if (tag === "a") {
       const href = safeMailLink(node.attribs.href ?? "");
-      return href ? `[${content.trim() || href}](${href})` : content;
+      return href ? `[${content().trim() || href}](${href})` : content();
     }
     if (tag === "ul" || tag === "ol") {
       const items = node.children.filter((child) => isElement(child) && child.name === "li");
@@ -101,11 +107,12 @@ function htmlMarkdown(html: string): string {
     }
     if (tag === "table") {
       const rows: Element[] = [];
-      const collect = (element: Element) => {
+      const collect = (element: Element, level = depth) => {
+        if (level > 60) return;
         for (const child of element.children) {
           if (!isElement(child) || invisible(child)) continue;
           if (child.name === "tr") rows.push(child);
-          else if (/^(thead|tbody|tfoot)$/.test(child.name)) collect(child);
+          else if (/^(thead|tbody|tfoot)$/.test(child.name)) collect(child, level + 1);
         }
       };
       collect(node);
@@ -120,9 +127,9 @@ function htmlMarkdown(html: string): string {
         }
       }
     }
-    if (/^(p|div|section|article|header|footer|table|tr|dl|dt|dd)$/.test(tag)) return `\n\n${content.trim()}\n\n`;
-    if (tag === "td" || tag === "th") return content + " ";
-    return content;
+    if (/^(p|div|section|article|header|footer|table|tr|dl|dt|dd)$/.test(tag)) return `\n\n${content().trim()}\n\n`;
+    if (tag === "td" || tag === "th") return content() + " ";
+    return content();
   }
   return safeMailText(root.children.map((node) => render(node)).join("")).trim();
 }

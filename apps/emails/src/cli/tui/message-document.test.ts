@@ -2,6 +2,23 @@ import { describe, expect, it } from "bun:test";
 import { messageDocument } from "./message-document.js";
 
 describe("message document", () => {
+  it("renders deeply nested tables and lists within a bounded subprocess", () => {
+    // The old traversal rendered children once eagerly, then again for each
+    // table cell/list item. A sub-kilobyte email could block the UI for minutes.
+    // Isolate the deadline so a regression cannot hang the entire test runner.
+    const probe = Bun.spawnSync([process.execPath, "--eval", `
+      import { messageDocument } from ${JSON.stringify(new URL("./message-document.ts", import.meta.url).href)};
+      const table = '<table><tr><th>'.repeat(25) + 'nested-table-leaf' + '</th></tr></table>'.repeat(25);
+      const list = '<ul><li>'.repeat(25) + 'nested-list-leaf' + '</li></ul>'.repeat(25);
+      process.stdout.write(JSON.stringify({
+        table: JSON.stringify(messageDocument(null, table)).includes('nested-table-leaf'),
+        list: JSON.stringify(messageDocument(null, list)).includes('nested-list-leaf'),
+      }));
+    `], { timeout: 3000 });
+    expect(probe.exitCode).toBe(0);
+    expect(JSON.parse(probe.stdout.toString())).toEqual({ table: true, list: true });
+  });
+
   it("keeps Markdown structure and code indentation without displaying fence markers", () => {
     const blocks = messageDocument("# Release\n\n**Ready** and `inline`\n\n```ts\nfunction build() {\n  return 42;\n}\n```\n\nDone.");
     expect(blocks).toEqual([
