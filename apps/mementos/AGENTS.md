@@ -202,11 +202,20 @@ GET /api/activity?days=14                         -- same via REST
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `HASNA_MEMENTOS_DB_PATH` / `MEMENTOS_DB_PATH` | Override DB path | `~/.hasna/mementos/mementos.db` |
+| `HASNA_MEMENTOS_DB_PATH` / `MEMENTOS_DB_PATH` | Explicit local SQLite file — the precedence-1 local opt-in | `~/.hasna/mementos/mementos.db` |
+| `HASNA_MEMENTOS_LOCAL` / `MEMENTOS_LOCAL` | Deliberate unhosted opt-in (honoured only when nothing configures an authority) | unset |
 | `MEMENTOS_DB_SCOPE` | `project` = use git root DB | global |
 | `MEMENTOS_HOST` | Server bind address | `127.0.0.1` |
-| `HASNA_MEMENTOS_API_URL` / `HASNA_MEMENTOS_API_KEY` | Select the client HTTP API transport when both exist (exactly one set throws) | none |
+| `HASNA_MEMENTOS_API_KEY` | Hosted credential, tier 5 (below Keychain + `~/.hasna/mementos/config/credentials`); a key alone resolves to `https://api.hasna.com/mementos` | none |
+| `HASNA_MEMENTOS_API_URL` | Hosted authority override; the Keychain `api-url` item, the credentials file, then the fleet gateway otherwise | fleet gateway |
+| `HASNA_STATION` | Keychain account for `hasna.credentials.mementos.api-key` (hostname/`USER` fallbacks) | hostname |
+| `HASNA_MEMENTOS_API_KEY_OVERRIDE` / `HASNA_MEMENTOS_API_KEY_REF` / `HASNA_PROFILE` | Deliberate env pointer / vault pointer / profile — tiers above the Keychain | none |
 | `HASNA_MEMENTOS_DATABASE_URL` | Server-only PostgreSQL URL; presence selects the server postgresql backend | none |
+
+Hosted clients (CLI, MCP server, `./sdk`) resolve through the ONE
+`@hasna/contracts` chain, fresh per call; retired `*_MODE` / `*_STORAGE_MODE`
+variables and the retired locations (`~/.hasna/fleet-env/`, `~/.hasna/cloud/`,
+`~/.config/hasna/`) are inputs nowhere.
 
 ## Ports
 
@@ -215,7 +224,8 @@ Default REST server port: **19428**
 Default MCP Streamable HTTP port: **8867**
 
 ```
-MEMENTOS_URL=http://localhost:19428   # for SDK clients
+# default REST server port: 19428 (SDK clients: pass an explicit baseUrl,
+# or rely on the unhosted default — the SDK no longer reads MEMENTOS_URL)
 ```
 
 ## Constraints

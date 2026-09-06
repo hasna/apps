@@ -13,6 +13,12 @@
 // store was expected is indistinguishable, from the caller's side, from a store
 // that is working.
 //
+// SINCE THE RESOLVER ADOPTION (2026-09-04, hasna/apps#1720) one half of that
+// table changed direction, deliberately: a credential with NO URL is now a
+// COMPLETE configuration (the authority defaults to the fleet gateway
+// https://api.hasna.com/mementos), and a URL with NO resolvable credential is
+// still a refusal. Both arms fail closed; nothing degrades to local.
+//
 // Precedent: the same defect was measured in @hasna/conversations on 2026-07-30 —
 // a half-configured client served 608 channels instead of 844, data frozen at
 // 2026-07-18, at exit 0. And ~/.claude/rules/no-mcps.md records an `emails` MCP
@@ -33,6 +39,7 @@ import {
   MementosStoreConfigError,
 } from "./api-mode.js";
 import { getDbPath } from "./database.js";
+import { MEMENTOS_LOCAL_OPT_IN_ENV_KEYS } from "../lib/local-opt-in.js";
 
 const URL_VAR = API_URL_ENV_KEYS[0];
 const KEY_VAR = API_KEY_ENV_KEYS[0];
@@ -46,6 +53,7 @@ const STORE_VARS = [
   ...API_KEY_ENV_KEYS,
   ...DATABASE_URL_ENV_KEYS,
   ...DB_PATH_ENV_KEYS,
+  ...MEMENTOS_LOCAL_OPT_IN_ENV_KEYS,
 ];
 
 const API_URL = "https://mementos.hasna.xyz";
@@ -78,14 +86,16 @@ describe("api mode — a half-configured client refuses instead of reading local
     expect(() => getApiConfig()).toThrow(MementosStoreConfigError);
   });
 
-  test("API key set + API URL missing => throws naming the missing URL variable", () => {
+  test("API key set + API URL missing is a COMPLETE configuration — the fleet gateway applies", () => {
+    // Contract change since the resolver adoption: a credential alone
+    // resolves to https://api.hasna.com/mementos (the client appends /v1).
     process.env[KEY_VAR] = FAKE_KEY;
 
-    expect(() => isApiMode()).toThrow(MementosStoreConfigError);
-    expect(() => isApiMode()).toThrow(new RegExp(URL_VAR));
+    expect(isApiMode()).toBe(true);
+    expect(getApiConfig()?.baseUrl).toBe("https://api.hasna.com/mementos/v1");
   });
 
-  test("the unprefixed aliases are held to the same rule", () => {
+  test("the unprefixed alias URL is held to the same rule (URL without key throws)", () => {
     process.env["MEMENTOS_API_URL"] = API_URL;
 
     expect(() => isApiMode()).toThrow(MementosStoreConfigError);
@@ -98,7 +108,7 @@ describe("api mode — a half-configured client refuses instead of reading local
     expect(isApiMode()).toBe(true);
   });
 
-  test("it must not answer false — the old contract — for a partial configuration", () => {
+  test("it must not answer false for a URL-only configuration", () => {
     process.env[URL_VAR] = API_URL;
 
     let answered: boolean | null = null;
@@ -112,7 +122,7 @@ describe("api mode — a half-configured client refuses instead of reading local
 });
 
 describe("api mode — explicit and unambiguous configurations still work", () => {
-  test("nothing configured => local, no error (the documented default)", () => {
+  test("nothing configured => local, no error (the unconfigured answer)", () => {
     expect(isApiMode()).toBe(false);
     expect(getApiConfig()).toBeNull();
   });
@@ -233,7 +243,10 @@ describe("api mode — explicit and unambiguous configurations still work", () =
 
 describe("api mode — errors are actionable and leak nothing", () => {
   test("the error never contains the API key value", () => {
+    // A complete configuration whose URL is refused (userinfo) must refuse
+    // without echoing the key anywhere in the message.
     process.env[KEY_VAR] = FAKE_KEY;
+    process.env[URL_VAR] = "https://user:sup3rsecret@mementos.hasna.xyz";
 
     let message = "";
     try {
@@ -244,6 +257,7 @@ describe("api mode — errors are actionable and leak nothing", () => {
 
     expect(message.length).toBeGreaterThan(0);
     expect(message).not.toContain(FAKE_KEY);
+    expect(message).not.toContain("sup3rsecret");
   });
 
   test("the error names the missing variable and the explicit-local escape hatch", () => {
@@ -258,5 +272,7 @@ describe("api mode — errors are actionable and leak nothing", () => {
 
     expect(message).toContain(KEY_VAR);
     expect(message).toContain(URL_VAR);
+    // The refusal must point at the explicit local escape hatch too.
+    expect(message).toContain(DB_PATH_VAR);
   });
 });

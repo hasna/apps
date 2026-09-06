@@ -128,15 +128,15 @@ describe("mementos storage configuration", () => {
 
     process.env["MEMENTOS_DATABASE_URL"] = "postgres://remote";
     expect(getStorageBackend()).toBe("postgresql");
-
-    process.env["HASNA_MEMENTOS_STORAGE_MODE"] = "cloud";
-    expect(() => getStorageBackend()).toThrow(/HASNA_MEMENTOS_STORAGE_MODE/);
   });
 
-  it("rejects any retired storage-mode variable instead of treating it as a selector", () => {
+  it("a retired storage-mode variable is inert — it never selects or throws", () => {
+    // The *_MODE / *_STORAGE_MODE switches were stripped with the resolver
+    // adoption (hasna/apps#1720): nothing reads them.
     for (const stale of ["cloud", "hybrid", "remote", "local"]) {
       process.env["HASNA_MEMENTOS_STORAGE_MODE"] = stale;
-      expect(() => getStorageBackend()).toThrow(/HASNA_MEMENTOS_STORAGE_MODE/);
+      expect(getStorageBackend()).toBe("sqlite");
+      expect(() => getStorageBackend()).not.toThrow();
     }
   });
 

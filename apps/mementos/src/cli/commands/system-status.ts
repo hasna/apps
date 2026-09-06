@@ -8,7 +8,15 @@ import {
   API_URL_ENV_KEYS,
   DB_PATH_ENV_KEYS,
   getConfiguredApiEnv,
+  getResolvedApiModeReport,
+  type ResolvedApiModeReport,
 } from "../../db/api-mode.js";
+import {
+  hasExplicitLocalDbPath,
+  hasMementosEnvAuthorityIntent,
+  isMementosLocalOptIn,
+  MEMENTOS_LOCAL_OPT_IN_ENV_KEYS,
+} from "../../lib/local-opt-in.js";
 
 /**
  * The uniform API/transport report (hasna/apps#1588).
@@ -18,6 +26,10 @@ import {
  * — which it reports as `unconfigured` rather than by silently implying a
  * local store. The shape mirrors `messages status` so the fleet's operator
  * surfaces stay diffable.
+ *
+ * The transport is answered through the SAME @hasna/contracts chain the data
+ * commands use (env key, macOS Keychain, `~/.hasna/mementos/config/credentials`
+ * or the fleet gateway default), so what this prints is what a run would do.
  */
 export interface MementosApiStatus {
   app: "mementos";
@@ -45,22 +57,34 @@ function firstEnvValue(keys: readonly string[]): string | null {
 }
 
 /**
- * Resolve the report. A malformed `HASNA_MEMENTOS_API_URL` throws out of
- * {@link getConfiguredApiEnv} by design (it must fail closed rather than
- * resolve to a wrong-but-plausible endpoint), so `status` is the one surface
- * that catches it: an operator running `mementos status` to debug a broken
- * endpoint needs the reason, not a stack trace.
+ * Resolve the report. A malformed `HASNA_MEMENTOS_API_URL` throws out of the
+ * resolver by design (it must fail closed rather than resolve to a
+ * wrong-but-plausible endpoint), so `status` is the one surface that catches
+ * it: an operator running `mementos status` to debug a broken endpoint needs
+ * the reason, not a stack trace.
  */
 export function resolveApiStatus(version: string = getPackageVersion()): { status: MementosApiStatus; error: string | null } {
   const apiBase = firstEnvValue(API_URL_ENV_KEYS);
-  const apiKeyPresent = Boolean(firstEnvValue(API_KEY_ENV_KEYS));
-  const localOptIn = Boolean(firstEnvValue(DB_PATH_ENV_KEYS));
 
   let apiUrl: string | null = null;
+  let configured: { baseUrl: string | null; apiKeyPresent: boolean; dbPathKey: string | null } | null = null;
   let error: string | null = null;
   if (apiBase) {
     try {
-      apiUrl = getConfiguredApiEnv().baseUrl;
+      configured = getConfiguredApiEnv();
+      apiUrl = configured.baseUrl;
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // What the chain RESOLVES (env, Keychain, credentials file, fleet gateway) —
+  // answered even with no URL configured, because a credential alone is a
+  // complete configuration (`https://api.hasna.com/mementos` default).
+  let resolved: ResolvedApiModeReport | null = null;
+  if (!error) {
+    try {
+      resolved = getResolvedApiModeReport();
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
@@ -70,11 +94,18 @@ export function resolveApiStatus(version: string = getPackageVersion()): { statu
   // rejection reason may be userinfo, and the `--json` branch would otherwise
   // print the raw env value verbatim, password included.
   const validBase = error ? null : apiBase;
+  const apiKeyConfigured = configured?.apiKeyPresent ?? false;
 
   let transport: MementosApiStatus["transport"];
-  if (validBase && apiKeyPresent && !localOptIn) transport = "http";
-  else if (localOptIn) transport = "local";
-  else transport = "unconfigured";
+  if (hasExplicitLocalDbPath()) {
+    transport = "local"; // precedence 1: an explicit file is the narrowest signal
+  } else if (isMementosLocalOptIn() && !hasMementosEnvAuthorityIntent()) {
+    transport = "local"; // the flag opt-in, answered without the resolver
+  } else if (resolved) {
+    transport = "http";
+  } else {
+    transport = "unconfigured";
+  }
 
   return {
     status: {
@@ -83,7 +114,7 @@ export function resolveApiStatus(version: string = getPackageVersion()): { statu
       transport,
       api_url: apiUrl,
       api_base: validBase,
-      api_key_present: apiKeyPresent,
+      api_key_present: apiKeyConfigured || resolved !== null,
     },
     error,
   };
@@ -123,8 +154,12 @@ export function registerStatusCommand(program: Command): void {
         }
         if (status.transport === "unconfigured") {
           console.error(
-            `${API_URL_ENV_KEYS[0]} and ${API_KEY_ENV_KEYS[0]} are not both set and no `
-              + `${DB_PATH_ENV_KEYS[0]} was given; no transport is configured.`,
+            "mementos is not configured: no credential could be resolved from the Keychain item " +
+              "hasna.credentials.mementos.api-key (macOS only), " +
+              `~/.hasna/mementos/config/credentials, or ${API_KEY_ENV_KEYS[0]}; the authority would be the ` +
+              `fleet gateway https://api.hasna.com/mementos (or ${API_URL_ENV_KEYS[0]} if set). ` +
+              `Set ${API_URL_ENV_KEYS[0]} / ${API_KEY_ENV_KEYS[0]} to go hosted, or opt into the on-box ` +
+              `store with ${DB_PATH_ENV_KEYS[0]} or ${MEMENTOS_LOCAL_OPT_IN_ENV_KEYS[0]}=1.`,
           );
           process.exit(1);
         }

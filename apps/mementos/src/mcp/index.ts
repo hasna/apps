@@ -5,6 +5,7 @@ import { listMemories } from "../db/memories.js";
 import { listAgents } from "../db/agents.js";
 import { listProjects } from "../db/projects.js";
 import { getDatabase } from "../db/database.js";
+import { announceMementosLocalMode } from "../lib/local-opt-in.js";
 import { getPrimaryMachineStartupWarning } from "../db/machines.js";
 import { detectProject } from "../lib/project-detect.js";
 import { loadWebhooksFromDb } from "../lib/built-in-hooks.js";
@@ -174,6 +175,8 @@ async function ensureRestServerRunning(): Promise<void> {
 }
 
 async function prepareMcpRuntime(): Promise<void> {
+  // A local-mode server says so on stderr once, at startup (fail-closed wave).
+  announceMementosLocalMode();
   try {
     const warning = getPrimaryMachineStartupWarning(getDatabase());
     if (warning) {

@@ -49,11 +49,13 @@ new MementosClient({
 })
 ```
 
-`MementosClient.fromEnv()` reads `MEMENTOS_URL` and otherwise uses the local
-default. This standalone version calls `/api` routes and has no built-in API-key
-option. For an authenticated deployment, supply a `fetch` wrapper which adds the
-required header, or use the `@hasna/mementos/sdk` client, which supports
-`apiKey` and canonical `/v1` routing.
+`MementosClient.fromEnv()` accepts only explicit overrides (the legacy
+`MEMENTOS_URL` env read was retired with the credential-chain adoption,
+hasna/apps#1720) and otherwise uses the local default. This standalone version
+calls `/api` routes and has no built-in API-key option. For an authenticated
+deployment, supply a `fetch` wrapper which adds the required header, or use the
+`@hasna/mementos/sdk` client, which resolves credentials through the
+`@hasna/contracts` chain and supports `apiKey` and canonical `/v1` routing.
 
 ## Methods
 

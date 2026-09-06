@@ -15,6 +15,7 @@ import { listAgents } from "../../db/agents.js";
 import { listProjects } from "../../db/projects.js";
 import { loadConfig, getActiveProfile, listProfiles } from "../../lib/config.js";
 import { isApiMode, getApiConfig, apiJson } from "../../db/api-mode.js";
+import { withoutStartupDbAccess } from "../startup-side-effects.js";
 import { outputJson, getPackageVersion, type GlobalOpts } from "../helpers.js";
 
 async function runCommandWithTimeout(
@@ -42,10 +43,11 @@ async function runCommandWithTimeout(
 }
 
 export function registerDoctorCommand(program: Command): void {
-  program
-    .command("doctor")
-    .description("Diagnose common issues with the mementos installation")
-    .action(async () => {
+  withoutStartupDbAccess(
+    program
+      .command("doctor")
+      .description("Diagnose common issues with the mementos installation")
+      .action(async () => {
       const globalOpts = program.opts<GlobalOpts>();
       const checks: { name: string; status: "ok" | "warn" | "fail"; detail: string }[] = [];
 
@@ -304,7 +306,8 @@ export function registerDoctorCommand(program: Command): void {
       }
 
       outputDoctorResults(globalOpts, checks);
-    });
+      }),
+  );
 }
 
 interface CloudHealth {

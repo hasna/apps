@@ -129,6 +129,57 @@ describe("MementosClient against a gateway base", () => {
     expect(urls[0]!.startsWith("https://api.hasna.com/mementos/v1/memories")).toBe(true);
   });
 
+  test("an explicit baseUrl WITHOUT apiKey never attaches the ambient fleet key (hasna/apps#1794)", async () => {
+    // A credential pinned to one authority must never leak onto an explicit
+    // baseUrl the caller chose. The ambient env carries a real-looking key;
+    // the explicit-argument client must send NO auth headers.
+    const KEYS = ["HASNA_MEMENTOS_API_URL", "MEMENTOS_API_URL", "HASNA_MEMENTOS_API_KEY", "MEMENTOS_API_KEY"];
+    const saved = new Map(KEYS.map((k) => [k, process.env[k]]));
+    for (const k of KEYS) delete process.env[k];
+    process.env["HASNA_MEMENTOS_API_KEY"] = "ambient-fleet-key-not-for-this-authority";
+    const captured: Array<{ url: string; headers: HeadersInit | undefined }> = [];
+    try {
+      const client = new MementosClient({
+        baseUrl: "https://private.example",
+        fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+          captured.push({ url: String(input), headers: init?.headers });
+          return new Response(JSON.stringify({ memories: [], total: 0 }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }) as typeof globalThis.fetch,
+      });
+      await client.listMemories({ limit: 1 });
+    } finally {
+      for (const k of KEYS) delete process.env[k];
+      for (const [k, v] of saved) if (v !== undefined) process.env[k] = v;
+    }
+    expect(captured.length).toBe(1);
+    expect(captured[0]!.url).toStartWith("https://private.example/v1/memories");
+    const headers = new Headers(captured[0]!.headers);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("x-api-key")).toBeNull();
+  });
+
+  test("an explicit apiKey IS sent to the explicit baseUrl", async () => {
+    const captured: Array<HeadersInit | undefined> = [];
+    const client = new MementosClient({
+      baseUrl: "https://private.example",
+      apiKey: "explicit-key",
+      fetch: (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        captured.push(init?.headers);
+        return new Response(JSON.stringify({ memories: [], total: 0 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as typeof globalThis.fetch,
+    });
+    await client.listMemories({ limit: 1 });
+    const headers = new Headers(captured[0]);
+    expect(headers.get("authorization")).toBe("Bearer explicit-key");
+    expect(headers.get("x-api-key")).toBe("explicit-key");
+  });
+
   test("does not double the version when the base already ends in /v1", async () => {
     const { client, urls } = recordingClient("https://api.hasna.com/mementos/v1");
     await client.listMemories({ limit: 1 });
@@ -149,7 +200,7 @@ describe("MementosClient against a gateway base", () => {
 });
 
 describe("MementosClient.fromEnv", () => {
-  const KEYS = ["HASNA_MEMENTOS_API_URL", "MEMENTOS_API_URL", "MEMENTOS_URL", "HASNA_MEMENTOS_API_KEY", "MEMENTOS_API_KEY"];
+  const KEYS = ["HASNA_MEMENTOS_API_URL", "MEMENTOS_API_URL", "HASNA_MEMENTOS_API_KEY", "MEMENTOS_API_KEY"];
   function withEnv<T>(values: Record<string, string | undefined>, fn: () => T): T {
     const saved = new Map(KEYS.map((k) => [k, process.env[k]]));
     for (const k of KEYS) delete process.env[k];
@@ -162,24 +213,76 @@ describe("MementosClient.fromEnv", () => {
     }
   }
 
-  test("prefers the canonical HASNA_MEMENTOS_API_URL and resolves it path-safely", () => {
+  test("the canonical HASNA_MEMENTOS_API_URL resolves path-safely", () => {
     const url = withEnv(
-      { HASNA_MEMENTOS_API_URL: "https://api.hasna.com/mementos", MEMENTOS_API_URL: "https://legacy.example" },
+      {
+        HASNA_MEMENTOS_API_URL: "https://api.hasna.com/mementos",
+        HASNA_MEMENTOS_API_KEY: "k",
+      },
       () => MementosClient.fromEnv().apiUrl,
     );
     expect(url).toBe("https://api.hasna.com/mementos/v1");
   });
 
-  test("falls back to the short aliases", () => {
-    expect(withEnv({ MEMENTOS_API_URL: "https://api.hasna.com/mementos/v1" }, () => MementosClient.fromEnv().apiUrl)).toBe(
+  test("disagreeing URL aliases refuse (fail closed) rather than picking one silently", () => {
+    // The resolver treats two different authority aliases as a
+    // misconfiguration: canonical-vs-legacy disagreement is refused, never
+    // resolved by precedence.
+    let message = "";
+    try {
+      withEnv(
+        {
+          HASNA_MEMENTOS_API_URL: "https://api.hasna.com/mementos",
+          MEMENTOS_API_URL: "https://legacy.example",
+          HASNA_MEMENTOS_API_KEY: "k",
+        },
+        () => MementosClient.fromEnv().apiUrl,
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("disagree");
+  });
+
+  test("resolves the legacy alias pair through the resolver", () => {
+    // `MEMENTOS_API_URL` is the resolver's silent legacy alias for one
+    // release — it configures the same authority as the canonical name. A
+    // KEY is required with it (a URL alone refuses).
+    expect(
+      withEnv(
+        { MEMENTOS_API_URL: "https://api.hasna.com/mementos", MEMENTOS_API_KEY: "k" },
+        () => MementosClient.fromEnv().apiUrl,
+      ),
+    ).toBe("https://api.hasna.com/mementos/v1");
+  });
+
+  test("a KEY alone resolves to the fleet gateway authority", () => {
+    // A credential alone is a complete configuration since the resolver
+    // adoption: the authority defaults to https://api.hasna.com/mementos.
+    expect(withEnv({ HASNA_MEMENTOS_API_KEY: "k" }, () => MementosClient.fromEnv().apiUrl)).toBe(
       "https://api.hasna.com/mementos/v1",
-    );
-    expect(withEnv({ MEMENTOS_URL: "https://mementos.hasna.xyz" }, () => MementosClient.fromEnv().apiUrl)).toBe(
-      "https://mementos.hasna.xyz/v1",
     );
   });
 
+  test("a URL without a key refuses (fail closed, never a silent default)", () => {
+    let message = "";
+    try {
+      withEnv({ HASNA_MEMENTOS_API_URL: "https://api.hasna.com/mementos" }, () =>
+        MementosClient.fromEnv().apiUrl,
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+    expect(message).toContain("no API key could be resolved");
+  });
+
+  test("nothing configured resolves to the unhosted local serve (localhost:19428)", () => {
+    expect(withEnv({}, () => MementosClient.fromEnv().apiUrl)).toBe("http://localhost:19428/v1");
+  });
+
   test("a blank value does not select an empty authority", () => {
-    expect(withEnv({ HASNA_MEMENTOS_API_URL: "   " }, () => MementosClient.fromEnv().apiUrl)).toBe("http://localhost:19428/v1");
+    expect(withEnv({ HASNA_MEMENTOS_API_URL: "   " }, () => MementosClient.fromEnv().apiUrl)).toBe(
+      "http://localhost:19428/v1",
+    );
   });
 });

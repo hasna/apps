@@ -52,13 +52,15 @@ Stdio mode also starts contextual auto-injection and advertises the experimental
 `claude/channel` capability. HTTP mode creates a stateless MCP server/transport
 for each request and supports concurrent clients in one process.
 
-Storage selection is shared with the CLI:
-
-- local mode uses SQLite;
-- client API mode uses `HASNA_MEMENTOS_API_URL` plus
-  `HASNA_MEMENTOS_API_KEY` (fallback aliases without `HASNA_` are accepted);
-- raw PostgreSQL database URLs belong only on `mementos-serve` or an explicit
-  administrative migration path.
+Storage selection is shared with the CLI: the hosted transport resolves
+through the ONE `@hasna/contracts` credential chain (fresh per request —
+`HASNA_MEMENTOS_API_KEY`, the macOS Keychain item
+`hasna.credentials.mementos.api-key`, or `~/.hasna/mementos/config/credentials`,
+with the authority defaulting to the fleet gateway `https://api.hasna.com/mementos`);
+the on-box SQLite store is reachable only through the explicit local opt-ins
+(`HASNA_MEMENTOS_DB_PATH` / `HASNA_MEMENTOS_LOCAL=1`), and a local server says
+so on stderr at startup. Raw PostgreSQL database URLs belong only on
+`mementos-serve` or an explicit administrative migration path.
 
 See [Configuration and storage](CONFIGURATION.md).
 

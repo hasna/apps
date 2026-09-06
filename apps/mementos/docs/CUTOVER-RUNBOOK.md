@@ -27,8 +27,8 @@ CLI / MCP / SDK client
 - There are no deployment modes (owner directive 2026-07-29; knowledge
   k_ms5wv466_u0jidq). The server data backend is the only runtime switch:
   `sqlite | postgresql`, selected by `HASNA_MEMENTOS_DATABASE_URL` presence.
-  Any retired storage-mode variable (`HASNA_MEMENTOS_STORAGE_MODE` or an
-  alias) is an error and must be deleted.
+  Retired storage-mode variables (`HASNA_MEMENTOS_STORAGE_MODE` and aliases)
+  are inert and must be deleted from old environments.
 - The `postgresql` backend is pure remote on `mementos-serve`: reads and
   writes go directly to PostgreSQL. There is no SQLite cache or merge layer.
 - Raw database credentials are server/administrative secrets. Fleet clients
@@ -170,8 +170,11 @@ export HASNA_MEMENTOS_API_URL=https://mementos.example.com
 export HASNA_MEMENTOS_API_KEY=REDACTED
 ```
 
-Both API variables are required. A lingering database URL on a client is an
-error (the DSN is server-only), so validate before any write:
+A credential alone is now a complete configuration (the authority defaults to
+the fleet gateway `https://api.hasna.com/mementos`); the URL is only needed to
+point somewhere else. A URL without a resolvable credential is an error. A
+lingering database URL on a client is an error (the DSN is server-only), so
+validate before any write:
 
 ```bash
 mementos storage mode --json
