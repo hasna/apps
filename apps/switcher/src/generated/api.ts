@@ -257,7 +257,7 @@ export interface components {
                 authStyle: "bearer" | "x-api-key";
                 catalogBaseUrl?: string;
                 /** @enum {string} */
-                catalogFormat: "openai" | "ollama" | "mistral" | "together";
+                catalogFormat: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "none";
                 /** @enum {string} */
                 catalogAuthStyle?: "bearer" | "x-api-key" | "none";
                 modelsPath: string;
@@ -281,10 +281,11 @@ export interface components {
             authStyle: "bearer" | "x-api-key";
             catalogBaseUrl?: string;
             /** @enum {string} */
-            catalogFormat?: "openai" | "ollama" | "mistral" | "together";
+            catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "none";
             /** @enum {string} */
             catalogAuthStyle?: "bearer" | "x-api-key" | "none";
             catalogCredentialEnv?: string;
+            catalogAccountId?: string;
             /** @default models */
             modelsPath: string;
             /** @default [] */
@@ -314,10 +315,11 @@ export interface components {
             authStyle: "bearer" | "x-api-key";
             catalogBaseUrl?: string;
             /** @enum {string} */
-            catalogFormat?: "openai" | "ollama" | "mistral" | "together";
+            catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "none";
             /** @enum {string} */
             catalogAuthStyle?: "bearer" | "x-api-key" | "none";
             catalogCredentialEnv?: string;
+            catalogAccountId?: string;
             /** @default models */
             modelsPath: string;
             /** @default [] */
@@ -415,10 +417,11 @@ export interface components {
                 authStyle: "bearer" | "x-api-key";
                 catalogBaseUrl?: string;
                 /** @enum {string} */
-                catalogFormat?: "openai" | "ollama" | "mistral" | "together";
+                catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "none";
                 /** @enum {string} */
                 catalogAuthStyle?: "bearer" | "x-api-key" | "none";
                 catalogCredentialEnv?: string;
+                catalogAccountId?: string;
                 /** @default models */
                 modelsPath: string;
                 /** @default [] */

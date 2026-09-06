@@ -30,9 +30,10 @@ export const providerInputSchema = z.object({
   credentialEnv: envRef.optional(),
   authStyle: z.enum(["bearer", "x-api-key"]).default("bearer"),
   catalogBaseUrl: urlSchema.optional(),
-  catalogFormat: z.enum(["openai", "ollama", "mistral", "together"]).optional(),
+  catalogFormat: z.enum(["openai", "ollama", "mistral", "together", "fireworks", "dashscope", "none"]).optional(),
   catalogAuthStyle: z.enum(["bearer", "x-api-key", "none"]).optional(),
   catalogCredentialEnv: envRef.optional(),
+  catalogAccountId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).optional(),
   modelsPath: z.string().regex(/^[a-zA-Z0-9_/-]+$/).max(200).default("models"),
   manualModels: z.array(modelSchema).max(10000).default([]),
 }).strict().refine(p => !p.modelsPath.split("/").includes("..") && !p.modelsPath.startsWith("/"), "modelsPath must be relative");
@@ -42,7 +43,7 @@ export const providerPresetSchema = z.object({
   protocols: z.array(z.object({
     protocol: protocolSchema, baseUrl: urlSchema.optional(),
     authStyle: z.enum(["bearer", "x-api-key"]),
-    catalogBaseUrl: urlSchema.optional(), catalogFormat: z.enum(["openai", "ollama", "mistral", "together"]),
+    catalogBaseUrl: urlSchema.optional(), catalogFormat: z.enum(["openai", "ollama", "mistral", "together", "fireworks", "dashscope", "none"]),
     catalogAuthStyle: z.enum(["bearer", "x-api-key", "none"]).optional(),
     modelsPath: z.string(), notes: z.array(z.string()),
   }).strict()).min(1),

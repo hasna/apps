@@ -13,7 +13,7 @@ const HELP = `switcher — launch a coding harness with a provider and its model
   switcher providers presets [ID]
   switcher providers list [--search TEXT] [--limit N] [--offset N]
   switcher providers add ID --url URL --protocol PROTOCOL [--credential-env NAME]
-  switcher providers add ID --preset PRESET [--protocol PROTOCOL]
+  switcher providers add ID --preset PRESET [--protocol PROTOCOL] [--catalog-account-id ID]
   switcher providers get|refresh ID
   switcher providers update ID --file provider.json --version N
   switcher providers delete ID --version N
@@ -42,7 +42,8 @@ Provider credential references must start SWITCHER_PROVIDER_.
 Credential bindings contain references only. Custom destinations require --origin URL.
 Vault bindings use the installed secrets CLI; --vault-account reads its operator
 from macOS Keychain, otherwise HASNA_SECRETS_API_KEY must be injected per process.
---file accepts a JSON object including id; raw credentials are never accepted.
+  --file accepts a JSON object including id; raw credentials are never accepted.
+Fireworks discovery requires --catalog-account-id (or an explicit --catalog-url).
 --json outputs machine-readable records (also the default for data commands).
 switcher --version | --help
 `;
@@ -57,7 +58,7 @@ export async function main(args = process.argv.slice(2)) {
     protocol:{type:"string"},preset:{type:"string"},name:{type:"string"},file:{type:"string"},
     "credential-env":{type:"string"},"auth-style":{type:"string"},
     "catalog-url":{type:"string"},"catalog-format":{type:"string"},"catalog-auth-style":{type:"string"},
-    "catalog-credential-env":{type:"string"},"models-path":{type:"string"},"dry-run":{type:"boolean"},provider:{type:"string"},
+    "catalog-credential-env":{type:"string"},"catalog-account-id":{type:"string"},"models-path":{type:"string"},"dry-run":{type:"boolean"},provider:{type:"string"},
     harness:{type:"string"},model:{type:"string"},search:{type:"string"},limit:{type:"string"},offset:{type:"string"},
     refresh:{type:"boolean"},cwd:{type:"string"},executable:{type:"string"},"state-dir":{type:"string"},timeout:{type:"string"},
     "vault-key":{type:"string"},"vault-url":{type:"string"},"vault-cli":{type:"string"},"vault-account":{type:"string"},
@@ -68,7 +69,7 @@ export async function main(args = process.argv.slice(2)) {
   const output = (value: unknown) => console.log(JSON.stringify(value,null,2));
   if (!["doctor", "launch", "models", "runs", "providers", "profiles", "credentials"].includes(command))
     throw new Error("Unknown command. Run switcher --help.");
-  const providerFlags = ["url", "protocol", "preset", "credential-env", "auth-style", "catalog-url", "catalog-format", "catalog-auth-style", "catalog-credential-env", "models-path"] as const;
+  const providerFlags = ["url", "protocol", "preset", "credential-env", "auth-style", "catalog-url", "catalog-format", "catalog-auth-style", "catalog-credential-env", "catalog-account-id", "models-path"] as const;
   const provided = (names: readonly (keyof typeof values)[]) => names.some(name => values[name] !== undefined);
   const credentialFlags = ["vault-key","vault-url","vault-cli","vault-account","keychain-service","keychain-account","origin"] as const;
   const credentials = new CredentialResolver();
@@ -113,7 +114,7 @@ export async function main(args = process.argv.slice(2)) {
     baseUrl: values.url, credentialEnv: values["credential-env"], authStyle: values["auth-style"] as PresetOptions["authStyle"],
     catalogBaseUrl: values["catalog-url"], catalogCredentialEnv: values["catalog-credential-env"],
     catalogAuthStyle: values["catalog-auth-style"] as PresetOptions["catalogAuthStyle"],
-    catalogFormat: values["catalog-format"] as PresetOptions["catalogFormat"], modelsPath: values["models-path"],
+    catalogFormat: values["catalog-format"] as PresetOptions["catalogFormat"], catalogAccountId: values["catalog-account-id"], modelsPath: values["models-path"],
   });
   if (command === "doctor") {
     const harnesses = await Promise.all((["claude","codex","grok","opencode2"] as const).map(h => detectHarness(h)));
@@ -172,7 +173,7 @@ export async function main(args = process.argv.slice(2)) {
           id, name: values.name ?? id, baseUrl: values.url, protocol: values.protocol,
           credentialEnv: values["credential-env"], authStyle: values["auth-style"],
           catalogBaseUrl: values["catalog-url"], catalogCredentialEnv: values["catalog-credential-env"],
-          catalogAuthStyle: values["catalog-auth-style"], catalogFormat: values["catalog-format"], modelsPath: values["models-path"],
+          catalogAuthStyle: values["catalog-auth-style"], catalogFormat: values["catalog-format"], catalogAccountId: values["catalog-account-id"], modelsPath: values["models-path"],
         });
       if(input.id!==id) throw new Error("File id must match the command id.");
       output(action==="add"?await client.createProvider(input):await client.updateProvider(input,currentVersion()));return;

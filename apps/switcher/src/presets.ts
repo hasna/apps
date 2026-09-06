@@ -39,6 +39,25 @@ export const providerPresets: readonly ProviderPreset[] = [
     ["https://docs.mistral.ai/api/endpoint/chat", "https://docs.mistral.ai/api/endpoint/models"], "MISTRAL_API_KEY"),
   preset("together", "Together AI", [route("openai-chat", "https://api.together.ai/v1", {catalogFormat:"together"})],
     ["https://docs.together.ai/docs/inference/openai-compatibility", "https://docs.together.ai/reference/models"], "TOGETHER_API_KEY"),
+  preset("fireworks", "Fireworks AI", [
+    route("openai-chat", "https://api.fireworks.ai/inference/v1", {catalogFormat:"fireworks", notes:["Model discovery uses GET /v1/accounts/{account_id}/models; provide --catalog-account-id or --catalog-url."]}),
+    route("openai-responses", "https://api.fireworks.ai/inference/v1", {catalogFormat:"fireworks", notes:["Model discovery uses GET /v1/accounts/{account_id}/models; provide --catalog-account-id or --catalog-url."]}),
+    route("anthropic-messages", "https://api.fireworks.ai/inference/v1", {catalogFormat:"fireworks", notes:["Model discovery uses GET /v1/accounts/{account_id}/models; provide --catalog-account-id or --catalog-url."]}),
+  ], ["https://docs.fireworks.ai/getting-started/quickstart", "https://docs.fireworks.ai/tools-sdks/python-client/api-reference", "https://docs.fireworks.ai/api-reference/anthropic-messages", "https://docs.fireworks.ai/api-reference/post-chatcompletions", "https://docs.fireworks.ai/api-reference/list-models"], "FIREWORKS_API_KEY"),
+  preset("moonshot", "Moonshot AI (Kimi)", [route("openai-chat", "https://api.moonshot.ai/v1", {catalogBaseUrl:"https://api.moonshot.ai/v1"})],
+    ["https://platform.kimi.ai/docs/api/chat", "https://platform.kimi.ai/docs/api/list-models"], "MOONSHOT_API_KEY"),
+  preset("dashscope", "Alibaba Cloud Model Studio (Qwen)", [route("openai-chat", "https://dashscope-us.aliyuncs.com/compatible-mode/v1", {
+    catalogFormat:"none", notes: ["Inference keys and endpoints are region/workspace-specific. Model discovery uses GET /api/v1/models on a documented region or workspace catalog URL; pass --catalog-url and --catalog-format dashscope."],
+  })], ["https://help.aliyun.com/en/model-studio/base-url", "https://help.aliyun.com/en/model-studio/compatibility-of-openai-with-dashscope", "https://help.aliyun.com/en/model-studio/list-models"], "DASHSCOPE_API_KEY"),
+  preset("zai", "Z.AI", [route("openai-chat", "https://api.z.ai/api/paas/v4", {
+    catalogFormat:"none", notes: ["The published API reference documents inference endpoints but no model-list endpoint; use manual models or provide an explicit catalog URL and parser."],
+  })], ["https://docs.z.ai/api-reference/introduction", "https://docs.z.ai/devpack/quick-start"], "ZAI_API_KEY"),
+  preset("minimax", "MiniMax", [
+    route("openai-chat", "https://api.minimax.cn/v1", {catalogBaseUrl:"https://api.minimax.cn/v1", notes:["The Open Platform contract uses api.minimax.cn and Bearer auth. Token Plan documentation uses api.minimaxi.com; select that authority explicitly with --url and matching auth/credential settings."]}),
+    route("anthropic-messages", "https://api.minimax.cn/anthropic/v1", {authStyle:"x-api-key", catalogBaseUrl:"https://api.minimax.cn/anthropic/v1", catalogAuthStyle:"x-api-key", notes:["The Open Platform contract uses api.minimax.cn/anthropic/v1 and X-Api-Key. Token Plan documentation uses api.minimaxi.com/anthropic; select that authority explicitly with --url and matching auth/credential settings."]}),
+  ], ["https://platform.minimaxi.com/docs/api-reference/text-chat-anthropic", "https://platform.minimaxi.com/docs/api-reference/models/anthropic/list-models", "https://platform.minimaxi.com/docs/api-reference/models/openai/list-models", "https://platform.minimaxi.com/docs/token-plan/other-tools"], "MINIMAX_API_KEY"),
+  preset("siliconflow", "SiliconFlow", [route("openai-chat", "https://api.siliconflow.cn/v1", {catalogBaseUrl:"https://api.siliconflow.cn/v1", catalogFormat:"openai", notes:["The official SiliconCloud OpenAPI contract defines GET /models with Bearer auth and data[] model rows; optional type and sub_type filters are available at the upstream endpoint."]})],
+    ["https://github.com/siliconflow/siliconcloud/blob/main/openapi.yaml", "https://docs.siliconflow.cn/docs/userguide/quickstart", "https://docs.siliconflow.cn/docs/api/chat-completions-post"], "SILICONFLOW_API_KEY"),
   ...(["anthropic-messages", "openai-responses", "openai-chat"] as const).map(protocol =>
     preset(`generic-${protocol}`, `Custom ${protocol}`, [route(protocol)], [])),
 ];
@@ -52,7 +71,7 @@ export type PresetOptions = {
   id?: string; protocol?: Protocol; harness?: Profile["harness"]; baseUrl?: string;
   credentialEnv?: string; authStyle?: "bearer" | "x-api-key";
   catalogBaseUrl?: string; catalogCredentialEnv?: string; catalogAuthStyle?: "bearer" | "x-api-key" | "none";
-  modelsPath?: string; catalogFormat?: ProviderInput["catalogFormat"];
+  modelsPath?: string; catalogFormat?: ProviderInput["catalogFormat"]; catalogAccountId?: string;
 };
 export function providerFromPreset(presetId: string, options: PresetOptions = {}) {
   const preset = getProviderPreset(presetId);
@@ -65,13 +84,20 @@ export function providerFromPreset(presetId: string, options: PresetOptions = {}
     throw new Fault(422, "credential_authority", "An endpoint on another origin requires an explicit --credential-env reference.");
   const suffix = selected.protocol === "anthropic-messages" ? "messages" : selected.protocol === "openai-responses" ? "responses" : "chat";
   // Endpoint overrides must not leave discovery pointed at the original provider.
-  const catalogBaseUrl = options.catalogBaseUrl ?? (options.baseUrl ? undefined : selected.catalogBaseUrl);
+  if (presetId === "fireworks" && !options.catalogBaseUrl && !options.catalogAccountId)
+    throw new Fault(400, "catalog_account_required", "Fireworks model discovery requires --catalog-account-id or an explicit --catalog-url.");
+  if (selected.catalogFormat === "none" && options.catalogFormat && !options.catalogBaseUrl)
+    throw new Fault(400, "catalog_url_required", "This preset requires an explicit --catalog-url when enabling a catalog parser.");
+  const catalogBaseUrl = options.catalogBaseUrl ?? (presetId === "fireworks" && options.catalogAccountId
+    ? `https://api.fireworks.ai/v1/accounts/${encodeURIComponent(options.catalogAccountId)}`
+    : options.baseUrl ? undefined : selected.catalogBaseUrl);
   return parse(providerInputSchema, {
     id: options.id ?? `${preset.id}-${suffix}`, name: preset.name, baseUrl, protocol: selected.protocol,
     credentialEnv: options.credentialEnv ?? preset.credentialEnv, authStyle: options.authStyle ?? selected.authStyle,
     catalogBaseUrl, catalogCredentialEnv: options.catalogCredentialEnv,
     catalogAuthStyle: options.catalogAuthStyle ?? selected.catalogAuthStyle,
-    catalogFormat: options.catalogFormat ?? selected.catalogFormat, modelsPath: options.modelsPath ?? selected.modelsPath,
+    catalogFormat: options.catalogFormat ?? selected.catalogFormat, catalogAccountId: options.catalogAccountId,
+    modelsPath: options.modelsPath ?? selected.modelsPath,
   });
 }
 

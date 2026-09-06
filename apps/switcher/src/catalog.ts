@@ -2,12 +2,24 @@ import { type Catalog, type Model, type Provider, type ProviderInput, Fault, mod
 import { boundedJson } from "./http";
 const positive = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined;
 const strings = (v: unknown) => Array.isArray(v) && v.every(i => typeof i === "string") ? v : undefined;
+const modalities = (v: unknown): string[] | undefined => {
+  if (v === undefined) return undefined;
+  if (!Array.isArray(v) || !v.every(i => typeof i === "string")) throw new Fault(502, "invalid_catalog", "Provider returned malformed modality metadata.");
+  return v.map(i => i.toLowerCase());
+};
 export type CatalogCredentialResolver = (provider: ProviderInput) => Promise<string | undefined>;
 export async function discover(provider: Provider, env: Record<string, string | undefined> = process.env, resolveCredential?: CatalogCredentialResolver): Promise<Catalog> {
   const refreshedAt = new Date().toISOString();
   if (provider.manualModels.length) return {models: provider.manualModels, source: "manual", refreshedAt};
+  if (provider.catalogFormat === "none")
+    throw new Fault(422, "catalog_unsupported", "This provider has no documented model-list contract; configure manual models or an explicit catalog URL and parser.");
   const headers: Record<string, string> = {"accept": "application/json"};
-  const url = new URL(`${provider.catalogBaseUrl ?? provider.baseUrl}/${provider.modelsPath}`);
+  if (provider.catalogFormat === "fireworks" && !provider.catalogBaseUrl && !provider.catalogAccountId)
+    throw new Fault(422, "catalog_account_required", "Fireworks model discovery requires a catalog account ID or an explicit catalog URL.");
+  const catalogRoot = provider.catalogBaseUrl ?? (provider.catalogFormat === "fireworks"
+    ? `${new URL(provider.baseUrl).origin}/v1/accounts/${encodeURIComponent(provider.catalogAccountId!)}` : provider.baseUrl);
+  const url = new URL(`${catalogRoot}/${provider.modelsPath}`);
+  if (provider.catalogFormat === "fireworks") url.searchParams.set("pageSize", "200");
   const authStyle = provider.catalogAuthStyle ?? provider.authStyle;
   const credentialEnv = provider.catalogCredentialEnv ?? provider.credentialEnv;
   if (authStyle !== "none" && credentialEnv) {
@@ -31,19 +43,21 @@ export async function discover(provider: Provider, env: Record<string, string | 
     const data = await boundedJson(response);
     // Together's native catalog is a bare array despite its inference API's
     // OpenAI compatibility. Do not silently accept that shape for other parsers.
-    const rows = provider.catalogFormat === "together" ? data : provider.catalogFormat === "ollama" ? data?.models : data?.data;
+    const rows = provider.catalogFormat === "together" ? data : provider.catalogFormat === "ollama" ? data?.models
+      : provider.catalogFormat === "fireworks" ? data?.models : provider.catalogFormat === "dashscope" ? data?.output?.models : data?.data;
     if (!Array.isArray(rows)) throw new Fault(502, "invalid_catalog", "Expected a provider catalog with a model array matching its configured format.");
     for (const row of rows) {
-      const id = provider.catalogFormat === "ollama" ? row?.model ?? row?.name : row?.id;
+      const id = provider.catalogFormat === "ollama" ? row?.model ?? row?.name : provider.catalogFormat === "fireworks" ? row?.name
+        : provider.catalogFormat === "dashscope" ? row?.model : row?.id;
       if (typeof id !== "string") throw new Fault(502, "invalid_catalog", "Catalog entry is missing a model ID.");
       const candidate = {
-        id, name: row.name ?? row.display_name ?? id,
+        id, name: row.displayName ?? row.name ?? row.display_name ?? id,
         available: provider.catalogFormat === "mistral" && typeof row.archived === "boolean" ? !row.archived : undefined,
         description: typeof row.description === "string" ? row.description.slice(0, 8000) : undefined,
-        contextWindow: positive(row.context_length ?? row.context_window ?? (provider.catalogFormat === "mistral" ? row.max_context_length : undefined)),
-        maxOutputTokens: positive(row.top_provider?.max_completion_tokens ?? row.max_output_tokens),
-        inputModalities: strings(row.architecture?.input_modalities ?? row.input_modalities),
-        outputModalities: strings(row.architecture?.output_modalities ?? row.output_modalities),
+        contextWindow: positive(row.context_length ?? row.context_window ?? row.contextLength ?? row.model_info?.context_window ?? (provider.catalogFormat === "mistral" ? row.max_context_length : undefined)),
+        maxOutputTokens: positive(row.top_provider?.max_completion_tokens ?? row.max_output_tokens ?? row.model_info?.max_output_tokens),
+        inputModalities: strings(row.architecture?.input_modalities ?? row.input_modalities) ?? modalities(row.inference_metadata?.request_modality),
+        outputModalities: strings(row.architecture?.output_modalities ?? row.output_modalities) ?? modalities(row.inference_metadata?.response_modality),
         supportedParameters: strings(row.supported_parameters),
       };
       if (provider.catalogFormat === "mistral") {
@@ -55,6 +69,14 @@ export async function discover(provider: Provider, env: Record<string, string | 
       if (provider.catalogFormat === "together") {
         const modalities: Record<string,string[]> = {chat:["text"],language:["text"],code:["text"],image:["image"],audio:["audio"],video:["video"],embedding:["embedding"],rerank:["rerank"],moderation:["classification"]};
         candidate.outputModalities = modalities[row.type];
+      }
+      if (provider.catalogFormat === "fireworks") {
+        if (row.supportsImageInput === true) candidate.inputModalities = ["image"];
+        if (typeof row.supportsTools === "boolean") candidate.supportedParameters = row.supportsTools ? ["tools"] : [];
+      }
+      if (provider.catalogFormat === "dashscope") {
+        if (row.features !== undefined && !Array.isArray(row.features)) throw new Fault(502, "invalid_catalog", "DashScope model features metadata is malformed.");
+        if (Array.isArray(row.features)) candidate.supportedParameters = row.features.includes("function-calling") ? ["tools"] : [];
       }
       const parsed = modelSchema.safeParse(candidate);
       if (!parsed.success) throw new Fault(502, "invalid_catalog", "Provider returned malformed model metadata.");
@@ -73,6 +95,35 @@ export async function discover(provider: Provider, env: Record<string, string | 
       if (url.searchParams.has("output_modalities")) target.searchParams.set("output_modalities", url.searchParams.get("output_modalities")!);
       if (seenPages.has(target.href)) throw new Fault(502, "invalid_catalog", "Provider catalog pagination did not advance.");
       seenPages.add(target.href); url.href = target.href; continue;
+    }
+    if (provider.catalogFormat === "fireworks" && data.nextPageToken !== undefined && data.nextPageToken !== null) {
+      if (typeof data.nextPageToken !== "string" || data.nextPageToken.length > 2000)
+        throw new Fault(502, "invalid_catalog", "Provider catalog pagination did not advance.");
+      if (data.nextPageToken) {
+        if (seenCursors.has(data.nextPageToken)) throw new Fault(502, "invalid_catalog", "Provider catalog pagination did not advance.");
+        seenCursors.add(data.nextPageToken); url.searchParams.set("pageToken", data.nextPageToken); url.searchParams.set("pageSize", "200"); continue;
+      }
+    }
+    if (provider.catalogFormat === "fireworks") {
+      if (data.totalSize !== undefined && (typeof data.totalSize !== "number" || !Number.isInteger(data.totalSize) || data.totalSize < 0))
+        throw new Fault(502, "invalid_catalog", "Fireworks catalog count metadata is malformed.");
+      if (typeof data.totalSize === "number" && data.totalSize !== models.size) throw new Fault(502, "incomplete_catalog", "Provider catalog count does not match the collected models; retry the refresh.");
+      return {models: [...models.values()], source: "remote", refreshedAt};
+    }
+    if (provider.catalogFormat === "dashscope") {
+      const output = data.output;
+      const total = output?.total;
+      const pageNo = output?.page_no;
+      const pageSize = output?.page_size;
+      if (typeof total !== "number" || !Number.isInteger(total) || total < 0 || typeof pageNo !== "number" || !Number.isInteger(pageNo) || pageNo < 1 || typeof pageSize !== "number" || !Number.isInteger(pageSize) || pageSize < 1)
+        throw new Fault(502, "invalid_catalog", "DashScope catalog pagination metadata is malformed.");
+      if (models.size < total && pageNo * pageSize < total) {
+        const nextPage = pageNo + 1;
+        if (seenCursors.has(String(nextPage))) throw new Fault(502, "invalid_catalog", "Provider catalog pagination did not advance.");
+        seenCursors.add(String(nextPage)); url.searchParams.set("page_no", String(nextPage)); url.searchParams.set("page_size", String(pageSize)); continue;
+      }
+      if (models.size !== total) throw new Fault(502, "incomplete_catalog", "Provider catalog count does not match the collected models; retry the refresh.");
+      return {models: [...models.values()], source: "remote", refreshedAt};
     }
     if (provider.catalogFormat === "together" || !data.has_more) {
       if (typeof data.total_count === "number" && data.total_count !== models.size)

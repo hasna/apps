@@ -1240,7 +1240,10 @@
                     "openai",
                     "ollama",
                     "mistral",
-                    "together"
+                    "together",
+                    "fireworks",
+                    "dashscope",
+                    "none"
                   ]
                 },
                 "catalogAuthStyle": {
@@ -1342,7 +1345,10 @@
               "openai",
               "ollama",
               "mistral",
-              "together"
+              "together",
+              "fireworks",
+              "dashscope",
+              "none"
             ]
           },
           "catalogAuthStyle": {
@@ -1356,6 +1362,10 @@
           "catalogCredentialEnv": {
             "type": "string",
             "pattern": "^SWITCHER_PROVIDER_[A-Z0-9_]+$"
+          },
+          "catalogAccountId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
           },
           "modelsPath": {
             "type": "string",
@@ -1484,7 +1494,10 @@
               "openai",
               "ollama",
               "mistral",
-              "together"
+              "together",
+              "fireworks",
+              "dashscope",
+              "none"
             ]
           },
           "catalogAuthStyle": {
@@ -1498,6 +1511,10 @@
           "catalogCredentialEnv": {
             "type": "string",
             "pattern": "^SWITCHER_PROVIDER_[A-Z0-9_]+$"
+          },
+          "catalogAccountId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
           },
           "modelsPath": {
             "type": "string",
@@ -1976,7 +1993,10 @@
                   "openai",
                   "ollama",
                   "mistral",
-                  "together"
+                  "together",
+                  "fireworks",
+                  "dashscope",
+                  "none"
                 ]
               },
               "catalogAuthStyle": {
@@ -1990,6 +2010,10 @@
               "catalogCredentialEnv": {
                 "type": "string",
                 "pattern": "^SWITCHER_PROVIDER_[A-Z0-9_]+$"
+              },
+              "catalogAccountId": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
               },
               "modelsPath": {
                 "type": "string",
