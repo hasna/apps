@@ -74,6 +74,9 @@ export class SqliteAdapter implements DbAdapter {
 
   constructor(path: string) {
     this.db = new Database(path, { create: true });
+    // WAL setup can itself need a lock; apply the existing wait budget before
+    // that first operation, rather than after this constructor has returned.
+    this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
   }
