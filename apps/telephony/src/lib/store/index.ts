@@ -11,15 +11,17 @@
 //   • ApiStore   — the server's HTTP API at `<API_URL>/v1` with a bearer key.
 //     Delegates to the vendored client-flip HTTP storage client.
 //
-// `getStore()` resolves which transport to use from the API env pair
-// (HASNA_TELEPHONY_API_URL + HASNA_TELEPHONY_API_KEY both set selects the HTTP
-// API). With neither set the resolver FAILS CLOSED (owner directive 2026-09-04):
-// it throws an actionable error naming the required env instead of silently
-// serving on-box SQLite — the LocalStore is reachable ONLY through the explicit
-// opt-in `HASNA_TELEPHONY_LOCAL=1` (alias `TELEPHONY_LOCAL=1`). A partial pair
-// throws naming the missing variable; any retired STORAGE_MODE variable throws
-// first. Callers NEVER branch on the backend themselves and NEVER touch sqlite
-// or fetch directly — that was the split-brain bug this module eliminates.
+// `getStore()` resolves which transport to use through the ONE shared
+// @hasna/contracts client resolver (../client-transport.ts): any credential
+// resolved from any tier (Keychain, ~/.hasna/telephony/config/credentials, or
+// HASNA_TELEPHONY_API_KEY) selects the HTTP API; the LocalStore is reachable
+// ONLY through the explicit opt-in `HASNA_TELEPHONY_LOCAL=1` (alias
+// `TELEPHONY_LOCAL=1`) and only when nothing at all resolves. With no
+// credential and no opt-in the resolver FAILS CLOSED (owner directive
+// 2026-09-04): it throws an actionable error instead of silently serving
+// on-box SQLite. Callers NEVER branch on the backend themselves and NEVER
+// touch sqlite or fetch directly — that was the split-brain bug this module
+// eliminates.
 //
 // Who runs the server and what they pay for it is operation, not a storage
 // branch: a user's own server and the hosted SaaS are the SAME client code
@@ -32,10 +34,17 @@
 
 import {
   HasnaHttpError,
-  resolveStorageClient,
   type HasnaStorageClient,
 } from "@hasna/contracts";
-import { assertNoLegacyStorageMode } from "../retired-storage-mode.js";
+import {
+  resolveTelephonyClientTransport,
+  TELEPHONY_APP,
+  TELEPHONY_API_KEY_ENV,
+  TELEPHONY_API_URL_ENV,
+  TELEPHONY_LOCAL_MODE_ENV,
+  isLocalModeOptIn,
+  telephonyStoreMisconfiguredError,
+} from "../client-transport.js";
 
 import * as dbAgents from "../../db/agents.js";
 import * as dbProjects from "../../db/projects.js";
@@ -74,7 +83,8 @@ import type {
   WebhookDispatchTarget,
 } from "../../types/index.js";
 
-export const TELEPHONY_APP = "telephony";
+// @hasna/telephony — the app slug the fleet credential chain is keyed on.
+export { TELEPHONY_APP } from "../client-transport.js";
 
 // ── Input shapes (mirror the db/* create signatures) ─────────────────────────
 
@@ -771,126 +781,61 @@ export class ApiStore implements TelephonyStore {
 }
 
 // ── Resolver ─────────────────────────────────────────────────────────────────
+//
+// The transport decision is delegated to the shared @hasna/contracts client
+// resolver (src/lib/client-transport.ts): a credential resolving from any tier
+// — an explicit pointer, the macOS Keychain, ~/.hasna/telephony/config/credentials,
+// or HASNA_TELEPHONY_API_KEY — selects the hosted HTTP API at
+// HASNA_TELEPHONY_API_URL (else the fleet gateway https://api.hasna.com/telephony).
+// The on-box LocalStore is reachable ONLY through the explicit opt-in
+// HASNA_TELEPHONY_LOCAL=1 (alias TELEPHONY_LOCAL=1) and only when nothing at
+// all resolves; with no credential and no opt-in the resolver FAILS CLOSED
+// (owner directive 2026-09-04): an actionable error naming the required
+// variables, never a silent SQLite fallback and never a local-fallback event.
+// The app's own env chain and its *_MODE / *_STORAGE_MODE switches are gone.
 
-let cached: TelephonyStore | null = null;
-
-const API_URL_KEYS = ["HASNA_TELEPHONY_API_URL", "TELEPHONY_API_URL"] as const;
-const API_KEY_KEYS = ["HASNA_TELEPHONY_API_KEY", "TELEPHONY_API_KEY"] as const;
+/**
+ * The fail-closed error raised when a store-backed surface runs without any
+ * resolvable credential and without the explicit local opt-in.
+ */
+export { telephonyStoreMisconfiguredError } from "../client-transport.js";
 
 /** Canonical fleet API env var naming the telephony HTTP API base URL. */
-export const TELEPHONY_API_URL_ENV = "HASNA_TELEPHONY_API_URL";
+export { TELEPHONY_API_URL_ENV } from "../client-transport.js";
 /** Canonical fleet API env var naming the telephony API bearer key. */
-export const TELEPHONY_API_KEY_ENV = "HASNA_TELEPHONY_API_KEY";
+export { TELEPHONY_API_KEY_ENV } from "../client-transport.js";
 /** Canonical explicit local-mode opt-in env var. */
-export const TELEPHONY_LOCAL_MODE_ENV = "HASNA_TELEPHONY_LOCAL";
-const LOCAL_MODE_OPT_IN_KEYS = [TELEPHONY_LOCAL_MODE_ENV, "TELEPHONY_LOCAL"] as const;
+export { TELEPHONY_LOCAL_MODE_ENV } from "../client-transport.js";
 
-function firstEnvValue(env: NodeJS.ProcessEnv, keys: readonly string[]): { key: string; value: string } | null {
-  for (const key of keys) {
-    if (Object.hasOwn(env, key)) {
-      const value = env[key]?.trim();
-      if (value) return { key, value };
-    }
-  }
-  return null;
-}
+export { isLocalModeOptIn } from "../client-transport.js";
 
 /**
- * True when the explicit local-mode opt-in is set to a truthy value
- * (`HASNA_TELEPHONY_LOCAL=1` or its `TELEPHONY_LOCAL` alias). `1`/`true`/`yes`
- * opt in; `0`/`false`/`no`/`off` and blank values all count as absent, so a
- * wrapper cannot flip local mode on by accident with a stale variable.
- */
-export function isLocalModeOptIn(env: NodeJS.ProcessEnv = process.env): boolean {
-  return LOCAL_MODE_OPT_IN_KEYS.some((key) => {
-    const raw = env[key];
-    if (raw === undefined) return false;
-    const value = raw.trim().toLowerCase();
-    return value !== "" && value !== "0" && value !== "false" && value !== "no" && value !== "off";
-  });
-}
-
-/**
- * The fail-closed error raised when a store-backed surface runs without the
- * fleet API env and without the explicit local opt-in. Actionable: names the
- * required variables and the opt-in, and never offers a silent local fallback.
- */
-export function telephonyStoreMisconfiguredError(): Error {
-  return new Error(
-    `No telephony API environment is configured and local mode is not enabled. ` +
-      `The telephony client fails closed instead of silently serving the local SQLite store: ` +
-      `set ${TELEPHONY_API_URL_ENV} and ${TELEPHONY_API_KEY_ENV} (unprefixed ` +
-      `TELEPHONY_API_URL / TELEPHONY_API_KEY aliases are accepted) to route CLI, MCP and SDK ` +
-      `data operations through the telephony HTTP API, or set ${TELEPHONY_LOCAL_MODE_ENV}=1 ` +
-      `(alias TELEPHONY_LOCAL=1) to explicitly opt in to the on-box local store.`,
-  );
-}
-
-/**
- * Resolve (and cache) the telephony Store from the environment. Transport is
- * selected by the API env pair alone: both `HASNA_TELEPHONY_API_URL` and
- * `HASNA_TELEPHONY_API_KEY` set selects the {@link ApiStore} (HTTP). With
- * neither set the resolver FAILS CLOSED (owner directive 2026-09-04) — it
- * throws an actionable error naming the required env instead of silently
- * serving on-box SQLite — unless the explicit local opt-in
- * (`HASNA_TELEPHONY_LOCAL=1` / `TELEPHONY_LOCAL=1`) selects the
- * {@link LocalStore}. Exactly one side of the pair throws naming the missing
- * variable — no silent drift. Any retired storage-mode variable throws first
- * via `assertNoLegacyStorageMode`.
+ * Resolve the telephony Store from the environment, FRESH on every call.
+ *
+ * The transport is decided by the shared @hasna/contracts credential chain:
+ * any resolved credential selects the {@link ApiStore} (HTTP); the explicit
+ * local opt-in (`HASNA_TELEPHONY_LOCAL=1` / `TELEPHONY_LOCAL=1`) with nothing
+ * resolving anywhere selects the {@link LocalStore}; everything else throws an
+ * actionable fail-closed error. The hosted transport re-resolves the
+ * credential on every request, so a held client picks up a rotation without
+ * being rebuilt.
  */
 export function getStore(env: NodeJS.ProcessEnv = process.env): TelephonyStore {
-  // Cache only the default (process.env) resolution — the hot path for CLI/MCP/
-  // lib actions. An explicit env override (e.g. SDK constructor) always resolves
-  // fresh so callers can target a different transport in the same process.
-  const isDefaultEnv = env === process.env;
-  if (isDefaultEnv && cached) return cached;
-  assertNoLegacyStorageMode(env);
-  const urlHit = firstEnvValue(env, API_URL_KEYS);
-  const keyHit = firstEnvValue(env, API_KEY_KEYS);
-  let store: TelephonyStore;
-  if (!urlHit && !keyHit) {
-    if (isLocalModeOptIn(env)) {
-      // Explicit opt-in only: the caller asked for the on-box SQLite store.
-      // This is the ONLY path that serves local data — never a missing-env
-      // default, never a fallback selected behind the caller's back.
-      store = new LocalStore();
-    } else {
-      throw telephonyStoreMisconfiguredError();
-    }
-  } else if (!urlHit || !keyHit) {
-    const present = urlHit ? TELEPHONY_API_URL_ENV : TELEPHONY_API_KEY_ENV;
-    throw new Error(
-      `API transport requires BOTH ${TELEPHONY_API_URL_ENV} and ${TELEPHONY_API_KEY_ENV}; only ` +
-        `${present} is set. Set the missing variable to reach the telephony HTTP API, or unset ` +
-        `the partial pair and set ${TELEPHONY_LOCAL_MODE_ENV}=1 to explicitly use the on-box ` +
-        `local store.`,
-    );
-  } else {
-    // Full pair: the client reads AND writes through the server's /v1 API. The
-    // contracts seam resolves its transport from this same env pair. The
-    // published seam type still admits a `sqlite` member (older contracts); it
-    // must NEVER select the on-box store from the fleet path — both API
-    // variables are set, so a non-http resolution is a seam fault and we fail
-    // closed rather than silently serve the wrong dataset.
-    const resolved = resolveStorageClient(TELEPHONY_APP, env);
-    if (resolved.transport !== "http") {
-      throw new Error(
-        `Storage resolution did not select the HTTP transport even though ` +
-          `${TELEPHONY_API_URL_ENV} and ${TELEPHONY_API_KEY_ENV} are set (resolved ` +
-          `${resolved.transport}). Telephony never falls back to the on-box store from ` +
-          `the fleet path — upgrade @hasna/contracts or check for a conflicting ` +
-          `storage-mode variable.`,
-      );
-    }
-    store = new ApiStore(resolved.client);
-  }
-  if (isDefaultEnv) cached = store;
-  return store;
+  const resolved = resolveTelephonyClientTransport(env);
+  if (resolved.mode === "local") return new LocalStore();
+  return new ApiStore(resolved.client as HasnaStorageClient);
 }
 
-/** Reset the cached Store (tests / env changes). */
+/**
+ * Reset the cached Store (tests / env changes).
+ *
+ * Resolution is always fresh — there is no cache to clear — so this is a
+ * compatibility no-op kept for callers that used it to forget a cached
+ * transport between tests.
+ */
 export function resetStore(): void {
-  cached = null;
+  // No-op: getStore() resolves the transport on every call, so there is
+  // nothing to invalidate.
 }
 
 /** True when the resolved Store is the cloud HTTP transport. */

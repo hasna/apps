@@ -22,18 +22,24 @@
  * the pin and the manifest `kitVersion` must move together, and the conformance
  * layer below grades the repo with `bunx @hasna/contracts@<kitVersion>` so the
  * validator is the exact version the manifest declares. The client credential
- * seam is NOT vendored: the app imports `@hasna/contracts` (root), so it
- * inherits the package's credential-resolution fixes and keeps the
- * credential_seam_compliance check green.
+ * seam is NOT vendored: the app imports `@hasna/contracts`, so it inherits the
+ * package's credential-resolution fixes and keeps the credential_seam_compliance
+ * check green.
  *
- * There is no mode enum anywhere in this repo — the client selects transport by
- * API-pair presence and the server backend by DATABASE_URL presence, so the
- * removed placement vocabulary has no parser that could accept it.
+ * There is no mode enum anywhere in this repo — the client selects its
+ * transport through the @hasna/contracts credential chain and the server
+ * backend is PostgreSQL selected by HASNA_TELEPHONY_DATABASE_URL — so the
+ * removed placement vocabulary has no parser that could accept it, and a stale
+ * *_MODE / *_STORAGE_MODE variable is inert (1.0.2 kit).
  */
 import { describe, expect, it } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { KIT_VERSION, SERVER_DATA_BACKENDS, assertNoLegacyStorageMode } from "./generated/storage-kit/index.js";
+import {
+  KIT_VERSION,
+  SERVER_DATA_BACKENDS,
+  resolveServerDataBackend,
+} from "./generated/storage-kit/index.js";
 
 const repoRoot = join(import.meta.dir, "..");
 const manifest = JSON.parse(readFileSync(join(repoRoot, "hasna.contract.json"), "utf8"));
@@ -123,23 +129,45 @@ describe("declared storage backends match the shipped runtime", () => {
     expect(KIT_VERSION).toBe(manifest.kitVersion);
   });
 
-  it("resolves every engine the manifest declares on the server", () => {
-    expect(manifest.storage.engines).toEqual([...SERVER_DATA_BACKENDS]);
-    for (const engine of manifest.storage.engines as string[]) {
-      expect(SERVER_DATA_BACKENDS).toContain(engine);
+  it("resolves the server's authoritative backend from the manifest's engine set", () => {
+    // The 1.0.2 storage kit serves ONE authoritative server backend —
+    // PostgreSQL, selected by HASNA_TELEPHONY_DATABASE_URL — while the manifest
+    // class gate still requires the full `sqlite | postgresql` engine story
+    // (sqlite is the client-side local store, never a server backend in 1.0.2).
+    expect(SERVER_DATA_BACKENDS).toEqual(["postgresql"]);
+    for (const engine of SERVER_DATA_BACKENDS) {
+      expect(manifest.storage.engines).toContain(engine);
     }
   });
 
-  it("resolves the default backend the manifest declares", () => {
-    expect(SERVER_DATA_BACKENDS).toContain(manifest.storage.backend);
+  it("declares the client-side local-store engine the server kit never serves", () => {
+    expect(manifest.storage.engines).toContain("sqlite");
+    expect(SERVER_DATA_BACKENDS).not.toContain("sqlite");
   });
 
-  it("rejects the removed placement vocabulary via the storage-mode ratchet", () => {
+  it("fails closed when the serve process has no PostgreSQL database URL", () => {
+    // The server never defaults to SQLite (1.0.2 kit): a missing, blank, or
+    // invalid HASNA_TELEPHONY_DATABASE_URL is a hard startup error, and the
+    // retired placement vocabulary (local/cloud/self_hosted/...) is INERT —
+    // it neither selects anything nor rescues a missing URL.
     for (const removed of ["local", "cloud", "self_hosted", "remote", "hybrid"]) {
-      expect(() => assertNoLegacyStorageMode("telephony", { HASNA_TELEPHONY_STORAGE_MODE: removed })).toThrow(
-        /HASNA_TELEPHONY_STORAGE_MODE was removed/,
-      );
+      expect(() =>
+        resolveServerDataBackend("telephony", { HASNA_TELEPHONY_STORAGE_MODE: removed }),
+      ).toThrow(/HASNA_TELEPHONY_DATABASE_URL/);
     }
+    expect(() => resolveServerDataBackend("telephony", { HASNA_TELEPHONY_DATABASE_URL: "" })).toThrow(
+      /HASNA_TELEPHONY_DATABASE_URL is set but blank/,
+    );
+  });
+
+  it("resolves postgresql from the canonical database URL and ignores retired mode variables", () => {
+    const resolution = resolveServerDataBackend("telephony", {
+      HASNA_TELEPHONY_DATABASE_URL: "postgresql://user:pass@localhost:5432/telephony",
+      HASNA_TELEPHONY_STORAGE_MODE: "postgres",
+    });
+    expect(resolution.backend).toBe("postgresql");
+    expect(resolution.databaseUrlSource).toBe("HASNA_TELEPHONY_DATABASE_URL");
+    // Placement words are inert in 1.0.2: they never appear in the backend set.
     for (const removed of ["local", "cloud", "self_hosted", "remote", "hybrid"]) {
       expect(SERVER_DATA_BACKENDS).not.toContain(removed);
     }
@@ -164,11 +192,12 @@ function resolveContractsCli(): string | null {
 const contractsCli = resolveContractsCli();
 
 /**
- * Keys the mode_enum_compliance check reads out of the ambient process
- * environment. They describe the operator's shell, not this repo, so a
- * developer exporting one must not change the verdict of a repo merge gate —
- * that is the same ambient-state dependence this file exists to remove. Every
- * other check reads the repo and stays inherited.
+ * Retired mode variables are ambient shell residue: a developer exporting one
+ * describes the operator's shell, not this repo, so it must not change the
+ * verdict of a repo merge gate — that is the same ambient-state dependence this
+ * file exists to remove. (The 1.0.2 kit treats them as inert, so stripping them
+ * here is hermeticity, not vetoing a check that would read them.) Every other
+ * check reads the repo and stays inherited.
  */
 const AMBIENT_MODE_ENV_KEYS = ["HASNA_TELEPHONY_STORAGE_MODE", "TELEPHONY_STORAGE_MODE"] as const;
 
