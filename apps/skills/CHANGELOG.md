@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- 4290ed4: Add the configurable Skills customer lifecycle to the public CLI, MCP and SDK: passwordless auth, instance-bound profiles, server-owned discovery, credit quotes and bounded run approval, account/checkout operations, retry keys, uploads and verified artifact downloads. Normalize full API bases and prefixes consistently, preserve local/internal execution, and fail closed on unsupported capabilities or instance credential mismatch. Account requests do not implement hosted billing or provider execution in the public server.
+
 ## 0.3.0
 
 ### Minor Changes
@@ -179,7 +185,7 @@
 - 6a14cc8c4: Dockerfile bun base aligned to 1.3.14 (lockfile-compatible).
 - fda23181a: Corpus-free server image (drop COPY skills).
 - a12b85fa9: The 9 fleet agent-workflow skills moved to the private per-station store (`fleet-package-rollout`, `goal-plan-coordination`, `inbox`, `inbox-monitor`, `merge-pr`, `skill-goal-execute`, `skill-login`, `skill-project-create`, `skill-publish`) per owner ruling 2026-08-15. They are for internal fleet use only and now live in `hasna-internal/fleet-resources`, which hydrates each station's skill cache (`~/.hasna/skills/skills/`); the public repo keeps only the OSS executable corpus under `skills/` and a pointer README under `agent-skills/`. The sync/registry code paths that serve agent-workflow skills remain, reading them from the machine-local cache rather than the repository.
-All notable changes to this project will be documented in this file.
+  All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
