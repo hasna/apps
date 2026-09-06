@@ -565,4 +565,6 @@ export class ConversationsClient {
     }
 }
 
-export { IdentityError } from "../lib/identity.js";
+export { IdentityError } from "../lib/identity-error.js";
+export { ConversationsSdkResolutionError, createConversationsClient, resolveConversationsSdkTransport } from "./resolve.js";
+export type { ConversationsSdkTransport, ResolveConversationsSdkTransportOptions } from "./resolve.js";

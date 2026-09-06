@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "fs";
 import { createHash, randomUUID } from "crypto";
 import { join, dirname } from "path";
 import { getDataDir } from "./db.js";
+import { IdentityError } from "./identity-error.js";
 import { normalizeAgentName } from "./presence.js";
 import { env } from "./env.js";
 
@@ -124,14 +125,10 @@ function persistIdentity(name: string): boolean {
   }
 }
 
-/** Raised when identity cannot be resolved without guessing. */
-export class IdentityError extends Error {
-  readonly code = "IDENTITY_NOT_SET" as const;
-  constructor(message: string) {
-    super(message);
-    this.name = "IdentityError";
-  }
-}
+// The error class lives in a dependency-free module so the `./sdk` bundle can
+// re-export it without pulling this resolver (and `bun:sqlite`) in. It is
+// re-exported here so every existing import site keeps working unchanged.
+export { IdentityError } from "./identity-error.js";
 
 /**
  * Whether this process opted in to the machine-wide identity file.
