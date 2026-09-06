@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { packageVersion } from "../lib/version.js";
@@ -19,12 +21,6 @@ import { packageVersion } from "../lib/version.js";
 
 const LOOPS_ROOT = join(import.meta.dir, "../..");
 
-let portCounter = 0;
-function nextPort(): string {
-  portCounter += 1;
-  return String(40000 + ((process.pid + portCounter) % 20000));
-}
-
 async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<string> {
   if (!stream) return "";
   return new Response(stream).text();
@@ -35,30 +31,83 @@ interface RunResult {
   stderr: string;
   exitCode: number | null;
   timedOut: boolean;
+  healthStatus?: number;
+  healthBody?: unknown;
+  servingBeforeCleanup?: boolean;
 }
 
-async function runMcp(args: string[]): Promise<RunResult> {
-  const proc = Bun.spawn([process.execPath, "run", "src/mcp/index.ts", ...args], {
+async function runMcp(args: string[], probeHttp = false): Promise<RunResult> {
+  const root = await mkdtemp(join(tmpdir(), "loops-mcp-early-args-"));
+  const proc = Bun.spawn([process.execPath, "--no-env-file", "run", "src/mcp/index.ts", ...args], {
     cwd: LOOPS_ROOT,
-    env: { ...process.env, MCP_HTTP_PORT: nextPort() },
+    // The plain invocation tests the default HTTP transport, regardless of the
+    // caller's MCP_STDIO or cloud configuration. Port 0 lets the OS reserve a
+    // free port atomically; a PID-derived port can collide with parallel tests.
+    env: {
+      PATH: process.env.PATH,
+      NO_COLOR: "1",
+      HASNA_HOME: join(root, "home"),
+      HASNA_CONFIG_HOME: join(root, "config"),
+      LOOPS_DATA_DIR: join(root, "data"),
+      HASNA_LOOPS_CONNECTION: "file",
+      MCP_HTTP_PORT: "0",
+    },
     stdout: "pipe",
     stderr: "pipe",
     stdin: "pipe",
   });
   proc.stdin?.end(); // close stdin so a stdio server cannot wait on it
   const stdoutPromise = readStream(proc.stdout);
-  const stderrPromise = readStream(proc.stderr);
-  const timedOut = await Promise.race([
-    proc.exited.then(() => false),
-    new Promise<boolean>((resolve) => {
-      setTimeout(() => {
-        proc.kill();
-        resolve(true);
-      }, 4_000);
-    }),
-  ]);
-  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
-  return { stdout, stderr, exitCode: proc.exitCode, timedOut };
+  let stderr = "";
+  let listening!: (url: string) => void;
+  const ready = new Promise<string>((resolve) => { listening = resolve; });
+  const stderrPromise = (async () => {
+    const decoder = new TextDecoder();
+    for await (const chunk of proc.stderr) {
+      stderr += decoder.decode(chunk, { stream: true });
+      const match = stderr.match(/HTTP listening on (http:\/\/127\.0\.0\.1:\d+)\/mcp/);
+      if (match) listening(match[1]!);
+    }
+    stderr += decoder.decode();
+  })();
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    proc.kill("SIGKILL");
+  }, 4_000);
+  let healthStatus: number | undefined;
+  let healthBody: unknown;
+  let servingBeforeCleanup: boolean | undefined;
+  try {
+    if (probeHttp) {
+      const url = await Promise.race([ready, proc.exited.then(() => undefined)]);
+      if (url) {
+        const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(1_000) });
+        healthStatus = response.status;
+        healthBody = await response.json();
+        servingBeforeCleanup = proc.exitCode === null;
+      }
+    } else {
+      await proc.exited;
+    }
+  } finally {
+    if (proc.exitCode === null) {
+      proc.kill("SIGTERM");
+      const forceStop = setTimeout(() => proc.kill("SIGKILL"), 500);
+      try {
+        await proc.exited;
+      } finally {
+        clearTimeout(forceStop);
+      }
+    }
+    clearTimeout(deadline);
+    await Promise.all([stdoutPromise, stderrPromise]);
+    await rm(root, { recursive: true, force: true });
+  }
+  return {
+    stdout: await stdoutPromise, stderr, exitCode: proc.exitCode, timedOut,
+    healthStatus, healthBody, servingBeforeCleanup,
+  };
 }
 
 describe("loops-mcp answers --version/--help before any bind (row 7e5f8f3d)", () => {
@@ -87,11 +136,15 @@ describe("loops-mcp answers --version/--help before any bind (row 7e5f8f3d)", ()
   });
 
   test("plain loops-mcp still starts the HTTP server (negative probe)", async () => {
-    // No early arg: the real HTTP server path must still be taken — the bind
-    // marker appears and the process keeps serving until killed. A fix that
-    // swallowed the start path would regress this side.
-    const result = await runMcp([]);
-    expect(result.timedOut).toBe(true);
-    expect(result.stdout + result.stderr).toContain("HTTP listening on");
+    // No early arg: require a real HTTP response while the child is alive,
+    // rather than treating a startup timeout as evidence of a working server.
+    // Include the isolated child's diagnostics if startup exits unexpectedly.
+    const result = await runMcp([], true);
+    expect(result).toMatchObject({
+      timedOut: false,
+      healthStatus: 200,
+      healthBody: { status: "ok", name: "loops" },
+      servingBeforeCleanup: true,
+    });
   });
 });
