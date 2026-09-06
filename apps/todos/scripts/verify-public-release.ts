@@ -409,7 +409,7 @@ function expectServeStartup(command: string, env: NodeJS.ProcessEnv): void {
   console.log(`$ timeout ${SERVE_PROBE_TIMEOUT_SECONDS} ${command} --port=${denyPort} --host 127.0.0.1  # expect refusal`);
   const denied = runCapture("timeout", [SERVE_PROBE_TIMEOUT_SECONDS, command, `--port=${denyPort}`, "--host", "127.0.0.1"], env);
   const deniedOutput = `${denied.stdout}\n${denied.stderr}`;
-  if (deniedOutput.includes("Todos HTTP server running at") || !deniedOutput.includes("TODOS_API_KEY")) {
+  if (deniedOutput.includes("Todos HTTP server running at") || !deniedOutput.includes("HASNA_TODOS_SERVER_API_KEY")) {
     console.error(deniedOutput);
     console.error("todos-serve started (or gave no actionable error) without an API credential — auth must fail closed.");
     process.exit(denied.status || 1);
