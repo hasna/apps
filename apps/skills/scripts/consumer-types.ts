@@ -45,7 +45,8 @@ import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsPro
 import { RemoteSkillsClient, RemoteSkillsAuthClient, RemoteCapabilityUnavailableError as RootCapabilityError } from "@hasna/skills";
 import { SKILLS_NATIVE_STORAGE_ENV, type SkillsNativeStorageConfig } from "@hasna/skills/storage";
 import { SkillsAdminSetUserRoleRequestSchema, SkillsAdminSuspendOrganizationRequestSchema,
-  SkillsAdminResumeOrganizationRequestSchema } from "@hasna/skills/admin-contract";
+  SkillsAdminResumeOrganizationRequestSchema, SkillsAdminListUsersResponseSchema,
+  SkillsAdminShowOrganizationResponseSchema, SkillsAdminSetUserRoleResponseSchema } from "@hasna/skills/admin-contract";
 declare const store: SkillsProductStore;
 const service = createRunService({ store });
 const admission = runAdmissionSchema.parse({});
@@ -85,6 +86,19 @@ const role = SkillsAdminSetUserRoleRequestSchema.parse({ role: "admin" }).role;
 const validRole: "owner" | "admin" | "member" | "viewer" = role;
 // @ts-expect-error Administrative roles cannot widen to arbitrary strings or any.
 const invalidRole: "superuser" = role;
+type ListRole = ReturnType<typeof SkillsAdminListUsersResponseSchema.parse>["users"][number]["role"];
+const noDefaultMembership: ListRole = null;
+const activeDefaultMembership: ListRole = "viewer";
+// @ts-expect-error The list role is required; absent and null differ.
+const absentListRole: ListRole = undefined;
+// @ts-expect-error List roles must not lose inference to arbitrary strings/any.
+const inventedListRole: ListRole = "superuser";
+// @ts-expect-error Active organization rosters still require a concrete role.
+const nullOrganizationRole: ReturnType<typeof SkillsAdminShowOrganizationResponseSchema.parse>["users"][number]["role"] = null;
+// @ts-expect-error Role assignment input does not allow null.
+const nullMutationInput: typeof SkillsAdminSetUserRoleRequestSchema._input["role"] = null;
+// @ts-expect-error Successful role mutation responses remain nonnullable.
+const nullMutationOutput: ReturnType<typeof SkillsAdminSetUserRoleResponseSchema.parse>["user"]["role"] = null;
 const suspended = SkillsAdminSuspendOrganizationRequestSchema.parse({ suspended: true, reason: "fixture" }).suspended;
 const resumed = SkillsAdminResumeOrganizationRequestSchema.parse({ suspended: false, reason: "fixture" }).suspended;
 const suspendLiteral: true = suspended;
@@ -97,7 +111,27 @@ void [service, version, status, terminalStatus, wrongVersion, wrongStatus, clien
   rootError, requestError, unavailableCode, arbitraryCode, storageEnv, storage, invalidStorage,
   validRole, invalidRole, suspendLiteral, resumeLiteral, wrongSuspend, wrongResume];
 `);
+  await writeFile(join(workspace, "admin-list-runtime.ts"), `
+import { strict as assert } from "node:assert";
+import { SkillsAdminListUsersResponseSchema as List, SkillsAdminShowOrganizationResponseSchema as Show,
+  SkillsAdminSetUserRoleRequestSchema as Input, SkillsAdminSetUserRoleResponseSchema as Output } from "@hasna/skills/admin-contract";
+const user = { id: "owned-user", email: "owned@example.test", organizationId: "owned-org", role: null, metadata: {}, createdAt: "2026-09-06T00:00:00Z" };
+const list = (row: unknown) => List.safeParse({ users: [row], limit: 1, offset: 0 }).success;
+assert.equal(list(user), true);
+assert.equal(list({ ...user, role: "viewer" }), true);
+assert.equal(list({ ...user, role: undefined }), false);
+const { role, ...missing } = user; assert.equal(list(missing), false);
+assert.equal(list({ ...user, role: "superuser" }), false);
+const organization = { id: "owned-org", slug: "owned", name: "Owned", metadata: {}, createdAt: user.createdAt };
+const show = (row: unknown) => Show.safeParse({ organization, users: [row], balance: null, subscription: null }).success;
+assert.equal(show(user), false); assert.equal(show({ ...user, role: "viewer" }), true);
+assert.equal(Input.safeParse({ role: null }).success, false);
+assert.equal(Output.safeParse({ ok: true, user }).success, false);
+assert.equal(Output.safeParse({ ok: true, user: { ...user, role: "viewer" } }).success, true);
+console.log("Installed admin list runtime: 10 assertions passed.");
+`);
   await run([process.execPath, "install", "--ignore-scripts", "--registry", "https://registry.npmjs.org"], workspace);
   await run([process.execPath, "node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], workspace);
+  console.log((await run([process.execPath, "--no-env-file", "admin-list-runtime.ts"], workspace)).trim());
   console.log(`Consumer types: @hasna/skills@${metadata.version} passed strict installed-package checking for all four exports (skipLibCheck=false).`);
 } finally { await rm(workspace, { recursive: true, force: true }); }
