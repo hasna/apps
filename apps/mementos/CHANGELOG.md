@@ -1,5 +1,115 @@
 # Changelog
 
+## 0.15.0
+
+### Minor Changes
+
+- 9084fdd: The SDK client survives a path-prefixed gateway base URL (hasna/apps#1601).
+
+  `MementosClient` now resolves its base once: the configured path prefix is kept
+  (`https://api.hasna.com/mementos` → `https://api.hasna.com/mementos/v1/...`,
+  never rebuilt from `URL.origin`), and a base that already carries `/v1` or the
+  legacy `/api` is not versioned a second time into `/mementos/v1/v1/memories`.
+  `MementosClient.fromEnv` reads the canonical `HASNA_MEMENTOS_API_URL` /
+  `HASNA_MEMENTOS_API_KEY` pair first, keeping `MEMENTOS_API_URL` / `MEMENTOS_URL`
+  / `MEMENTOS_API_KEY` as fallbacks, and ignores blank values. The resolved `/v1`
+  root is exposed as `client.apiUrl` for the uniform `API:` status line
+  (hasna/apps#1588).
+
+  The additive `./sdk` surface — `resolveMementosApiBase`,
+  `MEMENTOS_DEFAULT_BASE_URL`, `MEMENTOS_API_URL_ENV_KEYS`,
+  `MEMENTOS_API_KEY_ENV_KEYS` and `MementosClient.apiUrl` — is why this is a
+  minor rather than a patch.
+
+  `resolveMementosApiBase` also validates the configured base: one carrying
+  userinfo, a query or a fragment is refused instead of being concatenated into a
+  malformed request URL, and an explicit `prefix` now replaces whichever
+  versioned segment the base already carries rather than being appended after it.
+
+- 2d67e0c: Resolve credentials through the `@hasna/contracts` client chain (hasna/apps#1720).
+
+  The CLI, the MCP server and the `./sdk` client no longer carry a credential
+  chain of their own (the in-package api-mode client and its env-only resolver
+  are gone). All three call the one resolver in `@hasna/contracts` (bumped to
+  1.0.2), fresh on every call so a key rotation heals a long-lived shell or MCP
+  server without a restart. The chain reads: an explicit argument, then
+  `HASNA_MEMENTOS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
+  `HASNA_MEMENTOS_API_KEY_REF`, then the macOS Keychain item
+  `hasna.credentials.mementos.api-key`, then `~/.hasna/mementos/config/credentials`
+  (owner-only 0400/0600), then `HASNA_MEMENTOS_API_KEY`. The authority follows the
+  same ladder — `HASNA_MEMENTOS_API_URL`, the Keychain `api-url` item, the
+  credentials file — and now DEFAULTS to the fleet gateway
+  `https://api.hasna.com/mementos` once a credential resolves, so a key alone is a
+  complete configuration.
+
+  What this removes:
+
+  - The app's own api-mode credential resolution (`API_URL_ENV_KEYS` /
+    `API_KEY_ENV_KEYS` env reads in `src/db/api-mode.ts` and the SDK's
+    `MEMENTOS_URL`), and with it every reference to the retired locations:
+    `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME`
+    and any `~/.mementos/config.json` key store are inputs nowhere. The legacy
+    unprefixed `MEMENTOS_API_URL` / `MEMENTOS_API_KEY` spellings survive only as
+    the resolver's silent alias fallback for one release.
+  - The `*_MODE` / `*_STORAGE_MODE` fail-loud ratchet (and the generated
+    storage-kit copy of it): the retired storage-mode variables are inert —
+    nothing reads them — and the vendored storage kit was regenerated to the
+    pinned contracts 1.0.2 (with a documented local deviation keeping the
+    sqlite|postgresql server-backend pair this package's contract declares).
+  - The old half-pair contract "key without URL throws": a credential with no URL
+    now resolves to the fleet gateway, while a URL with no resolvable credential
+    still fails closed naming every tier consulted.
+
+  What this adds:
+
+  - FAIL LOUD, everywhere: hosted with no credential anywhere exits non-zero with
+    one line naming the Keychain item, the credentials file and the env key; there
+    is no SQLite fallback and no `*-local-fallback` event. The on-box SQLite
+    store is reachable ONLY through the explicit opt-ins (`HASNA_MEMENTOS_DB_PATH`
+    / `MEMENTOS_DB_PATH`, or `HASNA_MEMENTOS_LOCAL=1` with nothing configured),
+    and every local run prints one line saying it is local on stderr.
+  - The SDK attaches a credential only to the authority it resolved with: an
+    explicit `baseUrl` without an explicit `apiKey` never picks up the ambient
+    fleet key (hasna/apps#1794), and blank-variable normalisation carries the
+    Keychain gate across the copy it forces (hasna/apps#1788).
+  - Hermetic test seams: an injectable `security` runner and fixture
+    `HOME`/`HASNA_CONFIG_HOME` cover the Keychain and disk tiers in the suite;
+    the `bun test` preload pins the local opt-in and an empty Keychain account so
+    a scrubbed test process physically cannot reach the shared store.
+
+  The machines registry, `machine_id` on memories, and the server's own
+  accepted-key auth are unchanged.
+
+### Patch Changes
+
+- ceadee5: Validate the CLI's API base URL and add `mementos status`.
+
+  `src/db/api-mode.ts` — the transport the `mementos` CLI actually uses — now
+  resolves its base URL through the same validated `resolveMementosApiBase`
+  helper as `@hasna/mementos/sdk`, instead of a bare string concatenation. A base
+  carrying a query, fragment, userinfo, or a non-http(s) scheme is rejected rather
+  than pasted into the request URL, where `https://api.hasna.com/mementos?debug=1`
+  silently became `…?debug=1/v1/memories` and a `user:pass@` base leaked operator
+  credentials into every printed endpoint (hasna/apps#1601; the SDK half landed in
+  hasna/apps#1763).
+
+  Adds `mementos status` (`--json`), which prints the fleet-uniform
+  `API: https://api.hasna.com/mementos/v1` line, the transport, and whether a key
+  is present — never the key itself (hasna/apps#1588). Like `storage mode`, it
+  opts out of the startup store access so it still answers when nothing is
+  configured.
+
+  `mementos status --json` reports `api_base: null` for a refused base instead of
+  echoing the raw value (a base refused for its userinfo must not come back,
+  password included, on the surface that gets pasted into issues), and a refused
+  base no longer reports `transport: http`. The shared resolver also refuses a
+  bare trailing `?` or `#` (previously concatenated into `…/mementos?/v1`) and no
+  longer quotes an unparseable input in its error. `mementos doctor` prints the
+  same `API: …/v1` line and `transport: http` diagnostic instead of
+  `Storage backend: self-hosted API (…)`.
+
+- 93824eb: Apply the existing five-second SQLite busy timeout before enabling WAL, so startup can wait for a briefly locked local database. Persistent locks still fail after the timeout; no command retry is added.
+
 ## 0.14.88
 
 ### Patch Changes
@@ -9,13 +119,11 @@
 - Fix storage migrate resolving the env-configured DSN outside the serve context (O15-02695) — `storage migrate` now reads the configured database URL directly instead of failing the guard that blocks deploys.
 - Tuple-collision write paths (dedupe create/error on an occupied tuple, PATCH scope-change into an occupied tuple) return a handled 409 naming the existing row instead of a driver-dependent 400/500 (PLA8-00141).
 
-
 ## 0.14.87
 
 ### Patch Changes
 
 - 6adaf39: redact credential-shaped keys from list output on read (I24-00018) — collection list reads project credential-shaped keys out of JSON/YAML/CSV/compact output while preserving ordinary keys and required metadata.
-
 
 ## 0.14.86
 
@@ -228,12 +336,12 @@ added here exercises the near-miss arm specifically.
 
 ### Exit codes, stated plainly because callers script against them
 
-| case | before | 0.14.72 |
-| --- | --- | --- |
-| exact key present | `0` | `0` (unchanged) |
-| near-miss key, no `--fuzzy` | `0` + a different record | `1`, no record printed |
-| key absent entirely | `1` | `1` (unchanged) |
-| near-miss key, with `--fuzzy` | n/a | `2` + the neighbour |
+| case                          | before                   | 0.14.72                |
+| ----------------------------- | ------------------------ | ---------------------- |
+| exact key present             | `0`                      | `0` (unchanged)        |
+| near-miss key, no `--fuzzy`   | `0` + a different record | `1`, no record printed |
+| key absent entirely           | `1`                      | `1` (unchanged)        |
+| near-miss key, with `--fuzzy` | n/a                      | `2` + the neighbour    |
 
 A caller that treats any non-zero as "not found" keeps working. A caller that
 relied on a bare `recall <key>` returning a neighbour must now pass `--fuzzy`.
