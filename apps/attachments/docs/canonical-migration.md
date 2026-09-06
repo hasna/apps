@@ -25,14 +25,19 @@ application-owned adapters derived from the existing 0.8.2 kit, with provenance
 in its README; it is not falsely labeled an unmodified generated kit.
 No unpublished Contracts source was copied or consumed.
 
-Contracts remains at ^0.8.2 (the standalone committed lock resolves 0.8.7);
-the artifact scanner remains pinned to published 0.8.2. Reviewed security commit
-7ab022d87b48fd15f0ce1831fc560e0651b8c232 and test-only successor
-2b15c73f949729a001d5dc88509650f61e58ee41 were used only as read-only conformance
-evidence. Their canonical credential/server kit changes are unpublished.
-The static credential-seam check passing is NOT proof of actual shared-seam adoption:
-this application currently enforces the boundary in application-owned code.
-Adopting the released canonical shared implementation remains a release blocker.
+Client credentials and authorities resolve through the published
+@hasna/contracts 1.0.2 seam (owner directive 2026-09-04, hasna/apps#1720) —
+the CLI, MCP server and ./sdk all call `resolveClientTransport` /
+`resolveCredential` fresh per request, and the per-app env chain is deleted:
+no `*_MODE` / `*_STORAGE_MODE` selector, no client database URLs or DB_PATH,
+no `~/.hasna/fleet-env` / `~/.hasna/cloud` / `~/.config/hasna` /
+`$XDG_CONFIG_HOME` reads, no `~/.attachments/config.json` key store, and no
+DEPRECATED legacy-notice machinery. Hosted mode with no resolvable credential
+fails loud (non-zero exit, no SQLite, no local-fallback event). @hasna/contracts
+is a devDependency pinned exactly to 1.0.2 and inlined by `bun build --target
+bun`; the published .d.ts files never import it, and the packed-artifact scan
+gate proves that on every release. The artifact scanner (`repo-conformance` /
+`artifact-scan`) is pinned to the same published 1.0.2.
 
 Configuration uses @hasna/paths; agent attribution uses its state directory.
 Explicit input files and download destinations are not an application dataset.

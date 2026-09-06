@@ -3,7 +3,7 @@
   "name": "attachments",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.8.2",
+  "kitVersion": "1.0.2",
   "description": "Authenticated HTTPS clients; server-side PostgreSQL metadata and object storage.",
   "bins": [
     "attachments",

@@ -1,14 +1,21 @@
 import { describe, test, expect, beforeEach, afterEach, spyOn } from "bun:test";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { Command } from "commander";
 import { registerStatus } from "./status";
 const saved = { ...process.env };
 const originalFetch = globalThis.fetch;
+let scratchHome: string;
 beforeEach(() => {
+  scratchHome = mkdtempSync(join(tmpdir(), "attachments-diagnostic-"));
+  // Hermetic: the shared seam's disk tier anchors here, never to a station home.
+  process.env.HASNA_HOME = scratchHome;
   for (const name of Object.keys(process.env)) if (name.includes("ATTACHMENTS")) delete process.env[name];
   process.env.HASNA_ATTACHMENTS_API_URL = "https://attachments.example.test";
   process.env.HASNA_ATTACHMENTS_API_KEY = "diagnostic-test-key";
 });
-afterEach(() => { process.env = { ...saved }; globalThis.fetch = originalFetch; process.exitCode = 0; });
+afterEach(() => { process.env = { ...saved }; globalThis.fetch = originalFetch; process.exitCode = 0; rmSync(scratchHome, { recursive: true, force: true }); });
 async function run() {
   let text = "";
   const output = spyOn(process.stdout, "write").mockImplementation(chunk => { text += String(chunk); return true; });
@@ -27,6 +34,7 @@ describe("status canonical diagnostic", () => {
   });
   test("missing config makes zero network calls and does not fabricate identity", async () => {
     delete process.env.HASNA_ATTACHMENTS_API_URL;
+    delete process.env.HASNA_ATTACHMENTS_API_KEY;
     globalThis.fetch = (() => { throw new Error("must not call"); }) as typeof fetch;
     expect(await run()).toContain("BLOCKED");
   });

@@ -61,7 +61,14 @@ export interface ServeAppDeps {
   version: string;
   mode: string;
   signingSecret: string;
-  isRevoked?: (kid: string) => boolean | Promise<boolean>;
+  /**
+   * Key lifecycle verdict, wired straight into the 1.0.2 verifier as
+   * `keyStatus` — the only hook form that can refuse keys this service has no
+   * record of. `ApiKeyStore.keyStatus` implements it. Required: a serve app
+   * without one cannot revoke anything, and the strict verifier refuses to
+   * boot silently permissive.
+   */
+  keyStatus: (kid: string) => "active" | "revoked" | "unknown" | "expired" | Promise<"active" | "revoked" | "unknown" | "expired">;
   audit?: (event: unknown) => void;
   /**
    * Email sender for email-gated share links. When undefined, the public
@@ -288,7 +295,12 @@ export function createServeApp(deps: ServeAppDeps): Hono {
   const verifier: ApiKeyVerifier = verifyApiKey({
     app: APP_SLUG,
     signingSecret: deps.signingSecret,
-    ...(deps.isRevoked ? { isRevoked: deps.isRevoked } : {}),
+    // The strict 1.0.2 verifier demands a status hook — bare `isRevoked`
+    // cannot refuse keys this service has no record of, and a service with no
+    // hook at all cannot revoke anything. Production wires the store's
+    // keyStatus; the type keeps the hook required, so a test fixture that
+    // wants a permissive app says so with its own explicit stub.
+    keyStatus: deps.keyStatus,
     ...(deps.audit ? { audit: deps.audit as never } : {}),
   });
 
