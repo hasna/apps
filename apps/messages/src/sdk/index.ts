@@ -1,16 +1,18 @@
 /**
  * ./sdk — the client surface of @hasna/messages.
  *
- * One transport resolver, two connections: the server HTTP API selected by
- * HASNA_MESSAGES_API_URL (+ HASNA_MESSAGES_API_KEY), or the on-box local
- * store (a local SQLite file) — reachable ONLY through the explicit opt-in
- * HASNA_MESSAGES_LOCAL=1. A missing API URL is never a silent local-data
- * selection: the resolver fails closed with an error naming the required
- * env. The client never opens Postgres directly — the server (messages-serve)
- * owns the SQLite/PostgreSQL backend.
+ * ONE transport resolver, the shared @hasna/contracts client chain
+ * (hasna/apps#1720): CLI, MCP server and ./sdk all resolve their credential
+ * and their authority through it, per request, fresh. A key rotation heals a
+ * long-lived process without a rebuild; the on-box SQLite store is reachable
+ * ONLY under the explicit `HASNA_MESSAGES_LOCAL=1` opt-in, never by a missing
+ * credential — see ./resolve.ts for the five tiers and the fail-closed rule.
+ *
+ * The server (messages-serve) owns the SQLite/PostgreSQL backend; the client
+ * never opens Postgres directly.
  *
  * messages-serve supports a trusted localhost mode with no API key
- * configured; the client therefore sends the key when one is present and the
+ * configured; a client therefore sends the key when one was resolved and the
  * server is the authority on whether one is required. The key is never
  * logged, returned, or embedded in errors.
  */
@@ -25,68 +27,57 @@ import type {
 } from "../types";
 import { MessagesService, threadKeyFor, newThreadId } from "../service";
 import { SqliteMessagesStore } from "../server/sqlite-store";
+import {
+  MESSAGES_API_KEY_ENV,
+  MESSAGES_API_URL_ENV,
+  MESSAGES_DATABASE_URL_ENV,
+  MESSAGES_SQLITE_PATH_ENV,
+  resolveMessagesClientTransport,
+  resolveMessagesCredential,
+  stripV1FromApiUrl,
+} from "./resolve.js";
+import { toV1BaseUrl } from "@hasna/contracts/client";
+import type {
+  MessagesClientEnv,
+  MessagesClientResolveOptions,
+  MessagesCredentialProvider,
+  MessagesKeychainTierOptions,
+  MessagesResolvedCredential,
+} from "./client-types.js";
 
-export const MESSAGES_API_URL_ENV = "HASNA_MESSAGES_API_URL";
-export const MESSAGES_API_KEY_ENV = "HASNA_MESSAGES_API_KEY";
-export const MESSAGES_DATABASE_URL_ENV = "HASNA_MESSAGES_DATABASE_URL";
-export const MESSAGES_SQLITE_PATH_ENV = "HASNA_MESSAGES_SQLITE_PATH";
-
-/**
- * Explicit local-mode opt-in. The client surfaces NEVER default to the on-box
- * SQLite store when the fleet API env is missing; HASNA_MESSAGES_LOCAL=1 is
- * the only way to select local mode. Value `1`/`true`/`yes` opts in; `0`,
- * `false`, `no`, `off` and blank are all treated as absent.
- */
-export const MESSAGES_LOCAL_MODE_ENV = "HASNA_MESSAGES_LOCAL";
-
-export const MESSAGES_CLIENT_TRANSPORTS = ["http", "local"] as const;
-export type MessagesClientTransport = (typeof MESSAGES_CLIENT_TRANSPORTS)[number];
-
-export function isPresent(env: Record<string, string | undefined>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(env, key) && (env[key] ?? "").trim().length > 0;
-}
-
-/** True when the explicit local-mode opt-in env is set to a truthy value. */
-export function isLocalModeOptIn(env: Record<string, string | undefined>): boolean {
-  const raw = env[MESSAGES_LOCAL_MODE_ENV];
-  if (raw === undefined) return false;
-  const value = raw.trim().toLowerCase();
-  return !(value === "" || value === "0" || value === "false" || value === "no" || value === "off");
-}
-
-/** The fail-closed error: actionable, names the required env and the opt-in. */
-export function messagesTransportMisconfiguredError(): Error {
-  return new Error(
-    `${MESSAGES_API_URL_ENV} is not set; refusing to fall back to a local store. ` +
-      `Set ${MESSAGES_API_URL_ENV} (and ${MESSAGES_API_KEY_ENV}) to reach the messages fleet API, ` +
-      `or set ${MESSAGES_LOCAL_MODE_ENV}=1 to explicitly run in local SQLite mode.`,
-  );
-}
-
-export interface MessagesClientTransportReport {
-  transport: MessagesClientTransport;
-  apiUrlPresent: boolean;
-  apiKeyPresent: boolean;
-}
-
-/**
- * Resolve the client connection. `HASNA_MESSAGES_API_URL` present -> HTTP;
- * absent but `HASNA_MESSAGES_LOCAL=1` (explicit opt-in) -> local store;
- * absent both -> THROWS: a missing URL never silently selects local data.
- * The key is optional because messages-serve supports a trusted localhost
- * no-key mode; when the server requires a key it returns 401.
- */
-export function resolveMessagesClientTransport(env: Record<string, string | undefined> = process.env): MessagesClientTransportReport {
-  const apiUrlPresent = isPresent(env, MESSAGES_API_URL_ENV);
-  const apiKeyPresent = isPresent(env, MESSAGES_API_KEY_ENV);
-  if (apiUrlPresent) {
-    return { transport: "http", apiUrlPresent, apiKeyPresent };
-  }
-  if (isLocalModeOptIn(env)) {
-    return { transport: "local", apiUrlPresent: false, apiKeyPresent };
-  }
-  throw messagesTransportMisconfiguredError();
-}
+export {
+  MESSAGES_API_URL_ENV_KEYS,
+  MESSAGES_API_KEY_ENV_KEYS,
+  MESSAGES_API_URL_ENV,
+  MESSAGES_API_KEY_ENV,
+  MESSAGES_DATABASE_URL_ENV,
+  MESSAGES_SQLITE_PATH_ENV,
+  MESSAGES_DEFAULT_API_URL,
+  MESSAGES_LOCAL_OPT_IN_ENV_KEYS,
+  isMessagesLocalOptIn,
+  hasMessagesEnvAuthorityIntent,
+  selectsMessagesLocalStore,
+  resolveMessagesClientTransport,
+  resolveMessagesCredential,
+  messagesAuthorityEnvKeys,
+  messagesResolverEnv,
+  messagesResolverInputs,
+  messagesUnconfiguredError,
+  messagesLocalModeNotice,
+  resetMessagesLocalModeNotice,
+} from "./resolve.js";
+export type {
+  MessagesClientEnv,
+  MessagesClientResolveOptions,
+  MessagesClientTransport,
+  MessagesClientTransportReport,
+  MessagesCredentialProvider,
+  MessagesCredentialTier,
+  MessagesKeychainCommandResult,
+  MessagesKeychainCommandRunner,
+  MessagesKeychainTierOptions,
+  MessagesResolvedCredential,
+} from "./client-types.js";
 
 /** The route prefix every messages-serve route lives under. */
 export const MESSAGES_API_VERSION_PREFIX = "/v1";
@@ -96,46 +87,29 @@ export const MESSAGES_API_VERSION_PREFIX = "/v1";
  * appends `/v1/...` to, and to the canonical `/v1` root that status surfaces
  * print (hasna/apps#1588).
  *
- * The gateway addresses this app as `https://api.hasna.com/messages/v1/...`
- * (hasna/apps#1512), so an operator may configure `https://host`,
- * `https://host/v1`, `https://api.hasna.com/messages` or
- * `https://api.hasna.com/messages/v1`. The path prefix must SURVIVE (dropping
- * it to `URL.origin` is the hasna/apps#1601 defect) and a base that already
- * carries `/v1` must not be doubled into `/messages/v1/v1/agents`.
- *
- * A base carrying userinfo, a query or a fragment is REFUSED rather than
- * concatenated into a malformed request URL, and refusing also keeps
- * operator-supplied credential material out of the printed API line.
- *
- * TODO(hasna/apps#1588): replace this with the shared base-URL helper from
- * `@hasna/contracts` once that release lands and this package's pin is
- * bumped; the semantics here are intentionally identical to it.
+ * The OLD in-package implementation is gone: this is the shared
+ * `@hasna/contracts` normaliser (`toV1BaseUrl`), the same one every hosted
+ * Hasna client uses. It preserves the path prefix, refuses userinfo, query
+ * and fragment data, and restricts plain HTTP to exact loopback authorities.
  */
 export function resolveMessagesApiBase(rawBaseUrl: string): { baseUrl: string; apiUrl: string } {
-  const trimmed = (rawBaseUrl ?? "").trim().replace(/\/+$/, "");
-  let url: URL;
-  try {
-    url = new URL(trimmed);
-  } catch {
-    throw new Error(`${MESSAGES_API_URL_ENV} must be an absolute http(s) URL, got ${JSON.stringify(rawBaseUrl)}`);
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`${MESSAGES_API_URL_ENV} must be an absolute http(s) URL`);
-  }
-  if (url.username || url.password || url.search || url.hash) {
-    throw new Error(`${MESSAGES_API_URL_ENV} must not contain userinfo, query, or fragment data`);
-  }
-  const pathname = url.pathname.replace(/\/+$/, "");
-  const prefix = pathname === MESSAGES_API_VERSION_PREFIX ? "" : pathname.replace(/\/v1$/, "");
-  const baseUrl = `${url.origin}${prefix}`;
-  return { baseUrl, apiUrl: `${baseUrl}${MESSAGES_API_VERSION_PREFIX}` };
+  const apiUrl = toV1BaseUrl(rawBaseUrl);
+  return { baseUrl: stripV1FromApiUrl(apiUrl), apiUrl };
 }
 
 export interface MessagesClientOptions {
   /** Base URL of messages-serve, e.g. https://messages.example.com */
   baseUrl: string;
-  /** API key, sent as the `x-api-key` header. Optional for local-only servers. */
-  apiKey?: string;
+  /**
+   * API key, sent as the `x-api-key` header.
+   *
+   * Prefer a {@link MessagesCredentialProvider} for a long-lived client: the
+   * client calls it fresh for every request, so a key rotation heals without
+   * a rebuild. A plain string is a deliberate pin and is never re-resolved.
+   * Omitted means NO key is ever attached — the constructor never consults
+   * the machine's ambient credential stores.
+   */
+  apiKey?: string | MessagesCredentialProvider;
   /** Custom fetch (defaults to global fetch). */
   fetch?: typeof fetch;
 }
@@ -143,7 +117,7 @@ export interface MessagesClientOptions {
 export class MessagesClient {
   private readonly baseUrl: string;
   private readonly resolvedApiUrl: string;
-  private readonly apiKey?: string;
+  private readonly apiKey?: string | MessagesCredentialProvider;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: MessagesClientOptions) {
@@ -163,9 +137,18 @@ export class MessagesClient {
     return this.resolvedApiUrl;
   }
 
+  /** The key this client would send RIGHT NOW, re-resolved per call. Never logged. */
+  private currentApiKey(): string | null {
+    if (this.apiKey === undefined) return null;
+    if (typeof this.apiKey === "string") return this.apiKey;
+    const resolved = this.apiKey();
+    return resolved.apiKey;
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { "content-type": "application/json" };
-    if (this.apiKey) headers["x-api-key"] = this.apiKey;
+    const apiKey = this.currentApiKey();
+    if (apiKey) headers["x-api-key"] = apiKey;
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
       headers,
@@ -247,30 +230,98 @@ export class MessagesClient {
   }
 }
 
-/** Create a MessagesClient from the environment (HASNA_MESSAGES_API_URL). */
-export function createMessagesClient(env: Record<string, string | undefined> = process.env, fetchImpl?: typeof fetch): MessagesClient | null {
-  const report = resolveMessagesClientTransport(env);
-  if (report.transport !== "http") return null;
-  const apiUrl = env[MESSAGES_API_URL_ENV]!.trim();
-  const apiKey = report.apiKeyPresent ? env[MESSAGES_API_KEY_ENV]!.trim() : undefined;
-  return new MessagesClient({ baseUrl: apiUrl, apiKey, fetch: fetchImpl });
+export interface MessagesClientFromEnvOverrides {
+  /** Tier 1: an explicit authority pin. No ambient credential is attached without `apiKey`. */
+  baseUrl?: string;
+  /** Tier 1: an explicit credential pin. Never re-resolved. */
+  apiKey?: string;
+  /** Custom fetch (defaults to global fetch). */
+  fetch?: typeof fetch;
+  /** Tier 3: Keychain controls — a fake `security` runner in tests, an opt-out on CI. */
+  keychain?: MessagesKeychainTierOptions;
+}
+
+/**
+ * Build a MessagesClient from the environment through the shared
+ * @hasna/contracts resolver.
+ *
+ * The credential is resolved fresh on EVERY request (a per-request provider),
+ * so a long-lived client picks up a rotation without a rebuild. The authority
+ * is fixed for the life of the client: a credential written for one authority
+ * is never sent to another.
+ *
+ * An explicit `baseUrl` pins the authority, and with it the credential
+ * (#1794): without an explicit `apiKey` the ambient chain is NEVER consulted,
+ * so a client pointed at a caller-chosen authority attaches no fleet key.
+ *
+ * THROWS when hosted configuration fails to resolve a credential. Returns
+ * null ONLY when the explicit local opt-in (HASNA_MESSAGES_LOCAL=1) selects
+ * the on-box store and nothing configures a hosted authority.
+ */
+export function createMessagesClient(
+  env: MessagesClientEnv = process.env,
+  overrides: MessagesClientFromEnvOverrides = {},
+): MessagesClient | null {
+  const resolveOptions: MessagesClientResolveOptions = {
+    ...(overrides.baseUrl !== undefined ? { baseUrl: overrides.baseUrl } : {}),
+    ...(overrides.apiKey !== undefined ? { apiKey: overrides.apiKey } : {}),
+    ...(overrides.keychain ? { credentials: { keychain: overrides.keychain } } : {}),
+  };
+  const report = resolveMessagesClientTransport(env, resolveOptions);
+  if (report.transport === "local") return null;
+  const baseUrl = stripV1FromApiUrl(report.baseUrl!);
+
+  // An explicit apiKey is a deliberate pin and is never re-resolved.
+  if (overrides.apiKey !== undefined) {
+    return new MessagesClient({ baseUrl, apiKey: overrides.apiKey, fetch: overrides.fetch });
+  }
+  // A pinned authority with no pinned key: NO ambient credential applies
+  // (#1794). The chain is never consulted for the credential again.
+  if (overrides.baseUrl !== undefined) {
+    return new MessagesClient({ baseUrl, fetch: overrides.fetch });
+  }
+
+  // Otherwise the chain resolved a credential (the transport report throws
+  // when none exists) and the client re-resolves it on EVERY request, so a
+  // rotation heals mid-flight. A transient re-resolution failure keeps the
+  // constructed credential rather than breaking a working client.
+  const constructed = resolveMessagesCredential(env, resolveOptions);
+  const provider = (): MessagesResolvedCredential => {
+    const fresh = resolveMessagesCredential(env, resolveOptions) ?? constructed;
+    if (!fresh) {
+      throw new Error(
+        "messages: the hosted transport resolved, but no credential value could be resolved for this request.",
+      );
+    }
+    return fresh;
+  };
+  return new MessagesClient({ baseUrl, apiKey: provider, fetch: overrides.fetch });
 }
 
 /**
  * Resolve the client store from the environment. `http` returns the HTTP
  * client; `local` returns a local MessagesService over a local SQLite store
- * (the on-box backend) — selected only by the explicit HASNA_MESSAGES_LOCAL=1
- * opt-in, never by a missing API URL. Callers dispatch on `transport`.
+ * (the on-box backend) — selected ONLY by the explicit HASNA_MESSAGES_LOCAL=1
+ * opt-in, never by a missing API URL, and announced once on stderr. Callers
+ * dispatch on `transport`; any other outcome throws.
  */
 export function resolveMessagesClientStore(
-  env: Record<string, string | undefined> = process.env,
+  env: MessagesClientEnv = process.env,
+  overrides: MessagesClientFromEnvOverrides = {},
 ): { transport: "http"; client: MessagesClient } | { transport: "local"; service: MessagesService } {
-  const report = resolveMessagesClientTransport(env);
-  if (report.transport === "http") {
-    return { transport: "http", client: createMessagesClient(env)! };
+  const resolveOptions: MessagesClientResolveOptions = {
+    ...(overrides.baseUrl !== undefined ? { baseUrl: overrides.baseUrl } : {}),
+    ...(overrides.apiKey !== undefined ? { apiKey: overrides.apiKey } : {}),
+    ...(overrides.keychain ? { credentials: { keychain: overrides.keychain } } : {}),
+  };
+  const report = resolveMessagesClientTransport(env, resolveOptions);
+  if (report.transport === "local") {
+    const sqlitePath = env[MESSAGES_SQLITE_PATH_ENV];
+    return { transport: "local", service: new MessagesService(new SqliteMessagesStore(sqlitePath)) };
   }
-  const sqlitePath = env[MESSAGES_SQLITE_PATH_ENV];
-  return { transport: "local", service: new MessagesService(new SqliteMessagesStore(sqlitePath)) };
+  const client = createMessagesClient(env, overrides);
+  if (!client) throw new Error("HTTP transport resolved but no client could be created");
+  return { transport: "http", client };
 }
 
 export {

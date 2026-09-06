@@ -49,8 +49,23 @@ import {
   ApiKeyStore,
   verifyApiKey,
   type ApiKeyVerifier,
-  type AuthQueryClient,
 } from "@hasna/contracts/auth";
+
+/**
+ * The storage-kit-shaped query client `@hasna/contracts/auth` declares as
+ * `AuthQueryClient`, spelled locally so the published declarations never import
+ * @hasna/contracts (a build-time dependency of this package — #1782). The
+ * shapes are structurally identical; the seam assignments below fail the build
+ * if they ever drift.
+ */
+export type MessagesAuthRow = Record<string, unknown>;
+
+/** Structural subset of the storage kit's `TypedQueryClient`. */
+export interface MessagesAuthQueryClient {
+  many<T extends MessagesAuthRow>(sql: string, params?: readonly unknown[]): Promise<T[]>;
+  get<T extends MessagesAuthRow>(sql: string, params?: readonly unknown[]): Promise<T | null>;
+  execute(sql: string, params?: readonly unknown[]): Promise<void>;
+}
 
 /** App slug: the token prefix (`hasna_messages_`) and the scope namespace. */
 export const APP = "messages";
@@ -147,7 +162,7 @@ export interface AuthGateOptions {
    * URL when configured; `null` explicitly disables the store (stateless
    * verification only, which cannot refuse an unregistered kid).
    */
-  queryClient?: AuthQueryClient | null;
+  queryClient?: MessagesAuthQueryClient | null;
   /** Sink for the one-shot static-key deprecation warning. Defaults to console.warn. */
   warn?: (message: string) => void;
 }
@@ -170,7 +185,7 @@ function json(body: unknown, status: number): Response {
  * loaded at all unless the server is. (An earlier version of this comment
  * claimed the import was lazy. It never was.)
  */
-export function makeAuthQueryClient(env: Env): AuthQueryClient | null {
+export function makeAuthQueryClient(env: Env): MessagesAuthQueryClient | null {
   const dsn = env.HASNA_MESSAGES_DATABASE_URL?.trim();
   if (!dsn) return null;
   // A malformed DSN must degrade to stateless verification rather than kill

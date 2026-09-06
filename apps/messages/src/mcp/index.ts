@@ -3,9 +3,10 @@
  * messages-mcp — the MCP surface of @hasna/messages.
  *
  * Thin interface layer over the single domain implementation: the SDK client
- * when HASNA_MESSAGES_API_URL is set, or the local SQLite store — an EXPLICIT
- * opt-in (HASNA_MESSAGES_LOCAL=1) only. Without the API env and without the
- * opt-in the server fails closed at startup (non-zero exit + actionable
+ * through the shared @hasna/contracts resolver (credential + authority
+ * resolved per tool call, fresh — hasna/apps#1720), or the local SQLite store
+ * — an EXPLICIT opt-in (HASNA_MESSAGES_LOCAL=1) only. Hosted with no
+ * credential the server fails closed at startup (non-zero exit + actionable
  * error); it never silently serves the on-box store. Tools:
  *   messages_register, messages_agents, messages_send, messages_threads,
  *   messages_thread, messages_unread, messages_thread_close,
@@ -36,8 +37,11 @@ if (EARLY_ARGV.includes("--help") || EARLY_ARGV.includes("-h")) {
 
 Hasna Messages MCP server (stdio) — direct agent-to-agent DMs with threads.
 
-Requires HASNA_MESSAGES_API_URL (+ HASNA_MESSAGES_API_KEY) to reach the fleet
-API, or HASNA_MESSAGES_LOCAL=1 to explicitly serve the on-box SQLite store.
+Credentials and the API authority resolve through the shared @hasna/contracts
+chain (Keychain, ~/.hasna/messages/config/credentials, HASNA_MESSAGES_API_KEY;
+authority defaults to https://api.hasna.com/messages). Hosted with no
+credential the server exits non-zero; HASNA_MESSAGES_LOCAL=1 explicitly serves
+the on-box SQLite store.
 
 Options:
   -V, --version  output the version number
@@ -46,8 +50,8 @@ Options:
 }
 
 // Fail-closed gate (after the binds-before-version early exits, before the
-// stdio connect): a transport misconfiguration is fatal at startup. The
-// resolver throws when neither HASNA_MESSAGES_API_URL nor the explicit local
+// stdio connect): a host/credential misconfiguration is fatal at startup. The
+// resolver throws when neither a credential resolves nor the explicit local
 // opt-in is present — never open the on-box store silently and exit 0.
 try {
   resolveMessagesClientTransport(process.env);
@@ -58,6 +62,11 @@ try {
 
 type Service = MessagesService | MessagesClient;
 
+/**
+ * The service for ONE tool call, resolved fresh — the resolver consults the
+ * Keychain and the credential file at every call, so a rotation heals a
+ * long-lived server without a restart.
+ */
 function service(): Service {
   const report = resolveMessagesClientTransport(process.env);
   if (report.transport === "http") {
