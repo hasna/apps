@@ -72,21 +72,31 @@ async function denyReason(result: Awaited<ReturnType<typeof resolve>>): Promise<
   return { status: result.response.status, reason: body.reason };
 }
 
-beforeAll(async () => {
-  if (!pg) return;
-  await pg.execute("DROP SCHEMA IF EXISTS public CASCADE");
-  await pg.execute("CREATE SCHEMA public");
-  await new MigrationLedger(pg, emailsSelfHostedMigrations()).migrate();
-  await pg.execute(
-    `INSERT INTO tenants (id, slug, name, status) VALUES ($1, 'idp-int', 'Idp Int', 'active')
-     ON CONFLICT (id) DO NOTHING`,
-    [TENANT_ID],
-  );
-});
+// Rebuilding the complete schema on a cold CI database can exceed Bun's 5s
+// default hook deadline. Give setup its own budget; case deadlines stay intact.
+const POSTGRES_SETUP_TIMEOUT_MS = 120_000;
+let postgresSetup: Promise<void> | undefined;
+beforeAll(() => {
+  postgresSetup = (async () => {
+    if (!pg) return;
+    await pg.execute("DROP SCHEMA IF EXISTS public CASCADE");
+    await pg.execute("CREATE SCHEMA public");
+    await new MigrationLedger(pg, emailsSelfHostedMigrations()).migrate();
+    await pg.execute(
+      `INSERT INTO tenants (id, slug, name, status) VALUES ($1, 'idp-int', 'Idp Int', 'active')
+       ON CONFLICT (id) DO NOTHING`,
+      [TENANT_ID],
+    );
+  })();
+  return postgresSetup;
+}, POSTGRES_SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
+  // Bun does not cancel a timed-out hook. Let its SQL settle before ending the
+  // pool; beforeAll already owns any setup failure. The gate also bounds the process.
+  await postgresSetup?.catch(() => {});
   await pg?.close();
-});
+}, POSTGRES_SETUP_TIMEOUT_MS + 5_000);
 
 describe.skipIf(!pg)("migration 0021 — idp_principal_tenants", () => {
   it("creates the resolution table OUTSIDE row-level security", async () => {
