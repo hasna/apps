@@ -2,7 +2,6 @@
 "@hasna/knowledge": patch
 "@hasna/projects": patch
 "@hasna/secrets": patch
-"@hasna/skills": patch
 "@hasna/switcher": patch
 "@hasna/todos": patch
 ---
