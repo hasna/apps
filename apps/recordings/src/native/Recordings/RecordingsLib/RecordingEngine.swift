@@ -4810,9 +4810,9 @@ enum CLIRunner: Sendable {
         let arguments = command.argumentsPrefix + args
         do {
             let environment = try suppliedEnvironment ?? ServiceAPIConfiguration.childEnvironment(
-                base: ProcessInfo.processInfo.environment.merging([
+                base: OpenAIAPIKeyStore.childEnvironment(base: ProcessInfo.processInfo.environment.merging([
                     "PATH": "\(home)/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-                ]) { _, new in new }
+                ]) { _, new in new }, homePath: home)
             )
             let output = try runExecutable(
                 command.executable,
@@ -5625,7 +5625,7 @@ enum CLIRunner: Sendable {
         }
     }
 
-    static func parseError(_ output: String) -> String? {
+    static func parseError(_ output: String, serviceAPI: Bool = false) -> String? {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("ERROR:") else { return nil }
         let message = NativeErrorSanitizer.sanitize(
@@ -5634,10 +5634,12 @@ enum CLIRunner: Sendable {
         let lowercased = message.lowercased()
         if lowercased.contains("401") || lowercased.contains("incorrect api key")
             || lowercased.contains("invalid_api_key") || lowercased.contains("invalid or expired") {
+            if serviceAPI { return "Recordings API authentication failed — check the API connection in Settings" }
             return "OpenAI API key invalid or expired — update it in Recordings Settings"
         }
         if lowercased.contains("429") || lowercased.contains("exceeded your current quota")
             || lowercased.contains("insufficient_quota") || lowercased.contains("quota exceeded") {
+            if serviceAPI { return "Recordings API request limit reached — try again later" }
             return "OpenAI quota exceeded — check the OpenAI account billing"
         }
         if message.contains("OpenAI API key not configured") {

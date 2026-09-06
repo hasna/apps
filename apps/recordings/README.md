@@ -466,8 +466,11 @@ dataset. The explicit `HASNA_RECORDINGS_CLIENT_STORE` switch (`sqlite` |
 `sqlite` keeps reading the local file even when the hosted pair is present.
 Run the CLI through the `recordings` station wrapper (or set both variables)
 for the hosted API; run local-only workflows with the explicit
-`HASNA_RECORDINGS_CLIENT_STORE=sqlite` opt-in. `RECORDINGS_API_KEY` is the
-OpenAI transcription-key override only and never selects client transport.
+`HASNA_RECORDINGS_CLIENT_STORE=sqlite` opt-in. Use `RECORDINGS_OPENAI_API_KEY`
+for an explicit OpenAI transcription-key override, separate from the Hasna
+service credential. Native Settings saves new OpenAI keys in macOS Keychain
+under service `hasna.credentials.openai.api-key`, account `openai/api_key`;
+Finder launches read that entry and pass it to the embedded helper in memory.
 
 ```bash
 recordings-serve --port 8874          # start the API

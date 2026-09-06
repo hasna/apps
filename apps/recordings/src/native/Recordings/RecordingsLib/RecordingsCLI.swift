@@ -122,7 +122,7 @@ public enum RecordingsCLI {
 
     public static func delete(id: String, home: String = defaultHome) throws {
         let output = CLIRunner.run(["delete", id], home: home)
-        if let err = CLIRunner.parseError(output) { throw Failure(message: err) }
+        if let err = CLIRunner.parseError(output, serviceAPI: true) { throw Failure(message: err) }
     }
 
     public struct CanonicalProject: Codable, Sendable {
@@ -148,7 +148,7 @@ public enum RecordingsCLI {
 
     private static func runDecoding<T: Decodable>(_ type: T.Type, _ args: [String], home: String) throws -> T {
         let output = CLIRunner.run(args, home: home)
-        if let err = CLIRunner.parseError(output) { throw Failure(message: err) }
+        if let err = CLIRunner.parseError(output, serviceAPI: true) { throw Failure(message: err) }
         return try decode(type, from: output)
     }
 

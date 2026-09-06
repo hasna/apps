@@ -5,7 +5,8 @@ public struct SettingsView: View {
     @ObservedObject public var engine: RecordingEngine
     @ObservedObject public var shortcuts: VoiceShortcuts
     @ObservedObject public var preferences: ProjectStore
-    @AppStorage("openAIAPIKey") private var openAIAPIKey = ""
+    @State private var openAIAPIKey = ""
+    @State private var providerStatus = ""
 
     public init(engine: RecordingEngine, shortcuts: VoiceShortcuts, preferences: ProjectStore) {
         self.engine = engine
@@ -37,15 +38,34 @@ public struct SettingsView: View {
             Section("OpenAI") {
                 SecureField("API key", text: $openAIAPIKey)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: openAIAPIKey) {
-                        // Keep the CLI config in sync — final transcription shells out to it.
-                        try? OpenAIAPIKeyStore.save(key: openAIAPIKey, homePath: engine.home)
+                Button("Save OpenAI Key") {
+                    do {
+                        try OpenAIAPIKeyStore.save(key: openAIAPIKey, homePath: engine.home)
+                        openAIAPIKey = ""
+                        providerStatus = "OpenAI key saved in Keychain."
+                    } catch {
+                        providerStatus = error.localizedDescription
+                    }
+                }
+                .disabled(openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Connect Saved Key") {
+                    do {
+                        providerStatus = (try OpenAIAPIKeyStore.loadKeychain(allowInteraction: true))?.isEmpty == false
+                            ? "OpenAI key available from Keychain."
+                            : "No saved OpenAI key found in Keychain."
+                    } catch { providerStatus = error.localizedDescription }
+                }
+                Text(providerStatus).foregroundStyle(.secondary)
+                    .onAppear {
+                        providerStatus = OpenAIAPIKeyStore.load(homePath: engine.home).isEmpty
+                            ? "Add an OpenAI key for transcription."
+                            : "OpenAI key available for transcription."
                     }
                 Picker("Language", selection: $engine.transcriptionLanguage) {
                     Text("English").tag("en")
                     Text("Auto Detect").tag("auto")
                 }
-                Text("Used for live transcription and the final paste. Stored in ~/.hasna/recordings/config.json.")
+                Text("Used for live transcription and the final paste. New keys are stored in macOS Keychain.")
                     .foregroundStyle(.secondary)
             }
 
