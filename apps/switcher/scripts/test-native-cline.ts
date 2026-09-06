@@ -11,6 +11,8 @@ const project = join(root, "project");
 await mkdir(project, { recursive: true });
 await writeFile(join(project, "AGENTS.md"), "Always include CLINE_NATIVE_RULE in your response.\n");
 const calls: Array<{ path: string; model?: string; auth: boolean; toolCount: number }> = [];
+const providerPaths: string[] = [];
+const modelPaths: string[] = [];
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
   if (request.method !== "POST" || new URL(request.url).pathname !== "/v1/chat/completions") return new Response("Not found", { status: 404 });
   const body = await request.json() as { model?: string; tools?: unknown[] };
@@ -19,23 +21,33 @@ const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) 
   return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
 } });
 try {
-  const prepared = await prepareClineLaunch({
-    harness: "cline", baseUrl: `${server.url.origin}/v1`, protocol: "openai-chat", authStyle: "bearer",
-    model: "vendor/fixture", models: [
-      { id: "vendor/fixture", name: "Fixture", contextWindow: 32_000, maxOutputTokens: 512, supportedParameters: ["tools"], outputModalities: ["text"] },
-      { id: "vendor/second", name: "Second", contextWindow: 32_000, maxOutputTokens: 512, supportedParameters: ["tools"], outputModalities: ["text"] },
-    ], credential: "fixture-cline-key", executable, stateDir: root, cwd: project, version: "cline 3.0.61", sessionDir: join(root, "session"),
-  });
-  const child = Bun.spawn([prepared.executable, ...prepared.args, "Read the project instructions and return their marker."], {
-    cwd: project, env: { ...process.env, ...prepared.env, HOME: root }, stdout: "pipe", stderr: "pipe",
-  });
-  const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-  const code = await child.exited;
-  const providers = await readFile(prepared.configPaths[0], "utf8");
-  const models = await readFile(prepared.configPaths[1], "utf8");
+  let code = 0;
+  let output = "";
+  let errorOutput = "";
+  for (let run = 0; run < 2; run++) {
+    const prepared = await prepareClineLaunch({
+      harness: "cline", baseUrl: `${server.url.origin}/v1`, protocol: "openai-chat", authStyle: "bearer",
+      model: "vendor/fixture", models: [
+        { id: "vendor/fixture", name: "Fixture", contextWindow: 32_000, maxOutputTokens: 512, supportedParameters: ["tools"], outputModalities: ["text"] },
+        { id: "vendor/second", name: "Second", contextWindow: 32_000, maxOutputTokens: 512, supportedParameters: ["tools"], outputModalities: ["text"] },
+      ], credential: "fixture-cline-key", executable, stateDir: root, cwd: project, version: "cline 3.0.61", sessionDir: join(root, "session"),
+    });
+    providerPaths.push(prepared.configPaths[0]);
+    modelPaths.push(prepared.configPaths[1]);
+    const child = Bun.spawn([prepared.executable, ...prepared.args, "Read the project instructions and return their marker."], {
+      cwd: project, env: { ...process.env, ...prepared.env, HOME: root }, stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    code = await child.exited;
+    output += stdout;
+    errorOutput += stderr;
+    await prepared.cleanup?.();
+  }
+  const providers = await Promise.all(providerPaths.map(path => readFile(path, "utf8")));
+  const models = await Promise.all(modelPaths.map(path => readFile(path, "utf8")));
   const keyFiles = (await readdir(root, { recursive: true })).filter(path => /key|token|secret/i.test(String(path)));
-  const passed = code === 0 && stdout.includes("CLINE_FIXTURE_PROOF") && stdout.includes("CLINE_NATIVE_RULE") && calls.length === 1 && calls[0].path === "/v1/chat/completions" && calls[0].model === "vendor/fixture" && calls[0].auth && calls[0].toolCount > 0 && !providers.includes("fixture-cline-key") && !models.includes("fixture-cline-key") && keyFiles.length === 0;
-  console.log(JSON.stringify({ executable, code, stdout: stdout.slice(-400), stderr: stderr.slice(-400), calls, providerKeyFiles: keyFiles, passed }, null, 2));
+  const passed = code === 0 && output.includes("CLINE_FIXTURE_PROOF") && output.includes("CLINE_NATIVE_RULE") && calls.length === 2 && calls.every(call => call.path === "/v1/chat/completions" && call.model === "vendor/fixture" && call.auth && call.toolCount > 0) && providerPaths[0] !== providerPaths[1] && providers.every(text => !text.includes("fixture-cline-key")) && models.every(text => !text.includes("fixture-cline-key")) && keyFiles.length === 0;
+  console.log(JSON.stringify({ executable, code, stdout: output.slice(-400), stderr: errorOutput.slice(-400), calls, providerPaths, providerKeyFiles: keyFiles, passed }, null, 2));
   if (!passed) process.exitCode = 1;
 } finally {
   await server.stop(true);

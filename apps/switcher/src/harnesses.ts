@@ -265,7 +265,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
     grok:["--model","-m","--oauth","--leader","--leader-socket"],
     pi:["--model","--provider","--api-key","--models"],
     opencode2:["--model","-m","--server"],
-    cline:["--provider","--model","-m","--data-dir","--config","--cwd","--auto-approve","--key","-k"],
+    cline:["--provider","-P","--model","-m","--data-dir","--config","--cwd","--auto-approve","--key","-k"],
   };
   for(let i=0;i<(input.args??[]).length;i++){
     const arg=input.args![i],flag=arg.split("=")[0];
@@ -276,7 +276,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
     }
   }
   const nativeAuth=input.protocol==="anthropic-messages"?"x-api-key":"bearer";
-  const adaptAuth=(input.harness==="opencode2"||input.harness==="pi")&&(input.authStyle??"bearer")!==nativeAuth;
+  const adaptAuth=(input.harness==="opencode2"||input.harness==="pi"||input.harness==="cline")&&(input.authStyle??"bearer")!==nativeAuth;
   if((input.credential&&!adaptAuth)||input.harness==="grok") return prepareNativeLaunch(input);
   // No-auth endpoints must not receive a native login credential or even a
   // synthetic token. Authenticate only to this loopback hop, then strip auth.

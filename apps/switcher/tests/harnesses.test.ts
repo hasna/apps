@@ -89,14 +89,13 @@ test("Cline writes isolated full provider/model registries with environment-only
   try {
     for (const [protocol, client, nativeAuth, envName] of [
       ["anthropic-messages", "anthropic", "x-api-key", "ANTHROPIC_API_KEY"],
-      ["openai-responses", "openai", "bearer", "OPENAI_API_KEY"],
       ["openai-chat", "openai-compatible", "bearer", "OPENAI_API_KEY"],
     ] as const) {
       const state = join(input.stateDir, protocol);
       const prepared = await prepareHarnessLaunch({ ...input, stateDir: state, harness: "cline", protocol, authStyle: nativeAuth, version: "cline 3.0.61", models });
       const providers = JSON.parse(await readFile(prepared.configPaths[0], "utf8"));
       const catalog = JSON.parse(await readFile(prepared.configPaths[1], "utf8"));
-      const providerId = protocol === "anthropic-messages" ? "anthropic" : protocol === "openai-responses" ? "openai" : "openai-compatible";
+      const providerId = protocol === "anthropic-messages" ? "anthropic" : "openai-compatible";
       const settings = providers.providers[providerId].settings;
       expect(settings.protocol).toBe(protocol === "anthropic-messages" ? "anthropic" : protocol);
       expect(settings.client).toBe(client);
@@ -108,10 +107,23 @@ test("Cline writes isolated full provider/model registries with environment-only
       expect(prepared.args).toContain("--auto-approve");
       expect(prepared.args).toContain("false");
       expect(prepared.args).toContain(input.model);
+      expect(prepared.args).not.toContain("--data-dir");
     }
-    await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "anthropic-messages", authStyle: "bearer", version: "cline 3.0.61" })).rejects.toThrow("x-api-key");
+    await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-responses", authStyle: "bearer", version: "cline 3.0.61" })).rejects.toThrow("operator Responses endpoints are unsupported");
+    const mismatched = await prepareHarnessLaunch({ ...input, harness: "cline", protocol: "anthropic-messages", authStyle: "bearer", version: "cline 3.0.61" });
+    try {
+      const bridged = JSON.parse(await readFile(mismatched.configPaths[0], "utf8"));
+      expect(bridged.providers.anthropic.settings.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
+    } finally { await mismatched.cleanup?.(); }
     await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.60" })).rejects.toThrow("3.0.61");
     await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.61", args: ["--model", "outside"] })).rejects.toThrow("reserved");
+    await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.61", args: ["-P", "unselected"] })).rejects.toThrow("reserved");
+    const first = await prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.61", sessionDir: join(input.stateDir, "durable-session") });
+    const second = await prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.61", sessionDir: join(input.stateDir, "durable-session") });
+    expect(first.env.CLINE_SESSION_DATA_DIR).toBe(second.env.CLINE_SESSION_DATA_DIR);
+    expect(first.configPaths[0]).not.toBe(second.configPaths[0]);
+    expect(first.env.CLINE_PROVIDER_SETTINGS_PATH).not.toBe(second.env.CLINE_PROVIDER_SETTINGS_PATH);
+    await first.cleanup?.(); await second.cleanup?.();
   } finally {
     await rm(input.stateDir, { recursive: true, force: true });
   }
