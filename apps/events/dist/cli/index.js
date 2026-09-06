@@ -2605,6 +2605,15 @@ function parseMatcherExpression(value, label) {
   };
 }
 
+// src/cli-webhook-policy.ts
+function webhookTargetPolicyFromEnv() {
+  const value = process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS;
+  if (!value)
+    return;
+  const hosts = value.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  return hosts.length > 0 ? { allowPrivateHosts: hosts } : undefined;
+}
+
 // src/cli/index.ts
 function version() {
   try {
@@ -3151,6 +3160,8 @@ async function handleChannels(client, command, tail, parsed, options) {
       metadata: parseJsonOption(takeOption(args, "--metadata"), {})
     }, { honorFilters });
     output(parsed, result, () => console.log(`${result.status}: ${result.channelId}`));
+    if (result.status === "failed")
+      process.exitCode = 1;
     return;
   }
   if (command === "match") {
@@ -3260,13 +3271,6 @@ function severityOption(value) {
 function replaySummary(events, deliveries, nextCursor) {
   const suffix = nextCursor ? `, next cursor: ${nextCursor}` : "";
   return `Replayed ${events} event(s), ${deliveries} delivery result(s)${suffix}`;
-}
-function webhookTargetPolicyFromEnv() {
-  const value = process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS;
-  if (!value)
-    return;
-  const hosts = value.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  return hosts.length > 0 ? { allowPrivateHosts: hosts } : undefined;
 }
 if (import.meta.main) {
   runEventsCli().catch((error) => {
