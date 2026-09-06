@@ -53,14 +53,14 @@ beforeEach(() => {
 });
 
 describe("store transport resolution", () => {
-  test("no api env fails closed (the on-box store is never a silent default)", () => {
-    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_API_URL/);
+  test("no api env and no opt-in fails closed (the on-box store is never a silent default)", () => {
+    expect(() => getStore({})).toThrow(/REMOTE_API_CONFIG_MISSING/);
     expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_API_KEY/);
-    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_CLIENT_STORE=sqlite/);
+    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_LOCAL=1/);
   });
 
-  test("explicit HASNA_RECORDINGS_CLIENT_STORE=sqlite opts in to the on-box store", () => {
-    const store = getStore({ HASNA_RECORDINGS_CLIENT_STORE: "sqlite" });
+  test("explicit HASNA_RECORDINGS_LOCAL=1 opts in to the on-box store", () => {
+    const store = getStore({ HASNA_RECORDINGS_LOCAL: "1" });
     expect(store.mode).toBe("sqlite");
     expect(store.baseUrl).toBeNull();
   });

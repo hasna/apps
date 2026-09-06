@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveStorageClient, createStorageClient, createHttpTransport, resolveTransport } from "./client.js";
+import { createStorageClient, createHttpTransport, resolveRecordingsTransport } from "./client.js";
 import { countStoreRecordings, getStore, type Store } from "../store.js";
 
 const APP = "recordings";
@@ -20,51 +20,36 @@ function mockFetch(handler: (url: string, init: RequestInit) => { status: number
   return { fetchImpl, calls };
 }
 
-describe("client store resolution (two-backend env contract)", () => {
-  test("no env -> fails closed, naming the required variables and the local opt-in", () => {
-    const r = resolveTransport(APP, {});
-    expect(r.transport).toBe("sqlite");
-    expect(r.misconfigured).toBe(true);
-    expect(r.baseUrl).toBeNull();
-    expect(r.warning).toContain("HASNA_RECORDINGS_API_URL");
-    expect(r.warning).toContain("HASNA_RECORDINGS_API_KEY");
-    expect(r.warning).toContain("HASNA_RECORDINGS_CLIENT_STORE=sqlite");
+describe("client store resolution (resolver contract)", () => {
+  test("no env and no opt-in -> fails closed with a REMOTE_API code, never silently local", () => {
+    expect(() => resolveRecordingsTransport({})).toThrow(/REMOTE_API_CONFIG_MISSING/);
+    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_API_KEY/);
+    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_LOCAL=1/);
   });
 
   test("url + key -> http with /v1 base", () => {
-    const r = resolveTransport(APP, {
+    const r = resolveRecordingsTransport({
       HASNA_RECORDINGS_API_URL: "https://api.example.com",
       HASNA_RECORDINGS_API_KEY: "test-key",
     });
     expect(r.transport).toBe("http");
-    expect(r.modeSource).toBe("auto:api-url+api-key");
-    expect(r.baseUrl).toBe("https://api.example.com/v1");
+    expect(r.authority!.baseUrl).toBe("https://api.example.com/v1");
+    expect(r.authority!.apiKeyTier).toBe("env");
   });
 
-  test("url only (no key) -> fail closed, never silently local", () => {
-    const r = resolveTransport(APP, {
-      HASNA_RECORDINGS_API_URL: "https://api.example.com",
-    });
-    expect(r.transport).toBe("sqlite");
-    expect(r.misconfigured).toBe(true);
-    expect(r.warning).toContain("HASNA_RECORDINGS_API_KEY");
-    expect(() => resolveStorageClient(APP, { HASNA_RECORDINGS_API_URL: "https://api.example.com" })).toThrow();
-  });
-
-  test("key only (no url) -> fail closed, never silently local", () => {
-    const r = resolveTransport(APP, {
+  test("key only -> the fleet gateway, never a half-configured refusal", () => {
+    const r = resolveRecordingsTransport({
       HASNA_RECORDINGS_API_KEY: "test-key",
     });
-    expect(r.transport).toBe("sqlite");
-    expect(r.misconfigured).toBe(true);
-    expect(r.warning).toContain("HASNA_RECORDINGS_API_URL");
-    // The canonical seam (resolveStorageClient, re-exported from
-    // @hasna/contracts/client/storage) treats a key without a URL as "no
-    // server selected" and stays on the local store. The app's own resolver
-    // (resolveStoreClient, used by getStore) keeps the partial-pair
-    // fail-closed contract on top of the seam.
-    expect(resolveStorageClient(APP, { HASNA_RECORDINGS_API_KEY: "test-key" }).transport).toBe("sqlite");
-    expect(() => getStore({ HASNA_RECORDINGS_API_KEY: "test-key" })).toThrow();
+    expect(r.transport).toBe("http");
+    expect(r.authority!.baseUrl).toBe("https://api.hasna.com/recordings/v1");
+    expect(r.authority!.apiUrlSource).toBe("default");
+  });
+
+  test("url only with no resolvable credential -> fail closed, never silently local", () => {
+    expect(() => getStore({ HASNA_RECORDINGS_API_URL: "https://api.example.com" })).toThrow(
+      /REMOTE_API_CONFIG_MISSING|no API key could be resolved/,
+    );
   });
 
   test("getStore picks http from url+key presence", () => {
@@ -76,13 +61,10 @@ describe("client store resolution (two-backend env contract)", () => {
     expect(b.baseUrl).toBe("https://api.example.com/v1");
   });
 
-  test("url + deliberate override credential -> http via the seam call-time chain (P1-1 regression)", () => {
+  test("url + deliberate override credential -> http via the seam call-time chain", () => {
     // The seam resolves the credential at call time through the deliberate
-    // tiers (override, profile, disk) even when the legacy env key is absent.
-    // The app wrapper must not pre-gate on the env key pair before the seam
-    // gets a chance to resolve. Measured against the #957 seam contract; was
-    // throwing "HASNA_RECORDINGS_API_URL is set but HASNA_RECORDINGS_API_KEY
-    // is not..." before the 0.3.9 remediation.
+    // tiers (override, profile, disk) even when the canonical env key is
+    // absent.
     const r = getStore({
       HASNA_RECORDINGS_API_URL: "https://api.example.com",
       HASNA_RECORDINGS_API_KEY_OVERRIDE: "test-override-key",
@@ -91,23 +73,18 @@ describe("client store resolution (two-backend env contract)", () => {
     expect(r.baseUrl).toBe("https://api.example.com/v1");
   });
 
-  test("url only with no resolvable credential -> still fail closed, never silently local", () => {
-    // URL without any credential anywhere (no env key, no override) must keep
-    // the fail-closed contract: throwing, not silently reading the on-box
-    // dataset. The seam's own resolver throws for this configuration.
-    expect(() => getStore({ HASNA_RECORDINGS_API_URL: "https://api.example.com" })).toThrow();
-  });
-
-  test("getStore fails closed when env is unset (no silent local fallback)", () => {
-    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_API_URL/);
-    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_API_KEY/);
-    expect(() => getStore({})).toThrow(/HASNA_RECORDINGS_CLIENT_STORE=sqlite/);
-  });
-
-  test("getStore picks sqlite only via the explicit opt-in override", () => {
-    const b = getStore({ HASNA_RECORDINGS_CLIENT_STORE: "sqlite" });
+  test("getStore picks sqlite only via the explicit local opt-in", () => {
+    const b = getStore({ HASNA_RECORDINGS_LOCAL: "1" });
     expect(b.mode).toBe("sqlite");
     expect(b.baseUrl).toBeNull();
+  });
+
+  test("the unprefixed OpenAI transcription key is NOT a transport signal", () => {
+    // `RECORDINGS_API_KEY` is the OpenAI transcription-key override: it must
+    // never select or fail the hosted transport (the carve). Alone it fails
+    // closed; beside the local opt-in it stays local.
+    expect(() => getStore({ RECORDINGS_API_KEY: "sk-test-key" })).toThrow(/REMOTE_API_CONFIG_MISSING/);
+    expect(getStore({ RECORDINGS_API_KEY: "sk-test-key", HASNA_RECORDINGS_LOCAL: "1" }).mode).toBe("sqlite");
   });
 
   test("getStore picks http when env set", () => {
@@ -558,7 +535,7 @@ describe("ApiStore recording counts", () => {
 
 describe("legacy Store count compatibility", () => {
   test("accepts and counts a structural Store without countRecordings", async () => {
-    const { countRecordings: _countRecordings, ...legacyBase } = getStore({ HASNA_RECORDINGS_CLIENT_STORE: "sqlite" });
+    const { countRecordings: _countRecordings, ...legacyBase } = getStore({ HASNA_RECORDINGS_LOCAL: "1" });
     const rows = Array.from({ length: 23 }, (_, index) => ({ id: `legacy-${index}` }));
     const offsets: number[] = [];
     const legacyStore = {

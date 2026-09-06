@@ -440,20 +440,34 @@ directly with API-key auth via
 [`@hasna/contracts`](https://www.npmjs.com/package/@hasna/contracts).
 
 The CLI and MCP client have exactly two stores and never open Postgres — they
-read the on-box `sqlite` file only when explicitly opted in, or call the
-server's `/v1` HTTP API. The presence of BOTH `HASNA_RECORDINGS_API_URL` and
-`HASNA_RECORDINGS_API_KEY` selects the API; an environment that configures
-neither FAILS CLOSED with an error naming the required variables — the on-box
-file is never a silent default and is read only through the explicit
-`HASNA_RECORDINGS_CLIENT_STORE=sqlite` override. A partial setup (one of the
-two variables set) fails closed too rather than silently reading the wrong
-dataset. The explicit `HASNA_RECORDINGS_CLIENT_STORE` switch (`sqlite` |
-`http`) wins over the auto-selection, so a configuration that sets it to
-`sqlite` keeps reading the local file even when the hosted pair is present.
-Run the CLI through the `recordings` station wrapper (or set both variables)
-for the hosted API; run local-only workflows with the explicit
-`HASNA_RECORDINGS_CLIENT_STORE=sqlite` opt-in. `RECORDINGS_API_KEY` is the
-OpenAI transcription-key override only and never selects client transport.
+read the on-box `sqlite` file only when the deliberate unhosted opt-in
+`HASNA_RECORDINGS_LOCAL=1` (alias `RECORDINGS_LOCAL=1`) selects it, or they
+call the server's `/v1` HTTP API. Which one it is is decided by the ONE
+credential resolver in [`@hasna/contracts`](https://www.npmjs.com/package/@hasna/contracts)
+(resolved fresh on every call):
+
+| tier | source |
+| ---- | ------ |
+| 1 | explicit `--api-key` / `--profile`, or `HASNA_RECORDINGS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_RECORDINGS_API_KEY_REF` |
+| 2 | the macOS Keychain item `hasna.credentials.recordings.api-key` (account `HASNA_STATION`, else `hostname -s`, else `$USER`) |
+| 3 | `~/.hasna/recordings/config/credentials` (owner-only 0400/0600; `HASNA_HOME` / `HASNA_CONFIG_HOME` move the root) |
+| 4 | `HASNA_RECORDINGS_API_KEY` — a legitimate tier, no deprecation notice |
+
+The authority follows the same ladder — `HASNA_RECORDINGS_API_URL`, the
+Keychain `api-url` item, the credentials file — and otherwise DEFAULTS to the
+fleet gateway `https://api.hasna.com/recordings`, so a key alone is a complete
+configuration. Retired inputs are gone: nothing reads the old fleet-env or
+cloud credential directories, `~/.config/hasna` or `$XDG_CONFIG_HOME`, and no
+`*_MODE` / `*_STORAGE_MODE` / `*_CLIENT_STORE` switch exists (the old
+`HASNA_RECORDINGS_CLIENT_STORE` variable selects nothing any more).
+
+**Fail closed.** Hosted mode with no credential exits non-zero with one
+`REMOTE_API_*` line naming every tier that was consulted; there is no SQLite
+fallback and no local-fallback event. The on-box file is reachable ONLY
+through the explicit opt-in above, and an opted-in run reads neither the
+Keychain nor any credential file. `RECORDINGS_API_KEY` remains the OpenAI
+transcription-key override only — it is carved out of the resolver
+environment and never selects or fails client transport.
 
 ```bash
 recordings-serve --port 8874          # start the API
@@ -515,17 +529,25 @@ resolves `HASNA_RECORDINGS_MIGRATE_DATABASE_URL` /
 ## SDK
 
 The typed `/v1` client is generated from the serve OpenAPI document
-(`bun run generate:sdk`):
+(`bun run generate:sdk`). The resolver-backed factory resolves the credential
+and authority through the same `@hasna/contracts` chain as the CLI, fresh on
+every request, so a key rotation heals a client held open for hours:
 
 ```ts
-import { RecordingsV1Client } from "@hasna/recordings/sdk";
+import { createRecordingsV1Client } from "@hasna/recordings/sdk";
 
-const client = new RecordingsV1Client({
-  baseUrl: process.env.HASNA_RECORDINGS_API_URL!,
-  apiKey: process.env.HASNA_RECORDINGS_API_KEY!,
-});
+const client = createRecordingsV1Client();       // resolves through the chain
 const { recordings } = await client.listRecordings({ limit: 20 });
 ```
+
+An explicit `baseUrl` pins the authority: with no `apiKey` beside it the
+client sends NO credential at all (the ambient chain is never consulted), and
+with one it sends exactly that key, every request. The unhosted local
+`recordings-serve` (`http://localhost:8874`) is reachable only under
+`HASNA_RECORDINGS_LOCAL=1` and prints one "LOCAL mode" line on stderr; every
+other refusal throws `RECORDINGS_CREDENTIAL_MISSING`. The raw generated
+constructor `new RecordingsV1Client({ baseUrl, apiKey })` still works for
+explicit configurations.
 
 Useful agent tools include `recordings_status` for safe service/config diagnostics,
 `transcribe_audio`, `save_recording`, `list_recordings`, `search_recordings`,

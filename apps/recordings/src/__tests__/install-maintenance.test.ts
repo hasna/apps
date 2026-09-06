@@ -253,7 +253,7 @@ describe("local Store installation maintenance gate", () => {
 // Local mode is explicit (the client never silently defaults to the on-box
 // file): the point of this probe is that the maintenance marker blocks
 // every LOCAL operation while the cloud store stays available.
-const local = getStore({ HASNA_RECORDINGS_CLIENT_STORE: "sqlite" });
+const local = getStore({ HASNA_RECORDINGS_LOCAL: "1" });
 const operations = [
   () => local.createRecording({ raw_text: "fixture" }),
   () => local.getRecording("missing"),
