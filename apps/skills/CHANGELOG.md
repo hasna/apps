@@ -6,6 +6,12 @@
 
 - Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
 
+## 0.4.1
+
+### Patch Changes
+
+- 0f25eeb: Keep exported SDK run-schema declarations compatible with the declared Zod dependency using its explicit v3 subpath. Check a freshly installed package with strict TypeScript library checking before packing, and omit generated test fixture declarations from the distribution.
+
 ## 0.4.0
 
 ### Minor Changes
