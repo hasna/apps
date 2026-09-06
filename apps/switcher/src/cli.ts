@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
 import { SwitcherError } from "./sdk";
-import { VERSION, Fault, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, compatible, codingEligible } from "./domain";
+import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, compatible, codingEligible } from "./domain";
 import { detectHarness } from "./harnesses";
 import { launch } from "./launcher";
 import { openCliRuntime } from "./runtime";
 import { providerFromPreset, type PresetOptions } from "./presets";
 import { resolveLaunchProvider, selectModel, ensureLaunchProfile } from "./direct-launch";
-import { CredentialResolver, CredentialInterrupted, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential } from "./credentials";
+import { CredentialResolver, bindingTarget, credentialReference, credentialBindingSchema, deliverVaultCredential } from "./credentials";
 const HELP = `switcher — launch a coding harness with a provider and its model catalog
 
   switcher providers presets [ID]
@@ -193,5 +193,5 @@ export async function main(args = process.argv.slice(2)) {
 }
 if(import.meta.main) {
   if(process.argv.slice(2).length===1&&process.argv[2]==="--version") console.log(VERSION);
-  else main().catch(error=>{console.error(JSON.stringify({error:error instanceof SwitcherError?{code:error.code,message:error.message,requestId:error.requestId}:error instanceof Fault?{code:error.code,message:error.message}:{message:error instanceof Error?error.message:"Command failed."}}));process.exitCode=error instanceof CredentialInterrupted ? error.exitCode : error instanceof SwitcherError && error.code === "interrupted" ? process.exitCode ?? 1 : 1;});
+  else main().catch(error=>{console.error(JSON.stringify({error:error instanceof SwitcherError?{code:error.code,message:error.message,requestId:error.requestId}:error instanceof Fault?{code:error.code,message:error.message}:{message:error instanceof Error?error.message:"Command failed."}}));process.exitCode=error instanceof CommandInterrupted ? error.exitCode : error instanceof SwitcherError && error.code === "interrupted" ? process.exitCode ?? 1 : 1;});
 }

@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { constants } from "node:fs";
-import { open, readdir, unlink, link, lstat, access, stat } from "node:fs/promises";
-import { join, isAbsolute } from "node:path";
+import { open, readdir, unlink, link, lstat, access, stat, realpath, readlink } from "node:fs/promises";
+import { join, isAbsolute, dirname, parse as pathParts, resolve as resolvePath, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { resolveCredential } from "@hasna/contracts/client";
-import { endpoint, Fault, parse, type ProviderInput } from "./domain";
+import { endpoint, Fault, CommandInterrupted, parse, type ProviderInput } from "./domain";
 import { getProviderPreset, providerCredential } from "./presets";
 import { privateDirectory, switcherHome } from "./runtime";
 
@@ -102,15 +102,36 @@ export function credentialReference(selector: string) {
 }
 
 export async function validateVaultExecutable(path: string) {
-  let info;
+  let info, resolved: string;
   try {
-    await access(path,constants.X_OK);
-    info = await stat(path);
+    resolved = await realpath(path);
+    await access(resolved,constants.X_OK);
+    info = await stat(resolved);
     if (!info.isFile()) throw new Error();
   }
   catch { throw new Fault(422,"vault_exec_unavailable","The configured secrets CLI must be an installed executable file. Use --vault-cli with its absolute path."); }
   if (process.platform !== "win32" && ((info.mode & 0o022) || (info.uid !== 0 && info.uid !== process.getuid?.())))
     throw new Fault(422,"vault_exec_permissions","The secrets executable must be owned by this user or root and not writable by other users. Remove group/public write permission from its resolved file or choose a trusted installation.");
+  if (process.platform !== "win32") {
+    const seen = new Set<string>();
+    const inspect = async (candidate: string): Promise<void> => {
+      let prefix = pathParts(candidate).root;
+      for (const part of candidate.slice(prefix.length).split(sep)) {
+        if (!part) continue;
+        prefix = join(prefix,part);
+        if (seen.has(prefix)) continue;
+        seen.add(prefix);
+        if (seen.size > 256) throw new Fault(422,"vault_exec_permissions","The secrets executable path has too many symlink components.");
+        const entry = await lstat(prefix);
+        if ((entry.uid !== 0 && entry.uid !== process.getuid?.()) || (!entry.isSymbolicLink() && (entry.mode & 0o022)))
+          throw new Fault(422,"vault_exec_permissions","The secrets executable and its ancestor directories must not be replaceable by other users. Choose an installation owned by this user or root without group/public write permissions.");
+        if (entry.isSymbolicLink()) await inspect(resolvePath(dirname(prefix),await readlink(prefix)));
+      }
+    };
+    try { await inspect(path); await inspect(resolved); }
+    catch (error) { if (error instanceof Fault) throw error; throw new Fault(422,"vault_exec_unavailable","The secrets executable path changed or could not be verified. Retry with a trusted installation."); }
+  }
+  return resolved;
 }
 
 export function bindingTarget(selector: string, override?: string, allowedOrigins?: string[]) {
@@ -166,8 +187,8 @@ export class CredentialResolver {
 const DELIVERY_URL = "SWITCHER_CREDENTIAL_DELIVERY_URL";
 const DELIVERY_NONCE = "SWITCHER_CREDENTIAL_DELIVERY_NONCE";
 const DELIVERY_VALUE = "SWITCHER_CREDENTIAL_DELIVERY_VALUE";
-export class CredentialInterrupted extends Fault {
-  constructor(readonly exitCode: number) { super(499,"interrupted","Credential lookup was interrupted; no harness was started."); }
+export class CredentialInterrupted extends CommandInterrupted {
+  constructor(exitCode: number) { super(exitCode,"Credential lookup was interrupted; no harness was started."); }
 }
 
 /** Select an operator through the shared credential seam, then pin that choice. */
@@ -197,10 +218,10 @@ function vaultEnvironment(binding: CredentialBinding, env: NodeJS.ProcessEnv): N
 async function runVaultCommand(binding: CredentialBinding, args: string[], env: NodeJS.ProcessEnv, delivery: NodeJS.ProcessEnv = {}, captureCheck = false): Promise<string> {
   if (binding.source.kind !== "vault") throw new Fault(500,"credential_resolution","Unexpected credential source.");
   if (process.platform === "win32") throw new Fault(422,"vault_exec_unavailable","Vault CLI bindings currently require POSIX process groups; use runtime environment injection on Windows.");
-  await validateVaultExecutable(binding.source.executable);
+  const executable = await validateVaultExecutable(binding.source.executable);
   const childEnv = {...vaultEnvironment(binding,env),...delivery};
   return new Promise((resolveResult,reject) => {
-    const child = spawn(binding.source.kind === "vault" ? binding.source.executable : "",args,{env:childEnv,stdio:["ignore",captureCheck ? "pipe" : "ignore","ignore"],detached:true,shell:false});
+    const child = spawn(executable,args,{env:childEnv,stdio:["ignore",captureCheck ? "pipe" : "ignore","ignore"],detached:true,shell:false});
     let failure: Fault | undefined;
     let output = "";
     let cleaned = false;

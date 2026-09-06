@@ -22,6 +22,37 @@ async function command(home: string, args: string[], extra: NodeJS.ProcessEnv = 
   } finally { clearTimeout(timer); }
 }
 
+test("interactive model selection cancels on Ctrl-C, Ctrl-D and SIGTERM without leaving the owned API alive", async () => {
+  const upstream = Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture-model"}]})});
+  try {
+    for (const input of ["\x03","\x04","SIGTERM"] as const) {
+      const dir = await directory();
+      let output = "", cancelled = false, timedOut = false;
+      const child = Bun.spawn([process.execPath,cli,"launch","claude","--provider","generic-anthropic-messages","--url",upstream.url.origin], {
+        cwd:dir, env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_HOME:join(dir,"data")},
+        terminal:{cols:120,rows:40,data(terminal,data) {
+          output += new TextDecoder().decode(data);
+          if (!cancelled && output.includes("Ctrl-C cancels): ")) {
+            cancelled = true;
+            if (input === "SIGTERM") child.kill("SIGTERM"); else terminal.write(input);
+          }
+        }},
+      });
+      const timer = setTimeout(()=>{timedOut=true;child.kill("SIGKILL");},10_000);
+      try {
+        const code = await child.exited;
+        expect(cancelled,output).toBe(true);
+        expect(timedOut,output).toBe(false);
+        expect(code,output).toBe(input === "SIGTERM" ? 143 : 130);
+        expect(output).toContain("no harness was started");
+        const runs = await command(dir,["runs","list"]);
+        expect(runs.code,runs.stderr).toBe(0);
+        expect(JSON.parse(runs.stdout).total).toBe(0);
+      } finally { clearTimeout(timer);child.terminal?.close();await rm(dir,{recursive:true,force:true}); }
+    }
+  } finally { await upstream.stop(true); }
+},40_000);
+
 test("owned API is authenticated, persists data on reopen and closes its listener", async () => {
   const dir = await directory();
   let runtime: Awaited<ReturnType<typeof openCliRuntime>> | undefined;

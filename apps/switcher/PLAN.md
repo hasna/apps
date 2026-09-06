@@ -4,7 +4,7 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T07:46:21.373601+00:00"
+updated_at: "2026-09-06T07:58:51.697529+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -24,6 +24,8 @@ Delivery order:
 5. Obtain exact-commit review, pass required CI, merge, publish a new version, and repeat the matrix using the registry-installed command.
 
 The target direct form is `switcher launch claude --provider deepseek --model deepseek-v4-pro`; the source CLI implements this form. Split-catalog subprocess tests pass, and an independently installed development tarball completed live DeepSeek Pro/Flash proof-file tool loops and native picker selection without an API supervisor or catalog import. The built-in vault/Keychain resolver now passes subprocess coverage and installed-development-CLI live acceptance: DeepSeek Pro/Flash proof-file tool loops, all three native picker models, and the corrected Default mapping. The remaining adapter matrix and registry-installed release acceptance are still pending. Provider credentials may be supplied through a supported runtime or secure-store reference, but no outside launch supervisor or manual catalog JSON should be required for a built-in provider. An explicit remote API must never silently fall back to a local database.
+
+The current installed development CLI also passes live DeepSeek Flash proof-file reads and same-session resume in Grok 1.0.13 and OpenCode 2 beta-19157. All four first/resumed processes exited 0 and their generated settings were removed. Current source verification passes 43 tests and 415 assertions against real SQLite/PostgreSQL. Two exact-commit P2 review findings have fixes and regression evidence; independent verification and the contracts dependency/repository gates remain in progress. See the dated evidence in TODOS.md.
 
 The user-owned live session `switcher-deepseek` is preserved. New acceptance sessions use separate task-owned paths, sockets, ports and databases. New worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/complete-adapters`; branch `codex/fixer/2026-09-05-switcher-complete-adapters`; fetched base `48f8c1d020d5138fa542461c19ff137d9ea69819`.
 

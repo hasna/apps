@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { mkdir, mkdtemp, writeFile, readFile, readdir, rm, stat, chmod, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile, readFile, readdir, rm, stat, chmod, symlink, unlink, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,8 +64,27 @@ test("vault executable errors distinguish a missing command from unsafe installe
     await expect(validateVaultExecutable(file)).rejects.toMatchObject({code:"vault_exec_permissions"});
     await chmod(file,0o755);
     await symlink(file,join(dir,"installed-cli"));
-    await expect(validateVaultExecutable(join(dir,"installed-cli"))).resolves.toBeUndefined();
+    await expect(validateVaultExecutable(join(dir,"installed-cli"))).resolves.toBe(await realpath(file));
   } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test("vault validation rejects writable ancestors and pins the resolved executable across symlink replacement",async()=>{
+  const dir=await directory();
+  try {
+    const trusted=join(dir,"trusted");await mkdir(trusted,{mode:0o700});
+    const file=join(trusted,"cli");await writeFile(file,"#!/bin/sh\nexit 0\n",{mode:0o755});
+    const alias=join(dir,"alias");await symlink(file,alias);
+    const executable=await validateVaultExecutable(alias);
+    await unlink(alias);await symlink("/does/not/exist",alias);
+    expect(executable).toBe(await realpath(file));expect(await readFile(executable,"utf8")).toContain("exit 0");
+    await chmod(trusted,0o777);
+    await expect(validateVaultExecutable(file)).rejects.toMatchObject({code:"vault_exec_permissions"});
+    await chmod(trusted,0o700);
+    const unsafe=join(dir,"unsafe");await mkdir(unsafe,{mode:0o700});await chmod(unsafe,0o777);
+    await symlink(file,join(unsafe,"redirect"));
+    await unlink(alias);await symlink(join(unsafe,"redirect"),alias);
+    await expect(validateVaultExecutable(alias)).rejects.toMatchObject({code:"vault_exec_permissions"});
+  } finally {await rm(dir,{recursive:true,force:true});}
 });
 
 test("binding CLI validates metadata/source flags before creating data or opening an API",async()=>{

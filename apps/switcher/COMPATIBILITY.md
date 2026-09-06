@@ -4,7 +4,7 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T07:46:21.373601+00:00"
+updated_at: "2026-09-06T07:58:36.216970+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -19,8 +19,8 @@ This matrix covers the next release in progress. Documented endpoints and succes
 | --- | --- | --- | --- | --- |
 | Claude Code | >=2.1.242 / 2.1.263 | Messages | Per-launch modelPicker | Split-catalog fixture and development-tarball Pro/Flash tool/picker checks pass; Default mapping passes live; full cancellation, resume and registry checks open |
 | Codex | >=0.153.0 / 0.153.4 | Responses | Startup ModelInfo JSON | Existing fixture passes; richer metadata, live tools and resume open |
-| Grok Build | >=1.0.13 / 1.0.13 | Chat, Responses, Messages | Authenticated loopback catalog | Native Messages resume with preserved history passes through source CLI/local fixture; standalone and summary model pinned; live provider/registry cells open |
-| OpenCode 2 | Tested beta-19157 | Chat, Responses, Messages | Version 2 provider/models | Native Messages resume with preserved history and new bridge ports passes against a local fixture; live provider/protocol/registry resume remains open |
+| Grok Build | >=1.0.13 / 1.0.13 | Chat, Responses, Messages | Authenticated loopback catalog | Installed development CLI passes local Messages fixture and live DeepSeek Flash tool/read/resume; exact model confirmed by native usage; remaining protocols and registry cells open |
+| OpenCode 2 | Tested beta-19157 | Chat, Responses, Messages | Version 2 provider/models | Installed development CLI passes local Messages fixture and live DeepSeek Flash read-tool/resume; remaining protocols and registry cells open |
 
 Claude + non-Claude models remains experimental and unsupported by Anthropic. Messages, Responses and Chat are distinct protocols. A matrix intersection is a candidate for testing, not an automatic compatibility guarantee.
 
@@ -30,7 +30,7 @@ M = Anthropic Messages, R = OpenAI Responses, C = OpenAI Chat. Default catalog p
 
 | Provider | Implemented native routes | Default authentication | Catalog / next-release evidence |
 | --- | --- | --- | --- |
-| DeepSeek | M, C | Bearer; DEEPSEEK_API_KEY alias | Root `/models`, independent of `/anthropic/v1`; split-path fixture and development-tarball Claude Pro/Flash tools/picker pass; other live cells open |
+| DeepSeek | M, C | Bearer; DEEPSEEK_API_KEY alias | Root `/models`, independent of `/anthropic/v1`; split-path fixture, development Claude Pro/Flash tools/picker and Grok/OpenCode Flash tools/resume pass; remaining cells open |
 | OpenRouter | M, R, C | Bearer; OPENROUTER_API_KEY | Public all-modality catalog; earlier 0.1.0 live evidence only |
 | Anthropic | M | x-api-key; ANTHROPIC_API_KEY | `/v1/models`, Anthropic version header and cursor pagination; live open |
 | OpenAI | R, C | Bearer; OPENAI_API_KEY | `/v1/models`; live open |
@@ -72,4 +72,4 @@ For every implemented row, the release gate still requires applicable native har
 | Gemini CLI, Aider | Distinct auth/wire/config adapters and native listing limits (G22–G23) |
 | Protocol translation | Explicit opt-in gateway or implemented translators, with streaming/tool/reasoning/multimodal/cancellation coverage (H05–H08) |
 
-Built-in vault resolution passes actual installed-CLI live acceptance and SIGINT/SIGTERM subprocess cleanup tests; provider Keychain resolution has fixture coverage. Native subscription authentication, live subagent/explicit family-alias behavior, full harness process-tree ownership, bridge-safe resume, Docker deployment, exact-commit independent review, CI and publication remain open in TODOS.md. Provider environment injection remains available without saving values.
+Built-in vault resolution passes actual installed-CLI live acceptance and SIGINT/SIGTERM subprocess cleanup tests; provider Keychain resolution has fixture coverage. Native subscription authentication, live subagent/explicit family-alias behavior, full harness process-tree ownership, remaining protocol/resume cells, Docker deployment, independent verification of review fixes, CI and publication remain open in TODOS.md. Provider environment injection remains available without saving values.

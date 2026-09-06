@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { SwitcherClient, SwitcherError, type Provider, type Profile } from "./sdk";
-import { codingEligible, Fault, parse, providerInputSchema, profileInputSchema, type Model } from "./domain";
+import { codingEligible, Fault, CommandInterrupted, parse, providerInputSchema, profileInputSchema, type Model } from "./domain";
 import { providerFromPreset, type PresetOptions } from "./presets";
 
 const absent = (error: unknown) => error instanceof SwitcherError && error.status === 404;
@@ -32,18 +32,28 @@ export async function selectModel(models: Model[], query = ""): Promise<string> 
   const eligible = models.filter(codingEligible);
   if (!eligible.length) throw new Fault(422, "model_missing", "This provider has no models eligible for coding in its current catalog.");
   const reader = createInterface({input: process.stdin, output: process.stderr});
+  const cancellation = new AbortController();
+  const cancel = () => cancellation.abort(new CommandInterrupted(130,"Model selection was cancelled; no harness was started."));
+  const terminate = () => cancellation.abort(new CommandInterrupted(143,"Model selection was interrupted; no harness was started."));
+  reader.on("SIGINT",cancel); reader.on("close",cancel);
+  process.on("SIGINT",cancel); process.on("SIGTERM",terminate);
   try {
     for (;;) {
       const matching = eligible.filter(m => `${m.id} ${m.name}`.toLowerCase().includes(query.toLowerCase()));
       const visible = matching.slice(0, 30);
       console.error(`Models: ${matching.length} match${matching.length === 1 ? "" : "es"}${matching.length > 30 ? " (first 30 shown; type to narrow)" : ""}.`);
       visible.forEach((m, i) => console.error(`  ${i + 1}. ${display(m.id)} — ${display(m.name)}`));
-      const answer = (await reader.question("Model number, exact model ID, or search text (Ctrl-C cancels): ")).trim();
+      const answer = (await reader.question("Model number, exact model ID, or search text (Ctrl-C cancels): ",{signal:cancellation.signal})
+        .catch(error => { throw cancellation.signal.aborted ? cancellation.signal.reason : error; })).trim();
       if (/^[1-9]\d*$/.test(answer) && visible[Number(answer) - 1]) return visible[Number(answer) - 1].id;
       if (eligible.some(m => m.id === answer)) return answer;
       query = answer;
     }
-  } finally { reader.close(); }
+  } finally {
+    reader.off("SIGINT",cancel); reader.off("close",cancel);
+    process.off("SIGINT",cancel); process.off("SIGTERM",terminate);
+    reader.close();
+  }
 }
 
 export async function ensureLaunchProfile(client: SwitcherClient, provider: Provider, harness: Profile["harness"], model: string): Promise<Profile> {

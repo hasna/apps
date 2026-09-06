@@ -71,6 +71,9 @@ export type LaunchPlan = {planToken:string; profile: Profile; provider: Provider
 export class Fault extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
 }
+export class CommandInterrupted extends Fault {
+  constructor(readonly exitCode: number, message: string) { super(499,"interrupted",message); }
+}
 export function parse<T>(schema: z.ZodType<T, any, any>, value: unknown): T {
   const result = schema.safeParse(value);
   if (!result.success) throw new Fault(400, "invalid_request", result.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; "));

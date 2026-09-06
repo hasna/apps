@@ -4,7 +4,7 @@ title: "Switcher full adapter and installed CLI delivery checklist"
 type: "task-checklist"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T07:46:21.373601+00:00"
+updated_at: "2026-09-06T07:58:36.216970+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -21,15 +21,17 @@ Owner: parent Codex task `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Worktree: `~/Wo
 
 2026-09-06: the source CLI now owns its local API lifecycle, supports direct harness/provider launches, creates/reuses profiles, exposes fourteen provider/protocol preset entries through CLI/API/SDK, and supports interactive model search or deterministic `--model`. DeepSeek inference and discovery use separate endpoints. Standard provider aliases are restricted to matching preset origins; explicit remote configuration fails closed.
 
-Current package verification passes on pinned Bun 1.3.14 with real SQLite and PostgreSQL: 41 tests, 393 assertions, no skips. Credential tests cover atomic owner-only bindings, origin checks against the provider loaded by the API, no fallback from a failed binding, fresh vault reads, private authenticated memory handoff, process-group cancellation for SIGINT/SIGTERM, receiver closure, native exit codes, and key exclusion from output/files. Earlier startup stress passed 180 concurrent SQLite starts across fifteen rounds.
+Current package verification passes on pinned Bun 1.3.14 with real SQLite and PostgreSQL: 43 tests, 415 assertions, no skips. Credential tests cover atomic owner-only bindings, origin checks against the provider loaded by the API, no fallback from a failed binding, fresh vault reads, private authenticated memory handoff, process-group cancellation for SIGINT/SIGTERM, receiver closure, native exit codes, and key exclusion from output/files. Earlier startup stress passed 180 concurrent SQLite starts across fifteen rounds.
 
 The separately npm-installed development tarball (SHA-1 `7b6c403317d1206a060a2fecacd3f870b9b5a05f`, still unpublished version 0.1.0) passed the actual `switcher launch claude --provider deepseek --model deepseek-v4-pro` flow without an external credential wrapper, API supervisor or catalog import. A local binding selected the existing vault key and read its operator from Keychain. Claude 2.1.263 completed the Pro proof-file tool loop in two turns, exit 0. The native picker exposed all three DeepSeek IDs and Default correctly identified deepseek-v4-pro via ANTHROPIC_DEFAULT_MODEL. Session-only Flash selection completed the second proof-file read, and native usage identified deepseek-v4-flash. Subagent mapping is fixture-tested; live subagent and explicit-family-alias validation remain open. Evidence: `~/Workspace/scratch/universal-harness-switcher/live/phase2-built-in-credentials`. The original user session remains preserved.
 
 The installed Secrets CLI was version 0.3.13; its executable initially had mode 0777 and was rejected before credential access. Group/public write permissions were removed (0755), with identical file hashes. This was an installed executable permissions repair, not an API/catalog setup step. The updated Switcher tarball replaced only Switcher in an existing isolated npm installation; the clean dependency-install gate remains open pending the owning contracts optional-peer fix.
 
-Repository status: package build/contract/artifact checks pass (32 packed members), Node SDK import passes, and the frozen-lock gate now passes after fast-forwarding the worktree to upstream skills 0.4.0. The earlier todos packed-declaration failure was due to its unbuilt declarations in this worktree; rebuilding its existing build:js generated them without source changes. The final root run stopped at loops packed declarations; rebuilding its existing build:js also corrected that ignored-artifact failure, and loops check:packed:scan now passes. The final full root rerun is pending. Exact-commit review, PR, release/version changes, clean install and publication remain pending. See [COMPATIBILITY.md](COMPATIBILITY.md).
+Repository status: package verification passes (43 tests, 415 assertions, real PostgreSQL), with 32 packed members and a working Node SDK import. Frozen locks pass after the upstream skills 0.4.0 update. Existing todos/loops declaration builds corrected ignored-artifact failures without source edits. The full root rerun reached contracts prepack and failed its hostname/provenance tests; the owning dependency agent is investigating. Milestone commit `f967552e3869190bcab2ef72fb20a118e2d2c3ef` received independent review: no P1 findings, two P2 findings in chooser cancellation and vault executable validation. Both are fixed with regressions; the original chooser was reproduced hanging until forced termination, while Ctrl-C/Ctrl-D/SIGTERM now exit cleanly before launch. Independent verification of the fixes, PR, version changes, clean install and publication remain pending. See [COMPATIBILITY.md](COMPATIBILITY.md).
 
 The newer source also passes OpenCode 2 beta-19157 native session continuation across two CLI processes and fresh bridge ports against a controlled local Messages fixture. The prior assistant response reappeared in resumed upstream history, both native processes exited 0, generated settings were empty, and no fixture provider key was found in saved files. Reproduce from the checkout with `SWITCHER_TEST_OPENCODE_EXECUTABLE=/absolute/path/to/opencode2 bun run test:native-opencode-resume`; evidence is under `live/opencode-native-regression/run-IGZXCO` in the task scratch directory. This is native fixture evidence, not live provider or registry acceptance. Grok now permits headless resume and guards its upstream interactive inline-prompt race. Its native CLI also passed the two-process Messages fixture through Switcher source (grok-cli-resume/run-2WFUbf): history preserved, exit 0 twice, no saved fixture provider key, settings empty. Grok now forces standalone execution and pins the session-summary model; native environment API-key lockdown and forced-team login fail closed before discovery. Mistral capability/archive and Together bare-array catalog parsers have seven passing discovery tests, including bounded same-origin/same-path linked pagination and incomplete-catalog detection. These source changes postdate the development tarball above. The earlier interactive Claude test ended at its owned timeout (143), with settings and owned listeners cleaned.
+
+The newer npm-installed development tarball SHA-1 `29431898c73dcff0b7fa44975f98c32e609e8812` passed Grok 1.0.13 and OpenCode 2 beta-19157 native Messages resume against both controlled fixtures and live DeepSeek Flash. Each live first turn read an unknown proof-file token, and a second CLI process resumed the same session and recalled it; all four runs exited 0 and both generated settings directories were empty. Grok usage named deepseek-v4-flash; OpenCode recorded the completed read tool. Credentials came from the built-in vault binding and Keychain operator, with no external credential wrapper, API supervisor or catalog import. Evidence: task scratch `live/deepseek-resume-current/run-YUylmy/result.json`, `live/installed-grok-resume/run-KZqk4w/result.json`, and `live/installed-opencode-resume/run-nZF0Se/result.json`. This artifact predates the two review fixes and is still unpublished version 0.1.0. The original user session remains preserved.
 
 ## Definition of complete
 
@@ -49,24 +51,24 @@ Every adapter has a recorded endpoint/auth/catalog contract, capability matrix, 
 
 ## B. Installed CLI and onboarding
 
-- [ ] B01 Provide `switcher launch HARNESS --provider PROVIDER --model MODEL` as a complete built-in path while retaining existing saved-profile launches.
-- [ ] B02 Provide provider/harness discovery, model search and interactive selection using the same registry and API as noninteractive commands.
-- [ ] B03 Create or reuse the provider/profile automatically without overwriting a user's customized profile or racing another launch.
+- [x] B01 Provide `switcher launch HARNESS --provider PROVIDER --model MODEL` as a complete built-in path while retaining existing saved-profile launches.
+- [x] B02 Provide provider/harness discovery, model search and interactive selection using the same registry and API as noninteractive commands.
+- [x] B03 Create or reuse the provider/profile automatically without overwriting a user's customized profile or racing another launch.
 - [ ] B04 Resolve executable paths and versions; show precise installation guidance when absent and an explicitly requested install path where supported.
 - [ ] B05 Supply machine-readable plans, structured errors, exit codes, dry-run/diagnostic output and actionable remediation without revealing keys.
-- [ ] B06 Keep noninteractive automation deterministic: explicit missing credential/model errors, no hidden prompts or paid discovery probes.
+- [x] B06 Keep noninteractive automation deterministic: explicit missing credential/model errors, no hidden prompts or paid discovery probes.
 - [ ] B07 Install the actual package CLI onto a test PATH and verify its bin/shebang/runtime resolution; include a normal station install within quarantine rules.
 - [ ] B08 Add first-run, repeat-run, upgrade and restart acceptance using the documented commands exactly as a user would execute them.
 - [ ] B09 Document one-command DeepSeek and OpenRouter examples plus local and remote API modes; remove dependency on external setup scripts.
 
 ## C. Local API lifecycle and remote API behavior
 
-- [ ] C01 Start an authenticated loopback API automatically for the configured local mode; keep CLI/SDK application operations HTTP-only.
-- [ ] C02 Keep generated local operator credentials in memory or an approved secure store; no token files, plaintext env files or secret-bearing launch arguments.
-- [ ] C03 Use only `~/.hasna/switcher` or an explicit home override for user data; keep acceptance fixtures in Workspace scratch.
+- [x] C01 Start an authenticated loopback API automatically for the configured local mode; keep CLI/SDK application operations HTTP-only.
+- [x] C02 Keep generated local operator credentials in memory or an approved secure store; no token files, plaintext env files or secret-bearing launch arguments.
+- [x] C03 Use only `~/.hasna/switcher` or an explicit home override for user data; keep acceptance fixtures in Workspace scratch.
 - [ ] C04 Specify service ownership, port allocation, readiness, compatible-version checks, idle/shutdown policy and stale-process recovery.
-- [ ] C05 Prevent startup races and stale-PID/port reuse from attaching to or stopping an unrelated process.
-- [ ] C06 Verify concurrent launches, shared SQLite access and independent profiles without cross-session credential/config contamination.
+- [x] C05 Prevent startup races and stale-PID/port reuse from attaching to or stopping an unrelated process.
+- [x] C06 Verify concurrent launches, shared SQLite access and independent profiles without cross-session credential/config contamination.
 - [x] C07 Honor explicitly configured remote API URL/auth; fail on remote errors without creating a local fallback store.
 - [ ] C08 Preserve service availability for active sessions; stop only owned temporary services and bridges on normal exit, signals, timeout and startup failure.
 - [ ] C09 Expose status/doctor and explicit lifecycle controls with redacted diagnostics and a real reachability distinction.
@@ -106,8 +108,8 @@ Each preset must declare supported inference protocols, inference/catalog base U
 
 ## F. Catalog discovery and model metadata
 
-- [ ] F01 Add independent catalog base URL/path and parser/auth metadata to the provider schema, API, generated SDK and both database upgrade paths.
-- [ ] F02 Normalize inference/version path conventions centrally; cover DeepSeek's split path, custom prefixes and optional version suffixes.
+- [x] F01 Add independent catalog base URL/path and parser/auth metadata to the provider schema, API, generated SDK and both database upgrade paths.
+- [x] F02 Normalize inference/version path conventions centrally; cover DeepSeek's split path, custom prefixes and optional version suffixes.
 - [ ] F03 Implement applicable OpenAI/Anthropic/Ollama/provider-specific catalog parsers and pagination without truncating models.
 - [ ] F04 Verify refresh, retry/backoff, rate limits, bounded response/page sizes, cache freshness, offline behavior and upstream changes.
 - [ ] F05 Preserve exact upstream model IDs and metadata provenance; keep aliases explicit and inspectable.
@@ -156,12 +158,12 @@ Each preset must declare supported inference protocols, inference/catalog base U
 
 ## I. API, SDK, storage and self-hosting
 
-- [ ] I01 Extend OpenAPI and generated SDK for provider registry, discovery settings, capabilities, credential references and launch diagnostics; verify drift.
+- [x] I01 Extend OpenAPI and generated SDK for provider registry, discovery settings, capabilities, credential references and launch diagnostics; verify drift.
 - [ ] I02 Migrate existing 0.1.0 SQLite/PostgreSQL data without losing provider/profile/catalog/run history; prove rollback and restart persistence.
-- [ ] I03 Preserve transactional plan fingerprints, optimistic concurrency, durable idempotency and referential integrity with all new provider/launch fields.
-- [ ] I04 Run the same contract suite against real SQLite and PostgreSQL, including concurrent process startup.
+- [x] I03 Preserve transactional plan fingerprints, optimistic concurrency, durable idempotency and referential integrity with all new provider/launch fields.
+- [x] I04 Run the same contract suite against real SQLite and PostgreSQL, including concurrent process startup.
 - [ ] I05 Execute Docker build, SQLite compose and PostgreSQL compose on a Docker-capable host; verify health, persistence, upgrades and graceful stop.
-- [ ] I06 Verify hosted/remote API use from a separate CLI process and prevent remote API requests from executing local commands without the local launcher.
+- [x] I06 Verify hosted/remote API use from a separate CLI process and prevent remote API requests from executing local commands without the local launcher.
 - [ ] I07 Resolve the deprecated contracts → secrets → events → paths dependency chain through the owning contract boundary; do not fork credential resolution or hide it with legacy-peer flags.
 - [ ] I08 Verify CLI, serve, required MCP packaging surface and Node/Bun SDK entrypoints from the actual npm tarball; never register Hasna MCP in an agent.
 - [ ] I09 Keep remote execution workers as a separately identified product architecture; account for authentication, worker enrollment and process ownership before advertising remote launches.
@@ -169,16 +171,16 @@ Each preset must declare supported inference protocols, inference/catalog base U
 ## J. Automated and live acceptance
 
 - [ ] J01 Add a regression reproducing the DeepSeek inference/catalog split; prove it fails on 0.1.0 and passes through the new installed CLI.
-- [ ] J02 Add clean-environment subprocess tests for first launch, secure auth resolution, autostart, repeat launch, config persistence and remote-mode failure.
+- [x] J02 Add clean-environment subprocess tests for first launch, secure auth resolution, autostart, repeat launch, config persistence and remote-mode failure.
 - [ ] J03 Test every preset with deterministic contract servers for advertised protocols/auth/catalogs and meaningful negative cases.
 - [ ] J04 Validate missing/revoked keys, 401/403/404/429/5xx, broken streams, malformed catalogs, redirects and unavailable local servers.
 - [ ] J05 Maintain a provider × protocol × harness matrix with separate configured, fixture-tested, live-inference, live-tool-loop, picker and resume outcomes.
-- [ ] J06 Run DeepSeek + Claude via the installed `switcher` command in ephemeral tmux with no external supervisor or catalog import; verify full native list, model change and proof-file tool loop.
+- [x] J06 Run DeepSeek + Claude via the installed `switcher` command in ephemeral tmux with no external supervisor or catalog import; verify full native list, model change and proof-file tool loop.
 - [ ] J07 Repeat live acceptance for Claude Code, Codex, Grok and OpenCode 2 across applicable named built-in providers; include direct provider and gateway/local-server paths.
 - [ ] J08 Run the optional Ori backend through the installed CLI and verify its declared model/provider boundaries.
 - [ ] J09 Live-test SQLite and PostgreSQL, concurrent sessions, interruption, resume and cleanup; retain sanitized evidence and exact versions/model IDs.
 - [ ] J10 Use approved credentials and bounded prompts; record missing access as a blocker, not a skipped success; never rotate credentials without separate authority.
-- [ ] J11 Preserve the user's existing DeepSeek session; use separate task-owned tmux sockets, directories, databases and ports for acceptance.
+- [x] J11 Preserve the user's existing DeepSeek session; use separate task-owned tmux sockets, directories, databases and ports for acceptance.
 - [ ] J12 Remove all test-only setup assumptions from README examples and prove the documented install/launch path on a fresh configuration.
 
 ## K. Ship and close
