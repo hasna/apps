@@ -17,6 +17,17 @@ import {
   truncateText,
 } from "../../lib/compact-output.js";
 
+interface ScheduledRunResult {
+  name: string;
+  skill: string;
+  status: "success" | "error";
+  attempted: boolean;
+  paid?: boolean;
+  error?: string;
+  executionStatus?: "success" | "error";
+  historyError?: string;
+}
+
 export function registerSchedule(parent: Command) {
   const scheduleCmd = parent
     .command("schedule")
@@ -146,22 +157,40 @@ export function registerSchedule(parent: Command) {
         process.exitCode = 1;
         return;
       }
-      const results = [];
+      const results: ScheduledRunResult[] = [];
       for (const s of due) {
+        const result: ScheduledRunResult = { name: s.name, skill: s.skill, status: "error", attempted: false };
         try {
-          const execution = await executeScheduledSkill(s.skill, s.args ?? [], { allowPaid: options.allowPaid });
-          recordScheduleRun(s.id, "success");
-          results.push({ name: s.name, skill: s.skill, status: "success", ...execution });
+          const execute = await prepareScheduledSkill(s.skill, s.args ?? []);
+          result.attempted = true;
+          const execution = await execute();
+          result.status = "success";
+          result.paid = execution.paid;
         } catch (err) {
-          recordScheduleRun(s.id, "error");
-          results.push({ name: s.name, skill: s.skill, status: "error", error: (err as Error).message });
+          result.error = (err as Error).message;
         }
+        // Preflight refusal did not attempt a run: retain the due occurrence
+        // and its history. Persist actual attempts once, separately from execution,
+        // so a write failure cannot trigger another write or abort the batch.
+        if (result.attempted) {
+          try { recordScheduleRun(s.id, result.status); }
+          catch {
+            result.executionStatus = result.status;
+            result.status = "error";
+            result.historyError = `Could not save schedule history after local execution (${result.executionStatus}). Inspect the skill's effects before retrying.`;
+            result.error ??= result.historyError;
+          }
+        }
+        results.push(result);
       }
-      if (options.json) console.log(JSON.stringify({ ran: results.length, results }));
+      if (results.some((result) => result.status === "error")) process.exitCode = 1;
+      if (options.json) console.log(JSON.stringify({ ran: results.filter((result) => result.attempted).length, results }));
       else {
         for (const r of results) {
           console.log(`${r.status === "success" ? chalk.green("✓") : chalk.red("✗")} ${r.name} (${r.skill})`);
           if (r.error) console.log(chalk.dim(`  ${r.error}`));
+          if (r.historyError && r.historyError !== r.error) console.log(chalk.dim(`  ${r.historyError}`));
+          if (!r.attempted) console.log(chalk.dim("  Not started; schedule remains due."));
         }
       }
     });
@@ -193,7 +222,7 @@ export function registerSchedule(parent: Command) {
     });
 }
 
-async function executeScheduledSkill(skillName: string, args: string[], options: { allowPaid: boolean }) {
+async function prepareScheduledSkill(skillName: string, args: string[]) {
   const { getSkill } = await import("../../lib/registry.js");
   const skill = getSkill(skillName);
   if (!skill) throw new Error(`Skill '${skillName}' not found`);
@@ -217,11 +246,13 @@ async function executeScheduledSkill(skillName: string, args: string[], options:
   }
 
   const { runSkill } = await import("../../lib/skillinfo.js");
-  const result = await runSkill(skill.name, args);
-  if (result.exitCode !== 0) {
-    throw new Error(result.error || result.stderr || `Skill '${skill.name}' exited with ${result.exitCode}`);
-  }
-  return { paid: false };
+  return async () => {
+    const result = await runSkill(skill.name, args);
+    if (result.exitCode !== 0) {
+      throw new Error(result.error || result.stderr || `Skill '${skill.name}' exited with ${result.exitCode}`);
+    }
+    return { paid: false };
+  };
 }
 
 async function describeDueSchedule(schedule: { name: string; skill: string; cron: string; args?: string[] }) {

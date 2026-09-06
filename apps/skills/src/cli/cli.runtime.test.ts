@@ -562,10 +562,12 @@ describe("CLI runtime and misc commands", () => {
       const tmpDir = mkdtempSync(joinTop(tmpdir(), "cli-schedule-hosted-unconfigured-"));
       try {
         writeDueSchedule(tmpDir, "hosted-schedule-fixture");
+        const before = readFileSyncTop(joinTop(tmpDir, ".skills", "schedules.json"), "utf8");
         const { stdout, exitCode } = await runCliInCwd(["schedule", "run", "--json"], tmpDir, NO_ROUTING_ENV);
-        expect(exitCode).toBe(0);
+        expect(exitCode).toBe(1);
         const data = JSON.parse(stdout);
-        expect(data.ran).toBe(1);
+        expect(data.ran).toBe(0);
+        expect(data.results[0].attempted).toBe(false);
         expect(data.results[0].status).toBe("error");
         expect(data.results[0].error).toContain("REMOTE_REQUIRES_ORIGIN");
         expect(data.results[0].error).toContain("server-owned");
@@ -574,7 +576,7 @@ describe("CLI runtime and misc commands", () => {
         // hosted fixture has no entry point, so a local run would have failed
         // with "Entry point ... not found".
         expect(data.results[0].error).not.toContain("Entry point");
-        expect(lastRunStatus(tmpDir)).toBe("error");
+        expect(readFileSyncTop(joinTop(tmpDir, ".skills", "schedules.json"), "utf8")).toBe(before);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -586,13 +588,17 @@ describe("CLI runtime and misc commands", () => {
       const tmpDir = mkdtempSync(joinTop(tmpdir(), "cli-schedule-hosted-no-auth-"));
       try {
         writeDueSchedule(tmpDir, "hosted-schedule-fixture");
+        const before = readFileSyncTop(joinTop(tmpDir, ".skills", "schedules.json"), "utf8");
         const { stdout, exitCode } = await runCliInCwd(["schedule", "run", "--json"], tmpDir, ORIGIN_ONLY_ENV);
-        expect(exitCode).toBe(0);
+        expect(exitCode).toBe(1);
         const data = JSON.parse(stdout);
+        expect(data.ran).toBe(0);
+        expect(data.results[0].attempted).toBe(false);
         expect(data.results[0].status).toBe("error");
         expect(data.results[0].error).toContain("REMOTE_REQUIRES_CREDENTIAL");
         expect(data.results[0].error).toContain("skills auth login");
         expect(data.results[0].error).not.toContain("Entry point");
+        expect(readFileSyncTop(joinTop(tmpDir, ".skills", "schedules.json"), "utf8")).toBe(before);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -604,13 +610,17 @@ describe("CLI runtime and misc commands", () => {
       const tmpDir = mkdtempSync(joinTop(tmpdir(), "cli-schedule-hosted-configured-"));
       try {
         writeDueSchedule(tmpDir, "hosted-schedule-fixture");
+        const before = readFileSyncTop(joinTop(tmpDir, ".skills", "schedules.json"), "utf8");
         const { stdout, exitCode } = await runCliInCwd(["schedule", "run", "--json"], tmpDir, FULL_ROUTING_ENV);
-        expect(exitCode).toBe(0);
+        expect(exitCode).toBe(1);
         const data = JSON.parse(stdout);
+        expect(data.ran).toBe(0);
+        expect(data.results[0].attempted).toBe(false);
         expect(data.results[0].status).toBe("error");
         expect(data.results[0].error).toContain("Scheduled hosted runs are not supported yet");
         expect(data.results[0].error).toContain("skills run hosted-schedule-fixture");
         expect(data.results[0].error).not.toContain("Entry point");
+        expect(readFileSyncTop(joinTop(tmpDir, ".skills", "schedules.json"), "utf8")).toBe(before);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -626,6 +636,7 @@ describe("CLI runtime and misc commands", () => {
         expect(exitCode).toBe(0);
         const data = JSON.parse(stdout);
         expect(data.ran).toBe(1);
+        expect(data.results[0].attempted).toBe(true);
         expect(data.results[0].status).toBe("success");
         expect(data.results[0].paid).toBe(false);
         expect(lastRunStatus(tmpDir)).toBe("success");
