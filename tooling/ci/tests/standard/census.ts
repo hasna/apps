@@ -484,7 +484,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   // with the manifest rewrite its CONTRACTS_EXCEPTIONS remediation task owns.
   { member: "conversations", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "dispatch", kitVersion: "0.11.1", pinned: "0.14.0" },
-  { member: "instructions", kitVersion: "0.13.1", pinned: "0.14.0" },
   // knowledge left this list on 2026-09-05 (hasna/apps#1720): adopting the
   // @hasna/contracts client credential seam moved its pin to 1.0.1 and its
   // manifest kitVersion with it, and the manifest still validates at that kit
