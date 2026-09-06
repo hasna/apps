@@ -1,79 +1,16 @@
-import { accessSync, constants, readFileSync, readdirSync } from "node:fs";
+import { accessSync, constants } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 
 /**
- * Machine-wide Hasna client configuration: the API endpoints and credentials
- * every `@hasna/*` CLI needs to reach its configured server instead of a stale
- * on-box SQLite file.
+ * Environment helpers for the loops runner.
  *
- * Interactive shells get these from a shell rc file. Spawned ones do not: a
- * non-interactive `bash -c` reads no rc file, and `/bin/sh` (dash on Linux)
- * ignores `BASH_ENV` as well, so a child inherits only what its parent already
- * had. The loops runner is started by a launcher that sources a single file, so
- * without this loader every CLI invoked from a loop resolved to the on-box
- * store and answered with months-old data **at exit 0** — a confident wrong
- * answer, indistinguishable from a right one. See todos de1f78af.
- *
- * These files are read, never sourced. They are plain `KEY=value` (optionally
- * `export `-prefixed and quoted) and shelling out to source them would mean
- * executing arbitrary code from disk on every spawn, for no gain.
+ * The machine-wide client configuration the runner's spawned CLIs used to
+ * inherit from `~/.hasna/cloud/*.env` is retired: every hosted Hasna CLI now
+ * resolves its own credentials through the shared `@hasna/contracts` 1.0.2
+ * resolver (Keychain -> disk -> env) per call, so no loader and no injected
+ * env prefix is needed on a station (owner ruling 2026-09-04, hasna/apps#1720).
  */
-function clientEnvDir(env: NodeJS.ProcessEnv): string {
-  const explicit = env.HASNA_CLIENT_ENV_DIR?.trim();
-  if (explicit) return explicit;
-  const home = env.HOME?.trim() || homedir();
-  return join(home, ".hasna", "cloud");
-}
-
-function unquote(value: string): string {
-  if (value.length >= 2) {
-    const first = value[0];
-    if ((first === '"' || first === "'") && value.endsWith(first)) return value.slice(1, -1);
-  }
-  return value;
-}
-
-function parseEnvFile(contents: string, into: Record<string, string>): void {
-  for (const rawLine of contents.split("\n")) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const assignment = line.startsWith("export ") ? line.slice("export ".length).trim() : line;
-    const eq = assignment.indexOf("=");
-    if (eq <= 0) continue;
-    const key = assignment.slice(0, eq).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
-    into[key] = unquote(assignment.slice(eq + 1).trim());
-  }
-}
-
-/**
- * Parsed contents of every `*.env` in the Hasna client config directory, applied
- * in sorted filename order so a later file wins a duplicate key (matching the
- * shell glob the rc files use).
- *
- * Never throws: a missing, unreadable or malformed file yields fewer keys, not
- * a failed run. Set `LOOPS_CLIENT_ENV=0` to disable loading entirely.
- */
-export function hasnaClientEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  if (env.LOOPS_CLIENT_ENV?.trim() === "0") return {};
-  const dir = clientEnvDir(env);
-  const result: Record<string, string> = {};
-  let names: string[];
-  try {
-    names = readdirSync(dir).filter((name) => name.endsWith(".env")).sort();
-  } catch {
-    return result;
-  }
-  for (const name of names) {
-    try {
-      parseEnvFile(readFileSync(join(dir, name), "utf8"), result);
-    } catch {
-      // An unreadable or binary file must not take the run down with it.
-    }
-  }
-  return result;
-}
 
 function compactPathParts(parts: Array<string | undefined>): string[] {
   const seen = new Set<string>();

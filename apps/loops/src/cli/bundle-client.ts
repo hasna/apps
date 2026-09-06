@@ -8,11 +8,15 @@
  * transport in it would mean base64 in a JSON envelope - doubling the bytes on
  * the wire for the one payload with a hard 2 MiB cap.
  *
- * Credentials come from the shared `@hasna/contracts` resolver, so the CLI
- * honours exactly the same tiers (explicit, environment, credential file) as
- * every other Hasna client. No new environment switch is introduced.
+ * Credentials and the authority come from the shared `@hasna/contracts` 1.0.2
+ * resolver, exactly like every other loops surface: the macOS Keychain
+ * (`hasna.credentials.loops.api-key` / `.api-url`), the credential file
+ * `~/.hasna/loops/config/credentials`, `HASNA_LOOPS_API_KEY` /
+ * `HASNA_LOOPS_API_URL`, and the fleet gateway default
+ * `https://api.hasna.com/loops` once a credential has resolved. No app-owned
+ * environment switch is introduced.
  */
-import { clientTransportEnvKeys, resolveCredential, toV1BaseUrl } from "@hasna/contracts/client";
+import { clientTransportEnvKeys, resolveClientTransport, resolveCredential } from "@hasna/contracts/client";
 import type { OwnedBytes } from "../lib/bundle/pack.js";
 import { ownBytes } from "../lib/bundle/pack.js";
 
@@ -73,16 +77,21 @@ export interface BundleApiClient {
  * than a silent fall back to something that would appear to work.
  */
 export function createBundleApiClient(env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch): BundleApiClient {
-  const keys = clientTransportEnvKeys("loops");
-  const rawUrl = keys.apiUrlKeys.map((key) => env[key]?.trim()).find(Boolean);
-  if (!rawUrl) {
+  let baseUrl: string;
+  try {
+    // The shared resolver decides the authority: env, Keychain api-url item,
+    // credential file, then the fleet gateway. It throws when no credential
+    // resolves at all — the refusal below.
+    baseUrl = resolveClientTransport("loops", env).baseUrl;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     throw new BundleCliError(
       "CREDENTIALS_MISSING",
-      `bundle commands talk to the loops control plane; set ${keys.apiUrlKeys[0]} and ${keys.apiKeyKeys[0]}`,
+      `bundle commands talk to the loops control plane; ${message}`,
       EX_CONFIG,
     );
   }
-  let apiKey: string | null | undefined;
+  let apiKey: string | undefined;
   try {
     // The resolver returns null when no tier holds a credential; a throw means
     // a tier held an unusable one. Both are the same refusal to the operator.
@@ -91,10 +100,14 @@ export function createBundleApiClient(env: NodeJS.ProcessEnv = process.env, fetc
     throw new BundleCliError("CREDENTIALS_MISSING", error instanceof Error ? error.message : String(error), EX_CONFIG);
   }
   if (!apiKey) {
-    throw new BundleCliError("CREDENTIALS_MISSING", `bundle commands require ${keys.apiKeyKeys[0]}`, EX_CONFIG);
+    const keys = clientTransportEnvKeys("loops");
+    throw new BundleCliError(
+      "CREDENTIALS_MISSING",
+      `bundle commands require ${keys.apiKeyKeys[0]} (or the macOS Keychain item hasna.credentials.loops.api-key / ~/.hasna/loops/config/credentials)`,
+      EX_CONFIG,
+    );
   }
   const key = apiKey;
-  const baseUrl = toV1BaseUrl(rawUrl).replace(/\/+$/, "");
 
   const authorized = (extra: Record<string, string> = {}): Record<string, string> => ({
     authorization: `Bearer ${key}`,

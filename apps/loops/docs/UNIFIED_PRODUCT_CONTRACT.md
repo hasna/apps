@@ -10,14 +10,15 @@
 Loops is one product and one application contract. SQLite is its zero-configuration embedded-authority persistence; that embedded authority may be packaged or hosted without becoming the multi-tenant server role. PostgreSQL is the explicit persistence required by the network multi-tenant server role, including when that role runs on AWS. CLI, SDK, HTTP API, MCP, daemon/scheduler, runner, and server/admin are adapters or process roles over that one contract.
 
 Deployment modes are removed: there is no product-mode enum and no
-`HASNA_LOOPS_STORAGE_MODE` variable. `local` and `cloud` remain ordinary words
+`HASNA_LOOPS_STORAGE_MODE` variable (it is not read anywhere). `local` and
+`cloud` remain ordinary words
 (a location; the hosted SaaS product), and "self-hosted" survives only as plain
 English for a server someone runs. The only server-side switch is the data
 backend (`sqlite | postgresql`, selected by configuration such as
 `HASNA_LOOPS_DATABASE_URL`); clients connect via the local file or the
-control-plane API (`HASNA_LOOPS_API_URL` + `HASNA_LOOPS_API_KEY`). Legacy mode
-values are deleted and rejected at the boundary; they are not a compatibility
-input model.
+control-plane API, whose credential and authority resolve through the shared
+`@hasna/contracts` 1.0.2 resolver (macOS Keychain, credential file, env, fleet
+gateway default). Legacy mode values are not a compatibility input model.
 
 ### Scope
 
@@ -124,10 +125,10 @@ This matrix is closed: an unlisted role or role/configuration combination is uns
 
 A PostgreSQL DSN never changes client authority. A remote transport, authentication, authorization, timeout, validation, or server failure is returned as a precise remote error and never falls back to SQLite or another local authority. The product makes no dual-authority, cache-and-spool, queued-write, or automatic reconciliation claim: one invocation has one selected authority.
 
-Legacy mode inputs (`HASNA_LOOPS_STORAGE_MODE` and mode-shaped env values) are
-deleted; configuration is expressed only through the orthogonal axes.
-Ambiguous, conflicting, partial, or role-inapplicable configuration is rejected
-before resource creation.
+Legacy mode inputs (mode-shaped env values) are deleted; configuration is
+expressed only through the orthogonal axes. The client authority is decided by
+the shared `@hasna/contracts` resolver; ambiguous, conflicting, partial, or
+role-inapplicable configuration is rejected before resource creation.
 
 ## 4. One `LoopsApplication` capability contract
 
@@ -262,8 +263,9 @@ Canonical status and version responses emit orthogonal `storage`,
 #### Legacy mode value removal
 
 The legacy mode values `local`, `self_hosted`, and `cloud` — and the
-`HASNA_LOOPS_STORAGE_MODE` variable that carried them — are deleted in 0.5.0.
-There is no mapping table because there is no compatibility input: any
+`HASNA_LOOPS_STORAGE_MODE` variable that carried them — were deleted in 0.5.0;
+nothing in the package reads the retired variable any more. There is no mapping
+table because there is no compatibility input: any
 mode-shaped value is rejected before resource creation. Configuration is
 expressed only through the orthogonal axes, with the storage backend
 (`sqlite | postgresql`) and client connection (`file | api`) as the public

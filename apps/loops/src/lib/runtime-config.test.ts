@@ -7,7 +7,6 @@ import {
   runtimeStorage,
   runtimeStorageBackend,
 } from "./runtime-config.js";
-import { getStore, isCloudStore } from "./store/index.js";
 
 describe("runtime config contract", () => {
   test("defaults to sqlite file authority", () => {
@@ -25,9 +24,8 @@ describe("runtime config contract", () => {
     expect(presence.databaseUrlPresent).toBe(false);
   });
 
-  test("treats blank legacy env as unset", () => {
+  test("treats blank env as unset", () => {
     const config = resolveRuntimeConfig({
-      HASNA_LOOPS_STORAGE_MODE: "",
       HASNA_LOOPS_API_URL: "",
       HASNA_LOOPS_DATABASE_URL: "",
     });
@@ -68,35 +66,6 @@ describe("runtime config contract", () => {
       "HASNA_LOOPS_API_KEY",
     );
     expect(() => resolveRuntimeConfig({ HASNA_LOOPS_API_KEY: "key" })).toThrow("HASNA_LOOPS_API_URL");
-  });
-
-  test("rejects the retired storage mode env with a hard error", () => {
-    for (const mode of ["local", "self_hosted", "cloud"]) {
-      const env = { HASNA_LOOPS_STORAGE_MODE: mode };
-      expect(() => resolveRuntimeConfig(env)).toThrow("HASNA_LOOPS_STORAGE_MODE is retired");
-      expect(() => loopControlPlaneConfig(env)).toThrow("HASNA_LOOPS_STORAGE_MODE is retired");
-      expect(() => runtimeStorage(env)).toThrow("HASNA_LOOPS_STORAGE_MODE is retired");
-      expect(() => runtimeStorageBackend(env)).toThrow("HASNA_LOOPS_STORAGE_MODE is retired");
-    }
-  });
-
-  test("rejects the retired storage mode env on the client store data path", () => {
-    // A leftover retired HASNA_LOOPS_STORAGE_MODE (with no API vars) must fail
-    // loudly on the store path too, never silently resolve to the local file store.
-    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "cloud" })).toThrow("HASNA_LOOPS_STORAGE_MODE is retired");
-    expect(() => isCloudStore({ HASNA_LOOPS_STORAGE_MODE: "cloud" })).toThrow("HASNA_LOOPS_STORAGE_MODE is retired");
-    // ... including when API vars are also set: the retired env wins closed-matrix.
-    expect(() =>
-      getStore({ HASNA_LOOPS_STORAGE_MODE: "cloud", HASNA_LOOPS_API_URL: "https://loops.example.test", HASNA_LOOPS_API_KEY: "k" })
-    ).toThrow("HASNA_LOOPS_STORAGE_MODE is retired");
-    // A blank value counts as unset, so the fail-closed connection policy
-    // applies: resolution throws instead of silently opening the local store.
-    expect(() => getStore({ HASNA_LOOPS_STORAGE_MODE: "" })).toThrow(
-      /no loops client connection is configured: set HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY/,
-    );
-    expect(isCloudStore({ HASNA_LOOPS_STORAGE_MODE: "", HASNA_LOOPS_API_URL: "https://loops.example.test", HASNA_LOOPS_API_KEY: "k" })).toBe(
-      true,
-    );
   });
 
   test("reports database url presence as server-side postgres storage without switching the connection", () => {

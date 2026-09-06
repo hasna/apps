@@ -191,12 +191,17 @@ test("leaves an unwaived extra package bin fatal", () => {
     // The runtime /health probe serves the richer foundation envelope
     // { status, version, storage, connection } (asserted in scripts/smoke-serve.ts);
     // the conformance sample must match the strict { status, version, backend }
-    // HealthResponseSchema of @hasna/contracts 0.10.6, which rejects extra keys.
-    const sample = contractHealthResponse({});
-    expect(sample).toEqual({ status: "ok", version: expect.any(String), backend: expect.stringMatching(/^(sqlite|postgresql)$/) });
-    expect(sample.storage).toBeUndefined();
-    expect(sample.connection).toBeUndefined();
-    expect(sample.mode).toBeUndefined();
+    // HealthResponseSchema of @hasna/contracts 1.0.2, which rejects extra keys
+    // and represents exactly one server backend: postgresql.
+    const configured = contractHealthResponse({ HASNA_LOOPS_DATABASE_URL: "postgres://loops.example.test/openloops" });
+    expect(configured).toEqual({ status: "ok", version: expect.any(String), backend: "postgresql" });
+    expect(configured.storage).toBeUndefined();
+    expect(configured.connection).toBeUndefined();
+    expect(configured.mode).toBeUndefined();
+    // The sqlite development posture is the app's own vocabulary: the sample
+    // maps the server backend faithfully, so an unconfigured runtime reports
+    // sqlite.
+    expect(contractHealthResponse({}).backend).toBe("sqlite");
   });
 
   test("normalizes checkout roots in formatted conformance JSON", () => {

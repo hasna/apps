@@ -32,16 +32,21 @@ there or `HASNA_DATA_HOME` is set, or `$LOOPS_DATA_DIR/loops.db` when the
 exact-app override is set) or PostgreSQL
 (explicitly configured on `loops-serve` via `HASNA_LOOPS_DATABASE_URL`).
 Clients connect either to the local file (`connection=file`) or to a
-control-plane HTTP API (`connection=api`, selected by `HASNA_LOOPS_API_URL`
-plus `HASNA_LOOPS_API_KEY`). Neither is a default: an invocation with no API
-env and no explicit selection FAILS CLOSED with a non-zero exit and an error
-naming the required variables — the client never silently serves the local
-SQLite file when the API env is missing. The file connection is an EXPLICIT
-opt-in (`HASNA_LOOPS_CONNECTION=file`); the API connection requires both
-variables (`HASNA_LOOPS_CONNECTION=api` additionally enforces that). Setting
-`HASNA_LOOPS_CONNECTION=file` alongside the API variables is a contradiction
-and is rejected. The former `HASNA_LOOPS_STORAGE_MODE` variable is deleted and
-rejected if present.
+control-plane HTTP API (`connection=api`). The hosted connection is selected
+by the SHARED credential resolver (`@hasna/contracts` 1.0.2): the macOS
+Keychain items `hasna.credentials.loops.api-key` / `.api-url` (account
+`HASNA_STATION`, else the short hostname, else `USER`), the credential file
+`~/.hasna/loops/config/credentials` (0600; `HASNA_HOME` / `HASNA_CONFIG_HOME`
+relocate it, XDG is never consulted), `HASNA_LOOPS_API_KEY` in the
+environment, and the fleet gateway default `https://api.hasna.com/loops` once
+a credential has resolved — so a station needs no inline env prefix. Neither
+connection is a default: an invocation with no credential and no explicit
+selection FAILS CLOSED with a non-zero exit and an error naming what is
+missing — the client never silently serves the local SQLite file when no
+credential resolves. The file connection is an EXPLICIT opt-in only
+(`HASNA_LOOPS_CONNECTION=file`), and it announces itself on stderr; a
+configured environment outranks the opt-in. The retired `HASNA_LOOPS_CONNECTION=api`
+value and the former `HASNA_LOOPS_STORAGE_MODE` variable are not read at all.
 
 The public `@hasna/loops` package owns the local runtime, the Postgres storage
 adapter, the control-plane API contract, tenant authentication and
@@ -60,6 +65,18 @@ Postgres for normal control-plane CRUD and runner protocol routes when it is
 explicitly configured. Route admission remains bounded by `max_dispatch`,
 `max_active`, `max_active_per_project`, `max_active_per_project_group`,
 `max_active_scope`, and `max_per_profile`.
+
+### Client connection environment
+
+| Variable | Purpose |
+| --- | --- |
+| `HASNA_LOOPS_API_KEY` | Hosted credential tier (also stored in the macOS Keychain item `hasna.credentials.loops.api-key` or the file `~/.hasna/loops/config/credentials`, 0600; `HASNA_HOME` / `HASNA_CONFIG_HOME` relocate the file, XDG is never consulted) |
+| `HASNA_LOOPS_API_URL` | Optional explicit hosted authority (Keychain item `hasna.credentials.loops.api-url` / the credentials file override it in the same ladder); defaults to the fleet gateway `https://api.hasna.com/loops` once a credential resolves |
+| `HASNA_LOOPS_CONNECTION=file` | Explicit opt-in for the local SQLite file store (only accepted value; announces "local mode" on stderr) |
+| `HASNA_LOOPS_DATABASE_URL` | Server-side only (`loops-serve`): selects the PostgreSQL backend; never read by clients |
+
+The resolver is re-read per call by the CLI, the MCP server, the SDK and the
+runner, so a key rotation heals a long-lived process without a restart.
 
 Useful status and setup commands:
 

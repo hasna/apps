@@ -56,8 +56,7 @@ import type { Goal, GoalPlanNode, GoalRun, GoalStatus } from "../goal/types.js";
 import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError } from "../errors.js";
 import { publicWorkflowEvents } from "../workflow-events.js";
 import { runLoopNow } from "../scheduler.js";
-import { resolveCloudStorage } from "../cloud/resolve.js";
-import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { resolveCloudStorage, type LoopsStorageClient } from "../cloud/resolve.js";
 import { HasnaHttpError } from "@hasna/contracts/client";
 // Mirrors the seam's own Env definition; not re-exported from the client
 // subpath in the installed kit (0.10.x).
@@ -529,7 +528,7 @@ function pickObject<T>(raw: unknown, key: string): T | undefined {
 export class ApiStore implements LoopStore {
   readonly transport = "api" as const;
   constructor(
-    private readonly client: HasnaStorageClient,
+    private readonly client: LoopsStorageClient,
     readonly baseUrl: string,
   ) {}
 

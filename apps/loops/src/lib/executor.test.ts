@@ -206,86 +206,16 @@ describe("executeLoop", () => {
     }
   });
 
-  // Regression: todos de1f78af. The live runner's bootstrap script sources only
-  // its own env file, and composeExecutionEnv bases the child env on the runner's
-  // process.env. The child is `/bin/sh -c` (dash), which reads no rc file and ignores
-  // BASH_ENV, so nothing downstream recovers the missing config: every hasna CLI called
-  // from a loop-spawned shell silently fell back to a stale on-box store and returned
-  // wrong data at exit 0.
-  describe("hasna client env propagation into spawned shells", () => {
-    function clientEnvDir(files: Record<string, string>): { root: string; dir: string } {
-      const root = mkdtempSync(join(tmpdir(), "loops-exec-client-env-"));
-      const dir = join(root, "cloud");
-      mkdirSync(dir, { recursive: true });
-      for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
-      return { root, dir };
-    }
-
-    test("a spawned shell sees client config the runner process never had", async () => {
-      const { root, dir } = clientEnvDir({ "todos.env": "HASNA_DE1F78AF_API_URL=https://live.example\n" });
-      try {
-        const base: NodeJS.ProcessEnv = { ...process.env, HASNA_CLIENT_ENV_DIR: dir };
-        delete base.HASNA_DE1F78AF_API_URL;
-        const result = await executeTarget(
-          { type: "command", command: 'printf "%s" "${HASNA_DE1F78AF_API_URL:-UNSET}"', shell: true, timeoutMs: 5_000 },
-          {},
-          { env: base },
-        );
-        expect(result.status).toBe("succeeded");
-        expect(result.stdout).toBe("https://live.example");
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    });
-
-    test("does not clobber a value the caller explicitly set", async () => {
-      const { root, dir } = clientEnvDir({ "todos.env": "HASNA_DE1F78AF_API_URL=https://from-file\n" });
-      try {
-        const result = await executeTarget(
-          { type: "command", command: 'printf "%s" "${HASNA_DE1F78AF_API_URL:-UNSET}"', shell: true, timeoutMs: 5_000 },
-          {},
-          { env: { ...process.env, HASNA_CLIENT_ENV_DIR: dir, HASNA_DE1F78AF_API_URL: "https://explicit" } },
-        );
-        expect(result.status).toBe("succeeded");
-        expect(result.stdout).toBe("https://explicit");
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    });
-
-    test("target env still overrides client config", async () => {
-      const { root, dir } = clientEnvDir({ "todos.env": "HASNA_DE1F78AF_API_URL=https://from-file\n" });
-      try {
-        const base: NodeJS.ProcessEnv = { ...process.env, HASNA_CLIENT_ENV_DIR: dir };
-        delete base.HASNA_DE1F78AF_API_URL;
-        const result = await executeTarget(
-          {
-            type: "command",
-            command: 'printf "%s" "${HASNA_DE1F78AF_API_URL:-UNSET}"',
-            shell: true,
-            env: { HASNA_DE1F78AF_API_URL: "https://from-target" },
-            timeoutMs: 5_000,
-          },
-          {},
-          { env: base },
-        );
-        expect(result.status).toBe("succeeded");
-        expect(result.stdout).toBe("https://from-target");
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
-    });
-  });
-
   // Regression: row e84f3956-1083-4b4a-bb73-59f901b054b7 (2026-07-30, measured
   // runner-origin). The runner's own process.env (systemd/launchd launcher)
-  // lacks CLAUDE_CONFIG_DIR, and neither ~/.hasna/cloud/*.env nor an explicit
-  // spec.account supplies it, so a spawned headless claude resolved to the
-  // DEFAULT account profile — a silent identity switch that only surfaces once
-  // that account is spent (measured: 429 on the default while the configured
-  // profile sat idle; exit 0, zero cost, ~3s — indistinguishable from a config
-  // bug). The runner must propagate the tool's config-selecting var from the
-  // accounts CLI's ACTIVE profile when the value is otherwise absent.
+  // lacks CLAUDE_CONFIG_DIR, and neither an explicit spec.account nor the
+  // retired ~/.hasna/cloud loader supplies it, so a spawned headless claude
+  // resolved to the DEFAULT account profile — a silent identity switch that
+  // only surfaces once that account is spent (measured: 429 on the default
+  // while the configured profile sat idle; exit 0, zero cost, ~3s —
+  // indistinguishable from a config bug). The runner must propagate the tool's
+  // config-selecting var from the accounts CLI's ACTIVE profile when the value
+  // is otherwise absent.
   describe("active claude profile config-dir propagation into spawned targets", () => {
     function writeFakeAccounts(binDir: string, configDir: string, exitCode = 0): string {
       const accounts = join(binDir, "accounts");
