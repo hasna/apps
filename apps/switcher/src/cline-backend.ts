@@ -117,6 +117,16 @@ export async function prepareClineLaunch(input: HarnessLaunchInput): Promise<Pre
     ],
     env: {
       [credentialEnv]: input.credential ?? "switcher-local-no-auth",
+      // ACP does not consume the regular CLI --provider/--model flags when it
+      // creates a session. Keep the selected native provider/model explicit in
+      // the child environment so a fresh ACP process cannot fall back to the
+      // ambient Cline account or its last-used model. CLINE_API_KEY is the
+      // native ACP readiness gate and is delivered only in the child env; the
+      // provider-specific key above remains the source used by the wire
+      // client.
+      ...(input.credential ? { CLINE_API_KEY: input.credential } : {}),
+      CLINE_PROVIDER: providerId,
+      CLINE_MODEL: input.model,
       CLINE_PROVIDER_SETTINGS_PATH: providersPath,
       CLINE_DATA_DIR: dataDir,
       CLINE_SESSION_DATA_DIR: sessionDir,
