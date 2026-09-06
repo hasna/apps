@@ -12,7 +12,7 @@
 import { existsSync, readFileSync, statSync } from "fs";
 import { basename } from "path";
 import { lookup as mimeLookup } from "mime-types";
-import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
+import type { FilesStorageClient } from "./client-types.js";
 import { HasnaHttpError } from "@hasna/contracts/client";
 import { sha256File } from "../lib/hasher.js";
 import { FILES_API_MAX_PAGE_SIZE } from "../lib/api-pagination.js";
@@ -113,7 +113,7 @@ export class ApiStore implements FilesStore {
   readonly transport = "api" as const;
 
   constructor(
-    private readonly client: HasnaStorageClient,
+    private readonly client: FilesStorageClient,
     private readonly fetchContent?: AuthenticatedFilesFetch,
   ) {}
 

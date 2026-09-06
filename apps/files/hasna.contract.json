@@ -4,7 +4,7 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.4.2",
-  "description": "Agent-first file management — index local folders and S3 buckets, sync Google Drive, tag, search, organize, and serve an evidence vault. CLI + MCP + HTTP API (files-serve) + generated SDK. The client uses the hosted HTTP API when HASNA_FILES_API_URL + HASNA_FILES_API_KEY are set, else local SQLite; files-serve uses PostgreSQL when HASNA_FILES_DATABASE_URL is set, with API-key auth via @hasna/contracts; file bytes stay in S3.",
+  "description": "Agent-first file management — index local folders and S3 buckets, sync Google Drive, tag, search, organize, and serve an evidence vault. CLI + MCP + HTTP API (files-serve) + generated SDK. Hosted clients resolve credential and authority through the @hasna/contracts 1.0.2 resolver (Keychain hasna.credentials.files.api-key, ~/.hasna/files/config/credentials, HASNA_FILES_API_KEY; default gateway https://api.hasna.com/files) fresh per request and fail closed with no credential; local SQLite is an explicit opt-in (HASNA_FILES_LOCAL=1). files-serve uses PostgreSQL when HASNA_FILES_DATABASE_URL is set, with API-key auth via @hasna/contracts; file bytes stay in S3.",
   "bins": [
     "files",
     "files-mcp",
@@ -29,8 +29,8 @@
       "signingSecretSecretRef": "hasna/oss/files/api-key-signing-secret"
     },
     "client": {
-      "apiUrlEnv": "FILES_API_URL",
-      "apiKeyEnv": "FILES_API_KEY"
+      "apiUrlEnv": "HASNA_FILES_API_URL",
+      "apiKeyEnv": "HASNA_FILES_API_KEY"
     }
   }
 }

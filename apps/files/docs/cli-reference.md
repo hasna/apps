@@ -7,20 +7,30 @@ the current CLI.
 
 ## Client Transports
 
-The hosted API transport is selected when `HASNA_FILES_API_URL` and
-`HASNA_FILES_API_KEY` are both configured (aliases `FILES_API_URL` /
-`FILES_API_KEY` are accepted). It sends supported data-plane operations to
-`<API_URL>/v1`; it is not a local cache or a SQLite/PostgreSQL
-synchronization layer.
+The hosted API transport is resolved through the ONE `@hasna/contracts`
+credential chain, fresh on every call: an explicit `--api-key`/`--profile`
+argument, then `HASNA_FILES_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
+`HASNA_FILES_API_KEY_REF`, then the macOS Keychain item
+`hasna.credentials.files.api-key` (account `HASNA_STATION`, else the short
+hostname, else `$USER`), then `~/.hasna/files/config/credentials` (owner-only
+0400/0600, `HASNA_HOME`/`HASNA_CONFIG_HOME` move the root), then
+`HASNA_FILES_API_KEY`. The authority follows the same ladder —
+`HASNA_FILES_API_URL`, the Keychain `api-url` item, the credentials file — and
+defaults to the fleet gateway `https://api.hasna.com/files` once a credential
+resolves (the client appends `/v1`). The unprefixed `FILES_API_URL` /
+`FILES_API_KEY` names survive only as a silent resolver alias for one release.
 
-With neither the hosted API env nor the explicit local opt-in set, the CLI
-fails closed — a command exits non-zero with an error naming the required
-env, and no on-disk SQLite store is created. The local transport is used only
-under the explicit opt-in `HASNA_FILES_LOCAL_MODE=1` (alias
-`FILES_LOCAL_MODE=1`); it uses the resolver-resolved data root
-(`~/.local/share/hasna/files/files.db` on Linux, `~/Library/Application
-Support/Hasna/files/files.db` on macOS; the legacy `~/.hasna/files/files.db`
-stays effective until migrated or `HASNA_DATA_HOME` is set).
+With no resolvable credential and no local opt-in, the CLI fails closed — a
+command exits non-zero naming every tier the resolver consulted, and no on-disk
+SQLite store is created, no `*-local-fallback` event is emitted. The local
+transport is used only under the explicit opt-in `HASNA_FILES_LOCAL=1` (alias
+`FILES_LOCAL=1`) — the retired `HASNA_FILES_LOCAL_MODE` /
+`FILES_LOCAL_MODE`/`*_STORAGE_MODE` switches are gone — and every local run
+prints one `files: LOCAL mode — ...` line on stderr. Local mode uses the
+resolver-resolved data root (`~/.local/share/hasna/files/files.db` on Linux,
+`~/Library/Application Support/Hasna/files/files.db` on macOS; the legacy
+`~/.hasna/files/files.db` stays effective until migrated or `HASNA_DATA_HOME`
+is set).
 
 Commands marked **on-box** require local files, a local SQLite index, or local
 ingestion state and fail explicitly on the hosted transport. Commands marked
