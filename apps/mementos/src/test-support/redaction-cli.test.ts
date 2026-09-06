@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runRedactionCli } from "./redaction-cli.js";
+import { runRedactionCli } from "../../test-support/redaction-cli.js";
 
 const scratch = mkdtempSync(join(tmpdir(), "mementos-cli-diagnostics-"));
 const cli = join(scratch, "child.ts");

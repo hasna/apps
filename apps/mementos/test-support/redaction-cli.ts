@@ -1,4 +1,4 @@
-import { redactSecrets } from "../lib/redact.js";
+import { redactSecrets } from "../src/lib/redact.js";
 
 /** Test-only runner: keep the original process boundary and expose failed exits safely. */
 export async function runRedactionCli(

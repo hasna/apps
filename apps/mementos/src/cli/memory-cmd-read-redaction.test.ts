@@ -3,7 +3,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
-import { runRedactionCli } from "../test-support/redaction-cli.js";
+import { runRedactionCli } from "../../test-support/redaction-cli.js";
 import {
   assertLocalStoreBackend,
   blankLlmProviderEnv,
