@@ -108,6 +108,35 @@ test("Pi bridges protocol/auth mismatches without leaking bridge credentials ups
     expect(upstreamRequests[2].authorization).toBeNull();expect(upstreamRequests[2].key).toBe(input.credential);
   } finally { await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true}); }
 });
+test("OMP protocol bridge keeps its transformed endpoint and upstream authentication", async () => {
+  const input = await fixture();
+  const upstreamRequests: Array<{ authorization: string | null; key: string | null }> = [];
+  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    upstreamRequests.push({ authorization: request.headers.get("authorization"), key: request.headers.get("x-api-key") });
+    return Response.json({ ok: true });
+  }});
+  const stateDir = join(input.stateDir, "omp-bridge");
+  try {
+    const prepared = await prepareHarnessLaunch({ ...input, baseUrl: `${upstream.url.origin}/v1`, credential: undefined, stateDir, harness: "omp", protocol: "openai-chat", authStyle: "x-api-key", version: "omp/18.1.11" });
+    const config = JSON.parse(await readFile(prepared.configPaths[0], "utf8"));
+    const provider = config.providers.switcher;
+    expect(provider.baseUrl).not.toBe(input.baseUrl);
+    expect(provider.baseUrl).toContain("127.0.0.1");
+    expect(provider.baseUrl).toContain("/v1");
+    expect(prepared.env.SWITCHER_HARNESS_API_KEY).not.toBe(input.credential);
+    const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${prepared.env.SWITCHER_HARNESS_API_KEY}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: input.model, messages: [{ role: "user", content: "fixture" }] }),
+    });
+    expect(response.status).toBe(200);
+    expect(upstreamRequests).toEqual([{ authorization: null, key: null }]);
+    await prepared.cleanup?.();
+  } finally {
+    await upstream.stop(true);
+    await rm(input.stateDir, { recursive: true, force: true });
+  }
+});
 test("Grok resumes with a fresh bridge and the selected profile model; unsafe interactive queued prompts fail",async()=>{
   const input=await fixture();
   const safe=[

@@ -234,7 +234,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     warnings.push("Pi scopes its picker and model cycling to this provider; its --list-models diagnostic still enumerates global model definitions.");
     return {executable,args:["--provider",providerId,"--model",input.model,"--models",`${providerId}/**`,...args],env,configPaths,warnings};
   }
-  if(input.harness==="omp") return prepareOmpLaunch({...input,baseUrl:providerBaseUrl});
+  if(input.harness==="omp") return prepareOmpLaunch(input);
   // Session model references must identify the upstream provider, not the
   // allocated port of a temporary auth bridge which changes each launch.
   const providerID="switcher-"+createHash("sha256").update(endpoint(providerBaseUrl)+input.protocol).digest("hex").slice(0,12);
@@ -264,7 +264,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
     codex:["--model","-m","--profile","-p"],
     grok:["--model","-m","--oauth","--leader","--leader-socket"],
     pi:["--model","--provider","--api-key","--models"],
-    omp:["--model","--provider","--api-key","--profile","--cwd","--config","--session-dir","--models","--no-rules","--no-tools","--smol","--slow","--plan","--prewalk","--prewalk-into","--plan-yolo-into"],
+    omp:["--model","--provider","--api-key","--profile","--cwd","--config","--session-dir","--models","--no-rules","--smol","--slow","--plan","--prewalk","--prewalk-into","--plan-yolo-into"],
     opencode2:["--model","-m","--server"],
   };
   for(let i=0;i<(input.args??[]).length;i++){
