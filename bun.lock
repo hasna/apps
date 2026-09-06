@@ -1127,7 +1127,7 @@
     },
     "apps/todos": {
       "name": "@hasna/todos",
-      "version": "0.15.53",
+      "version": "0.16.0",
       "bin": {
         "todos": "dist/cli/index.js",
         "todos-mcp": "dist/mcp/index.js",
