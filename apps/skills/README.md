@@ -294,6 +294,14 @@ Stable command shapes:
   served by the API and never ships in this package.
 - Config and schedules: `config * --json` and `schedule * --json` return
   machine-readable status objects.
+  `schedule run` exits 1 if any item fails, in human and JSON output. JSON
+  `results[].attempted` identifies items handed to the local executor; `ran`
+  counts those attempts, including failures. Missing skills, routing refusals,
+  and unsupported hosted scheduling leave that occurrence due and its history
+  unchanged. Local attempts record success/error and advance the schedule.
+  If history cannot be saved, the item reports `executionStatus` and
+  `historyError`; inspect its effects before retrying. Other due items still run.
+  No-due and `--dry-run` remain successful without consuming occurrences.
 - Storage: `storage status --json` returns local `.skills` paths and optional
   repo-native remote readiness; `storage sync-plan --json` returns a no-network
   snapshot plan.
