@@ -120,9 +120,9 @@ describe('sync removal — server', () => {
     expect(notesMod.syncNotes).toBeUndefined();
   });
 
-  test('server app registers no /api/v1/sync route', async () => {
+  test('server app registers no /v1/sync route', async () => {
     const text = await readText(join(repoRoot, 'server', 'app.mjs'));
-    expect(text).not.toMatch(/api\/v1\/sync/);
+    expect(text).not.toMatch(/\/v1\/sync/);
   });
 
   test('server schema has no sync_batches table', async () => {

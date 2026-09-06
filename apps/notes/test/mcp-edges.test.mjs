@@ -10,7 +10,12 @@ const mcpPath = join(repoRoot, 'mcp', 'notes-mcp.mjs');
 
 function cleanEnv(extra = {}) {
   const env = { ...process.env, ...extra };
-  for (const key of ['HASNA_NOTES_API_URL', 'HASNA_NOTES_API_KEY', 'HASNA_NOTES_DATABASE_URL']) {
+  for (const key of [
+    'HASNA_NOTES_API_URL', 'HASNA_NOTES_API_KEY', 'HASNA_NOTES_DATABASE_URL',
+    'HASNA_NOTES_API_KEY_OVERRIDE', 'HASNA_NOTES_API_KEY_REF', 'HASNA_PROFILE',
+    'HASNA_HOME', 'HASNA_CONFIG_HOME',
+    'PERSONALNOTES_MODE', 'HASNA_NOTES_STORAGE_MODE', 'HASNA_NOTES_MODE', 'NOTES_STORAGE_MODE', 'NOTES_MODE',
+  ]) {
     if (!(key in extra)) delete env[key];
   }
   return env;

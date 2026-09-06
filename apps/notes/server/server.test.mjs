@@ -1,7 +1,7 @@
 // notes-server test suite — boots the real entrypoint, then exercises
 // the personalnotes/v1 dialect surface in-process via Hono's app.request:
 // auth (OTP + device flow + auto-approve), notes CRUD, and cursor
-// pagination. The /api/v1/sync round-trip endpoint and its sync_batches
+// pagination. The /v1/sync round-trip endpoint and its sync_batches
 // table were removed (0.2.0).
 // Run: cd server && bun test
 
@@ -28,8 +28,8 @@ function call(app, method, path, { token, idem, body, env = LOOPBACK } = {}) {
 }
 
 async function login(app, email = 'owner@example.com') {
-  const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
-  const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode, requestId: started.requestId } });
+  const started = await (await call(app, 'POST', '/v1/auth/login', { body: { email } })).json();
+  const res = await call(app, 'POST', '/v1/auth/verify', { body: { email, code: started.devCode, requestId: started.requestId } });
   expect(res.status).toBe(200);
   return res.json(); // { token, user, tenant, apiKey? }
 }
@@ -74,7 +74,7 @@ describe('boot', () => {
 describe('auth', () => {
   test('unauthenticated API access gets the dialect error envelope', async () => {
     const { app } = await makeApp();
-    const res = await call(app, 'GET', '/api/v1/notes');
+    const res = await call(app, 'GET', '/v1/notes');
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.error.code).toBe('unauthorized');
@@ -93,10 +93,10 @@ describe('auth', () => {
     expect(second.apiKey).toBeUndefined();
     expect(second.user.id).toBe(first.user.id);
 
-    const viaKey = await (await call(app, 'GET', '/api/v1/auth/whoami', { token: first.apiKey })).json();
+    const viaKey = await (await call(app, 'GET', '/v1/auth/whoami', { token: first.apiKey })).json();
     expect(viaKey.auth.via).toBe('api_key');
     expect(viaKey.tenant.id).toBe(first.tenant.id);
-    const viaSession = await (await call(app, 'GET', '/api/v1/auth/whoami', { token: first.token })).json();
+    const viaSession = await (await call(app, 'GET', '/v1/auth/whoami', { token: first.token })).json();
     expect(viaSession.auth.via).toBe('session');
     expect(viaSession.user.email).toBe('first@example.com');
   });
@@ -105,57 +105,57 @@ describe('auth', () => {
     const { app } = await makeApp();
     const { token, apiKey } = await login(app);
 
-    const startRes = await call(app, 'POST', '/api/v1/auth/device/start', { body: {} });
+    const startRes = await call(app, 'POST', '/v1/auth/device/start', { body: {} });
     expect(startRes.status).toBe(201);
     const started = await startRes.json();
     expect(started.deviceCode).toStartWith('dc_');
     expect(started.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
     expect(started.interval).toBe(5);
 
-    const pending = await (await call(app, 'POST', '/api/v1/auth/device/token', { body: { deviceCode: started.deviceCode } })).json();
+    const pending = await (await call(app, 'POST', '/v1/auth/device/token', { body: { deviceCode: started.deviceCode } })).json();
     expect(pending).toMatchObject({ status: 'pending', approved: false });
 
     // API keys are rejected on approve — user session required.
-    const viaKey = await call(app, 'POST', '/api/v1/auth/device/approve', { token: apiKey, body: { userCode: started.userCode } });
+    const viaKey = await call(app, 'POST', '/v1/auth/device/approve', { token: apiKey, body: { userCode: started.userCode } });
     expect(viaKey.status).toBe(403);
 
-    const approved = await (await call(app, 'POST', '/api/v1/auth/device/approve', { token, body: { userCode: started.userCode } })).json();
+    const approved = await (await call(app, 'POST', '/v1/auth/device/approve', { token, body: { userCode: started.userCode } })).json();
     expect(approved.approved).toBe(true);
     expect(approved.exchangeToken).toStartWith('dt_');
 
-    const done = await (await call(app, 'POST', '/api/v1/auth/device/token', { body: { deviceCode: started.deviceCode } })).json();
+    const done = await (await call(app, 'POST', '/v1/auth/device/token', { body: { deviceCode: started.deviceCode } })).json();
     expect(done.status).toBe('approved');
     expect(done.apiKey).toStartWith('pn_');
 
-    const again = await call(app, 'POST', '/api/v1/auth/device/token', { body: { deviceCode: started.deviceCode } });
+    const again = await call(app, 'POST', '/v1/auth/device/token', { body: { deviceCode: started.deviceCode } });
     expect(again.status).toBe(410);
     expect((await again.json()).error.code).toBe('gone');
-    const exchanged = await call(app, 'POST', '/api/v1/auth/device/exchange', { body: { exchangeToken: approved.exchangeToken } });
+    const exchanged = await call(app, 'POST', '/v1/auth/device/exchange', { body: { exchangeToken: approved.exchangeToken } });
     expect(exchanged.status).toBe(410);
 
     // The minted device key is a working full-scope credential.
-    const whoami = await call(app, 'GET', '/api/v1/auth/whoami', { token: done.apiKey });
+    const whoami = await call(app, 'GET', '/v1/auth/whoami', { token: done.apiKey });
     expect(whoami.status).toBe(200);
   });
 
   test('--auto-approve completes loopback device logins without manual approval', async () => {
     const { app } = await makeApp({ autoApprove: true });
-    const started = await (await call(app, 'POST', '/api/v1/auth/device/start', { body: {} })).json();
-    const done = await (await call(app, 'POST', '/api/v1/auth/device/token', { body: { deviceCode: started.deviceCode } })).json();
+    const started = await (await call(app, 'POST', '/v1/auth/device/start', { body: {} })).json();
+    const done = await (await call(app, 'POST', '/v1/auth/device/token', { body: { deviceCode: started.deviceCode } })).json();
     expect(done.status).toBe('approved');
     expect(done.apiKey).toStartWith('pn_');
 
     // Non-loopback requests stay pending even with the flag on.
-    const remote = await (await call(app, 'POST', '/api/v1/auth/device/start', { body: {}, env: { ip: '203.0.113.9' } })).json();
-    const poll = await (await call(app, 'POST', '/api/v1/auth/device/token', { body: { deviceCode: remote.deviceCode } })).json();
+    const remote = await (await call(app, 'POST', '/v1/auth/device/start', { body: {}, env: { ip: '203.0.113.9' } })).json();
+    const poll = await (await call(app, 'POST', '/v1/auth/device/token', { body: { deviceCode: remote.deviceCode } })).json();
     expect(poll.status).toBe('pending');
   });
 
   test('logout revokes the session', async () => {
     const { app } = await makeApp();
     const { token } = await login(app, 'bye@example.com');
-    expect((await call(app, 'POST', '/api/v1/auth/logout', { token })).status).toBe(200);
-    expect((await call(app, 'GET', '/api/v1/auth/whoami', { token })).status).toBe(401);
+    expect((await call(app, 'POST', '/v1/auth/logout', { token })).status).toBe(200);
+    expect((await call(app, 'GET', '/v1/auth/whoami', { token })).status).toBe(401);
   });
 });
 
@@ -164,25 +164,25 @@ describe('notes CRUD', () => {
     const { app } = await makeApp();
     const { apiKey } = await login(app);
 
-    const createRes = await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'crud-1', title: 'Hello', bodyMarkdown: 'World', labels: [' a ', 'a', 'b'] } });
+    const createRes = await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: 'crud-1', title: 'Hello', bodyMarkdown: 'World', labels: [' a ', 'a', 'b'] } });
     expect(createRes.status).toBe(201);
     const note = await createRes.json();
     expect(note).toMatchObject({ clientId: 'crud-1', title: 'Hello', revision: 1, source: 'hosted', labels: ['a', 'b'], deletedAt: null });
     expect(note.seq).toBe(1);
 
-    const patched = await (await call(app, 'PATCH', `/api/v1/notes/${note.id}`, { token: apiKey, body: { title: 'Hello again' } })).json();
+    const patched = await (await call(app, 'PATCH', `/v1/notes/${note.id}`, { token: apiKey, body: { title: 'Hello again' } })).json();
     expect(patched.revision).toBe(2);
     expect(patched.bodyMarkdown).toBe('World');
     expect(patched.contentHash).not.toBe(note.contentHash);
 
-    const deleted = await (await call(app, 'DELETE', `/api/v1/notes/${note.id}`, { token: apiKey })).json();
+    const deleted = await (await call(app, 'DELETE', `/v1/notes/${note.id}`, { token: apiKey })).json();
     expect(deleted).toEqual({ deleted: true, id: note.id, revision: 3 });
-    expect((await call(app, 'GET', `/api/v1/notes/${note.id}`, { token: apiKey })).status).toBe(404);
+    expect((await call(app, 'GET', `/v1/notes/${note.id}`, { token: apiKey })).status).toBe(404);
 
-    const withDeleted = await (await call(app, 'GET', '/api/v1/notes?include_deleted=1', { token: apiKey })).json();
+    const withDeleted = await (await call(app, 'GET', '/v1/notes?include_deleted=1', { token: apiKey })).json();
     expect(withDeleted.data).toHaveLength(1);
     expect(withDeleted.data[0].deletedAt).not.toBeNull();
-    const withoutDeleted = await (await call(app, 'GET', '/api/v1/notes', { token: apiKey })).json();
+    const withoutDeleted = await (await call(app, 'GET', '/v1/notes', { token: apiKey })).json();
     expect(withoutDeleted.data).toHaveLength(0);
   });
 
@@ -194,21 +194,21 @@ describe('notes CRUD', () => {
     // path and emitTransitionEvents' note.restored already anticipate this).
     const { app } = await makeApp();
     const { apiKey } = await login(app);
-    const created = await (await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'restore-1', title: 'Trash me' } })).json();
+    const created = await (await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: 'restore-1', title: 'Trash me' } })).json();
 
-    await call(app, 'DELETE', `/api/v1/notes/${created.id}`, { token: apiKey });
+    await call(app, 'DELETE', `/v1/notes/${created.id}`, { token: apiKey });
 
-    const restored = await (await call(app, 'PATCH', `/api/v1/notes/${created.id}`, { token: apiKey, body: { archived: false, title: 'Trash me' } })).json();
+    const restored = await (await call(app, 'PATCH', `/v1/notes/${created.id}`, { token: apiKey, body: { archived: false, title: 'Trash me' } })).json();
     expect(restored.deletedAt).toBeNull();
     expect(restored.archived).toBe(false);
     expect(restored.title).toBe('Trash me');
 
     // The note is visible again in the default (non-deleted) list.
-    const list = await (await call(app, 'GET', '/api/v1/notes', { token: apiKey })).json();
+    const list = await (await call(app, 'GET', '/v1/notes', { token: apiKey })).json();
     expect(list.data.map((n) => n.id)).toContain(created.id);
 
     // A second PATCH on the restored note is an ordinary update (no error).
-    const again = await (await call(app, 'PATCH', `/api/v1/notes/${created.id}`, { token: apiKey, body: { title: 'Restored again' } })).json();
+    const again = await (await call(app, 'PATCH', `/v1/notes/${created.id}`, { token: apiKey, body: { title: 'Restored again' } })).json();
     expect(again.title).toBe('Restored again');
     expect(again.deletedAt).toBeNull();
   });
@@ -216,8 +216,8 @@ describe('notes CRUD', () => {
   test('duplicate clientId maps to 409 conflict', async () => {
     const { app } = await makeApp();
     const { apiKey } = await login(app);
-    await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'dup-1' } });
-    const dup = await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'dup-1' } });
+    await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: 'dup-1' } });
+    const dup = await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: 'dup-1' } });
     expect(dup.status).toBe(409);
     expect((await dup.json()).error.code).toBe('conflict');
   });
@@ -225,10 +225,10 @@ describe('notes CRUD', () => {
   test('export returns non-deleted notes with an exportId', async () => {
     const { app } = await makeApp();
     const { apiKey } = await login(app);
-    await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'e1', title: 'Keep' } });
-    const drop = await (await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'e2', title: 'Drop' } })).json();
-    await call(app, 'DELETE', `/api/v1/notes/${drop.id}`, { token: apiKey });
-    const exported = await (await call(app, 'POST', '/api/v1/export', { token: apiKey, body: {} })).json();
+    await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: 'e1', title: 'Keep' } });
+    const drop = await (await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: 'e2', title: 'Drop' } })).json();
+    await call(app, 'DELETE', `/v1/notes/${drop.id}`, { token: apiKey });
+    const exported = await (await call(app, 'POST', '/v1/export', { token: apiKey, body: {} })).json();
     expect(exported.exportId).toBeTruthy();
     expect(exported.notes.map((n) => n.clientId)).toEqual(['e1']);
   });
@@ -252,20 +252,20 @@ describe('version label', () => {
 describe('cursor pagination', () => {
   async function seed(app, apiKey, count = 250) {
     for (let i = 0; i < count; i += 1) {
-      const res = await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: `p${String(i).padStart(3, '0')}`, title: `Note ${i}` } });
+      const res = await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: `p${String(i).padStart(3, '0')}`, title: `Note ${i}` } });
       expect(res.status).toBe(201);
     }
   }
 
-  test('GET /api/v1/notes pages with cursor + nextCursor (list superset)', async () => {
+  test('GET /v1/notes pages with cursor + nextCursor (list superset)', async () => {
     const { app } = await makeApp();
     const { apiKey } = await login(app);
     await seed(app, apiKey);
 
-    const page1 = await (await call(app, 'GET', '/api/v1/notes?limit=200', { token: apiKey })).json();
+    const page1 = await (await call(app, 'GET', '/v1/notes?limit=200', { token: apiKey })).json();
     expect(page1.data).toHaveLength(200);
     expect(page1.nextCursor).toMatch(/^s:\d+$/);
-    const page2 = await (await call(app, 'GET', `/api/v1/notes?limit=200&cursor=${page1.nextCursor}`, { token: apiKey })).json();
+    const page2 = await (await call(app, 'GET', `/v1/notes?limit=200&cursor=${page1.nextCursor}`, { token: apiKey })).json();
     expect(page2.data).toHaveLength(50);
     expect(page2.nextCursor).toBeNull();
     const ids = new Set([...page1.data, ...page2.data].map((n) => n.id));

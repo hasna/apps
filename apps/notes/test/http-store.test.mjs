@@ -1,11 +1,12 @@
 // client/http-store.mjs unit tests — agent-authored (SOL consult refused:
 // fleet ChatGPT codex lane at capacity; see the task receipt).
 //
-// The existing transport.test.mjs round-trips the HTTP store through a real
-// server; this file pins the store's own error contract with a stub fetch:
-// fetch failures map to NotesHttpStoreError, the API key never leaks into
-// errors, the dialect error envelope surfaces status/code/details, query
-// serialization and id encoding are exact, and construction fails closed.
+// The HTTP store is an adapter over the @hasna/contracts client transport
+// (hasna/apps#1720): the credential is resolved through the fleet chain per
+// request, auth-failure bodies are cancelled unread, and the store's own error
+// contract (NotesHttpStoreError with status/code/details, redaction of echoed
+// credentials, exact query serialization and id encoding, fail-closed
+// construction, explicit-authority pins) is pinned here with a stub fetch.
 
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
@@ -23,6 +24,15 @@ const API_URL = 'https://notes.example.test';
 // assert this value never leaks into errors.
 const API_KEY = ['pn', 'test', 'fixture', 'not-a-real-credential', 'abcdef0123'].join('_');
 
+/** The transport sends Authorization/Content-Type capitalized; read either spelling. */
+function authOf(options) {
+  return options?.headers?.authorization ?? options?.headers?.Authorization;
+}
+
+function contentTypeOf(options) {
+  return options?.headers?.['content-type'] ?? options?.headers?.['Content-Type'];
+}
+
 function storeWith(fetchImpl, { url = API_URL, key = API_KEY } = {}) {
   return new NotesHttpStore({ apiUrl: url, apiKey: key }, fetchImpl);
 }
@@ -30,7 +40,7 @@ function storeWith(fetchImpl, { url = API_URL, key = API_KEY } = {}) {
 test('credentials stay private and the request authority cannot be replaced through public fields', async () => {
   const seen = [];
   const store = storeWith(async (url, options) => {
-    seen.push([url, options.headers.authorization]);
+    seen.push([url, authOf(options)]);
     return new Response('{}');
   });
   assert.equal(store.apiKey, undefined);
@@ -41,7 +51,7 @@ test('credentials stay private and the request authority cannot be replaced thro
   Object.defineProperty(store, 'apiUrl', { value: 'https://other.example.test' });
   store.apiKey = 'replacement-fixture';
   await store.health();
-  assert.deepEqual(seen, [[`${API_URL}/health`, `Bearer ${API_KEY}`]]);
+  assert.deepEqual(seen, [[`${API_URL}/v1/health`, `Bearer ${API_KEY}`]]);
 });
 
 test('accessor-backed environment credentials are rejected without invoking getters or dispatching', () => {
@@ -52,9 +62,9 @@ test('accessor-backed environment credentials are rejected without invoking gett
     get() { reads++; env.HASNA_NOTES_API_URL = 'https://other.example.test'; return API_KEY; },
   });
   const fetchImpl = () => { fetches++; throw new Error('unexpected fetch'); };
-  assert.throws(() => resolveNotesClientTransport(env), /plain string configuration/);
-  assert.throws(() => createNotesHttpStore(env, fetchImpl), /plain string configuration/);
-  assert.throws(() => new NotesClient(env, fetchImpl), /plain string configuration/);
+  assert.throws(() => resolveNotesClientTransport(env), /accessor-backed/);
+  assert.throws(() => createNotesHttpStore(env, fetchImpl), /accessor-backed/);
+  assert.throws(() => new NotesClient(env, fetchImpl), /accessor-backed/);
   assert.equal(reads, 0);
   assert.equal(fetches, 0);
 });
@@ -66,16 +76,48 @@ test('direct store options also reject credential accessors without reading them
   assert.equal(reads, 0);
 });
 
-test('later environment rotation cannot mix an existing client authority and a new credential', async () => {
+test('an explicit baseUrl without an apiKey never attaches the ambient fleet credential (#1794)', async () => {
+  // A hostile environment that WOULD resolve a credential — disk and env both —
+  // must not leak it onto an explicit authority the caller did not pin to it.
+  const creds = ['fleet', 'disk', 'credential', 'abcdef0123'].join('_');
+  const sent = [];
+  const fetchImpl = async (url, options) => { sent.push([url, authOf(options)]); return new Response('{}'); };
+  const ambient = { HOME: '/nonexistent-hermetic-home', HASNA_NOTES_API_KEY: creds };
+  const explicit = new NotesHttpStore({ apiUrl: 'https://other.example.test', apiKey: API_KEY }, fetchImpl);
+  await explicit.health();
+  assert.deepEqual(sent, [['https://other.example.test/v1/health', `Bearer ${API_KEY}`]]);
+  assert.ok(!JSON.stringify(sent).includes(creds), 'the ambient key never reaches an explicit authority');
+});
+
+test("an explicit baseUrl with no apiKey is refused outright — no ambient tier is consulted", async () => {
+  let fetches = 0;
+  const fetchImpl = () => { fetches++; throw new Error('unexpected fetch'); };
+  assert.throws(
+    () => new NotesHttpStore({ apiUrl: 'https://other.example.test' }, fetchImpl),
+    /explicit apiKey/, // never "borrowed the key from the environment"
+  );
+  assert.equal(fetches, 0);
+});
+
+test('a held client re-resolves the credential per request: rotation heals, authority drift throws', async () => {
   const seen = [];
   const env = { HASNA_NOTES_API_URL: API_URL, HASNA_NOTES_API_KEY: API_KEY };
-  const fetchImpl = async (url, options) => { seen.push([url, options.headers.authorization]); return new Response('{}'); };
-  const original = new NotesClient(env, fetchImpl);
+  const fetchImpl = async (url, options) => { seen.push([url, authOf(options)]); return new Response('{}'); };
+  const client = new NotesClient(env, fetchImpl);
+  await client.health();
+  // Rotate ONLY the key: the next request carries the new key (fresh chain per
+  // request), while the authority stays the one the client was built against.
+  env.HASNA_NOTES_API_KEY = 'rotated-fixture-key';
+  await client.health();
+  assert.deepEqual(seen, [
+    [`${API_URL}/v1/health`, `Bearer ${API_KEY}`],
+    [`${API_URL}/v1/health`, 'Bearer rotated-fixture-key'],
+  ]);
+  // Changing the AUTHORITY under a held client is a refusal, not a silent
+  // re-home: a credential pinned to one authority is never sent to another
+  // (#1794).
   env.HASNA_NOTES_API_URL = 'https://other.example.test';
-  env.HASNA_NOTES_API_KEY = 'rotated-fixture';
-  await original.health();
-  await new NotesClient(env, fetchImpl).health();
-  assert.deepEqual(seen, [[`${API_URL}/health`, `Bearer ${API_KEY}`], ['https://other.example.test/health', 'Bearer rotated-fixture']]);
+  await assert.rejects(client.health(), /authority changed/);
 });
 
 test('transport errors redact echoed credentials from both messages and codes', async () => {
@@ -85,18 +127,35 @@ test('transport errors redact echoed credentials from both messages and codes', 
     assert.ok(!String(err).includes(API_KEY));
     assert.ok(!JSON.stringify(err).includes(API_KEY));
     assert.match(err.message, /\[REDACTED\]/);
+    assert.match(err.code, /error_\[REDACTED\]/);
     return true;
   });
 });
 
-test('API error envelopes redact echoed credentials recursively without dropping safe details', async () => {
+test('auth failure bodies are cancelled unread; the refusal names the credential source, never a value', async () => {
   const store = storeWith(async () => new Response(JSON.stringify({ error: {
     code: `denied_${API_KEY}`, message: `denied ${API_KEY}`,
-    details: { scope: 'notes_read', nested: [API_KEY, { [API_KEY]: `Bearer ${API_KEY}` }] },
+    details: { scope: 'notes_read', nested: [API_KEY] },
   } }), { status: 403 }));
   await assert.rejects(store.health(), (err) => {
+    assert.ok(err instanceof NotesHttpStoreError);
     assert.equal(err.status, 403);
-    assert.equal(err.details.scope, 'notes_read');
+    assert.equal(err.details, undefined, 'the 403 body is never read, so no envelope details exist');
+    assert.match(err.message, /api key|credential/);
+    assert.ok(!String(err).includes(API_KEY));
+    return true;
+  });
+});
+
+test('non-auth API error envelopes redact echoed credentials recursively without dropping safe details', async () => {
+  const store = storeWith(async () => new Response(JSON.stringify({ error: {
+    code: `conflict_${API_KEY}`, message: `conflict ${API_KEY}`,
+    details: { scope: 'notes_write', nested: [API_KEY, { [API_KEY]: `Bearer ${API_KEY}` }] },
+  } }), { status: 409 }));
+  await assert.rejects(store.health(), (err) => {
+    assert.ok(err instanceof NotesHttpStoreError);
+    assert.equal(err.status, 409);
+    assert.equal(err.details.scope, 'notes_write');
     assert.ok(!String(err).includes(API_KEY));
     assert.ok(!JSON.stringify(err).includes(API_KEY));
     assert.deepEqual(err.details.nested, ['[REDACTED]', { '[REDACTED]': 'Bearer [REDACTED]' }]);
@@ -110,8 +169,7 @@ test('response body failures cannot escape as raw credential-bearing errors', as
   }), { status: 502 }));
   await assert.rejects(store.health(), (err) => {
     assert.ok(err instanceof NotesHttpStoreError);
-    assert.equal(err.status, 502);
-    assert.equal(err.code, 'body_read_failed');
+    assert.equal(err.code, 'fetch_failed');
     assert.ok(!String(err).includes(API_KEY));
     assert.ok(!JSON.stringify(err).includes(API_KEY));
     return true;
@@ -121,10 +179,10 @@ test('response body failures cannot escape as raw credential-bearing errors', as
 test('deeply nested error details retain their shape without overflowing the redactor', async () => {
   const depth = 12000;
   const payload = '{"error":{"message":"denied","details":' + '['.repeat(depth) + JSON.stringify(API_KEY) + ']'.repeat(depth) + '}}';
-  const store = storeWith(async () => new Response(payload, { status: 403 }));
+  const store = storeWith(async () => new Response(payload, { status: 409 }));
   await assert.rejects(store.health(), (err) => {
     assert.ok(err instanceof NotesHttpStoreError);
-    assert.equal(err.status, 403);
+    assert.equal(err.status, 409);
     let value = err.details;
     for (let index = 0; index < depth; index++) { assert.ok(Array.isArray(value)); value = value[0]; }
     assert.equal(value, '[REDACTED]');
@@ -135,10 +193,10 @@ test('deeply nested error details retain their shape without overflowing the red
 test('malformed non-string error messages and codes cannot override the safe error contract', async () => {
   const store = storeWith(async () => new Response(JSON.stringify({ error: {
     message: { toString: API_KEY }, code: { toString: API_KEY }, details: { scope: 'notes_read' },
-  } }), { status: 403 }));
+  } }), { status: 409 }));
   await assert.rejects(store.health(), (err) => {
     assert.ok(err instanceof NotesHttpStoreError);
-    assert.equal(err.status, 403);
+    assert.equal(err.status, 409);
     assert.equal(err.code, undefined);
     assert.equal(err.details.scope, 'notes_read');
     assert.ok(!String(err).includes(API_KEY));
@@ -157,10 +215,10 @@ test('invalid JSON diagnostics redact a credential echoed in a requested identif
 });
 
 test('construction fails closed: URL without key and key without URL both throw', () => {
-  assert.throws(() => createNotesHttpStore({}), /HASNA_NOTES_API_URL and HASNA_NOTES_API_KEY/);
+  assert.throws(() => createNotesHttpStore({}), /HASNA_NOTES_API_URL.*HASNA_NOTES_API_KEY/);
   assert.throws(
     () => createNotesHttpStore({ HASNA_NOTES_API_URL: API_URL }),
-    /HASNA_NOTES_API_KEY is required/,
+    /HASNA_NOTES_API_KEY/,
   );
   assert.throws(
     () => createNotesHttpStore({ HASNA_NOTES_API_URL: API_URL, HASNA_NOTES_API_KEY: API_KEY, HASNA_NOTES_STORAGE_MODE: 'local' }),
@@ -176,7 +234,7 @@ test('trailing slash on the API URL is stripped and never doubled in paths', () 
   }, { url: 'https://notes.example.test/' });
   assert.equal(store.apiUrl, 'https://notes.example.test');
   return store.listNotes({}).then(() => {
-    assert.equal(seen[0], 'https://notes.example.test/api/v1/notes');
+    assert.equal(seen[0], 'https://notes.example.test/v1/notes');
   });
 });
 
@@ -189,8 +247,8 @@ test('listNotes serializes limit, cursor, and include_deleted; no params -> bare
   await store.listNotes({ limit: 5, cursor: 'next page', includeDeleted: true });
   await store.listNotes({});
   assert.deepEqual(seen, [
-    'https://notes.example.test/api/v1/notes?limit=5&include_deleted=1&cursor=next+page',
-    'https://notes.example.test/api/v1/notes',
+    'https://notes.example.test/v1/notes?limit=5&include_deleted=1&cursor=next+page',
+    'https://notes.example.test/v1/notes',
   ]);
 });
 
@@ -206,9 +264,9 @@ test('note ids are URI-encoded in every path segment', async () => {
   await store.deleteNote(id);
   const encoded = encodeURIComponent(id);
   assert.deepEqual(seen, [
-    `https://notes.example.test/api/v1/notes/${encoded}`,
-    `https://notes.example.test/api/v1/notes/${encoded}`,
-    `https://notes.example.test/api/v1/notes/${encoded}`,
+    `https://notes.example.test/v1/notes/${encoded}`,
+    `https://notes.example.test/v1/notes/${encoded}`,
+    `https://notes.example.test/v1/notes/${encoded}`,
   ]);
 });
 
@@ -220,43 +278,36 @@ test('request carries the bearer key and JSON content-type; body is JSON-seriali
   });
   await store.createNote({ title: 'T', bodyMarkdown: 'B' });
   assert.equal(captured.method, 'POST');
-  assert.equal(captured.headers.authorization, `Bearer ${API_KEY}`);
-  assert.equal(captured.headers['content-type'], 'application/json');
+  assert.equal(captured.headers.authorization ?? captured.headers.Authorization, `Bearer ${API_KEY}`);
+  assert.equal(captured.headers['x-api-key'], API_KEY);
+  assert.equal(contentTypeOf(captured), 'application/json');
   assert.deepEqual(JSON.parse(captured.body), { title: 'T', bodyMarkdown: 'B' });
-  assert.equal(captured.redirect, 'error');
+  // The transport never follows a redirect: every 3xx is terminal, so a
+  // credential or body can never cross an authority boundary.
+  assert.equal(captured.redirect, 'manual');
 });
 
 for (const status of [301, 302, 303, 307, 308]) {
   test(`authenticated ${status} redirects are rejected before credentials or body reach any destination`, async () => {
-    for (const destination of [
-      'https://other.example.test/redirected',
-      'http://other.example.test/redirected',
-      `${API_URL}/same-origin-redirected`,
-    ]) {
-      const sourceRequests = [];
-      const destinationRequests = [];
-      // This deterministic fetch double reproduces Fetch's default redirect
-      // behavior, including method rewriting, and honors redirect:'error'. It
-      // therefore fails the pre-fix implementation by recording a destination
-      // request while remaining independent of external TLS/network state.
-      const fetchImpl = async (url, options) => {
-        sourceRequests.push({ url, options });
-        if (options.redirect === 'error') throw new TypeError(`redirect ${status} blocked`);
-        destinationRequests.push({
-          url: destination,
-          method: [301, 302, 303].includes(status) ? 'GET' : options.method,
-          headers: options.headers,
-          body: [301, 302, 303].includes(status) ? undefined : options.body,
-        });
-        return new Response('{}', { status: 200 });
-      };
-      const store = storeWith(fetchImpl);
-      await assert.rejects(store.createNote({ title: 'redirect probe', bodyMarkdown: 'sensitive body' }), /cannot reach/);
-      assert.equal(sourceRequests.length, 1);
-      assert.equal(sourceRequests[0].options.redirect, 'error');
-      assert.equal(sourceRequests[0].options.headers.authorization, `Bearer ${API_KEY}`);
-      assert.equal(destinationRequests.length, 0);
-    }
+    const sourceRequests = [];
+    const destinationRequests = [];
+    const fetchImpl = async (url, options) => {
+      sourceRequests.push({ url, options });
+      // redirect:'manual' means the response comes back as-is: the transport
+      // must treat every 3xx as terminal and never re-issue.
+      return new Response('{}', { status });
+    };
+    const store = storeWith(fetchImpl);
+    await assert.rejects(store.createNote({ title: 'redirect probe', bodyMarkdown: 'sensitive body' }), (err) => {
+      assert.ok(err instanceof NotesHttpStoreError);
+      assert.equal(err.status, status);
+      assert.match(err.message, /redirect/);
+      return true;
+    });
+    assert.equal(sourceRequests.length, 1);
+    assert.equal(sourceRequests[0].options.redirect, 'manual');
+    assert.equal(authOf(sourceRequests[0].options), `Bearer ${API_KEY}`);
+    assert.equal(destinationRequests.length, 0);
   });
 }
 
@@ -297,19 +348,19 @@ test('macOS Local Network Privacy blocks are described as such, not as a network
   });
 });
 
-test('dialect error envelope surfaces status, code and details; the key still never appears', async () => {
+test('dialect error envelope surfaces status, code and details on non-auth failures', async () => {
   const store = storeWith(async () => new Response(
-    JSON.stringify({ error: { code: 'unauthorized', message: 'valid session or Hasna Notes API key required', details: { scope: 'notes_read' } } }),
-    { status: 401 },
+    JSON.stringify({ error: { code: 'rate_limited', message: 'too many requests', details: { scope: 'notes_read' } } }),
+    { status: 429 },
   ));
   await assert.rejects(
     store.listNotes({}),
     (err) => {
       assert.ok(err instanceof NotesHttpStoreError);
-      assert.equal(err.status, 401);
-      assert.equal(err.code, 'unauthorized');
+      assert.equal(err.status, 429);
+      assert.equal(err.code, 'rate_limited');
       assert.deepEqual(err.details, { scope: 'notes_read' });
-      assert.equal(err.message, 'valid session or Hasna Notes API key required');
+      assert.equal(err.message, 'too many requests');
       assert.ok(!err.message.includes(API_KEY));
       return true;
     },
@@ -347,6 +398,6 @@ test('NotesClient SDK facade delegates every note operation to the HTTPS store',
   await client.delete('id');
   await client.export();
   assert.deepEqual(seen.map(([, method]) => method), ['GET', 'GET', 'POST', 'PATCH', 'DELETE', 'POST']);
-  assert.ok(seen.every(([url]) => url.startsWith(API_URL)));
-  assert.ok(seen.every(([, , options]) => options?.redirect === 'error'));
+  assert.ok(seen.every(([url]) => url.startsWith(`${API_URL}/v1/`)));
+  assert.ok(seen.every(([, , options]) => options?.redirect === 'manual'));
 });

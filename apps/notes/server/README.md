@@ -33,13 +33,13 @@ client shows you with a signed-in session:
 #    Get the code from the OTP response in dev mode (--dev / HASNA_NOTES_SERVER_DEV=1
 #    adds devCode) or opt into console delivery for self-hosting with
 #    HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1.
-curl -X POST http://127.0.0.1:8788/api/v1/auth/login  -d '{"email":"you@example.com"}'
+curl -X POST http://127.0.0.1:8788/v1/auth/login  -d '{"email":"you@example.com"}'
 # → { sent, email, requestId, expiresAt }   (requestId is the request nonce; keep it)
-curl -X POST http://127.0.0.1:8788/api/v1/auth/verify -d '{"email":"you@example.com","code":"123456","requestId":"<requestId>"}'
+curl -X POST http://127.0.0.1:8788/v1/auth/verify -d '{"email":"you@example.com","code":"123456","requestId":"<requestId>"}'
 # → { token, user, tenant, apiKey }   (apiKey is returned exactly once)
 
 # 2. approve the device code the CLI showed you
-curl -X POST http://127.0.0.1:8788/api/v1/auth/device/approve \
+curl -X POST http://127.0.0.1:8788/v1/auth/device/approve \
   -H 'authorization: Bearer <token>' -d '{"userCode":"XXXX-XXXX"}'
 ```
 
@@ -107,8 +107,8 @@ does not import it into PostgreSQL or make it authoritative.
 
 ## API and verification
 
-The server retains auth/OTP/device flow, API keys, CRUD at /api/v1/notes,
-export at /api/v1/export, and /health, /ready, /version, /openapi.json.
+The server retains auth/OTP/device flow, API keys, CRUD at /v1/notes,
+export at /v1/export, and /health, /ready, /version, /openapi.json.
 The wire name remains `personalnotes/v1`; the separate PersonalNotes product
 at `hasna-products/personalnotes` is unchanged. Multi-machine sync was removed.
 
