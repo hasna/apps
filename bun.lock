@@ -1059,7 +1059,7 @@
     },
     "apps/switcher": {
       "name": "@hasna/switcher",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "bin": {
         "switcher": "dist/cli/index.js",
         "switcher-mcp": "dist/mcp/index.js",

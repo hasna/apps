@@ -26,6 +26,9 @@ function selectedModels(input: HarnessLaunchInput) {
  * The credential therefore never reaches the generated files or command line.
  */
 export async function prepareOmpLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
+  if (input.protocol === "gemini-generate-content") throw new Error("OMP does not support the Gemini generateContent protocol.");
+  if (input.protocol === "anthropic-messages" && input.authStyle === "api-key")
+    throw new Error("OMP literal api-key Messages authentication requires the Switcher launch bridge; use prepareHarnessLaunch.");
   const models = selectedModels(input);
   const baseUrl = endpoint(input.baseUrl);
   if (input.credential && /[\r\n]/.test(input.credential)) throw new Error("Provider credential contains invalid header characters.");
@@ -52,12 +55,12 @@ export async function prepareOmpLaunch(input: HarnessLaunchInput): Promise<Prepa
     api,
     models: modelDefinitions,
   };
-  if (input.authStyle === "x-api-key") {
+  if (input.authStyle === "x-api-key" || input.authStyle === "api-key") {
     // A keyless OMP provider prevents its OpenAI client from adding a second
     // Authorization header; the explicit header reference is still resolved
     // from the child environment for every request.
     provider.auth = "none";
-    provider.headers = { "x-api-key": KEY };
+    provider.headers = { [input.authStyle]: KEY };
   } else {
     provider.apiKey = KEY;
     provider.authHeader = true;

@@ -7,6 +7,39 @@ import {mkdir,mkdtemp,readFile,rm} from "node:fs/promises";
 import {homedir} from "node:os";
 import {join} from "node:path";
 
+test("Gemini and Azure v1 routes preserve documented prefixes and exact auth headers", async () => {
+  const seen: Array<{method:string;path:string;authorization:string|null;apiKey:string|null}> = [];
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, async fetch(request) {
+    const parsed = new URL(request.url);
+    seen.push({method:request.method,path:parsed.pathname,authorization:request.headers.get("authorization"),apiKey:request.headers.get("api-key")});
+    if (request.method === "GET" && parsed.pathname === "/v1beta/openai/models")
+      return Response.json({data:[{id:"gemini-2.5-pro",context_window:1_000_000}]});
+    if (request.method === "POST" && parsed.pathname === "/openai/v1/chat/completions")
+      return Response.json({id:"fixture",choices:[]});
+    return Response.json({error:{message:"fixture route not found"}},{status:404});
+  }});
+  try {
+    const gemini = providerFromPreset("gemini", {protocol:"openai-chat", baseUrl:upstream.url.origin+"/v1beta/openai", credentialEnv:"SWITCHER_PROVIDER_GEMINI"});
+    const geminiCatalog = await discover({...gemini,version:1,updatedAt:"now"},{SWITCHER_PROVIDER_GEMINI:"gemini-fixture"});
+    expect(geminiCatalog.models[0]).toMatchObject({id:"gemini-2.5-pro",contextWindow:1_000_000});
+    expect(seen.find(request=>request.path === "/v1beta/openai/models")).toMatchObject({authorization:"Bearer gemini-fixture",apiKey:null});
+
+    const azure = providerFromPreset("azure-openai", {protocol:"openai-chat", baseUrl:upstream.url.origin+"/openai/v1", credentialEnv:"SWITCHER_PROVIDER_AZURE_OPENAI"});
+    expect(azure.baseUrl).toBe(upstream.url.origin+"/openai/v1");
+    expect(azure.authStyle).toBe("api-key");
+    expect(azure.catalogFormat).toBe("none");
+    expect(providerCredential(azure,{AZURE_OPENAI_API_KEY:"azure-fixture"})).toBe("azure-fixture");
+    await expect(discover({...azure,version:1,updatedAt:"now"},{SWITCHER_PROVIDER_AZURE_OPENAI:"azure-fixture"})).rejects.toMatchObject({code:"catalog_unsupported"});
+    const inference = await fetch(azure.baseUrl+"/chat/completions", {method:"POST",headers:{"api-key":"azure-fixture","content-type":"application/json"},body:JSON.stringify({model:"deployment-prod",messages:[]})});
+    expect(inference.status).toBe(200);
+    expect(seen.find(request=>request.method === "POST")?.apiKey).toBe("azure-fixture");
+    expect(seen.find(request=>request.method === "POST")?.authorization).toBeNull();
+    expect(seen.find(request=>request.method === "POST")?.path).toBe("/openai/v1/chat/completions");
+    expect(()=>providerFromPreset("azure-openai",{baseUrl:upstream.url.origin+"/openai/deployments/my-model"})).toThrow("ending in /openai/v1");
+    expect(()=>providerFromPreset("azure-openai",{baseUrl:upstream.url.origin+"/openai/v1",protocol:"anthropic-messages"})).toThrow("compatible");
+  } finally { await upstream.stop(true); }
+});
+
 test("material compatible provider presets expose only documented routes and credential aliases",()=>{
   const expected={
     fireworks:{protocols:["openai-chat","openai-responses","anthropic-messages"],alias:"FIREWORKS_API_KEY",base:"https://api.fireworks.ai/inference/v1"},
@@ -45,6 +78,22 @@ test("provider routes resolve to complete documented inference paths",()=>{
     const actual=preset.protocols.map(route=>new URL(`${route.baseUrl}/${route.protocol === "anthropic-messages" ? "messages" : route.protocol === "openai-responses" ? "responses" : "chat/completions"}`).pathname);
     expect(actual).toEqual(expected);
   }
+});
+
+test("Gemini discovery uses the documented models shape, x-goog-api-key and page tokens",async()=>{
+  const requests:{path:string;token:string|null;page:string|null}[]=[];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){
+    const url=new URL(request.url); requests.push({path:url.pathname,token:request.headers.get("x-goog-api-key"),page:url.searchParams.get("pageToken")});
+    return Response.json(url.searchParams.has("pageToken")
+      ? {models:[{name:"models/gemini-2",displayName:"Gemini 2",inputTokenLimit:32768,outputTokenLimit:4096,supportedGenerationMethods:["generateContent"]}]}
+      : {models:[{name:"models/gemini-1",displayName:"Gemini 1",inputTokenLimit:8192,outputTokenLimit:1024,supportedGenerationMethods:["generateContent"]}],nextPageToken:"next"});
+  }});
+  try {
+    const provider={...parse(providerInputSchema,{id:"gemini",name:"Gemini",baseUrl:upstream.url.origin+"/v1beta",catalogBaseUrl:upstream.url.origin+"/v1beta",modelsPath:"models",catalogFormat:"gemini",catalogAuthStyle:"x-api-key",credentialEnv:"SWITCHER_PROVIDER_TEST",protocol:"gemini-generate-content",authStyle:"x-api-key"}),version:1,updatedAt:"now"};
+    const result=await discover(provider,{SWITCHER_PROVIDER_TEST:"fixture"});
+    expect(result.models).toMatchObject([{id:"gemini-1",name:"Gemini 1",contextWindow:8192,maxOutputTokens:1024},{id:"gemini-2",name:"Gemini 2",contextWindow:32768,maxOutputTokens:4096}]);
+    expect(requests).toEqual([{path:"/v1beta/models",token:"fixture",page:null},{path:"/v1beta/models",token:"fixture",page:"next"}]);
+  } finally {await upstream.stop(true);}
 });
 
 test("MiniMax Anthropic catalog route uses its documented separate x-api-key model endpoint",async()=>{

@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Switcher API",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "description": "Authenticated provider/profile/catalog control plane. Launches run locally; the API never returns provider credentials."
   },
   "security": [
@@ -1216,7 +1216,8 @@
                   "enum": [
                     "anthropic-messages",
                     "openai-responses",
-                    "openai-chat"
+                    "openai-chat",
+                    "gemini-generate-content"
                   ]
                 },
                 "baseUrl": {
@@ -1227,7 +1228,8 @@
                   "type": "string",
                   "enum": [
                     "bearer",
-                    "x-api-key"
+                    "x-api-key",
+                    "api-key"
                   ]
                 },
                 "catalogBaseUrl": {
@@ -1243,6 +1245,7 @@
                     "together",
                     "fireworks",
                     "dashscope",
+                    "gemini",
                     "none"
                   ]
                 },
@@ -1251,6 +1254,7 @@
                   "enum": [
                     "bearer",
                     "x-api-key",
+                    "api-key",
                     "none"
                   ]
                 },
@@ -1320,7 +1324,8 @@
             "enum": [
               "anthropic-messages",
               "openai-responses",
-              "openai-chat"
+              "openai-chat",
+              "gemini-generate-content"
             ]
           },
           "credentialEnv": {
@@ -1331,7 +1336,8 @@
             "type": "string",
             "enum": [
               "bearer",
-              "x-api-key"
+              "x-api-key",
+              "api-key"
             ],
             "default": "bearer"
           },
@@ -1348,6 +1354,7 @@
               "together",
               "fireworks",
               "dashscope",
+              "gemini",
               "none"
             ]
           },
@@ -1356,6 +1363,7 @@
             "enum": [
               "bearer",
               "x-api-key",
+              "api-key",
               "none"
             ]
           },
@@ -1469,7 +1477,8 @@
             "enum": [
               "anthropic-messages",
               "openai-responses",
-              "openai-chat"
+              "openai-chat",
+              "gemini-generate-content"
             ]
           },
           "credentialEnv": {
@@ -1480,7 +1489,8 @@
             "type": "string",
             "enum": [
               "bearer",
-              "x-api-key"
+              "x-api-key",
+              "api-key"
             ],
             "default": "bearer"
           },
@@ -1497,6 +1507,7 @@
               "together",
               "fireworks",
               "dashscope",
+              "gemini",
               "none"
             ]
           },
@@ -1505,6 +1516,7 @@
             "enum": [
               "bearer",
               "x-api-key",
+              "api-key",
               "none"
             ]
           },
@@ -1629,10 +1641,17 @@
               "claude",
               "codex",
               "grok",
+              "opencode",
               "opencode2",
               "pi",
               "omp",
-              "dsh"
+              "dsh",
+              "cline",
+              "hermes",
+              "prime-agent",
+              "gemini",
+              "aider",
+              "kilo"
             ]
           },
           "model": {
@@ -1672,10 +1691,17 @@
               "claude",
               "codex",
               "grok",
+              "opencode",
               "opencode2",
               "pi",
               "omp",
-              "dsh"
+              "dsh",
+              "cline",
+              "hermes",
+              "prime-agent",
+              "gemini",
+              "aider",
+              "kilo"
             ]
           },
           "model": {
@@ -1974,7 +2000,8 @@
                 "enum": [
                   "anthropic-messages",
                   "openai-responses",
-                  "openai-chat"
+                  "openai-chat",
+                  "gemini-generate-content"
                 ]
               },
               "credentialEnv": {
@@ -1985,7 +2012,8 @@
                 "type": "string",
                 "enum": [
                   "bearer",
-                  "x-api-key"
+                  "x-api-key",
+                  "api-key"
                 ],
                 "default": "bearer"
               },
@@ -2002,6 +2030,7 @@
                   "together",
                   "fireworks",
                   "dashscope",
+                  "gemini",
                   "none"
                 ]
               },
@@ -2010,6 +2039,7 @@
                 "enum": [
                   "bearer",
                   "x-api-key",
+                  "api-key",
                   "none"
                 ]
               },
@@ -2134,10 +2164,17 @@
                   "claude",
                   "codex",
                   "grok",
+                  "opencode",
                   "opencode2",
                   "pi",
                   "omp",
-                  "dsh"
+                  "dsh",
+                  "cline",
+                  "hermes",
+                  "prime-agent",
+                  "gemini",
+                  "aider",
+                  "kilo"
                 ]
               },
               "model": {
@@ -2282,10 +2319,17 @@
               "claude",
               "codex",
               "grok",
+              "opencode",
               "opencode2",
               "pi",
               "omp",
-              "dsh"
+              "dsh",
+              "cline",
+              "hermes",
+              "prime-agent",
+              "gemini",
+              "aider",
+              "kilo"
             ]
           },
           "model": {
@@ -2342,10 +2386,17 @@
               "claude",
               "codex",
               "grok",
+              "opencode",
               "opencode2",
               "pi",
               "omp",
-              "dsh"
+              "dsh",
+              "cline",
+              "hermes",
+              "prime-agent",
+              "gemini",
+              "aider",
+              "kilo"
             ]
           },
           "model": {

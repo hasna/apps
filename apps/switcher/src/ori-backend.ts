@@ -6,8 +6,8 @@ import { validateGrokResume } from "./grok-args";
 const exec = promisify(execFile);
 
 /** The Ori 0.12.1 command name for a Switcher harness. */
-export type OriTarget = "claude" | "codex" | "grok" | "opencode2" | "pi" | "dsh";
-export type OriProtocol = "anthropic-messages" | "openai-responses" | "openai-chat";
+export type OriTarget = "claude" | "codex" | "grok" | "opencode2" | "pi" | "dsh" | "gemini" | "aider" | "kilo";
+export type OriProtocol = "anthropic-messages" | "openai-responses" | "openai-chat" | "gemini-generate-content";
 export type OriReasoningEffort = "max" | "xhigh" | "high" | "medium" | "low" | "minimal" | "none";
 
 export type OriProviderCatalogEntry = {
@@ -175,8 +175,11 @@ export function assertSupportedOriVersion(contract: OriContract): void {
 /** Fail before Ori's interactive installer offer when the native binary is absent. */
 export function requireOriHarness(contract: OriContract, target: OriTarget): OriHarnessAvailability {
   assertSupportedOriVersion(contract);
+  if (target === "kilo") throw new OriBackendError("unsupported_harness", "Ori does not launch Kilo; use the direct adapter.");
   if (target === "dsh") throw new OriBackendError("unsupported_harness", "Ori dsh performs setup only. Use the direct DeepSeek Harness adapter to launch the native harness.");
-  if (target === "pi")
+  if (target === "gemini")
+    throw new OriBackendError("unsupported_harness", "Gemini CLI is supported through the direct Switcher adapter; Ori has no verified Gemini target.");
+  if (target === "pi" || target === "aider")
     throw new OriBackendError("unsupported_harness", "Pi is supported through the direct Switcher adapter; the Ori preservation subset supports Codex and Grok only.");
   if (target === "opencode2")
     throw new OriBackendError("unsupported_harness", "Ori 0.12.1 targets legacy `opencode`; it cannot launch OpenCode 2 (`opencode2`).");
@@ -213,8 +216,11 @@ function assertPassthrough(target: OriTarget, args: readonly string[]): void {
 
 /** Validate target, provider and catalog authority before resolving a key. */
 export function validateOriLaunchRequest(request: OriLaunchRequest): void {
+  if (request.target === "kilo") throw new OriBackendError("unsupported_harness", "Ori does not launch Kilo; use the direct adapter.");
   if (request.target === "dsh") throw new OriBackendError("unsupported_harness", "Ori dsh performs setup only. Use the direct DeepSeek Harness adapter to launch the native harness.");
-  if (request.target === "pi")
+  if (request.target === "gemini")
+    throw new OriBackendError("unsupported_harness", "Gemini CLI is supported through the direct Switcher adapter; Ori has no verified Gemini target.");
+  if (request.target === "pi" || request.target === "aider")
     throw new OriBackendError("unsupported_harness", "Pi is supported through the direct Switcher adapter; the Ori preservation subset supports Codex and Grok only.");
   assertProviderAuthority(request.target, request.provider, request.providerBaseUrl, request.protocol);
   if (!request.model.trim()) throw new OriBackendError("model_required", "An OpenRouter model ID is required for an Ori launch.");

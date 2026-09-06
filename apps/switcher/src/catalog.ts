@@ -1,5 +1,6 @@
 import { type Catalog, type Model, type Provider, type ProviderInput, Fault, modelSchema } from "./domain";
 import { boundedJson } from "./http";
+import { authHeader } from "./auth";
 const positive = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined;
 const strings = (v: unknown) => Array.isArray(v) && v.every(i => typeof i === "string") ? v : undefined;
 const modalities = (v: unknown): string[] | undefined => {
@@ -30,7 +31,8 @@ export async function discover(provider: Provider, env: Record<string, string | 
     const credential = resolveCredential ? await resolveCredential({...provider,baseUrl:provider.catalogBaseUrl ?? provider.baseUrl,credentialEnv}) : env[credentialEnv];
     if (!credential) throw new Fault(422, "credential_missing", "Provider credential environment variable is not available on the server.");
     if (/[\r\n]/.test(credential)) throw new Fault(422, "credential_invalid", "Catalog credential contains invalid header characters.");
-    headers[authStyle === "x-api-key" ? "x-api-key" : "authorization"] = authStyle === "x-api-key" ? credential : `Bearer ${credential}`;
+    const [header, value] = authHeader(authStyle, credential);
+    headers[provider.catalogFormat === "gemini" && header === "x-api-key" ? "x-goog-api-key" : header] = value;
   }
   if (provider.protocol === "anthropic-messages" && url.hostname !== "openrouter.ai") headers["anthropic-version"] = "2023-06-01";
   // OpenRouter defaults to text-only; retain other modalities for truthful catalog browsing.
@@ -54,18 +56,19 @@ export async function discover(provider: Provider, env: Record<string, string | 
     // Together's native catalog is a bare array despite its inference API's
     // OpenAI compatibility. Do not silently accept that shape for other parsers.
     const rows = provider.catalogFormat === "together" ? data : provider.catalogFormat === "ollama" ? data?.models
-      : provider.catalogFormat === "fireworks" ? data?.models : provider.catalogFormat === "dashscope" ? data?.output?.models : data?.data;
+      : provider.catalogFormat === "fireworks" || provider.catalogFormat === "gemini" ? data?.models : provider.catalogFormat === "dashscope" ? data?.output?.models : data?.data;
     if (!Array.isArray(rows)) throw new Fault(502, "invalid_catalog", "Expected a provider catalog with a model array matching its configured format.");
     for (const row of rows) {
       const id = provider.catalogFormat === "ollama" ? row?.model ?? row?.name : provider.catalogFormat === "fireworks" ? row?.name
+        : provider.catalogFormat === "gemini" ? typeof row?.name === "string" ? row.name.replace(/^models\//, "") : undefined
         : provider.catalogFormat === "dashscope" ? row?.model : row?.id;
       if (typeof id !== "string") throw new Fault(502, "invalid_catalog", "Catalog entry is missing a model ID.");
       const candidate = {
         id, name: row.displayName ?? row.name ?? row.display_name ?? id,
         available: provider.catalogFormat === "mistral" && typeof row.archived === "boolean" ? !row.archived : undefined,
         description: typeof row.description === "string" ? row.description.slice(0, 8000) : undefined,
-        contextWindow: positive(row.context_length ?? row.context_window ?? row.contextLength ?? row.model_info?.context_window ?? (provider.catalogFormat === "mistral" ? row.max_context_length : undefined)),
-        maxOutputTokens: positive(row.top_provider?.max_completion_tokens ?? row.max_output_tokens ?? row.model_info?.max_output_tokens),
+        contextWindow: positive(row.context_length ?? row.context_window ?? row.contextLength ?? row.inputTokenLimit ?? row.model_info?.context_window ?? (provider.catalogFormat === "mistral" ? row.max_context_length : undefined)),
+        maxOutputTokens: positive(row.top_provider?.max_completion_tokens ?? row.max_output_tokens ?? row.outputTokenLimit ?? row.model_info?.max_output_tokens),
         inputModalities: strings(row.architecture?.input_modalities ?? row.input_modalities) ?? modalities(row.inference_metadata?.request_modality),
         outputModalities: strings(row.architecture?.output_modalities ?? row.output_modalities) ?? modalities(row.inference_metadata?.response_modality),
         supportedParameters: strings(row.supported_parameters),
@@ -117,6 +120,17 @@ export async function discover(provider: Provider, env: Record<string, string | 
     if (provider.catalogFormat === "fireworks") {
       if (fireworksTotal !== undefined && fireworksTotal !== models.size) throw new Fault(502, "incomplete_catalog", "Provider catalog count does not match the collected models; retry the refresh.");
       return {models: [...models.values()], source: "remote", refreshedAt};
+    }
+    if (provider.catalogFormat === "gemini") {
+      const nextPageToken=data.nextPageToken;
+      if(nextPageToken!==undefined&&nextPageToken!==null) {
+        if(typeof nextPageToken!=="string"||nextPageToken.length>2000) throw new Fault(502,"invalid_catalog","Gemini catalog pagination token is malformed.");
+        if(nextPageToken) {
+          if(seenCursors.has(nextPageToken)) throw new Fault(502,"invalid_catalog","Provider catalog pagination did not advance.");
+          seenCursors.add(nextPageToken); url.searchParams.set("pageToken",nextPageToken); continue;
+        }
+      }
+      return {models:[...models.values()],source:"remote",refreshedAt};
     }
     if (provider.catalogFormat === "dashscope") {
       const output = data.output;

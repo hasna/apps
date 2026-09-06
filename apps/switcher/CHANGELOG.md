@@ -4,15 +4,18 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-06T12:44:02.606710+00:00"
+updated_at: "2026-09-06T13:53:41.691Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-## Unreleased
+## 0.1.2
 
-- Add the official DeepSeek Harness (`dsh`) with its native browser UI, headless task and ACP profiles, all three wire protocols, isolated provider catalog and persistent sessions/attachments. Reject SDK/custom profiles and Ori's setup-only command as launch paths.
-- Add OMP with a native provider catalog and persistent per-profile sessions.
+### Patch Changes
+
+- Add built-in OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, legacy OpenCode, Kilo, Gemini CLI and Aider adapters with provider catalogs, native model selection and persistent sessions. Preserve each supported native permission and instruction contract with validation before provider discovery or credential resolution.
+
+  Add Gemini generateContent and OpenAI-compatible provider routes, plus Azure v1 Chat/Responses with literal api-key authentication and explicit deployment inventories. Correct signal exit codes and Prime socket-path fallback; retain parent-held credentials for adapters that require scoped bridges.
 
 ## 0.1.1
 

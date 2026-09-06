@@ -1,4 +1,5 @@
 import {test,expect} from "bun:test";
+import {spawn} from "node:child_process";
 import {mkdir,mkdtemp,writeFile,readFile,rm,readdir} from "node:fs/promises";
 import {join} from "node:path";
 import {homedir} from "node:os";
@@ -7,6 +8,17 @@ import type {SwitcherClient} from "../src/sdk";
 import {SwitcherError} from "../src/sdk";
 import {providerFromPreset} from "../src/presets";
 import {resolveLaunchProvider} from "../src/direct-launch";
+test("Gemini auth mismatch is rejected before discovery or credential lookup",async()=>{
+  let touched=false;
+  const client={
+    getProfile:async()=>({providerId:"gemini",harness:"gemini"}),
+    getProvider:async()=>({protocol:"gemini-generate-content",authStyle:"bearer"}),
+    refreshModels:async()=>{touched=true;throw new Error("unexpected discovery");},
+  } as unknown as SwitcherClient;
+  await expect(launch(client,"gemini",{resolveCredential:async()=>{touched=true;return "fixture";}})).rejects.toMatchObject({code:"auth_mismatch"});
+  expect(touched).toBe(false);
+});
+
 test("Grok authentication lockdown rejects provider launch before discovery or credential lookup",async()=>{
   const prior=process.env.GROK_DISABLE_API_KEY_AUTH,team=process.env.GROK_FORCE_LOGIN_TEAM_ID;
   let touched=false;
@@ -144,3 +156,172 @@ test("a changed API launch plan is checked again before local credential lookup"
   await expect(launch(client,"changed",{refresh:false,args:["-moutside"],resolveCredential:async()=>{credentialRead=true;return "fixture";}})).rejects.toThrow("profile");
   expect(credentialRead).toBe(false);
 });
+
+
+test.skipIf(process.platform === "win32")("launch timeout covers Prime readiness and finalizes a late run without starting the client",async()=>{
+  const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});const dir=await mkdtemp(join(root,"prime-timeout-"));const runtime=join(homedir(),"Workspace/scratch/u");await mkdir(runtime,{recursive:true});
+  const executable=join(dir,"prime-fixture"),clientStarted=join(dir,"client-started");
+  await writeFile(executable,`#!${process.execPath}
+import {createServer} from 'node:net';
+const socket=process.argv[process.argv.indexOf('--daemon-socket')+1];
+if(process.argv.includes('--version')){console.log('prime-agent 0.9.2');process.exit(0);}
+if(process.argv.includes('--mode')){
+  process.on('SIGTERM',()=>process.exit(143));
+  setTimeout(()=>{const server=createServer(connection=>{connection.write(JSON.stringify({type:'daemon_hello'})+'\\n');connection.on('data',data=>{for(const line of data.toString().split('\\n')){if(!line)continue;const request=JSON.parse(line);if(request.command?.type==='shutdown'){connection.write(JSON.stringify({type:'response',success:true})+'\\n');server.close(()=>process.exit(0));}}});});server.listen(socket)},1500);
+  setInterval(()=>{},1000);
+} else {await Bun.write(${JSON.stringify(clientStarted)},'started');process.exit(99)}
+`,{mode:0o700});
+  const records:any[]=[];
+  const client={
+    getProfile:async()=>({providerId:'fixture',harness:'prime-agent',model:'fixture-model'}),refreshModels:async()=>{},
+    launchPlan:async()=>({planToken:'${"a".repeat(64)}',profile:{harness:'prime-agent',model:'fixture-model'},provider:{baseUrl:'http://127.0.0.1:1/v1',protocol:'openai-chat',authStyle:'bearer'},catalog:{models:[{id:'fixture-model',name:'Fixture',supportedParameters:['tools'],inputModalities:['text'],outputModalities:['text']}],refreshedAt:new Date().toISOString(),source:'manual'},warnings:[]}),
+    createRun:async()=>({id:'fixture-run',version:1}),finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);},
+  } as unknown as SwitcherClient;
+  const previousTmp=process.env.TMPDIR;process.env.TMPDIR=runtime;
+  try {
+    let error:any;
+    try { await launch(client,'fixture',{executable,cwd:dir,stateDir:join(dir,'state'),resolveCredential:async()=> 'fixture-key',timeoutMs:100,refresh:false}); }
+    catch (caught) { error=caught; }
+    expect(error).toMatchObject({code:'interrupted',exitCode:143});
+    expect(await readFile(clientStarted).catch(()=>''),'native client must not start after readiness timeout').toBe('');
+    expect(records).toEqual([]);
+    await Bun.sleep(1700);
+    expect(await readFile(clientStarted).catch(()=>''),'late supervisor must not reach the client').toBe('');
+  } finally { if(previousTmp===undefined)delete process.env.TMPDIR;else process.env.TMPDIR=previousTmp;await rm(dir,{recursive:true,force:true}); }
+},10_000);
+
+test("launch timeout finalizes a createRun that resolves after cancellation",async()=>{
+  const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});const dir=await mkdtemp(join(root,"late-run-"));
+  const executable=join(dir,"codex-fixture"),started=join(dir,"native-started");
+  await writeFile(executable,`#!${process.execPath}
+if(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0)}
+await Bun.write(${JSON.stringify(started)},'started');process.exit(7);
+`,{mode:0o700});
+  const records:any[]=[];
+  const client={
+    getProfile:async()=>({providerId:'fixture',harness:'codex',model:'fixture-model'}),refreshModels:async()=>{},
+    launchPlan:async()=>({planToken:'${"b".repeat(64)}',profile:{harness:'codex',model:'fixture-model'},provider:{baseUrl:'http://127.0.0.1:1/v1',protocol:'openai-responses'},catalog:{models:[{id:'fixture-model',name:'Fixture'}],refreshedAt:new Date().toISOString(),source:'manual'},warnings:[]}),
+    createRun:async()=>{await Bun.sleep(700);return {id:'late-run',version:3};},finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);},
+  } as unknown as SwitcherClient;
+  try {
+    let error:any;
+    try { await launch(client,'fixture',{executable,cwd:dir,stateDir:join(dir,'state'),resolveCredential:async()=> 'fixture-key',timeoutMs:500,refresh:false}); }
+    catch (caught) { error=caught; }
+    expect(error).toMatchObject({code:'interrupted',exitCode:143});
+    expect(records).toEqual([{status:'interrupted',exitCode:143}]);
+    expect(await readFile(started).catch(()=>''),'native client must not start after createRun cancellation').toBe('');
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test("same-turn preparation cancellation finalizes a createRun before its race continuation",async()=>{
+  const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});const dir=await mkdtemp(join(root,"same-turn-run-"));
+  const executable=join(dir,"codex-fixture"),started=join(dir,"native-started");
+  await writeFile(executable,`#!${process.execPath}
+if(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0)}
+await Bun.write(${JSON.stringify(started)},'started');process.exit(7);
+`,{mode:0o700});
+  const records:any[]=[];
+  const client={
+    getProfile:async()=>({providerId:'fixture',harness:'codex',model:'fixture-model'}),refreshModels:async()=>{},
+    launchPlan:async()=>({planToken:'${"c".repeat(64)}',profile:{harness:'codex',model:'fixture-model'},provider:{baseUrl:'http://127.0.0.1:1/v1',protocol:'openai-responses'},catalog:{models:[{id:'fixture-model',name:'Fixture'}],refreshedAt:new Date().toISOString(),source:'manual'},warnings:[]}),
+    createRun:()=>new Promise(resolve=>setTimeout(()=>{process.emit('SIGTERM');resolve({id:'same-turn-run',version:4});},0)),finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);},
+  } as unknown as SwitcherClient;
+  try {
+    let error:any;
+    try { await launch(client,'fixture',{executable,cwd:dir,stateDir:join(dir,'state'),resolveCredential:async()=> 'fixture-key',timeoutMs:5000,refresh:false}); }
+    catch (caught) { error=caught; }
+    expect(error).toMatchObject({code:'interrupted',exitCode:143});
+    expect(records).toEqual([{status:'interrupted',exitCode:143}]);
+    expect(await readFile(started).catch(()=>''),'native client must not start after same-turn cancellation').toBe('');
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test("same-turn signal and createRun resolution finalize exactly once in either order",async()=>{
+  const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});
+  const dir=await mkdtemp(join(root,"same-turn-orders-"));const executable=join(dir,"codex-fixture");
+  await writeFile(executable,`#!${process.execPath}\nif(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0)}\nawait Bun.write(${JSON.stringify(join(dir,"native-started"))},'started');process.exit(7);`,{mode:0o700});
+  try {
+    for(const signal of ["SIGINT","SIGTERM","SIGHUP"] as const) for(const order of ["signal-first","resolve-first"] as const) {
+      const records:any[]=[];
+      const client={
+        getProfile:async()=>({providerId:'fixture',harness:'codex',model:'fixture-model'}),refreshModels:async()=>{},
+        launchPlan:async()=>({planToken:'${"d".repeat(64)}',profile:{harness:'codex',model:'fixture-model'},provider:{baseUrl:'http://127.0.0.1:1/v1',protocol:'openai-responses'},catalog:{models:[{id:'fixture-model',name:'Fixture'}],refreshedAt:new Date().toISOString(),source:'manual'},warnings:[]}),
+        createRun:()=>new Promise(resolve=>setTimeout(()=>{
+          if(order==='signal-first'){process.emit(signal);resolve({id:'same-turn-run',version:4});}
+          else {resolve({id:'same-turn-run',version:4});queueMicrotask(()=>process.emit(signal));}
+        },0)),
+        finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);},
+      } as unknown as SwitcherClient;
+      let error:any;
+      try { await launch(client,'fixture',{executable,cwd:dir,stateDir:join(dir,`${signal}-${order}`),resolveCredential:async()=> 'fixture-key',timeoutMs:5000,refresh:false}); }
+      catch (caught) { error=caught; }
+      expect(error).toMatchObject({code:'interrupted',exitCode:signal==='SIGINT'?130:signal==='SIGTERM'?143:129});
+      expect(records).toHaveLength(1);
+      expect(records[0]).toEqual({status:'interrupted',exitCode:signal==='SIGINT'?130:signal==='SIGTERM'?143:129});
+      expect(await readFile(join(dir,'native-started')).catch(()=>'')).toBe('');
+    }
+  } finally { await rm(dir,{recursive:true,force:true}); }
+});
+
+test.skipIf(process.platform === "win32")("Prime launch cancellation during supervisor readiness cleans up before native client spawn",async()=>{
+  const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});
+  const dir=await mkdtemp(join(root,"prime-signal-"));const runtime="/Users/hasna/Workspace/scratch/u";await mkdir(runtime,{recursive:true});
+  const executable=join(dir,"prime-fixture"),runner=join(dir,"runner.ts"),spawned=join(dir,"daemon-spawned"),clientStarted=join(dir,"client-started");
+  const launcherSource = await Bun.file(join(process.cwd(),"src/launcher.ts")).exists() ? join(process.cwd(),"src/launcher.ts") : join(process.cwd(),"apps/switcher/src/launcher.ts");
+  await writeFile(executable,`#!${process.execPath}
+import {createServer} from 'node:net';
+import {writeFileSync,unlinkSync} from 'node:fs';
+const socket=process.argv[process.argv.indexOf('--daemon-socket')+1];
+if(process.argv.includes('--version')){console.log('prime-agent 0.9.2');process.exit(0);}
+if(process.argv.includes('--mode')){
+  writeFileSync(${JSON.stringify(spawned)},socket);
+  const stop=()=>{try{unlinkSync(socket)}catch{};process.exit(143)};process.on('SIGTERM',stop);process.on('SIGINT',stop);
+  setTimeout(()=>{const server=createServer(connection=>{connection.setEncoding('utf8');connection.write(JSON.stringify({type:'daemon_hello'})+'\\n');connection.on('data',data=>{for(const line of data.split('\\n')){if(!line)continue;const request=JSON.parse(line);if(request.command?.type==='shutdown'){connection.write(JSON.stringify({type:'response',success:true})+'\\n');server.close(()=>{try{unlinkSync(socket)}catch{};process.exit(0)});}}});});server.listen(socket)},1500);
+  setInterval(()=>{},1000);
+} else {writeFileSync(${JSON.stringify(clientStarted)},'started');process.exit(99)}
+`,{mode:0o700});
+  await writeFile(runner,`import {launch} from ${JSON.stringify(launcherSource)};
+const fixture=${JSON.stringify(executable)};
+const client={getProfile:async()=>({providerId:'fixture',harness:'prime-agent',model:'fixture-model'}),refreshModels:async()=>({}),launchPlan:async()=>({planToken:'${"a".repeat(64)}',profile:{harness:'prime-agent',model:'fixture-model'},provider:{baseUrl:'http://127.0.0.1:1/v1',protocol:'openai-chat',authStyle:'bearer'},catalog:{models:[{id:'fixture-model',name:'Fixture',supportedParameters:['tools'],inputModalities:['text'],outputModalities:['text']}],refreshedAt:new Date().toISOString(),source:'manual'},warnings:[]}),createRun:async()=>({id:'fixture',version:1}),finishRun:async()=>{}};
+try{const code=await launch(client,'fixture',{executable:fixture,cwd:${JSON.stringify(dir)},stateDir:${JSON.stringify(join(dir,"state"))},refresh:false});process.exitCode=code}catch(error){console.error(error);process.exitCode=error?.exitCode??1}
+`);
+  const child=spawn(process.execPath,[runner],{cwd:dir,env:{...process.env,TMPDIR:runtime,HASNA_SWITCHER_HOME:join(dir,"home"),SWITCHER_PROVIDER_FIXTURE:"fixture-key"},stdio:["ignore","pipe","pipe"]});
+  let stderr="";child.stderr?.on("data",chunk=>{stderr+=chunk.toString()});
+  try {
+    const deadline=Date.now()+5000;while(Date.now()<deadline){try{await readFile(spawned);break}catch{await Bun.sleep(10)}}
+    if (!(await readFile(spawned).then(()=>true,()=>false))) throw new Error(`Prime fixture did not spawn: ${stderr}`);
+    expect(await readFile(spawned,"utf8")).toContain(".sock");
+    child.kill("SIGTERM");
+    const code=await new Promise<number>((resolve,reject)=>{child.once("error",reject);child.once("exit",value=>resolve(value??-1))});
+    expect(code,stderr).toBe(143);expect(await readFile(clientStarted).catch(()=>"")).toBe("");
+    const socket=await readFile(spawned,"utf8");expect(await readFile(socket).catch(()=>"")).toBe("");expect(await readdir(join(dir,"state")).catch(()=>[])).toEqual(["sessions"]);
+    await Bun.sleep(1600);expect(await readFile(socket).catch(()=>"")).toBe("");
+  } finally {if(!child.killed)child.kill("SIGKILL");await rm(dir,{recursive:true,force:true});}
+},15_000);
+
+test.skipIf(process.platform === "win32")("normal exit and timeout stop owned harness descendants before removing launch state",async()=>{
+  const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});
+  const dir=await mkdtemp(join(root,"process-tree-"));
+  const executable=join(dir,"native");const descendant=join(dir,"descendant.ts");
+  await writeFile(descendant,`import {writeFileSync} from 'node:fs';\nprocess.on('SIGTERM',()=>{});writeFileSync('descendant.pid',String(process.pid));setInterval(()=>writeFileSync('heartbeat',String(Date.now())),25);\n`);
+  await writeFile(executable,`#!${process.execPath}\nimport {spawn} from 'node:child_process';import {existsSync} from 'node:fs';\nif(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0);}\nspawn(process.execPath,[${JSON.stringify(descendant)}],{stdio:'ignore'}).unref();\nprocess.on('SIGTERM',()=>process.exit(143));\nsetInterval(()=>{if(process.argv.includes('--fixture-exit')&&existsSync('heartbeat'))process.exit(7);},25);\n`,{mode:0o700});
+  const records:any[]=[];
+  const client={getProfile:async()=>({providerId:"fixture",harness:"codex"}),refreshModels:async()=>({}),launchPlan:async()=>({profile:{harness:"codex",model:"fixture-model"},provider:{baseUrl:"http://127.0.0.1:1",protocol:"openai-responses"},catalog:{models:[{id:"fixture-model",name:"Fixture"}]},warnings:[]}),createRun:async()=>({id:"fixture",version:1}),finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);}} as unknown as SwitcherClient;
+  try {
+    for(const mode of ["normal","timeout"]) {
+      const project=join(dir,mode);await mkdir(project);
+      try {
+        const code=await launch(client,"fixture",{executable,cwd:project,stateDir:join(project,"state"),args:mode==="normal"?["--fixture-exit"]:[],timeoutMs:mode==="normal"?undefined:500});
+        expect(code).toBe(mode==="normal"?7:143);
+        expect(records.at(-1).status).toBe(mode==="normal"?"failed":"interrupted");
+        const heartbeat=await readFile(join(project,"heartbeat"),"utf8");
+        await Bun.sleep(150);
+        expect(await readFile(join(project,"heartbeat"),"utf8")).toBe(heartbeat);
+        expect(await readdir(join(project,"state"))).toEqual([]);
+      } finally {
+        // Preserve a failing regression's evidence without leaving its fixture running.
+        try {process.kill(Number(await readFile(join(project,"descendant.pid"),"utf8")),"SIGKILL");} catch {}
+      }
+    }
+  } finally {await rm(dir,{recursive:true,force:true});}
+},25_000);

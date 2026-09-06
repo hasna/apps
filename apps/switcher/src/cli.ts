@@ -2,8 +2,8 @@
 import { assertHarnessArguments } from "./harness-arguments";
 import { parseArgs } from "node:util";
 import { SwitcherError } from "./sdk";
-import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, compatible, codingEligible } from "./domain";
-import { detectHarness } from "./harnesses";
+import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, harnessEligible, validateHarnessProvider } from "./domain";
+import { detectHarness, validateHarnessConfiguration } from "./harnesses";
 import { launch, validateOriForPlan, type LaunchBackend } from "./launcher";
 import { openCliRuntime } from "./runtime";
 import { providerFromPreset, type PresetOptions } from "./presets";
@@ -34,8 +34,8 @@ const HELP = `switcher — launch a coding harness with a provider and its model
   switcher credentials list|check|remove [PRESET_OR_REFERENCE]
   switcher doctor
 
-HARNESS: claude, codex, grok, opencode2, pi, omp, dsh
-PROTOCOL: anthropic-messages, openai-responses, openai-chat
+HARNESS: claude, codex, grok, opencode, opencode2, pi, omp, dsh, cline, hermes, prime-agent, gemini, aider, kilo
+PROTOCOL: anthropic-messages, openai-responses, openai-chat, gemini-generate-content
 Without remote API configuration, the CLI owns a local authenticated API and
 stores data in ~/.hasna/switcher (override HASNA_SWITCHER_HOME).
 Set HASNA_SWITCHER_API_URL + HASNA_SWITCHER_API_KEY for a remote API.
@@ -116,7 +116,10 @@ export async function main(args = process.argv.slice(2)) {
     throw new Fault(400, "conflicting_options", "--dry-run belongs to launch.");
   if (command === "launch" && provided(["name", "harness", "file"]))
     throw new Fault(400, "conflicting_options", "Launch takes its harness from the positional argument or saved profile; edit named records through providers/profiles.");
-  if (command === "launch" && values.provider) assertHarnessArguments(parse(harnessSchema,action),nativeArgs);
+  if (command === "launch" && values.provider) {
+    const harness=parse(harnessSchema,action);assertHarnessArguments(harness,nativeArgs);
+    await validateHarnessConfiguration(harness,values.cwd??process.cwd(),nativeArgs);
+  }
   const runtime = await openCliRuntime(process.env,provider=>credentials.resolve(provider));
   const client = runtime.client;
   try {
@@ -128,7 +131,7 @@ export async function main(args = process.argv.slice(2)) {
     catalogFormat: values["catalog-format"] as PresetOptions["catalogFormat"], catalogAccountId: values["catalog-account-id"], modelsPath: values["models-path"],
   });
   if (command === "doctor") {
-    const harnesses = await Promise.all((["claude","codex","grok","opencode2","pi","omp","dsh"] as const).map(h => detectHarness(h)));
+    const harnesses = await Promise.all((["claude","codex","grok","opencode","opencode2","pi","omp","dsh","cline","hermes","prime-agent","gemini","aider","kilo"] as const).map(h => detectHarness(h)));
     let api: unknown;
     try { api = {mode: runtime.mode, reachable: true, health: await client.health(), ready: await client.ready()}; }
     catch { api = {mode: runtime.mode, reachable: false}; process.exitCode = 1; }
@@ -144,18 +147,20 @@ export async function main(args = process.argv.slice(2)) {
     if (values.provider) {
       const harness = parse(harnessSchema, action);
       const provider = await resolveLaunchProvider(client, values.provider, {...presetOptions(), harness});
-      if (!compatible(harness, provider.protocol)) throw new Fault(422, "protocol_mismatch", "Harness does not support the saved provider's protocol.");
+      validateHarnessProvider(harness, provider);
       const catalog = await client.refreshModels(provider.id);
-      const model = values.model ?? await selectModel(catalog.models, values.search);
+      const model = values.model ?? await selectModel(catalog.models, values.search,harness);
       const selected = catalog.models.find(m => m.id === model);
       if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
-      if (!codingEligible(selected)) throw new Fault(422, "model_ineligible", "Selected model explicitly lacks text output or tool support.");
+      if (!harnessEligible(selected,harness)) throw new Fault(422, "model_ineligible", "Selected model explicitly lacks text output or tool support.");
       profileId = (await ensureLaunchProfile(client, provider, harness, model)).id;
     } else {
       if (values.model || values.protocol || values.url || values["credential-env"])
         throw new Error("Use --provider PROVIDER for a direct launch, or update the saved profile explicitly.");
       const profile = await client.getProfile(profileId);
+      if (profile.harness === "gemini") validateHarnessProvider(profile.harness, await client.getProvider(profile.providerId));
       assertHarnessArguments(profile.harness,nativeArgs);
+      await validateHarnessConfiguration(profile.harness,values.cwd??process.cwd(),nativeArgs);
       await client.refreshModels(profile.providerId);
     }
     if (values["dry-run"]) {

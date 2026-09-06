@@ -4,90 +4,76 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T12:20:01.564707+00:00"
+updated_at: "2026-09-06T14:02:36.227431+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-# Evidence boundaries
+Switcher 0.1.1 is published and registry accepted. Expanded adapters are being integrated for 0.1.2; their fixture results are not features of the published 0.1.1 package. This matrix distinguishes advertised wire contracts, controlled native tests and real-provider acceptance. It does not imply that every provider model works in every harness.
 
-The shared native argument correction is committed as `3b6a4fd2cf4ff6824cb465b5495eae2e198cd5fa` and independently approved. It rejects attached/clustered provider and model overrides, quoted Codex configuration roots and Claude fallback selection while preserving literal prompt values and end-of-options text. Package verification passes 92 tests / 816 assertions with real PostgreSQL and installed Pi/Ori. Replacement archive SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed` passes normal npm dependency resolution, all 38 installed file identities, Node/Bun package surfaces, and real installed-CLI read/delete/fresh-resume tests for Claude, Codex, Grok, OpenCode 2, Pi and Codex/Grok through Ori. SQLite/PostgreSQL Compose, upgrade, rollback and re-upgrade pass on exact image `sha256:c515c2d85103d8e8fcb4aaccc5ef812725d3941196fa8ac1f775bf3ad950fd2d`. Source has been reconciled with main after Contracts PR #1813. Fresh CI, merge, publication and registry-installed repetition remain open. Both earlier archives remain withdrawn.
+## Published 0.1.1
 
-The replacement's prior checks passed 85 tests / 769 assertions with real PostgreSQL and installed Pi/Ori, live installed OpenCode 2 DeepSeek read/resume/full picker, Node/Bun package surfaces and SQLite/PostgreSQL container persistence/upgrade/rollback. Its image is `sha256:24222a427ed714cdb8f167ec3e2eb301a86407f6e911d56afc4c59a44e5f7490`. All those outcomes remain bound to the withdrawn archive. Registry-installed repetition is open.
+PR #1810 merged as `e63213ece8be8dff2e21cdcdbd9cdd6d9fb7f857`. Published source is `0bb3d62e28ba23acb76352a8dfad9f2d5d770e50`; npm publication time is `2026-09-06T13:22:44.352Z`. Registry SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed` matches the reviewed archive and all 38 installed files. Ordinary npm installation uses published Contracts 1.0.2 without the optional Secrets/Events/Paths chain. Earlier rejected archives remain withdrawn and are not current acceptance evidence. [Release record](../../release-candidate/switcher-release-completion.json), [registry identity](../../release-candidate/switcher-registry-consumer.json).
 
-Documented routes, catalog parsing, inference, actual tool use, native model changes, cancellation and resume are separate claims. Named adapter candidates below remain independent work until integrated and tested together.
+The actual registry-installed station command passed these seven bounded live paths. Every path performed an actual file read, then a fresh-process continuation after deleting the file; native session continuity and owned cleanup passed. M = Anthropic Messages, R = OpenAI Responses, C = OpenAI Chat Completions, G = native Gemini generateContent.
 
-# Native harness contracts
-
-| Harness | Adapter version requirement / prior tested version | Native wire protocols | Catalog | Next-release acceptance |
+| Harness / native version | Backend | Provider / selected model | Wire | Registry live result |
 | --- | --- | --- | --- | --- |
-| Claude Code | >=2.1.242 / 2.1.263 | Messages | Per-launch modelPicker | Split-catalog fixture and development-tarball Pro/Flash tool/picker checks pass; Default mapping passes live; full cancellation, resume and registry checks open |
-| Codex | >=0.153.0 / 0.153.4 | Responses | Startup ModelInfo JSON | Earlier candidate direct and Ori tool/resume pass; historical candidate native app-server list exactly matches all 364 compatible models in the 582-entry OpenRouter catalog; richer metadata and registry checks open |
-| Grok Build | >=1.0.13 / 1.0.13 | Chat, Responses, Messages | Authenticated loopback catalog | Installed development CLI passes local Messages fixture and live DeepSeek Flash tool/read/resume; exact model confirmed by native usage; remaining protocols and registry cells open |
-| OpenCode 2 | Requires beta-19157+ | Chat, Responses, Messages | Isolated version 2 provider/models with preserved native permissions and ancestor instructions | Corrected source passes controlled native tool/deleted-file resume, agent deny and exact settled catalog checks across all three protocols; earlier live DeepSeek evidence predates the authority correction; new registry/live cells remain open |
-| Pi | >=0.85.1 / 0.85.1 | Chat, Responses, Messages | Per-launch models.json; provider-scoped picker/cycling | Native nine-cell auth/path fixtures and installed candidate DeepSeek Flash read-tool/same-session resume pass; interactive model changes and registry acceptance remain open |
+| Claude Code 2.1.263 | Direct | DeepSeek / deepseek-v4-flash | M | Read + deleted-file resume pass |
+| Codex 0.153.4 | Direct | OpenRouter / anthropic/claude-haiku-4.5 | R | Read + deleted-file resume pass |
+| Grok Build 1.0.13 | Direct | DeepSeek / deepseek-v4-flash | M | Read + deleted-file resume pass |
+| OpenCode 2 beta-19157 | Direct | DeepSeek / deepseek-v4-flash | M | Read + deleted-file resume pass; resumed answer contained the proof with additional formatting |
+| Pi 0.85.1 | Direct | DeepSeek / deepseek-v4-flash | C | Read + deleted-file same-session resume pass |
+| Codex 0.153.4 | Ori 0.12.1 | OpenRouter / anthropic/claude-haiku-4.5 | R | Read + deleted-file resume pass |
+| Grok Build 1.0.13 | Ori 0.12.1 | OpenRouter / anthropic/claude-haiku-4.5 | C | Read + deleted-file resume pass |
 
-Claude + non-Claude models remains experimental and unsupported by Anthropic. Messages, Responses and Chat are distinct protocols. A matrix intersection is a candidate for testing, not an automatic compatibility guarantee.
+Evidence: [six core/Ori paths](../../live/registry-0.1.1/live-matrix-C5F5th/result.json), [Pi](../../live/pi-registry-fJgCLY/result.json). Claude with non-Claude models remains unsupported by Anthropic. Native usage reports are not proof of provider billing prices.
 
-# Provider registry
+Registry-installed Codex returned exactly all **363 compatible IDs from 581 OpenRouter catalog entries** at the recorded refresh. These are dated observations, not fixed expected counts. OpenCode 2 exposed all three discovered DeepSeek IDs and selected Pro without inference. [Codex catalog](../../live/installed-codex-catalog-YUzaw0/result.json), [OpenCode picker](../parent-opencode2/picker-registry-bp732h83/result.json). Grok through Ori uses Ori's entitled OpenRouter catalog; Pi scopes its picker/cycling, while its diagnostic listing still exposes global definitions.
 
-M = Anthropic Messages, R = OpenAI Responses, C = OpenAI Chat. Default catalog parser is an OpenAI-style data array. Anthropic cursor pagination, same-origin continuation links, Ollama tags, Together arrays and Mistral capabilities have explicit parsing. Sources and per-route notes are embedded in the shared typed registry and returned by `switcher providers presets ID`.
+Node 26.8.1 and Bun 1.3.14 package CLI/API/SDK/server/standalone MCP surface tests pass from registry bytes; no MCP registration occurred. Reviewed identical candidate bytes also passed SQLite/PostgreSQL Compose persistence, 0.1.0 upgrade, rollback and re-upgrade on image `sha256:c515c2d85103d8e8fcb4aaccc5ef812725d3941196fa8ac1f775bf3ad950fd2d`. Published source includes the OpenCode 2 routing isolation, argument authority and unfinished-SSE cleanup fixes. These successes do not close later adapter-specific or cloud-provider work.
 
-| Provider | Implemented native routes | Default authentication | Catalog / next-release evidence |
-| --- | --- | --- | --- |
-| DeepSeek | M, C | Bearer; DEEPSEEK_API_KEY alias | Root `/models`, independent of `/anthropic/v1`; split-path fixture, development Claude Pro/Flash tools/picker and Grok/OpenCode Flash tools/resume pass; remaining cells open |
-| OpenRouter | M, R, C | Bearer; OPENROUTER_API_KEY | Public all-modality catalog; earlier 0.1.1 candidate direct/Ori Codex and Ori Grok tool/resume evidence; historical candidate Codex full-catalog equality passes; registry cells open |
-| Anthropic | M | x-api-key; ANTHROPIC_API_KEY | `/v1/models`, Anthropic version header and cursor pagination; live open |
-| OpenAI | R, C | Bearer; OPENAI_API_KEY | `/v1/models`; live open |
-| xAI | M, R, C | Bearer; XAI_API_KEY | `/v1/models`; documented routes, live open |
-| Ollama | R, C | None for local server | `/api/tags`; parser fixture passes; Responses >=0.13.3, stateless only; live open |
-| LM Studio | M, R, C | Optional configured token | `/v1/models`; operator URL/auth overrides; live open |
-| Groq | R, C | Bearer; GROQ_API_KEY | `/openai/v1/models`; Responses beta; live open |
-| Cerebras | C | Bearer; CEREBRAS_API_KEY | `/v1/models`; live open |
-| Mistral | C | Bearer; MISTRAL_API_KEY | `/v1/models`, declared capabilities/context and archived status; parser fixture passes, live open |
-| Together AI | C | Bearer; TOGETHER_API_KEY | `/v1/models`, native bare array, exact namespaced IDs and declared model type; parser fixture passes, live open |
-| Fireworks | M, R, C | Bearer; FIREWORKS_API_KEY | Account-scoped catalog requires account ID or explicit URL; paginated counts and native vision metadata fixtures pass; live open |
-| Moonshot/Kimi | C | Bearer; MOONSHOT_API_KEY | Documented `/v1/models`; route fixture passes; live open |
-| DashScope | C | Bearer; DASHSCOPE_API_KEY | Explicit region/workspace catalog URL + dashscope parser; pagination fixtures pass; live open |
-| Z.AI | C | Bearer; ZAI_API_KEY | No documented model-list contract; explicit catalog or manual models required; automatic-discovery/live gate open |
-| MiniMax | M, C | Messages x-api-key; Chat Bearer; MINIMAX_API_KEY | `.cn` Open Platform routes, protocol-specific model catalogs; Messages fixture passes; alternate-product authority must be explicit; live open |
-| SiliconFlow | C | Bearer; SILICONFLOW_API_KEY | Official SiliconCloud OpenAPI `/v1/models` data array; fixture passes; live open |
-| vLLM | M, R, C | Explicit operator reference or none | Explicit inference prefix, normally `/v1`; model catalog and Messages bridge fixtures pass; deployment/tool-parser/live validation open |
-| LiteLLM | M, R, C | Explicit proxy reference or none | Explicit deployment prefix; Messages stored base ends in `/v1`; separate catalog auth and real bridge POST fixtures pass; live open |
-| Generic Messages | M | Explicit reference or no auth | Required URL and declared catalog contract; fixture coverage, live operator deployment open |
-| Generic Responses | R | Explicit reference or no auth | Required URL and declared catalog contract; fixture coverage, live operator deployment open |
-| Generic Chat | C | Explicit reference or no auth | Required URL and declared catalog contract; fixture coverage, live operator deployment open |
+## Expanded native adapters: controlled evidence, unpublished
 
-For every implemented row, the release gate still requires applicable native harness inference, proof-file tool loop, streaming, full catalog, actual switched request model, cancellation, restart/resume and registry-installed CLI evidence. Credential access is not inferred from a public catalog.
+All rows below use official installed native software and synthetic credentials against owned loopback fixtures. Each still needs the common next-release acceptance below. An earlier source review does not approve uncommitted integration changes.
 
-# Remaining provider work
+| Adapter / tested native | Controlled evidence | Material boundary / shortest remaining adapter check |
+| --- | --- | --- |
+| OMP 18.1.11 | Exact `658b1551` + reviewed followup; six C/R/M auth/no-auth cells, real read, deleted-file fresh resume; native RPC returns both provider models and selects the second | Preserve corrected shared grammar/minimum version in final source; repeat representative installed-package read/resume and exact native RPC catalog |
+| DeepSeek Harness 0.1.2-rc.1 | Exact `c3235ef7` independently approved; author nine protocol/auth ACP cells; parent Messages/bearer read/resume and web catalog/401/403/loopback cleanup; integrated ACP/web replays | Distinct from Claude+DeepSeek. Web/ACP resume; headless starts a fresh task. SDK/custom profiles rejected. Repeat installed ACP read/resume and web auth/cleanup; image attachment round-trip and Linux remain unverified |
+| Cline 3.0.61 | Exact `86b5964b` independently approved; C/R/M source CLI/native permissioned read, deleted-file fresh resume, full catalog, selected route/auth and AGENTS | Repeat packaged ACP/session path with permission grant; final shared-launch/config-isolation regression remains a release gate |
+| Hermes 0.21.0 | Exact `3f32e765` approved; C/R/M ordinary chat oneshot read/deleted-file resume and instruction preservation. Integrated native provider inventory equals both selected-provider models; second-model selection succeeds without inference | Native UI retains built-in free-provider/MOA entries; do not claim exclusive picker contents. Repeat installed chat/resume and selected-provider inventory; do not use top-level native -z as an approval-preserving fixture |
+| Prime Agent 0.9.2 | Foreground-supervisor correction and protocol fixtures; independent `ecb0931d` passes all six signal/callback orders. Integrated long-TMPDIR fallback passes actual ipython file read/deletion/fresh continuation and owned cleanup. Native RPC returns exactly two models, switches to the second, then sends one authenticated request for that model | Bind final integrated fallback/portable-test corrections to a clean commit. Repeat installed read/resume; retain delayed-start, same-turn cancellation and explicit unsupported-long-path negatives |
+| Aider 0.86.2 | Exact `33f985ab` independently approved; C/R/M native file edits, deleted-file history restoration, model listing/second selection, hostile config suppression; six auth-style plus no-auth probes | File context/whole-file edits are its native behavior, not an autonomous read function tool. Responses output is buffered. Repeat installed edit/history and advertised native model listing; interactive/Linux remain unverified |
+| Legacy OpenCode 1.18.29 | Exact `3005ca2f` parent C/R/M read/deleted-file same-session resume and exact native models diagnostic; corrected JSONC/root/agent deny checks; later foundation delta integrated | Distinct executable and singular-provider schema from OpenCode 2. Bind final integrated policy/argument corrections to exact source, then repeat installed tool/resume and diagnostic catalog; visual picker remains separate |
+| Gemini CLI 0.58.0 | Exact hardening `6bfa6364`: six actual native source CLI launches cover file read, second model, deleted-file fresh resume, concurrent sessions, user deny and global/project imports; exact two-ID native loader catalog. Original argv/config/trust attacks reject | G with x-goog-api-key only; parent-held upstream key. Parent integrated native/adversarial replays pass, including six launches, zero-request routing rejection, untrusted exit55/no hook and timeout exit143 with upstream/listener cleanup. Bind final integrated source, then packaged tool/resume/catalog. ACP and conflicting model transport config reject; private-home/context limitations remain explicit |
+| Kilo 7.5.15 | Official native interface and three-protocol WIP fixtures exist; late legacy-MCP startup and token inheritance reproduced | **Guard correction `96678360` is being integrated/reviewed; final acceptance remains open.** No native disable control proven durable. A parent-held bridge can withhold the upstream key, but native project MCP shares its temporary bridge authority. Do not count WIP as shipped or all isolation controls solved |
 
-| Provider family | Required work / checklist |
-| --- | --- |
-| vLLM | Deployment-specific URLs, declared native capabilities and live local/gateway acceptance (E09) |
-| LiteLLM | Gateway endpoint/auth/discovery contract and live acceptance (E10) |
-| Mistral, Together | Current presets/parsers implemented; live credentials, inference and native acceptance remain open (E11) |
-| Fireworks | Account-aware catalog implemented; credential/account and live native acceptance remain open (E11) |
-| Moonshot/Kimi, Qwen/DashScope | Presets and explicit regional catalog parsing implemented; live native acceptance remains open (E11) |
-| Z.ai, MiniMax, SiliconFlow | Presets implemented; Z.AI automatic catalog is unsupported without a documented contract; live acceptance remains open (E11) |
-| Gemini | Queued OpenAI-compatible Chat preset; independent catalog/auth fixtures pass, integration and live access remain open (E12) |
-| Azure OpenAI | Queued v1 Chat/Responses preset; actual native Codex literal api-key request passes. Deployment names require explicit catalog input; no false foundation-model discovery claim. Integration and live access remain open (E12) |
-| Bedrock, Vertex | Cloud auth, region/model/deployment contracts or explicit gateway adapter (E12) |
+Parent followups supersede the earlier Gemini/Prime failures: [Gemini six-launch result](../parent-gemini/expanded/native/source-cli-KkESw9/result.json), [args](../parent-gemini/expanded/counter-pID892/result.json), [routing](../parent-gemini/expanded/config-counter-ZZNbkU/result.json), [trust](../parent-gemini/expanded/trust-counter-LGWBqY/result.json), [timeout143](../parent-gemini/expanded/cancel-SuFlhF/result.json); [Prime long-path read/resume](../parent-prime/fallback-cli-fixture.log), [exact native catalog](../parent-prime/expanded-catalog-shared-home.log), [actual switched-model request](../parent-prime/expanded-second-request.log). The Prime result's legacy `unexpected` field contains the deliberately requested second-model inference; `secondModelInferenceVerified:true` identifies the intended positive assertion.
 
-# Remaining harness and compatibility work
+The linked [evidence index](docs/verification-evidence.json) records the exact reviewed sources and later integration checkpoints. Model-list APIs, visual pickers and actual inference selection are separate observations; a no-inference second-model selection does not become a paid model call.
 
-| Harness/backend | Required work / checklist |
-| --- | --- |
-| Ori 0.12.1 | Codex/Grok backend and boundary/version/auth tests implemented; both candidate tool/resume checks pass with initial answer-format discrepancies recorded; full catalog and registry acceptance remain open (H01–H04) |
-| Pi | Integrated direct adapter; strengthened native auth/tool/resume verification and live registry acceptance (G14) |
-| Prime Agent | Candidate under correction for per-launch config isolation, native worker socket length and owned-daemon cleanup (G15) |
-| DeepSeek Harness | Candidate independently approved for integration; actual native ACP tool/resume and web authentication/cleanup pass, real-provider and registry acceptance open (G16) |
-| Hermes | Independent candidate `36f06c2` passes actual source-CLI tool/read and deleted-file resume across all three protocols; integration, picker and registry verification remain open (G17) |
-| Legacy OpenCode | Distinct native adapter; legacy OpenCode is not OpenCode 2 (G18) |
-| OMP, Kilo, Cline | Distribution/launch/provider/model interfaces and honest catalog support (G19–G21) |
-| Gemini CLI, Aider | Distinct auth/wire/config adapters and native listing limits (G22–G23) |
-| Protocol translation | Explicit opt-in gateway or implemented translators, with streaming/tool/reasoning/multimodal/cancellation coverage (H05–H08) |
+## Providers and cloud access
 
-Built-in vault resolution passes actual installed-CLI live acceptance and SIGINT/SIGTERM subprocess cleanup tests; provider Keychain resolution has fixture coverage. Native subscription authentication, live subagent/explicit family-alias behavior, remaining process/platform and protocol/resume cells, CI and publication remain open in TODOS.md. Provider environment injection remains available without saving values.
+Published presets cover DeepSeek, OpenRouter, Anthropic, OpenAI, xAI, Ollama, LM Studio, Groq, Cerebras, Mistral, Together, Fireworks, Moonshot/Kimi, DashScope, Z.AI, MiniMax, SiliconFlow, vLLM, LiteLLM and generic M/R/C endpoints. The typed registry's per-route notes remain authoritative for protocol, auth, discovery and prefixes. Parser/auth/prefix fixtures establish those contracts; the seven live rows above establish live acceptance only for their specific paths.
 
-Historical withdrawn candidate container image `sha256:6de1712ffc8ab9ae9eabffe4daee3bf7a0a56f98bd1c0fb8ea5774a2e1dae014` passes both SQLite and PostgreSQL Compose profiles, health/readiness, authentication and recreation persistence. Published 0.1.0 → candidate → rollback → re-upgrade preserves legacy provider/profile/catalog/run data. Extended checks preserve candidate-only Pi records after re-upgrade and verify that 0.1.0 rejects a Pi launch. Public CLI/serve/SDK/standalone MCP checks pass under Node 26.8.1 and Bun 1.3.14; no MCP registration was performed. That older source had 76 passing tests/743 assertions with installed Pi/Ori checks enabled, including native terminal/lifecycle regressions; macOS and Linux tests preserve six descriptor mixes and keyboard reads from `/dev/tty`. Lifecycle and Ori exact-commit review passed. The expanded gateway source is independently reviewed; registry acceptance is pending.
+Expanded Gemini provider routes remain distinct: native G uses x-goog-api-key; Google's OpenAI-compatible C endpoint uses Bearer and `/v1beta/openai`. Expanded Azure v1 C/R uses a user-specified `/openai/v1` resource URL and literal `api-key`; an actual Codex fixture emitted that header and exact deployment ID. **Azure requires real deployment names supplied manually or by an explicit deployment-aware catalog.** Its foundation-model listing is not a deployment inventory. Both provider additions require final integrated checks and real access acceptance.
+
+| Access group | What the existing inventory establishes | Remaining prerequisite |
+| --- | --- | --- |
+| DeepSeek, OpenRouter | Actual protected vault resolution and registry live paths pass | Reuse bounded accepted paths for release regression; no new key setup inferred |
+| Anthropic, OpenAI, xAI, Groq, Cerebras, Mistral, Fireworks, Moonshot/Kimi, DashScope/Qwen, Z.AI/Zhipu, MiniMax, Gemini | Candidate secret references exist; some are archived, notes or admin metadata | Validate a relevant authorized provider credential/account through the resolver; metadata is not proof of validity, entitlement or paid-call access. Fireworks also needs account scope; DashScope needs region/workspace; Z.AI needs a truthful explicit catalog contract |
+| Together, SiliconFlow, Azure | No matching references in this inventory | Locate/provide a usable approved credential reference. Azure additionally needs resource endpoint and deployment inventory; absence in one inventory is not proof no key exists anywhere |
+| Bedrock | API-key/bearer-token and expiry/identifier metadata | Verify actual credential type/expiry, region, model access and invocation contract. Native cloud adapter is not implemented by these metadata records |
+| Vertex | OAuth client ID/secret metadata only | Establish an applicable runtime identity/token flow, project, location and model permissions. An OAuth client secret is not ADC or an access token; direct cloud adapter remains open |
+| Ollama, LM Studio, vLLM, LiteLLM/generic gateways | Explicit endpoint contracts/fixtures; no running deployment established by credential inventory | A reachable configured local/server deployment, actual model availability and required native tool parser/capabilities; auth where configured |
+
+The inventory explicitly says `valuesRead:false`; no credentials were read or validated by this documentation audit. Missing cloud access is an external acceptance prerequisite, not a skipped success and not evidence that the provider parser is defective. Generic gateways may satisfy an explicitly configured compatible wire path; they do not silently add Bedrock/Vertex native authentication or cross-protocol translation.
+
+## Finite next-release acceptance
+
+1. Bind the passing integrated Gemini and Prime corrections to the final clean source; finish Kilo guard integration/review and any remaining combined regressions. Preserve the native authority, permission and owned-process contracts.
+2. On one exact expanded candidate, run package/generated/build/artifact/storage checks and required root/affected/CI gates. Repeat existing deterministic native fixtures for changed protocol/auth paths, with explicit negative routes, permission preservation and cleanup. Final source identity binds earlier unaffected evidence.
+3. Install that candidate normally and run one bounded native task plus fresh-process resume per new adapter using a supported provider/model. Check its full compatible catalog and second selection using a native API/diagnostic where that is the supported interface. Use a protocol-specific extra cell only where it exercises a distinct changed adapter contract. DSH additionally retains its small web auth/cleanup check; Aider uses edit/history semantics. Shared launcher changes warrant the existing seven-path core/Ori regression, not every possible provider/model combination.
+4. Complete provider-specific live cells only where account/endpoint/model access exists. Record other named provider cells as blocked or unverified with the concrete prerequisite above. Do not require every provider × every model × every harness to receive paid inference, and do not promote a successful shared protocol fixture to untested live-provider coverage.
+5. Apply the next patch changeset, independent release review, PR/CI/publish checks, registry byte identity and a representative installed-command repetition. Preserve documented upstream limits and leave the overall expanded task open until its named acceptance scope is satisfied.
