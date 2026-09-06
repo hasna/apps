@@ -42,7 +42,10 @@ afterAll(() => {
 describe("connectors path resolution", () => {
   it("defaults to ~/.hasna/connectors until the XDG store exists or HASNA_DATA_HOME is set", () => {
     expect(legacyHomeDir()).toBe(join(effectiveHome(), ".hasna", "connectors"));
-    expect(resolverHome()).toBe(join(effectiveHome(), ".local", "share", "hasna", "connectors"));
+    const nativeDataRoot = process.platform === "darwin"
+      ? ["Library", "Application Support", "Hasna"]
+      : [".local", "share", "hasna"];
+    expect(resolverHome()).toBe(join(effectiveHome(), ...nativeDataRoot, "connectors"));
     expect(adoptResolverHome(resolverHome())).toBe(false);
     expect(connectorsHome()).toBe(legacyHomeDir());
   });

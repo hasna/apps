@@ -4,7 +4,7 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T09:29:38.856913+00:00"
+updated_at: "2026-09-06T09:46:58.620668+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -20,8 +20,8 @@ This matrix covers the next release in progress. Documented endpoints and succes
 | Claude Code | >=2.1.242 / 2.1.263 | Messages | Per-launch modelPicker | Split-catalog fixture and development-tarball Pro/Flash tool/picker checks pass; Default mapping passes live; full cancellation, resume and registry checks open |
 | Codex | >=0.153.0 / 0.153.4 | Responses | Startup ModelInfo JSON | Candidate direct and Ori tool loops plus same-session resume pass; richer metadata, final native-picker and registry checks open |
 | Grok Build | >=1.0.13 / 1.0.13 | Chat, Responses, Messages | Authenticated loopback catalog | Installed development CLI passes local Messages fixture and live DeepSeek Flash tool/read/resume; exact model confirmed by native usage; remaining protocols and registry cells open |
-| OpenCode 2 | Tested beta-19157 | Chat, Responses, Messages | Version 2 provider/models | Installed development CLI passes local Messages fixture and live DeepSeek Flash read-tool/resume; remaining protocols and registry cells open |
-| Pi | >=0.85.1 / 0.85.1 | Chat, Responses, Messages | Per-launch models.json; provider-scoped picker/cycling | Adapter and auth/path/case-collision fixtures implemented; rigorous native proof and registry acceptance remain open |
+| OpenCode 2 | Tested beta-19157 | Chat, Responses, Messages | Version 2 provider/models | Older development CLI passes local Messages fixture and live DeepSeek Flash read-tool/resume; latest candidate exposed post-answer bridge cleanup hang, source fix and concurrent regressions pass, installed retest pending |
+| Pi | >=0.85.1 / 0.85.1 | Chat, Responses, Messages | Per-launch models.json; provider-scoped picker/cycling | Native nine-cell auth/path fixtures and installed candidate DeepSeek Flash read-tool/same-session resume pass; interactive model changes and registry acceptance remain open |
 
 Claude + non-Claude models remains experimental and unsupported by Anthropic. Messages, Responses and Chat are distinct protocols. A matrix intersection is a candidate for testing, not an automatic compatibility guarantee.
 
@@ -84,4 +84,4 @@ For every implemented row, the release gate still requires applicable native har
 
 Built-in vault resolution passes actual installed-CLI live acceptance and SIGINT/SIGTERM subprocess cleanup tests; provider Keychain resolution has fixture coverage. Native subscription authentication, live subagent/explicit family-alias behavior, remaining process/platform and protocol/resume cells, release-image verification, CI and publication remain open in TODOS.md. Provider environment injection remains available without saving values.
 
-Current development container checks pass for both SQLite and PostgreSQL Compose profiles: health/readiness, authentication and recreation persistence. Upgrades from the published 0.1.0 image preserve provider/profile/catalog/run history in both backends. Release-image checks remain open. Pi-integrated source has 75 passing tests/739 assertions with installed Pi/Ori checks enabled, including native terminal/lifecycle regressions; macOS and Linux tests preserve six descriptor mixes and keyboard reads from `/dev/tty`. Lifecycle and Ori exact-commit review passed. The expanded gateway source is independently reviewed; registry acceptance is pending.
+Current development container checks pass for both SQLite and PostgreSQL Compose profiles: health/readiness, authentication and recreation persistence. Upgrades from the published 0.1.0 image preserve provider/profile/catalog/run history in both backends. Release-image checks remain open. Current source has 76 passing tests/743 assertions with installed Pi/Ori checks enabled, including native terminal/lifecycle regressions; macOS and Linux tests preserve six descriptor mixes and keyboard reads from `/dev/tty`. Lifecycle and Ori exact-commit review passed. The expanded gateway source is independently reviewed; registry acceptance is pending.

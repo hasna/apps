@@ -4,7 +4,7 @@ title: "Switcher"
 type: "package-documentation"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:50:21.698672Z"
-updated_at: "2026-09-06T09:29:38.856913+00:00"
+updated_at: "2026-09-06T09:46:58.620668+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -23,7 +23,7 @@ switcher doctor
 
 ## Direct launch
 
-The following flow is implemented on the development branch and awaits the next npm release; npm 0.1.0 still requires explicit API/provider/profile setup.
+The direct launch flow is available from 0.1.1. Version 0.1.0 requires explicit API/provider/profile setup.
 
 Supply the provider key through environment injection (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, or an explicit `SWITCHER_PROVIDER_*` reference), or configure a local credential binding below. Switcher never saves the value.
 

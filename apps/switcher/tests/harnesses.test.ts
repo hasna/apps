@@ -205,3 +205,34 @@ test.skipIf(!process.env.SWITCHER_TEST_PI_PACKAGE)("installed Pi picker scope re
     expect(resolved.scopedModels.every((row:any)=>row.model.provider===provider)).toBe(true);
   } finally {await rm(input.stateDir,{recursive:true,force:true});}
 });
+
+test("auth bridges cancel unfinished upstream SSE before shutting down",async()=>{
+  const input=await fixture();let source:ReadableStreamDefaultController<Uint8Array>|undefined;
+  let upstreamSignal:AbortSignal|undefined;
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){
+    upstreamSignal=request.signal;
+    return new Response(new ReadableStream<Uint8Array>({start(controller){source=controller;controller.enqueue(new TextEncoder().encode('data: {"type":"message_stop"}\n\n'));}}),{headers:{"content-type":"text/event-stream"}});
+  }});
+  let prepared:Awaited<ReturnType<typeof prepareHarnessLaunch>>|undefined;
+  let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
+  let closing:Promise<void>|undefined;
+  try {
+    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1",version:"opencode2 beta"});
+    const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const provider:any=Object.values(config.providers)[0];
+    const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model,messages:[],stream:true})});
+    reader=response.body!.getReader();expect(new TextDecoder().decode((await reader.read()).value)).toContain("message_stop");
+    // The native harness can stop consuming once it sees the terminal event,
+    // leaving the provider's streaming response open when the process exits.
+    let stopped=false;closing=Promise.all([prepared.cleanup!(),prepared.cleanup!()]).then(()=>{stopped=true;});
+    await Promise.race([closing,Bun.sleep(500)]);
+    expect(stopped).toBe(true);
+    await expect(fetch(provider.settings.baseURL+"/models")).rejects.toThrow();
+    expect(upstreamSignal?.aborted).toBe(true);
+  } finally {
+    try{source?.close();}catch{}
+    await reader?.cancel().catch(()=>{});
+    await closing?.catch(()=>{});
+    if(!closing)await prepared?.cleanup?.();
+    await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true});
+  }
+},5000);

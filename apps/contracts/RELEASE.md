@@ -1,11 +1,11 @@
 ---
 id: "contracts-release-1-0-2"
-title: "Contracts 1.0.2 optional secrets peer release preparation"
+title: "Contracts 1.0.2 optional secrets peer release evidence"
 type: "release-report"
 owner: "codex-fixer"
 created_at: "2026-09-06T08:05:24Z"
-updated_at: "2026-09-06T08:48:25.675825+00:00"
-status: "prepared"
+updated_at: "2026-09-06T09:46:58.620668+00:00"
+status: "published"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
@@ -27,7 +27,9 @@ versioning and restored unchanged.
   before preparation.
 - Root `bun.lock` records Contracts 1.0.2 and its optional peer metadata.
 - `apps/contracts/bun.lock` records the union peer range and `optionalPeers`.
-- No publication or merge has occurred.
+- Published 2026-09-06T09:31:01.120Z through the independently reviewed PR #1810 dependency wave. Registry bytes exactly match the candidate digests below. The source PR remains open until all required checks pass.
+- Independent ordinary npm installation passed with four packages and no Secrets/Events/Paths. Both CLI aliases report 1.0.2 and list all 47 schemas; all 19 JavaScript exports import under Bun 1.3.14 and Node 26.8.1. Missing optional-peer credential pointers fail closed with zero network calls and no ambient fallback.
+- Publication intent and confirmation were recorded in the required publishing channel and tracking task. No global install or quarantine change was needed.
 
 # Candidate lock provenance
 

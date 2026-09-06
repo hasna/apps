@@ -56,9 +56,13 @@ function grokBridge(input: HarnessLaunchInput) {
   const token=crypto.randomUUID()+crypto.randomUUID();const expected=createHash("sha256").update(`Bearer ${token}`).digest();
   const models=new Map(input.models.flatMap(m=>[[m.id,m.id],[grokAlias(input,m.id),m.id]]));
   let server: ReturnType<typeof Bun.serve>;
+  let closing=false;
+  let stopped:Promise<void>|undefined;
+  const active=new Set<{abort:AbortController;done:Promise<void>;cancel?:()=>Promise<void>}>();
   const apiBackend={"anthropic-messages":"messages","openai-responses":"responses","openai-chat":"chat_completions"}[input.protocol];
   const apiPath={"anthropic-messages":"/messages","openai-responses":"/responses","openai-chat":"/chat/completions"}[input.protocol];
   server=Bun.serve({hostname:"127.0.0.1",port:0,maxRequestBodySize:4*1024*1024,idleTimeout:255,async fetch(request){
+    if(closing)return Response.json({error:{message:"Bridge is closing"}},{status:503});
     const auth=request.headers.get("authorization")??(request.headers.has("x-api-key")?`Bearer ${request.headers.get("x-api-key")}`:"");
     if(!timingSafeEqual(expected,createHash("sha256").update(auth).digest())) return Response.json({error:{message:"Unauthorized"}},{status:401});
     const path=new URL(request.url).pathname;
@@ -80,13 +84,51 @@ function grokBridge(input: HarnessLaunchInput) {
       headers["anthropic-version"]=request.headers.get("anthropic-version")??"2023-06-01";
       if(request.headers.has("anthropic-beta")) headers["anthropic-beta"]=request.headers.get("anthropic-beta")!;
     }
+    if(closing)return Response.json({error:{message:"Bridge is closing"}},{status:503});
+    let complete!:()=>void;
+    const record:{abort:AbortController;done:Promise<void>;cancel?:()=>Promise<void>}={abort:new AbortController(),done:new Promise<void>(resolve=>{complete=resolve;})};
+    const release=()=>{active.delete(record);complete();};
+    active.add(record);
     try {
-      const response=await fetch(`${input.baseUrl}${apiPath}`,{method:"POST",headers,body:JSON.stringify(body),redirect:"manual",signal:AbortSignal.any([request.signal,AbortSignal.timeout(240000)])});
-      if(!response.ok){await response.body?.cancel();return Response.json({error:{message:`Provider returned HTTP ${response.status}`}},{status:response.status>=300&&response.status<400?502:response.status});}
-      return new Response(response.body,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
-    }catch{return Response.json({error:{message:"Provider request failed"}},{status:502});}
+      const response=await fetch(`${input.baseUrl}${apiPath}`,{method:"POST",headers,body:JSON.stringify(body),redirect:"manual",signal:AbortSignal.any([record.abort.signal,request.signal,AbortSignal.timeout(240000)])});
+      if(!response.ok){await response.body?.cancel();release();return Response.json({error:{message:`Provider returned HTTP ${response.status}`}},{status:response.status>=300&&response.status<400?502:response.status});}
+      if(!response.body){release();return new Response(null,{status:response.status});}
+      const reader=response.body.getReader();
+      let ended=false;
+      let output:ReadableStreamDefaultController<Uint8Array>;
+      const end=(error?:Error)=>{
+        if(ended)return;ended=true;
+        try{if(error&&!closing)output.error(error);else output.close();}catch{}
+        release();
+      };
+      const stream=new ReadableStream<Uint8Array>({
+        start(controller){output=controller;},
+        async pull(controller){
+          try{const chunk=await reader.read();if(ended)return;if(chunk.done)end();else controller.enqueue(chunk.value);}
+          catch{end(new Error("Provider stream ended unexpectedly"));}
+        },
+        async cancel(){
+          ended=true;record.abort.abort();
+          try{await reader.cancel();}finally{release();}
+        },
+      });
+      record.cancel=async()=>{
+        record.abort.abort();
+        try{await reader.cancel();}catch{}finally{end();}
+      };
+      return new Response(stream,{status:response.status,headers:{"content-type":response.headers.get("content-type")??"application/json","cache-control":"no-store"}});
+    }catch{release();return Response.json({error:{message:"Provider request failed"}},{status:502});}
   }});
-  return {baseUrl:new URL("v1",server.url).href,token,cleanup:async()=>{await server.stop(true);}};
+  return {baseUrl:new URL("v1",server.url).href,token,cleanup:()=>stopped??=(async()=>{
+    closing=true;
+    // Close our forwarding streams before stopping the listener. Bun 1.3.14
+    // can leave stop(true) pending if it destroys an unfinished proxied SSE
+    // response while that response still owns an upstream reader.
+    const pending=[...active];
+    for(const record of pending)record.abort.abort();
+    await Promise.allSettled(pending.map(async record=>{await record.cancel?.();await record.done;}));
+    await server.stop(true);
+  })()};
 }
 function grokAlias(input: HarnessLaunchInput, model: string) {
   return "switcher-" + createHash("sha256").update(JSON.stringify([input.baseUrl,input.protocol])).digest("hex").slice(0,12) + "/" + model;
