@@ -20,6 +20,7 @@ import {
 import {
   adoptUnmarkedHomes,
   pruneStrayHomes,
+  type AdoptionOptions,
 } from "../../lib/home-adoption.js";
 import { censusHomeDrift, type DriftCensus } from "../../lib/home-census.js";
 import {
@@ -231,11 +232,11 @@ function handleSync(
     return;
   }
   if (options.adopt) {
-    handleSyncAdopt(options.apply, options.json);
+    handleSelectedHomeMode(names, options, handleSyncAdopt);
     return;
   }
   if (options.prune) {
-    handleSyncPrune(options.apply, options.json);
+    handleSelectedHomeMode(names, options, handleSyncPrune);
     return;
   }
 
@@ -366,8 +367,22 @@ function handleSyncCheck(names: string[], options: { for: string; source?: strin
   }
 }
 
-function handleSyncAdopt(apply: boolean, json: boolean): void {
-  const result = adoptUnmarkedHomes({ apply });
+function handleSelectedHomeMode(names: string[], options: { for: string; source?: string; apply: boolean; json: boolean },
+  action: (selection: AdoptionOptions, json: boolean) => void): void {
+  try {
+    const agents = resolveSyncAgents(options.for);
+    const { roots } = resolveSyncCorpus({ sourceDir: options.source });
+    action({ rootDir: roots[0], agents, names, apply: options.apply }, options.json);
+  } catch (error) {
+    if (options.json) console.log(JSON.stringify({ error: (error as Error).message }));
+    else console.error(chalk.red((error as Error).message));
+    process.exitCode = 1;
+  }
+}
+
+function handleSyncAdopt(options: AdoptionOptions, json: boolean): void {
+  const apply = options.apply === true;
+  const result = adoptUnmarkedHomes(options);
   if (json) {
     console.log(JSON.stringify({ dryRun: !apply, ...result }, null, 2));
   } else {
@@ -390,8 +405,9 @@ function handleSyncAdopt(apply: boolean, json: boolean): void {
   }
 }
 
-function handleSyncPrune(apply: boolean, json: boolean): void {
-  const result = pruneStrayHomes({ apply });
+function handleSyncPrune(options: AdoptionOptions, json: boolean): void {
+  const apply = options.apply === true;
+  const result = pruneStrayHomes(options);
   if (json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
