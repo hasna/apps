@@ -4,12 +4,17 @@ import { Command } from "commander";
 import chalk from "chalk";
 import { homedir } from "node:os";
 // NOTE: the legacy SQLite migration helpers are NOT imported at module scope.
-// This CLI is remote-only in api mode (HASNA_CALENDAR_API_URL configured):
-// nothing may open or create a local database then. `db/database.js` is loaded
-// lazily only by `db-migrate`, after that command has refused to run in api
-// mode — so `new Database(...)` is unreachable whenever the API URL is set.
+// This CLI is hosted-only — every store-backed command talks to the
+// authenticated /v1 authority that the @hasna/contracts chain resolves
+// (HASNA_CALENDAR_API_URL / the Keychain api-url item / the credentials file /
+// the fleet gateway, with a credential from any tier): nothing may open or
+// create a local database on that path. `db/database.js` is loaded lazily only
+// by `db-migrate`, after that command has refused to run on any machine with
+// hosted intent — so `new Database(...)` is unreachable whenever a credential
+// or authority resolves.
 import { getStore } from "../store/index.js";
 import { resolveClientTransport } from "../store/http-storage.js";
+import { calendarHasHostedEnvIntent, CALENDAR_DB_MIGRATE_COMMAND } from "../store/local-opt-in.js";
 import type { CalendarVisibility, EventStatus, EventBusyType, AttendeeStatus, OrgRole } from "../types/index.js";
 
 const packageJson = await Bun.file(new URL("../../package.json", import.meta.url)).json() as { version: string };
@@ -455,14 +460,15 @@ calendarCommand("status")
       version: packageJson.version,
     };
     let text = `calendar v${packageJson.version}`;
-    // Classify BEFORE any request: only a box with no resolvable API URL + key
-    // (the same check resolveStorageClient uses) reports "unconfigured". A
-    // configured box whose API call fails (401, 5xx, network down) is a
-    // transport error, never a config status — relabeling it "unconfigured"
-    // would hide the very drift this command exists to expose (hasna/apps#1602).
+    // Classify BEFORE any request: only a box where the @hasna/contracts chain
+    // resolves no credential and no authority (the same check
+    // resolveStorageClient fails on) reports "unconfigured". A configured box
+    // whose API call fails (401, 5xx, network down) is a transport error,
+    // never a config status — relabeling it "unconfigured" would hide the very
+    // drift this command exists to expose (hasna/apps#1602).
     if (resolveClientTransport("calendar", process.env).transport === "unconfigured") {
       report.transport = "unconfigured";
-      text = `calendar v${packageJson.version} — not configured (set HASNA_CALENDAR_API_URL plus a calendar API key)`;
+      text = `calendar v${packageJson.version} — not configured (no Calendar credential resolved from the macOS Keychain, ~/.hasna/calendar/config/credentials or HASNA_CALENDAR_API_KEY)`;
     } else {
       try {
         const store = getStore();
@@ -481,28 +487,43 @@ calendarCommand("status")
 
 // ── Local database (legacy, LOCAL-ONLY) ─────────────────────────────────────
 
-function isApiModeConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env["HASNA_CALENDAR_API_URL"] !== undefined || env["CALENDAR_API_URL"] !== undefined
-    || env["HASNA_CALENDAR_API_KEY"] !== undefined || env["CALENDAR_API_KEY"] !== undefined;
+/**
+ * Is this machine headed for the hosted authority?
+ *
+ * True when the @hasna/contracts chain resolves a credential OR authority
+ * (env, Keychain, credentials file), or when the environment DECLARES one
+ * (the URL-without-key half-configuration — a hosted intent the resolver
+ * refuses, and which must still refuse a local migration).
+ */
+function isHostedConfigured(): boolean {
+  if (calendarHasHostedEnvIntent(process.env)) return true;
+  return resolveClientTransport("calendar", process.env).transport === "http-api";
 }
 
 calendarCommand("db-migrate")
-  .description("One-time migration of legacy non-canonical calendar data into ~/.hasna/calendar (LOCAL-ONLY; refused in api mode)")
+  .description("One-time migration of legacy non-canonical calendar data into ~/.hasna/calendar (LOCAL-ONLY; refused when a hosted Calendar credential or authority resolves)")
   .option("--dry-run", "Report what would migrate without writing anything")
   .action(async (opts) => {
-    // Fleet doctrine (docs/fleet-local-storage.md): in api mode the hosted API
-    // is the only write path — a fleet CLI must not create, open, or migrate
-    // any local database. Refuse BEFORE the sqlite layer is even loaded, and
-    // emit no legacy-data JSON (it would leak local paths).
-    if (isApiModeConfigured()) {
+    // Fleet doctrine (docs/fleet-local-storage.md): wherever the hosted API is
+    // reachable — a credential or authority from ANY tier of the shared chain
+    // (env, macOS Keychain, ~/.hasna/calendar/config/credentials, the fleet
+    // gateway) — the hosted API is the only write path and a fleet CLI must
+    // not create, open, or migrate any local database. Refuse BEFORE the
+    // sqlite layer is even loaded, and emit no legacy-data JSON (it would leak
+    // local paths).
+    if (isHostedConfigured()) {
       fail(
-        "calendar db-migrate is LOCAL-ONLY and refused in api mode: HASNA_CALENDAR_API_URL "
-          + "is configured, so the hosted API is the only write path and no local database "
-          + "may be created or migrated. Unset the API URL/key to run the one-time legacy migration.",
+        `calendar ${CALENDAR_DB_MIGRATE_COMMAND} is LOCAL-ONLY and refused whenever a hosted Calendar credential or ` +
+          "authority resolves (HASNA_CALENDAR_API_URL, the macOS Keychain item hasna.credentials.calendar.api-key / " +
+          "its api-url item, or ~/.hasna/calendar/config/credentials): the hosted API is the only write path and no " +
+          "local database may be created or migrated. Run it on a machine with no Calendar credential configured.",
       );
     }
+    console.error(
+      "calendar: LOCAL mode — no hosted Calendar credential or authority resolved; migrating legacy data into the on-box store.",
+    );
     // Loaded only here, only in local mode: keeps `bun:sqlite` out of the
-    // api-mode CLI bundle and makes the local tier unreachable in api mode.
+    // hosted CLI bundle and makes the local tier unreachable in hosted runs.
     const { migrateLegacyData, scanLegacyData } = await import("../db/database.js");
     const scan = scanLegacyData();
     if (opts.dryRun) {

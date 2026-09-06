@@ -19,6 +19,8 @@ describe("calendar client transport resolver (env-selection contract)", () => {
     expect(r.baseUrl).toBe("https://calendar.example.test/v1");
     expect(r.apiKeyPresent).toBe(true);
     expect(r.apiUrlSource).toBe("HASNA_CALENDAR_API_URL");
+    expect(r.apiKeySource).toBe("HASNA_CALENDAR_API_KEY");
+    expect(r.apiKeyTier).toBe("env");
     expect(r.misconfigured).toBe(false);
   });
 
@@ -37,14 +39,17 @@ describe("calendar client transport resolver (env-selection contract)", () => {
     expect(r.misconfigured).toBe(true);
     expect(r.warning).toContain("HASNA_CALENDAR_API_KEY");
     expect(() => resolveStorageClient("calendar", { HASNA_CALENDAR_API_URL: "https://calendar.example.test" })).toThrow();
+    expect(() => resolveStorageClient("calendar", { HASNA_CALENDAR_API_URL: "https://calendar.example.test" })).toThrow(/HASNA_CALENDAR_API_KEY is required/);
   });
 
-  test("API key WITHOUT URL is misconfigured and resolveStorageClient throws (no default host)", () => {
+  test("API key WITHOUT URL resolves the fleet gateway (a key alone is complete)", () => {
     const r = resolveClientTransport("calendar", { HASNA_CALENDAR_API_KEY: "k" });
-    expect(r.transport).toBe("unconfigured");
-    expect(r.misconfigured).toBe(true);
-    expect(r.warning).toContain("HASNA_CALENDAR_API_URL");
-    expect(() => resolveStorageClient("calendar", { HASNA_CALENDAR_API_KEY: "k" })).toThrow();
+    expect(r.transport).toBe("http-api");
+    expect(r.baseUrl).toBe("https://api.hasna.com/calendar/v1");
+    expect(r.apiUrlSource).toBe("default");
+    expect(r.misconfigured).toBe(false);
+    const resolved = resolveStorageClient("calendar", { HASNA_CALENDAR_API_KEY: "k" });
+    expect(resolved.client.baseUrl).toBe("https://api.hasna.com/calendar/v1");
   });
 
   test("an invalid API URL is misconfigured and resolveStorageClient throws", () => {
@@ -63,7 +68,7 @@ describe("calendar client transport resolver (env-selection contract)", () => {
   });
 
   test("resolveStorageClient refuses absent configuration", () => {
-    expect(() => resolveStorageClient("calendar", {})).toThrow();
+    expect(() => resolveStorageClient("calendar", {})).toThrow(/HASNA_CALENDAR_API_URL is required/);
   });
 
   test("resolveStorageClient returns a ready client when the pair is set", () => {
