@@ -12,9 +12,10 @@
  * item, ~/.hasna/knowledge/config/credentials, HASNA_KNOWLEDGE_API_KEY, or a
  * deliberate override/pointer) selects the HTTP transport, against
  * HASNA_KNOWLEDGE_API_URL or the fleet gateway. The on-box transport applies
- * when nothing resolves anywhere, or under an explicit `--store` path
- * override. A configured authority whose credential does not resolve fails
- * loudly instead of dropping here (see client-transport.ts).
+ * only under the explicit `HASNA_KNOWLEDGE_LOCAL=1` opt-in (which says "local"
+ * on stderr) or an explicit `--store` path override. With no credential and no
+ * opt-in the invocation FAILS CLOSED instead of dropping here (see
+ * client-transport.ts) — no sqlite, no local-fallback event.
  *
  * EVERY knowledge-item CLI command routes through this Store. No item command
  * touches the JSON file or the HTTP client directly — that is the split-brain
@@ -466,7 +467,10 @@ export interface ResolveItemStoreOptions {
 
 /**
  * Resolve the single item Store for this invocation. Returns the ApiItemStore
- * when the canonical API URL and key are present, otherwise the LocalItemStore. An
+ * when the shared chain resolves a credential, otherwise the LocalItemStore —
+ * which is reachable only because the caller already opted in (explicit
+ * `HASNA_KNOWLEDGE_LOCAL=1` or an explicit `--store` path override); without
+ * either, `resolveKnowledgeHttpStore` throws and this fails closed. An
  * explicit `--store` override always yields the local transport so the flip
  * stays fully reversible.
  */

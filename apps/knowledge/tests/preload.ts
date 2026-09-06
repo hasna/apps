@@ -6,7 +6,7 @@ import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_APP_SLUG,
-  RETIRED_KNOWLEDGE_LOCAL_ENV,
+  KNOWLEDGE_LOCAL_OPT_IN_ENV,
   RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS,
 } from '../src/client-transport';
 import {
@@ -38,18 +38,22 @@ import {
  *     a real `hasna.credentials.knowledge.api-key` item therefore measures the
  *     same thing CI does.
  *
- * With every tier closed the transport resolves to the on-box store — the
- * package's local mode — so no opt-in variable is set or needed. Tests that
- * exercise routing pass an explicit env object (which never reaches the
- * Keychain) or set and restore process.env inside their own lifecycle. The
- * outbound network guard remains the primary safety control; this preload
- * removes machine-dependent suite behavior rather than substituting for it.
+ * Local mode is opt-in ONLY (`HASNA_KNOWLEDGE_LOCAL=1`), so the suite opts in
+ * explicitly here: with every tier closed and nothing configured, the package
+ * FAILS CLOSED — the suite would otherwise stop measuring the on-box store it
+ * exists to test. The opt-in variable is deliberately NOT scrubbed from child
+ * processes: subprocess tests inherit it and run local by default, and a test
+ * that exercises fail-closed or hosted routing blanks or overrides it in its
+ * own env. Tests that exercise routing pass an explicit env object (which
+ * never reaches the Keychain) or set and restore process.env inside their own
+ * lifecycle. The outbound network guard remains the primary safety control;
+ * this preload removes machine-dependent suite behavior rather than
+ * substituting for it.
  */
 export const KNOWLEDGE_TEST_ROUTE_ENV_KEYS = [
   ...KNOWLEDGE_API_URL_ENV_KEYS,
   ...KNOWLEDGE_API_KEY_ENV_KEYS,
   ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS,
-  RETIRED_KNOWLEDGE_LOCAL_ENV,
   credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG),
   credentialPointerEnvKey(KNOWLEDGE_APP_SLUG),
   CREDENTIAL_PROFILE_ENV_KEY,
@@ -76,6 +80,11 @@ const savedKnowledgeRouteEnv = new Map<string, string | undefined>(
 
 for (const key of KNOWLEDGE_TEST_ROUTE_ENV_KEYS) delete process.env[key];
 
+// The explicit local-mode opt-in: with no credential anywhere the package
+// fails closed, so the on-box store the suite measures is reachable only by
+// opting in. Kept AFTER the scrub above so it survives every subprocess.
+process.env[KNOWLEDGE_LOCAL_OPT_IN_ENV] = '1';
+
 /**
  * The canonical project-scoped knowledge home resolves under the HOME root
  * (~/.hasna/knowledge/projects/<key>). Point the whole suite at a throwaway
@@ -94,6 +103,7 @@ afterAll(() => {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
+  delete process.env[KNOWLEDGE_LOCAL_OPT_IN_ENV];
   if (savedHome === undefined) delete process.env.HOME;
   else process.env.HOME = savedHome;
   if (savedUserProfile === undefined) delete process.env.USERPROFILE;

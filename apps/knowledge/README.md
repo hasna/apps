@@ -764,14 +764,13 @@ of the shared `@hasna/contracts` chain selects HTTP, against
 `https://api.hasna.com/knowledge` (the client appends `/v1`). See
 [Credential resolution](#credential-resolution) for the full ladder.
 
-* **Configured authority, no resolvable credential → the CLI FAILS CLOSED**
-  (non-zero, naming every place it looked). It never drops onto the on-box
-  store: serving stale local rows at exit 0 while authentication is broken is
-  the incident this closes.
-* **Nothing configured anywhere → the on-box store**, and one line on stderr
-  saying so. Local is a real mode for this package; it is never a silent one.
-* `HASNA_KNOWLEDGE_LOCAL` is retired. It is accepted and ignored for one
-  release, and reported as ignored, then deleted.
+* **No resolvable credential → the CLI FAILS CLOSED** (non-zero, naming every
+  place it looked). It never drops onto the on-box store: serving stale local
+  rows at exit 0 while a credential is missing is the incident this closes.
+* **The on-box store is opt-in only.** `HASNA_KNOWLEDGE_LOCAL=1` (or an
+  explicit `--store <path>`) selects local mode, and local mode prints
+  `local mode` once on stderr — it is never a silent default. An environment
+  that configures an authority or credential outranks the opt-in.
 
 The command opens no store, reads no config file and makes no request, so it
 answers correctly on a machine with no config and no network. It prints source
@@ -1001,13 +1000,17 @@ reason and the failing key's kid. A negative verdict **exits non-zero** and
 carries `ok: false`, in `--json` too — `knowledge auth whoami --json | jq -e .ok`
 is a usable health gate (issue #1587).
 
-The OSS package stays on-box while no credential resolves; any resolved
-credential selects the HTTP client boundary (see
-[Credential resolution](#credential-resolution)). `auth login --api-key` writes
-`~/.hasna/knowledge/auth.json`, which is now a LEGACY last resort consulted only
-when the shared chain finds nothing — put new credentials in the Keychain item
-or `~/.hasna/knowledge/config/credentials` instead; `auth.json` is removed in a
-following release. `remote contracts` prints the typed
+The OSS package stays on-box only under the explicit `HASNA_KNOWLEDGE_LOCAL=1`
+opt-in (which prints `local mode` on stderr) or an explicit `--store <path>`;
+with no credential anywhere the client FAILS CLOSED instead of dropping onto
+the local store (see [Credential resolution](#credential-resolution)).
+`auth login --api-key` writes the canonical credentials file
+`~/.hasna/knowledge/config/credentials` (0600) — the shared chain's DISK tier —
+so `auth whoami` right after a login probes through the file the resolver
+reads; `auth logout` removes it. There is no other local credential store: the
+legacy `~/.hasna/knowledge/auth.json` is never consulted, and `email`/`org`
+metadata is not persisted (the canonical file format has no fields for it).
+`remote contracts` prints the typed
 registry/search/ask/build/sync/status/logs and artifact API contract that a
 future SaaS wrapper can implement.
 
@@ -1043,9 +1046,27 @@ A URL never needs configuring; a credential from any tier is enough to reach the
 fleet. The unprefixed `KNOWLEDGE_API_URL` / `KNOWLEDGE_API_KEY` spellings are
 accepted as a silent alias fallback below the canonical names.
 
+**Fail closed.** With no credential resolvable from any tier — and no explicit
+local opt-in — every client surface exits non-zero and touches nothing on-box:
+no SQLite, no local-fallback event. The on-box store is reachable ONLY by the
+explicit opt-in:
+
+```bash
+HASNA_KNOWLEDGE_LOCAL=1 knowledge transport --json   # on-box store; stderr says "local mode"
+knowledge list --store ~/some/db.json                 # explicit store path also pins local
+```
+
+The opt-in is answered BEFORE the shared resolver runs (so no Keychain item and
+no credentials file is read for it), and an environment that configures an
+authority or credential outranks it: a run with `HASNA_KNOWLEDGE_API_KEY` set
+goes hosted even if a stale `HASNA_KNOWLEDGE_LOCAL` is lying around. A
+half-configured run (authority set, credential missing) still fails closed.
+
 Never consulted, and never restored: `~/.hasna/fleet-env/`, `~/.hasna/cloud/`,
-`~/.config/hasna/`, `$XDG_CONFIG_HOME`, and any `*-cloud.env` file. There is no
-`*_MODE` or `*_STORAGE_MODE` switch: routing is decided by what resolves.
+`~/.config/hasna/`, `$XDG_CONFIG_HOME`, and any `*-cloud.env` file there. There
+is no `*_MODE` or `*_STORAGE_MODE` switch — a stale selector VARIABLE is
+refused loudly, and the retired `~/.hasna/knowledge/auth.json` file is never
+read as a credential source.
 
 A credential file is:
 

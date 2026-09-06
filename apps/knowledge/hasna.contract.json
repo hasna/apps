@@ -4,7 +4,7 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "1.0.2",
-  "description": "Agent-friendly knowledge store. CLI + MCP + HTTP API (knowledge-serve) + generated SDK. Clients resolve their credential through the @hasna/contracts client seam (Keychain, ~/.hasna/knowledge/config/credentials, HASNA_KNOWLEDGE_API_KEY) and reach HASNA_KNOWLEDGE_API_URL or the fleet gateway; with nothing configured they use the on-box SQLite store. knowledge-serve reads PostgreSQL selected by HASNA_KNOWLEDGE_DATABASE_URL.",
+  "description": "Agent-friendly knowledge store. CLI + MCP + HTTP API (knowledge-serve) + generated SDK. Clients resolve their credential through the @hasna/contracts client seam (Keychain, ~/.hasna/knowledge/config/credentials, HASNA_KNOWLEDGE_API_KEY) and reach HASNA_KNOWLEDGE_API_URL or the fleet gateway; with no credential anywhere the client FAILS CLOSED (non-zero, no SQLite, no local-fallback event) unless the explicit HASNA_KNOWLEDGE_LOCAL=1 opt-in (or an explicit --store argument) selects the on-box store, which prints \"local\" on stderr. knowledge-serve reads PostgreSQL selected by HASNA_KNOWLEDGE_DATABASE_URL.",
   "bins": [
     "knowledge",
     "knowledge-mcp",
@@ -93,7 +93,8 @@
     },
     "client": {
       "apiUrlEnv": "HASNA_KNOWLEDGE_API_URL",
-      "apiKeyEnv": "HASNA_KNOWLEDGE_API_KEY"
+      "apiKeyEnv": "HASNA_KNOWLEDGE_API_KEY",
+      "localOptInEnv": "HASNA_KNOWLEDGE_LOCAL"
     },
     "release": {
       "artifactScan": {

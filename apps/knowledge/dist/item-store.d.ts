@@ -127,7 +127,10 @@ export interface ResolveItemStoreOptions {
 }
 /**
  * Resolve the single item Store for this invocation. Returns the ApiItemStore
- * when the canonical API URL and key are present, otherwise the LocalItemStore. An
+ * when the shared chain resolves a credential, otherwise the LocalItemStore —
+ * which is reachable only because the caller already opted in (explicit
+ * `HASNA_KNOWLEDGE_LOCAL=1` or an explicit `--store` path override); without
+ * either, `resolveKnowledgeHttpStore` throws and this fails closed. An
  * explicit `--store` override always yields the local transport so the flip
  * stays fully reversible.
  */
