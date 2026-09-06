@@ -799,3 +799,14 @@ same name operations for an explicitly supplied interactive session. Servers
 retain the final permission checks; ordinary API keys may be refused. MCP tools
 `update_account_profile` and `update_workspace_name` accept a name, email and
 fresh verification code, and return only the safe updated projection.
+
+## Admin user-list authority
+
+The `./admin-contract` user-list response retains a global identity whose default
+workspace membership is absent or revoked. Its required `role` is `null` in that
+case, and its `organizationId` remains the default workspace pointer. Null grants
+no workspace authority. Consumers must handle it explicitly; an organization
+filter lists active members of that workspace. Role assignment still requires a
+concrete role and targets the default membership; a missing default membership
+does not select a different workspace automatically. Active organization rosters
+and role-mutation responses continue to require non-null roles.

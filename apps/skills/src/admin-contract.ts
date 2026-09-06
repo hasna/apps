@@ -253,7 +253,10 @@ export const SkillsAdminSuspendOrganizationResponseSchema = z.object({
 }).passthrough();
 
 export const SkillsAdminListUsersResponseSchema = z.object({
-  users: z.array(SkillsAdminUserSchema),
+  // Global identities remain visible when their default workspace membership
+  // is absent/revoked. Null grants no role; active organization rosters and
+  // role mutations keep their nonnullable contracts.
+  users: z.array(SkillsAdminUserSchema.extend({ role: SkillsAdminUserSchema.shape.role.nullable() })),
   limit: positiveInt,
   offset: nonNegativeInt,
 }).passthrough();
