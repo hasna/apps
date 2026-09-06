@@ -19,11 +19,10 @@
   as the bearer credential; the URL always comes from the resolver, defaulting to
   the hosted default endpoint once a credential resolves.
 
-  **Deleted with the own chain**: the deployment-mode word
-  (`EMAILS_MODE` / `HASNA_EMAILS_MODE`) and all `*_STORAGE_MODE` switches, the
-  retired-mode refusal guards, and the `EMAILS_CLIENT_ENV_SECRET` vault-pointer
-  delivery of the URL and API key (the pointer now only persists the app's own
-  session/identity tokens). Hosted runs with no credential FAIL CLOSED — no
+  **Deleted with the own chain**: the deployment-mode variable and its
+  prefixed alias, all storage-mode switches, the retired-mode refusal guards,
+  and the `EMAILS_CLIENT_ENV_SECRET` vault-pointer delivery of the URL and API
+  key (the pointer now only persists the app's own session/identity tokens). Hosted runs with no credential FAIL CLOSED — no
   SQLite, no `local-fallback` event — and local SQLite is reached only by an
   explicit `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH`, announced as
   `emails: local mode` on stderr.
