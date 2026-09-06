@@ -115,8 +115,9 @@ async function handleTest(skillArg: string | undefined, options: { json: boolean
     results.push({ skill: name, envVars, systemDeps, npmDeps, ready: envVars.every((v) => v.set) && systemDeps.every((d) => d.available) && npmDeps.every((d) => d.installed) });
   }
 
-  if (options.json) { console.log(JSON.stringify(results, null, 2)); return; }
   const allReady = results.every((r) => r.ready);
+  if (!allReady) process.exitCode = 1;
+  if (options.json) { console.log(JSON.stringify(results, null, 2)); return; }
   console.log(chalk.bold(`\nSkills Test (${results.length} skill${results.length === 1 ? "" : "s"}):\n`));
   for (const result of results) {
     console.log(chalk.bold(`  ${result.skill}`) + chalk.dim(` [${result.ready ? chalk.green("ready") : chalk.red("not ready")}]`));
@@ -128,7 +129,6 @@ async function handleTest(skillArg: string | undefined, options: { json: boolean
   console.log();
   if (allReady) console.log(chalk.green(`All ${results.length} skill(s) ready`));
   else { const notReady = results.filter((r) => !r.ready).length; console.log(chalk.yellow(`${notReady} skill(s) not ready`)); }
-  if (!allReady) process.exitCode = 1;
 }
 
 function handleAuth(name: string | undefined, options: { set?: string; json: boolean }) {
