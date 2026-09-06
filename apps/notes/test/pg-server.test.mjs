@@ -78,11 +78,11 @@ const SIGNING = 'notes-test-signing-secret-with-32-bytes!';
 describe('notes server on PostgreSQL backend', () => {
   test('OTP login + verify issues a contracts api key minted with the signing secret', async () => {
     const { app } = await bootPgServer({ HASNA_NOTES_API_SIGNING_KEY: SIGNING });
-    const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'pg@example.test' } });
+    const login = await request(app, 'POST', '/v1/auth/login', { body: { email: 'pg@example.test' } });
     expect(login.status).toBe(200);
     const code = login.json.devCode;
     expect(typeof code).toBe('string');
-    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'pg@example.test', code, requestId: login.json.requestId, name: 'Pg User' } });
+    const verify = await request(app, 'POST', '/v1/auth/verify', { body: { email: 'pg@example.test', code, requestId: login.json.requestId, name: 'Pg User' } });
     expect(verify.status).toBe(200);
     expect(verify.json.apiKey).toStartWith('hasna_notes_');
     expect(verify.json.token).toBeTruthy();
@@ -94,8 +94,8 @@ describe('notes server on PostgreSQL backend', () => {
       { HASNA_API_SIGNING_KEY: SIGNING },
     ]) {
       const { app } = await bootPgServer(env);
-      const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'pg2@example.test' } });
-      const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'pg2@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Pg2' } });
+      const login = await request(app, 'POST', '/v1/auth/login', { body: { email: 'pg2@example.test' } });
+      const verify = await request(app, 'POST', '/v1/auth/verify', { body: { email: 'pg2@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Pg2' } });
       expect(verify.status).toBe(200);
       expect(verify.json.apiKey).toStartWith('hasna_notes_');
     }
@@ -107,54 +107,54 @@ describe('notes server on PostgreSQL backend', () => {
 
   test('contracts api key authenticates notes CRUD over the wire dialect', async () => {
     const { app } = await bootPgServer({ HASNA_NOTES_API_SIGNING_KEY: SIGNING });
-    const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'crud@example.test' } });
-    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'crud@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Crud' } });
+    const login = await request(app, 'POST', '/v1/auth/login', { body: { email: 'crud@example.test' } });
+    const verify = await request(app, 'POST', '/v1/auth/verify', { body: { email: 'crud@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Crud' } });
     const apiKey = verify.json.apiKey;
 
-    const created = await request(app, 'POST', '/api/v1/notes', { token: apiKey, body: { title: 'PG note', bodyMarkdown: 'hello postgres' } });
+    const created = await request(app, 'POST', '/v1/notes', { token: apiKey, body: { title: 'PG note', bodyMarkdown: 'hello postgres' } });
     expect(created.status).toBe(201);
     expect(created.json.title).toBe('PG note');
 
-    const listed = await request(app, 'GET', '/api/v1/notes', { token: apiKey });
+    const listed = await request(app, 'GET', '/v1/notes', { token: apiKey });
     expect(listed.status).toBe(200);
     expect(listed.json.data.length).toBe(1);
     expect(listed.json.data[0].bodyMarkdown).toBe('hello postgres');
 
-    const got = await request(app, 'GET', `/api/v1/notes/${created.json.id}`, { token: apiKey });
+    const got = await request(app, 'GET', `/v1/notes/${created.json.id}`, { token: apiKey });
     expect(got.status).toBe(200);
     expect(got.json.contentHash).toBeTruthy();
 
-    const updated = await request(app, 'PATCH', `/api/v1/notes/${created.json.id}`, { token: apiKey, body: { title: 'PG note v2' } });
+    const updated = await request(app, 'PATCH', `/v1/notes/${created.json.id}`, { token: apiKey, body: { title: 'PG note v2' } });
     expect(updated.status).toBe(200);
     expect(updated.json.revision).toBe(2);
 
-    const deleted = await request(app, 'DELETE', `/api/v1/notes/${created.json.id}`, { token: apiKey });
+    const deleted = await request(app, 'DELETE', `/v1/notes/${created.json.id}`, { token: apiKey });
     expect(deleted.status).toBe(200);
     expect(deleted.json.deleted).toBe(true);
   });
 
   test('legacy pn_ api keys are rejected on the postgres backend', async () => {
     const { app } = await bootPgServer({ HASNA_NOTES_API_SIGNING_KEY: SIGNING });
-    const res = await request(app, 'GET', '/api/v1/notes', { token: 'pn_test_0000000000000000000000000000' });
+    const res = await request(app, 'GET', '/v1/notes', { token: 'pn_test_0000000000000000000000000000' });
     expect(res.status).toBe(401);
   });
 
   test('session (JWT) auth works on postgres', async () => {
     const { app } = await bootPgServer({ HASNA_NOTES_API_SIGNING_KEY: SIGNING });
-    const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'session@example.test' } });
-    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'session@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Session' } });
+    const login = await request(app, 'POST', '/v1/auth/login', { body: { email: 'session@example.test' } });
+    const verify = await request(app, 'POST', '/v1/auth/verify', { body: { email: 'session@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Session' } });
     const token = verify.json.token;
-    const whoami = await request(app, 'GET', '/api/v1/auth/whoami', { token });
+    const whoami = await request(app, 'GET', '/v1/auth/whoami', { token });
     expect(whoami.status).toBe(200);
     expect(whoami.json.user.email).toBe('session@example.test');
   });
 
   test('api-keys listing works on postgres (contracts table shape)', async () => {
     const { app } = await bootPgServer({ HASNA_NOTES_API_SIGNING_KEY: SIGNING });
-    const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'keys@example.test' } });
-    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'keys@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Keys' } });
+    const login = await request(app, 'POST', '/v1/auth/login', { body: { email: 'keys@example.test' } });
+    const verify = await request(app, 'POST', '/v1/auth/verify', { body: { email: 'keys@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Keys' } });
     const apiKey = verify.json.apiKey;
-    const res = await request(app, 'GET', '/api/v1/api-keys', { token: apiKey });
+    const res = await request(app, 'GET', '/v1/api-keys', { token: apiKey });
     expect(res.status).toBe(200);
     expect(Array.isArray(res.json.data)).toBe(true);
     expect(res.json.data.length).toBeGreaterThanOrEqual(1);
@@ -171,9 +171,9 @@ describe('notes server on PostgreSQL backend', () => {
 
   test('sync endpoint is unavailable on postgres (sync_batches dropped)', async () => {
     const { app } = await bootPgServer({ HASNA_NOTES_API_SIGNING_KEY: SIGNING });
-    const login = await request(app, 'POST', '/api/v1/auth/login', { body: { email: 'sync@example.test' } });
-    const verify = await request(app, 'POST', '/api/v1/auth/verify', { body: { email: 'sync@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Sync' } });
-    const res = await request(app, 'POST', '/api/v1/sync', {
+    const login = await request(app, 'POST', '/v1/auth/login', { body: { email: 'sync@example.test' } });
+    const verify = await request(app, 'POST', '/v1/auth/verify', { body: { email: 'sync@example.test', code: login.json.devCode, requestId: login.json.requestId, name: 'Sync' } });
+    const res = await request(app, 'POST', '/v1/sync', {
       token: verify.json.apiKey,
       body: { items: [], cursor: null },
     });

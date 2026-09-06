@@ -105,7 +105,7 @@ describe('macOS app removal', () => {
 
   test('the docs directory documents only the headless package', async () => {
     const docs = (await readdir(join(repoRoot, 'docs'))).sort();
-    expect(docs).toEqual(['notes-vs-personalnotes.md', 'storage.md', 'sync.md']);
+    expect(docs).toEqual(['cli.md', 'notes-vs-personalnotes.md', 'storage.md', 'sync.md']);
   });
 
   test('no shipped code or build config references a removed app surface', async () => {

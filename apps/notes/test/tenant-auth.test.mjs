@@ -64,7 +64,7 @@ describe('PostgreSQL API-key tenant boundary', () => {
     a = await mint('tenant-a');
     b = await mint('tenant-b');
     absent = await mint(undefined);
-    const created = await request(a.token, 'POST', '/api/v1/notes', { title: 'Only tenant A' });
+    const created = await request(a.token, 'POST', '/v1/notes', { title: 'Only tenant A' });
     expect(created.status).toBe(201);
     noteId = created.json.id;
   });
@@ -74,17 +74,17 @@ describe('PostgreSQL API-key tenant boundary', () => {
   });
 
   const protectedRoutes = [
-    ['list', 'GET', () => '/api/v1/notes'],
-    ['get', 'GET', () => `/api/v1/notes/${noteId}`],
-    ['create', 'POST', () => '/api/v1/notes', { title: 'Must not be stored' }],
-    ['update', 'PATCH', () => `/api/v1/notes/${noteId}`, { title: 'Must not change' }],
-    ['delete', 'DELETE', () => `/api/v1/notes/${noteId}`],
-    ['export', 'POST', () => '/api/v1/export'],
-    ['whoami', 'GET', () => '/api/v1/auth/whoami'],
-    ['key-list', 'GET', () => '/api/v1/api-keys'],
-    ['key-mint', 'POST', () => '/api/v1/api-keys', {}],
-    ['logout', 'POST', () => '/api/v1/auth/logout'],
-    ['device-approve', 'POST', () => '/api/v1/auth/device/approve', {}],
+    ['list', 'GET', () => '/v1/notes'],
+    ['get', 'GET', () => `/v1/notes/${noteId}`],
+    ['create', 'POST', () => '/v1/notes', { title: 'Must not be stored' }],
+    ['update', 'PATCH', () => `/v1/notes/${noteId}`, { title: 'Must not change' }],
+    ['delete', 'DELETE', () => `/v1/notes/${noteId}`],
+    ['export', 'POST', () => '/v1/export'],
+    ['whoami', 'GET', () => '/v1/auth/whoami'],
+    ['key-list', 'GET', () => '/v1/api-keys'],
+    ['key-mint', 'POST', () => '/v1/api-keys', {}],
+    ['logout', 'POST', () => '/v1/auth/logout'],
+    ['device-approve', 'POST', () => '/v1/auth/device/approve', {}],
   ];
 
   for (const [name, method, path, body] of protectedRoutes) {
@@ -103,7 +103,7 @@ describe('PostgreSQL API-key tenant boundary', () => {
   test('malformed and tampered tenants remain unauthenticated before SQL', async () => {
     const tampered = signClaims({ ...a.claims, tid: 'tenant-b' }).split('.')[0] + '.' + a.token.split('.')[1];
     for (const token of [signClaims({ ...a.claims, tid: null }), signClaims({ ...a.claims, tid: 'bad/tenant' }), tampered]) {
-      const res = await request(token, 'GET', '/api/v1/notes');
+      const res = await request(token, 'GET', '/v1/notes');
       expect(res.status).toBe(401);
       expect(res.json.error.code).toBe('unauthorized');
       expect(calls).toEqual([]);
@@ -117,7 +117,7 @@ describe('PostgreSQL API-key tenant boundary', () => {
     const expired = await mint('tenant-a');
     await pg.query("UPDATE api_keys SET expires_at = NOW() - INTERVAL '1 day' WHERE kid = $1", [expired.kid]);
     for (const key of [unknown, revoked, expired]) {
-      const res = await request(key.token, 'GET', '/api/v1/notes');
+      const res = await request(key.token, 'GET', '/v1/notes');
       expect(res.status).toBe(401);
       expect(res.json.error.code).toBe('unauthorized');
       expect(calls.length).toBe(1);
@@ -127,37 +127,37 @@ describe('PostgreSQL API-key tenant boundary', () => {
   });
 
   test('valid A/B keys retain separate CRUD, export, identity, and key-mint scope', async () => {
-    const created = await request(b.token, 'POST', '/api/v1/notes', { title: 'Only tenant B' });
+    const created = await request(b.token, 'POST', '/v1/notes', { title: 'Only tenant B' });
     expect(created.status).toBe(201);
     const bId = created.json.id;
     for (const method of ['GET', 'PATCH', 'DELETE']) {
-      const res = await request(b.token, method, `/api/v1/notes/${noteId}`, method === 'PATCH' ? { title: 'Wrong tenant' } : undefined);
+      const res = await request(b.token, method, `/v1/notes/${noteId}`, method === 'PATCH' ? { title: 'Wrong tenant' } : undefined);
       expect(res.status).toBe(404);
       const domain = calls.filter(({ sql }) => /\bnotes\b/.test(sql));
       expect(domain.length).toBe(1);
       expect(domain[0].params).toEqual(['tenant-b', noteId]);
     }
     for (const [key, id, tid] of [[a, noteId, 'tenant-a'], [b, bId, 'tenant-b']]) {
-      const listed = await request(key.token, 'GET', '/api/v1/notes');
+      const listed = await request(key.token, 'GET', '/v1/notes');
       expect(listed.status).toBe(200);
       expect(listed.json.data.map(note => note.id)).toEqual([id]);
-      const exported = await request(key.token, 'POST', '/api/v1/export');
+      const exported = await request(key.token, 'POST', '/v1/export');
       expect(exported.status).toBe(200);
       expect(exported.json.notes.map(note => note.id)).toEqual([id]);
-      const whoami = await request(key.token, 'GET', '/api/v1/auth/whoami');
+      const whoami = await request(key.token, 'GET', '/v1/auth/whoami');
       expect(whoami.status).toBe(200);
       expect(whoami.json.tenant.id).toBe(tid);
-      const minted = await request(key.token, 'POST', '/api/v1/api-keys', { tenantId: 'ignored-foreign-tenant' });
+      const minted = await request(key.token, 'POST', '/v1/api-keys', { tenantId: 'ignored-foreign-tenant' });
       expect(minted.status).toBe(201);
       const row = await store.findByKid(minted.json.api_key.id);
       expect(row.tid).toBe(tid);
       const lastUsed = (await pg.query('SELECT last_used_at FROM api_keys WHERE kid = $1', [key.kid])).rows[0];
       expect(lastUsed.last_used_at === null).toBe(false);
     }
-    const updated = await request(b.token, 'PATCH', `/api/v1/notes/${bId}`, { title: 'B updated' });
+    const updated = await request(b.token, 'PATCH', `/v1/notes/${bId}`, { title: 'B updated' });
     expect(updated.status).toBe(200);
     expect(updated.json.title).toBe('B updated');
-    expect((await request(b.token, 'DELETE', `/api/v1/notes/${bId}`)).status).toBe(200);
-    expect((await request(a.token, 'GET', `/api/v1/notes/${noteId}`)).json.title).toBe('Only tenant A');
+    expect((await request(b.token, 'DELETE', `/v1/notes/${bId}`)).status).toBe(200);
+    expect((await request(a.token, 'GET', `/v1/notes/${noteId}`)).json.title).toBe('Only tenant A');
   });
 });

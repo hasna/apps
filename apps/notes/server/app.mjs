@@ -69,24 +69,25 @@ function isLoopback(ip) {
 }
 
 // The personalnotes/v1 wire dialect, documented as OpenAPI (the future hosted
-// wrapper speaks this same dialect — documented, not renamed).
+// wrapper speaks this same dialect at the /v1 authority root — documented,
+// not renamed).
 const OPENAPI_DOC = {
   openapi: '3.1.0',
   info: {
     title: 'Hasna Notes API — personalnotes/v1 wire dialect',
     version: VERSION,
-    description: 'The self-hosted Hasna Notes server API. Clients authenticate with a Bearer api key (the key is issued by the server at first login).',
+    description: 'The self-hosted Hasna Notes server API at the /v1 authority root. Clients authenticate with a Bearer api key (the key is issued by the server at first login).',
   },
   paths: {
     '/health': { get: { summary: 'liveness probe', responses: { 200: { description: 'healthy' } } } },
     '/ready': { get: { summary: 'readiness probe incl. storage backend', responses: { 200: { description: 'ready' } } } },
     '/version': { get: { summary: 'server version', responses: { 200: { description: 'version' } } } },
-    '/api/v1': { get: { summary: 'dialect discovery', responses: { 200: { description: 'dialect metadata' } } } },
-    '/api/v1/auth/login': { post: { summary: 'request a one-time login code; the response carries the request nonce (requestId)', responses: { 200: { description: 'sent' } } } },
-    '/api/v1/auth/verify': { post: { summary: 'verify {email, code, requestId}; five wrong codes burn the request; first login provisions tenant + api key', responses: { 200: { description: 'session token and optional api key' } } } },
-    '/api/v1/notes': { get: { summary: 'list notes' }, post: { summary: 'create a note' } },
-    '/api/v1/notes/{id}': { get: { summary: 'get a note' }, patch: { summary: 'update a note' }, delete: { summary: 'soft-delete a note' } },
-    '/api/v1/export': { post: { summary: 'export notes' } },
+    '/v1': { get: { summary: 'dialect discovery', responses: { 200: { description: 'dialect metadata' } } } },
+    '/v1/auth/login': { post: { summary: 'request a one-time login code; the response carries the request nonce (requestId)', responses: { 200: { description: 'sent' } } } },
+    '/v1/auth/verify': { post: { summary: 'verify {email, code, requestId}; five wrong codes burn the request; first login provisions tenant + api key', responses: { 200: { description: 'session token and optional api key' } } } },
+    '/v1/notes': { get: { summary: 'list notes' }, post: { summary: 'create a note' } },
+    '/v1/notes/{id}': { get: { summary: 'get a note' }, patch: { summary: 'update a note' }, delete: { summary: 'soft-delete a note' } },
+    '/v1/export': { post: { summary: 'export notes' } },
   },
 };
 
@@ -154,7 +155,7 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
 
   const health = (c) => c.json({ status: 'healthy', service: SERVICE, version: VERSION });
   app.get('/health', health);
-  app.get('/api/v1/health', health); // optional alias allowed by §1
+  app.get('/v1/health', health); // optional alias allowed by §1
   // Contract endpoints: readiness and version are required by the service
   // contract for a supported API surface (see hasna.contract.json).
   // Readiness reports the selected storage backend — never the DSN.
@@ -163,13 +164,13 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
   const versionInfo = (c) => c.json({ version: VERSION, service: SERVICE });
   app.get('/version', versionInfo);
   const discovery = (c) => c.json({ version: VERSION, service: SERVICE, dialect: 'personalnotes/v1', open_source: '@hasna/notes' });
-  app.get('/api/v1', discovery);
-  app.get('/api/v1/', discovery);
+  app.get('/v1', discovery);
+  app.get('/v1/', discovery);
   app.get('/openapi.json', (c) => c.json(OPENAPI_DOC));
   app.get('/favicon.ico', (c) => c.body(null, 204));
   app.get('/device', (c) =>
     c.html(
-      `<!doctype html><html><head><meta charset="utf-8"><title>Hasna Notes Device Login</title></head><body><main><h1>Hasna Notes Device Login</h1><p>Sign in with <code>POST /api/v1/auth/login</code> + <code>/verify</code> (one-time login codes are never written to the server log), then approve your device code with <code>POST /api/v1/auth/device/approve {"userCode":"XXXX-XXXX"}</code> using the session token. Self-hosted tip: start the server with <code>--auto-approve</code> and device logins from this machine complete automatically. Self-hosters that need login codes on the server console must opt in explicitly: <code>HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1</code>.</p></main></body></html>`,
+      `<!doctype html><html><head><meta charset="utf-8"><title>Hasna Notes Device Login</title></head><body><main><h1>Hasna Notes Device Login</h1><p>Sign in with <code>POST /v1/auth/login</code> + <code>/verify</code> (one-time login codes are never written to the server log), then approve your device code with <code>POST /v1/auth/device/approve {"userCode":"XXXX-XXXX"}</code> using the session token. Self-hosted tip: start the server with <code>--auto-approve</code> and device logins from this machine complete automatically. Self-hosters that need login codes on the server console must opt in explicitly: <code>HASNA_NOTES_SERVER_AUTH_CONSOLE_CODES=1</code>.</p></main></body></html>`,
     ),
   );
 
@@ -234,7 +235,7 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
   const jsonBody = (c) => c.req.json().catch(() => ({}));
 
   // Auth routes are mirrored unversioned under /api/auth/* (dialect §1).
-  for (const prefix of ['/api/auth', '/api/v1/auth']) {
+  for (const prefix of ['/api/auth', '/v1/auth']) {
     app.post(`${prefix}/login`, async (c) => {
       rateLimit(c, 'otp', 5);
       const body = await jsonBody(c);
@@ -260,7 +261,7 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
         const user = await autoApproveDeviceAuth(db, id);
         cfg.log(`[${SERVICE}] auto-approved device login for ${user.email} (loopback + --auto-approve)`);
       } else {
-        cfg.log(`[${SERVICE}] device login requested — approve at ${result.verificationUri} or POST /api/v1/auth/device/approve with a signed-in session`);
+        cfg.log(`[${SERVICE}] device login requested — approve at ${result.verificationUri} or POST /v1/auth/device/approve with a signed-in session`);
       }
       return c.json(result, 201);
     });
@@ -274,14 +275,14 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     });
   }
 
-  // Everything else under /api/v1 requires a bearer credential.
-  app.use('/api/v1/*', async (c, next) => {
+  // Everything else under /v1 requires a bearer credential.
+  app.use('/v1/*', async (c, next) => {
     const path = c.req.path;
     if (
-      path === '/api/v1' || path === '/api/v1/' || path === '/api/v1/health' ||
-      path.startsWith('/api/v1/auth/login') || path.startsWith('/api/v1/auth/verify') ||
-      path.startsWith('/api/v1/auth/device/start') || path.startsWith('/api/v1/auth/device/token') ||
-      path.startsWith('/api/v1/auth/device/exchange')
+      path === '/v1' || path === '/v1/' || path === '/v1/health' ||
+      path.startsWith('/v1/auth/login') || path.startsWith('/v1/auth/verify') ||
+      path.startsWith('/v1/auth/device/start') || path.startsWith('/v1/auth/device/token') ||
+      path.startsWith('/v1/auth/device/exchange')
     ) {
       return next();
     }
@@ -303,7 +304,7 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     if (c.get('auth').via !== 'session' || c.get('actor').type !== 'user') throw new ApiError('forbidden', 'user session required', 403);
   };
 
-  app.get('/api/v1/auth/whoami', async (c) => {
+  app.get('/v1/auth/whoami', async (c) => {
     const actor = c.get('actor');
     const user = actor.type === 'user' ? await getUser(db, actor.id) : null;
     const tenant = await getTenant(db, c.get('tenantId'));
@@ -314,23 +315,23 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     });
   });
 
-  app.post('/api/v1/auth/logout', async (c) => {
+  app.post('/v1/auth/logout', async (c) => {
     await revokeSession(db, cfg, bearer(c.req.header('authorization')));
     return c.json({ ok: true });
   });
 
-  app.post('/api/v1/auth/device/approve', async (c) => {
+  app.post('/v1/auth/device/approve', async (c) => {
     requireUserSession(c);
     const body = await jsonBody(c);
     return c.json(await approveDeviceAuth(db, { userCode: body.userCode, userId: c.get('actor').id, tenantId: c.get('tenantId') }));
   });
 
-  app.get('/api/v1/api-keys', async (c) => {
+  app.get('/v1/api-keys', async (c) => {
     requireScope(c, 'admin');
     return c.json({ data: await listApiKeys(db, c.get('tenantId')) });
   });
 
-  app.post('/api/v1/api-keys', async (c) => {
+  app.post('/v1/api-keys', async (c) => {
     requireScope(c, 'admin');
     const body = await jsonBody(c);
     const created = await insertApiKey(db, {
@@ -342,7 +343,7 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     return c.json({ key: created.key, api_key: { id: created.id, name: created.name, prefix: created.prefix, scopes: created.scopes } }, 201);
   });
 
-  app.get('/api/v1/notes', async (c) => {
+  app.get('/v1/notes', async (c) => {
     requireScope(c, 'notes_read');
     const { data, nextCursor } = await listNotes(db, c.get('tenantId'), {
       limit: parseLimit(c.req.query('limit'), 50, 200),
@@ -352,29 +353,29 @@ export async function createApp({ db, config, testOnlySqlite = false }) {
     return c.json({ data, nextCursor });
   });
 
-  app.post('/api/v1/notes', async (c) => {
+  app.post('/v1/notes', async (c) => {
     requireScope(c, 'notes_write');
     rateLimit(c, 'note_write', 300);
     return c.json(await createNote(db, c.get('tenantId'), await jsonBody(c), c.get('actor')), 201);
   });
 
-  app.get('/api/v1/notes/:id', async (c) => {
+  app.get('/v1/notes/:id', async (c) => {
     requireScope(c, 'notes_read');
     return c.json(await getNote(db, c.get('tenantId'), c.req.param('id')));
   });
 
-  app.patch('/api/v1/notes/:id', async (c) => {
+  app.patch('/v1/notes/:id', async (c) => {
     requireScope(c, 'notes_write');
     rateLimit(c, 'note_write', 300);
     return c.json(await updateNote(db, c.get('tenantId'), c.req.param('id'), await jsonBody(c), c.get('actor')));
   });
 
-  app.delete('/api/v1/notes/:id', async (c) => {
+  app.delete('/v1/notes/:id', async (c) => {
     requireScope(c, 'notes_write');
     return c.json(await deleteNote(db, c.get('tenantId'), c.req.param('id'), c.get('actor')));
   });
 
-  app.post('/api/v1/export', async (c) => {
+  app.post('/v1/export', async (c) => {
     requireScope(c, 'notes_read');
     return c.json(await exportNotes(db, c.get('tenantId')));
   });

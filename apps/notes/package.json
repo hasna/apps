@@ -75,7 +75,7 @@
     "bun": ">=1.0"
   },
   "dependencies": {
-    "@hasna/contracts": "0.10.6",
+    "@hasna/contracts": "1.0.2",
     "@hasna/events": "0.1.16",
     "hono": "4.13.3",
     "pg": "^8.16.3"

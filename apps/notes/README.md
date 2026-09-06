@@ -11,25 +11,48 @@ never open a database directly.
 
 ## Canonical client contract
 
-The CLI, MCP server, and `@hasna/notes/sdk` all use the single resolver in
-`client/transport.mjs`. Every client invocation that accesses notes requires:
+The CLI, MCP server, and `@hasna/notes/sdk` all resolve their authority and
+credential through the single fleet resolver in `@hasna/contracts`
+(hasna/apps#1720), per request, fresh — a long-lived MCP server or SDK client
+picks up a key rotation without a restart. The `personalnotes/v1` wire dialect
+is spoken at the `/v1` authority root. There is no local SQLite/Markdown
+fallback and no default localhost endpoint.
 
-```sh
-export HASNA_NOTES_API_URL=https://notes.example.com
-export HASNA_NOTES_API_KEY='...'
-notes list --json
-```
+### Environment variables
 
-Both variables are required. The URL must be absolute HTTPS and cannot contain
-credentials, a query, or a fragment. Partial or missing configuration fails
-closed before any note data is read or written. There is no local
-SQLite/Markdown fallback and no default localhost endpoint.
-Authenticated requests reject every HTTP redirect instead of forwarding an API
-key/body or accepting method-rewritten 301/302/303 responses as success.
+| Variable | Role | Notes |
+|---|---|---|
+| `HASNA_NOTES_API_URL` | service authority | Optional; overrides the Keychain `api-url` item, the credentials file, and the default fleet gateway `https://api.hasna.com/notes`. Must be absolute HTTPS (exact loopback HTTP is allowed for local dev). |
+| `HASNA_NOTES_API_KEY` | API key | The bottom tier of the credential chain, read per call. Keychain and disk run first (see below). |
+| `HASNA_NOTES_API_KEY_OVERRIDE` | deliberate per-call key | Never auto-populated; outranks every other tier and never falls through. |
+| `HASNA_PROFILE` | identity selection | Selects `credentials-<profile>` beside the credentials file. |
+| `HASNA_NOTES_API_KEY_REF` | secrets-vault pointer | Names a vault ITEM KEY (`namespace/app/live/api_key`), resolved through the secrets SDK at request time; terminal on failure. |
+| `HASNA_HOME` / `HASNA_CONFIG_HOME` | layout overrides | Replace `~/.hasna` / the config root; blank or relative values are ignored. |
+| `HASNA_NOTES_DATABASE_URL` | **server-only** | A client process that contains it fails closed; client status and errors never print credentials. PostgreSQL migration scripts and `notes-serve` remain the only DSN consumers. |
 
-`HASNA_NOTES_DATABASE_URL` is server-only. A client process that contains it
-fails closed; client status and errors never print credentials. PostgreSQL
-migration scripts and `notes-serve` remain the only DSN consumers.
+### Credential and authority chain
+
+The CLI, MCP server, and `./sdk` use the same resolver; every request walks the
+chain again:
+
+1. keychain: macOS item `hasna.credentials.notes.api-key` (account
+   `HASNA_STATION`, else the short hostname, else `USER`);
+2. disk: `~/.hasna/notes/config/credentials` (owner-only `0600`, re-read on
+   every call);
+3. env: `HASNA_NOTES_API_KEY`.
+
+The authority follows the same ladder — `HASNA_NOTES_API_URL`, the Keychain
+`api-url` item, the credentials file — and defaults to the fleet gateway
+`https://api.hasna.com/notes` once a credential resolves, so a key alone is a
+complete configuration.
+
+Hosted with no credential FAILS CLOSED on every surface: non-zero exit, no
+SQLite, no local-fallback event, and the refusal names every tier it
+consulted. An explicit base URL without an explicit key is also refused — the
+ambient fleet credential is never attached to an arbitrary authority
+(hasna/apps#1794). Authenticated requests reject every HTTP redirect instead
+of forwarding an API key/body or accepting method-rewritten 301/302/303
+responses as success. A 401/403 response body is cancelled unread.
 
 Supported CLI operations are `list`, `get`, `create`, `update`, `delete`,
 `archive`, `restore`, label assignment, and Markdown helpers. Run `notes --help`
@@ -39,7 +62,7 @@ stdio. Destructive deletion is confirmation-gated.
 ```js
 import { NotesClient } from '@hasna/notes/sdk';
 
-const notes = new NotesClient();
+const notes = new NotesClient(); // resolves per request: Keychain → credentials file → env
 const page = await notes.list({ limit: 10 });
 ```
 
