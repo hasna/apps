@@ -89,17 +89,19 @@ test("Cline writes isolated full provider/model registries with environment-only
   try {
     for (const [protocol, client, nativeAuth, envName] of [
       ["anthropic-messages", "anthropic", "x-api-key", "ANTHROPIC_API_KEY"],
+      ["openai-responses", "openai", "bearer", "OPENAI_API_KEY"],
       ["openai-chat", "openai-compatible", "bearer", "OPENAI_API_KEY"],
     ] as const) {
       const state = join(input.stateDir, protocol);
       const prepared = await prepareHarnessLaunch({ ...input, stateDir: state, harness: "cline", protocol, authStyle: nativeAuth, version: "cline 3.0.61", models });
       const providers = JSON.parse(await readFile(prepared.configPaths[0], "utf8"));
       const catalog = JSON.parse(await readFile(prepared.configPaths[1], "utf8"));
-      const providerId = protocol === "anthropic-messages" ? "anthropic" : "openai-compatible";
+      const providerId = protocol === "anthropic-messages" ? "anthropic" : protocol === "openai-responses" ? "openai-native" : "openai-compatible";
       const settings = providers.providers[providerId].settings;
       expect(settings.protocol).toBe(protocol === "anthropic-messages" ? "anthropic" : protocol);
       expect(settings.client).toBe(client);
       expect(settings.baseUrl).toBe(input.baseUrl);
+      if (protocol === "openai-responses") expect(settings.routingProviderId).toBe("openai-native");
       expect(Object.keys(catalog.providers[providerId].models)).toEqual(models.map(model => model.id));
       expect(prepared.env[envName]).toBe(input.credential);
       expect(JSON.stringify(providers)).not.toContain(input.credential);
@@ -109,7 +111,11 @@ test("Cline writes isolated full provider/model registries with environment-only
       expect(prepared.args).toContain(input.model);
       expect(prepared.args).not.toContain("--data-dir");
     }
-    await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-responses", authStyle: "bearer", version: "cline 3.0.61" })).rejects.toThrow("operator Responses endpoints are unsupported");
+    const responses = await prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-responses", authStyle: "bearer", version: "cline 3.0.61" });
+    try {
+      const providers = JSON.parse(await readFile(responses.configPaths[0], "utf8"));
+      expect(providers.providers["openai-native"].settings.routingProviderId).toBe("openai-native");
+    } finally { await responses.cleanup?.(); }
     const mismatched = await prepareHarnessLaunch({ ...input, harness: "cline", protocol: "anthropic-messages", authStyle: "bearer", version: "cline 3.0.61" });
     try {
       const bridged = JSON.parse(await readFile(mismatched.configPaths[0], "utf8"));
@@ -118,6 +124,9 @@ test("Cline writes isolated full provider/model registries with environment-only
     await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.60" })).rejects.toThrow("3.0.61");
     await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.61", args: ["--model", "outside"] })).rejects.toThrow("reserved");
     await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.61", args: ["-P", "unselected"] })).rejects.toThrow("reserved");
+    for (const arg of ["-moutside", "-Poutside", "-ksecret", "-c/other", "--model=outside", "--provider=other", "--autoapprove", "-y", "--yolo", "-z", "--zen", "--id=old-session"]) {
+      await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.61", args: [arg] })).rejects.toThrow("reserved");
+    }
     const first = await prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.61", sessionDir: join(input.stateDir, "durable-session") });
     const second = await prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.61", sessionDir: join(input.stateDir, "durable-session") });
     expect(first.env.CLINE_SESSION_DATA_DIR).toBe(second.env.CLINE_SESSION_DATA_DIR);

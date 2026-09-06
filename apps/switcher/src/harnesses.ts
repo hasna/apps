@@ -265,11 +265,16 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
     grok:["--model","-m","--oauth","--leader","--leader-socket"],
     pi:["--model","--provider","--api-key","--models"],
     opencode2:["--model","-m","--server"],
-    cline:["--provider","-P","--model","-m","--data-dir","--config","--cwd","--auto-approve","--key","-k"],
+    cline:["--provider","-P","--model","-m","--data-dir","--config","--cwd","-c","--auto-approve","--autoapprove","-y","--yolo","-z","--zen","--key","-k","--id","--system","-s","--plan","-p","--json","--retries","--timeout","-t","--hooks-dir","--worktree","-i","--tui"],
   };
   for(let i=0;i<(input.args??[]).length;i++){
     const arg=input.args![i],flag=arg.split("=")[0];
-    if(reserved[input.harness].includes(flag)) throw new Error("Provider/model configuration arguments are reserved by the launch profile; update the profile instead.");
+    const clineAttached = input.harness === "cline" &&
+      ((/^-[Pmksct](?!$)/.test(arg)) || arg.startsWith("--provider=") || arg.startsWith("--model=") ||
+       arg.startsWith("--key=") || arg.startsWith("--cwd=") || arg.startsWith("--config=") ||
+       arg.startsWith("--data-dir=") || arg.startsWith("--system=") || arg.startsWith("--timeout=") ||
+       arg.startsWith("--retries="));
+    if(reserved[input.harness].includes(flag) || clineAttached) throw new Error("Provider/model and native lifecycle arguments are reserved by the launch profile; update the profile instead.");
     if(input.harness==="codex"&&(flag==="-c"||flag==="--config"||arg.startsWith("-c"))){
       const value=arg==="-c"||arg==="--config"?input.args![i+1]??"":arg.replace(/^(-c|--config=)/,"");
       if(/^(model|model_provider|model_providers|model_catalog_json)([.=]|$)/.test(value.trim())) throw new Error("Codex provider/model configuration must come from the launch profile.");

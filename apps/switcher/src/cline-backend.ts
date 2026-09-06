@@ -11,7 +11,9 @@ const ENV_BY_PROTOCOL = {
 } as const;
 const PROTOCOL = {
   "anthropic-messages": { protocol: "anthropic", client: "anthropic", providerId: "anthropic", authStyle: "x-api-key" },
-  "openai-responses": { protocol: "openai-responses", client: "openai", providerId: "openai", authStyle: "bearer" },
+  // The native Responses handler is exposed by this built-in provider ID;
+  // retain the explicit protocol/model metadata for operator endpoints.
+  "openai-responses": { protocol: "openai-responses", client: "openai", providerId: "openai-native", authStyle: "bearer" },
   "openai-chat": { protocol: "openai-chat", client: "openai-compatible", providerId: "openai-compatible", authStyle: "bearer" },
 } as const;
 
@@ -44,8 +46,6 @@ export async function prepareClineLaunch(input: HarnessLaunchInput): Promise<Pre
   const requestedProtocol = input.protocol;
   const selected = input.models.find(model => model.id === input.model);
   if (!selected) throw new Error("Selected model is missing from the launch catalog.");
-  if (input.protocol === "openai-responses")
-    throw new Error("Cline 3.0.61 routes OpenAI Responses through its hosted OpenAI provider; operator Responses endpoints are unsupported. Use the direct OpenAI Responses adapter.");
   if (input.models.some(model => !codingEligible(model))) throw new Error("Launch catalog contains a model explicitly ineligible for coding.");
   if (new Set(input.models.map(model => model.id.toLowerCase())).size !== input.models.length)
     throw new Error("Cline cannot safely select model IDs that differ only by letter case; update the provider catalog.");
@@ -81,7 +81,7 @@ export async function prepareClineLaunch(input: HarnessLaunchInput): Promise<Pre
           protocol: mapping.protocol,
           client: mapping.client,
           baseUrl,
-          ...(requestedProtocol === "openai-responses" ? { routingProviderId: "openai-compatible" } : {}),
+          ...(requestedProtocol === "openai-responses" ? { routingProviderId: "openai-native" } : {}),
           capabilities: ["streaming", "tools"],
         },
         updatedAt: new Date().toISOString(),
