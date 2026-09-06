@@ -276,7 +276,11 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
     }
   }
   const nativeAuth=input.protocol==="anthropic-messages"?"x-api-key":"bearer";
-  const adaptAuth=(input.harness==="opencode2"||input.harness==="pi")&&(input.authStyle??"bearer")!==nativeAuth;
+  // OMP's Anthropic client always adds Authorization on non-official
+  // endpoints, even when a custom x-api-key header is configured. Bridge that
+  // cell so the upstream receives exactly the selected auth style.
+  const adaptAuth=(input.harness==="opencode2"||input.harness==="pi")&&(input.authStyle??"bearer")!==nativeAuth
+    || (input.harness==="omp"&&input.protocol==="anthropic-messages"&&input.authStyle==="x-api-key");
   if((input.credential&&!adaptAuth)||input.harness==="grok") return prepareNativeLaunch(input);
   // No-auth endpoints must not receive a native login credential or even a
   // synthetic token. Authenticate only to this loopback hop, then strip auth.

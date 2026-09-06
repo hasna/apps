@@ -67,11 +67,14 @@ test("OMP writes an isolated provider-qualified catalog for all native APIs with
         const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
         const settings=JSON.parse(await readFile(prepared.configPaths[1],"utf8"));
         const provider:any=config.providers.switcher;
-        expect(provider.api).toBe(api);expect(provider.baseUrl).toBe(input.baseUrl);expect(provider.models.map((m:any)=>m.id)).toEqual(models.map(m=>m.id));
+        expect(provider.api).toBe(api);
+        if(protocol==="anthropic-messages") expect(provider.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
+        else expect(provider.baseUrl).toBe(input.baseUrl);
+        expect(provider.models.map((m:any)=>m.id)).toEqual(models.map(m=>m.id));
         expect(settings.enabledModels).toEqual(["switcher/**"]);expect(settings.modelRoles).toEqual({default:`switcher/${input.model}`,smol:`switcher/${input.model}`,slow:`switcher/${input.model}`,plan:`switcher/${input.model}`});
         expect(prepared.args.slice(0,6)).toEqual(["--model",`switcher/${input.model}`,"--models","switcher/**","--session-dir",join(input.stateDir,protocol,"sessions")]);
         expect(provider.apiKey ?? provider.headers?.["x-api-key"]).toBe("SWITCHER_HARNESS_API_KEY");
-        if(authStyle==="x-api-key") expect(provider.auth).toBe("none"); else expect(provider.authHeader).toBe(true);
+        expect(provider.authHeader).toBe(true);
         expect(JSON.stringify(config)).not.toContain(input.credential);expect(JSON.stringify(settings)).not.toContain(input.credential);
       } finally { await prepared.cleanup?.(); }
     }
