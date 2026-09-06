@@ -2,7 +2,9 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createServer, type AddressInfo, type Socket } from "node:net";
 import { useDefaultTestTimeout } from "../test-preload.js";
+import { buildCliFixture } from "./cli-build.fixture.js";
 
 useDefaultTestTimeout();
 const scratch = mkdtempSync(join(tmpdir(), "skills-safe-errors-"));
@@ -17,8 +19,7 @@ const guidance = "Subscription checkout is unavailable on the configured Skills 
 beforeAll(async () => {
   for (const [entrypoint, name] of [[resolve(import.meta.dir, "index.tsx"), "skills.js"],
     [resolve(import.meta.dir, "../mcp/index.ts"), "mcp.js"]]) {
-    const result = await Bun.build({ entrypoints: [entrypoint!], outdir: scratch, naming: name, target: "bun" });
-    expect(result.success).toBe(true);
+    await buildCliFixture(entrypoint!, join(scratch, name!));
   }
   writeFileSync(guard, `
     import { writeFileSync } from "node:fs";
@@ -43,28 +44,52 @@ async function fixture(action: (context: {
   const root = mkdtempSync(join(scratch, "consumer-"));
   const calls: string[] = [];
   let mode: Mode = "recognized";
-  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    calls.push(`${request.method} ${new URL(request.url).pathname}`);
-    if (request.method === "POST") expect(await request.json()).toEqual({});
-    if (mode === "success") return Response.json({ url: "https://checkout.example.test/session" });
-    const value = { code: mode === "unknown" ? canary : code, error: canary, message: canary, detail: canary,
-      url: `https://${canary}.example.test`, headers: { authorization: canary } };
-    const text = mode === "malformed" ? "{" + canary : JSON.stringify(value);
-    const body = mode === "stalled" ? new ReadableStream({ start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    } }) : mode === "oversized" ? text.padEnd(8 * 1024 + 1, " ") : text;
-    return new Response(body, { status: mode === "wrong-status" ? 502 : 503, statusText: canary,
-      headers: { "content-type": "application/json", "x-debug": canary } });
-  } });
+  const sockets = new Set<Socket>();
+  // Raw HTTP preserves a malicious reason phrase on the wire. Bun.serve
+  // canonicalizes statusText, so it cannot prove that this field is discarded.
+  const server = createServer(socket => {
+    sockets.add(socket); socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => {});
+    let bytes = Buffer.alloc(0);
+    let handled = false;
+    socket.on("data", chunk => {
+      if (handled) return;
+      bytes = Buffer.concat([bytes, typeof chunk === "string" ? Buffer.from(chunk) : chunk]);
+      const separator = bytes.indexOf("\r\n\r\n");
+      if (separator < 0) return;
+      const headers = bytes.subarray(0, separator).toString();
+      const length = Number(headers.match(/\r\ncontent-length:\s*(\d+)/i)?.[1] ?? 0);
+      if (bytes.byteLength < separator + 4 + length) return;
+      handled = true;
+      const [method, path] = headers.split("\r\n")[0]!.split(" ");
+      calls.push(`${method} ${path}`);
+      if (method === "POST") expect(JSON.parse(bytes.subarray(separator + 4).toString())).toEqual({});
+      const value = { code: mode === "unknown" ? canary : code, error: canary, message: canary, detail: canary,
+        url: `https://${canary}.example.test`, headers: { authorization: canary } };
+      const text = mode === "success" ? JSON.stringify({ url: "https://checkout.example.test/session" })
+        : mode === "malformed" ? "{" + canary : JSON.stringify(value);
+      const body = mode === "oversized" ? text.padEnd(8 * 1024 + 1, " ") : text;
+      const status = mode === "success" ? 200 : mode === "wrong-status" ? 502 : 503;
+      socket.write(`HTTP/1.1 ${status} ${canary}\r\nContent-Type: application/json\r\nX-Debug: ${canary}\r\n` +
+        `Content-Length: ${Buffer.byteLength(body) + (mode === "stalled" ? 1 : 0)}\r\nConnection: close\r\n\r\n${body}`);
+      if (mode !== "stalled") socket.end();
+    });
+  });
+  await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const env = { PATH: `${dirname(process.execPath)}:/usr/bin:/bin`, NO_COLOR: "1", TERM: "dumb",
     HASNA_HOME: join(root, "home"), HASNA_CONFIG_HOME: join(root, "config"), HASNA_SKILLS_DIR: join(root, "data"),
     HASNA_STATION: "safe-error-fixture-no-keychain", HASNA_PROFILE: "safe-error-fixture", SKILLS_TEST_MODE: "1",
-    HASNA_SKILLS_API_URL: server.url.origin, HASNA_SKILLS_API_KEY_OVERRIDE: "local-fixture-credential",
-    QA_ALLOWED_ORIGIN: server.url.origin, QA_GUARD_MARKER: join(root, "unexpected-action") };
+    HASNA_SKILLS_API_URL: origin, HASNA_SKILLS_API_KEY_OVERRIDE: "local-fixture-credential",
+    QA_ALLOWED_ORIGIN: origin, QA_GUARD_MARKER: join(root, "unexpected-action") };
   try {
     await action({ calls, root, env, setMode(value) { mode = value; } });
     expect(existsSync(env.QA_GUARD_MARKER)).toBe(false);
-  } finally { server.stop(true); rmSync(root, { recursive: true, force: true }); }
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 async function cli(args: string[], root: string, env: Record<string, string>) {

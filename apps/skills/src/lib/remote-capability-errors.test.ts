@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { RemoteCapabilityUnavailableError, RemoteRequestError, RemoteRouteUnsupportedError, RemoteSkillsClient } from "./remote-client.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 const originalFetch = globalThis.fetch;
 const code = "SUBSCRIPTION_CHECKOUT_UNAVAILABLE";
