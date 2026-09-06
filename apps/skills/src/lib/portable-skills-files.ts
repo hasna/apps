@@ -96,7 +96,28 @@ export function normalizePortableSkillName(name: string): string {
   return normalized;
 }
 
+/** New local identities use hyphens; legacy lookups and command names keep their grammar. */
+export function normalizeNewPortableSkillName(name: string): string {
+  const normalized = name.trim()
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1-$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!normalized) throw new Error(`Invalid skill name '${name}'. Include letters or numbers.`);
+  return normalized;
+}
+
 export function readPortableSkillManifest(skillPath: string, fallbackName = basename(skillPath)): PortableSkillManifest {
+  return readManifest(skillPath, fallbackName, normalizePortableSkillName);
+}
+
+/** Import needs the original spelling before the legacy reader discards case boundaries. */
+export function readPortableSkillManifestForImport(skillPath: string): PortableSkillManifest {
+  return readManifest(skillPath, basename(skillPath), normalizeNewPortableSkillName);
+}
+
+function readManifest(skillPath: string, fallbackName: string, normalizeName: (name: string) => string): PortableSkillManifest {
   const skillJsonPath = join(skillPath, "skill.json");
   const skillMdPath = join(skillPath, "SKILL.md");
   const pkgPath = join(skillPath, "package.json");
@@ -105,7 +126,7 @@ export function readPortableSkillManifest(skillPath: string, fallbackName = base
   const frontmatter = existsSync(skillMdPath) ? parseSkillFrontmatter(readFileSync(skillMdPath, "utf-8")) ?? undefined : undefined;
   const pkg = existsSync(pkgPath) ? readJsonObject(pkgPath) as PackageJson : undefined;
 
-  const name = normalizePortableSkillName(
+  const name = normalizeName(
     stringField(jsonManifest, "name")
       ?? frontmatter?.name
       ?? stringValue(pkg?.name)
@@ -362,8 +383,8 @@ function ensurePackageJson(skillPath: string, manifest: PortableSkillManifest): 
 /**
  * Instruction (prose) skills are consumed by agent renderers/MCP docs, not run
  * locally, so `port` must never fabricate executable stubs (package.json, bin,
- * src/index.ts, tsconfig.json, AGENTS.md). It keeps the copied SKILL.md verbatim
- * and writes a minimal skill.json declaring `kind: "instruction"`.
+ * src/index.ts, tsconfig.json, AGENTS.md). Apart from aligning declared names
+ * after an import rename, it preserves the copied prose and metadata.
  */
 export function ensureInstructionSkillFiles(skillPath: string, manifest: PortableSkillManifest): PortableSkillManifest {
   const next: PortableSkillManifest = {
@@ -378,13 +399,47 @@ export function ensureInstructionSkillFiles(skillPath: string, manifest: Portabl
     commands: [],
   };
 
-  // SKILL.md is the agent handoff artifact and is kept exactly as copied. Only
-  // synthesize one if the source somehow lacked it.
+  // Change only the copied declaration when import chooses a new identity.
+  // Do not re-render frontmatter: instruction metadata and prose belong to its author.
   if (!existsSync(join(skillPath, "SKILL.md"))) {
     writeFileSync(join(skillPath, "SKILL.md"), renderSkillMd(next));
+  } else {
+    const path = join(skillPath, "SKILL.md");
+    const content = readFileSync(path, "utf8");
+    const declaredName = parseSkillFrontmatter(content)?.name;
+    if (declaredName && declaredName !== next.name) {
+      writeFileSync(path, renameInstructionFrontmatter(content, next.name));
+    }
+  }
+  // Instruction packages are optional: keep existing command/bin declarations,
+  // and never fabricate a package solely to give an instruction a new name.
+  const packagePath = join(skillPath, "package.json");
+  if (existsSync(packagePath)) {
+    const pkg = readJsonObject(packagePath);
+    if (typeof pkg.name === "string" && pkg.name !== next.name) {
+      writeFileSync(packagePath, `${JSON.stringify({ ...pkg, name: next.name }, null, 2)}\n`);
+    }
   }
   writeSkillJsonWithHash(skillPath, next);
   return readPortableSkillManifest(skillPath, next.name);
+}
+
+function renameInstructionFrontmatter(content: string, name: string): string {
+  const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/);
+  const names = frontmatter?.[1]?.match(/^[ \t]*name[ \t]*:[^\r\n]*/gm) ?? [];
+  const declaration = names.length === 1 ? names[0]!.match(/^(name[ \t]*:[ \t]*)(.*?)([ \t]*)$/) : null;
+  const scalar = declaration?.[2] ?? "";
+  // The existing metadata reader supports simple scalars, not full YAML. Do
+  // not guess about duplicate/nested keys, comments, aliases or multiline values.
+  let simple = /^[a-zA-Z0-9_.@/ -]+$/.test(scalar);
+  if (scalar.startsWith('"')) {
+    try { simple = typeof JSON.parse(scalar) === "string"; } catch { simple = false; }
+  } else if (scalar.startsWith("'")) simple = /^'[^'\r\n]*'$/.test(scalar);
+  if (!frontmatter || !declaration || !simple) {
+    throw new Error("Cannot rename instruction SKILL.md: use one unambiguous top-level name scalar in frontmatter.");
+  }
+  const renamed = frontmatter[0].replace(/^name[ \t]*:[^\r\n]*/m, () => `${declaration[1]}${name}${declaration[3]}`);
+  return renamed + content.slice(frontmatter[0].length);
 }
 
 export function copySkillDirectory(source: string, destination: string): void {
