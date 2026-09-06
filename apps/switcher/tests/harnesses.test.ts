@@ -83,6 +83,39 @@ test("Pi bridges protocol/auth mismatches without leaking bridge credentials ups
     expect(upstreamRequests[2].authorization).toBeNull();expect(upstreamRequests[2].key).toBe(input.credential);
   } finally { await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true}); }
 });
+test("Cline writes isolated full provider/model registries with environment-only auth", async () => {
+  const input = await fixture();
+  const models = [...input.models, { ...input.models[0], id: "vendor/second", name: "Second" }];
+  try {
+    for (const [protocol, client, nativeAuth, envName] of [
+      ["anthropic-messages", "anthropic", "x-api-key", "ANTHROPIC_API_KEY"],
+      ["openai-responses", "openai", "bearer", "OPENAI_API_KEY"],
+      ["openai-chat", "openai-compatible", "bearer", "OPENAI_API_KEY"],
+    ] as const) {
+      const state = join(input.stateDir, protocol);
+      const prepared = await prepareHarnessLaunch({ ...input, stateDir: state, harness: "cline", protocol, authStyle: nativeAuth, version: "cline 3.0.61", models });
+      const providers = JSON.parse(await readFile(prepared.configPaths[0], "utf8"));
+      const catalog = JSON.parse(await readFile(prepared.configPaths[1], "utf8"));
+      const providerId = protocol === "anthropic-messages" ? "anthropic" : protocol === "openai-responses" ? "openai" : "openai-compatible";
+      const settings = providers.providers[providerId].settings;
+      expect(settings.protocol).toBe(protocol === "anthropic-messages" ? "anthropic" : protocol);
+      expect(settings.client).toBe(client);
+      expect(settings.baseUrl).toBe(input.baseUrl);
+      expect(Object.keys(catalog.providers[providerId].models)).toEqual(models.map(model => model.id));
+      expect(prepared.env[envName]).toBe(input.credential);
+      expect(JSON.stringify(providers)).not.toContain(input.credential);
+      expect(JSON.stringify(catalog)).not.toContain(input.credential);
+      expect(prepared.args).toContain("--auto-approve");
+      expect(prepared.args).toContain("false");
+      expect(prepared.args).toContain(input.model);
+    }
+    await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "anthropic-messages", authStyle: "bearer", version: "cline 3.0.61" })).rejects.toThrow("x-api-key");
+    await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.60" })).rejects.toThrow("3.0.61");
+    await expect(prepareHarnessLaunch({ ...input, harness: "cline", protocol: "openai-chat", version: "cline 3.0.61", args: ["--model", "outside"] })).rejects.toThrow("reserved");
+  } finally {
+    await rm(input.stateDir, { recursive: true, force: true });
+  }
+});
 test("Grok resumes with a fresh bridge and the selected profile model; unsafe interactive queued prompts fail",async()=>{
   const input=await fixture();
   const safe=[

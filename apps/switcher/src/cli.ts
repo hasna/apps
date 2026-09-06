@@ -33,7 +33,7 @@ const HELP = `switcher — launch a coding harness with a provider and its model
   switcher credentials list|check|remove [PRESET_OR_REFERENCE]
   switcher doctor
 
-HARNESS: claude, codex, grok, opencode2, pi
+HARNESS: claude, codex, grok, opencode2, pi, cline
 PROTOCOL: anthropic-messages, openai-responses, openai-chat
 Without remote API configuration, the CLI owns a local authenticated API and
 stores data in ~/.hasna/switcher (override HASNA_SWITCHER_HOME).
@@ -126,7 +126,7 @@ export async function main(args = process.argv.slice(2)) {
     catalogFormat: values["catalog-format"] as PresetOptions["catalogFormat"], catalogAccountId: values["catalog-account-id"], modelsPath: values["models-path"],
   });
   if (command === "doctor") {
-    const harnesses = await Promise.all((["claude","codex","grok","opencode2","pi"] as const).map(h => detectHarness(h)));
+    const harnesses = await Promise.all((["claude","codex","grok","opencode2","pi","cline"] as const).map(h => detectHarness(h)));
     let api: unknown;
     try { api = {mode: runtime.mode, reachable: true, health: await client.health(), ready: await client.ready()}; }
     catch { api = {mode: runtime.mode, reachable: false}; process.exitCode = 1; }

@@ -47,7 +47,8 @@
     "scan:artifact": "bun scripts/artifact-scan.ts",
     "prepack": "bun run verify && bun run scan:artifact",
     "test:native-opencode-resume": "bun scripts/test-native-resume.ts",
-    "test:native-grok-resume": "SWITCHER_TEST_NATIVE_HARNESS=grok bun scripts/test-native-resume.ts"
+    "test:native-grok-resume": "SWITCHER_TEST_NATIVE_HARNESS=grok bun scripts/test-native-resume.ts",
+    "test:native-cline": "bun scripts/test-native-cline.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

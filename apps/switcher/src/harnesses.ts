@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { compatible, endpoint, codingEligible } from "./domain";
 import { childEnvironment } from "./harness-environment";
 import { validateGrokResume } from "./grok-args";
+import { prepareClineLaunch } from "./cline-backend";
 import type { HarnessId, HarnessLaunchInput, PreparedLaunch } from "./harness-types";
 const execute = promisify(execFile);
 const KEY = "SWITCHER_HARNESS_API_KEY";
@@ -29,6 +30,7 @@ export function validateHarnessVersion(harness: HarnessId, version: string | und
   if(harness==="codex"&&!versionAtLeast(version,[0,153,0])) throw new Error("Codex >=0.153.0 is required by this catalog adapter.");
   if(harness==="grok"&&!versionAtLeast(version,[1,0,13])) throw new Error("Grok Build >=1.0.13 is required by this remote catalog adapter.");
   if(harness==="opencode2"&&!version?.includes("opencode2")&&!versionAtLeast(version,[2,0,0])) throw new Error("Use the OpenCode 2 executable, not legacy OpenCode.");
+  if(harness==="cline"&&!versionAtLeast(version,[3,0,61])) throw new Error("Cline >=3.0.61 is required by this native provider adapter.");
 }
 async function jsonFile(dir:string,name:string,value:unknown) {
   const path=join(dir,name);await writeFile(path,JSON.stringify(value,null,2)+"\n",{mode:0o600,flag:"wx"});return path;
@@ -232,6 +234,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     warnings.push("Pi scopes its picker and model cycling to this provider; its --list-models diagnostic still enumerates global model definitions.");
     return {executable,args:["--provider",providerId,"--model",input.model,"--models",`${providerId}/**`,...args],env,configPaths,warnings};
   }
+  if(input.harness==="cline") return prepareClineLaunch(input);
   // Session model references must identify the upstream provider, not the
   // allocated port of a temporary auth bridge which changes each launch.
   const providerID="switcher-"+createHash("sha256").update(endpoint(providerBaseUrl)+input.protocol).digest("hex").slice(0,12);
@@ -262,6 +265,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
     grok:["--model","-m","--oauth","--leader","--leader-socket"],
     pi:["--model","--provider","--api-key","--models"],
     opencode2:["--model","-m","--server"],
+    cline:["--provider","--model","-m","--data-dir","--config","--cwd","--auto-approve","--key","-k"],
   };
   for(let i=0;i<(input.args??[]).length;i++){
     const arg=input.args![i],flag=arg.split("=")[0];
@@ -278,7 +282,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
   // synthetic token. Authenticate only to this loopback hop, then strip auth.
   const bridge=grokBridge({...input,baseUrl:endpoint(input.baseUrl)});
   try{
-    const prepared=await prepareNativeLaunch({...input,baseUrl:bridge.baseUrl,credential:bridge.token,authStyle:input.harness==="opencode2"?nativeAuth:"bearer"},input.baseUrl);
+    const prepared=await prepareNativeLaunch({...input,baseUrl:bridge.baseUrl,credential:bridge.token,authStyle:(input.harness==="opencode2"||input.harness==="cline")?nativeAuth:"bearer"},input.baseUrl);
     return {...prepared,cleanup:async()=>{await prepared.cleanup?.();await bridge.cleanup();}};
   }catch(error){await bridge.cleanup();throw error;}
 }

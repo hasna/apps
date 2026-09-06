@@ -1630,7 +1630,8 @@
               "codex",
               "grok",
               "opencode2",
-              "pi"
+              "pi",
+              "cline"
             ]
           },
           "model": {
@@ -1671,7 +1672,8 @@
               "codex",
               "grok",
               "opencode2",
-              "pi"
+              "pi",
+              "cline"
             ]
           },
           "model": {
@@ -2131,7 +2133,8 @@
                   "codex",
                   "grok",
                   "opencode2",
-                  "pi"
+                  "pi",
+                  "cline"
                 ]
               },
               "model": {
@@ -2277,7 +2280,8 @@
               "codex",
               "grok",
               "opencode2",
-              "pi"
+              "pi",
+              "cline"
             ]
           },
           "model": {
@@ -2335,7 +2339,8 @@
               "codex",
               "grok",
               "opencode2",
-              "pi"
+              "pi",
+              "cline"
             ]
           },
           "model": {
