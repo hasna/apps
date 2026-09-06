@@ -2,6 +2,10 @@ import {test,expect} from "bun:test";
 import {discover} from "../src/catalog";
 import {parse,providerInputSchema,codingEligible} from "../src/domain";
 import {getProviderPreset,providerFromPreset,providerCredential} from "../src/presets";
+import {prepareHarnessLaunch} from "../src/harnesses";
+import {mkdir,mkdtemp,readFile,rm} from "node:fs/promises";
+import {homedir} from "node:os";
+import {join} from "node:path";
 
 test("material compatible provider presets expose only documented routes and credential aliases",()=>{
   const expected={
@@ -68,8 +72,32 @@ test("Fireworks discovery uses the account-scoped catalog, provider shape, and p
   try {
     const provider={...providerFromPreset("fireworks",{catalogAccountId:"acct",baseUrl:upstream.url.origin+"/inference/v1",catalogBaseUrl:upstream.url.origin+"/v1/accounts/acct",credentialEnv:"SWITCHER_PROVIDER_TEST"}),version:1,updatedAt:"now"};
     const result=await discover(provider,{SWITCHER_PROVIDER_TEST:"fixture"});
-    expect(result.models).toMatchObject([{id:"accounts/acct/models/first",name:"First",contextWindow:64000,inputModalities:["image"],supportedParameters:["tools"]},{id:"accounts/acct/models/second",name:"Second",contextWindow:32000}]);
+    expect(result.models).toMatchObject([{id:"accounts/acct/models/first",name:"First",contextWindow:64000,inputModalities:["text","image"],supportedParameters:["tools"]},{id:"accounts/acct/models/second",name:"Second",contextWindow:32000}]);
     expect(requests).toEqual([{path:"/v1/accounts/acct/models",pageToken:null,auth:"Bearer fixture"},{path:"/v1/accounts/acct/models",pageToken:"next",auth:"Bearer fixture"}]);
+    const scratch=process.env.SWITCHER_TEST_ROOT??join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(scratch,{recursive:true});
+    const dir=await mkdtemp(join(scratch,"fireworks-native-"));
+    try {
+      for(const harness of ["codex","opencode2"] as const) {
+        const prepared=await prepareHarnessLaunch({harness,baseUrl:provider.baseUrl,protocol:"openai-responses",model:result.models[0].id,models:result.models,credential:"fixture",authStyle:"bearer",stateDir:join(dir,harness),cwd:dir,args:[],version:harness==="codex"?"codex-cli 0.153.4":"opencode2 beta-19157"});
+        const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
+        const input=harness==="codex"?config.models[0].input_modalities:Object.values(config.providers).map((p:any)=>p.models[result.models[0].id].capabilities.input)[0];
+        expect(input).toEqual(["text","image"]);
+        await prepared.cleanup?.();
+      }
+    } finally {await rm(dir,{recursive:true,force:true});}
+  } finally {await upstream.stop(true);}
+});
+
+test("Fireworks preserves earlier page counts and rejects changing or incomplete snapshots",async()=>{
+  let finalTotal:number|undefined;
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){
+    return Response.json(new URL(request.url).searchParams.has("pageToken")
+      ?{models:[{name:"accounts/acct/models/second"}],totalSize:finalTotal,nextPageToken:""}
+      :{models:[{name:"accounts/acct/models/first"}],totalSize:3,nextPageToken:"next"});
+  }});
+  try {
+    const provider={...providerFromPreset("fireworks",{catalogAccountId:"acct",baseUrl:upstream.url.origin+"/inference/v1",catalogBaseUrl:upstream.url.origin+"/v1/accounts/acct",credentialEnv:"SWITCHER_PROVIDER_TEST"}),version:1,updatedAt:"now"};
+    for(finalTotal of [undefined,2])await expect(discover(provider,{SWITCHER_PROVIDER_TEST:"fixture"})).rejects.toMatchObject({code:"incomplete_catalog"});
   } finally {await upstream.stop(true);}
 });
 

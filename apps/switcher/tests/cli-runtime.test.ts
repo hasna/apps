@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { SQL } from "bun";
-import { mkdir, mkdtemp, writeFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile, readFile, readdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +21,36 @@ async function command(home: string, args: string[], extra: NodeJS.ProcessEnv = 
     return {code, stdout, stderr};
   } finally { clearTimeout(timer); }
 }
+
+test("the CLI launches Ori from a real OpenRouter preset with its complete catalog and keyless dry-run",async()=>{
+  const dir=await directory(),executable=join(dir,"ori-fixture"),nativeExecutable=join(dir,"native-codex");
+  await writeFile(nativeExecutable,"#!/bin/sh\necho codex-cli 0.153.4\n",{mode:0o700});
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture/one",supported_parameters:["tools"]},{id:"fixture/two",supported_parameters:["tools"]}]})});
+  await writeFile(executable,`#!${process.execPath}
+const args=process.argv.slice(2);
+if(args.includes('--version')||args[0]==='harness'){
+  if(process.env.OPENROUTER_API_KEY)process.exit(90);
+  console.log(args.includes('--version')?'@ori-runtime/cli 0.12.1+fixture':JSON.stringify({data:{launchable:[{kind:'codex',installed:true,path:${JSON.stringify(nativeExecutable)}}]}}));process.exit(0);
+}
+const file=args.find(arg=>arg.startsWith('model_catalog_json='));
+const catalog=await Bun.file(JSON.parse(file.slice('model_catalog_json='.length))).json();
+await Bun.write('ori-proof.json',JSON.stringify({args,models:catalog.models.map(m=>m.slug),keyPresent:Boolean(process.env.OPENROUTER_API_KEY)}));
+process.exit(23);
+`,{mode:0o700});
+  const args=["launch","codex","--provider","openrouter","--model","fixture/one","--catalog-url",upstream.url.origin,"--backend","ori","--ori-executable",executable];
+  try {
+    const dry=await command(dir,[...args,"--dry-run"]);
+    expect(dry.code,dry.stderr).toBe(0);expect(dry.stdout).toContain('openrouter-responses');
+    expect(await Bun.file(join(dir,"ori-proof.json")).exists()).toBe(false);
+    const launched=await command(dir,[...args,"--","exec","literal $value `text`"],{SWITCHER_PROVIDER_OPENROUTER:"fixture-key"});
+    expect(launched.code,launched.stderr).toBe(23);expect(launched.stdout+launched.stderr).not.toContain("fixture-key");
+    const proof=JSON.parse(await readFile(join(dir,"ori-proof.json"),"utf8"));
+    expect(proof.models).toEqual(["fixture/one","fixture/two"]);expect(proof.keyPresent).toBe(true);
+    expect(proof.args.slice(-2)).toEqual(["exec","literal $value `text`"]);
+    const runs=await command(dir,["runs","list"]);expect(runs.code,runs.stderr).toBe(0);expect(JSON.parse(runs.stdout).data[0]).toMatchObject({harness:"codex",model:"fixture/one",status:"failed",exitCode:23});
+    expect(await readdir(join(dir,"data/state"))).toEqual([]);
+  } finally {await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
+},30_000);
 
 test("interactive model selection cancels on Ctrl-C, Ctrl-D and SIGTERM without leaving the owned API alive", async () => {
   const upstream = Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture-model"}]})});

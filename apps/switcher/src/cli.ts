@@ -3,7 +3,7 @@ import { parseArgs } from "node:util";
 import { SwitcherError } from "./sdk";
 import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, compatible, codingEligible } from "./domain";
 import { detectHarness } from "./harnesses";
-import { launch } from "./launcher";
+import { launch, validateOriForPlan, type LaunchBackend } from "./launcher";
 import { openCliRuntime } from "./runtime";
 import { providerFromPreset, type PresetOptions } from "./presets";
 import { resolveLaunchProvider, selectModel, ensureLaunchProfile } from "./direct-launch";
@@ -23,7 +23,8 @@ const HELP = `switcher — launch a coding harness with a provider and its model
   switcher profiles update ID --file profile.json --version N
   switcher profiles delete ID --version N
   switcher launch HARNESS --provider PROVIDER [--model MODEL] [--dry-run]
-  switcher launch PROFILE [--cwd DIR] [--executable PATH] [--state-dir DIR]
+  switcher launch PROFILE [--backend direct|ori] [--cwd DIR] [--executable PATH]
+                          [--ori-executable PATH] [--state-dir DIR]
                           [--timeout SECONDS] -- [native harness arguments]
   switcher runs list|get [ID]
   switcher credentials bind PRESET --vault-key KEY --vault-url URL
@@ -60,7 +61,7 @@ export async function main(args = process.argv.slice(2)) {
     "catalog-url":{type:"string"},"catalog-format":{type:"string"},"catalog-auth-style":{type:"string"},
     "catalog-credential-env":{type:"string"},"catalog-account-id":{type:"string"},"models-path":{type:"string"},"dry-run":{type:"boolean"},provider:{type:"string"},
     harness:{type:"string"},model:{type:"string"},search:{type:"string"},limit:{type:"string"},offset:{type:"string"},
-    refresh:{type:"boolean"},cwd:{type:"string"},executable:{type:"string"},"state-dir":{type:"string"},timeout:{type:"string"},
+    refresh:{type:"boolean"},backend:{type:"string"},cwd:{type:"string"},executable:{type:"string"},"ori-executable":{type:"string"},"state-dir":{type:"string"},timeout:{type:"string"},
     "vault-key":{type:"string"},"vault-url":{type:"string"},"vault-cli":{type:"string"},"vault-account":{type:"string"},
     "keychain-service":{type:"string"},"keychain-account":{type:"string"},origin:{type:"string",multiple:true},
   }});
@@ -93,6 +94,14 @@ export async function main(args = process.argv.slice(2)) {
     return;
   }
   if (provided(credentialFlags)) throw new Fault(400,"conflicting_options","Credential source and origin options belong to credentials bind.");
+  const backend = values.backend ?? "direct";
+  if (backend !== "direct" && backend !== "ori") throw new Fault(400, "invalid_backend", "Use --backend direct or --backend ori.");
+  if (command !== "launch" && (values.backend !== undefined || values["ori-executable"] !== undefined))
+    throw new Fault(400, "conflicting_options", "--backend and --ori-executable belong to launch.");
+  if (command === "launch" && backend === "ori" && values.executable !== undefined)
+    throw new Fault(400, "conflicting_options", "--executable is ambiguous with --backend ori; use --ori-executable PATH.");
+  if (command === "launch" && backend === "direct" && values["ori-executable"] !== undefined)
+    throw new Fault(400, "conflicting_options", "--ori-executable requires --backend ori.");
   const mutation = (command === "providers" || command === "profiles") && ["add", "update"].includes(action);
   if (values.file && (!mutation || provided([...providerFlags, "name", "provider", "harness", "model"])))
     throw new Fault(400, "conflicting_options", "Use --file by itself for provider/profile settings; inline settings cannot override an input file.");
@@ -146,8 +155,15 @@ export async function main(args = process.argv.slice(2)) {
       const profile = await client.getProfile(profileId);
       await client.refreshModels(profile.providerId);
     }
-    if (values["dry-run"]) { output(await client.launchPlan(profileId)); return; }
-    process.exitCode = await launch(client, profileId, {cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, resolveCredential: provider=>credentials.resolve(provider)});
+    if (values["dry-run"]) {
+      const plan = await client.launchPlan(profileId);
+      if (backend === "ori") {
+        const {contract,warnings} = await validateOriForPlan(plan, {oriExecutable: values["ori-executable"], args: nativeArgs, cwd: values.cwd});
+        output({...plan, backend: {kind: "ori", executable: contract.executable, version: contract.version, target: plan.profile.harness, provider: "openrouter", model: plan.profile.model, warnings: [...plan.warnings,...warnings]}});
+      } else output(plan);
+      return;
+    }
+    process.exitCode = await launch(client, profileId, {backend: backend as LaunchBackend, oriExecutable: values["ori-executable"], cwd: values.cwd, executable: values.executable, stateDir: values["state-dir"], args: nativeArgs, timeoutMs, refresh: false, resolveCredential: provider=>credentials.resolve(provider)});
     return;
   }
   if (command === "models" && action) {

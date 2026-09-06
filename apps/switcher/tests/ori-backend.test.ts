@@ -14,6 +14,10 @@ async function fixtureDir() {
 async function fixtureOri(dir: string) {
   const executable = join(dir, "ori-fixture");
   await writeFile(executable, `#!/bin/sh
+if [ "$1" = "--version" ] || [ "$1 $2 $3" = "harness list --json" ]; then
+  if [ -n "$OPENROUTER_API_KEY" ]; then printf '%s\\n' present > "$PWD/inspection-key"; else printf '%s\\n' absent > "$PWD/inspection-key"; fi
+  printf '%s\\n' "$PWD" > "$PWD/inspection-cwd"
+fi
 case "$1 $2 $3" in
   "--version  ") printf '%s\\n' '{"ok":true,"command":"version","data":{"name":"@ori-runtime/cli","version":"0.12.1+fixture"}}' ;;
   "harness list --json") printf '%s\\n' '{"ok":true,"command":"harness list","data":{"launchable":[{"kind":"claude","displayName":"Claude Code","installed":true,"path":"/fixture/claude"},{"kind":"codex","displayName":"Codex CLI","installed":true,"path":"/fixture/codex"},{"kind":"grok","installed":false},{"kind":"opencode","installed":false}]}}' ;;
@@ -44,7 +48,8 @@ test("Ori provider catalog is OpenRouter-only and declares native flags/catalog 
   expect(oriProviderCatalog[0]).toMatchObject({id: "openrouter", credentialEnv: "OPENROUTER_API_KEY", publicModelsUrl: "https://openrouter.ai/api/v1/models", entitledModelsUrl: "https://openrouter.ai/api/v1/models/user"});
   expect(oriNativeFlags.codex).toEqual(["--model", "--reasoning-effort"]);
   expect(oriNativeFlags.grok).toEqual(["--model", "--reasoning-effort"]);
-  expect(() => prepareOriLaunch({...request(), provider: "deepseek"})).toThrowError(OriBackendError);
+  expect(() => prepareOriLaunch({...request(), provider: "openrouter-responses"})).not.toThrow();
+  expect(() => prepareOriLaunch({...request(), provider: "deepseek", providerBaseUrl: "https://api.deepseek.com/v1"})).toThrowError(OriBackendError);
 });
 
 test("prepareOriLaunch validates OpenRouter authority/protocol and the Switcher-owned catalog", () => {
@@ -67,6 +72,14 @@ test("prepareOriLaunch fails closed on missing key or native Ori login lockdown"
   expect(() => prepareOriLaunch({...request(), environment: {PATH: process.env.PATH, HOME: "/fixture/home", OPENROUTER_API_KEY: "fixture-key", ORI_REQUIRE_LOGIN: "1"}})).toThrow("cannot bypass native Ori login policy");
 });
 
+test("Ori Grok is restricted to its verified Chat contract and keeps resume/leader policy owned", () => {
+  const plan = prepareOriLaunch({...request(), target: "grok", protocol: "openai-chat", args: ["--print", "hello"]});
+  expect(plan.args.slice(0, 4)).toEqual(["grok", "--no-leader", "--model", "openrouter/model"]);
+  expect(() => prepareOriLaunch({...request(), target: "grok", protocol: "openai-responses"})).toThrow("OpenAI Chat");
+  expect(() => prepareOriLaunch({...request(), target: "grok", protocol: "openai-chat", args: ["--resume", "id", "inline"]})).toThrow("interactive resume");
+  expect(() => prepareOriLaunch({...request(), target: "grok", protocol: "openai-chat", args: ["--leader"]})).toThrow("leader");
+});
+
 test("Ori rejects OpenCode 2, Claude global-config mutation, and provider/model overrides", () => {
   expect(() => prepareOriLaunch({...request(), target: "opencode2"})).toThrow("OpenCode 2");
   expect(() => prepareOriLaunch({...request(), target: "claude", protocol: "anthropic-messages"})).toThrow("preservation subset");
@@ -84,6 +97,8 @@ test("inspectOri reads only version and harness inventory from a controlled Ori 
     expect(requireOriHarness(contract, "codex")).toMatchObject({installed: true, path: "/fixture/codex"});
     expect(() => requireOriHarness(contract, "grok")).toThrow("not installed");
     expect(() => requireOriHarness(contract, "opencode2")).toThrow("OpenCode 2");
+    expect(await readFile(join(dir, "inspection-key"), "utf8")).toBe("absent\n");
+    expect(await readFile(join(dir, "inspection-cwd"), "utf8")).toBe(`${dir}\n`);
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
 

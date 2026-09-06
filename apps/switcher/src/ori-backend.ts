@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { validateGrokResume } from "./grok-args";
 
 const exec = promisify(execFile);
 
@@ -41,6 +42,8 @@ export type OriCatalogInput = {
   /** IDs from Switcher's OpenRouter catalog; Ori does not own discovery. */
   modelIds: readonly string[];
   source: "switcher-openrouter";
+  /** A Switcher-generated Codex catalog, appended after Ori's provider config. */
+  codexModelCatalogPath?: string;
 };
 
 export type OriHarnessAvailability = {
@@ -108,6 +111,12 @@ function safeEnvironment(environment: NodeJS.ProcessEnv): Record<string, string>
   return result;
 }
 
+export function assertOriLoginAllowed(environment: NodeJS.ProcessEnv): void {
+  const loginPolicy = environment.ORI_REQUIRE_LOGIN?.trim().toLowerCase();
+  if (loginPolicy && !["0", "false", "no", "off"].includes(loginPolicy))
+    throw new OriBackendError("ori_login_required", "ORI_REQUIRE_LOGIN is enabled; this adapter cannot bypass native Ori login policy with an environment key.");
+}
+
 function parseVersion(stdout: string): string | undefined {
   try {
     const value = JSON.parse(stdout) as { data?: { version?: unknown } };
@@ -135,7 +144,7 @@ function parseHarnesses(stdout: string): OriHarnessAvailability[] {
 
 async function readOnly(executable: string, args: string[], environment: NodeJS.ProcessEnv, cwd?: string) {
   try {
-    const result = await exec(executable, args, {cwd, env: safeEnvironment(environment), timeout: 10_000, maxBuffer: 256 * 1024}) as {stdout?: unknown; stderr?: unknown};
+    const result = await exec(executable, args, {cwd, env: safeEnvironment({...environment, OPENROUTER_API_KEY: undefined}), timeout: 10_000, maxBuffer: 256 * 1024}) as {stdout?: unknown; stderr?: unknown};
     return {code: 0, stdout: typeof result.stdout === "string" ? result.stdout : "", stderr: typeof result.stderr === "string" ? result.stderr : ""};
   } catch (error) {
     const failure = error as {code?: number | string; stdout?: string; stderr?: string; message?: string};
@@ -180,7 +189,9 @@ export function oriProvider(id: string): OriProviderCatalogEntry {
 }
 
 function assertProviderAuthority(target: OriTarget, provider: string, providerBaseUrl: string | undefined, protocol: OriProtocol | undefined): void {
-  const catalog = oriProvider(provider);
+  // The saved provider ID is only a record/credential namespace. The exact
+  // authority and target-compatible protocol establish the Ori family.
+  const catalog = oriProvider("openrouter");
   const compatible = target === "codex" ? protocol === "openai-responses" : target === "claude" ? protocol === "anthropic-messages" : catalog.protocols.includes(protocol as OriProtocol);
   if (!providerBaseUrl || !protocol || !compatible)
     throw new OriBackendError("provider_authority", "Ori requires an explicit OpenRouter provider URL and a protocol supported by the selected Ori target.");
@@ -205,6 +216,8 @@ function assertPassthrough(target: OriTarget, args: readonly string[]): void {
     throw new OriBackendError("reserved_argument", "Ori model and reasoning options are reserved by the launch profile.");
     if (/^--(?:provider|model-provider|model_provider)(?:=|$)/.test(arg))
       throw new OriBackendError("reserved_argument", "Provider selection is reserved by the Ori launch profile.");
+    if (target === "grok" && ["--leader", "--leader-socket", "--oauth"].some(name => arg === name || arg.startsWith(`${name}=`)))
+      throw new OriBackendError("reserved_argument", "Grok leader and authentication options are reserved by the Ori launch profile.");
     if (target !== "codex") continue;
     if (arg === "--profile" || arg === "-p" || arg === "--config" || arg === "-c" || arg.startsWith("--profile=") || arg.startsWith("--config="))
       throw new OriBackendError("reserved_argument", "Codex profile and provider configuration are reserved by the Ori launch profile.");
@@ -215,31 +228,50 @@ function assertPassthrough(target: OriTarget, args: readonly string[]): void {
   }
 }
 
+/** Validate target, provider and catalog authority before resolving a key. */
+export function validateOriLaunchRequest(request: OriLaunchRequest): void {
+  assertProviderAuthority(request.target, request.provider, request.providerBaseUrl, request.protocol);
+  if (!request.model.trim()) throw new OriBackendError("model_required", "An OpenRouter model ID is required for an Ori launch.");
+  assertPassthrough(request.target, request.args ?? []);
+  if (request.target === "opencode2")
+    throw new OriBackendError("unsupported_harness", "Ori 0.12.1 targets legacy `opencode`; it cannot launch OpenCode 2 (`opencode2`).");
+  if (request.target === "claude") throw new OriBackendError("global_config_mutation", "Ori Claude launches may update ~/.claude.json; the preservation subset supports Codex and Grok only.");
+  if (request.target === "grok" && request.protocol !== "openai-chat")
+    throw new OriBackendError("unsupported_protocol", "Ori Grok is verified only for OpenAI Chat; use the direct adapter for Messages or Responses.");
+  const catalog = request.catalog;
+  if (!catalog || catalog.source !== "switcher-openrouter" || !catalog.modelIds.includes(request.model))
+    throw new OriBackendError("catalog_required", "The selected model must come from Switcher's OpenRouter catalog before an Ori launch.");
+}
+
 /**
  * Construct an argv-only Ori launch. This function does no process start and
  * does not read credentials; callers hand it the already-authorized environment.
  */
 export function prepareOriLaunch(request: OriLaunchRequest & {executable?: string; environment?: NodeJS.ProcessEnv}): OriLaunchPlan {
-  assertProviderAuthority(request.target, request.provider, request.providerBaseUrl, request.protocol);
-  if (!request.model.trim()) throw new OriBackendError("model_required", "An OpenRouter model ID is required for an Ori launch.");
+  validateOriLaunchRequest(request);
   const args = request.args ?? [];
-  assertPassthrough(request.target, args);
-  if (request.target === "opencode2")
-    throw new OriBackendError("unsupported_harness", "Ori 0.12.1 targets legacy `opencode`; it cannot launch OpenCode 2 (`opencode2`).");
-  if (request.target === "claude") throw new OriBackendError("global_config_mutation", "Ori Claude launches may update ~/.claude.json; the preservation subset supports Codex and Grok only.");
-  const catalog = request.catalog;
-  if (!catalog || catalog.source !== "switcher-openrouter" || !catalog.modelIds.includes(request.model))
-    throw new OriBackendError("catalog_required", "The selected model must come from Switcher's OpenRouter catalog before an Ori launch.");
   const environment = request.environment ?? process.env;
-  const loginPolicy = environment.ORI_REQUIRE_LOGIN?.trim().toLowerCase();
-  if (loginPolicy && !["0", "false", "no", "off"].includes(loginPolicy))
-    throw new OriBackendError("ori_login_required", "ORI_REQUIRE_LOGIN is enabled; this adapter cannot bypass native Ori login policy with an environment key.");
+  assertOriLoginAllowed(environment);
   const credential = environment.OPENROUTER_API_KEY?.trim();
   if (!credential) throw new OriBackendError("openrouter_key_missing", "An OpenRouter API key must be supplied in the launch environment before starting Ori.");
   if (/[\r\n]/.test(credential)) throw new OriBackendError("openrouter_key_invalid", "The OpenRouter API key contains invalid characters.");
   const oriArgs = [request.target, "--model", request.model];
+  if (request.target === "grok") {
+    validateGrokResume(args);
+    oriArgs.splice(1, 0, "--no-leader");
+  }
   if (request.reasoningEffort) oriArgs.push("--reasoning-effort", request.reasoningEffort);
+  if (request.target === "codex" && request.catalog?.codexModelCatalogPath) {
+    const path = request.catalog.codexModelCatalogPath;
+    if (!path.startsWith("/") || /[\r\n\0]/.test(path)) throw new OriBackendError("catalog_path_invalid", "The Switcher Codex catalog path must be an absolute safe path.");
+    oriArgs.push("-c", `model_catalog_json=${JSON.stringify(path)}`);
+  }
   oriArgs.push(...args);
   return {executable: request.executable ?? "ori", args: oriArgs, env: safeEnvironment(environment),
-    target: request.target, provider: "openrouter", model: request.model, warnings: []};
+    target: request.target, provider: "openrouter", model: request.model,
+    warnings: oriLaunchWarnings(request.target)};
+}
+
+export function oriLaunchWarnings(target: OriTarget): string[] {
+  return target === "grok" ? ["Ori supplies Grok's account-entitled OpenRouter catalog; it is not the Switcher-filtered catalog snapshot."] : [];
 }

@@ -4,6 +4,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { compatible, endpoint, codingEligible } from "./domain";
+import { childEnvironment } from "./harness-environment";
 import { validateGrokResume } from "./grok-args";
 import type { HarnessId, HarnessLaunchInput, PreparedLaunch } from "./harness-types";
 const execute = promisify(execFile);
@@ -12,7 +13,7 @@ const quote = (value: unknown) => JSON.stringify(value);
 export async function detectHarness(harness: HarnessId, override?: string) {
   const executable = override ?? Bun.which(harness) ?? harness;
   try {
-    const {stdout} = await execute(executable,["--version"],{timeout:8000,maxBuffer:65536});
+    const {stdout} = await execute(executable,["--version"],{timeout:8000,maxBuffer:65536,env:childEnvironment()});
     return {harness,executable,available:true,version:stdout.trim().slice(0,200)};
   } catch { return {harness,executable,available:false,version:undefined}; }
 }
@@ -22,10 +23,16 @@ const versionAtLeast = (raw: string | undefined, minimum: number[]) => {
   const actual=match.slice(1).map(Number);
   for(let i=0;i<3;i++){if(actual[i]>minimum[i])return true;if(actual[i]<minimum[i])return false;}return true;
 };
+export function validateHarnessVersion(harness: HarnessId, version: string | undefined): void {
+  if(harness==="claude"&&!versionAtLeast(version,[2,1,242])) throw new Error("Claude Code >=2.1.242 is required for a full native modelPicker.");
+  if(harness==="codex"&&!versionAtLeast(version,[0,153,0])) throw new Error("Codex >=0.153.0 is required by this catalog adapter.");
+  if(harness==="grok"&&!versionAtLeast(version,[1,0,13])) throw new Error("Grok Build >=1.0.13 is required by this remote catalog adapter.");
+  if(harness==="opencode2"&&!version?.includes("opencode2")&&!versionAtLeast(version,[2,0,0])) throw new Error("Use the OpenCode 2 executable, not legacy OpenCode.");
+}
 async function jsonFile(dir:string,name:string,value:unknown) {
   const path=join(dir,name);await writeFile(path,JSON.stringify(value,null,2)+"\n",{mode:0o600,flag:"wx"});return path;
 }
-function codexModel(model: HarnessLaunchInput["models"][number], priority:number) {
+export function codexModel(model: HarnessLaunchInput["models"][number], priority:number) {
   // Conservative wire/tool choices; no invented reasoning levels or model-specific policies.
   return {
     slug:model.id,display_name:model.name,description:model.description??model.id,
@@ -86,6 +93,7 @@ function grokAlias(input: HarnessLaunchInput, model: string) {
 async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = input.baseUrl): Promise<PreparedLaunch> {
   input={...input,baseUrl:endpoint(input.baseUrl)};
   if(!compatible(input.harness,input.protocol)) throw new Error("Harness and provider protocol are incompatible.");
+  validateHarnessVersion(input.harness,input.version);
   if(!isAbsolute(input.stateDir)||!isAbsolute(input.cwd)) throw new Error("Launch state and working directories must be absolute.");
   if(!input.models.length||!input.models.some(m=>m.id===input.model)) throw new Error("Selected model is missing from the launch catalog.");
   if(input.models.some(m=>!codingEligible(m))) throw new Error("Launch catalog contains a model explicitly ineligible for coding.");
@@ -97,7 +105,6 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   const missing=input.models.filter(m=>!m.contextWindow).length;
   if(missing) warnings.push(`${missing} catalog models have no declared context limit; native fallback limits may be inaccurate.`);
   if(input.harness==="claude") {
-    if(!versionAtLeast(input.version,[2,1,242])) throw new Error("Claude Code >=2.1.242 is required for a full native modelPicker.");
     env.ANTHROPIC_BASE_URL=input.baseUrl.replace(/\/v1$/,"");
     env.ANTHROPIC_MODEL=input.model;
     // The native Default picker row has separate precedence from --model.
@@ -111,7 +118,6 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     return {executable,args:["--settings",file,"--model",input.model,...args],env,configPaths,warnings};
   }
   if(input.harness==="codex") {
-    if(!versionAtLeast(input.version,[0,153,0])) throw new Error("Codex >=0.153.0 is required by this catalog adapter.");
     const file=await jsonFile(input.stateDir,"codex-models.json",{models:input.models.map(codexModel)});
     configPaths.push(file);
     env[KEY]=input.credential??"switcher-local-no-auth";
@@ -126,7 +132,6 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     return {executable,args:[...overrides,...args],env,configPaths,warnings};
   }
   if(input.harness==="grok") {
-    if(!versionAtLeast(input.version,[1,0,13])) throw new Error("Grok Build >=1.0.13 is required by this remote catalog adapter.");
     validateGrokResume(args);
     const file=await jsonFile(input.stateDir,"grok-overlay.json",{models:{default:grokAlias(input,input.model),session_summary:grokAlias(input,input.model),allowed_models:input.models.map(m=>grokAlias(input,m.id))}});
     configPaths.push(file);
@@ -140,7 +145,6 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     // own a standalone backend and its current short-lived bridge credentials.
     return {executable,args:["--model",grokAlias(input,input.model),"--no-leader",...args],env,configPaths,warnings,cleanup:bridge.cleanup};
   }
-  if(!input.version?.includes("opencode2")&&!versionAtLeast(input.version,[2,0,0])) throw new Error("Use the OpenCode 2 executable, not legacy OpenCode.");
   // Session model references must identify the upstream provider, not the
   // allocated port of a temporary auth bridge which changes each launch.
   const providerID="switcher-"+createHash("sha256").update(endpoint(providerBaseUrl)+input.protocol).digest("hex").slice(0,12);

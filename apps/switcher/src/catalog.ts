@@ -35,12 +35,20 @@ export async function discover(provider: Provider, env: Record<string, string | 
   if (url.hostname === "openrouter.ai") url.searchParams.set("output_modalities", "all");
   const models = new Map<string, Model>(); const seenCursors = new Set<string>();
   const seenPages = new Set<string>([url.href]);
+  let fireworksTotal: number | undefined;
   for (let page = 0; page < 100; page++) {
     let response: Response;
     try { response = await fetch(url, {headers, redirect: "manual", signal: AbortSignal.timeout(20_000)}); }
     catch { throw new Fault(502, "provider_unavailable", "Provider catalog request failed."); }
     if (!response.ok) { await response.body?.cancel(); throw new Fault(502, "provider_rejected", `Provider catalog returned HTTP ${response.status}.`); }
     const data = await boundedJson(response);
+    if (provider.catalogFormat === "fireworks" && data?.totalSize !== undefined) {
+      if (typeof data.totalSize !== "number" || !Number.isInteger(data.totalSize) || data.totalSize < 0)
+        throw new Fault(502, "invalid_catalog", "Fireworks catalog count metadata is malformed.");
+      if (fireworksTotal !== undefined && fireworksTotal !== data.totalSize)
+        throw new Fault(502, "incomplete_catalog", "Provider catalog count changed during pagination; retry the refresh.");
+      fireworksTotal = data.totalSize;
+    }
     // Together's native catalog is a bare array despite its inference API's
     // OpenAI compatibility. Do not silently accept that shape for other parsers.
     const rows = provider.catalogFormat === "together" ? data : provider.catalogFormat === "ollama" ? data?.models
@@ -71,7 +79,7 @@ export async function discover(provider: Provider, env: Record<string, string | 
         candidate.outputModalities = modalities[row.type];
       }
       if (provider.catalogFormat === "fireworks") {
-        if (row.supportsImageInput === true) candidate.inputModalities = ["image"];
+        if (row.supportsImageInput === true) candidate.inputModalities = ["text", "image"];
         if (typeof row.supportsTools === "boolean") candidate.supportedParameters = row.supportsTools ? ["tools"] : [];
       }
       if (provider.catalogFormat === "dashscope") {
@@ -105,9 +113,7 @@ export async function discover(provider: Provider, env: Record<string, string | 
       }
     }
     if (provider.catalogFormat === "fireworks") {
-      if (data.totalSize !== undefined && (typeof data.totalSize !== "number" || !Number.isInteger(data.totalSize) || data.totalSize < 0))
-        throw new Fault(502, "invalid_catalog", "Fireworks catalog count metadata is malformed.");
-      if (typeof data.totalSize === "number" && data.totalSize !== models.size) throw new Fault(502, "incomplete_catalog", "Provider catalog count does not match the collected models; retry the refresh.");
+      if (fireworksTotal !== undefined && fireworksTotal !== models.size) throw new Fault(502, "incomplete_catalog", "Provider catalog count does not match the collected models; retry the refresh.");
       return {models: [...models.values()], source: "remote", refreshedAt};
     }
     if (provider.catalogFormat === "dashscope") {
