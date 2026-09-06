@@ -3,6 +3,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
+import { runRedactionCli } from "../../test-support/redaction-cli.js";
 import {
   assertLocalStoreBackend,
   blankLlmProviderEnv,
@@ -48,16 +49,7 @@ async function runCli(
   env: Record<string, string>,
   ...args: string[]
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const proc = Bun.spawn(["bun", "run", CLI_PATH, ...args], {
-    env,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: await proc.exited };
+  return runRedactionCli(CLI_PATH, env, args);
 }
 
 interface SeedRow {
