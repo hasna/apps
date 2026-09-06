@@ -469,7 +469,7 @@ describe("CLI runtime and misc commands", () => {
       // Regression: `skills test excel --json` previously listed npmDeps without
       // an `installed` field and computed `ready` from env vars alone, so a skill
       // that cannot run without its npm deps could report a false-green readiness.
-      const { stdout } = await runCli(["test", "deps-fixture", "--json"], FIXTURE_ENV);
+      const { stdout, exitCode } = await runCli(["test", "deps-fixture", "--json"], FIXTURE_ENV);
       const data = JSON.parse(stdout);
       const entry = data[0];
       expect(entry.npmDeps.length).toBeGreaterThan(0);
@@ -484,6 +484,7 @@ describe("CLI runtime and misc commands", () => {
         entry.systemDeps.every((d: { available: boolean }) => d.available) &&
         entry.npmDeps.every((d: { installed: boolean }) => d.installed);
       expect(entry.ready).toBe(expectedReady);
+      expect(exitCode).toBe(expectedReady ? 0 : 1);
     });
   });
 
