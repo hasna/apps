@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.2
+
+### Patch Changes
+
+- 5a52e67: Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
+- b95cedd: Align the public administration schemas with the Zod v3 compatibility API used by the canonical build, so their inferred declarations also work with the declared Zod 4 dependency. Check all four public exports in a fresh strict TypeScript consumer, including administrative role and suspension literal inference.
+- 5069dbb: Make `env-check --set` and its `check-env` alias update only an exact valid environment key, preserve literal supported values, and omit supplied values from errors. Reject unsupported values, ambiguous existing dotenv layouts, symlinks and special files before writing; create new `.env` files with owner-only permissions while preserving existing modes and unrelated lines.
+- 2dc5814: Use hyphenated names when scaffolding or importing local skills, preserving CamelCase and acronym boundaries and converting dots and underscores to hyphens. Preserve existing installed identities and declared command names; align name declarations in copied instruction files without changing their original source. Make single-folder `port` / `add` return a failing exit status when JSON reports invalid validation, consistent with human output; imported folders remain available for correction.
+- 4c66df8: Compute governed artifact hashes and byte counts from the text after redaction so stored metadata and sequential cumulative output checks match the persisted UTF-8 bytes. Concurrent admission remains a separate follow-up. Refuse missing or non-text bodies before storage instead of fabricating integrity metadata.
+- 854240f: Reject unsupported nonzero or malformed cursors for remote run lists before making a request, with actionable human and JSON errors. Keep the default/zero remote cursor and local run pagination unchanged.
+- 854240f: Report recognized unavailable subscription checkout with a typed SDK error and fixed guidance in the CLI and MCP. Bound error-code parsing by size and time, and omit server-controlled HTTP reason phrases from generic remote errors.
+- 854240f: Return a nonzero exit status when schedule creation fails in JSON mode, matching human output. Invalid cron expressions preserve existing schedule files, and successful creation keeps its current JSON shape.
+- a76c2c0: Reject unexpected positional arguments to `storage status`, `storage sync-plan`, and `storage migrate` before their handlers run. Invalid invocations now exit unsuccessfully without creating storage directories, reading the snapshot, or migrating the owner layout; valid options and commands retain their existing behavior.
+- 854240f: Reject unsupported `skills tools validate --profile` values before inspecting the catalog. Preserve the documented `basic` and `all` profiles and the default `all` behavior.
+
 ## 0.4.1
 
 ### Patch Changes
