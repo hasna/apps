@@ -10,6 +10,7 @@ import {
   SKILLS_ADMIN_ENV_URL,
   SKILLS_ADMIN_OPERATIONS,
   SkillsAdminGrantEntitlementRequestSchema,
+  SkillsAdminSetUserRoleRequestSchema,
   SkillsAdminStatusResponseSchema,
 } from "./admin-contract";
 
@@ -57,6 +58,14 @@ describe("skills admin API contract", () => {
       expect(schema.safeParse({ suspended: accepted, reason: "contract test" }).success).toBeTrue();
       expect(schema.safeParse({ suspended: rejected, reason: "contract test" }).success).toBeFalse();
     }
+  });
+
+  test("accepts only declared administrative roles and no extra mutation fields", () => {
+    for (const role of ["owner", "admin", "member", "viewer"] as const) {
+      expect(SkillsAdminSetUserRoleRequestSchema.parse({ role })).toEqual({ role });
+    }
+    expect(SkillsAdminSetUserRoleRequestSchema.safeParse({ role: "superuser" }).success).toBeFalse();
+    expect(SkillsAdminSetUserRoleRequestSchema.safeParse({ role: "admin", suspended: true }).success).toBeFalse();
   });
 
   test("response schemas tolerate additive fields but retain required fields", () => {
