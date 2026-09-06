@@ -8,7 +8,7 @@
   and key now resolve through the shared `@hasna/contracts/client` resolver,
   fresh on every request, from the same five tiers every hosted Hasna CLI uses:
   `--api-key`/`--profile`, `HASNA_EMAILS_API_KEY_REF` pointers, the macOS
-  Keychain item `hasna.credentials.emails.api-key`, the
+  Keychain item for the Emails API key, the
   `~/.hasna/emails/config/credentials` file, then `HASNA_EMAILS_API_KEY`.
 
   **Canonical env names** are now `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`.
@@ -17,7 +17,7 @@
   the same window skills gave its `SKILLS_API_*` names. A live user session
   (`EMAILS_SESSION_TOKEN`) or agent identity token (`EMAILS_IDP_TOKEN`) still wins
   as the bearer credential; the URL always comes from the resolver, defaulting to
-  the fleet gateway `https://api.hasna.com/emails` once a credential resolves.
+  the hosted default endpoint once a credential resolves.
 
   **Deleted with the own chain**: the deployment-mode word
   (`EMAILS_MODE` / `HASNA_EMAILS_MODE`) and all `*_STORAGE_MODE` switches, the
