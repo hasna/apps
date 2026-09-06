@@ -4,7 +4,7 @@ title: "Switcher"
 type: "package-documentation"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:50:21.698672Z"
-updated_at: "2026-09-06T09:46:58.620668+00:00"
+updated_at: "2026-09-06T11:12:08Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -61,6 +61,14 @@ switcher launch claude --provider deepseek --model deepseek-v4-pro
 For provider keys already stored in macOS Keychain, use `--keychain-service SERVICE --keychain-account ACCOUNT` instead of vault options. Bindings contain only references and authorized origins under `~/.hasna/switcher/config/credential-bindings`, in owner-only files. They remain local even when Switcher uses a remote API. A configured binding takes precedence over environment aliases; an unavailable binding never falls back to another account.
 
 `credentials list` displays bindings; `credentials remove PRESET_OR_REFERENCE` removes only the locator. Replacement requires explicit removal. Custom credential references require `--origin URL` (repeatable); preset bindings authorize their documented origins by default. `credentials check` reports availability, length and hash, not successful provider authentication. Provider credentials needed by a remote API's catalog discovery must still be configured on that server independently.
+
+## OpenCode 2 configuration
+
+OpenCode 2 requires beta-19157 or newer. Each launch isolates its provider configuration, home, configuration directory and cache. Switcher snapshots native global and project tool permissions, safe agent prompts and permissions, and the global and working-directory ancestor `AGENTS.md` files. Provider/model overrides, agent request headers and bodies, plugins, and live configuration reloads are excluded. Unsupported permission forms, unreadable policy files and malformed JSONC or agent YAML stop the launch instead of dropping rules.
+
+The original `XDG_DATA_HOME` is retained so existing native sessions continue to work. Switcher reads only the native database's remote-configuration registration key and, when needed, migration status; it never edits that database. Registered remote configuration or a pending legacy credential migration blocks launch because those sources could reintroduce provider settings. Use an explicitly isolated `XDG_DATA_HOME` or complete the native migration separately before launching. Path permissions using `~` or `$HOME` retain their original home-directory meaning.
+
+For bounded installed-native checks, set `SWITCHER_TEST_NATIVE_EXECUTABLE` to OpenCode 2 and run `bun run test:native-opencode2-authority openai-chat`, `openai-responses`, or `anthropic-messages` from the package directory. These checks use local fixtures, actual file reads, deleted-file resume, an agent deny rule, and the settled native catalog.
 
 ## Pi
 

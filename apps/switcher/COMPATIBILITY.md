@@ -4,23 +4,27 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T10:31:20.164273+00:00"
+updated_at: "2026-09-06T12:20:01.564707+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
 # Evidence boundaries
 
-This matrix covers Switcher 0.1.1 candidate SHA-1 `fd8eb1cecad2ef8f37d87d3e818c14f1a1113773`, built from `dfb778237c3fd12a6490493551e03a96a20729a5`. It is installed from the reviewed tarball with normally resolved published Contracts 1.0.2. Switcher 0.1.1 is not yet published; registry-byte repetition remains open. Documented routes, catalog parsing, inference, actual tool use, native model changes, cancellation and resume are separate acceptance claims. Older artifact identities and their evidence are preserved in TODOS.md and task scratch.
+The shared native argument correction is committed as `3b6a4fd2cf4ff6824cb465b5495eae2e198cd5fa` and independently approved. It rejects attached/clustered provider and model overrides, quoted Codex configuration roots and Claude fallback selection while preserving literal prompt values and end-of-options text. Package verification passes 92 tests / 816 assertions with real PostgreSQL and installed Pi/Ori. Replacement archive SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed` passes normal npm dependency resolution, all 38 installed file identities, Node/Bun package surfaces, and real installed-CLI read/delete/fresh-resume tests for Claude, Codex, Grok, OpenCode 2, Pi and Codex/Grok through Ori. SQLite/PostgreSQL Compose, upgrade, rollback and re-upgrade pass on exact image `sha256:c515c2d85103d8e8fcb4aaccc5ef812725d3941196fa8ac1f775bf3ad950fd2d`. Source has been reconciled with main after Contracts PR #1813. Fresh CI, merge, publication and registry-installed repetition remain open. Both earlier archives remain withdrawn.
+
+The replacement's prior checks passed 85 tests / 769 assertions with real PostgreSQL and installed Pi/Ori, live installed OpenCode 2 DeepSeek read/resume/full picker, Node/Bun package surfaces and SQLite/PostgreSQL container persistence/upgrade/rollback. Its image is `sha256:24222a427ed714cdb8f167ec3e2eb301a86407f6e911d56afc4c59a44e5f7490`. All those outcomes remain bound to the withdrawn archive. Registry-installed repetition is open.
+
+Documented routes, catalog parsing, inference, actual tool use, native model changes, cancellation and resume are separate claims. Named adapter candidates below remain independent work until integrated and tested together.
 
 # Native harness contracts
 
 | Harness | Adapter version requirement / prior tested version | Native wire protocols | Catalog | Next-release acceptance |
 | --- | --- | --- | --- | --- |
 | Claude Code | >=2.1.242 / 2.1.263 | Messages | Per-launch modelPicker | Split-catalog fixture and development-tarball Pro/Flash tool/picker checks pass; Default mapping passes live; full cancellation, resume and registry checks open |
-| Codex | >=0.153.0 / 0.153.4 | Responses | Startup ModelInfo JSON | Earlier candidate direct and Ori tool/resume pass; current candidate native app-server list exactly matches all 364 compatible models in the 582-entry OpenRouter catalog; richer metadata and registry checks open |
+| Codex | >=0.153.0 / 0.153.4 | Responses | Startup ModelInfo JSON | Earlier candidate direct and Ori tool/resume pass; historical candidate native app-server list exactly matches all 364 compatible models in the 582-entry OpenRouter catalog; richer metadata and registry checks open |
 | Grok Build | >=1.0.13 / 1.0.13 | Chat, Responses, Messages | Authenticated loopback catalog | Installed development CLI passes local Messages fixture and live DeepSeek Flash tool/read/resume; exact model confirmed by native usage; remaining protocols and registry cells open |
-| OpenCode 2 | Tested beta-19157 | Chat, Responses, Messages | Version 2 provider/models | Current candidate passes DeepSeek Flash tool/resume in headless and TTY-input runs; interactive picker shows all three DeepSeek models and selects Pro; stream cleanup passes; registry cells open |
+| OpenCode 2 | Requires beta-19157+ | Chat, Responses, Messages | Isolated version 2 provider/models with preserved native permissions and ancestor instructions | Corrected source passes controlled native tool/deleted-file resume, agent deny and exact settled catalog checks across all three protocols; earlier live DeepSeek evidence predates the authority correction; new registry/live cells remain open |
 | Pi | >=0.85.1 / 0.85.1 | Chat, Responses, Messages | Per-launch models.json; provider-scoped picker/cycling | Native nine-cell auth/path fixtures and installed candidate DeepSeek Flash read-tool/same-session resume pass; interactive model changes and registry acceptance remain open |
 
 Claude + non-Claude models remains experimental and unsupported by Anthropic. Messages, Responses and Chat are distinct protocols. A matrix intersection is a candidate for testing, not an automatic compatibility guarantee.
@@ -32,7 +36,7 @@ M = Anthropic Messages, R = OpenAI Responses, C = OpenAI Chat. Default catalog p
 | Provider | Implemented native routes | Default authentication | Catalog / next-release evidence |
 | --- | --- | --- | --- |
 | DeepSeek | M, C | Bearer; DEEPSEEK_API_KEY alias | Root `/models`, independent of `/anthropic/v1`; split-path fixture, development Claude Pro/Flash tools/picker and Grok/OpenCode Flash tools/resume pass; remaining cells open |
-| OpenRouter | M, R, C | Bearer; OPENROUTER_API_KEY | Public all-modality catalog; earlier 0.1.1 candidate direct/Ori Codex and Ori Grok tool/resume evidence; current candidate Codex full-catalog equality passes; registry cells open |
+| OpenRouter | M, R, C | Bearer; OPENROUTER_API_KEY | Public all-modality catalog; earlier 0.1.1 candidate direct/Ori Codex and Ori Grok tool/resume evidence; historical candidate Codex full-catalog equality passes; registry cells open |
 | Anthropic | M | x-api-key; ANTHROPIC_API_KEY | `/v1/models`, Anthropic version header and cursor pagination; live open |
 | OpenAI | R, C | Bearer; OPENAI_API_KEY | `/v1/models`; live open |
 | xAI | M, R, C | Bearer; XAI_API_KEY | `/v1/models`; documented routes, live open |
@@ -78,7 +82,7 @@ For every implemented row, the release gate still requires applicable native har
 | Pi | Integrated direct adapter; strengthened native auth/tool/resume verification and live registry acceptance (G14) |
 | Prime Agent | Candidate under correction for per-launch config isolation, native worker socket length and owned-daemon cleanup (G15) |
 | DeepSeek Harness | Candidate independently approved for integration; actual native ACP tool/resume and web authentication/cleanup pass, real-provider and registry acceptance open (G16) |
-| Hermes | Candidate implementation; current native fixture proves tool schemas and conversation resume, with actual CLI tool-loop and picker verification required before acceptance (G17) |
+| Hermes | Independent candidate `36f06c2` passes actual source-CLI tool/read and deleted-file resume across all three protocols; integration, picker and registry verification remain open (G17) |
 | Legacy OpenCode | Distinct native adapter; legacy OpenCode is not OpenCode 2 (G18) |
 | OMP, Kilo, Cline | Distribution/launch/provider/model interfaces and honest catalog support (G19–G21) |
 | Gemini CLI, Aider | Distinct auth/wire/config adapters and native listing limits (G22–G23) |
@@ -86,4 +90,4 @@ For every implemented row, the release gate still requires applicable native har
 
 Built-in vault resolution passes actual installed-CLI live acceptance and SIGINT/SIGTERM subprocess cleanup tests; provider Keychain resolution has fixture coverage. Native subscription authentication, live subagent/explicit family-alias behavior, remaining process/platform and protocol/resume cells, CI and publication remain open in TODOS.md. Provider environment injection remains available without saving values.
 
-Exact candidate container image `sha256:6de1712ffc8ab9ae9eabffe4daee3bf7a0a56f98bd1c0fb8ea5774a2e1dae014` passes both SQLite and PostgreSQL Compose profiles, health/readiness, authentication and recreation persistence. Published 0.1.0 → candidate → rollback → re-upgrade preserves legacy provider/profile/catalog/run data. Extended checks preserve candidate-only Pi records after re-upgrade and verify that 0.1.0 rejects a Pi launch. Public CLI/serve/SDK/standalone MCP checks pass under Node 26.8.1 and Bun 1.3.14; no MCP registration was performed. Current source has 76 passing tests/743 assertions with installed Pi/Ori checks enabled, including native terminal/lifecycle regressions; macOS and Linux tests preserve six descriptor mixes and keyboard reads from `/dev/tty`. Lifecycle and Ori exact-commit review passed. The expanded gateway source is independently reviewed; registry acceptance is pending.
+Historical withdrawn candidate container image `sha256:6de1712ffc8ab9ae9eabffe4daee3bf7a0a56f98bd1c0fb8ea5774a2e1dae014` passes both SQLite and PostgreSQL Compose profiles, health/readiness, authentication and recreation persistence. Published 0.1.0 → candidate → rollback → re-upgrade preserves legacy provider/profile/catalog/run data. Extended checks preserve candidate-only Pi records after re-upgrade and verify that 0.1.0 rejects a Pi launch. Public CLI/serve/SDK/standalone MCP checks pass under Node 26.8.1 and Bun 1.3.14; no MCP registration was performed. That older source had 76 passing tests/743 assertions with installed Pi/Ori checks enabled, including native terminal/lifecycle regressions; macOS and Linux tests preserve six descriptor mixes and keyboard reads from `/dev/tty`. Lifecycle and Ori exact-commit review passed. The expanded gateway source is independently reviewed; registry acceptance is pending.

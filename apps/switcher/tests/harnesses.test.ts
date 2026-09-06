@@ -169,7 +169,7 @@ test("Grok resumes with a fresh bridge and the selected profile model; unsafe in
 test("OpenCode2 config uses v2 schema and isolated execution without broad permission flags",async()=>{
   const input=await fixture();
   try{
-    const prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-18999",args:["run","hello"]});
+    const prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-19157",args:["run","hello"]});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
     const provider:any=Object.values(config.providers)[0];expect(provider.package).toEndWith("/openai/responses");
     expect(provider.models[input.model].capabilities).toEqual({tools:true,input:["text"],output:["text"]});
@@ -219,7 +219,7 @@ test("OpenCode's fixed native auth convention can bridge a provider's different 
   let auth:string|null=null,key:string|null=null;
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req){auth=req.headers.get("authorization");key=req.headers.get("x-api-key");return Response.json({ok:true});}});
   try{
-    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-18999",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1"});
+    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-19157",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1"});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const provider:any=Object.values(config.providers)[0];
     const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model})});
     expect(response.status).toBe(200);expect(auth).toBe(`Bearer ${input.credential}`);expect(key).toBeNull();
@@ -271,7 +271,7 @@ test("auth bridges cancel unfinished upstream SSE before shutting down",async()=
   let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
   let closing:Promise<void>|undefined;
   try {
-    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1",version:"opencode2 beta"});
+    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1",version:"opencode2 v0.0.0-beta-19157"});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const provider:any=Object.values(config.providers)[0];
     const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model,messages:[],stream:true})});
     reader=response.body!.getReader();expect(new TextDecoder().decode((await reader.read()).value)).toContain("message_stop");
@@ -290,3 +290,37 @@ test("auth bridges cancel unfinished upstream SSE before shutting down",async()=
     await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true});
   }
 },5000);
+
+
+test("native attached and clustered options cannot override the launch profile",async()=>{
+  const input=await fixture();
+  const cases:[HarnessLaunchInput["harness"],string,string[][]][]=[
+    ["codex","0.153.4",[["exec","-mvendor/second"],["-pother"],["-hmvendor/second"],["-hcmodel=other"],["--oss"],["--local-provider=ollama"],["--remote","ws://127.0.0.1:9999"],["-c",'"model_provider"="outside"']]],
+    ["grok","1.0.13",[["-mvendor/second"],["-cmvendor/second"]]],
+    ["opencode2","2.0.0-beta-19157",[["run","-moutside/model"],["run","-cmoutside/model"]]],
+  ];
+  try{
+    for(const [harness,version,arguments_] of cases)for(const args of arguments_)
+      await expect(prepareHarnessLaunch({...input,harness,version,args})).rejects.toThrow("profile");
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});
+
+test("native argument values and end-of-options prompts keep literal model-looking text",async()=>{
+  const input=await fixture();
+  try{
+    for(const [index,args] of [["exec","-oresult-mmodel.txt","--","-mvendor/second"],["exec","-capproval_policy=never","--","--model=literal"]].entries()){
+      const prepared=await prepareHarnessLaunch({...input,harness:"codex",version:"0.153.4",stateDir:join(input.stateDir,String(index)),args});
+      expect(prepared.args.slice(-args.length)).toEqual(args);
+    }
+    const grok=await prepareHarnessLaunch({...input,harness:"grok",version:"1.0.13",stateDir:join(input.stateDir,"grok"),args:["-p-mvendor/second"]});
+    try{expect(grok.args.at(-1)).toBe("-p-mvendor/second");}finally{await grok.cleanup?.();}
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});
+
+test("Claude fallback model selection is owned by the launch profile",async()=>{
+  const input=await fixture();
+  try{
+    for(const args of [["--fallback-model","outside/model"],["--fallback-model=outside/model,other/model"]])
+      await expect(prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.263",args})).rejects.toThrow("profile");
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});

@@ -7,6 +7,8 @@ import { compatible, endpoint, codingEligible } from "./domain";
 import { childEnvironment } from "./harness-environment";
 import { validateGrokResume } from "./grok-args";
 import { prepareClineLaunch } from "./cline-backend";
+import { assertHarnessArguments } from "./harness-arguments";
+import { isolateOpenCode2, openCode2ConfigText } from "./opencode2-config";
 import type { HarnessId, HarnessLaunchInput, PreparedLaunch } from "./harness-types";
 const execute = promisify(execFile);
 const KEY = "SWITCHER_HARNESS_API_KEY";
@@ -31,6 +33,10 @@ export function validateHarnessVersion(harness: HarnessId, version: string | und
   if(harness==="grok"&&!versionAtLeast(version,[1,0,13])) throw new Error("Grok Build >=1.0.13 is required by this remote catalog adapter.");
   if(harness==="opencode2"&&!version?.includes("opencode2")&&!versionAtLeast(version,[2,0,0])) throw new Error("Use the OpenCode 2 executable, not legacy OpenCode.");
   if(harness==="cline"&&!versionAtLeast(version,[3,0,61])) throw new Error("Cline >=3.0.61 is required by this native provider adapter.");
+  if(harness==="opencode2") {
+    const preview=version?.match(/opencode2.*beta-(\d+)/i);
+    if(!(preview&&Number(preview[1])>=19157)&&!versionAtLeast(version,[2,0,0]))throw new Error("OpenCode 2 beta-19157 or newer is required for isolated provider configuration; legacy OpenCode is not supported by this adapter.");
+  }
 }
 async function jsonFile(dir:string,name:string,value:unknown) {
   const path=join(dir,name);await writeFile(path,JSON.stringify(value,null,2)+"\n",{mode:0o600,flag:"wx"});return path;
@@ -248,38 +254,22 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   }]));
   const settings:Record<string,string>={baseURL:input.baseUrl};
   env[KEY]=input.credential??"switcher-local-no-auth";settings.apiKey=`{env:${KEY}}`;
-  const config={model:`${providerID}/${input.model}`,providers:{[providerID]:{name:"Switcher",env:[KEY],package:`@opencode-ai/ai/providers/${packageName}`,settings,models}}};
-  const file=await jsonFile(input.stateDir,"opencode.json",config);configPaths.push(file);
+  const isolated=await isolateOpenCode2(input.cwd,input.stateDir,providerID);
+  const config={...isolated.config,model:`${providerID}/${input.model}`,providers:{[providerID]:{name:"Switcher",env:[KEY],package:`@opencode-ai/ai/providers/${packageName}`,settings,models}}};
+  const file=join(input.stateDir,"opencode.json");
+  await writeFile(file,openCode2ConfigText(config,providerID,KEY),{mode:0o600,flag:"wx"});
+  configPaths.push(file,isolated.instructionFile);
+  Object.assign(env,isolated.env);
   env.OPENCODE_CONFIG=file;
-  // Inline content wins over project provider settings without changing user files.
-  env.OPENCODE_CONFIG_CONTENT=JSON.stringify({model:config.model});
+  env.OPENCODE_CONFIG_CONTENT="{}";
   const native=args[0]==="run"?["run","--standalone","--model",`${providerID}/${input.model}`,...args.slice(1)]:args[0]==="models"?["models","--standalone",...args.slice(1)]:["--standalone",...args];
   warnings.push("OpenCode 2 uses a standalone server so concurrent launch profiles cannot share provider configuration.");
+  warnings.push("OpenCode 2 snapshots native permissions, agent prompts and AGENTS.md for this launch; provider overrides, plugins and live configuration reloads are isolated. Native session data remains in its original XDG data directory.");
   if(input.models.some(m=>!m.supportedParameters||!m.inputModalities||!m.outputModalities)) warnings.push("OpenCode requires complete capabilities; unknown fields use text-only/tool-enabled native defaults, not verified provider capabilities.");
   return {executable,args:native,env,configPaths,warnings};
 }
 export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
-  const reserved:Record<HarnessId,string[]>={
-    claude:["--model","--settings","--setting-sources"],
-    codex:["--model","-m","--profile","-p"],
-    grok:["--model","-m","--oauth","--leader","--leader-socket"],
-    pi:["--model","--provider","--api-key","--models"],
-    opencode2:["--model","-m","--server"],
-    cline:["--provider","-P","--model","-m","--data-dir","--config","--cwd","-c","--auto-approve","--autoapprove","-y","--yolo","-z","--zen","--key","-k","--id","--system","-s","--plan","-p","--json","--retries","--timeout","-t","--hooks-dir","--worktree","-i","--tui"],
-  };
-  for(let i=0;i<(input.args??[]).length;i++){
-    const arg=input.args![i],flag=arg.split("=")[0];
-    const clineAttached = input.harness === "cline" &&
-      ((/^-[Pmksct](?!$)/.test(arg)) || arg.startsWith("--provider=") || arg.startsWith("--model=") ||
-       arg.startsWith("--key=") || arg.startsWith("--cwd=") || arg.startsWith("--config=") ||
-       arg.startsWith("--data-dir=") || arg.startsWith("--system=") || arg.startsWith("--timeout=") ||
-       arg.startsWith("--retries="));
-    if(reserved[input.harness].includes(flag) || clineAttached) throw new Error("Provider/model and native lifecycle arguments are reserved by the launch profile; update the profile instead.");
-    if(input.harness==="codex"&&(flag==="-c"||flag==="--config"||arg.startsWith("-c"))){
-      const value=arg==="-c"||arg==="--config"?input.args![i+1]??"":arg.replace(/^(-c|--config=)/,"");
-      if(/^(model|model_provider|model_providers|model_catalog_json)([.=]|$)/.test(value.trim())) throw new Error("Codex provider/model configuration must come from the launch profile.");
-    }
-  }
+  assertHarnessArguments(input.harness,input.args ?? []);
   const nativeAuth=input.protocol==="anthropic-messages"?"x-api-key":"bearer";
   const adaptAuth=(input.harness==="opencode2"||input.harness==="pi"||input.harness==="cline")&&(input.authStyle??"bearer")!==nativeAuth;
   if((input.credential&&!adaptAuth)||input.harness==="grok") return prepareNativeLaunch(input);

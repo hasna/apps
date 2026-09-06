@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { assertHarnessArguments } from "./harness-arguments";
 import { parseArgs } from "node:util";
 import { SwitcherError } from "./sdk";
 import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, compatible, codingEligible } from "./domain";
@@ -115,6 +116,7 @@ export async function main(args = process.argv.slice(2)) {
     throw new Fault(400, "conflicting_options", "--dry-run belongs to launch.");
   if (command === "launch" && provided(["name", "harness", "file"]))
     throw new Fault(400, "conflicting_options", "Launch takes its harness from the positional argument or saved profile; edit named records through providers/profiles.");
+  if (command === "launch" && values.provider) assertHarnessArguments(parse(harnessSchema,action),nativeArgs);
   const runtime = await openCliRuntime(process.env,provider=>credentials.resolve(provider));
   const client = runtime.client;
   try {
@@ -153,10 +155,12 @@ export async function main(args = process.argv.slice(2)) {
       if (values.model || values.protocol || values.url || values["credential-env"])
         throw new Error("Use --provider PROVIDER for a direct launch, or update the saved profile explicitly.");
       const profile = await client.getProfile(profileId);
+      assertHarnessArguments(profile.harness,nativeArgs);
       await client.refreshModels(profile.providerId);
     }
     if (values["dry-run"]) {
       const plan = await client.launchPlan(profileId);
+      assertHarnessArguments(plan.profile.harness,nativeArgs);
       if (backend === "ori") {
         const {contract,warnings} = await validateOriForPlan(plan, {oriExecutable: values["ori-executable"], args: nativeArgs, cwd: values.cwd});
         output({...plan, backend: {kind: "ori", executable: contract.executable, version: contract.version, target: plan.profile.harness, provider: "openrouter", model: plan.profile.model, warnings: [...plan.warnings,...warnings]}});
