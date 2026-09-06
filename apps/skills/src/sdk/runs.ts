@@ -11,7 +11,9 @@
  * `FOR UPDATE SKIP LOCKED`, SQLite `BEGIN IMMEDIATE` plus a conditional claim) — no
  * business logic is duplicated here.
  */
-import { z } from "zod";
+// The monorepo builds with Zod 3 while consumers may install Zod 4. Both
+// expose this stable subpath; emitted declarations must name their real API.
+import { z } from "zod/v3";
 import {
   REMOTE_SKILL_RUN_CONTRACT_VERSION,
   normalizeRemoteSkillRunContract,
