@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { createRemoteSkillsClient } from "../../lib/remote-client.js";
+import { createRemoteSkillsClient, RemoteCapabilityUnavailableError } from "../../lib/remote-client.js";
 
 /** These commands expose the configured server's account contract, without local prices. */
 export function registerRemoteAccount(parent: Command) {
@@ -44,7 +44,9 @@ export async function execute(options: { json: boolean }, action: (client: NonNu
     console.log(JSON.stringify(result, null, 2));
   } catch (error) {
     const message = error instanceof Error ? error.message : "The Skills server request failed";
-    if (options.json) console.log(JSON.stringify({ error: message }));
+    if (options.json) console.log(JSON.stringify({ error: message,
+      ...(error instanceof RemoteCapabilityUnavailableError ? { code: error.code, status: error.status } : {}),
+    }));
     else console.error(message);
     process.exitCode = 1;
   }

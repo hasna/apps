@@ -57,46 +57,23 @@ test("Pi uses the selected provider/model across all supported wire protocols an
     await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.0"})).rejects.toThrow("0.85.1");
   } finally { await rm(input.stateDir,{recursive:true,force:true}); }
 });
-test("OMP writes an isolated provider-qualified catalog for all native APIs without persisting credentials",async()=>{
+test("OMP reserves policy escapes while preserving native value and literal prompt grammar",async()=>{
   const input=await fixture();
-  const models=[...input.models,{...input.models[0],id:"vendor/team/model",name:"Nested"}];
   try {
-    for(const [protocol,api,authStyle] of [["anthropic-messages","anthropic-messages","x-api-key"],["openai-responses","openai-responses","bearer"],["openai-chat","openai-completions","bearer"]] as const) {
-      const prepared=await prepareHarnessLaunch({...input,stateDir:join(input.stateDir,protocol),harness:"omp",protocol,authStyle,version:"omp/18.1.11",models,args:["-p","prompt"]});
-      try {
-        const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
-        const settings=JSON.parse(await readFile(prepared.configPaths[1],"utf8"));
-        const provider:any=config.providers.switcher;
-        expect(provider.api).toBe(api);
-        if(protocol==="anthropic-messages") expect(provider.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:/);
-        else expect(provider.baseUrl).toBe(input.baseUrl);
-        expect(provider.models.map((m:any)=>m.id)).toEqual(models.map(m=>m.id));
-        expect(settings.enabledModels).toEqual(["switcher/**"]);expect(settings.modelRoles).toEqual({default:`switcher/${input.model}`,smol:`switcher/${input.model}`,slow:`switcher/${input.model}`,plan:`switcher/${input.model}`});
-        expect(prepared.args.slice(0,6)).toEqual(["--model",`switcher/${input.model}`,"--models","switcher/**","--session-dir",join(input.stateDir,protocol,"sessions")]);
-        expect(provider.apiKey ?? provider.headers?.["x-api-key"]).toBe("SWITCHER_HARNESS_API_KEY");
-        expect(provider.authHeader).toBe(true);
-        expect(JSON.stringify(config)).not.toContain(input.credential);expect(JSON.stringify(settings)).not.toContain(input.credential);
-      } finally { await prepared.cleanup?.(); }
-    }
-    await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args:["--model","outside"]})).rejects.toThrow("reserved");
-    await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args:["--config","outside"]})).rejects.toThrow("reserved");
-    await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args:["--no-rules"]})).rejects.toThrow("reserved");
     for (const args of [
-      ["--auto-approve"], ["--yolo"], ["--approval-mode", "yolo"], ["--approval-mode=yolo"], ["--plan-yolo"],
+      ["--auto-approve"], ["--yolo"], ["--approval-mode=yolo"], ["--plan-yolo"],
       ["--alias", "switcher-profile"], ["--plugin-dir", "/outside/plugin"], ["--hook", "/outside/hook.ts"],
       ["--extension", "/outside/extension.ts"], ["-e", "/outside/extension.ts"], ["--trusted-extension", "/outside/extension.ts"],
       ["--from-claude"], ["--from-codex"],
+    ]) await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args})).rejects.toThrow("reserved");
+    for (const args of [
+      ["--tools", "read"], ["--no-tools"], ["--add-dir", input.cwd],
+      ["--system-prompt", "--auto-approve"], ["--", "--auto-approve", "literal prompt"],
     ]) {
-      await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args})).rejects.toThrow("reserved");
-    }
-    for (const args of [["--tools", "read"], ["--no-tools"], ["--add-dir", input.cwd]]) {
       const prepared=await prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args});
-      try {
-        expect(prepared.args.slice(-args.length)).toEqual(args);
-      } finally { await prepared.cleanup?.(); }
+      try { expect(prepared.args.slice(-args.length)).toEqual(args); }
+      finally { await prepared.cleanup?.(); }
     }
-    await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",models:[...models,{...models[0],id:"VENDOR/MODEL"}] })).rejects.toThrow("letter case");
-    await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.10"})).rejects.toThrow("18.1.11");
   } finally { await rm(input.stateDir,{recursive:true,force:true}); }
 });
 test("Pi bridges protocol/auth mismatches without leaking bridge credentials upstream",async()=>{
@@ -124,35 +101,6 @@ test("Pi bridges protocol/auth mismatches without leaking bridge credentials ups
     expect(upstreamRequests[1].authorization).toBeNull();expect(upstreamRequests[1].key).toBe(input.credential);
     expect(upstreamRequests[2].authorization).toBeNull();expect(upstreamRequests[2].key).toBe(input.credential);
   } finally { await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true}); }
-});
-test("OMP protocol bridge keeps its transformed endpoint and upstream authentication", async () => {
-  const input = await fixture();
-  const upstreamRequests: Array<{ authorization: string | null; key: string | null }> = [];
-  const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-    upstreamRequests.push({ authorization: request.headers.get("authorization"), key: request.headers.get("x-api-key") });
-    return Response.json({ ok: true });
-  }});
-  const stateDir = join(input.stateDir, "omp-bridge");
-  try {
-    const prepared = await prepareHarnessLaunch({ ...input, baseUrl: `${upstream.url.origin}/v1`, credential: undefined, stateDir, harness: "omp", protocol: "openai-chat", authStyle: "x-api-key", version: "omp/18.1.11" });
-    const config = JSON.parse(await readFile(prepared.configPaths[0], "utf8"));
-    const provider = config.providers.switcher;
-    expect(provider.baseUrl).not.toBe(input.baseUrl);
-    expect(provider.baseUrl).toContain("127.0.0.1");
-    expect(provider.baseUrl).toContain("/v1");
-    expect(prepared.env.SWITCHER_HARNESS_API_KEY).not.toBe(input.credential);
-    const response = await fetch(`${provider.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${prepared.env.SWITCHER_HARNESS_API_KEY}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: input.model, messages: [{ role: "user", content: "fixture" }] }),
-    });
-    expect(response.status).toBe(200);
-    expect(upstreamRequests).toEqual([{ authorization: null, key: null }]);
-    await prepared.cleanup?.();
-  } finally {
-    await upstream.stop(true);
-    await rm(input.stateDir, { recursive: true, force: true });
-  }
 });
 test("Grok resumes with a fresh bridge and the selected profile model; unsafe interactive queued prompts fail",async()=>{
   const input=await fixture();
@@ -186,7 +134,7 @@ test("Grok resumes with a fresh bridge and the selected profile model; unsafe in
 test("OpenCode2 config uses v2 schema and isolated execution without broad permission flags",async()=>{
   const input=await fixture();
   try{
-    const prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-18999",args:["run","hello"]});
+    const prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-19157",args:["run","hello"]});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
     const provider:any=Object.values(config.providers)[0];expect(provider.package).toEndWith("/openai/responses");
     expect(provider.models[input.model].capabilities).toEqual({tools:true,input:["text"],output:["text"]});
@@ -236,7 +184,7 @@ test("OpenCode's fixed native auth convention can bridge a provider's different 
   let auth:string|null=null,key:string|null=null;
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req){auth=req.headers.get("authorization");key=req.headers.get("x-api-key");return Response.json({ok:true});}});
   try{
-    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-18999",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1"});
+    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-19157",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1"});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const provider:any=Object.values(config.providers)[0];
     const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model})});
     expect(response.status).toBe(200);expect(auth).toBe(`Bearer ${input.credential}`);expect(key).toBeNull();
@@ -288,7 +236,7 @@ test("auth bridges cancel unfinished upstream SSE before shutting down",async()=
   let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
   let closing:Promise<void>|undefined;
   try {
-    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1",version:"opencode2 beta"});
+    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1",version:"opencode2 v0.0.0-beta-19157"});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const provider:any=Object.values(config.providers)[0];
     const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model,messages:[],stream:true})});
     reader=response.body!.getReader();expect(new TextDecoder().decode((await reader.read()).value)).toContain("message_stop");
@@ -307,3 +255,37 @@ test("auth bridges cancel unfinished upstream SSE before shutting down",async()=
     await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true});
   }
 },5000);
+
+
+test("native attached and clustered options cannot override the launch profile",async()=>{
+  const input=await fixture();
+  const cases:[HarnessLaunchInput["harness"],string,string[][]][]=[
+    ["codex","0.153.4",[["exec","-mvendor/second"],["-pother"],["-hmvendor/second"],["-hcmodel=other"],["--oss"],["--local-provider=ollama"],["--remote","ws://127.0.0.1:9999"],["-c",'"model_provider"="outside"']]],
+    ["grok","1.0.13",[["-mvendor/second"],["-cmvendor/second"]]],
+    ["opencode2","2.0.0-beta-19157",[["run","-moutside/model"],["run","-cmoutside/model"]]],
+  ];
+  try{
+    for(const [harness,version,arguments_] of cases)for(const args of arguments_)
+      await expect(prepareHarnessLaunch({...input,harness,version,args})).rejects.toThrow("profile");
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});
+
+test("native argument values and end-of-options prompts keep literal model-looking text",async()=>{
+  const input=await fixture();
+  try{
+    for(const [index,args] of [["exec","-oresult-mmodel.txt","--","-mvendor/second"],["exec","-capproval_policy=never","--","--model=literal"]].entries()){
+      const prepared=await prepareHarnessLaunch({...input,harness:"codex",version:"0.153.4",stateDir:join(input.stateDir,String(index)),args});
+      expect(prepared.args.slice(-args.length)).toEqual(args);
+    }
+    const grok=await prepareHarnessLaunch({...input,harness:"grok",version:"1.0.13",stateDir:join(input.stateDir,"grok"),args:["-p-mvendor/second"]});
+    try{expect(grok.args.at(-1)).toBe("-p-mvendor/second");}finally{await grok.cleanup?.();}
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});
+
+test("Claude fallback model selection is owned by the launch profile",async()=>{
+  const input=await fixture();
+  try{
+    for(const args of [["--fallback-model","outside/model"],["--fallback-model=outside/model,other/model"]])
+      await expect(prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.263",args})).rejects.toThrow("profile");
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});

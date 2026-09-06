@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 import { compatible, endpoint, codingEligible } from "./domain";
 import { childEnvironment } from "./harness-environment";
 import { validateGrokResume } from "./grok-args";
+import { assertHarnessArguments } from "./harness-arguments";
+import { isolateOpenCode2, openCode2ConfigText } from "./opencode2-config";
 import { prepareOmpLaunch } from "./omp-backend";
 import type { HarnessId, HarnessLaunchInput, PreparedLaunch } from "./harness-types";
 const execute = promisify(execFile);
@@ -27,10 +29,12 @@ const versionAtLeast = (raw: string | undefined, minimum: number[]) => {
 export function validateHarnessVersion(harness: HarnessId, version: string | undefined): void {
   if(harness==="claude"&&!versionAtLeast(version,[2,1,242])) throw new Error("Claude Code >=2.1.242 is required for a full native modelPicker.");
   if(harness==="pi"&&!versionAtLeast(version,[0,85,1])) throw new Error("Pi >=0.85.1 is required by this catalog adapter.");
-  if(harness==="omp"&&!versionAtLeast(version,[18,1,11])) throw new Error("OMP >=18.1.11 is required by this catalog adapter.");
   if(harness==="codex"&&!versionAtLeast(version,[0,153,0])) throw new Error("Codex >=0.153.0 is required by this catalog adapter.");
   if(harness==="grok"&&!versionAtLeast(version,[1,0,13])) throw new Error("Grok Build >=1.0.13 is required by this remote catalog adapter.");
-  if(harness==="opencode2"&&!version?.includes("opencode2")&&!versionAtLeast(version,[2,0,0])) throw new Error("Use the OpenCode 2 executable, not legacy OpenCode.");
+  if(harness==="opencode2") {
+    const preview=version?.match(/opencode2.*beta-(\d+)/i);
+    if(!(preview&&Number(preview[1])>=19157)&&!versionAtLeast(version,[2,0,0]))throw new Error("OpenCode 2 beta-19157 or newer is required for isolated provider configuration; legacy OpenCode is not supported by this adapter.");
+  }
 }
 async function jsonFile(dir:string,name:string,value:unknown) {
   const path=join(dir,name);await writeFile(path,JSON.stringify(value,null,2)+"\n",{mode:0o600,flag:"wx"});return path;
@@ -248,45 +252,24 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   }]));
   const settings:Record<string,string>={baseURL:input.baseUrl};
   env[KEY]=input.credential??"switcher-local-no-auth";settings.apiKey=`{env:${KEY}}`;
-  const config={model:`${providerID}/${input.model}`,providers:{[providerID]:{name:"Switcher",env:[KEY],package:`@opencode-ai/ai/providers/${packageName}`,settings,models}}};
-  const file=await jsonFile(input.stateDir,"opencode.json",config);configPaths.push(file);
+  const isolated=await isolateOpenCode2(input.cwd,input.stateDir,providerID);
+  const config={...isolated.config,model:`${providerID}/${input.model}`,providers:{[providerID]:{name:"Switcher",env:[KEY],package:`@opencode-ai/ai/providers/${packageName}`,settings,models}}};
+  const file=join(input.stateDir,"opencode.json");
+  await writeFile(file,openCode2ConfigText(config,providerID,KEY),{mode:0o600,flag:"wx"});
+  configPaths.push(file,isolated.instructionFile);
+  Object.assign(env,isolated.env);
   env.OPENCODE_CONFIG=file;
-  // Inline content wins over project provider settings without changing user files.
-  env.OPENCODE_CONFIG_CONTENT=JSON.stringify({model:config.model});
+  env.OPENCODE_CONFIG_CONTENT="{}";
   const native=args[0]==="run"?["run","--standalone","--model",`${providerID}/${input.model}`,...args.slice(1)]:args[0]==="models"?["models","--standalone",...args.slice(1)]:["--standalone",...args];
   warnings.push("OpenCode 2 uses a standalone server so concurrent launch profiles cannot share provider configuration.");
-  if(input.models.some(m=>!m.supportedParameters||!m.inputModalities||!m.outputModalities)) warnings.push("OpenCode requires complete capabilities; unknown fields use text-only/tool-enabled native defaults, not verified provider capabilities.");
-  return {executable,args:native,env,configPaths,warnings};
+    warnings.push("OpenCode 2 snapshots native permissions, agent prompts and AGENTS.md for this launch; provider overrides, plugins and live configuration reloads are isolated. Native session data remains in its original XDG data directory.");
+    if(input.models.some(m=>!m.supportedParameters||!m.inputModalities||!m.outputModalities)) warnings.push("OpenCode requires complete capabilities; unknown fields use text-only/tool-enabled native defaults, not verified provider capabilities.");
+    return {executable,args:native,env,configPaths,warnings};
 }
 export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
-  const reserved:Record<HarnessId,string[]>={
-    claude:["--model","--settings","--setting-sources"],
-    codex:["--model","-m","--profile","-p"],
-    grok:["--model","-m","--oauth","--leader","--leader-socket"],
-    pi:["--model","--provider","--api-key","--models"],
-    // OMP's launch profile owns provider/model/config/session state and the
-    // permission boundary. Keep native flags that can change those values,
-    // install code, import foreign sessions, or mutate global shell state out
-    // of the caller's control. Tool selection and workspace expansion remain
-    // pass-through so an operator can deliberately request a read-only tool
-    // subset or an additional project directory.
-    omp:["--model","--provider","--api-key","--profile","--cwd","--config","--session-dir","--models","--no-rules","--smol","--slow","--plan","--prewalk","--prewalk-into","--plan-yolo-into","--plan-yolo","--auto-approve","--yolo","--approval-mode","--alias","--plugin-dir","--hook","--extension","-e","--trusted-extension","--from-claude","--from-codex"],
-    opencode2:["--model","-m","--server"],
-  };
-  for(let i=0;i<(input.args??[]).length;i++){
-    const arg=input.args![i],flag=arg.split("=")[0];
-    if(reserved[input.harness].includes(flag)) throw new Error("Provider/model, policy, and isolation arguments are reserved by the launch profile; update the profile instead.");
-    if(input.harness==="codex"&&(flag==="-c"||flag==="--config"||arg.startsWith("-c"))){
-      const value=arg==="-c"||arg==="--config"?input.args![i+1]??"":arg.replace(/^(-c|--config=)/,"");
-      if(/^(model|model_provider|model_providers|model_catalog_json)([.=]|$)/.test(value.trim())) throw new Error("Codex provider/model configuration must come from the launch profile.");
-    }
-  }
+  assertHarnessArguments(input.harness,input.args ?? []);
   const nativeAuth=input.protocol==="anthropic-messages"?"x-api-key":"bearer";
-  // OMP's Anthropic client always adds Authorization on non-official
-  // endpoints, even when a custom x-api-key header is configured. Bridge that
-  // cell so the upstream receives exactly the selected auth style.
-  const adaptAuth=(input.harness==="opencode2"||input.harness==="pi")&&(input.authStyle??"bearer")!==nativeAuth
-    || (input.harness==="omp"&&input.protocol==="anthropic-messages"&&input.authStyle==="x-api-key");
+  const adaptAuth=(input.harness==="opencode2"||input.harness==="pi")&&(input.authStyle??"bearer")!==nativeAuth;
   if((input.credential&&!adaptAuth)||input.harness==="grok") return prepareNativeLaunch(input);
   // No-auth endpoints must not receive a native login credential or even a
   // synthetic token. Authenticate only to this loopback hop, then strip auth.

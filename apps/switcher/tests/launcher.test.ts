@@ -35,7 +35,7 @@ exit 7
 `,{mode:0o700});
   const records:any[]=[]; let resolved=0;
   const client={
-    getProfile:async(id:string)=>({id,providerId:"openrouter"}), refreshModels:async()=>({}),
+    getProfile:async(id:string)=>({id,providerId:"openrouter",harness:"codex"}), refreshModels:async()=>({}),
     launchPlan:async()=>({planToken:"a".repeat(64),profile:{harness:"codex",model:"openrouter/model"},provider:{id:"openrouter",baseUrl:"https://openrouter.ai/api/v1",protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_OPENROUTER",authStyle:"bearer"},catalog:{models:[{id:"openrouter/model",name:"Fixture",supportedParameters:["tools"]},{id:"other/model",name:"Other",available:false}],refreshedAt:new Date().toISOString(),source:"remote"},warnings:[]}),
     createRun:async(body:any)=>({id:body.profileId,version:1}), finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);},
   } as unknown as SwitcherClient;
@@ -51,7 +51,7 @@ exit 7
     const diagnostic=await validateOriForPlan(await routedClient.launchPlan("ori-profile"),{oriExecutable:executable,cwd:dir});
     expect(diagnostic.contract.version).toBe("0.12.1+fixture");
     const selectedKey=process.env.OPENROUTER_API_KEY,unrelatedKey=process.env.OTHER_PROVIDER_API_KEY;
-    process.env.OPENROUTER_API_KEY="fixture-ambient";process.env.OTHER_PROVIDER_API_KEY="unrelated-fixture";
+    process.env.OPENROUTER_API_KEY="fixture";process.env.OTHER_PROVIDER_API_KEY="fixture";
     try {
       await writeFile(nativeExecutable,"#!/bin/sh\nif [ -n \"$OPENROUTER_API_KEY$OTHER_PROVIDER_API_KEY\" ]; then exit 91; fi\necho codex-cli 0.153.4\n",{mode:0o700});
       await expect(validateOriForPlan(await routedClient.launchPlan("ori-profile"),{oriExecutable:executable,cwd:dir})).resolves.toMatchObject({contract:{version:"0.12.1+fixture"}});
@@ -90,7 +90,7 @@ test("concurrent launches isolate config, preserve child exit on API failure, ti
   const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});const dir=await mkdtemp(join(root,"launch-"));
   const executable=join(dir,"fake-codex");const records:any[]=[];
   await writeFile(executable,`#!/bin/sh\nif [ "$1" = '--version' ]; then echo 'codex-cli 0.153.4'; exit 0; fi\nprintf '%s\\n' "$@" > "$PWD/args"\nexit 7\n`,{mode:0o700});
-  const client={getProfile:async(id:string)=>({id,providerId:id}),refreshModels:async()=>({}),launchPlan:async(id:string)=>({profile:{harness:"codex",model:id},provider:{baseUrl:"https://example.com/v1",protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_TEST"},catalog:{models:[{id,name:id}]},warnings:[]}),createRun:async(body:any)=>({id:body.profileId,version:1}),finishRun:async(id:string,_v:number,body:any)=>{records.push({id,...body});throw new Error("API temporarily unavailable");}} as unknown as SwitcherClient;
+  const client={getProfile:async(id:string)=>({id,providerId:id,harness:"codex"}),refreshModels:async()=>({}),launchPlan:async(id:string)=>({profile:{harness:"codex",model:id},provider:{baseUrl:"https://example.com/v1",protocol:"openai-responses",credentialEnv:"SWITCHER_PROVIDER_TEST"},catalog:{models:[{id,name:id}]},warnings:[]}),createRun:async(body:any)=>({id:body.profileId,version:1}),finishRun:async(id:string,_v:number,body:any)=>{records.push({id,...body});throw new Error("API temporarily unavailable");}} as unknown as SwitcherClient;
   const previous=process.env.SWITCHER_PROVIDER_TEST;process.env.SWITCHER_PROVIDER_TEST="test-not-real";
   try{
     const a=join(dir,"a"),b=join(dir,"b");await mkdir(a);await mkdir(b);
@@ -110,7 +110,7 @@ test.skipIf(process.platform === "win32")("normal exit and timeout stop owned ha
   await writeFile(descendant,`import {writeFileSync} from 'node:fs';\nprocess.on('SIGTERM',()=>{});writeFileSync('descendant.pid',String(process.pid));setInterval(()=>writeFileSync('heartbeat',String(Date.now())),25);\n`);
   await writeFile(executable,`#!${process.execPath}\nimport {spawn} from 'node:child_process';import {existsSync} from 'node:fs';\nif(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0);}\nspawn(process.execPath,[${JSON.stringify(descendant)}],{stdio:'ignore'}).unref();\nprocess.on('SIGTERM',()=>process.exit(143));\nsetInterval(()=>{if(process.argv.includes('--fixture-exit')&&existsSync('heartbeat'))process.exit(7);},25);\n`,{mode:0o700});
   const records:any[]=[];
-  const client={getProfile:async()=>({providerId:"fixture"}),refreshModels:async()=>({}),launchPlan:async()=>({profile:{harness:"codex",model:"fixture-model"},provider:{baseUrl:"http://127.0.0.1:1",protocol:"openai-responses"},catalog:{models:[{id:"fixture-model",name:"Fixture"}]},warnings:[]}),createRun:async()=>({id:"fixture",version:1}),finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);}} as unknown as SwitcherClient;
+  const client={getProfile:async()=>({providerId:"fixture",harness:"codex"}),refreshModels:async()=>({}),launchPlan:async()=>({profile:{harness:"codex",model:"fixture-model"},provider:{baseUrl:"http://127.0.0.1:1",protocol:"openai-responses"},catalog:{models:[{id:"fixture-model",name:"Fixture"}]},warnings:[]}),createRun:async()=>({id:"fixture",version:1}),finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);}} as unknown as SwitcherClient;
   try {
     for(const mode of ["normal","timeout"]) {
       const project=join(dir,mode);await mkdir(project);
@@ -129,3 +129,18 @@ test.skipIf(process.platform === "win32")("normal exit and timeout stop owned ha
     }
   } finally {await rm(dir,{recursive:true,force:true});}
 },25_000);
+
+
+test("SDK rejects native profile overrides before catalog or credential lookup",async()=>{
+  let touched=false;
+  const client={getProfile:async()=>({harness:"codex"}),refreshModels:async()=>{touched=true;throw new Error("unexpected discovery");}} as unknown as SwitcherClient;
+  await expect(launch(client,"saved",{args:["exec","-moutside"],resolveCredential:async()=>{touched=true;return "fixture";}})).rejects.toThrow("profile");
+  expect(touched).toBe(false);
+});
+
+test("a changed API launch plan is checked again before local credential lookup",async()=>{
+  let credentialRead=false;
+  const client={getProfile:async()=>({harness:"claude"}),launchPlan:async()=>({profile:{harness:"codex"}})} as unknown as SwitcherClient;
+  await expect(launch(client,"changed",{refresh:false,args:["-moutside"],resolveCredential:async()=>{credentialRead=true;return "fixture";}})).rejects.toThrow("profile");
+  expect(credentialRead).toBe(false);
+});

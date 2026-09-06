@@ -85,7 +85,7 @@ test("Ori rejects OpenCode 2, Claude global-config mutation, and provider/model 
   expect(() => prepareOriLaunch({...request(), target: "pi"})).toThrow("direct Switcher adapter");
   expect(() => requireOriHarness({version:"0.12.1",executable:"ori",harnesses:[{kind:"pi",installed:true,path:"/fixture/pi"}]},"pi")).toThrow("direct Switcher adapter");
   expect(() => prepareOriLaunch({...request(), target: "claude", protocol: "anthropic-messages"})).toThrow("preservation subset");
-  for (const args of [["--model=other/model"], ["-mother/model"], ["--provider", "other"], ["--provider=other"], ["-c", "model_providers.switcher.base_url=https://other.example"], ["-cmodel_provider=other"]])
+  for (const args of [["-hmother/model"], ["-pother"], ["--oss"], ["--remote=ws://127.0.0.1:9999"], ["--model=other/model"], ["-mother/model"], ["--provider", "other"], ["--provider=other"], ["-c", "model_providers.switcher.base_url=https://other.example"], ["-cmodel_provider=other"]])
     expect(() => prepareOriLaunch({...request(), args})).toThrow("reserved");
 });
 
@@ -131,4 +131,11 @@ test.skipIf(!process.env.SWITCHER_TEST_ORI_EXECUTABLE)("installed Ori read-only 
     expect(harness.path).toBeDefined();
     expect(await Bun.file(harness.path!).exists()).toBe(true);
   }
+});
+
+
+test("Ori passthrough keeps literal flag text after native option parsing ends",()=>{
+  const args=["exec","--","-mnot-an-option"];
+  expect(prepareOriLaunch({...request(),args}).args.slice(-args.length)).toEqual(args);
+  expect(prepareOriLaunch({...request(),target:"grok",protocol:"openai-chat",args:["-p-mtext"]}).args.at(-1)).toBe("-p-mtext");
 });

@@ -192,6 +192,7 @@ export {
   createRemoteSkillsClient,
   RemoteRouteUnsupportedError,
   RemoteRequestError,
+  RemoteCapabilityUnavailableError,
   type RemotePin,
   type RemoteSkillSummary,
   type UpdatedSincePage,

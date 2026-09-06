@@ -30,10 +30,24 @@ export class RemoteRequestError extends Error {
   constructor(
     readonly path: string,
     readonly status: number,
-    statusText: string,
+    _statusText?: string,
   ) {
-    super(`Remote request to ${path} failed: HTTP ${status}${statusText ? ` ${statusText}` : ""}`);
+    // HTTP reason phrases are server-controlled, just like response bodies.
+    // Keep the optional argument for existing SDK callers without displaying it.
+    super(`Remote request to ${path} failed: HTTP ${status}`);
     this.name = "RemoteRequestError";
+  }
+}
+
+/** A recognized unavailable capability; all displayed text is client-owned. */
+export class RemoteCapabilityUnavailableError extends RemoteRequestError {
+  readonly code = "SUBSCRIPTION_CHECKOUT_UNAVAILABLE" as const;
+
+  constructor() {
+    super("/api/v1/billing/checkout", 503);
+    this.name = "RemoteCapabilityUnavailableError";
+    this.message = "Subscription checkout is unavailable on the configured Skills server. " +
+      "Use skills credits packs to view credit packs, or skills billing portal to manage an existing subscription.";
   }
 }
 
@@ -133,9 +147,15 @@ export class RemoteSkillsClient {
       ) {
         return response;
       }
+      void response.body?.cancel().catch(() => {});
       throw new RemoteRouteUnsupportedError(routePath, response.status, this.apiUrl);
     }
     if (!response.ok) {
+      if (path === "/api/v1/billing/checkout" && options?.method === "POST" && response.status === 503 &&
+        await responseBodyCarriesCode(response, ["SUBSCRIPTION_CHECKOUT_UNAVAILABLE"])) {
+        throw new RemoteCapabilityUnavailableError();
+      }
+      void response.body?.cancel().catch(() => {});
       throw new RemoteRequestError(routePath, response.status, response.statusText);
     }
     return response;
@@ -568,14 +588,39 @@ function normalizeSkillSummaryList(payload: unknown): RemoteSkillSummary[] {
 
 /** True when a 404's JSON body carries one of the given `code` values. */
 async function responseBodyCarriesCode(response: Response, codes: string[]): Promise<boolean> {
+  const reader = response.body?.getReader();
+  if (!reader) return false;
+  const maximum = 8 * 1024;
+  let deadline: ReturnType<typeof setTimeout>;
+  const expired = new Promise<never>((_, reject) => {
+    deadline = setTimeout(() => reject(new Error("Error response read deadline exceeded")), 1_000);
+  });
   try {
-    const payload: unknown = await response.clone().json();
-    if (!payload || typeof payload !== "object") return false;
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const next = await Promise.race([reader.read(), expired]);
+      if (next.done) break;
+      size += next.value.byteLength;
+      // Never retain or parse an oversized chunk, even without Content-Length.
+      if (size > maximum) return false;
+      chunks.push(next.value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) || !Object.hasOwn(payload, "code")) return false;
     const code = (payload as Record<string, unknown>).code;
     return typeof code === "string" && codes.includes(code);
   } catch {
-    // A bare 404 (route missing, no domain body) does not parse as JSON.
+    // Malformed, oversized, or stalled bodies cannot establish a known code.
     return false;
+  } finally {
+    clearTimeout(deadline!);
+    // A broken stream's cancel hook may never settle: do not await it.
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }
 
