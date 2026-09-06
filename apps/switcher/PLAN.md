@@ -4,7 +4,7 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T09:46:58.620668+00:00"
+updated_at: "2026-09-06T10:31:20.164273+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -166,3 +166,7 @@ Run package typecheck/tests/build/contract checks and repository-required gates.
 - The exact registry release passed Node SDK/CLI/server/MCP smoke, all four native harness read-only tool loops on SQLite, and PostgreSQL with a second model. See `RELEASE.md` for evidence and limitations.
 - Tracking task: `e0be8c8c-9588-4b7b-9996-382f113736e3`.
 - Build, PR merge, publication and registry live acceptance are complete. Task/goal closure follows final evidence delivery. Optional product extensions and maintenance follow-ups remain explicit in `TODOS.md`.
+
+## Release candidate verification update
+
+The reviewed 0.1.1 archive now passes installed OpenCode tool/resume and interactive full DeepSeek picker checks, exact Codex provider-catalog matching, Node/Bun public surface checks, and both container storage profiles with upgrade/rollback/re-upgrade preservation. PR #1810 awaits a new required CI result after Projects’ generated storage-kit version stamp was refreshed to Contracts 1.0.2. This correction does not change the Switcher archive. The remaining adapter branches and live provider cells in TODOS.md remain active.
