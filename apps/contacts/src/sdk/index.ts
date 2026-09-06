@@ -9,8 +9,9 @@ export interface ContactsV1ClientOptions
   extends Omit<GeneratedContactsV1ClientOptions, "baseUrl" | "apiKey"> {
   /** Explicit HTTPS service authority. No default is composed. */
   baseUrl: string;
-  /** API key sent to the configured authority. Required and never logged. */
-  apiKey: string;
+  /** API key sent to the configured authority. Required and never logged.
+   * An explicit baseUrl never falls back to an ambient fleet key (#1794). */
+  apiKey?: string;
 }
 
 function validateBaseUrl(raw: string): string {
@@ -32,8 +33,8 @@ function validateBaseUrl(raw: string): string {
   return url.toString().replace(/\/+$/, "");
 }
 
-function validateApiKey(apiKey: string): string {
-  const key = apiKey.trim();
+function validateApiKey(apiKey: string | undefined): string {
+  const key = (apiKey ?? "").trim();
   if (!key) throw new Error("ContactsV1Client requires an API key.");
   if (/[^\t\x20-\x7e]/.test(key)) {
     throw new Error("ContactsV1Client API key contains bytes that are invalid in an HTTP header.");

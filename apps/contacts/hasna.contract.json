@@ -4,8 +4,8 @@
   "name": "contacts",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.2",
-  "description": "Contact and company management for AI coding agents. Public CLI, MCP, and SDK clients use one explicitly configured authenticated HTTPS /v1 authority and never open SQLite or PostgreSQL. contacts-serve is the server-only PostgreSQL/API-key boundary.",
+  "kitVersion": "1.0.2",
+  "description": "Contact and company management for AI coding agents. Public CLI, MCP, and SDK clients use one authenticated HTTPS /v1 authority resolved by the @hasna/contracts client chain (fleet gateway default https://api.hasna.com/contacts) and never open SQLite or PostgreSQL. contacts-serve is the server-only PostgreSQL/API-key boundary.",
   "bins": [
     "contacts",
     "contacts-mcp",
@@ -22,9 +22,21 @@
       "status": "supported",
       "bin": "contacts-serve",
       "authMode": "api-key",
-      "health": { "method": "GET", "path": "/health", "public": true },
-      "readiness": { "method": "GET", "path": "/ready", "public": true },
-      "version": { "method": "GET", "path": "/version", "public": true },
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
       "apiBasePath": "/v1",
       "openApiPath": "/openapi.json"
     },
@@ -54,7 +66,9 @@
   ],
   "storage": {
     "backend": "postgresql",
-    "engines": ["postgresql"],
+    "engines": [
+      "postgresql"
+    ],
     "envPrefix": "HASNA_CONTACTS_",
     "aliasEnvPrefix": "CONTACTS_",
     "pgTestGate": {
