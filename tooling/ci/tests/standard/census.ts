@@ -165,8 +165,20 @@ export function resolveValidatorVersion(pinned: string | undefined, kitVersion: 
  * @hasna/contracts) against one member directory. Returns a verdict and the
  * raw output. Shared by the standard-adherence suite and the check-manifests
  * CI gate, so a member is validated by exactly the same invocation in both. */
+export function conformanceCommand(version: string): { executable: string; args: string[] } {
+  const root = path.join(APPS_DIR, "contracts");
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  // This producer repository must validate a candidate before publishing it.
+  // Use its canonical source CLI only for the exact in-tree version. Older
+  // pins, ranges and latest retain their independent registry resolution.
+  if (manifest.name === "@hasna/contracts" && version === manifest.version)
+    return { executable: "bun", args: [path.join(root, "src/cli/index.ts")] };
+  return { executable: "bunx", args: ["--bun", `@hasna/contracts@${version}`] };
+}
+
 export function runConformance(dir: string, version: string): { verdict: "ok" | "fail" | "cannot-run"; fails: string[]; raw: string } {
-  const res = spawnSync("bunx", ["--bun", `@hasna/contracts@${version}`, "repo-conformance", dir], {
+  const command = conformanceCommand(version);
+  const res = spawnSync(command.executable, [...command.args, "repo-conformance", dir], {
     cwd: REPO_ROOT,
     encoding: "utf8",
     timeout: 180_000,

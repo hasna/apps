@@ -4,10 +4,40 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-05T15:00:05.316596+00:00"
-status: "released"
+updated_at: "2026-09-06T12:20:01.564707+00:00"
+status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+Current release hold: both 0.1.1 candidate archives are withdrawn. The OpenCode 2 authority correction is integrated, but native Codex still accepted an attached model override in `d490cb840`. A shared native argument correction is undergoing exact source review and replacement acceptance. Keep publication, registry installation and the expanded adapter goal open until their recorded gates pass. See R07/R06 in TODOS.md and task scratch `reviews/parent-args/`.
+
+# Current delivery: complete built-in adapters and installed CLI
+
+The shared native argument correction is committed as `3b6a4fd2cf4ff6824cb465b5495eae2e198cd5fa` and independently approved. It rejects attached/clustered provider and model overrides, quoted Codex configuration roots and Claude fallback selection while preserving literal prompt values and end-of-options text. Package verification passes 92 tests / 816 assertions with real PostgreSQL and installed Pi/Ori. Replacement archive SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed` passes normal npm dependency resolution, all 38 installed file identities, Node/Bun package surfaces, and real installed-CLI read/delete/fresh-resume tests for Claude, Codex, Grok, OpenCode 2, Pi and Codex/Grok through Ori. SQLite/PostgreSQL Compose, upgrade, rollback and re-upgrade pass on exact image `sha256:c515c2d85103d8e8fcb4aaccc5ef812725d3941196fa8ac1f775bf3ad950fd2d`. Source has been reconciled with main after Contracts PR #1813. Fresh CI, merge, publication and registry-installed repetition remain open. Both earlier archives remain withdrawn.
+
+The 2026-09-05 DeepSeek test demonstrated that 0.1.0 needed an external API supervisor, an explicit provider/profile setup, and a manual model-catalog import. A successful OpenRouter release test did not prove the fresh-install DeepSeek experience. The user has authorized completing the missing adapters, shipping them, and testing the installed command live.
+
+The active specification is the A–K checklist in [TODOS.md](TODOS.md). Its historical 0.1.0 section records earlier evidence only. The new goal remains active until the required adapter matrix and release acceptance are complete.
+
+Publication is currently held on a reproduced OpenCode 2 credential-routing defect: native project or per-model configuration can redirect the selected provider credential. The previous 0.1.1 archive is withdrawn. Correction `0574a1c` now has independent native approval for all three API protocols, preserved deny rules/instructions, full native catalog and fresh same-session resume. Combined package/root checks and replacement-archive native/container acceptance pass. Exact-head CI, merge, publication and registry-installed repetition remain required. Additional adapter regressions and exact candidate states are tracked as R01–R06 in TODOS.md.
+
+Delivery order:
+
+1. Fix the DeepSeek catalog/inference split, provider registry, direct launch syntax, and automatic authenticated local API lifecycle.
+2. Complete secure credential resolution, native catalogs/settings, cleanup and resume for Claude Code, Codex, Grok and OpenCode 2.
+3. Complete the audited provider/gateway and Ori adapters, with explicit native versus translated protocol contracts and no implicit provider substitution.
+4. Verify API/SDK migrations, real SQLite/PostgreSQL concurrency, Docker execution, the documented installed-CLI flow, and all applicable live provider/harness cells.
+5. Open the reviewed release PR and publish the exact Contracts 1.0.2 dependency candidate within that wave so registry-dependent gates can run normally. Pass all required gates and CI before merging, then publish Switcher and repeat the matrix using the registry-installed command.
+
+The target direct form is `switcher launch claude --provider deepseek --model deepseek-v4-pro`; the source CLI implements this form. Split-catalog subprocess tests pass, and an independently installed development tarball completed live DeepSeek Pro/Flash proof-file tool loops and native picker selection without an API supervisor or catalog import. The built-in vault/Keychain resolver now passes subprocess coverage and installed-development-CLI live acceptance: DeepSeek Pro/Flash proof-file tool loops, all three native picker models, and the corrected Default mapping. The remaining adapter matrix and registry-installed release acceptance are still pending. Provider credentials may be supplied through a supported runtime or secure-store reference, but no outside launch supervisor or manual catalog JSON should be required for a built-in provider. An explicit remote API must never silently fall back to a local database.
+
+The earlier source passed 85 tests / 769 assertions with real SQLite/PostgreSQL and installed Pi/Ori checks enabled. A live OpenCode 2 cleanup hang was reproduced and fixed by closing unfinished forwarding streams before bridge shutdown; installed-candidate retesting passed before the separate routing defect was discovered. Reviewed source includes the installed-CLI setup and credential flow, process-group/terminal ownership, optional Ori integration, and the expanded provider/gateway registry. A fresh npm-installed candidate passed Claude + DeepSeek Flash tool use and Codex + OpenRouter tool use/resume through both direct and Ori backends in ephemeral tmux. Candidate bytes predate the final review corrections, so registry-byte repetition remains mandatory. Contracts 1.0.2 is published and independently verified from npm. Its exact candidate bytes and six dependent locks match. The registry-backed dependency gate and normal Skills consumer check now pass. PR #1810 is open and mergeable; CI runs before merge. See [TODOS.md](TODOS.md) for hashes, evidence and the remaining finite adapter matrix.
+
+Both Docker Compose storage profiles passed health/authentication and recreation persistence in an isolated task VM. Upgrades from published 0.1.0 preserve all four data record kinds in SQLite and PostgreSQL. The historical candidate image passed upgrade/rollback acceptance; the replacement archive requires fresh image verification. Pi's corrected three-protocol adapter is integrated and undergoing combined review and verification; the remaining named harness/cloud adapters stay in scope.
+
+The user-owned live session `switcher-deepseek` is preserved. New acceptance sessions use separate task-owned paths, sockets, ports and databases. New worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/complete-adapters`; branch `codex/fixer/2026-09-05-switcher-complete-adapters`; fetched base `48f8c1d020d5138fa542461c19ff137d9ea69819`.
+
+# Original product plan and 0.1.0 provenance
 
 # Product and acceptance
 
@@ -142,3 +172,7 @@ Run package typecheck/tests/build/contract checks and repository-required gates.
 - The exact registry release passed Node SDK/CLI/server/MCP smoke, all four native harness read-only tool loops on SQLite, and PostgreSQL with a second model. See `RELEASE.md` for evidence and limitations.
 - Tracking task: `e0be8c8c-9588-4b7b-9996-382f113736e3`.
 - Build, PR merge, publication and registry live acceptance are complete. Task/goal closure follows final evidence delivery. Optional product extensions and maintenance follow-ups remain explicit in `TODOS.md`.
+
+## Release candidate verification update
+
+The reviewed 0.1.1 archive now passes installed OpenCode tool/resume and interactive full DeepSeek picker checks, exact Codex provider-catalog matching, Node/Bun public surface checks, and both container storage profiles with upgrade/rollback/re-upgrade preservation. PR #1810 awaits a new required CI result after Projects’ generated storage-kit version stamp was refreshed to Contracts 1.0.2. This correction does not change the Switcher archive. The remaining adapter branches and live provider cells in TODOS.md remain active.
