@@ -49,7 +49,9 @@
     "test:native-opencode-resume": "bun scripts/test-native-resume.ts",
     "test:native-omp": "bun scripts/test-native-omp.ts",
     "test:native-opencode2-authority": "bun scripts/test-native-opencode2-authority.ts",
-    "test:native-grok-resume": "SWITCHER_TEST_NATIVE_HARNESS=grok bun scripts/test-native-resume.ts"
+    "test:native-grok-resume": "SWITCHER_TEST_NATIVE_HARNESS=grok bun scripts/test-native-resume.ts",
+    "test:native-dsh": "bun scripts/test-native-dsh.ts",
+    "test:native-dsh-web": "bun scripts/test-native-dsh-web.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

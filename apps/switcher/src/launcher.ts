@@ -116,7 +116,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
       model:plan.profile.model, models:plan.catalog.models.filter(codingEligible),
       credential, authStyle:plan.provider.authStyle, executable:options.executable, args:options.args ?? [], stateDir,
       cwd:resolve(options.cwd ?? process.cwd()), version:detection?.version,
-      ...(["pi","omp"].includes(plan.profile.harness) ? {sessionDir:join(root,"sessions",plan.profile.harness,profileId)} : {}),
+      ...(["pi","omp","dsh"].includes(plan.profile.harness) ? {sessionDir:join(root,"sessions",plan.profile.harness,profileId)} : {}),
     });
     cleanup = prepared.cleanup;
     for (const warning of [...plan.warnings,...prepared.warnings]) console.error(`switcher: ${warning}`);

@@ -4,7 +4,7 @@ title: "Switcher full adapter and installed CLI delivery checklist"
 type: "task-checklist"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T12:20:01.564707+00:00"
+updated_at: "2026-09-06T12:44:02.606710+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -18,6 +18,8 @@ Tracking task: `1fb71b94-93b1-466f-a44b-0bcdaa710804` (O15-05467).
 Owner: parent Codex task `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/complete-adapters`. Branch: `codex/fixer/2026-09-05-switcher-complete-adapters`. Fetched base: `48f8c1d020d5138fa542461c19ff137d9ea69819`. Canonical directive: `~/Workspace/scratch/universal-harness-switcher/directives/2026-09-05-01a07181-complete-switcher-adapters.md`.
 
 ## Latest implementation evidence
+
+Expanded integration branch `codex/fixer/2026-09-06-switcher-expanded-adapters` combines OMP and DeepSeek Harness without changing the frozen 0.1.1 archive or PR head. The combined package passes 98 tests / 890 assertions with real PostgreSQL and installed Pi/Ori. OMP's independently checked native model API returns the exact provider catalog and changes model without inference. DSH unsupported profiles now fail before catalog discovery or key resolution. New adapter live/registry gates remain open.
 
 The shared native argument correction is committed as `3b6a4fd2cf4ff6824cb465b5495eae2e198cd5fa` and independently approved. It rejects attached/clustered provider and model overrides, quoted Codex configuration roots and Claude fallback selection while preserving literal prompt values and end-of-options text. Package verification passes 92 tests / 816 assertions with real PostgreSQL and installed Pi/Ori. Replacement archive SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed` passes normal npm dependency resolution, all 38 installed file identities, Node/Bun package surfaces, and real installed-CLI read/delete/fresh-resume tests for Claude, Codex, Grok, OpenCode 2, Pi and Codex/Grok through Ori. SQLite/PostgreSQL Compose, upgrade, rollback and re-upgrade pass on exact image `sha256:c515c2d85103d8e8fcb4aaccc5ef812725d3941196fa8ac1f775bf3ad950fd2d`. Source has been reconciled with main after Contracts PR #1813. Fresh CI, merge, publication and registry-installed repetition remain open. Both earlier archives remain withdrawn.
 
@@ -33,7 +35,7 @@ Earlier candidate `d542620bc412a71b07ebb5a34faa6a56c683e302` passed installed Cl
 
 All live launches use the installed command and its built-in vault binding, with the operator credential read from Keychain. No external provider-key wrapper, API supervisor or manual catalog import is required for the tested DeepSeek/OpenRouter paths. The original user's DeepSeek tmux session is preserved.
 
-DeepSeek Harness G16 and Gemini/Azure routes have independent integration approval; their paid-provider and registry acceptance remain open. Hermes G17 passes all three native protocols through two fresh source CLI launches; fixture cleanup candidate `3f32e765` remains separate. Prime `894bc91d` passes independent delayed-supervisor timeout/cancellation probes while same-tick run finalization is under review. Legacy OpenCode `91686df0` passes four native root/agent permission-deny cases; full source CLI fresh-resume remains open. OMP `bff55395` passes six source CLI protocol/auth/read/resume cells; native policy-flag review is in progress. Cline `5dc69f17` independently passes all three source CLI ACP protocols, full catalogs, explicit read permission, deleted-file fresh-process resume and credential-value absence in saved files. Kilo remains incomplete with a fail-closed unsupported boundary; Gemini CLI custom gateway authentication and Aider implementation remain open. These candidates have not been integrated into the replacement release archive.
+DeepSeek Harness G16 is integrated with OMP for the next patch; Gemini/Azure routes have independent integration approval; their paid-provider and registry acceptance remain open. Hermes G17 passes all three native protocols through two fresh source CLI launches; fixture cleanup candidate `3f32e765` remains separate. Prime `ecb0931d` additionally passes all six independent same-callback cancellation orderings with exactly one finalization. Legacy OpenCode `3005ca2f` passes all three source CLI protocols, same-session read/delete/resume and exact native catalogs, alongside earlier root/agent deny cases. OMP `658b1551` plus `8a44fd84` passes six independently verified source CLI protocol/auth/read/resume cells and native catalog/model-switch checks; shared grammar is integrated. Cline `5dc69f17` independently passes all three source CLI ACP protocols, full catalogs, explicit read permission, deleted-file fresh-process resume and credential-value absence in saved files. Kilo remains incomplete with a fail-closed unsupported boundary; Gemini CLI custom gateway authentication and Aider implementation remain open. These candidates have not been integrated into the replacement release archive.
 
 ## Definition of complete
 
@@ -156,7 +158,7 @@ Each preset must declare supported inference protocols, inference/catalog base U
 - [ ] G13 Inventory additional harnesses from Ori/local evidence and add explicit adapter tasks for supported launch interfaces; keep the named four mandatory.
 - [ ] G14 Pi: implement verified executable/config/provider/catalog/session integration and apply the same installed-CLI live acceptance contract.
 - [ ] G15 Prime Agent: implement verified launch/provider/full-catalog integration and test native model changes and lifecycle.
-- [ ] G16 DeepSeek Harness: implement an actual native launch adapter, distinct from using DeepSeek as Claude Code's provider; do not count Ori's setup-only command as a running harness.
+- [x] G16 DeepSeek Harness: direct native `dsh` web/headless/ACP adapter with isolated catalog, all three wire protocols and persistent sessions/attachments. Installed official 0.1.2-rc.1 fixtures verify nine protocol/auth tool/resume cells and browser catalog/auth/trust/shutdown. SDK/custom profiles and Ori's setup-only command are rejected. Independent integration review and real-provider live acceptance remain separate release gates.
 - [ ] G17 Hermes: verify and implement isolated provider/auth/model configuration, catalog behavior, tool loop and resume.
 - [ ] G18 Legacy OpenCode: keep its executable/schema separate from OpenCode 2 and test both without ambiguous executable substitution.
 - [ ] G19 OMP: verify the native launch/config contract and implement model selection plus truthful catalog support.

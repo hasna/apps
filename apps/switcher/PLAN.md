@@ -4,12 +4,16 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T12:20:01.564707+00:00"
+updated_at: "2026-09-06T12:44:02.606710+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-Current release hold: both 0.1.1 candidate archives are withdrawn. The OpenCode 2 authority correction is integrated, but native Codex still accepted an attached model override in `d490cb840`. A shared native argument correction is undergoing exact source review and replacement acceptance. Keep publication, registry installation and the expanded adapter goal open until their recorded gates pass. See R07/R06 in TODOS.md and task scratch `reviews/parent-args/`.
+The reviewed 0.1.1 archive is frozen at source `0bb3d62e28ba23acb76352a8dfad9f2d5d770e50`, SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed`. PR #1810 retains that exact head while required CI finishes. Earlier rejected archives remain withdrawn. Publication and registry-installed repetition remain required.
+
+Expanded adapter integration now uses the same owned worktree on `codex/fixer/2026-09-06-switcher-expanded-adapters`, based on the frozen PR head. OMP `658b1551` plus reviewed followup `8a44fd84` and DeepSeek Harness `c3235ef7` are combined. A new regression proves DSH rejects unsupported native profiles before SDK catalog discovery or credential resolution. The combined package passes 98 tests / 890 assertions with real PostgreSQL and installed Pi/Ori; all 43 affected builds pass. Native and root checks are recorded in task scratch `release-candidate/expanded-dsh-*`. New adapter publication belongs to the next patch release after 0.1.1. DSH native ACP read/delete/resume and web catalog/auth checks pass after integration. Repository artifact, manifest, deployment and frozen-lock gates pass. The standard suite passed 146 tests but one unchanged conformance self-test exceeded its 5-second timeout; its focused retry passed in 2.45 seconds, preserving the initial failure log. OMP now enforces its verified minimum native version, with a red/green regression.
+
+The pending `.changeset/switcher-expanded-adapters.md` schedules that patch. Its front matter follows the Changesets package-to-bump parser contract; this metadata-bearing plan records ownership and provenance for that machine-consumed Markdown exception.
 
 # Current delivery: complete built-in adapters and installed CLI
 

@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { prepareHarnessLaunch } from "../src/harnesses";
+import { prepareHarnessLaunch, validateHarnessVersion } from "../src/harnesses";
 import { childEnvironment } from "../src/launcher";
 import type { HarnessLaunchInput } from "../src/harness-types";
 async function fixture() {
@@ -68,6 +68,7 @@ test("OMP reserves policy escapes while preserving native value and literal prom
     ]) await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args})).rejects.toThrow("reserved");
     for (const args of [
       ["--tools", "read"], ["--no-tools"], ["--add-dir", input.cwd],
+      ["--fork", "--auto-approve"], ["--provider-session-id", "--model"], ["--prompt-cache-key", "--profile"], ["--session", "saved-session"],
       ["--system-prompt", "--auto-approve"], ["--", "--auto-approve", "literal prompt"],
     ]) {
       const prepared=await prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args});
@@ -288,4 +289,9 @@ test("Claude fallback model selection is owned by the launch profile",async()=>{
     for(const args of [["--fallback-model","outside/model"],["--fallback-model=outside/model,other/model"]])
       await expect(prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.263",args})).rejects.toThrow("profile");
   }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});
+
+test("OMP requires the verified native catalog and session contract version",()=>{
+  for(const version of [undefined,"omp/17.0.0","omp/18.1.10"]) expect(()=>validateHarnessVersion("omp",version)).toThrow("18.1.11");
+  expect(()=>validateHarnessVersion("omp","omp/18.1.11")).not.toThrow();
 });

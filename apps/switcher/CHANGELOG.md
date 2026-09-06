@@ -4,10 +4,15 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-06T11:12:08Z"
+updated_at: "2026-09-06T12:44:02.606710+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+## Unreleased
+
+- Add the official DeepSeek Harness (`dsh`) with its native browser UI, headless task and ACP profiles, all three wire protocols, isolated provider catalog and persistent sessions/attachments. Reject SDK/custom profiles and Ori's setup-only command as launch paths.
+- Add OMP with a native provider catalog and persistent per-profile sessions.
 
 ## 0.1.1
 

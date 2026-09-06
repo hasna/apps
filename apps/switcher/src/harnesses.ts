@@ -9,6 +9,7 @@ import { validateGrokResume } from "./grok-args";
 import { assertHarnessArguments } from "./harness-arguments";
 import { isolateOpenCode2, openCode2ConfigText } from "./opencode2-config";
 import { prepareOmpLaunch } from "./omp-backend";
+import { dshArguments } from "./dsh-args";
 import type { HarnessId, HarnessLaunchInput, PreparedLaunch } from "./harness-types";
 const execute = promisify(execFile);
 const KEY = "SWITCHER_HARNESS_API_KEY";
@@ -27,6 +28,8 @@ const versionAtLeast = (raw: string | undefined, minimum: number[]) => {
   for(let i=0;i<3;i++){if(actual[i]>minimum[i])return true;if(actual[i]<minimum[i])return false;}return true;
 };
 export function validateHarnessVersion(harness: HarnessId, version: string | undefined): void {
+  if(harness==="omp"&&!versionAtLeast(version,[18,1,11])) throw new Error("OMP >=18.1.11 is required for the native catalog and persistent session adapter.");
+  if(harness==="dsh"&&(!versionAtLeast(version,[0,1,2])||(/\b0\.1\.2-/.test(version??"")&&!/\b0\.1\.2-rc\.[1-9]\d*(?:\b|$)/.test(version??"")))) throw new Error("DeepSeek Harness (dsh) >=0.1.2-rc.1 is required for the native profile adapter.");
   if(harness==="claude"&&!versionAtLeast(version,[2,1,242])) throw new Error("Claude Code >=2.1.242 is required for a full native modelPicker.");
   if(harness==="pi"&&!versionAtLeast(version,[0,85,1])) throw new Error("Pi >=0.85.1 is required by this catalog adapter.");
   if(harness==="codex"&&!versionAtLeast(version,[0,153,0])) throw new Error("Codex >=0.153.0 is required by this catalog adapter.");
@@ -239,6 +242,39 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     return {executable,args:["--provider",providerId,"--model",input.model,"--models",`${providerId}/**`,...args],env,configPaths,warnings};
   }
   if(input.harness==="omp") return prepareOmpLaunch(input);
+  if(input.harness==="dsh") {
+    const selected=dshArguments(args);
+    const providerId=piProviderId(input,providerBaseUrl);
+    const api={"anthropic-messages":"anthropic-messages","openai-responses":"openai-responses","openai-chat":"openai-completions"}[input.protocol];
+    const home=join(input.stateDir,"dsh-home");
+    const sessionDir=input.sessionDir??join(input.stateDir,"dsh-state");
+    if(!isAbsolute(sessionDir)) throw new Error("DSH session directory must be absolute.");
+    await mkdir(home,{recursive:true,mode:0o700});
+    await mkdir(sessionDir,{recursive:true,mode:0o700});
+    const route={provider:providerId,model:input.model};
+    const overlay:unknown[]=[
+      {id:"llm-deepseek",disabled:true},
+      {id:"llm-pi-ai",config:{providers:{[providerId]:{
+        displayName:"Switcher",api,apiKeyEnv:KEY,
+        baseURL:input.protocol==="anthropic-messages"?input.baseUrl.replace(/\/v1$/i,""):input.baseUrl,
+        models:input.models.map(model=>({id:model.id,name:model.name,
+          ...(model.contextWindow?{contextWindow:model.contextWindow}:{}),
+          ...(model.maxOutputTokens?{maxTokens:model.maxOutputTokens}:{}),
+          input:(model.inputModalities??["text"]).filter(modality=>modality==="text"||modality==="image"),
+        })),
+      }}}},
+      {id:"agent-default-model",config:route},
+      {id:"session-persistence-jsonl",config:{root:join(sessionDir,"sessions")}},
+      {id:"attachment-local",config:{dshHome:sessionDir}},
+      ...(selected.profile==="acp"?[{id:"acp",config:route}]:[]),
+    ];
+    const file=await jsonFile(input.stateDir,"dsh-patch.json",overlay);configPaths.push(file);
+    env.DSH_HOME=home;env[KEY]=input.credential??"switcher-local-no-auth";
+    warnings.push("DeepSeek Harness uses an isolated temporary home and its native pi-ai provider adapter. Global profiles, settings, plugins and saved credentials are not loaded; sessions and attachments persist under Switcher state per profile. Native project customization remains active.");
+    if(selected.profile==="web") warnings.push("DSH opens its native browser UI on an allocated loopback port; use -- --no-open to print the URL without opening a browser.");
+    if(selected.profile==="headless") warnings.push("DSH headless runs one fresh task; resume is available through the native web UI or ACP session/resume.");
+    return {executable,args:["--profile",selected.profile,"--patch",file,...selected.args],env,configPaths,warnings};
+  }
   // Session model references must identify the upstream provider, not the
   // allocated port of a temporary auth bridge which changes each launch.
   const providerID="switcher-"+createHash("sha256").update(endpoint(providerBaseUrl)+input.protocol).digest("hex").slice(0,12);
@@ -262,14 +298,14 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   env.OPENCODE_CONFIG_CONTENT="{}";
   const native=args[0]==="run"?["run","--standalone","--model",`${providerID}/${input.model}`,...args.slice(1)]:args[0]==="models"?["models","--standalone",...args.slice(1)]:["--standalone",...args];
   warnings.push("OpenCode 2 uses a standalone server so concurrent launch profiles cannot share provider configuration.");
-    warnings.push("OpenCode 2 snapshots native permissions, agent prompts and AGENTS.md for this launch; provider overrides, plugins and live configuration reloads are isolated. Native session data remains in its original XDG data directory.");
-    if(input.models.some(m=>!m.supportedParameters||!m.inputModalities||!m.outputModalities)) warnings.push("OpenCode requires complete capabilities; unknown fields use text-only/tool-enabled native defaults, not verified provider capabilities.");
-    return {executable,args:native,env,configPaths,warnings};
+  warnings.push("OpenCode 2 snapshots native permissions, agent prompts and AGENTS.md for this launch; provider overrides, plugins and live configuration reloads are isolated. Native session data remains in its original XDG data directory.");
+  if(input.models.some(m=>!m.supportedParameters||!m.inputModalities||!m.outputModalities)) warnings.push("OpenCode requires complete capabilities; unknown fields use text-only/tool-enabled native defaults, not verified provider capabilities.");
+  return {executable,args:native,env,configPaths,warnings};
 }
 export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
   assertHarnessArguments(input.harness,input.args ?? []);
   const nativeAuth=input.protocol==="anthropic-messages"?"x-api-key":"bearer";
-  const adaptAuth=(input.harness==="opencode2"||input.harness==="pi")&&(input.authStyle??"bearer")!==nativeAuth;
+  const adaptAuth=(input.harness==="opencode2"||input.harness==="pi"||input.harness==="dsh")&&(input.authStyle??"bearer")!==nativeAuth;
   if((input.credential&&!adaptAuth)||input.harness==="grok") return prepareNativeLaunch(input);
   // No-auth endpoints must not receive a native login credential or even a
   // synthetic token. Authenticate only to this loopback hop, then strip auth.

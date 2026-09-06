@@ -148,7 +148,7 @@ await execFileAsync("git", ["init", "-q", project]);
      results.push({ protocol: c.protocol, authStyle: c.authStyle, firstExit: first.code, resumeExit: second.code, toolLoop: true, deletedFile: true, persistedSession: sessionFiles.length === 1, catalogModels: [c.model, `${c.model}-other`], path: c.path });
    }
    const files: string[] = [];
-   async function walkAll(path: string) { try { for (const entry of await readdir(path, { withFileTypes: true, recursive: true })) if (entry.isFile()) files.push(join(path, entry.name)); } catch {} }
+   async function walkAll(path: string) { try { for (const entry of await readdir(path, { withFileTypes: true, recursive: true })) if (entry.isFile()) { const parentPath = "parentPath" in entry && typeof (entry as { parentPath?: unknown }).parentPath === "string" ? (entry as { parentPath: string }).parentPath : path; files.push(join(parentPath, entry.name)); } } catch {} }
    await walkAll(root);
    const keyHits: string[] = [];
    for (const path of files) { try { if ((await readFile(path, "utf8")).includes(key)) keyHits.push(path); } catch {} }

@@ -1,3 +1,4 @@
+import { dshArguments } from "./dsh-args";
 import type { HarnessId } from "./harness-types";
 
 const reserved: Record<HarnessId, readonly string[]> = {
@@ -6,6 +7,7 @@ const reserved: Record<HarnessId, readonly string[]> = {
   grok: ["--model", "-m", "--oauth", "--leader", "--leader-socket"],
   opencode2: ["--model", "-m", "--server"],
   pi: ["--model", "--provider", "--api-key", "--models"],
+  dsh: ["--patch", "--dump-config", "--dump-default-config"],
   // OMP's profile owns provider/model/config/session state and permission
   // policy. These native options can bypass that authority, load external
   // code/session state, or mutate global shell configuration.
@@ -14,6 +16,7 @@ const reserved: Record<HarnessId, readonly string[]> = {
 // Only option tokens are inspected: a required value or text following -- is
 // not another flag. These are the supported native launch option contracts.
 const values: Record<HarnessId, readonly string[]> = {
+  dsh: ["--profile"],
   claude: ["--system-prompt", "--append-system-prompt", "--agent", "--agents", "--tools", "--allowedTools", "--disallowedTools", "--permission-mode", "--permission-prompts", "--output-format", "--input-format", "--json-schema", "--max-turns", "--max-budget-usd", "--mcp-config", "--session-id", "--plugin-dir"],
   codex: ["--config", "--image", "--sandbox", "--cd", "--add-dir", "--ask-for-approval", "--output-last-message", "--output-schema", "--color", "--enable", "--disable", "--thread-source"],
   grok: ["--single", "--print", "--prompt-file", "--prompt-json", "--load", "--cwd", "--agent", "--agents", "--allow", "--allowedTools", "--deny", "--disallowedTools", "--debug-file", "--json-schema", "--max-turns", "--output-format", "--permission-mode", "--reasoning-effort", "--effort", "--rules", "--append-system-prompt", "--system-prompt", "--system-prompt-override", "--session-id", "--sandbox", "--tools", "--disallowed-tools", "--worktree-ref", "--ref"],
@@ -22,10 +25,10 @@ const values: Record<HarnessId, readonly string[]> = {
   // Derived from OMP 18.1.11's `src/cli/flag-tables.ts` and `--help`:
   // values must be skipped even when they look like flags, while `--` ends
   // option parsing and leaves the remaining prompt literal.
-  omp: ["--model", "--smol", "--slow", "--plan", "--prewalk-into", "--plan-yolo-into", "--provider", "--api-key", "--system-prompt", "--append-system-prompt", "--profile", "--cwd", "--mode", "--config", "--add-dir", "--session-dir", "--models", "--tools", "--thinking", "--service-tier", "--hook", "--extension", "-e", "--trusted-extension", "--plugin-dir", "--skills", "--export", "--max-time", "--approval-mode"],
+  omp: ["--model", "--smol", "--slow", "--plan", "--prewalk-into", "--plan-yolo-into", "--provider", "--api-key", "--system-prompt", "--append-system-prompt", "--profile", "--cwd", "--mode", "--config", "--add-dir", "--session-dir", "--models", "--tools", "--thinking", "--service-tier", "--hook", "--extension", "-e", "--trusted-extension", "--plugin-dir", "--skills", "--export", "--max-time", "--approval-mode", "--fork", "--provider-session-id", "--prompt-cache-key"],
 };
 const optionalValues: Partial<Record<HarnessId, readonly string[]>> = {
-  claude: ["--resume", "--continue"], grok: ["--resume", "--worktree", "--local-workspace"], pi: ["--list-models"], omp: ["--resume", "-r"],
+  claude: ["--resume", "--continue"], grok: ["--resume", "--worktree", "--local-workspace"], pi: ["--list-models"], omp: ["--resume", "-r", "--session"],
 };
 // clap and Effect support short clusters. Stop at a value-taking option, so
 // -pTEXT in Grok or -oFILE in Codex cannot turn text into model flags. Pi's
@@ -77,4 +80,5 @@ export function assertHarnessArguments(harness: HarnessId, args: readonly string
       }
     }
   }
+  if (harness === "dsh") dshArguments([...args]);
 }

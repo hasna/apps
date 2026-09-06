@@ -4,14 +4,14 @@ title: "Switcher"
 type: "package-documentation"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:50:21.698672Z"
-updated_at: "2026-09-06T11:12:08Z"
+updated_at: "2026-09-06T12:44:02.606710+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
 # Switcher
 
-Launch Claude Code, Codex, Grok Build, OpenCode 2, Pi or OMP with a chosen compatible provider and its model catalog. An authenticated API owns profiles and run metadata; the CLI starts the native harness on your computer. Import the same HTTP client from `@hasna/switcher/sdk`.
+Launch Claude Code, Codex, Grok Build, OpenCode 2, Pi, OMP or DeepSeek Harness with a chosen compatible provider and its model catalog. An authenticated API owns profiles and run metadata; the CLI starts the native harness on your computer. Import the same HTTP client from `@hasna/switcher/sdk`.
 
 Requires Bun 1.3.14 or newer. Install the native harnesses separately.
 
@@ -80,6 +80,27 @@ Pi sessions persist under Switcher state per profile; pass native `--continue` o
 
 OMP 18.1.11 or newer supports the three Switcher wire protocols through its native `models.yml` provider API. Switcher writes a per-launch provider catalog and `config.yml` under `PI_CODING_AGENT_DIR`, selects the exact provider-qualified model, and keeps the API key in the child environment. OMP's native project instructions, tools and permissions stay enabled. Sessions persist under the profile's Switcher-owned `--session-dir`; model, provider, profile and config overrides are reserved by the launch profile.
 
+## DeepSeek Harness
+
+Use the official [`@deepseek-ai/dsh`](https://github.com/deepseek-ai/deepseek-harness) executable, version 0.1.2-rc.1 or newer, with its supported Node runtime. This is the native DeepSeek Harness, separate from Claude Code using a DeepSeek provider. Switcher supplies the full coding catalog through DSH's native `llm-pi-ai` adapter, supporting Chat Completions, Responses and Messages. The selected model becomes the default for new sessions; native model choices remain available within that catalog.
+
+```sh
+# Native browser UI, bound to an allocated loopback port.
+switcher launch dsh --provider deepseek --model deepseek-v4-flash
+# Print the authenticated local URL without opening a browser.
+switcher launch dsh --provider deepseek --model deepseek-v4-flash -- --no-open
+# Native one-shot task; headless has no resume flag.
+switcher launch dsh --provider deepseek --model deepseek-v4-flash -- --profile headless "Inspect this project"
+# Standard ACP over stdin/stdout for a programmatic client.
+switcher launch dsh --provider deepseek --model deepseek-v4-flash -- --profile acp
+```
+
+DSH sessions and attachments persist under Switcher state per launch profile. Resume through the native browser UI or ACP `session/list` and `session/resume`; a resumed session retains its native conversation and model selection. Each launch uses a temporary DSH home. Existing global profiles, settings, plugins and saved credentials are not loaded, and edits to the temporary configuration disappear on exit. Project customization remains native. Native browser authentication uses a launch URL and a host/port-bound cookie; its own temporary signing grant is removed with that home. Provider keys remain environment references in configuration.
+
+Only the shipped `web`, `headless` and `acp` profiles are supported. SDK initialization can mount a different provider independently of the launch profile, so SDK/custom profiles and arbitrary patches are rejected. Listener overrides are also rejected. Ori's `dsh` command performs setup only and is not accepted as a launch backend.
+
+The opt-in `test:native-dsh` script runs the actual Switcher CLI and installed DSH against local inference fixtures, verifies a real file-read tool and second-process resume after deleting the file, and rejects model choices outside the catalog. `SWITCHER_TEST_DSH_PROTOCOL` selects a wire protocol, `SWITCHER_TEST_DSH_AUTH` selects `bearer`, `x-api-key` or `none`, and `SWITCHER_TEST_DSH_MODE=headless` checks the native one-shot path. `test:native-dsh-web` checks the browser catalog, authentication, Host/Origin protections and shutdown without opening a browser. Set `SWITCHER_TEST_DSH_EXECUTABLE` to the official executable and `SWITCHER_TEST_ROOT` to an owned scratch directory. These checks do not make paid provider calls.
+
 ## Run a persistent service
 
 Inject a random operator token of at least 24 characters as `HASNA_SWITCHER_API_KEY` through your secret manager. Inject provider credentials separately, using names beginning `SWITCHER_PROVIDER_`. Only environment references are persisted. Explicitly hosted servers read `SWITCHER_PROVIDER_*` references; the local launcher also accepts the standard aliases declared by each built-in preset.
@@ -130,6 +151,7 @@ When the API runs remotely, inject the provider credential into the API process 
 | Codex ≥0.153.0 | OpenAI Responses | Startup `model_catalog_json` |
 | Grok Build ≥1.0.13 | Chat Completions, Responses or Messages | Authenticated loopback remote catalog with upstream model IDs |
 | OpenCode 2 (tested beta-19157) | Chat Completions, Responses or Messages | Version 2 provider/model configuration and standalone server |
+| DeepSeek Harness ≥0.1.2-rc.1 | Chat Completions, Responses or Messages | Native web/ACP catalog from an isolated provider composition; persistent sessions |
 
 The CLI catalog includes all provider output modalities. Native coding pickers exclude unavailable models and those explicitly lacking text output or tool support; unknown metadata remains unknown. This is a capability filter, not a guarantee of successful tool use. Catalog refresh happens before every launch. Native pickers are startup snapshots, not promised live reloads. OpenCode requires a complete capability object; missing fields use text-only/tool-enabled native defaults with a warning. Its beta `models --standalone` command may return an early empty snapshot; the native `/api/model` API and interactive picker expose the settled catalog.
 
