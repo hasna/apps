@@ -95,7 +95,7 @@ struct FrontmostAppSnapshot: Equatable, Sendable {
 
 /// The one capability `RecordingEngine` needs from an audio recorder; lets tests run the
 /// production start path without microphone hardware or TCC grants.
-protocol PCMRecordingSource: AnyObject {
+protocol PCMRecordingSource: AnyObject, Sendable {
     func start() throws
     func stop()
 }
@@ -854,7 +854,7 @@ public final class RecordingEngine: ObservableObject {
     private var deliveryBlockedReasonGeneration: UInt64?
     /// Advanced fallback policy (Settings only): when off, every recording is dictated
     /// literally and the classifier is never consulted.
-    @Published public var intentDetectionEnabled: Bool = true {
+    @Published public var intentDetectionEnabled: Bool = false {
         didSet {
             UserDefaults.standard.set(intentDetectionEnabled, forKey: "intentDetectionEnabled")
         }
@@ -1204,7 +1204,7 @@ public final class RecordingEngine: ObservableObject {
         log("RecordingEngine init; microphone=\(microphonePermissionLabel); accessibility=\(accessibilityPermissionLabel)")
 
         // Load preferences
-        intentDetectionEnabled = UserDefaults.standard.object(forKey: "intentDetectionEnabled") as? Bool ?? true
+        intentDetectionEnabled = UserDefaults.standard.object(forKey: "intentDetectionEnabled") as? Bool ?? false
         transcriptionLanguage = OpenAIAPIKeyStore.loadLanguage(homePath: home)
         useFnKey = UserDefaults.standard.object(forKey: "useFnKey") as? Bool ?? false
         if KeyboardShortcuts.getShortcut(for: .toggleRecording) == nil {
@@ -2219,12 +2219,12 @@ public final class RecordingEngine: ObservableObject {
 
         let recorder = nativeRecorder
         nativeRecorder = nil
-        recorder?.stop()
 
         isRecording = false
         isTranscribing = true
 
         guard let captureConfiguration = activeCaptureConfiguration else {
+            recorder?.stop()
             realtimeClient?.stop()
             realtimeClient = nil
             streamingTask?.cancel()
@@ -2251,6 +2251,9 @@ public final class RecordingEngine: ObservableObject {
         self.pcmStreamPipe = nil
 
         Task {
+            // AVAudioEngine shutdown can block for hundreds of milliseconds. Keep
+            // receiving realtime text and repainting while capture drains completely.
+            await Task.detached(priority: .userInitiated) { recorder?.stop() }.value
             if let pcmStreamPipe {
                 self.recordedPCM = await pcmStreamPipe.finish()
             }

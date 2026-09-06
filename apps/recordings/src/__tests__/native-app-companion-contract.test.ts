@@ -528,7 +528,8 @@ describe("native app companion contract", () => {
     const theme = readFileSync("src/native/Recordings/App/Theme.swift", "utf8");
 
     expect(chrome).toContain("reduceTransparency ? .opaque : .liquidGlass");
-    expect(workspace).toContain("ChromeSurface.forReducedTransparency(reduceTransparency)");
+    expect(workspace).not.toContain(".glassEffect(");
+    expect(workspace).not.toContain("GlassEffectContainer");
     expect(theme).toContain("ChromeSurface.forReducedTransparency(reduceTransparency)");
     expect(workspace).not.toContain("ultraThinMaterial");
     expect(theme).not.toContain("ultraThinMaterial");

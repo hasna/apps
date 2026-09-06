@@ -2,16 +2,10 @@ import SwiftUI
 import RecordingsLib
 @preconcurrency import KeyboardShortcuts
 
-/// The Recordings workspace — the app's first screen. One Liquid-Glass hero drives the whole
-/// flow: speak, and the app types it, answers a question, or edits the selection. There is no
-/// mode selector; the phase (idle → listening → finalizing → processing → ready/error) is the
-/// only state the page renders.
+/// A lightweight recording panel with live text and optional assistant actions.
 struct RecordWorkspaceView: View {
     @ObservedObject var store: RecordingsStore
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Namespace private var glass
 
     private var engine: RecordingEngine { store.engine }
     private var phase: RecordingFlowPhase { engine.flowPhase }
@@ -19,11 +13,9 @@ struct RecordWorkspaceView: View {
     var body: some View {
         VStack {
             VStack(spacing: 22) {
-                GlassEffectContainer(spacing: 12) {
-                    hero
-                        .frame(maxWidth: 560)
-                }
-                .padding(.top, 12)
+                hero
+                    .frame(maxWidth: 560)
+                    .padding(.top, 12)
 
                 if let reply = engine.conversationReply {
                     replyCard(reply)
@@ -35,7 +27,6 @@ struct RecordWorkspaceView: View {
             .padding(.horizontal, 28)
             .padding(.bottom, 12)
         }
-        .animation(reduceMotion ? nil : .smooth(duration: 0.28), value: phase)
         .onChange(of: engine.isTranscribing) { wasTranscribing, isTranscribing in
             // Refresh promptly when the foreground path finishes. RecordingsStore also
             // observes confirmed persistence so async saves still refresh after this view
@@ -44,7 +35,7 @@ struct RecordWorkspaceView: View {
         }
     }
 
-    // MARK: - Hero (single morphing glass surface)
+    // MARK: - Recording panel
 
     @ViewBuilder
     private var hero: some View {
@@ -60,34 +51,12 @@ struct RecordWorkspaceView: View {
         }
         .frame(maxWidth: .infinity, minHeight: 156)
         .padding(18)
-        switch ChromeSurface.forReducedTransparency(reduceTransparency) {
-        case .opaque:
-            // Reduce Transparency: a fully opaque system background — never a material,
-            // which still composites the desktop through the window.
-            content
-                .background(
-                    Color(NSColor.windowBackgroundColor),
-                    in: .rect(cornerRadius: Theme.cornerLarge)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: Theme.cornerLarge, style: .continuous)
-                        .strokeBorder(.separator, lineWidth: 1)
-                )
-        case .liquidGlass:
-            content
-                .glassEffect(heroGlass, in: .rect(cornerRadius: Theme.cornerLarge))
-                .glassEffectID("record-hero", in: glass)
-        }
-    }
-
-    private var heroGlass: Glass {
-        switch phase {
-        case .idle: return .regular.interactive()
-        case .listening: return .regular.tint(Theme.recordRed.opacity(0.18))
-        case .finalizing, .processing: return .regular.tint(.orange.opacity(0.12))
-        case .ready: return .regular.tint(.green.opacity(0.10))
-        case .failed: return .regular.tint(.orange.opacity(0.16))
-        }
+        content
+            .background(Color(NSColor.windowBackgroundColor), in: .rect(cornerRadius: Theme.cornerLarge))
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.cornerLarge, style: .continuous)
+                    .strokeBorder(.separator, lineWidth: 1)
+            )
     }
 
     @ViewBuilder
@@ -125,9 +94,9 @@ struct RecordWorkspaceView: View {
             liveTextReservation
             HStack(spacing: 12) {
                 Button {} label: { Label("Discard", systemImage: "xmark") }
-                    .buttonStyle(.glass)
+                    .buttonStyle(.bordered)
                 Button {} label: { Label("Stop & Transcribe", systemImage: "stop.fill") }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.borderedProminent)
             }
             .controlSize(.large)
             .disabled(true)
@@ -166,7 +135,9 @@ struct RecordWorkspaceView: View {
             .disabled(!presentation.isEnabled)
             .accessibilityLabel(presentation.accessibilityLabel)
 
-            Text("Speak — Recordings types what you say, answers questions, and edits selected text.")
+            Text(engine.intentDetectionEnabled
+                 ? "Speak to dictate, ask a question, or edit selected text."
+                 : "Speak to transcribe and paste. Your words appear as you talk.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -194,12 +165,10 @@ struct RecordWorkspaceView: View {
         VStack(spacing: 14) {
             HStack(spacing: 12) {
                 Image(systemName: "waveform")
-                    .symbolEffect(.variableColor.iterative, isActive: !reduceMotion)
                     .foregroundStyle(Theme.recordRed).font(.largeTitle)
                     .accessibilityHidden(true)
                 Text(fmt(engine.recordingDuration))
                     .font(.system(size: 34, weight: .semibold, design: .rounded).monospacedDigit())
-                    .contentTransition(reduceMotion ? .identity : .numericText())
                     .accessibilityLabel("Recording, \(fmt(engine.recordingDuration))")
             }
             liveText(placeholder: "Listening…")
@@ -207,13 +176,13 @@ struct RecordWorkspaceView: View {
                 Button(role: .cancel) { engine.cancelRecording() } label: {
                     Label("Discard", systemImage: "xmark")
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel("Discard recording")
                 Button { engine.stopAndTranscribe() } label: {
                     Label("Stop & Transcribe", systemImage: "stop.fill")
                 }
-                .buttonStyle(.glassProminent).tint(Theme.recordRed)
+                .buttonStyle(.borderedProminent).tint(Theme.recordRed)
                 .keyboardShortcut(.defaultAction)
                 .accessibilityLabel("Stop and transcribe")
             }
@@ -247,7 +216,7 @@ struct RecordWorkspaceView: View {
                 } label: {
                     Label("Cancel", systemImage: "xmark")
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .controlSize(.large)
                 .keyboardShortcut(.cancelAction)
                 .help("Stop waiting — the transcript stays in Recent")
@@ -276,7 +245,7 @@ struct RecordWorkspaceView: View {
             } label: {
                 Label(presentation.title, systemImage: "mic.fill")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .disabled(!presentation.isEnabled)
@@ -305,7 +274,7 @@ struct RecordWorkspaceView: View {
             } label: {
                 Label(presentation.title, systemImage: "mic.fill")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
             .disabled(!presentation.isEnabled)
@@ -325,7 +294,7 @@ struct RecordWorkspaceView: View {
                 Text(engine.liveTranscriptionText)
                     .font(.system(.title3, design: .rounded))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(3).contentTransition(.opacity)
+                    .lineLimit(3)
             } else {
                 Text(placeholder).font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

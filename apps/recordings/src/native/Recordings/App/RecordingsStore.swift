@@ -11,9 +11,10 @@ final class RecordingsStore: ObservableObject {
     let preferences: ProjectStore
     let voiceShortcuts: VoiceShortcuts
 
-    @Published var library: [Recording] = []
+    @Published var library: [Recording] = [] { didSet { updateVisibleRecordings() } }
     @Published var selection: String?
-    @Published var searchText: String = ""
+    @Published var searchText: String = "" { didSet { updateVisibleRecordings() } }
+    @Published private(set) var visibleRecordings: [Recording] = []
     @Published var isLoadingLibrary = false
     @Published var loadError: String?
     @Published var operationError: String?
@@ -61,14 +62,14 @@ final class RecordingsStore: ObservableObject {
             .store(in: &cancellables)
     }
 
-    var visibleRecordings: [Recording] { library.filter(matchesSearch) }
-
-    private func matchesSearch(_ r: Recording) -> Bool {
+    // Recording ticks and transcript deltas must not rescan the entire history.
+    private func updateVisibleRecordings() {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return true }
-        if r.displayText.localizedCaseInsensitiveContains(q) { return true }
-        if r.tags.contains(where: { $0.localizedCaseInsensitiveContains(q) }) { return true }
-        return false
+        guard !q.isEmpty else { visibleRecordings = library; return }
+        visibleRecordings = library.filter { recording in
+            recording.displayText.localizedCaseInsensitiveContains(q) ||
+                recording.tags.contains { $0.localizedCaseInsensitiveContains(q) }
+        }
     }
 
     var selectedRecording: Recording? {

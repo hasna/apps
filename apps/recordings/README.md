@@ -24,6 +24,13 @@ are preserved.
 - Open **Settings** (⌘,) from the app or menu bar to configure the API, transcription,
   shortcuts, and permissions.
 
+New installations default to dictation. Question and edit-command detection is
+optional in Settings; enabling it can add a model request before delivery. For
+verbatim dictation with the shortest delivery path, keep intent detection off and
+set Transcription Cleanup to Off. Settled realtime text can paste while the API save
+continues in the background. Capture shutdown runs off the UI thread, and the
+recording panel avoids animated glass so rendering does not stall live transcription.
+
 In **Settings → General → Recordings API**, enter your API URL and service key,
 then choose **Save Connection** and **Test Connection**. There is no compiled-in API
 hostname. Both a service prefix such as `https://api.example.com/recordings` and its
@@ -528,6 +535,13 @@ resolves `HASNA_RECORDINGS_MIGRATE_DATABASE_URL` /
   `/ready` return `503 {"error":"dependency unavailable"}` — the database is
   healthy; the role posture is not. Remediate by re-owning the tables and
   sequences to the owner role and granting the DML set above.
+
+The table owner must also retain the privileges used by PostgreSQL's foreign
+key cleanup: SELECT/UPDATE on `recording_idempotency.recording_id` and
+SELECT/DELETE on `recording_tags`. Revoking the owner's DML privileges can
+make recording deletion fail even when the runtime grants are correct.
+Readiness checks both owner cleanup permissions. Restore these grants to the
+affected table's owner; the runtime role remains SELECT/INSERT on both tables.
 
 ## SDK
 
