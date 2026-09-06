@@ -208,6 +208,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills create <name>` | | Scaffold a new custom skill directory |
 | `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
 | `skills sync --from claude` | | Disabled by design; agent skill folders are not used |
+| `skills sync [names...] --check --for <agent> --source <path>` | `render` | Read-only drift census for the selected corpus, skills and agent; explicit source overrides `SKILLS_SOURCE`, then the installed cache. Unknown selections or drift exit nonzero. Without selectors, check all existing agent homes. |
 | `skills sync --station <id>` | | Per-station snapshot mode: snapshot the installed skill homes into `resources/<station>/skills` with a v3 sync-manifest (dry-run by default; `--populate` writes) |
 | `skills hydrate --station <id>` | | Restore the canonical corpus cache from a reviewed per-station snapshot (dry-run by default; `--apply` writes) |
 | `skills validate <name>` | | Check a skill's directory structure |
