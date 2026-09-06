@@ -3,14 +3,14 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { useDefaultTestTimeout } from "../test-preload.js";
+import { buildCliFixture } from "./cli-build.fixture.js";
 
 useDefaultTestTimeout();
 const scratch = mkdtempSync(join(tmpdir(), "skills-tool-profile-"));
 const binary = join(scratch, "skills.js");
 const guard = join(scratch, "guard.js");
 beforeAll(async () => {
-  const build = await Bun.build({ entrypoints: [resolve(import.meta.dir, "index.tsx")], outdir: scratch, naming: "skills.js", target: "bun" });
-  expect(build.success).toBe(true);
+  await buildCliFixture(resolve(import.meta.dir, "index.tsx"), binary);
   writeFileSync(guard, `const originalFetch=globalThis.fetch;
 globalThis.fetch=(input,init)=>{
  const url=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url);
