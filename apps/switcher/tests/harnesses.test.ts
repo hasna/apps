@@ -115,7 +115,7 @@ test("Grok resumes with a fresh bridge and the selected profile model; unsafe in
 test("OpenCode2 config uses v2 schema and isolated execution without broad permission flags",async()=>{
   const input=await fixture();
   try{
-    const prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-18999",args:["run","hello"]});
+    const prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-19157",args:["run","hello"]});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
     const provider:any=Object.values(config.providers)[0];expect(provider.package).toEndWith("/openai/responses");
     expect(provider.models[input.model].capabilities).toEqual({tools:true,input:["text"],output:["text"]});
@@ -165,7 +165,7 @@ test("OpenCode's fixed native auth convention can bridge a provider's different 
   let auth:string|null=null,key:string|null=null;
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req){auth=req.headers.get("authorization");key=req.headers.get("x-api-key");return Response.json({ok:true});}});
   try{
-    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-18999",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1"});
+    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-19157",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1"});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const provider:any=Object.values(config.providers)[0];
     const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model})});
     expect(response.status).toBe(200);expect(auth).toBe(`Bearer ${input.credential}`);expect(key).toBeNull();
@@ -217,7 +217,7 @@ test("auth bridges cancel unfinished upstream SSE before shutting down",async()=
   let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
   let closing:Promise<void>|undefined;
   try {
-    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1",version:"opencode2 beta"});
+    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1",version:"opencode2 v0.0.0-beta-19157"});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const provider:any=Object.values(config.providers)[0];
     const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model,messages:[],stream:true})});
     reader=response.body!.getReader();expect(new TextDecoder().decode((await reader.read()).value)).toContain("message_stop");

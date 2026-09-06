@@ -4,7 +4,7 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T10:31:20.164273+00:00"
+updated_at: "2026-09-06T11:12:08Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -20,7 +20,7 @@ This matrix covers Switcher 0.1.1 candidate SHA-1 `fd8eb1cecad2ef8f37d87d3e818c1
 | Claude Code | >=2.1.242 / 2.1.263 | Messages | Per-launch modelPicker | Split-catalog fixture and development-tarball Pro/Flash tool/picker checks pass; Default mapping passes live; full cancellation, resume and registry checks open |
 | Codex | >=0.153.0 / 0.153.4 | Responses | Startup ModelInfo JSON | Earlier candidate direct and Ori tool/resume pass; current candidate native app-server list exactly matches all 364 compatible models in the 582-entry OpenRouter catalog; richer metadata and registry checks open |
 | Grok Build | >=1.0.13 / 1.0.13 | Chat, Responses, Messages | Authenticated loopback catalog | Installed development CLI passes local Messages fixture and live DeepSeek Flash tool/read/resume; exact model confirmed by native usage; remaining protocols and registry cells open |
-| OpenCode 2 | Tested beta-19157 | Chat, Responses, Messages | Version 2 provider/models | Current candidate passes DeepSeek Flash tool/resume in headless and TTY-input runs; interactive picker shows all three DeepSeek models and selects Pro; stream cleanup passes; registry cells open |
+| OpenCode 2 | Requires beta-19157+ | Chat, Responses, Messages | Isolated version 2 provider/models with preserved native permissions and ancestor instructions | Corrected source passes controlled native tool/deleted-file resume, agent deny and exact settled catalog checks across all three protocols; earlier live DeepSeek evidence predates the authority correction; new registry/live cells remain open |
 | Pi | >=0.85.1 / 0.85.1 | Chat, Responses, Messages | Per-launch models.json; provider-scoped picker/cycling | Native nine-cell auth/path fixtures and installed candidate DeepSeek Flash read-tool/same-session resume pass; interactive model changes and registry acceptance remain open |
 
 Claude + non-Claude models remains experimental and unsupported by Anthropic. Messages, Responses and Chat are distinct protocols. A matrix intersection is a candidate for testing, not an automatic compatibility guarantee.
