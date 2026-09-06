@@ -3,6 +3,7 @@ import { normalizeSkillsApiOrigin, resolveSkillsConnection } from "./fleet-crede
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 import { creditCount, parseRemoteBillingStatus, parseRemoteCheckout, parseRemoteCreditPacks, parseRemoteRunQuote, RemoteCreditApprovalError, type RemoteCreditPack, type RemoteRunApproval, type RemoteRunQuote } from "./remote-account.js";
 import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES, type RemoteInputFile } from "./remote-files.js";
+import { customerNamePatch, parseUpdatedProfile, parseUpdatedWorkspace, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 
 /**
  * A server that predates this client's pin/tag/incremental-sync routes answered
@@ -244,6 +245,16 @@ export class RemoteSkillsClient {
 
   async getIdentity(): Promise<Record<string, unknown>> {
     return (await this.requestNewRoute("/api/auth/whoami")).json();
+  }
+  /** Requires a customer session; API keys and support impersonation cannot edit names. */
+  async updateProfile(input: UpdateRemoteProfile) {
+    const body = customerNamePatch(input, "displayName");
+    return parseUpdatedProfile(await (await this.requestNewRoute("/api/v1/account/profile", { method: "PATCH", body: JSON.stringify(body) })).json());
+  }
+  /** Owner/admin session only; the current workspace identity and slug stay fixed. */
+  async updateCurrentWorkspace(input: UpdateRemoteWorkspace) {
+    const body = customerNamePatch(input, "name");
+    return parseUpdatedWorkspace(await (await this.requestNewRoute("/api/v1/workspaces/current", { method: "PATCH", body: JSON.stringify(body) })).json());
   }
   async listApiKeys(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/auth/keys"); }
   async createApiKey(name: string, scopes?: string[]): Promise<{ key: string; [field: string]: unknown }> {

@@ -56,3 +56,4 @@ export { RemoteCreditApprovalError, type RemoteRunApproval, type RemoteRunQuote,
 export { type RemoteInputFile, type RemoteInputFileDescriptor } from "../lib/remote-files.js";
 
 export { RemoteSkillsAuthClient, HostedApiError } from "../lib/remote-auth.js";
+export type { RemoteCustomerRole, RemoteCustomerProfile, RemoteCurrentWorkspace, UpdateRemoteProfile, UpdateRemoteWorkspace } from "../lib/remote-profile.js";

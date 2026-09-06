@@ -470,3 +470,4 @@ export {
 export { RemoteCreditApprovalError, type RemoteRunApproval, type RemoteRunQuote, type RemoteCreditPack } from "./lib/remote-account.js";
 
 export { RemoteSkillsAuthClient, HostedApiError } from "./lib/remote-auth.js";
+export type { RemoteCustomerRole, RemoteCustomerProfile, RemoteCurrentWorkspace, UpdateRemoteProfile, UpdateRemoteWorkspace } from "./lib/remote-profile.js";

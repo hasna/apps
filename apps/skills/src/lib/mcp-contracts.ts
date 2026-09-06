@@ -511,6 +511,18 @@ const toolContracts: McpToolContract[] = [
     }),
   },
   {
+    name: "update_account_profile", title: "Update Account Display Name", description: "Update your display name with fresh email verification on the configured server.",
+    params: ["name", "email", "code"], category: "execution", sideEffects: "local-process-or-remote-run", stable: true,
+    inputSchema: objectSchema({ name: stringSchema("Display name, 1–100 characters"), email: { type: "string", format: "email" }, code: { type: "string", pattern: "^\\d{6}$" } }, ["name", "email", "code"]),
+    outputSchema: objectSchema({ user: objectSchema({ id: stringSchema("Account identifier."), email: stringSchema("Account email."), displayName: stringSchema("Display name."), role: stringSchema("Current workspace role.") }, ["id", "email", "displayName", "role"]) }, ["user"]),
+  },
+  {
+    name: "update_workspace_name", title: "Update Workspace Name", description: "Update the current workspace name as an owner/admin with fresh email verification.",
+    params: ["name", "email", "code"], category: "execution", sideEffects: "local-process-or-remote-run", stable: true,
+    inputSchema: objectSchema({ name: stringSchema("Workspace name, 1–100 characters"), email: { type: "string", format: "email" }, code: { type: "string", pattern: "^\\d{6}$" } }, ["name", "email", "code"]),
+    outputSchema: objectSchema({ organization: objectSchema({ id: stringSchema("Workspace identifier."), slug: stringSchema("Stable workspace slug."), name: stringSchema("Workspace name.") }, ["id", "slug", "name"]) }, ["organization"]),
+  },
+  {
     name: "list_api_keys", title: "List API Keys", description: "List keys using fresh email OTP reauthentication.",
     params: ["email", "code"], category: "execution", sideEffects: "local-process-or-remote-run", stable: true,
     inputSchema: objectSchema({ email: { type: "string", format: "email" }, code: { type: "string", pattern: "^\\d{6}$" } }, ["email", "code"]),

@@ -1,5 +1,6 @@
 import { RemoteSkillsClient } from "./remote-client.js";
 import { normalizeSkillsApiOrigin } from "./fleet-credentials.js";
+import { customerNamePatch, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 
 const MAX_ERROR_DETAIL_LENGTH = 200;
 export class HostedApiError extends Error {
@@ -98,7 +99,7 @@ export class RemoteSkillsAuthClient {
   startDevice() { return this.request("/api/auth/device/start", { method: "POST", body: JSON.stringify({ client: "skills-sdk" }) }); }
   pollDevice(deviceCode: string) { return this.request("/api/auth/device/token", { method: "POST", body: JSON.stringify({ deviceCode }) }); }
   private async sessionClient(email: string, code: string): Promise<RemoteSkillsClient> {
-    if (!email.includes("@") || !/^\d{6}$/.test(code)) throw new Error("Fresh email and six-digit verification code are required to manage API keys");
+    if (!email.includes("@") || !/^\d{6}$/.test(code)) throw new Error("Fresh email and six-digit verification code are required to manage this account");
     const login = await this.verifyCode(email, code);
     if (!login || typeof login.token !== "string" || !login.token) throw new Error("The server did not return an authorized account session");
     return new RemoteSkillsClient(login.token, this.apiOrigin);
@@ -108,6 +109,15 @@ export class RemoteSkillsAuthClient {
   }
   async listApiKeys(email: string, code: string) { return (await this.sessionClient(email, code)).listApiKeys(); }
   async revokeApiKey(email: string, code: string, keyId: string) { return (await this.sessionClient(email, code)).revokeApiKey(keyId); }
+  /** Reauthentication is ephemeral: it never replaces a saved key or profile. */
+  async updateProfile(email: string, code: string, input: UpdateRemoteProfile) {
+    customerNamePatch(input, "displayName");
+    return (await this.sessionClient(email, code)).updateProfile(input);
+  }
+  async updateCurrentWorkspace(email: string, code: string, input: UpdateRemoteWorkspace) {
+    customerNamePatch(input, "name");
+    return (await this.sessionClient(email, code)).updateCurrentWorkspace(input);
+  }
   /** Common auth transport used by CLI login, preserving the selected instance through awaits. */
   request(path: string, options?: RequestInit) {
     if (!["/api/auth/login", "/api/auth/verify", "/api/auth/device/start", "/api/auth/device/token", "/api/auth/keys", "/api/auth/whoami"].includes(path)) throw new Error("Unsupported authentication operation");
