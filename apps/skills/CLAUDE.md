@@ -48,8 +48,10 @@ document, and run them. Four surfaces share one set of core modules:
 
 There is **one deployment story: you run it.** No *deployment* mode concept survives —
 no `local`/`self-hosted`/`cloud` config key, no storage mode, no `--mode` flag, no
-`mode` field in any server payload. "Running locally" is simply the absence of a
-configured API origin. See [No deployment modes](#no-deployment-modes).
+`mode` field in any server payload. "Running locally" is the DELIBERATE unhosted
+opt-in (`HASNA_SKILLS_LOCAL=1`, see `src/lib/local-opt-in.ts`): an unconfigured
+install fails closed instead of silently serving this machine. See
+[No deployment modes](#no-deployment-modes).
 
 (Unrelated `mode`-named things do still exist and are not part of that cleanup:
 `InstallMode` in `src/lib/installer.ts` labels a pin/source/manifest result, and
@@ -315,8 +317,12 @@ other command rejects.
 
 The one fact that survives is whether an API origin is configured, and
 `src/lib/api-url.ts` is the only place that is resolved: `resolveApiUrl()` returns
-`undefined` on read paths (callers fall back to the bundled registry), and
-`requireApiUrl()` throws `MissingApiUrlError` on auth and write paths.
+`undefined` on read paths ONLY under the explicit local opt-in
+(`HASNA_SKILLS_LOCAL=1` — callers then fall back to the bundled registry), and
+`requireApiUrl()` throws `MissingApiUrlError` on auth and write paths. Without the
+opt-in, an unconfigured install fails closed: `src/lib/fleet-credentials.ts` throws
+a `MISSING_API_CREDENTIAL` refusal naming the opt-in, no SQLite is opened and no
+`*-local-fallback` event is emitted (see `src/lib/local-opt-in.ts`).
 
 Regression guards: `src/lib/retired-settings.test.ts` (the refusal, its namespacing,
 and the live `*_MODE` settings it must not touch), `src/lib/config.test.ts` (every

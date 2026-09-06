@@ -267,22 +267,23 @@ async function handleSetup(options: SetupCommandOptions) {
   let error: string | null = null;
   try {
     const fleet = resolveSkillsFleet();
-    if (fleet.mode === "hosted") {
-      configured = fleet.apiOrigin;
-      source = fleet.apiUrlSource;
-      authenticated = true;
-    }
+    if (fleet.mode === "hosted") authenticated = true;
   } catch (err) {
     // Setup configures an instance before login. Missing authentication is
     // expected here; malformed configuration and a mismatched saved key still fail.
-    if (err instanceof SkillsFleetCredentialError && err.code === "MISSING_API_CREDENTIAL") {
-      const authority = resolveSkillsApiOrigin();
-      configured = authority?.origin ?? saved;
-      source = authority?.source ?? null;
-    } else {
+    if (!(err instanceof SkillsFleetCredentialError && err.code === "MISSING_API_CREDENTIAL")) {
       error = (err as Error).message;
       configured = saved;
     }
+  }
+  if (!error) {
+    // The authority in effect, read back independently of the mode decision:
+    // the local opt-in and a missing credential can both make the fleet
+    // resolution above refuse, while the address this command manages (env,
+    // Keychain, the file it just wrote) is still configured and must be shown.
+    const authority = resolveSkillsApiOrigin();
+    configured = authority?.origin ?? null;
+    source = authority?.source ?? null;
   }
 
   const next = error

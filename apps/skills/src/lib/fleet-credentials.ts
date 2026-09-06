@@ -36,8 +36,14 @@
  * are not read anywhere else in this package. `SKILL_API_KEY` (singular) is
  * gone: it shadowed nothing canonical and was never documented.
  *
- * THREE OUTCOMES, and no fourth:
+ * THIRD: the local run is opt-in only (owner ruling 2026-09-04, hasna/apps#1720;
+ * class-patch order 2026-09-06). `HASNA_SKILLS_LOCAL=1` (alias `SKILLS_LOCAL=1`)
+ * selects the on-machine run when the ENVIRONMENT configures no authority; it is
+ * answered before the resolver runs, so opting in never reads the Keychain or
+ * the credentials file. A configured environment always outranks it. The
+ * outcomes, and no fourth:
  *
+ *   - the local opt-in selected        → LOCAL, announced once on stderr.
  *   - a credential resolves            → HOSTED. The authority is the configured
  *                                        URL, else the fleet gateway. A credential
  *                                        that cannot produce a usable key — a
@@ -51,10 +57,12 @@
  *                                        There is no local fallback here: serving
  *                                        local results while authentication is
  *                                        unconfigured is a false green.
- *   - neither a credential nor a URL   → LOCAL. Skills is an OSS tool with a
- *                                        bundled corpus, so running on this
- *                                        machine is a real mode — and it says so,
- *                                        once, on stderr.
+ *   - neither a credential nor a URL, and no opt-in
+ *                                      → LOUD failure, exit non-zero, no SQLite,
+ *                                        no *-local-fallback event. Running on
+ *                                        this machine is a deliberate choice now,
+ *                                        not the silence that follows a missing
+ *                                        credential.
  */
 
 import {
@@ -68,15 +76,16 @@ import {
   keychainConfigValue,
   resolveCredential,
   toV1BaseUrl,
-  type CredentialChainOptions,
-  type CredentialTier,
-  type KeychainTierOptions,
-  type ResolvedCredential,
 } from "@hasna/contracts/client";
+import type { CredentialChainOptions, CredentialTier, KeychainTierOptions, ResolvedCredential } from "./client-types.js";
 import { captureSkillsCredentialFiles, readSkillsInstanceMetadata, selectedSkillsProfile, skillsProfileCredentialFiles } from "./instance-credentials.js";
+import { isSkillsLocalOptIn, selectsSkillsLocalMode, SKILLS_LOCAL_OPT_IN_ENV_KEYS } from "./local-opt-in.js";
 
 /** The app slug: the Keychain service, the `~/.hasna/<app>` folder, the gateway path. */
 export const SKILLS_APP = "skills";
+
+/** The deliberate unhosted opt-in env names. Re-exported for the surfaces that have to name them. */
+export { SKILLS_LOCAL_OPT_IN_ENV_KEYS, isSkillsLocalOptIn, selectsSkillsLocalMode } from "./local-opt-in.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -181,6 +190,16 @@ function isCredentialResolutionError(error: unknown): boolean {
     (typeof error === "object" &&
       error !== null &&
       (error as { name?: unknown }).name === "CredentialResolutionError")
+  );
+}
+
+/** True for this package's own refusal, across bundle boundaries. */
+function isSkillsFleetCredentialError(error: unknown): boolean {
+  return (
+    error instanceof SkillsFleetCredentialError ||
+    (typeof error === "object" &&
+      error !== null &&
+      (error as { name?: unknown }).name === "SkillsFleetCredentialError")
   );
 }
 
@@ -306,18 +325,18 @@ let localNoticePrinted = false;
 /**
  * Say — once per process, on stderr — that this install is running locally.
  *
- * Local mode is legitimate for Skills: the corpus ships in the package. It is
- * still announced, because "no credential resolved" and "deliberately offline"
- * look identical in the output otherwise, and the first one is usually a
- * misconfiguration the operator wants to hear about.
+ * Local mode is legitimate for Skills: the corpus ships in the package. It is a
+ * deliberate choice now, though: it is reachable only through the explicit
+ * opt-in (`HASNA_SKILLS_LOCAL=1`), and it is still announced, because "no
+ * credential resolved" and "deliberately offline" look identical in the output
+ * otherwise, and the first one is usually a misconfiguration the operator wants
+ * to hear about.
  */
 export function noticeLocalSkillsMode(write: (line: string) => void = (line) => console.error(line)): void {
   if (localNoticePrinted) return;
   localNoticePrinted = true;
   write(
-    `skills: local mode — no ${SKILLS_API_KEY_ENV} and no ${SKILLS_API_URL_ENV} resolved, ` +
-      `so this runs on this machine against the bundled corpus. ` +
-      `Sign in with: skills auth login`,
+    `skills: local mode (${SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]}=1) — running on this machine against the bundled corpus.`,
   );
 }
 
@@ -371,12 +390,29 @@ function snapshotSkillsOptions(env: Env, options: SkillsFleetOptions): SkillsFle
 }
 
 function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): SkillsFleet {
+  // THE LOCAL OPT-IN IS ANSWERED FIRST, ON ENV VALUES ALONE (see
+  // local-opt-in.ts for why the order is load-bearing in both directions): a
+  // run with HASNA_SKILLS_LOCAL=1 and no authority variables never touches the
+  // Keychain or the credentials file — and a run without it never lands here
+  // silent. An environment that CONFIGURES an authority outranks the opt-in and
+  // goes (or fails) hosted instead.
+  if (selectsSkillsLocalMode(env)) return { mode: "local", apiOrigin: null, apiKey: null };
+
   const assertFilesUnchanged = captureSkillsCredentialFiles(skillsProfileCredentialFiles(env, options.credentials?.profile));
   const configured = configuredSkillsApiUrl(env, options.credentials?.keychain, options.credentials?.profile);
   // The released shared resolver owns every credential tier. Resolve it once.
   const credential = resolveCredential(SKILLS_APP, env, options.credentials);
   if (!credential) {
-    if (!configured) return { mode: "local", apiOrigin: null, apiKey: null };
+    if (!configured) {
+      // Nothing at all: no credential, no authority, no opt-in. Fail closed —
+      // the alternative is quietly answering from the bundled corpus for a
+      // machine that was never told to serve it.
+      throw new SkillsFleetCredentialError(
+        `No API key resolved and no Skills API URL is configured — failing closed ` +
+          `(local mode is opt-in only: set ${SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]}=1 to run on this machine). ` +
+          `Sign in with: skills auth login`,
+      );
+    }
     throw new SkillsFleetCredentialError(
       `${configured.source} points this CLI at a Skills service but no API key resolved — refusing to run locally instead. ` +
         `Looked in hasna.credentials.skills.api-key, ${skillsCredentialFiles(env).join(" or ") || "no credentials file"}, and ${SKILLS_API_KEY_ENV}. Sign in with: skills auth login`,
@@ -507,10 +543,11 @@ export async function requireSkillsApiKey(
  * The credential for a surface that reports refusals as data (an MCP tool, a
  * `--json` command) rather than as an exception.
  *
- * `reason` is the ladder's own message when an authority is configured and no
- * key resolved — a refusal carried as a value, NOT a fallback: the caller must
- * still refuse. It is null only when nothing at all is configured, which is the
- * ordinary "not signed in" case.
+ * `reason` is the ladder's own message when a hosted resolution is refused — an
+ * authority with no key, or an unconfigured install without the local opt-in
+ * (fail-closed ruling) — a refusal carried as a value, NOT a fallback: the
+ * caller must still refuse. It is null only when the explicit local opt-in
+ * selected the on-machine run, the ordinary "not signed in" case.
  */
 export async function skillsCredentialOrReason(
   env: Env = process.env,
@@ -523,7 +560,7 @@ export async function skillsCredentialOrReason(
     const connection = await resolveSkillsConnection(env, options);
     return connection ? { apiKey: connection.apiKey, apiOrigin: connection.apiOrigin, reason: null } : { apiKey: null, apiOrigin: null, reason: null };
   } catch (error) {
-    if (error instanceof SkillsFleetCredentialError || (error as Error)?.name === "SkillsFleetCredentialError") {
+    if (isSkillsFleetCredentialError(error)) {
       return { apiKey: null, apiOrigin: null, reason: (error as Error).message };
     }
     throw error;
@@ -538,6 +575,12 @@ export async function skillsCredentialOrReason(
  * Keychain, credentials file), else the authority a resolved credential implies.
  * With neither, this returns null and the caller fails loudly: R1 still holds,
  * an install that named no service does not get to send an email address to one.
+ *
+ * The fail-closed refusal an unconfigured install now raises on every DATA
+ * surface is swallowed here and reported as plain "no authority": for a flow
+ * whose purpose is to acquire a credential, "nothing is configured" and "local
+ * mode is opted in" have the same two-step way out (configure an origin, then
+ * sign in).
  */
 export function resolveSkillsApiOrigin(
   env: Env = process.env,
@@ -551,7 +594,13 @@ export function resolveSkillsApiOrigin(
     toV1BaseUrl(configured.value);
     return { origin: normalizeSkillsApiOrigin(configured.value), source: configured.source };
   }
-  const fleet = resolveSkillsFleet(env, options);
+  let fleet: SkillsFleet;
+  try {
+    fleet = resolveSkillsFleet(env, options);
+  } catch (error) {
+    if (isSkillsFleetCredentialError(error)) return null;
+    throw error;
+  }
   return fleet.mode === "hosted" ? { origin: fleet.apiOrigin, source: fleet.apiUrlSource } : null;
 }
 

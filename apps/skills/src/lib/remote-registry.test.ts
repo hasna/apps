@@ -87,7 +87,10 @@ describe("remote registry", () => {
   });
 
   test("nothing configured resolves nothing — the read path stays local", () => {
-    expect(getConfiguredApiUrl({})).toBeUndefined();
+    // The one empty environment that yields no URL at all is the opted-in one:
+    // local mode is a deliberate choice (fail-closed ruling), not the absence
+    // of configuration.
+    expect(getConfiguredApiUrl({ HASNA_SKILLS_LOCAL: "1" })).toBeUndefined();
   });
 
   test("parses remote array payload", () => {
@@ -271,8 +274,12 @@ describe("remote registry", () => {
   });
 
   test("loads remote registry with injected fetch implementation", async () => {
+    // An explicit unauthenticated read is a caller's decision (`authToken:
+    // null`); the seam itself refuses to yield a credential for an
+    // unconfigured machine without the local opt-in (fail-closed ruling).
     const skills = await loadRemoteRegistry({
       apiUrl: "https://skills.example.com",
+      authToken: null,
       fetchImpl: async (input) => {
         expect(String(input)).toBe("https://skills.example.com/api/v1/skills");
         return Response.json({
@@ -340,6 +347,7 @@ describe("remote registry", () => {
   test("reports remote registry HTTP failures clearly", async () => {
     await expect(loadRemoteRegistry({
       apiUrl: "https://skills.example.com/api/v1",
+      authToken: null,
       fetchImpl: async () => new Response("nope", { status: 503, statusText: "Unavailable" }),
     })).rejects.toThrow("Remote registry request failed: 503 Unavailable");
   });
@@ -354,6 +362,7 @@ describe("remote registry", () => {
   describe("mergeRemoteRegistry (default-read merge, R1 fail-closed)", () => {
     const originalSkillsApiKey = process.env.SKILLS_API_KEY;
     const originalSkillApiKey = process.env.SKILL_API_KEY;
+    const originalSkillsLocal = process.env.HASNA_SKILLS_LOCAL;
 
     const localFixture: SkillMeta[] = [
       {
@@ -379,9 +388,14 @@ describe("remote registry", () => {
       else process.env.SKILLS_API_KEY = originalSkillsApiKey;
       if (originalSkillApiKey === undefined) delete process.env.SKILL_API_KEY;
       else process.env.SKILL_API_KEY = originalSkillApiKey;
+      if (originalSkillsLocal === undefined) delete process.env.HASNA_SKILLS_LOCAL;
+      else process.env.HASNA_SKILLS_LOCAL = originalSkillsLocal;
     });
 
     test("returns the local list unchanged when no origin is configured and never fetches", async () => {
+      // The ambient analog of "unconfigured" is now the local opt-in: without
+      // it the same call fails closed (asserted next door in the CLI suite).
+      process.env.HASNA_SKILLS_LOCAL = "1";
       delete process.env.SKILLS_API_URL;
       let fetched = false;
       const result = await mergeRemoteRegistry(localFixture, {

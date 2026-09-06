@@ -18,6 +18,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MissingApiUrlError, requireApiUrl, resolveApiUrl } from "./api-url.js";
+import { SkillsFleetCredentialError } from "./fleet-credentials.js";
 import { getPackedFiles } from "./packlist.js";
 import { getConfiguredApiUrl } from "./remote-registry.js";
 import {
@@ -51,7 +52,9 @@ useDefaultTestTimeout();
  * configured:
  *
  *   "closed" — read paths degrade to the bundled local registry, so they return
- *              undefined and the CLI keeps working offline.
+ *              undefined ONLY under the explicit local opt-in
+ *              (HASNA_SKILLS_LOCAL=1). Without the opt-in an unconfigured
+ *              install is a refusal — the fail-closed ruling — not a URL.
  *   "loud"   — auth and write paths have nothing sane to default to, so they
  *              throw an error naming the missing configuration.
  */
@@ -160,9 +163,22 @@ describe("R1 — unconfigured client produces no endpoint", () => {
     expect(CLIENT_ENDPOINT_RESOLVERS.some((r) => r.kind === "loud")).toBe(true);
   });
 
-  test("read paths yield no URL at all with empty env and empty config", () => {
+  test("read paths yield no URL with empty env — undefined only under the opt-in", () => {
     for (const resolver of CLIENT_ENDPOINT_RESOLVERS.filter((r) => r.kind === "closed")) {
-      expect(resolver.resolve(emptyEnv()), `${resolver.module} ${resolver.name}`).toBeUndefined();
+      // Fail-closed default: nothing configured and no opt-in is a refusal that
+      // names the way out, never a silent local read.
+      let thrown: unknown;
+      try {
+        resolver.resolve(emptyEnv());
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown, `${resolver.module} ${resolver.name} must fail closed`).toBeInstanceOf(SkillsFleetCredentialError);
+      expect((thrown as SkillsFleetCredentialError).code, `${resolver.module} ${resolver.name}`).toBe("MISSING_API_CREDENTIAL");
+      expect((thrown as Error).message, `${resolver.module} ${resolver.name}`).toContain("HASNA_SKILLS_LOCAL");
+      // The deliberate local opt-in is the ONE empty environment that yields no
+      // URL and keeps the caller working against the bundled registry.
+      expect(resolver.resolve({ HASNA_SKILLS_LOCAL: "1" }), `${resolver.module} ${resolver.name}`).toBeUndefined();
     }
   });
 
@@ -214,7 +230,7 @@ describe("R1 — unconfigured client produces no endpoint", () => {
     expect(resolveApiUrl({ HASNA_SKILLS_API_KEY: "sk_boundary_test_only" })).toBe(
       `https://${FLEET_GATEWAY_HOST}/skills`,
     );
-    expect(resolveApiUrl(emptyEnv())).toBeUndefined();
+    expect(resolveApiUrl({ HASNA_SKILLS_LOCAL: "1" })).toBeUndefined();
   });
 
   test("the CLI's own auth command reaches no host when nothing is configured", async () => {

@@ -48,15 +48,20 @@ export class McpClient {
       stderr: "pipe",
       // Drop the preload's $HASNA_SKILLS_DIR: the server under test must resolve
       // its data dir from the throwaway $HOME above, not from the parent's
-      // ambient override inherited via ...process.env.
-      env: withoutDataDirOverrideEnv({
-        ...process.env,
-        HOME: home,
-        ...CLEAN_STORAGE_ENV,
-        ...env,
-        MCP_STDIO: "1",
-        NO_COLOR: "1",
-      }) as Record<string, string>,
+      // ambient override inherited via ...process.env. The local opt-in is
+      // deliberately added AFTER the scrub (which would strip it): local mode
+      // is the harness's explicit default, exactly like the CLI harness.
+      env: {
+        ...withoutDataDirOverrideEnv({
+          ...process.env,
+          HOME: home,
+          ...CLEAN_STORAGE_ENV,
+          ...env,
+          MCP_STDIO: "1",
+          NO_COLOR: "1",
+        }),
+        HASNA_SKILLS_LOCAL: env.HASNA_SKILLS_LOCAL ?? env.SKILLS_LOCAL ?? "1",
+      } as Record<string, string>,
     });
     this.reader = (this.proc.stdout as ReadableStream<Uint8Array>).getReader();
     this._readLoop();

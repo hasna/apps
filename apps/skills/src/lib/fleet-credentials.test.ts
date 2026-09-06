@@ -27,6 +27,7 @@ import {
   skillsCredentialOrReason,
   SKILLS_API_KEY_ENV,
   SKILLS_API_URL_ENV,
+  SKILLS_LOCAL_OPT_IN_ENV_KEYS,
 } from "./fleet-credentials.js";
 import { CLI_PATH } from "../cli/cli.test-utils.js";
 
@@ -89,7 +90,9 @@ describe("fleet credential ladder", () => {
   });
 
   test("SKILL_API_KEY (singular) is not a credential source any more", () => {
-    expect(resolveSkillsFleet({ SKILL_API_KEY: KEY }).mode).toBe("local");
+    // The singular spelling carries no authority intent and is never read by
+    // the resolver, so under the opt-in it is a plain local run.
+    expect(resolveSkillsFleet({ SKILL_API_KEY: KEY, HASNA_SKILLS_LOCAL: "1" }).mode).toBe("local");
   });
 
   test("tier 4 — the credentials file supplies the key, and outranks the env", () => {
@@ -208,10 +211,23 @@ describe("fleet credential ladder", () => {
     expect(fleet.apiOrigin).toBe("https://skills.internal.example");
   });
 
-  test("nothing configured is local mode, and says so once", () => {
-    const fleet = resolveSkillsFleet({});
-    expect(fleet).toEqual({ mode: "local", apiOrigin: null, apiKey: null });
+  test("nothing configured and no opt-in fails closed, naming the opt-in", () => {
+    let thrown: unknown;
+    try {
+      resolveSkillsFleet({});
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SkillsFleetCredentialError);
+    expect((thrown as SkillsFleetCredentialError).code).toBe("MISSING_API_CREDENTIAL");
+    const message = (thrown as Error).message;
+    expect(message).toContain(`${SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]}=1`);
     expect(configuredSkillsApiUrl({})).toBeNull();
+  });
+
+  test("the explicit opt-in is local mode, and says so once", () => {
+    const fleet = resolveSkillsFleet({ [SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]]: "1" });
+    expect(fleet).toEqual({ mode: "local", apiOrigin: null, apiKey: null });
 
     resetLocalSkillsModeNotice();
     const lines: string[] = [];
@@ -219,7 +235,18 @@ describe("fleet credential ladder", () => {
     noticeLocalSkillsMode((line) => lines.push(line));
     expect(lines.length).toBe(1);
     expect(lines[0]).toContain("local mode");
-    expect(lines[0]).toContain(SKILLS_API_KEY_ENV);
+    expect(lines[0]).toContain(SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]);
+  });
+
+  test("the opt-in never answers when the environment configures an authority", () => {
+    // A configured environment outranks the opt-in: a stale HASNA_SKILLS_LOCAL
+    // must not mask a half-configured install, or serve a different dataset.
+    expect(() => resolveSkillsFleet({ [SKILLS_API_URL_ENV]: "https://skills.internal.example", HASNA_SKILLS_LOCAL: "1" }))
+      .toThrow(SkillsFleetCredentialError);
+    const keyed = resolveSkillsFleet({ [SKILLS_API_KEY_ENV]: KEY, HASNA_SKILLS_LOCAL: "1" });
+    expect(keyed.mode).toBe("hosted");
+    if (keyed.mode !== "hosted") return;
+    expect(keyed.apiKey).toBe(KEY);
   });
 
   test("an authority with no credential fails loud — it never degrades to local", () => {
@@ -237,10 +264,25 @@ describe("fleet credential ladder", () => {
     }
   });
 
-  test("requireSkillsFleet names what is missing and hands back no endpoint", () => {
+  test("requireSkillsFleet refuses an unconfigured install without the opt-in", () => {
+    // Fail-closed: no credential, no authority, no opt-in is a refusal, and the
+    // message names the local opt-in as the deliberate way out.
     let thrown: unknown;
     try {
       requireSkillsFleet("Publishing", {});
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SkillsFleetCredentialError);
+    expect((thrown as SkillsFleetCredentialError).code).toBe("MISSING_API_CREDENTIAL");
+    expect((thrown as Error).message).toContain(SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]);
+    expect((thrown as Error).message).not.toContain("https://");
+  });
+
+  test("requireSkillsFleet names what is missing for an opted-in local install", () => {
+    let thrown: unknown;
+    try {
+      requireSkillsFleet("Publishing", { HASNA_SKILLS_LOCAL: "1" });
     } catch (error) {
       thrown = error;
     }
@@ -274,6 +316,66 @@ describe("the CLI fails closed rather than opening a local database", () => {
       expect(exitCode).not.toBe(0);
       expect(output).toContain(SKILLS_API_URL_ENV);
       expect(databaseFilesUnder(home)).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("nothing configured and no opt-in exits non-zero, creates no database and no local-fallback event", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skills-fleet-cli-unset-"));
+    try {
+      const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "list", "--json"], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: home,
+          NO_COLOR: "1",
+          SKILLS_TEST_MODE: "1",
+          HASNA_STATION: "skills-suite-no-such-keychain-account",
+        },
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+
+      // Fail closed: non-zero, no silent local listing, and the way out is named.
+      expect(exitCode).not.toBe(0);
+      expect(stdout).toBe("");
+      expect(stderr).toContain(SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]);
+      // No SQLite was opened, and there is no *-local-fallback event anywhere.
+      expect(databaseFilesUnder(home)).toEqual([]);
+      expect(stderr + stdout).not.toContain("skills-local-fallback");
+      expect(stderr + stdout).not.toContain("local-fallback");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("the explicit opt-in runs the same command locally and says so on stderr", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skills-fleet-cli-optin-"));
+    try {
+      const proc = Bun.spawn(["bun", "run", CLI_PATH, "--", "list", "--limit", "1", "--json"], {
+        stdout: "pipe",
+        stderr: "pipe",
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: home,
+          NO_COLOR: "1",
+          SKILLS_TEST_MODE: "1",
+          HASNA_STATION: "skills-suite-no-such-keychain-account",
+          [SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]]: "1",
+        },
+      });
+      const stdout = await new Response(proc.stdout).text();
+      const stderr = await new Response(proc.stderr).text();
+      const exitCode = await proc.exited;
+
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(stdout)).toBeInstanceOf(Array);
+      // Local mode announces itself on stderr, once, and names the opt-in.
+      expect(stderr).toContain("skills: local mode");
+      expect(stderr).toContain(SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -391,7 +493,7 @@ describe("tier 2 — HASNA_PROFILE", () => {
 });
 
 describe("skills setup-info reports where the credential came from, never its value", () => {
-  test("names the tier and the file mode, and says local when nothing is configured", async () => {
+  test("names the tier and the file mode, and says local when the opt-in is set", async () => {
     const home = mkdtempSync(join(tmpdir(), "skills-setup-info-"));
     try {
       const configDir = join(home, ".hasna", "skills", "config");
@@ -410,8 +512,19 @@ describe("skills setup-info reports where the credential came from, never its va
       expect(JSON.stringify(hosted)).not.toContain(KEY);
 
       rmSync(join(configDir, "credentials"));
-      const local = await runSetupInfo(home, {});
+      const local = await runSetupInfo(home, { HASNA_SKILLS_LOCAL: "1" });
       expect(local.credential).toMatchObject({ mode: "local", apiUrl: null, apiKeySource: null });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("reports the fail-closed refusal with the opt-in hint when nothing is configured", async () => {
+    const home = mkdtempSync(join(tmpdir(), "skills-setup-info-fc-"));
+    try {
+      const unconfigured = await runSetupInfo(home, {});
+      expect(unconfigured.credential.mode).toBe("misconfigured");
+      expect(unconfigured.credential.error).toContain(SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

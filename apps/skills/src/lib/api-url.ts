@@ -5,9 +5,10 @@
  * thin reading of `@hasna/contracts/client`. It exists only so the two failure
  * MODES stay named:
  *
- *   - Read paths fail closed: `resolveApiUrl()` returns `undefined` when nothing
- *     is configured, and the caller keeps working against the bundled local
- *     registry.
+ *   - Read paths fail closed: `resolveApiUrl()` returns `undefined` only under
+ *     the explicit local opt-in (`HASNA_SKILLS_LOCAL=1`, alias `SKILLS_LOCAL=1`),
+ *     and the caller keeps working against the bundled local registry. Without
+ *     the opt-in, an install with nothing configured is a refusal, not a URL.
  *   - Auth and write paths fail loudly: `requireApiUrl()` throws an error naming
  *     the missing configuration.
  *
@@ -24,6 +25,7 @@
 
 import {
   MissingSkillsFleetError,
+  SkillsFleetCredentialError,
   resolveSkillsFleet,
   SKILLS_API_URL_ENV,
   type SkillsFleetOptions,
@@ -65,7 +67,16 @@ export function requireApiUrl(
   env: Env = process.env,
   options: SkillsFleetOptions = {},
 ): string {
-  const resolved = resolveApiUrl(env, options);
+  let resolved: string | undefined;
+  try {
+    resolved = resolveApiUrl(env, options);
+  } catch (error) {
+    // The fail-closed refusal (nothing configured, no local opt-in) is an
+    // unconfigured install from the auth/write perspective, which has no local
+    // answer at all — its structured refusal is the classic missing-URL error.
+    if (error instanceof SkillsFleetCredentialError) throw new MissingSkillsFleetError(action);
+    throw error;
+  }
   if (!resolved) throw new MissingSkillsFleetError(action);
   return resolved;
 }
