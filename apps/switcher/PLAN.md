@@ -4,7 +4,7 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T14:02:36.227431+00:00"
+updated_at: "2026-09-06T14:33:36.182874+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -13,7 +13,9 @@ source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 
 Switcher **0.1.1 is published and registry accepted**. PR [#1810](https://github.com/hasna/apps/pull/1810) merged source `0bb3d62e28ba23acb76352a8dfad9f2d5d770e50`; npm publication at `2026-09-06T13:22:44.352Z` has SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed`. All 38 installed files match the reviewed archive. The actual station CLI passed seven real-provider file-read/deleted-file fresh-resume paths in owned tmux: Claude/DeepSeek, Codex/OpenRouter, Grok/DeepSeek, OpenCode 2/DeepSeek, Pi/DeepSeek and Codex/Grok through Ori/OpenRouter. Codex listed exactly 363 compatible IDs from the recorded 581-entry OpenRouter refresh; OpenCode 2 showed all three DeepSeek IDs and selected Pro without inference. Node/Bun package surfaces and SQLite/PostgreSQL container persistence, upgrade, rollback and re-upgrade passed. Earlier rejected archives remain withdrawn; their reports are historical evidence.
 
-The **0.1.2 candidate** adds OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, legacy OpenCode, Kilo, Gemini CLI and Aider. Controlled native tool/edit, catalog and resume evidence exists for these integrations; final combined review, package/live acceptance and publication remain open. Gemini's reproduced routing/trust/argument defects are corrected: six integrated native launches, hostile-config rejection, untrusted-workspace rejection and timeout exit 143 with upstream cancellation pass. Prime's long-TMPDIR fallback, actual read/deleted-file resume, exact catalog and native second-model request pass. Kilo passes all three integrated native protocol/tool/deleted-file resume/catalog paths and concurrent cancellation/cleanup. Independent integration review reports no actionable P1/P2 findings, with 13 reviewed source hashes reconciled. Final package verification passes 149 tests / 1,568 assertions with real PostgreSQL and installed Pi/Ori/Gemini. All 43 affected builds pass; the final artifact scan checks 49 packed members. Root gates, installed-candidate/live acceptance and publication remain open. Explicit native permission choices remain caller-controlled.
+The **0.1.2 candidate** adds OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, legacy OpenCode, Kilo, Gemini CLI and Aider. All 14 native harnesses and two Ori paths passed actual installed baseline requests plus deleted-file fresh-process continuation; Aider uses file-context/edit/history semantics. The final source `ef217dd749c4628bead0df43c4a83b3dc8d11468` additionally preserves Gemini generation methods and excludes explicitly incompatible methods from coding selection, without inventing tool capabilities. Independent reviews reconcile 19 exact file hashes; 14 adapter implementation files are unchanged from the live baseline. The final archive SHA-1 `453bc3d6180a523286ab10f0a0154316cbf75672` matches all 49 ordinary npm consumer files.
+
+Current verification passes **152 package tests / 1,584 assertions** including real PostgreSQL and installed Pi/Ori/Gemini, **147 root tests / 560 assertions**, all **43 affected builds**, generated/artifact/manifest/secret guards and frozen locks. Final archive Node/Bun CLI/API/SDK/MCP surfaces and SQLite/PostgreSQL container persistence, rollback and re-upgrade pass. Final Gemini live/catalog replay passes (54 retained models, 40 eligible native IDs, 14 explicitly incompatible method entries); PR [#1836](https://github.com/hasna/apps/pull/1836) CI is in progress; publication and registry acceptance remain open. The old 0.1.1 API reads preserved new rows but refuses new harness writes and updates carrying new generation-method metadata. Hermes/DeepSeek Chat can emit a nonfatal auxiliary-title format warning; its main tool loop and history resume pass. Native permission choices remain caller-controlled.
 
 [COMPATIBILITY.md](COMPATIBILITY.md) separates published evidence, current source fixtures and remaining access/package gates. Evidence paths resolve under `~/Workspace/scratch/universal-harness-switcher`; the [evidence index](docs/verification-evidence.json) records source identities. Preserve the original user session `switcher-deepseek` on the separate `deepseek.sock` socket.
 
@@ -21,9 +23,9 @@ Worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/complete-ada
 
 The Changesets release-plan API applied only `switcher-expanded-adapters`: `@hasna/switcher` 0.1.1 → 0.1.2. Its parser requires package-to-bump front matter; this plan records metadata/provenance for that exception. Unrelated pending monorepo changesets were not applied. `release-candidate/expanded-scoped-release-plan.json` records the exact plan and touched files.
 
-1. Finish the exact combined adapter review and targeted regressions; preserve corrected permissions, routing and process ownership.
-2. Run package/generated/build/storage/artifact checks, required root and affected checks, and PR CI against the combined commit.
-3. Install one exact candidate normally. Test a bounded native task plus fresh resume and its supported catalog/second-selection interface for every new adapter. Repeat the seven core/Ori live paths because the shared launcher changed. DSH also requires its browser auth/cleanup path; Aider uses native file/edit/history behavior.
+1. Combined independent review, package/source checks, ordinary candidate installation, the finite native live matrix and DSH browser auth/cleanup checks are complete. Preserve their exact source/archive identities.
+2. Complete the required PR CI and merge checks against the final documentation/source head.
+3. Preserve native catalog/selection boundaries and repeat representative installed acceptance from published registry bytes; Aider uses native file/edit/history behavior.
 4. Test additional named provider contracts with usable authorized access; record missing endpoint, deployment or credential prerequisites explicitly. Do not infer working access from vault metadata or infer all protocols from one passing route.
 5. Merge through the reviewed PR, publish the exact npm artifact and verify registry byte identity and installed-command acceptance. Update the stable checklist IDs before closing the task.
 
@@ -152,7 +154,7 @@ Live verification uses a task-owned tmux session and scratch directory, loopback
 
 Run package typecheck/tests/build/contract checks and repository-required gates. Perform independent review against the exact implementation commit. Ship via branch and pull request; run staged secret scans before commits/pushes. Announce package/version in the required publishing channel, publish with npm from the package directory using protected token injection, verify registry version plus timestamp and test the exact registry artifact. Respect the global-install quarantine.
 
-## Ownership and current state
+## Original 0.1.0 delivery record
 
 - Owner: parent Codex task `01a07181-ca8d-70c1-99a2-b276dc5770f3`.
 - Base commit: `c6a9fcf5a4825a9e49bab7b3ae688040726fcd61`.
@@ -165,6 +167,13 @@ Run package typecheck/tests/build/contract checks and repository-required gates.
 - Tracking task: `e0be8c8c-9588-4b7b-9996-382f113736e3`.
 - Build, PR merge, publication and registry live acceptance are complete. Task/goal closure follows final evidence delivery. Optional product extensions and maintenance follow-ups remain explicit in `TODOS.md`.
 
-## Release candidate verification update
+## Completed 0.1.1 release verification
 
-The reviewed 0.1.1 archive now passes installed OpenCode tool/resume and interactive full DeepSeek picker checks, exact Codex provider-catalog matching, Node/Bun public surface checks, and both container storage profiles with upgrade/rollback/re-upgrade preservation. PR #1810 awaits a new required CI result after Projects’ generated storage-kit version stamp was refreshed to Contracts 1.0.2. This correction does not change the Switcher archive. The remaining adapter branches and live provider cells in TODOS.md remain active.
+The reviewed 0.1.1 archive now passes installed OpenCode tool/resume and interactive full DeepSeek picker checks, exact Codex provider-catalog matching, Node/Bun public surface checks, and both container storage profiles with upgrade/rollback/re-upgrade preservation. PR #1810 subsequently passed CI, merged and published 0.1.1 at 2026-09-06T13:22:44.352Z. Registry identity and all seven installed live paths passed. This is the completed 0.1.1 record; the expanded 0.1.2 release is tracked above and below.
+
+
+## Expanded release checkpoint
+
+PR [#1836](https://github.com/hasna/apps/pull/1836) contains reviewed source `ef217dd749c4628bead0df43c4a83b3dc8d11468`. The final unpublished 0.1.2 archive SHA-1 is `453bc3d6180a523286ab10f0a0154316cbf75672`; all 49 normal consumer files match. All 14 native harnesses and both Ori paths passed installed baseline live tasks and deleted-file fresh-process continuation. Final Gemini generation-method metadata/filtering has independent review, source verification (152 tests / 1,584 assertions), Node/Bun package surfaces and both container backends; its final native live/catalog replay also passes with 54 retained models and 40 eligible native IDs.
+
+Finish exact final acceptance, CI and PR merge, publish through the protected npm flow, verify registry bytes/install and repeat representative installed live commands. Keep provider account/deployment prerequisites and native interface limits explicit. The original DeepSeek user tmux session remains untouched.
