@@ -1973,6 +1973,15 @@ function parseMatcherExpression(value, label) {
   };
 }
 
+// src/cli-webhook-policy.ts
+function webhookTargetPolicyFromEnv() {
+  const value = process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS;
+  if (!value)
+    return;
+  const hosts = value.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  return hosts.length > 0 ? { allowPrivateHosts: hosts } : undefined;
+}
+
 // src/commander.ts
 var DEFAULT_EVENT_LIST_LIMIT = 100;
 function parseJsonObject(value, fallback) {
@@ -1999,7 +2008,7 @@ function parseHeaders(values) {
 function createClient(options) {
   if (options.createClient)
     return options.createClient();
-  return new EventsClient({ store: new JsonEventsStore(options.dataDir) });
+  return new EventsClient({ store: new JsonEventsStore(options.dataDir), webhookTargetPolicy: webhookTargetPolicyFromEnv() });
 }
 function print(value, json, text) {
   if (json)
@@ -2080,6 +2089,8 @@ function registerChannelCommands(program, options) {
         metadata: parseJsonObject(actionOptions.metadata, {})
       }, { honorFilters: actionOptions.honorFilters });
       print(result, json, `${result.status}: ${result.channelId}`);
+      if (result.status === "failed")
+        process.exitCode = 1;
     } catch (error) {
       fail(error, json);
     }
