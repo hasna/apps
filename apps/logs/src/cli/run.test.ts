@@ -48,7 +48,8 @@ describe("logs run CLI", () => {
       );
 
       expect(result.status).toBe(0);
-      expect(result.stderr.trim()).toBe("");
+      // Local mode announces itself once on stderr; it is never silent.
+      expect(result.stderr).toMatch(/local/);
       const summary = JSON.parse(result.stdout) as {
         run_id: string;
         process_id: string;

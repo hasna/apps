@@ -2,15 +2,15 @@
 // DO NOT EDIT. Regenerate: bun scripts/generate-sdk-api.ts
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Logs 0.3.34
+// Source: Logs 0.4.8
 
 export interface Project { "id": string; "name": string; "github_repo"?: string | null; "base_url"?: string | null; "description"?: string | null; "created_at": string }
 
 export interface CreateProject { "name": string; "github_repo"?: string | null; "base_url"?: string | null; "description"?: string | null }
 
-export interface LogRecord { "id": string; "timestamp": string; "project_id"?: string | null; "level": "debug" | "info" | "warn" | "error" | "fatal"; "source": string; "service"?: string | null; "message": string; "trace_id"?: string | null; "session_id"?: string | null; "agent"?: string | null; "url"?: string | null; "stack_trace"?: string | null; "metadata"?: Record<string, unknown> | null }
+export interface LogRecord { "id": string; "timestamp": string; "project_id"?: string | null; "page_id"?: string | null; "level": "debug" | "info" | "warn" | "error" | "fatal"; "source": string; "service"?: string | null; "message": string; "trace_id"?: string | null; "session_id"?: string | null; "agent"?: string | null; "url"?: string | null; "stack_trace"?: string | null; "metadata"?: Record<string, unknown> | null; "source_event_id"?: string | null; "machine_id"?: string | null; "repo_id"?: string | null; "app_id"?: string | null; "process_id"?: string | null; "run_id"?: string | null; "span_id"?: string | null; "parent_span_id"?: string | null; "release_id"?: string | null; "environment"?: string | null; "privacy"?: string | null }
 
-export interface CreateLog { "level": "debug" | "info" | "warn" | "error" | "fatal"; "message": string; "project_id"?: string | null; "source"?: string | null; "service"?: string | null; "trace_id"?: string | null; "session_id"?: string | null; "agent"?: string | null; "url"?: string | null; "stack_trace"?: string | null; "metadata"?: Record<string, unknown> | null }
+export interface CreateLog { "id"?: string; "level": "debug" | "info" | "warn" | "error" | "fatal"; "message": string; "project_id"?: string | null; "page_id"?: string | null; "source"?: string | null; "service"?: string | null; "trace_id"?: string | null; "session_id"?: string | null; "agent"?: string | null; "url"?: string | null; "stack_trace"?: string | null; "metadata"?: Record<string, unknown> | null; "timestamp"?: string | null; "source_event_id"?: string | null; "machine_id"?: string | null; "repo_id"?: string | null; "app_id"?: string | null; "process_id"?: string | null; "run_id"?: string | null; "span_id"?: string | null; "parent_span_id"?: string | null; "release_id"?: string | null; "environment"?: string | null; "privacy"?: string | null }
 
 export interface ProjectList { "projects": Array<Project> }
 
@@ -56,7 +56,14 @@ export class LogsClient {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
