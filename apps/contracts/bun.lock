@@ -17,8 +17,11 @@
         "typescript": "^5.7.3",
       },
       "peerDependencies": {
-        "@hasna/secrets": "0.3.10",
+        "@hasna/secrets": "^0.3.10 || ^0.4.0",
       },
+      "optionalPeers": [
+        "@hasna/secrets",
+      ],
     },
   },
   "packages": {

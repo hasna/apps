@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2
+
+### Patch Changes
+
+- efa74e4: Mark `@hasna/secrets` as an optional peer so consumers that use ordinary env, Keychain, disk, or explicit credentials can install Contracts without the vault SDK. Vault pointer resolution remains terminal and reports actionable guidance when the SDK is absent; add a packed-consumer smoke for that boundary.
+  - @hasna/secrets@0.4.0
+
 ## 1.0.1
 
 ### Patch Changes

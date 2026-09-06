@@ -105,11 +105,13 @@ test("controlled plan subprocess preserves passthrough, key isolation, exit stat
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
 
-test("installed Ori read-only contract reports the pinned version and inventory when available", async () => {
-  const installed = "/opt/homebrew/bin/ori";
-  if (!(await Bun.file(installed).exists())) return;
+test.skipIf(!process.env.SWITCHER_TEST_ORI_EXECUTABLE)("installed Ori read-only contract reports its version and native inventory", async () => {
+  const installed = process.env.SWITCHER_TEST_ORI_EXECUTABLE!;
   const contract = await inspectOri({executable: installed, environment: {PATH: process.env.PATH, HOME: process.env.HOME}});
-  expect(contract.version).toMatch(/^0\.12\.1\+/);
-  expect(contract.harnesses.find(row => row.kind === "codex")).toMatchObject({installed: true});
-  expect(contract.harnesses.find(row => row.kind === "opencode")).toMatchObject({installed: false});
+  expect(() => assertSupportedOriVersion(contract)).not.toThrow();
+  expect(contract.harnesses.map(row => row.kind)).toEqual(expect.arrayContaining(["claude", "codex", "grok", "opencode"]));
+  for (const harness of contract.harnesses.filter(row => row.installed)) {
+    expect(harness.path).toBeDefined();
+    expect(await Bun.file(harness.path!).exists()).toBe(true);
+  }
 });

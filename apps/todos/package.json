@@ -1,6 +1,6 @@
 {
   "name": "@hasna/todos",
-  "version": "0.15.52",
+  "version": "0.15.53",
   "description": "Universal task management for AI coding agents - CLI + MCP server + interactive TUI",
   "type": "module",
   "main": "dist/index.js",
@@ -117,7 +117,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "1.0.1",
+    "@hasna/contracts": "1.0.2",
     "@hasna/events": "^0.1.11",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",

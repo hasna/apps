@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.1";
 export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode2"]);
 export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/switcher",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Universal provider and model switcher for coding harnesses with an API, SDK and self-hosted storage",
   "license": "Apache-2.0",
@@ -58,7 +58,7 @@
   "dependencies": {
     "zod": "3.25.76",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@hasna/contracts": "1.0.1"
+    "@hasna/contracts": "1.0.2"
   },
   "repository": {
     "type": "git",

@@ -4,7 +4,7 @@
   "name": "switcher",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "1.0.1",
+  "kitVersion": "1.0.2",
   "description": "Universal provider and model switcher for coding harnesses with an API, SDK and self-hosted storage",
   "bins": [
     "switcher",

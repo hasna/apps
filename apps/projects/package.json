@@ -1,6 +1,6 @@
 {
   "name": "@hasna/projects",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "High-level project management CLI, MCP server, SDK, and AI SDK agent loop for coding agents",
   "type": "module",
   "main": "dist/index.js",
@@ -85,7 +85,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "1.0.1",
+    "@hasna/contracts": "1.0.2",
     "@hasna/conversations": "0.7.8",
     "@hasna/events": "0.1.3",
     "@hasna/mementos": "0.14.85",

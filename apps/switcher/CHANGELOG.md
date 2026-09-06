@@ -4,10 +4,19 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-05T12:54:59Z"
+updated_at: "2026-09-06T08:40:01.343081+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+## 0.1.1
+
+### Patch Changes
+
+- Launch a named harness/provider directly with a managed authenticated local API or explicitly configured remote API. Discover the provider catalog, choose a model and reuse the launch profile.
+- Resolve origin-scoped Keychain or vault credential bindings through the installed CLI without storing key values. Separate inference and catalog endpoints, including DeepSeek.
+- Preserve native terminal input, resize, redirected descriptors and exit codes; stop owned POSIX tool processes on exit and cancellation. Correct Grok and OpenCode 2 session continuation across fresh bridge ports.
+- Align the exact `@hasna/contracts` pin with the 1.0.2 optional Secrets peer release.
 
 # 0.1.0
 
