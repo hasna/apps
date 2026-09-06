@@ -146,7 +146,14 @@ describe("CLI P1 safety regressions", () => {
       expect(value.ok).toBe(false);
       expect(value.error.code).toBe("LOOP_NOT_FOUND");
       expect(value.error.message.length).toBeLessThan(700);
-      expect(result.stderr.trim()).toBe(`error: ${value.error.message}`);
+      // The spawned CLI is an explicit-opt-in local run, so stderr carries the
+      // resolver's local-mode announcement before the error line; the error
+      // line itself is byte-identical to the JSON message.
+      const err = result.stderr
+        .split("\n")
+        .filter((line) => !line.includes("loops: local mode"))
+        .join("\n");
+      expect(err.trim()).toBe(`error: ${value.error.message}`);
       expect(result.stdout).not.toContain(syntheticSecret);
       expect(result.stderr).not.toContain(syntheticSecret);
     } finally {

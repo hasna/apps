@@ -203,6 +203,9 @@ loop CRUD, runner claim/finalize, and
 `loops push --dry-run --no-runs`. Never attempt an in-place reverse
 migration or overwrite the enforced database during rollback.
 Local scheduled execution remains on SQLite unless operators explicitly
-configure a runner/control-plane cutover, so unsetting `HASNA_LOOPS_API_URL`
-and `HASNA_LOOPS_API_KEY` returns the standalone CLI/daemon to the local file
-connection.
+configure a runner/control-plane cutover, so removing the machine's loops
+credential (unset `HASNA_LOOPS_API_KEY`, delete the Keychain item
+`hasna.credentials.loops.api-key` / the credential file
+`~/.hasna/loops/config/credentials`) returns the standalone CLI/daemon to
+fail-closed mode; the local file connection is the explicit
+`HASNA_LOOPS_CONNECTION=file` opt-in.

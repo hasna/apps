@@ -16,6 +16,7 @@ import type {
 import { executeLoop } from "../lib/executor.js";
 import { classifyLoopExecutionResult } from "../lib/loop-result.js";
 import { executeLoopTarget, type WorkflowExecutionStore } from "../lib/workflow-runner.js";
+import { resolveClientTransport, resolveCredential } from "@hasna/contracts/client";
 import { loopControlPlaneConfig, type RuntimeConfig } from "../lib/runtime-config.js";
 import { applyRunnerEnvFile } from "./env-file.js";
 import { LoopsApiError, RunnerRefusalError, VersionProbeError } from "./errors.js";
@@ -70,13 +71,28 @@ program
   .option("-j, --json", "print JSON");
 
 function configuredApiUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  // hasna-credential-seam-waiver: the loops runner needs the raw API-key VALUE for bearer-authenticated claim/poll/finalize fetches; loops' doctrine-clean client seam never exposes key values, and adopting the @hasna/contracts/client credential chain (disk tiers, profiles) would change the runner's connection semantics; seam adoption is a tracked cloud/-domain follow-up
-  return env.HASNA_LOOPS_API_URL?.trim();
+  // The shared @hasna/contracts resolver decides the authority, fresh on every
+  // call: HASNA_LOOPS_API_URL, the Keychain api-url item, the credential file,
+  // then the fleet gateway — so a station needs no inline env prefix and a
+  // rotation heals without a restart. The runner dials root-level paths
+  // (/version) and /v1/... paths, so the transport's `<origin>/v1` base is
+  // stripped back to the origin. A forbidden/refused URL propagates loudly; an
+  // absent credential falls through to the caller's stable refusal message.
+  try {
+    return resolveClientTransport("loops", env).baseUrl.replace(/\/v1\/?$/, "");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/no API key could be resolved/.test(message)) throw error;
+    return undefined;
+  }
 }
 
 function configuredApiKey(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  // hasna-credential-seam-waiver: the loops runner needs the raw API-key VALUE for bearer-authenticated claim/poll/finalize fetches; loops' doctrine-clean client seam never exposes key values, and adopting the @hasna/contracts/client credential chain (disk tiers, profiles) would change the runner's connection semantics; seam adoption is a tracked cloud/-domain follow-up
-  return env.HASNA_LOOPS_API_KEY?.trim();
+  // The shared resolver's full chain: an explicit argument/override, the
+  // Keychain item hasna.credentials.loops.api-key, the credential file
+  // ~/.hasna/loops/config/credentials, then HASNA_LOOPS_API_KEY. A deliberate
+  // tier that cannot be honoured throws rather than falling through.
+  return resolveCredential("loops", env)?.apiKey;
 }
 
 /**
@@ -106,7 +122,19 @@ export interface RunnerStatus {
 
 export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || process.env.HASNA_MACHINE_ID): RunnerStatus {
   const controlPlane = loopControlPlaneConfig();
-  const apiReady = controlPlane.apiUrlPresent && controlPlane.apiKeyPresent;
+  let apiReady = false;
+  let resolvedApiUrl: string | undefined;
+  try {
+    // The shared credential resolver is the connection authority: env,
+    // Keychain, credential file, then the fleet gateway once a credential has
+    // resolved. A machine whose credential lives outside the environment
+    // reports api_ready exactly like the data path would behave.
+    resolvedApiUrl = resolveClientTransport("loops", process.env).baseUrl.replace(/\/v1\/?$/, "");
+    apiReady = true;
+  } catch {
+    // Nothing resolves: fall back to the env-presence report so the state
+    // still names which half is missing.
+  }
   const state: RunnerState = apiReady
     ? "api_ready"
     : controlPlane.apiUrlPresent
@@ -117,9 +145,9 @@ export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || 
   const config: RuntimeConfig = {
     storage: controlPlane.databaseUrlPresent ? "postgresql" : "sqlite",
     connection: apiReady ? "api" : "file",
-    apiUrl: controlPlane.apiUrl,
-    apiUrlPresent: controlPlane.apiUrlPresent,
-    apiKeyPresent: controlPlane.apiKeyPresent,
+    apiUrl: apiReady ? resolvedApiUrl : controlPlane.apiUrl,
+    apiUrlPresent: apiReady || controlPlane.apiUrlPresent,
+    apiKeyPresent: apiReady || controlPlane.apiKeyPresent,
     databaseUrlPresent: controlPlane.databaseUrlPresent,
   };
   const claimScopeValue = process.env.LOOPS_RUNNER_CLAIM_SCOPE?.trim();

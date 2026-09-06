@@ -108,6 +108,19 @@ function runCli(dataDir: string, args: string[], input?: string, env: Record<str
   return result;
 }
 
+/**
+ * stderr without the local-mode announcement the resolver prints (once, per
+ * process) on an explicit `HASNA_LOOPS_CONNECTION=file` run. Assertions about
+ * a command's OWN stderr strip it, mirroring what an operator sees below the
+ * notice.
+ */
+function cliStderr(result: { stderr: string }): string {
+  return result.stderr
+    .split("\n")
+    .filter((line) => !line.includes("loops: local mode"))
+    .join("\n");
+}
+
 function storedLoop(dataDir: string, id: string) {
   const store = new Store(join(dataDir, "loops.db"));
   try {
@@ -2962,7 +2975,7 @@ describe("loops CLI", () => {
 
     const validate = runCli(dataDir, ["--json", "workflows", "validate", file]);
     expect(validate.status).toBe(1);
-    expect(validate.stderr).toBe("");
+    expect(cliStderr(validate)).toBe("");
     const validation = JSON.parse(validate.stdout);
     expect(validation.created).toBe(false);
     expect(validation.validation.ok).toBe(false);
@@ -2970,7 +2983,7 @@ describe("loops CLI", () => {
 
     const create = runCli(dataDir, ["--json", "workflows", "create", file]);
     expect(create.status).toBe(1);
-    expect(create.stderr).toBe("");
+    expect(cliStderr(create)).toBe("");
     const created = JSON.parse(create.stdout);
     expect(created.created).toBe(false);
     expect(created.validation.ok).toBe(false);
@@ -3029,7 +3042,7 @@ describe("loops CLI", () => {
     const create = runCli(dataDir, ["--json", "workflows", "create", file, "--preflight"]);
 
     expect(create.status).toBe(1);
-    expect(create.stderr).toBe("");
+    expect(cliStderr(create)).toBe("");
     const value = JSON.parse(create.stdout);
     expect(value).toMatchObject({
       ok: false,
@@ -3062,7 +3075,7 @@ describe("loops CLI", () => {
     const complete = runCli(dataDir, ["--json", "workflows", "list"]);
     expect(complete.status).toBe(0);
     expect(JSON.parse(complete.stdout)).toHaveLength(205);
-    expect(complete.stderr).toBe("");
+    expect(cliStderr(complete)).toBe("");
 
     const limited = runCli(dataDir, ["--json", "workflows", "list", "--limit", "10"]);
     expect(limited.status).toBe(0);
@@ -9285,7 +9298,7 @@ describe("loops CLI", () => {
     );
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toBe("");
+    expect(cliStderr(result)).toBe("");
     const value = JSON.parse(result.stdout);
     expect(value.created).toBe(false);
     expect(value.preflight.error).toContain("workflow step worker preflight failed");
@@ -10531,12 +10544,13 @@ describe("loops CLI", () => {
 
     const result = runCli(dataDir, ["runs", runId, "--limit", "1", "--show-output"]);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(`error: loop not found: ${runId}`);
-    expect(result.stderr).toContain("looks like a run id");
-    expect(result.stderr).toContain("loops goal show");
-    expect(result.stderr.trim().split("\n")).toHaveLength(1);
-    expect(result.stderr).not.toMatch(/^\s*at /m);
-    expect(result.stderr).not.toMatch(/(?:\/[^\s]+|[A-Za-z]:\\[^\s]+)/);
+    const err = cliStderr(result);
+    expect(err).toContain(`error: loop not found: ${runId}`);
+    expect(err).toContain("looks like a run id");
+    expect(err).toContain("loops goal show");
+    expect(err.trim().split("\n")).toHaveLength(1);
+    expect(err).not.toMatch(/^\s*at /m);
+    expect(err).not.toMatch(/(?:\/[^\s]+|[A-Za-z]:\\[^\s]+)/);
 
     const suggested = runCli(dataDir, ["--json", "goal", "show", runId]);
     expect(suggested.status).toBe(0);

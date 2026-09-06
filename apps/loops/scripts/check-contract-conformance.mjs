@@ -7,12 +7,23 @@ import { contractHealthResponse } from "../src/api/index.ts";
 
 export const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 
-// Doctrine: there is no HASNA_LOOPS_STORAGE_MODE. @hasna/contracts 0.10.6
-// rejects legacy storage-mode variables outright (server_backend_configuration),
-// and the sqlite | postgresql server backend is selected solely by
-// HASNA_LOOPS_DATABASE_URL. The env below stays empty; process.env is never
-// forwarded here so a leftover storage-mode var cannot poison the run.
+// Doctrine: there is no HASNA_LOOPS_STORAGE_MODE. @hasna/contracts 1.0.2 makes
+// PostgreSQL the only contract server backend (`server_backend_configuration`
+// expects the resolver to fail closed when HASNA_LOOPS_DATABASE_URL is absent;
+// `HealthResponseSchema.backend` is the literal "postgresql"). The env below
+// stays empty so the backend-configuration check sees the fail-closed posture;
+// process.env is never forwarded here.
 const conformanceEnv = {};
+
+// The strict health shape has exactly one representable server backend
+// ("postgresql"), so the health sample comes from the contract-CONFIGURED
+// posture — a server with HASNA_LOOPS_DATABASE_URL declared. The app's own
+// sqlite runtime is a non-contract development posture; the /health wire
+// envelope reports it as `storage` (see src/api/index.ts), outside the strict
+// schema's vocabulary.
+const CONFIGURED_SERVER_ENV = {
+  HASNA_LOOPS_DATABASE_URL: "postgres://loops.example.test/openloops",
+};
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -21,7 +32,7 @@ function readJson(path) {
 export function runRawContractConformance(root = repoRoot) {
   return runRepoConformance(root, {
     env: conformanceEnv,
-    healthSample: contractHealthResponse(conformanceEnv),
+    healthSample: contractHealthResponse(CONFIGURED_SERVER_ENV),
   });
 }
 

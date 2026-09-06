@@ -27,7 +27,7 @@ import {
   resolveAccountEnvSync,
 } from "./accounts.js";
 import { agentSessionContract, BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture, type AgentInvocation } from "./agent-adapter.js";
-import { commandNotFoundMessage, executableExists, hasnaClientEnv, normalizeExecutionPath } from "./env.js";
+import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { resolveBundleExecution, type BundleExecutionRefusal } from "./bundle/executor-bundle.js";
 import type { RunReceiptBundle } from "../types.js";
 import { nowIso } from "./ids.js";
@@ -624,8 +624,9 @@ function agentToolForSpec(spec: CommandSpec): string | undefined {
  * agent CLI but which carries no explicit account. Regression row
  * e84f3956-1083-4b4a-bb73-59f901b054b7 (measured 2026-07-30, runner-origin):
  * the runner's own process.env lacks CLAUDE_CONFIG_DIR under systemd/launchd
- * launchers, and neither ~/.hasna/cloud/*.env nor an explicit account supplies
- * it, so headless claude resolved to the DEFAULT account profile — a silent
+ * launchers, and neither an explicit account nor the retired ~/.hasna/cloud
+ * loader supplies it, so headless claude resolved to the DEFAULT account
+ * profile — a silent
  * identity switch (429 on the exhausted default, exit 1, zero cost, ~3s) while
  * the configured profile sat idle. `accounts env --tool <tool>` with no name
  * resolves the machine's ACTIVE profile — the same source interactive shells
@@ -660,17 +661,14 @@ function composeExecutionEnv(
   activeConfigEnv: Record<string, string> | undefined,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...(opts.env ?? process.env) };
-  // Machine-wide Hasna client config the runner's own process.env may be missing.
-  // Fill-if-absent, and deliberately so: an inherited or caller-supplied value is
-  // an explicit choice, while an absent one is the defect (todos de1f78af). This
-  // sits ABOVE the account block on purpose, so AUTH_ENV_KEYS scrubbing and
-  // per-target `spec.env` both still win over machine config.
-  for (const [key, value] of Object.entries(hasnaClientEnv(env))) {
-    if (!env[key]) env[key] = value;
-  }
-  // Active-profile config-selecting var, fill-if-absent, same precedence tier as
-  // machine client config: explicit runner env, an explicit account, and
-  // per-target `spec.env` all still win over it.
+  // The machine-wide client-config loader (~/.hasna/cloud/*.env) is retired:
+  // every hosted Hasna CLI resolves its own credentials through the shared
+  // @hasna/contracts resolver per call, so the runner no longer injects env
+  // files for spawned CLIs (owner ruling 2026-09-04, hasna/apps#1720).
+  // Active-profile config-selecting var, fill-if-absent: an inherited or
+  // caller-supplied value is an explicit choice, while an absent one is the
+  // defect (todos de1f78af). An explicit account and per-target `spec.env`
+  // still win over it.
   if (activeConfigEnv) {
     for (const [key, value] of Object.entries(activeConfigEnv)) {
       if (!env[key]) env[key] = value;

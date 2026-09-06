@@ -212,11 +212,15 @@ function foundationEnvelope(
 }
 
 /**
- * Strict health payload for the @hasna/contracts 0.10.6 `HealthResponseSchema`
+ * Strict health payload for the @hasna/contracts 1.0.2 `HealthResponseSchema`
  * ({ status, version, backend } — extra keys are rejected). This is the
  * conformance sample, not the wire envelope: the runtime /health probe serves
  * the richer foundationEnvelope ({ status, version, storage, connection }).
- * `backend` maps 1:1 from the runtime storage backend (sqlite | postgresql).
+ * `backend` maps from the runtime storage backend; the strict schema's only
+ * backend is `postgresql`, so the conformance check feeds the sample from the
+ * contract-CONFIGURED posture (scripts/check-contract-conformance.mjs). The
+ * sqlite development posture is the app's own vocabulary and has no strict
+ * representation.
  */
 export function contractHealthResponse(
   env: Env = process.env,
