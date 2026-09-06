@@ -124,7 +124,8 @@ describe("mementos status", () => {
     expect(parsed.api_url).toBeNull();
     // A refused base is not a configured HTTP transport.
     expect(parsed.transport).toBe("unconfigured");
-    expect(parsed.error).toContain("userinfo, query, or fragment");
+    // The resolver's refusal names the defect class, never the URL.
+    expect(parsed.error).toContain("credentials");
   });
 
   test("creates no database file as a side effect", async () => {
@@ -167,7 +168,7 @@ describe("mementos doctor — malformed endpoint", () => {
     const all = stdout + stderr;
     expect(exitCode).toBe(1);
     expect(all).toContain("API endpoint");
-    expect(all).toContain("userinfo, query, or fragment");
+    expect(all).toContain("credentials");
     expect(all).not.toContain("sup3rsecret");
     expect(all).not.toContain("at resolveMementosApiBase");
   }, 30_000);

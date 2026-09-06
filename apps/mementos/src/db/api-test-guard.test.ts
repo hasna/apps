@@ -32,7 +32,7 @@ const URL_KEY = "HASNA_MEMENTOS_API_URL";
 const KEY_KEY = "HASNA_MEMENTOS_API_KEY";
 
 /** RFC 5737 TEST-NET-1 — routable-looking, guaranteed not to be a real service. */
-const NON_LOOPBACK_URL = "http://192.0.2.1";
+const NON_LOOPBACK_URL = "https://192.0.2.1";
 const LOOPBACK_URL = "http://127.0.0.1:1";
 
 afterEach(() => {

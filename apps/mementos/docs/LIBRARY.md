@@ -101,11 +101,16 @@ Constructor options are `baseUrl`, a custom `fetch`, `apiKey`, and `prefix`.
 When an API key is supplied it is sent as both `Authorization: Bearer` and
 `x-api-key`.
 
-`MementosClient.fromEnv()` reads `MEMENTOS_API_URL`, then `MEMENTOS_URL`, with
-`http://localhost:19428` as the URL fallback. It reads `MEMENTOS_API_KEY` for
-authentication. Unlike the CLI transport resolver, this helper does not read
-the `HASNA_MEMENTOS_API_*` names; pass them explicitly if those are the only
-variables in the process.
+`MementosClient.fromEnv()` performs NO env reading of its own: the credential
+and the authority come from the one resolver in `@hasna/contracts/client`
+(`HASNA_MEMENTOS_API_KEY` and its legacy alias, the macOS Keychain item
+`hasna.credentials.mementos.api-key`, or `~/.hasna/mementos/config/credentials`),
+resolved fresh on EVERY request. A credential alone resolves to the fleet
+gateway `https://api.hasna.com/mementos`; with nothing configured the client
+talks to the unhosted `http://localhost:19428` (and says so on stderr). An
+explicit `baseUrl` is tier 1 and is used verbatim — without an explicit
+`apiKey` it never attaches an ambient fleet key. The legacy `MEMENTOS_URL`
+spelling is retired.
 
 ### Bundled client methods
 
@@ -130,7 +135,9 @@ directly or use the standalone client if its other tradeoffs fit.
 The package in `sdk/` is versioned independently and works in Node.js, Bun,
 Deno, and browsers. Its current constructor accepts only `baseUrl` and a custom
 `fetch`; it does not add an API key or versioned-prefix routing. It calls legacy
-`/api` paths directly. `fromEnv()` reads only `MEMENTOS_URL`.
+`/api` paths directly. `fromEnv()` accepts only explicit overrides; the
+legacy `MEMENTOS_URL` env read is retired with the credential-chain adoption
+(hasna/apps#1720).
 
 It includes `consolidateMemories` and `reflect`, but it does not include the
 bundled client's readiness/version probes, task methods, namespace fields, or

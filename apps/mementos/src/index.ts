@@ -234,7 +234,6 @@ export {
   type SyncMeta,
   type IncrementalSyncStats,
 } from "./storage.js";
-export { assertNoLegacyStorageMode, LEGACY_STORAGE_MODE_KEYS } from "./lib/retired-storage-mode.js";
 
 // Redaction
 export { redactSecrets, containsSecrets } from "./lib/redact.js";

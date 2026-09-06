@@ -3,18 +3,23 @@
 //
 // WHY THIS EXISTS (a measured incident, not a hypothetical):
 //
-// mementos selects its storage transport by the mere PRESENCE of env vars —
-// `isApiMode()` in src/db/api-mode.ts is true whenever an API URL and API key
-// are both set and no DSN is. On a fleet machine the operator's shell exports
-// HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY, and the tmux server process
-// carries them, so EVERY pane and every child process inherits them.
+// mementos resolves its storage transport through the @hasna/contracts client
+// chain — `isApiMode()` in src/db/api-mode.ts is true whenever the chain
+// resolves a credential (env `HASNA_MEMENTOS_API_KEY` or its legacy alias, the
+// macOS Keychain item `hasna.credentials.mementos.api-key`, or
+// `~/.hasna/mementos/config/credentials`). On a fleet machine the operator's
+// shell exports HASNA_MEMENTOS_API_URL + HASNA_MEMENTOS_API_KEY, and the tmux
+// server process carries them, so EVERY pane and every child process inherits
+// them.
 //
 // A harness that spawns the CLI with `{ ...process.env, MEMENTOS_DB_PATH: tmp }`
-// therefore runs in API mode against the SHARED PRODUCTION store. The redirect
+// therefore runs in API mode against the SHARED PRODUCTION store — and since
+// the chain can also pull a credential from the Keychain or a credentials
+// file, an env dictionary alone can no longer guarantee isolation. The redirect
 // looks like it worked and does nothing:
 //
-//   - MEMENTOS_DB_PATH is consulted at src/db/database.ts:157, which is
-//     unreachable past the API-mode guard at :142; and
+//   - `MEMENTOS_DB_PATH` is consulted at src/db/api-mode.ts only when the
+//     chain is not engaged first; and
 //   - the memory read/write paths route to HTTP in src/db/memories.ts before
 //     `getDatabase()` is consulted at all.
 //
@@ -27,16 +32,22 @@
 // WHY BLANKING ALONE IS NOT THE FIX: a hand-written list of vars to blank is a
 // copy of a list that lives somewhere else. It stops covering the resolver the
 // moment a new selector is added, and it fails silently — the harness keeps
-// passing while writing to production. So this module does two things instead:
+// passing while writing to production. So this module does three things instead:
 //
 //   1. Builds the child env from the key lists the RESOLVER ITSELF reads
-//      (exported from src/db/api-mode.ts and src/storage.ts), so the list
-//      cannot drift out of sync with the code that consults it.
-//   2. ASSERTS, by asking the child process what it resolved, that the backend
+//      (exported from @hasna/contracts/client via src/db/api-mode.ts and
+//      src/lib/local-opt-in.ts), so the list cannot drift out of sync with the
+//      code that consults it.
+//   2. Defaults the EXPLICIT local opt-in (`HASNA_MEMENTOS_LOCAL=1` /
+//      `MEMENTOS_LOCAL=1`) and pins the Keychain account (`HASNA_STATION`) to a
+//      name no item can exist under, so — since the local opt-in is answered
+//      BEFORE the resolver runs — no Keychain item and no credential file is
+//      ever read by a local-intent fixture.
+//   3. ASSERTS, by asking the child process what it resolved, that the backend
 //      really is local — and throws loudly if not. A selector nobody thought of
 //      then produces a RED SUITE instead of a production write.
 //
-// Point 2 is the load-bearing half. "I set the variable" is not evidence of
+// Point 3 is the load-bearing half. "I set the variable" is not evidence of
 // isolation; "the child says local-sqlite and the scratch file now exists with
 // my row in it" is. A prior incident in this workspace destroyed 139 live
 // artifacts precisely because a redirect was believed rather than verified in
@@ -48,39 +59,93 @@ import {
   API_KEY_ENV_KEYS,
   API_URL_ENV_KEYS,
   DATABASE_URL_ENV_KEYS,
+  DB_PATH_ENV_KEYS as API_MODE_DB_PATH_ENV_KEYS,
 } from "../db/api-mode.js";
 import type { StoreBackendReport } from "../db/store-backend.js";
+import {
+  MEMENTOS_DB_PATH_ENV_KEYS,
+  MEMENTOS_LOCAL_OPT_IN_ENV_KEYS,
+  REMOVED_MEMENTOS_MODE_ENV_KEYS as REMOVED_STORE_ENV_KEYS_SRC,
+  mementosAuthorityEnvKeys,
+} from "../lib/local-opt-in.js";
 import { MEMENTOS_STORAGE_ENV, MEMENTOS_STORAGE_FALLBACK_ENV } from "../storage.js";
-import { LEGACY_STORAGE_MODE_KEYS } from "../lib/retired-storage-mode.js";
 
 /**
- * Every env var that can move the store off local SQLite, plus the store
- * credential. Derived from the resolver's own exported key lists rather than
- * retyped, so adding a selector in src/db/api-mode.ts or src/storage.ts
- * automatically widens what the harnesses neutralize.
+ * Every env var that can point this client at a store shared with other
+ * people, derived from the resolver's own exported key lists rather than
+ * retyped, so adding a selector in @hasna/contracts (or a deliberate tier
+ * here) automatically widens what the harnesses neutralize.
  *
- * The retired storage-mode keys stay in the set even though the ratchet turns
- * them into errors: a harness child that inherits a stale variable from the
- * operator shell must have it DELETED (a blank value would still throw), and
- * the preload must keep the suite runnable on a machine that still exports one.
+ * Blanking them is NO LONGER SUFFICIENT ON ITS OWN, and that is the whole
+ * reason the local opt-in below is defaulted on. Since the credential chain
+ * moved into @hasna/contracts (hasna/apps#1720) a key can also arrive from the
+ * machine's login Keychain or from `~/.hasna/mementos/config/credentials`,
+ * neither of which an env dictionary can blank. What makes a fixture
+ * physically unable to reach the hosted authority is therefore the pair: these
+ * variables deleted, AND the local opt-in, which the resolver is never
+ * consulted past — so no Keychain item and no credential file is ever read.
  *
- * `MEMENTOS_DATABASE_PASSWORD` is not a selector but is the store credential;
- * removing it can only make the child more local, never less.
+ * The legacy unprefixed `MEMENTOS_*` spellings are the resolver's silent alias
+ * fallback for one release; they are scrubbed here for the same reason the
+ * canonical names are.
  */
 export const STORE_SELECTOR_ENV_KEYS: readonly string[] = Array.from(
   new Set<string>([
     ...API_URL_ENV_KEYS,
     ...API_KEY_ENV_KEYS,
+    ...mementosAuthorityEnvKeys(),
     ...DATABASE_URL_ENV_KEYS,
     MEMENTOS_STORAGE_ENV.databaseUrl,
     MEMENTOS_STORAGE_FALLBACK_ENV.databaseUrl,
-    ...LEGACY_STORAGE_MODE_KEYS,
     "MEMENTOS_DATABASE_PASSWORD",
   ]),
 );
 
+/**
+ * Routing variables that select a store *kind* rather than a shared
+ * destination; LOCAL_ONLY entries are pinned rather than scrubbed and exempt
+ * from the coverage assertion:
+ *
+ *   - `HASNA_MEMENTOS_LOCAL` / `MEMENTOS_LOCAL` — the explicit unhosted
+ *     opt-in; local-intent envs default it on, remote-intent envs may set it
+ *     to "" to exercise the fail-closed arm. It is answered BEFORE the
+ *     resolver runs, so a scrubbed test environment physically cannot read the
+ *     Keychain or a credentials file.
+ *   - the `*_DB_PATH` keys are the precedence-1 explicit local SQLite file.
+ *   - `HASNA_STATION` pins WHICH Keychain account the resolver asks for — a
+ *     name no item can exist under, so the Keychain tier is reliably EMPTY on
+ *     a developer Mac and on CI alike.
+ */
+export const LOCAL_ONLY_STORE_ENV_KEYS: readonly string[] = [
+  ...MEMENTOS_LOCAL_OPT_IN_ENV_KEYS,
+  ...MEMENTOS_DB_PATH_ENV_KEYS,
+  ...API_MODE_DB_PATH_ENV_KEYS,
+  "HASNA_STATION",
+];
+
+/**
+ * The retired storage-mode variables, from the resolver's own list. The
+ * resolver never reads them — they are inert — but a test env DELETES them so
+ * a test can never depend on a stale fragment from the host environment. They
+ * are listed here so scrub coverage treats them as handled.
+ */
+export const REMOVED_STORE_ENV_KEYS: readonly string[] = [...REMOVED_STORE_ENV_KEYS_SRC];
+
+/**
+ * The Keychain account a test environment pins, chosen so that no item can
+ * exist under it (see LOCAL_ONLY_STORE_ENV_KEYS).
+ */
+export const MEMENTOS_TEST_KEYCHAIN_ACCOUNT = "mementos-test-fixture-no-such-station";
+
+/** The local-intent defaults: the explicit opt-in (both spellings) and the empty Keychain account. */
+const LOCAL_OPT_IN_DEFAULT = {
+  HASNA_MEMENTOS_LOCAL: "1",
+  MEMENTOS_LOCAL: "1",
+  HASNA_STATION: MEMENTOS_TEST_KEYCHAIN_ACCOUNT,
+} as const;
+
 /** The two env vars that point the CLI at a specific SQLite file. */
-export const DB_PATH_ENV_KEYS = ["MEMENTOS_DB_PATH", "HASNA_MEMENTOS_DB_PATH"] as const;
+export const DB_PATH_ENV_KEYS: readonly string[] = MEMENTOS_DB_PATH_ENV_KEYS;
 
 export interface IsolatedStoreEnvOptions {
   /**
@@ -105,31 +170,23 @@ export function isolatedStoreEnv(
   dbPath: string,
   options: IsolatedStoreEnvOptions = {},
 ): Record<string, string> {
-  const env = envWithoutStoreSelectors();
+  const env = localIntentEnv();
   for (const key of DB_PATH_ENV_KEYS) env[key] = dbPath;
   for (const [key, value] of Object.entries(options.extra ?? {})) env[key] = value;
   return env;
 }
 
-/** The ambient env with every store selector removed. The shared starting point. */
-function envWithoutStoreSelectors(): Record<string, string> {
+/** The ambient env scrubbed of storage selectors, with the local opt-in defaulted on. */
+function localIntentEnv(): Record<string, string> {
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
   for (const key of STORE_SELECTOR_ENV_KEYS) delete env[key];
-  return env;
+  for (const key of REMOVED_STORE_ENV_KEYS) delete env[key];
+  return { ...env, ...LOCAL_OPT_IN_DEFAULT };
 }
 
 export interface StubApiEnvOptions {
   /** Stub bearer token. Never a real credential — the stub does not check it. */
   apiKey?: string;
-
-  // REMOVED 2026-08-03: `dbPath`, documented as "pin the (non-authoritative)
-  // local SQLite path too, for belt and braces". It had exactly one caller,
-  // which passed nothing. Since precedence 1 landed, a local path is no longer
-  // non-authoritative — it OUTRANKS the API selectors — so this option would
-  // have silently disabled the very API mode this helper exists to create, and
-  // pointed the suite at a SQLite file instead of its stub server. Belt and
-  // braces that cuts the belt. Deleted rather than fixed because nothing uses
-  // it and a live option is a live hazard.
 }
 
 /**
@@ -148,6 +205,9 @@ export function stubApiEnv(baseUrl: string, options: StubApiEnvOptions = {}): Re
   // An inherited DB_PATH would outrank the stub credentials and send the suite
   // to a SQLite file instead of the stub server (precedence 1), so drop it.
   for (const key of DB_PATH_ENV_KEYS) delete env[key];
+  // The flag opt-in must not outrank a configured environment (authority
+  // intent wins), but pinning it off keeps the fixture unambiguous.
+  for (const key of MEMENTOS_LOCAL_OPT_IN_ENV_KEYS) delete env[key];
   env[API_URL_ENV_KEYS[0]] = baseUrl;
   env[API_KEY_ENV_KEYS[0]] = options.apiKey ?? "stub-key-not-a-secret";
   return env;
@@ -180,9 +240,30 @@ export function cloudSelectingEnv(
 ): Record<string, string> {
   const env = envWithoutStoreSelectors();
   for (const key of DB_PATH_ENV_KEYS) delete env[key];
+  for (const key of MEMENTOS_LOCAL_OPT_IN_ENV_KEYS) delete env[key];
   env[API_URL_ENV_KEYS[0]] = baseUrl;
   env[API_KEY_ENV_KEYS[0]] = apiKey;
   return env;
+}
+
+/** The ambient env with every store selector removed. The shared starting point. */
+function envWithoutStoreSelectors(): Record<string, string> {
+  const env: Record<string, string> = { ...(process.env as Record<string, string>) };
+  for (const key of STORE_SELECTOR_ENV_KEYS) delete env[key];
+  for (const key of REMOVED_STORE_ENV_KEYS) delete env[key];
+  return env;
+}
+
+/**
+ * The ambient env with the local-intent defaults applied ON TOP of the scrub
+ * (used by the `bun test` preload and by in-process suites that must be able
+ * to reach the hosted arm deliberately).
+ */
+export function localMementosTestEnv(extra: Record<string, string> = {}): Record<string, string> {
+  const env = envWithoutStoreSelectors();
+  for (const key of LOCAL_ONLY_STORE_ENV_KEYS) delete env[key];
+  const result: Record<string, string> = { ...env, ...LOCAL_OPT_IN_DEFAULT, ...extra };
+  return result;
 }
 
 /** LLM provider keys most harnesses blank so no test can make a billed call. */
@@ -259,7 +340,8 @@ export async function assertLocalStoreBackend(
         `  selected_by    : ${report.selected_by}\n` +
         `  server_backend : ${report.server_backend}\n` +
         `  db_path        : ${report.db_path}\n` +
-        "A store-selecting env var reached the child that STORE_SELECTOR_ENV_KEYS does not cover. " +
+        "A store-selecting env var reached the child that STORE_SELECTOR_ENV_KEYS does not cover, or the " +
+        "resolver pulled a credential from the Keychain or a credentials file. " +
         "Add it to src/test-support/store-isolation.ts (and export it from the resolver that reads it).",
     );
   }

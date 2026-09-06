@@ -133,6 +133,8 @@ describe("getDatabase() unpinned-test-open guard (todos 57b8b8c5)", () => {
     delete process.env["MEMENTOS_DB_PATH"];
     delete process.env["HASNA_MEMENTOS_DB_PATH"];
     delete process.env["MEMENTOS_DB_SCOPE"];
+    delete process.env["MEMENTOS_LOCAL"];
+    delete process.env["HASNA_MEMENTOS_LOCAL"];
     delete process.env["NODE_ENV"];
 
     const originalCwd = process.cwd();
