@@ -1,26 +1,33 @@
 // Client-side store resolver for @hasna/shortlinks.
 //
 // This is the single seam the CLI, MCP server, and SDK consult to obtain a
-// `Store`. It returns the hosted-API `ApiStore` when the hosted shortlinks
-// service is configured (HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY,
-// or a fleet app-config / credential the @hasna/contracts resolver accepts),
-// and otherwise FAILS CLOSED: a missing backend is an error naming the
-// required env, never a silent switch to the on-box SQLite store. A CLI run
-// without its API env must never serve ~/.hasna/shortlinks/shortlinks.db and
+// `Store`. It returns the hosted-API `ApiStore` when the @hasna/contracts
+// client resolver finds a shortlinks credential — the Keychain item
+// `hasna.credentials.shortlinks.api-key`, the disk credential file
+// `~/.hasna/shortlinks/config/credentials` (0400/0600), or
+// `HASNA_SHORTLINKS_API_KEY` (alias `SHORTLINKS_API_KEY`) — and otherwise
+// FAILS CLOSED: a missing backend is an error naming the credential chain,
+// never a silent switch to the on-box SQLite store. A CLI run without a
+// resolvable credential must never serve ~/.hasna/shortlinks/shortlinks.db and
 // exit 0 (owner ruling 2026-09-04: no silent local fallback).
 //
 // The on-box SQLite `LocalStore` is reachable ONLY through an explicit opt-in:
-//   • `SHORTLINKS_LOCAL=1` in the environment, or
+//   • `HASNA_SHORTLINKS_LOCAL=1` in the environment (alias `SHORTLINKS_LOCAL`), or
 //   • an explicit database path (`--db <path>` / `options.dbPath`).
+// A hosted configuration always wins over the opt-in, and selecting local mode
+// ANNOUNCES it on stderr (once per process) — local is never silent.
 //
 // There is NO postgres/DSN branch here: a client never reads or writes the raw
-// RDS. `resolveStore` throws (via CloudShortlinksStore.fromEnv) when the hosted
-// client is partially configured, so a client can never silently drift back to
-// the wrong dataset.
+// RDS. Partial hosted configuration (a URL without a credential, a
+// declared-but-blank variable, disagreeing authorities, an unreadable
+// credential file) THROWS via CloudShortlinksStore.fromEnv — a client can
+// never silently drift back to the wrong dataset.
 
 import { CloudShortlinksStore } from "./cloud-store.js";
 import { ShortlinksStore } from "./store.js";
+import { shortlinksResolverInputs } from "./client-resolver-inputs.js";
 import type { Env, ListLinksOptions, Store, TotalStats } from "./store-interface.js";
+import type { ShortlinksTransportOverrides } from "./client-types.js";
 import type {
   AddDomainInput,
   Click,
@@ -36,37 +43,67 @@ export { CloudShortlinksStore as ApiStore } from "./cloud-store.js";
 export type { Store } from "./store-interface.js";
 
 /**
- * Environment opt-in for the on-box SQLite store. Without the hosted-API env
- * AND without this flag (or an explicit `--db` path) the CLI fails closed
- * instead of serving local data.
+ * Environment opt-in for the on-box SQLite store, canonical name first. The
+ * legacy `SHORTLINKS_LOCAL` spelling stays accepted (it is documented and in
+ * the wild). Without a hosted credential AND without this flag (or an explicit
+ * `--db` path) the CLI fails closed instead of serving local data.
  */
-export const LOCAL_OPT_IN_ENV_KEY = "SHORTLINKS_LOCAL";
+export const LOCAL_OPT_IN_ENV_KEYS = ["HASNA_SHORTLINKS_LOCAL", "SHORTLINKS_LOCAL"] as const;
 
-/** Canonical hosted-API env keys (with their legacy aliases) named in errors. */
-const API_URL_ENV_KEYS = ["HASNA_SHORTLINKS_API_URL", "SHORTLINKS_API_URL"] as const;
-const API_KEY_ENV_KEYS = ["HASNA_SHORTLINKS_API_KEY", "SHORTLINKS_API_KEY"] as const;
+/** The canonical local opt-in env key, named in errors and notices. */
+export const LOCAL_OPT_IN_ENV_KEY = LOCAL_OPT_IN_ENV_KEYS[0];
 
 /**
  * True when the environment explicitly opts into the on-box SQLite store via
- * `SHORTLINKS_LOCAL`. Any value except an empty string / 0 / false / no / off
- * opts in. A fully configured hosted API still wins over this flag — opt-in
- * never silently shadows an explicit hosted configuration (same precedence as
- * `--db`).
+ * `HASNA_SHORTLINKS_LOCAL` / `SHORTLINKS_LOCAL`. Any value except an empty
+ * string / 0 / false / no / off opts in. A fully configured hosted API still
+ * wins over this flag — opt-in never silently shadows an explicit hosted
+ * configuration (same precedence as `--db`).
  */
 export function isLocalOptIn(env: Env): boolean {
-  const raw = env[LOCAL_OPT_IN_ENV_KEY]?.trim().toLowerCase();
-  if (!raw) return false;
-  return raw !== "0" && raw !== "false" && raw !== "no" && raw !== "off";
+  for (const key of LOCAL_OPT_IN_ENV_KEYS) {
+    const raw = env[key]?.trim().toLowerCase();
+    if (!raw) continue;
+    if (raw !== "0" && raw !== "false" && raw !== "no" && raw !== "off") return true;
+  }
+  return false;
 }
 
-/** Actionable fail-closed message: names the required env and the local opt-in. */
+/** Actionable fail-closed message: names the credential chain and the local opt-in. */
 export function missingBackendMessage(): string {
   return (
     `No shortlinks data backend is configured; the CLI never falls back to local storage on its own. ` +
-    `${API_URL_ENV_KEYS[0]} and ${API_KEY_ENV_KEYS[0]} are required to reach the hosted shortlinks API ` +
-    `(aliases ${API_URL_ENV_KEYS[1]} / ${API_KEY_ENV_KEYS[1]}). To use the on-box SQLite store ` +
-    `explicitly, set ${LOCAL_OPT_IN_ENV_KEY}=1 or pass --db <path>.`
+    `The @hasna/contracts client resolver found no shortlinks credential: look in the Keychain item ` +
+    `hasna.credentials.shortlinks.api-key (macOS), write ~/.hasna/shortlinks/config/credentials ` +
+    `(0400/0600, HASNA_SHORTLINKS_API_KEY=...), or set HASNA_SHORTLINKS_API_KEY ` +
+    `(alias SHORTLINKS_API_KEY; the authority defaults to https://api.hasna.com/shortlinks and can be ` +
+    `overridden with HASNA_SHORTLINKS_API_URL). To use the on-box SQLite store explicitly, set ` +
+    `${LOCAL_OPT_IN_ENV_KEY}=1 (alias SHORTLINKS_LOCAL) or pass --db <path>.`
   );
+}
+
+let localNoticePrinted = false;
+
+/** Reset the once-per-process local-mode notice. Test seam only. */
+export function __resetShortlinksLocalNotice(): void {
+  localNoticePrinted = false;
+}
+
+/**
+ * The one-line stderr announcement local mode makes (once per process): an
+ * operator running the on-box store while believing they are on the fleet is
+ * the false-green this ruling exists to end, so local mode is never silent.
+ */
+function announceLocalMode(reason: string, notice?: (line: string) => void): void {
+  if (localNoticePrinted) return;
+  localNoticePrinted = true;
+  const line =
+    `shortlinks: local mode — on-box SQLite store in use (${reason}); reading and writing ` +
+    `~/.hasna/shortlinks/shortlinks.db, not the hosted fleet. To go hosted, set ` +
+    `HASNA_SHORTLINKS_API_KEY, add the Keychain item hasna.credentials.shortlinks.api-key, or write ` +
+    `~/.hasna/shortlinks/config/credentials.`;
+  if (notice) notice(line);
+  else if (typeof process !== "undefined") process.stderr.write(`${line}\n`);
 }
 
 /**
@@ -150,30 +187,44 @@ export interface ResolveStoreOptions {
   /** Explicit local SQLite path (CLI `--db`); also opts into the local store. Ignored when the hosted API is selected. */
   dbPath?: string;
   /** Transport overrides for the hosted-API client (test injection: fetchImpl, ...). */
-  cloudOverrides?: Parameters<typeof CloudShortlinksStore.fromEnv>[1];
+  cloudOverrides?: ShortlinksTransportOverrides;
+  /** Where the one-line local-mode notice goes. Defaults to `process.stderr`. */
+  notice?: (line: string) => void;
 }
 
 /**
  * Resolve the active {@link Store} for the current environment.
  *
- * - The hosted-API {@link ApiStore} wins when it is fully configured
- *   (HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY, or a fleet
- *   app-config / credential the contracts resolver accepts); a partially
- *   configured hosted client throws.
+ * - The hosted-API {@link ApiStore} wins when the @hasna/contracts client
+ *   resolver finds a shortlinks credential (Keychain, disk credential file, or
+ *   `HASNA_SHORTLINKS_API_KEY`); a partially configured hosted client throws.
  * - Otherwise the on-box {@link LocalStore} is used ONLY when local mode was
- *   explicitly opted into (`SHORTLINKS_LOCAL=1` or an explicit `dbPath`).
- * - Otherwise resolution FAILS CLOSED: it throws an error naming the required
- *   env instead of silently serving the local SQLite dataset.
+ *   explicitly opted into (`HASNA_SHORTLINKS_LOCAL=1`, alias `SHORTLINKS_LOCAL`,
+ *   or an explicit `dbPath`).
+ * - Otherwise resolution FAILS CLOSED: it throws an error naming the credential
+ *   chain instead of silently serving the local SQLite dataset.
  */
 export function resolveStore(
   env: Env = process.env,
   options: ResolveStoreOptions = {},
 ): Store {
-  const cloud = CloudShortlinksStore.fromEnv(env, options.cloudOverrides);
+  // Normalise declared-but-blank authority variables WITHOUT handing the
+  // resolver a silent copy: the Keychain tier's ambient gate travels with the
+  // copy when one is forced (hasna/apps#1788). See ./client-resolver-inputs.ts.
+  const { env: resolverEnv, credentials } = shortlinksResolverInputs(env, options.cloudOverrides?.credentials);
+  const cloud = CloudShortlinksStore.fromEnv(resolverEnv, {
+    ...options.cloudOverrides,
+    credentials,
+  });
   if (cloud) return cloud;
   // No hosted backend resolved. Local SQLite is never the silent default: it
-  // requires the documented opt-in (SHORTLINKS_LOCAL=1 or --db <path>).
+  // requires the documented opt-in (HASNA_SHORTLINKS_LOCAL=1 / SHORTLINKS_LOCAL=1
+  // or --db <path>), and selecting it is announced on stderr (once per process).
   if (options.dbPath !== undefined || isLocalOptIn(env)) {
+    const reason = options.dbPath !== undefined
+      ? `--db ${options.dbPath}`
+      : `${LOCAL_OPT_IN_ENV_KEY}=1`;
+    announceLocalMode(reason, options.notice);
     return new LocalStore(options.dbPath);
   }
   throw new Error(missingBackendMessage());
@@ -182,7 +233,7 @@ export function resolveStore(
 /**
  * Run `fn` with a resolved {@link Store}, always closing it afterward. The
  * canonical helper for one-shot CLI/MCP operations. Fails closed (throws
- * naming the required env) when no backend is configured and local mode was
+ * naming the credential chain) when no backend is configured and local mode was
  * not explicitly opted into.
  */
 export async function withStore<T>(

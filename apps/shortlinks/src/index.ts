@@ -12,4 +12,6 @@ export { createCloudflarePlan, generateWorkerScript, writeWorkerFiles, upsertClo
 export { createLocalSetupPlan, registerMachinesDns } from "./local.js";
 export { formatShortUrl, getConfigPath, getDataDir, getDatabasePath, loadConfig, normalizeHostname, saveConfig } from "./config.js";
 export { normalizeSlug, randomToken } from "./slug.js";
+export { createShortlinksApiClient, resolveShortlinksSdkTransport } from "./sdk/resolve.js";
+export type { ResolveShortlinksSdkTransportOptions, ShortlinksSdkTransport } from "./sdk/resolve.js";
 export type { AddDomainInput, Click, ClickInput, CreateLinkInput, Domain, Link, LinkStats } from "./types.js";
