@@ -1,9 +1,12 @@
 import { Database } from "bun:sqlite";
 import { CURRENT_MIGRATION_LEVEL } from "../db/database.js";
 import { existsSync } from "fs";
-import { resolveTransport } from "../http/client.js";
+import {
+  getRecordingsTransportStatus,
+  type RecordsClientResolveOptions,
+} from "../http/client.js";
 import { redactKeyMaterial } from "./transcriber.js";
-import { APP, getStore, type Store } from "../store.js";
+import { getStore, type Store } from "../store.js";
 import type { RecordingsConfig } from "../types/index.js";
 
 /**
@@ -11,13 +14,13 @@ import type { RecordingsConfig } from "../types/index.js";
  *
  * A transcript is only "recorded" once it is durably stored, and this package
  * has TWO stores behind one interface (src/store.ts): on-box SQLite and the
- * server's `/v1` HTTP API. Which one is active is decided entirely by the
- * environment — the presence of HASNA_RECORDINGS_API_URL +
- * HASNA_RECORDINGS_API_KEY is itself the signal to use the API, with no
- * variable set explicitly to make it visible.
+ * server's `/v1` HTTP API. Which one is active is decided by the
+ * @hasna/contracts resolver — a resolved credential (Keychain, disk or env)
+ * points at the hosted API, nothing resolved points nowhere until the
+ * deliberate `HASNA_RECORDINGS_LOCAL=1` opt-in selects the on-box file.
  *
  * `check` never reported which store it had resolved. That blind spot is not
- * theoretical: on an affected fleet Mac those two variables are set in the
+ * theoretical: on an affected fleet Mac the hosted API pair was set in the
  * LAUNCHD USER SESSION, so every process in the session inherits them — the GUI
  * app, its CLI helper, and any ssh shell alike. Writes go to the API while
  * ~/.hasna/recordings/recordings.db sits frozen at the row count it held when the
@@ -34,19 +37,24 @@ import type { RecordingsConfig } from "../types/index.js";
  * easier to open.
  */
 
-/** The name we report when the transport came from URL+key presence alone. */
-export const AUTO_FLIP_MODE_SOURCE = "auto:api-url+api-key";
+/**
+ * The name we report when the credential came from the process-env tier, where
+ * a shell export is a snapshot that a rotation cannot heal until the shell
+ * exits.
+ */
+export const ENV_CREDENTIAL_MODE_SOURCE = "env";
 
 /**
  * Strip credentials out of a URL before it is printed anywhere.
  *
- * `toV1BaseUrl` clears the query and fragment but preserves userinfo, so a
- * configured `https://svc:PASSWORD@host` reaches every reporter in this module
- * intact — stdout, the `--json` payload, and two warning strings. This module
- * exists to make the store visible; leaking a password while doing it would be a
- * worse bug than the one it fixes.
+ * The @hasna/contracts resolver REFUSES an authority URL that carries userinfo,
+ * so a configured `https://svc:PASSWORD@host` never reaches the transport or
+ * this module's reporters on its way to failure. This boundary exists as
+ * defense-in-depth for every other URL-shaped string a reporter can receive —
+ * a fake Store's `baseUrl` in diagnostics, a server-supplied URL in a future
+ * report — and to make the redaction property testable without a resolution.
  *
- * Applied at the reporting boundary rather than in `toV1BaseUrl` itself, so the
+ * Applied at the reporting boundary rather than in the URL normaliser, so the
  * URL the transport actually requests is left exactly as configured.
  */
 export function safeBaseUrl(baseUrl: string | null): string | null {
@@ -66,8 +74,10 @@ export function safeBaseUrl(baseUrl: string | null): string | null {
 export interface ActiveStoreDescription {
   transport: "sqlite" | "http";
   /**
-   * What decided the transport: an env var NAME, `auto:api-url+api-key`, or
-   * `default`. Never a value — these variables hold credentials.
+   * What decided the transport: `"local-opt-in"`, `"unresolved"`, or an env
+   * key NAME / Keychain item reference / file PATH / `"default"` as the
+   * @hasna/contracts chain reported the credential and the authority. Never a
+   * value — these variables hold credentials.
    */
   mode_source: string;
   /** `<url>/v1` when routed to the API, else null. Carries no credential. */
@@ -144,70 +154,71 @@ export function localStoreIsBehindSchema(dbPath: string): boolean | null {
  */
 export function describeActiveStore(
   config: RecordingsConfig,
-  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+  options: RecordsClientResolveOptions = {},
 ): ActiveStoreDescription {
   const localDbPath = config.db_path;
   const localDbPresent = existsSync(localDbPath);
   const localDbRecordings = localDbPresent ? readLocalRecordingCount(localDbPath) : null;
 
-  let resolution: ReturnType<typeof resolveTransport>;
-  try {
-    resolution = resolveTransport(APP, env);
-  } catch (error) {
+  const status = getRecordingsTransportStatus(env, options);
+
+  if (!status.ok || !status.selected || status.transport !== "http") {
+    // Nothing resolved (fail-closed refusal), or the deliberate local opt-in.
+    // Either way the on-box file is NOT the live store without the opt-in, so
+    // the diagnostic says so instead of silently treating the file as active.
+    const issues = status.issues.length > 0 ? status.issues.join(" ") : null;
     return {
       transport: "sqlite",
-      mode_source: "unresolved",
+      mode_source: status.ok ? "local-opt-in" : "unresolved",
       base_url: null,
       local_db_path: localDbPath,
       local_db_present: localDbPresent,
       local_db_recordings: localDbRecordings,
       divergent: false,
-      // The thrown message echoes the raw env value ("Unknown client store: <value>"),
-      // which is operator-supplied and may hold anything.
-      warning: redactKeyMaterial(
-        `could not resolve the active store: ${(error as Error).message}`
-      ),
+      // The issues echo operator-visible text only; redacted like every other
+      // warning in this module.
+      warning: issues ? redactKeyMaterial(issues) : null,
     };
   }
 
-  const divergent =
-    resolution.transport === "http" && (localDbRecordings ?? 0) > 0;
+  const divergent = (localDbRecordings ?? 0) > 0;
 
   const warnings: string[] = [];
-  if (resolution.warning) warnings.push(resolution.warning);
+  // A credential that resolved from the process env is a shell snapshot: it
+  // cannot absorb a rotation until the exporting shell exits, unlike the
+  // Keychain item or the credentials file, both re-read on every call.
+  if (status.api_key_tier === ENV_CREDENTIAL_MODE_SOURCE) {
+    warnings.push(
+      "the credential came from the process environment (HASNA_RECORDINGS_API_KEY): a shell export is a " +
+        "snapshot taken when the shell started, so a rotation stays invisible until that shell exits. " +
+        "Check `launchctl getenv HASNA_RECORDINGS_API_KEY` too: a launchd session variable " +
+        "is inherited by the GUI app as well as by shells, and is invisible in a login profile. " +
+        "Prefer the Keychain item hasna.credentials.recordings.api-key or " +
+        "~/.hasna/recordings/config/credentials, both re-read on every call."
+    );
+  }
   // An uncountable local file must not read as "no second dataset". A read-only
   // open fails on, among other things, a WAL database whose -shm cannot be
   // created, and silently reporting 0 there would hide the divergence.
-  if (
-    resolution.transport === "http" &&
-    localDbPresent &&
-    localDbRecordings === null
-  ) {
+  if (localDbPresent && localDbRecordings === null) {
     warnings.push(
-      `writes go to ${safeBaseUrl(resolution.baseUrl)}, and ${localDbPath} exists but could not be counted, ` +
+      `writes go to ${safeBaseUrl(status.v1_base_url)}, and ${localDbPath} exists but could not be counted, ` +
         "so whether a second dataset is sitting there is UNKNOWN — not 'none'."
     );
   }
   if (divergent) {
     warnings.push(
-      `writes go to ${safeBaseUrl(resolution.baseUrl)}, but ${localDbPath} still holds ` +
+      `writes go to ${safeBaseUrl(status.v1_base_url)}, but ${localDbPath} still holds ` +
         `${localDbRecordings} recordings from an earlier on-box-only period. ` +
         "That file is NOT the live store — auditing it undercounts and looks like data loss."
     );
   }
-  if (resolution.transport === "http" && resolution.modeSource === AUTO_FLIP_MODE_SOURCE) {
-    warnings.push(
-      "the API transport was selected by the mere PRESENCE of " +
-        "HASNA_RECORDINGS_API_URL + HASNA_RECORDINGS_API_KEY. " +
-        "Check `launchctl getenv HASNA_RECORDINGS_API_URL` too: a launchd session variable " +
-        "is inherited by the GUI app as well as by shells, and is invisible in a login profile."
-    );
-  }
 
   return {
-    transport: resolution.transport,
-    mode_source: resolution.modeSource,
-    base_url: safeBaseUrl(resolution.baseUrl),
+    transport: "http",
+    mode_source: `${status.api_key_source ?? status.api_key_tier}+${status.api_url_source ?? "default"}`,
+    base_url: safeBaseUrl(status.v1_base_url),
     local_db_path: localDbPath,
     local_db_present: localDbPresent,
     local_db_recordings: localDbRecordings,
