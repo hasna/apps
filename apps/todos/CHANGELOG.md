@@ -1,5 +1,205 @@
 # Changelog
 
+## 0.16.0
+
+### Minor Changes
+
+- 96169f8: Resolve credentials through the `@hasna/contracts` client chain (hasna/apps#1720).
+
+  The CLI, the MCP server and the `./sdk` client no longer carry a credential
+  chain of their own. All three call the one resolver in `@hasna/contracts`
+  (bumped to 1.0.1), which reads, per call: an explicit `--api-key`/`--profile`,
+  then `HASNA_TODOS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
+  `HASNA_TODOS_API_KEY_REF`, then the macOS Keychain item
+  `hasna.credentials.todos.api-key`, then `~/.hasna/todos/config/credentials`
+  (owner-only 0400/0600), then `HASNA_TODOS_API_KEY`. The authority follows the
+  same ladder — `HASNA_TODOS_API_URL`, the Keychain `api-url` item, the
+  credentials file — and now DEFAULTS to the fleet gateway
+  `https://api.hasna.com/todos` once a credential resolves, so a key alone is a
+  complete configuration. Resolving per call is what makes a key rotation heal a
+  long-lived shell, MCP server or agent without restarting it: a `TodosClient`
+  held for hours re-resolves the credential on every request, so the next request
+  after a rotation carries the new key. The two deliberate exceptions are an
+  explicit `apiKey` argument (tier 1, a pin the caller owns) and the service
+  authority, which is fixed for the life of a client so a credential written for
+  one authority is never sent to another.
+
+  What this removes:
+
+  - `getLocalApiConfig()` and `LocalApiConfig` (breaking, hence minor), together
+    with the `apiUrl` / `apiKey` fields of `TodosConfig`. The SDK used to read a
+    credential out of `~/.todos/config.json` — an ordinary-permission file that
+    unrelated `todos config` writes rewrite wholesale — and to prefer `TODOS_URL`
+    and an unprefixed key name over the canonical `HASNA_TODOS_*` pair, so an
+    operator who configured the documented names silently got the localhost
+    default with no credential.
+  - `requireTodosRemoteAuthorityEnv()` (breaking), the pre-normalisation pass the
+    resolver now performs itself.
+  - The retired paths, everywhere: nothing reads `~/.hasna/fleet-env`,
+    `~/.hasna/cloud`, `~/.config/hasna` or `$XDG_CONFIG_HOME`. `@hasna/todos/testing`
+    delivers a fixture key to `~/.hasna/todos/config/credentials` at 0600 instead.
+  - The legacy-env DEPRECATED stderr notice, which contracts 1.0.1 drops:
+    `HASNA_TODOS_API_KEY` is a legitimate tier, it just sits below disk.
+
+  What this adds:
+
+  - `@hasna/todos/sdk` exports `resolveTodosSdkTransport`, `createTodosV1Client`
+    and `TODOS_LOCAL_SERVE_URL`, so a consumer can see WHICH tier supplied its
+    credential (never the value) and build the hosted `/v1` client without writing
+    a private copy of the chain.
+  - `todos storage status` reports `api_url_source`, `api_key_source` and
+    `api_key_tier`.
+  - `@hasna/todos/testing` exports `TODOS_CREDENTIALS_FILE_SEGMENTS` and
+    `TODOS_TEST_KEYCHAIN_ACCOUNT`. The scrub list gained the deliberate pointers
+    (`HASNA_TODOS_API_KEY_OVERRIDE`, `HASNA_TODOS_API_KEY_REF`, `HASNA_PROFILE`)
+    and now REMOVES entries rather than blanking them, because a declared-but-blank
+    credential is a refusal rather than an absence. Blanking still means "unset"
+    at the Todos seam, so existing consumer fixtures keep working.
+
+  Behaviour worth knowing about:
+
+  - Hosted mode with no credential still fails closed — non-zero exit, no SQLite
+    fallback, no local-fallback event — and the message now names every tier it
+    consulted, so the remedy is in the error. The `./sdk` surface differs for that
+    ONE case by design: `new TodosClient()` falls to the local `todos-serve` with
+    a stderr line, `createTodosV1Client()` throws. Every other refusal throws on
+    every surface.
+  - The bundled `@hasna/todos-sdk` package (`apps/todos/sdk`, published separately
+    and NOT a workspace member, so it carries no changeset of its own — see
+    hasna/apps#1787) now documents the environment variables it reads and prints
+    one line when it falls back to the local `todos-serve`. Its canonical
+    `HASNA_TODOS_*` names always win; the unprefixed spellings are legacy and are
+    accepted for one release only.
+  - A declared-but-blank `*TODOS_*` variable no longer disables the Keychain tier.
+    Removing a blank means handing the resolver a COPY of the environment, and
+    @hasna/contracts gates its ambient tiers on object identity, so the copy used
+    to switch tier 3 off for the whole run — silently dropping a station from its
+    Keychain identity to the next one in the chain. The gate is now decided before
+    normalising and carried across as `keychain.enabled`.
+  - Local mode (`HASNA_TODOS_LOCAL=1`, alias `TODOS_LOCAL=1`) is honoured only
+    when the environment configures no authority and no credential, and is
+    answered BEFORE the resolver runs, so an unhosted run reads neither the
+    Keychain nor the credential file. Every local run now prints one line on
+    stderr saying it is local.
+  - A credential with no URL used to be refused as a half-configured pair; it now
+    resolves the fleet gateway.
+  - A 401/403 from the authority no longer echoes the server's response body: the
+    transport cancels it unread, because that body is the one place a rejected
+    request can reflect credential material back into logs. The refusal still
+    names the authority and the credential source.
+
+### Patch Changes
+
+- 92d9dac: Stop the `./sdk` client sending the station's fleet credential to a
+  caller-supplied `baseUrl` (hasna/apps#1781 review follow-up, regression from
+  hasna/apps#1788).
+
+  Making credential resolution per-call gave `TodosClient` a `currentApiKey()`
+  that re-ran the resolver on every request — but it re-ran it with no `baseUrl`,
+  dropping the tier-1 authority the constructor was given. For
+  `new TodosClient({ baseUrl: X })` with no `apiKey`, construction correctly took
+  the explicit-authority arm and held no credential, and then every request
+  resolved the AMBIENT chain (Keychain, `~/.hasna/todos/config/credentials`,
+  `HASNA_TODOS_API_KEY`) and attached that key as `x-api-key` on the way to `X`.
+  `baseUrl` is a documented public option, and the shape with no key is what
+  local-serve and test-double callers write — including this repo's own tests
+  against `http://localhost:19427` — so a hosted credential was going to an
+  unauthenticated on-box process. It also contradicted the guarantee the same
+  change documented: the service authority is fixed for the life of a client
+  because a credential written for one authority must never be sent to another.
+
+  The authority pin now binds the credential. When tier 1 named the authority the
+  chain is not consulted again: the client sends the credential it was
+  CONSTRUCTED with — an explicit `apiKey`, or nothing. Per-call re-resolution, and
+  the rotation-healing it exists for, still applies to a client that resolved its
+  own hosted authority. Regression tests cover `new TodosClient({ baseUrl })` with
+  no key, with a key, and the rotating hosted client that must still re-resolve.
+
+  Also in this change:
+
+  - `createTodosV1Client()`'s per-request `fetch` wrapper normalises the headers
+    init through `Headers` instead of an object spread with a
+    `Record<string, string>` cast. The generated client hands it a plain record
+    today, but that was asserted only in a comment — a regenerated client passing
+    a `Headers` instance or a tuple array would have spread to `{}` and silently
+    dropped every header, `Content-Type` included. The wrapper also no longer
+    forwards `notice` into its re-resolution, which could print the "LOCAL mode —
+    … not the hosted fleet" line while the client was still addressing its
+    original hosted authority.
+  - `resolveTodosSdkTransport()` walks the credential chain once instead of twice.
+    `resolveClientTransport()` resolves the credential but returns only its
+    source, so reading the value meant a second full pass — and on macOS each pass
+    spawns `/usr/bin/security`, so a per-request surface paid two spawns per
+    request for one answer (measured: 3 `security` invocations per resolution, now
+    2). The resolved value is handed down as the chain's tier-1 argument, so the
+    second pass short-circuits; the reported `apiKeySource` is still the true tier
+    (`keychain:…`, a file path, an env name), never `"explicit apiKey argument"`.
+
+  Bundled `@hasna/todos-sdk` (`apps/todos/sdk`, published separately and NOT a
+  workspace member, so changesets cannot version it — bumped by hand to **0.2.0**,
+  which is the release vehicle for the behaviour hasna/apps#1788 documented but
+  shipped without one):
+
+  - A resolved credential with no authority no longer targets `localhost`. The
+    local-mode notice was gated on "no URL and no key", but the URL still fell
+    back to `http://localhost:19427` whenever no URL was named — so with
+    `HASNA_TODOS_API_KEY` set and no `HASNA_TODOS_API_URL`, the client went local,
+    said nothing, and forwarded the fleet credential to an unauthenticated
+    `todos-serve` on the box. A key now selects the fleet gateway
+    `https://api.hasna.com/todos`, which is what the `@hasna/todos` `./sdk`
+    surface already answered for that identical environment; the two clients no
+    longer disagree about where a key is sent. Local mode is unchanged where the
+    ruling puts it: no URL and no key, with one stderr line saying so.
+  - The behaviour has tests. `__resetTodosLocalModeNotice`,
+    `TODOS_API_URL_ENV_KEYS`, `TODOS_API_KEY_ENV_KEYS` and
+    `TODOS_LOCAL_SERVE_URL` were added as a test seam and a public surface but
+    exported from nowhere and referenced by nothing; they are now re-exported from
+    the package index and exercised, alongside the new `TODOS_DEFAULT_FLEET_URL`.
+  - `README.md` documented the hole ("Setting either one turns the notice off and
+    uses what you set") and now documents the rule, with the default authority in
+    the configuration table.
+
+- 49d75dd: Reject an explicitly empty `active --project` filter instead of silently returning unfiltered work.
+- 500f99d: `@hasna/todos/testing`'s `deliverTodosApiKeyViaDisk` now delivers fixture keys
+  through the PRIMARY disk tier (`$HOME/.hasna/fleet-env/todos.env`) instead of
+  the legacy `~/.hasna/cloud` fallback. Forced by @hasna/contracts 0.14.2, which
+  demotes the cloud tier to a NOISY deprecated fallback: a CLI subprocess test
+  delivering via cloud would print the DEPRECATED notice to stderr and break
+  stderr-exact assertions. Consumers of the exported helper that rely on the
+  cloud path must migrate to fleet-env.
+- 6f4238c: Project and task-list slugs are no longer auto-prefixed with `todos-`. A new
+  project registered from the name `apps` now derives the bare slug `apps`
+  (previously `todos-apps`); task lists follow the same rule, matching the fleet
+  convention that a repo project's task-list slug IS the repo short name.
+
+  - New projects/task lists: `task_list_id`/`slug` = the sanitized kebab-case
+    name, verbatim — no prefix is prepended (SQLite, Postgres, and the
+    project-registration authority all agree; v1 `/projects` and `/task-lists`
+    derive the same way).
+  - Explicit user-supplied slugs are stored verbatim, so a deliberate
+    `todos-<name>` id is still honored.
+  - Legacy stored ids are untouched (no rows renamed) and keep resolving by
+    their stored value, including the registration authority's bind of
+    pre-normalization `todos-<slug>` rows. Duplicate names still fail with
+    `PROJECT_SLUG_CONFLICT`; the collision surface for the hosted fleet's
+    existing prefixed rows is planned in `apps/todos/docs/slug-prefix-
+normalization.md` (runner: `apps/todos/scripts/normalize-slug-prefixes.ts`,
+    dry-run by default, case-seeded collision resolutions, separate reviewed
+    run).
+
+- f00607b: Remove the bundled web dashboard (Vite/React/shadcn SPA at `dashboard/`): the tree, the `dashboard` workspace + `files` entry, the `build:dashboard` script, the dashboard step in `build`, the Dockerfile/.dockerignore references, the CI dashboard job, and the server's static-file serving (`resolveDashboardDir`/`serveStaticFile`/SPA fallback) with unknown non-API routes now always 404 JSON. The server startup browser auto-open and the `--no-open` flag / `TODOS_NO_OPEN` env are gone; the headless-boundary manifest drops the dead `local_dashboard` optional surface. REST API, MCP HTTP, OAuth-adjacent auth postures, the CLI, and the SDK are unchanged — `todos serve` / `todos-serve` still serve /api/\* and /mcp.
+- 6d8782c: `todos serve` / `todos-serve` now read their accepted key from the server's own
+  variable, `HASNA_TODOS_SERVER_API_KEY`, instead of the client credential names
+  (`HASNA_TODOS_API_KEY` / `TODOS_API_KEY`). One name no longer plays both roles
+  on opposite sides of the same trust boundary: exporting the fleet client key on
+  a workstation can no longer silently become the local server's accepted key,
+  and rotating the client key no longer changes what the local server accepts.
+
+  The client names remain a documented silent fallback for one release, so an env
+  written before 2026-09-05 keeps working. `todos serve` prints one line at
+  startup naming which variable supplied its accepted key, flagging the
+  deprecated spelling when a fallback name was used.
+
 ## 0.15.53
 
 ### Patch Changes
