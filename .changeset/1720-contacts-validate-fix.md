@@ -1,0 +1,5 @@
+---
+"@hasna/contacts": patch
+---
+
+Resolver validation fixes (hasna/apps#1720): the MCP connection-status and CLI transport tests are hermetic against a populated station Keychain (`HASNA_STATION` pinned to an absent account, `HASNA_HOME` to an empty temporary root, pointer/profile names cleared), the #1788 Keychain-gate test observes the tier through an injected account derivation instead of the machine's Keychain; `contacts status` reports the RESOLVED `/v1` authority plus `api_url_source` / `api_key_source` / `api_key_tier` (names only, never values) and the resolver's `issue` when unconfigured; `contacts-mcp --version` / `--help` and `contacts-serve --help` answer without starting a server or binding a port; `./sdk` gains `createContactsClient()` — the @hasna/contracts chain resolved through the same seam as the CLI and MCP server, the key re-resolved per request with the authority pinned, while an explicit `baseUrl` still requires an explicit `apiKey` (#1794) — and `ContactsV1Client` accepts a gateway path prefix such as `https://api.hasna.com/contacts`; the retired `~/.config/hasna` path shape no longer ships in the client bundle.

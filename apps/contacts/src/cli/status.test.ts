@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,7 +31,16 @@ function testEnv(): Record<string, string> {
     "CONTACTS_DB_PATH",
     "HASNA_CONTACTS_DATABASE_URL",
     "CONTACTS_DATABASE_URL",
+    "HASNA_CONTACTS_API_KEY_OVERRIDE",
+    "HASNA_CONTACTS_API_KEY_REF",
+    "HASNA_PROFILE",
+    "HASNA_CONFIG_HOME",
   ]) delete env[key];
+  // Hermetic against the station's ambient tiers: an absent Keychain account
+  // (`security` exits 44 → tier absent) and an empty HASNA_HOME with no
+  // credentials file, so only what a test sets configures the child.
+  env.HASNA_HOME = tempHome;
+  env.HASNA_STATION = "no-such-station";
   return env;
 }
 
@@ -66,6 +75,9 @@ describe("contacts status CLI", () => {
       version: expect.any(String),
       storage: "unconfigured",
       api: expect.stringContaining("(not configured"),
+      api_url_source: null,
+      api_key_source: null,
+      api_key_tier: null,
     });
     expect(report.counts).toBeUndefined();
     expect(report.error).toBeUndefined();
@@ -90,11 +102,45 @@ describe("contacts status CLI", () => {
       service: "contacts",
       version: expect.any(String),
       storage: "error",
-      api: "https://contacts.example.invalid",
+      // The RESOLVED /v1 base URL the client sends to, plus where each half
+      // came from — names only, never a value.
+      api: "https://contacts.example.invalid/v1",
+      api_url_source: "HASNA_CONTACTS_API_URL",
+      api_key_source: "HASNA_CONTACTS_API_KEY",
+      api_key_tier: "env",
       error: expect.any(String),
     });
     expect(report.storage).not.toBe("unconfigured");
     expect(report.counts).toBeUndefined();
+    expect(stdoutText(result)).not.toContain("status-fixture-key");
+  });
+
+  test("reports the resolved authority and the disk tier under HASNA_HOME by source, never by value", () => {
+    const env = testEnv();
+    env.HASNA_CONTACTS_API_URL = "https://contacts.example.invalid";
+    const dir = join(env.HASNA_HOME!, "contacts", "config");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "credentials"), "HASNA_CONTACTS_API_KEY=disk-key-not-a-real-secret\n");
+    chmodSync(join(dir, "credentials"), 0o600);
+
+    const result = runStatus(["status", "--json"], env, false);
+    expect(result.exitCode).toBe(0);
+    const report = parseStdout(result);
+    expect(report).toMatchObject({
+      storage: "error",
+      api: "https://contacts.example.invalid/v1",
+      api_url_source: "HASNA_CONTACTS_API_URL",
+      api_key_tier: "disk",
+    });
+    expect(String(report.api_key_source)).toContain(join("contacts", "config", "credentials"));
+    expect(stdoutText(result)).not.toContain("disk-key-not-a-real-secret");
+
+    const text = runStatus(["status"], env, false);
+    expect(text.exitCode).toBe(0);
+    expect(stdoutText(text)).toContain("API:      https://contacts.example.invalid/v1");
+    expect(stdoutText(text)).toContain("API key source: ");
+    expect(stdoutText(text)).toContain("(disk)");
+    expect(stdoutText(text)).not.toContain("disk-key-not-a-real-secret");
   });
 
   test("reports cloud storage and counts when the API responds", async () => {
@@ -105,6 +151,9 @@ describe("contacts status CLI", () => {
     expect(report).toMatchObject({
       service: "contacts",
       storage: "cloud (/v1)",
+      api: "https://contacts.example.test/v1",
+      api_url_source: "HASNA_CONTACTS_API_URL",
+      api_key_source: "HASNA_CONTACTS_API_KEY",
       counts: { contacts: 2, companies: 1 },
     });
     expect(report.error).toBeUndefined();
