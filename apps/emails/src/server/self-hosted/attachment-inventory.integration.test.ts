@@ -185,13 +185,25 @@ async function drainInventory(deps: SelfHostedServiceDeps, token: string, limit:
 }
 const keyOf = (i: any) => `${i.message_id}#${i.attachment_index}`;
 
-beforeAll(async () => {
-  if (!pgClient) return;
-  await pgClient.execute("DROP SCHEMA IF EXISTS public CASCADE");
-  await pgClient.execute("CREATE SCHEMA public");
-  await new MigrationLedger(pgClient, emailsSelfHostedMigrations()).migrate();
-});
-afterAll(async () => { await pgClient?.close(); });
+// Rebuilding the complete schema on a cold CI database can exceed Bun's 5s
+// default hook deadline. Give setup its own budget; case deadlines stay intact.
+const POSTGRES_SETUP_TIMEOUT_MS = 120_000;
+let postgresSetup: Promise<void> | undefined;
+beforeAll(() => {
+  postgresSetup = (async () => {
+    if (!pgClient) return;
+    await pgClient.execute("DROP SCHEMA IF EXISTS public CASCADE");
+    await pgClient.execute("CREATE SCHEMA public");
+    await new MigrationLedger(pgClient, emailsSelfHostedMigrations()).migrate();
+  })();
+  return postgresSetup;
+}, POSTGRES_SETUP_TIMEOUT_MS);
+afterAll(async () => {
+  // Bun does not cancel a timed-out hook. Let its SQL settle before ending the
+  // pool; beforeAll already owns any setup failure. The gate also bounds the process.
+  await postgresSetup?.catch(() => {});
+  await pgClient?.close();
+}, POSTGRES_SETUP_TIMEOUT_MS + 5_000);
 
 describe.skipIf(!pgClient)("MP-00034 bulk search underreport fix", () => {
   it("GET /v1/messages?search=<filename> matches attachment-only signals (regression)", async () => {
