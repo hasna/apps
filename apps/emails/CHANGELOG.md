@@ -1,3 +1,39 @@
+## 1.5.0
+
+### Minor Changes
+
+- 88ea705: Adopt the @hasna/contracts 1.0.2 credential resolver (hasna/apps#1720).
+
+  The hosted Emails client no longer owns a second credential chain. The API URL
+  and key now resolve through the shared `@hasna/contracts/client` resolver,
+  fresh on every request, from the same five tiers every hosted Hasna CLI uses:
+  `--api-key`/`--profile`, `HASNA_EMAILS_API_KEY_REF` pointers, the macOS
+  Keychain item for the Emails API key, the
+  `~/.hasna/emails/config/credentials` file, then `HASNA_EMAILS_API_KEY`.
+
+  **Canonical env names** are now `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`.
+  The legacy `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` spellings
+  remain accepted as aliases for one release, one rung below the canonical names —
+  the same window skills gave its `SKILLS_API_*` names. A live user session
+  (`EMAILS_SESSION_TOKEN`) or agent identity token (`EMAILS_IDP_TOKEN`) still wins
+  as the bearer credential; the URL always comes from the resolver, defaulting to
+  the hosted default endpoint once a credential resolves.
+
+  **Deleted with the own chain**: the deployment-mode variable and its
+  prefixed alias, all storage-mode switches, the retired-mode refusal guards,
+  and the `EMAILS_CLIENT_ENV_SECRET` vault-pointer delivery of the URL and API
+  key (the pointer now only persists the app's own session/identity tokens). Hosted runs with no credential FAIL CLOSED — no
+  SQLite, no `local-fallback` event — and local SQLite is reached only by an
+  explicit `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH`, announced as
+  `emails: local mode` on stderr.
+
+### Patch Changes
+
+- 371ac0c: Switch @hasna/emails local path reads/writes through the in-package resolver (XDG/macOS home layout). The legacy `~/.hasna/emails` data root (with the `HASNA_EMAILS_HOME` / `EMAILS_HOME` exact-app overrides layered on top of the existing `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` store overrides) stays the effective data root until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The postinstall data-directory hardening and the config/credentials, workflow-event, and provider-keyring locations all resolve through the effective data root. The wave-wide resolver dependency (`@hasna/paths@0.1.0`) was deleted 2026-09-03 (hasna/apps#1535); the resolver is now implemented locally in-package.
+- db20efd: Render formatted HTML and Markdown mail with collapsible code, quoted replies, and thread messages. Add a mailbox-name switcher with an All mailboxes option, improve inbox search and message previews, and fix reader scrolling, picker navigation, and time formatting.
+
+  Show contextual empty and error states, hide unavailable actions, and replace nested settings menus with a responsive preferences panel and working session controls.
+
 ## 1.4.10
 
 ### Patch Changes
