@@ -16,6 +16,34 @@ export type Page<T> = {data: T[]; total: number; limit: number; offset: number};
 export class SwitcherError extends Error {
   constructor(public status: number, public code: string, message: string, public requestId?: string) { super(message); }
 }
+
+/** Remote diagnostics are untrusted; never turn an echoed operator key into local output. */
+function apiError(status: number, data: unknown, apiKey: string): SwitcherError {
+  const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+  const error = object(data) && object(data.error) ? data.error : {};
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const base64 = Buffer.from(apiKey, "utf8").toString("base64");
+  // These cover ordinary diagnostic renderings, not arbitrary/nested encodings.
+  const literal = [apiKey, JSON.stringify(apiKey).slice(1,-1), base64, base64.replace(/=+$/, ""), Buffer.from(apiKey, "utf8").toString("base64url")];
+  const encoded = [encodeURIComponent(apiKey), new URLSearchParams({key: apiKey}).toString().slice(4)];
+  const patterns = [...new Set(literal)].sort((a,b)=>b.length-a.length).map(escape);
+  for (const value of encoded) {
+    // Percent escapes are case insensitive; unescaped token characters are not.
+    patterns.unshift(escape(value).replace(/%[0-9A-F]{2}/g, part => part.replace(/[A-F]/g, letter => `[${letter}${letter.toLowerCase()}]`)));
+  }
+  const reflected = new RegExp(patterns.join("|"), "g");
+  const redact = (value: string) => value.replace(reflected, "[REDACTED]");
+  const identifier = (value: unknown, pattern: RegExp) => typeof value === "string" && pattern.test(value) && redact(value) === value ? value : undefined;
+  const code = identifier(error.code, /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/) ?? "api_error";
+  const requestId = identifier(error.requestId, /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/);
+  const fallback = `Switcher API returned HTTP ${status}.`;
+  // Drop oversized values rather than retaining a possibly truncated credential.
+  const message = typeof error.message === "string" && error.message.length <= 4096
+    ? redact(error.message).replace(/[\x00-\x1f\x7f-\x9f]/g, " ").trim().slice(0,2048) || fallback
+    : fallback;
+  return new SwitcherError(status, code, message, requestId);
+}
+
 export type ClientOptions = {baseUrl: string; apiKey: string | (() => string); fetch?: typeof fetch; timeoutMs?: number};
 export class SwitcherClient {
   private readonly options: ClientOptions;
@@ -38,7 +66,7 @@ export class SwitcherClient {
     catch { throw new SwitcherError(0, "connection_failed", "Switcher API request failed; check endpoint and service availability."); }
     let data: any;
     try { data = await boundedJson(response); } catch { throw new SwitcherError(response.status, "invalid_response", "Switcher API returned invalid JSON."); }
-    if (!response.ok) throw new SwitcherError(response.status, data?.error?.code ?? "api_error", data?.error?.message ?? `Switcher API returned HTTP ${response.status}.`, data?.error?.requestId);
+    if (!response.ok) throw apiError(response.status, data, apiKey);
     return data as T;
   }
   private query(options: {limit?: number; offset?: number; search?: string} = {}) {

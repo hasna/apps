@@ -251,15 +251,15 @@ export interface components {
             credentialAliases: string[];
             protocols: {
                 /** @enum {string} */
-                protocol: "anthropic-messages" | "openai-responses" | "openai-chat";
+                protocol: "anthropic-messages" | "openai-responses" | "openai-chat" | "gemini-generate-content";
                 baseUrl?: string;
                 /** @enum {string} */
-                authStyle: "bearer" | "x-api-key";
+                authStyle: "bearer" | "x-api-key" | "api-key";
                 catalogBaseUrl?: string;
                 /** @enum {string} */
-                catalogFormat: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "none";
+                catalogFormat: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
                 /** @enum {string} */
-                catalogAuthStyle?: "bearer" | "x-api-key" | "none";
+                catalogAuthStyle?: "bearer" | "x-api-key" | "api-key" | "none";
                 modelsPath: string;
                 notes: string[];
             }[];
@@ -272,18 +272,18 @@ export interface components {
             name: string;
             baseUrl: string;
             /** @enum {string} */
-            protocol: "anthropic-messages" | "openai-responses" | "openai-chat";
+            protocol: "anthropic-messages" | "openai-responses" | "openai-chat" | "gemini-generate-content";
             credentialEnv?: string;
             /**
              * @default bearer
              * @enum {string}
              */
-            authStyle: "bearer" | "x-api-key";
+            authStyle: "bearer" | "x-api-key" | "api-key";
             catalogBaseUrl?: string;
             /** @enum {string} */
-            catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "none";
+            catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
             /** @enum {string} */
-            catalogAuthStyle?: "bearer" | "x-api-key" | "none";
+            catalogAuthStyle?: "bearer" | "x-api-key" | "api-key" | "none";
             catalogCredentialEnv?: string;
             catalogAccountId?: string;
             /** @default models */
@@ -299,6 +299,7 @@ export interface components {
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
             }[];
         };
         Provider: {
@@ -306,18 +307,18 @@ export interface components {
             name: string;
             baseUrl: string;
             /** @enum {string} */
-            protocol: "anthropic-messages" | "openai-responses" | "openai-chat";
+            protocol: "anthropic-messages" | "openai-responses" | "openai-chat" | "gemini-generate-content";
             credentialEnv?: string;
             /**
              * @default bearer
              * @enum {string}
              */
-            authStyle: "bearer" | "x-api-key";
+            authStyle: "bearer" | "x-api-key" | "api-key";
             catalogBaseUrl?: string;
             /** @enum {string} */
-            catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "none";
+            catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
             /** @enum {string} */
-            catalogAuthStyle?: "bearer" | "x-api-key" | "none";
+            catalogAuthStyle?: "bearer" | "x-api-key" | "api-key" | "none";
             catalogCredentialEnv?: string;
             catalogAccountId?: string;
             /** @default models */
@@ -333,6 +334,7 @@ export interface components {
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
             }[];
             version: number;
             updatedAt: string;
@@ -342,7 +344,7 @@ export interface components {
             name: string;
             providerId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2" | "pi";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
         };
         Profile: {
@@ -350,7 +352,7 @@ export interface components {
             name: string;
             providerId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2" | "pi";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
             version: number;
             updatedAt: string;
@@ -365,6 +367,7 @@ export interface components {
             inputModalities?: string[];
             outputModalities?: string[];
             supportedParameters?: string[];
+            supportedGenerationMethods?: string[];
         };
         ModelPage: {
             data: {
@@ -377,6 +380,7 @@ export interface components {
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
                 codingEligible: boolean;
             }[];
             total: number;
@@ -397,6 +401,7 @@ export interface components {
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
             }[];
             refreshedAt: string;
             /** @enum {string} */
@@ -408,18 +413,18 @@ export interface components {
                 name: string;
                 baseUrl: string;
                 /** @enum {string} */
-                protocol: "anthropic-messages" | "openai-responses" | "openai-chat";
+                protocol: "anthropic-messages" | "openai-responses" | "openai-chat" | "gemini-generate-content";
                 credentialEnv?: string;
                 /**
                  * @default bearer
                  * @enum {string}
                  */
-                authStyle: "bearer" | "x-api-key";
+                authStyle: "bearer" | "x-api-key" | "api-key";
                 catalogBaseUrl?: string;
                 /** @enum {string} */
-                catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "none";
+                catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
                 /** @enum {string} */
-                catalogAuthStyle?: "bearer" | "x-api-key" | "none";
+                catalogAuthStyle?: "bearer" | "x-api-key" | "api-key" | "none";
                 catalogCredentialEnv?: string;
                 catalogAccountId?: string;
                 /** @default models */
@@ -435,6 +440,7 @@ export interface components {
                     inputModalities?: string[];
                     outputModalities?: string[];
                     supportedParameters?: string[];
+                    supportedGenerationMethods?: string[];
                 }[];
                 version: number;
                 updatedAt: string;
@@ -444,7 +450,7 @@ export interface components {
                 name: string;
                 providerId: string;
                 /** @enum {string} */
-                harness: "claude" | "codex" | "grok" | "opencode2" | "pi";
+                harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
                 model: string;
                 version: number;
                 updatedAt: string;
@@ -460,6 +466,7 @@ export interface components {
                     inputModalities?: string[];
                     outputModalities?: string[];
                     supportedParameters?: string[];
+                    supportedGenerationMethods?: string[];
                 }[];
                 refreshedAt: string;
                 /** @enum {string} */
@@ -471,7 +478,7 @@ export interface components {
         RunInput: {
             profileId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2" | "pi";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
             planToken: string;
         };
@@ -483,7 +490,7 @@ export interface components {
         Run: {
             profileId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2" | "pi";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
             planToken: string;
             version: number;

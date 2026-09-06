@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { SwitcherClient, SwitcherError, type Provider, type Profile } from "./sdk";
-import { codingEligible, Fault, CommandInterrupted, parse, providerInputSchema, profileInputSchema, type Model } from "./domain";
+import { codingEligible, harnessEligible, Fault, CommandInterrupted, parse, providerInputSchema, profileInputSchema, type Model } from "./domain";
 import { providerFromPreset, type PresetOptions } from "./presets";
 
 const absent = (error: unknown) => error instanceof SwitcherError && error.status === 404;
@@ -26,10 +26,10 @@ export async function resolveLaunchProvider(client: SwitcherClient, selector: st
 }
 
 const display = (value: string) => value.replace(/[\x00-\x1f\x7f-\x9f]/g, "");
-export async function selectModel(models: Model[], query = ""): Promise<string> {
+export async function selectModel(models: Model[], query = "", harness?: Profile["harness"]): Promise<string> {
   if (!process.stdin.isTTY || !process.stderr.isTTY)
     throw new Fault(400, "model_required", "Use --model MODEL in noninteractive mode. List available models with switcher models PROVIDER.");
-  const eligible = models.filter(codingEligible);
+  const eligible = models.filter(m=>harness?harnessEligible(m,harness):codingEligible(m));
   if (!eligible.length) throw new Fault(422, "model_missing", "This provider has no models eligible for coding in its current catalog.");
   const reader = createInterface({input: process.stdin, output: process.stderr});
   const cancellation = new AbortController();

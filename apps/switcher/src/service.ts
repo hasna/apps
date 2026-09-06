@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Store } from "./store";
 import { discover, type CatalogCredentialResolver } from "./catalog";
 import { boundedJson } from "./http";
-import { Fault, VERSION, parse, idSchema, providerInputSchema, profileInputSchema, runInputSchema, runUpdateSchema, compatible, codingEligible, type Provider, type Profile, type Run, type Catalog, type LaunchPlan } from "./domain";
+import { Fault, VERSION, parse, idSchema, providerInputSchema, profileInputSchema, runInputSchema, runUpdateSchema, validateHarnessProvider, codingEligible, harnessEligible, type Provider, type Profile, type Run, type Catalog, type LaunchPlan } from "./domain";
 import { providerPresets, getProviderPreset } from "./presets";
 import openapi from "../openapi.json";
 const snapshot=(profile:Profile,provider:Provider,catalog:Catalog)=>createHash("sha256").update(JSON.stringify([profile,provider,{models:catalog.models,source:catalog.source}])).digest("hex");
@@ -77,7 +77,7 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
             if (resource === "profiles") {
               const profile = value as Profile;
               const provider = await store.get<Provider>("providers", profile.providerId, db);
-              if (!compatible(profile.harness, provider.protocol)) throw new Fault(422, "protocol_mismatch", "Harness does not support this provider protocol.");
+              validateHarnessProvider(profile.harness, provider);
             }
             const saved = await store.put(resource, value, id ? version() : undefined, db);
             if (resource === "providers" && id) await db.unsafe("DELETE FROM switcher_catalogs WHERE id = $1", [id]);
@@ -97,15 +97,15 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
           const {profileId} = parse(z.object({profileId: idSchema}).strict(), body);
           const profile = await store.get<Profile>("profiles", profileId, db);
           const provider = await store.get<Provider>("providers", profile.providerId, db);
-          if (!compatible(profile.harness, provider.protocol)) throw new Fault(422, "protocol_mismatch", "Harness does not support this provider protocol.");
+          validateHarnessProvider(profile.harness, provider);
           let catalog: Catalog;
           try { catalog = await store.get<Catalog>("catalogs", provider.id, db); }
           catch (e) { if (e instanceof Fault && e.status === 404) throw new Fault(422, "catalog_missing", "Refresh the provider catalog before launching."); throw e; }
           const selected = catalog.models.find(m => m.id === profile.model);
           if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
-          if (!codingEligible(selected)) throw new Fault(422, "model_ineligible", "Selected model explicitly lacks text output or tool support.");
+          if (!harnessEligible(selected,profile.harness)) throw new Fault(422, "model_ineligible", "Selected model is unavailable or explicitly lacks a required generation method, text output or tool support.");
           const warnings: string[] = [];
-          if (!selected.supportedParameters) warnings.push("Provider does not declare tool capabilities; execution compatibility is unverified.");
+          if (profile.harness!=="aider"&&!selected.supportedParameters) warnings.push("Provider does not declare tool capabilities; execution compatibility is unverified.");
           if (profile.harness === "claude" && !/claude/i.test(profile.model)) warnings.push("Anthropic does not support non-Claude models in Claude Code; this combination is experimental.");
           if (Date.now() - Date.parse(catalog.refreshedAt) > 300000) warnings.push("Catalog snapshot is older than five minutes; refresh before launching.");
           return {profile, provider, catalog, warnings,planToken:snapshot(profile,provider,catalog)} satisfies LaunchPlan;

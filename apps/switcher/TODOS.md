@@ -4,60 +4,40 @@ title: "Switcher full adapter and installed CLI delivery checklist"
 type: "task-checklist"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T12:20:01.564707+00:00"
+updated_at: "2026-09-06T15:24:32.222793+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
 # Active goal: complete adapters and installed CLI delivery
 
-User directive, 2026-09-05: “create TODOS.md and let's add full todos for all the missing adapters everything must be built in full and start a goal to ship and test live”. This checklist supersedes the assumption that the 0.1.0 setup experience was complete. Historical release evidence is retained below; it does not close any new acceptance requirement.
+User directive, 2026-09-05: “create TODOS.md and let's add full todos for all the missing adapters everything must be built in full and start a goal to ship and test live”. Tracking task: `1fb71b94-93b1-466f-a44b-0bcdaa710804`. Owner: `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Canonical directive: `~/Workspace/scratch/universal-harness-switcher/directives/2026-09-05-01a07181-complete-switcher-adapters.md`.
 
-Tracking task: `1fb71b94-93b1-466f-a44b-0bcdaa710804` (O15-05467).
+Switcher **0.1.1 is published and registry accepted**. PR [#1810](https://github.com/hasna/apps/pull/1810) merged source `0bb3d62e28ba23acb76352a8dfad9f2d5d770e50`; npm publication at `2026-09-06T13:22:44.352Z` has SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed`. All 38 installed files match the reviewed archive. The actual station CLI passed seven real-provider file-read/deleted-file fresh-resume paths in owned tmux: Claude/DeepSeek, Codex/OpenRouter, Grok/DeepSeek, OpenCode 2/DeepSeek, Pi/DeepSeek and Codex/Grok through Ori/OpenRouter. Codex listed exactly 363 compatible IDs from the recorded 581-entry OpenRouter refresh; OpenCode 2 showed all three DeepSeek IDs and selected Pro without inference. Node/Bun package surfaces and SQLite/PostgreSQL container persistence, upgrade, rollback and re-upgrade passed. Earlier rejected archives remain withdrawn; their reports are historical evidence.
 
-Owner: parent Codex task `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/complete-adapters`. Branch: `codex/fixer/2026-09-05-switcher-complete-adapters`. Fetched base: `48f8c1d020d5138fa542461c19ff137d9ea69819`. Canonical directive: `~/Workspace/scratch/universal-harness-switcher/directives/2026-09-05-01a07181-complete-switcher-adapters.md`.
+The 0.1.2 release candidate is being rebuilt before publication. An independent error-path probe reproduced an operator-credential reflection in SDK/CLI remote API errors; the correction, bounded catalog retries and native installation guidance are being integrated and checked. Archive `453bc3d6180a523286ab10f0a0154316cbf75672` is retained as historical evidence and must not be published. New archive identity, combined verification, CI and registry acceptance remain pending.
 
-## Latest implementation evidence
+The **historical 0.1.2 candidate** adds OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, legacy OpenCode, Kilo, Gemini CLI and Aider. All 14 native harnesses and two Ori paths passed actual installed baseline requests plus deleted-file fresh-process continuation; Aider uses file-context/edit/history semantics. The historical source `ef217dd749c4628bead0df43c4a83b3dc8d11468` additionally preserves Gemini generation methods and excludes explicitly incompatible methods from coding selection, without inventing tool capabilities. Independent reviews reconcile 19 exact file hashes; 14 adapter implementation files are unchanged from the live baseline. Its archive SHA-1 `453bc3d6180a523286ab10f0a0154316cbf75672` matches all 49 ordinary npm consumer files.
 
-The shared native argument correction is committed as `3b6a4fd2cf4ff6824cb465b5495eae2e198cd5fa` and independently approved. It rejects attached/clustered provider and model overrides, quoted Codex configuration roots and Claude fallback selection while preserving literal prompt values and end-of-options text. Package verification passes 92 tests / 816 assertions with real PostgreSQL and installed Pi/Ori. Replacement archive SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed` passes normal npm dependency resolution, all 38 installed file identities, Node/Bun package surfaces, and real installed-CLI read/delete/fresh-resume tests for Claude, Codex, Grok, OpenCode 2, Pi and Codex/Grok through Ori. SQLite/PostgreSQL Compose, upgrade, rollback and re-upgrade pass on exact image `sha256:c515c2d85103d8e8fcb4aaccc5ef812725d3941196fa8ac1f775bf3ad950fd2d`. Source has been reconciled with main after Contracts PR #1813. Fresh CI, merge, publication and registry-installed repetition remain open. Both earlier archives remain withdrawn.
+That source passed **152 package tests / 1,584 assertions** including real PostgreSQL and installed Pi/Ori/Gemini, **147 root tests / 560 assertions**, all **43 affected builds**, generated/artifact/manifest/secret guards and frozen locks. Its archive Node/Bun CLI/API/SDK/MCP surfaces and SQLite/PostgreSQL container persistence, rollback and re-upgrade pass. Its Gemini live/catalog replay passes (54 retained models, 40 eligible native IDs, 14 explicitly incompatible method entries); PR [#1836](https://github.com/hasna/apps/pull/1836) CI is in progress; publication and registry acceptance remain open. The old 0.1.1 API reads preserved new rows but refuses new harness writes and updates carrying new generation-method metadata. Hermes/DeepSeek Chat can emit a nonfatal auxiliary-title format warning; its main tool loop and history resume pass. Native permission choices remain caller-controlled.
 
-The source CLI owns its authenticated local API lifecycle, creates or reuses provider/profile records, resolves secure credential references and refreshes the provider catalog before launch. Claude Code, Codex, Grok, OpenCode 2 and Pi have direct adapters; Ori has an explicit Codex/Grok subset. The provider registry includes separate inference/discovery endpoints and vLLM/LiteLLM operator routes. [COMPATIBILITY.md](COMPATIBILITY.md) records implemented contracts and remaining live cells.
+[COMPATIBILITY.md](COMPATIBILITY.md) separates published evidence, current source fixtures and remaining access/package gates. Evidence paths resolve under `~/Workspace/scratch/universal-harness-switcher`; the [evidence index](docs/verification-evidence.json) records source identities. Preserve the original user session `switcher-deepseek` on the separate `deepseek.sock` socket.
 
-Withdrawn replacement archive SHA-1 `42f91a38db414053e290b3706e3020de5e808252` includes independently reviewed OpenCode 2 correction `0574a1c`. Combined verification passes 85 tests / 769 assertions with real PostgreSQL and installed Pi/Ori; all 43 affected builds and the full root gate pass, including 147 standard tests / 560 assertions and frozen locks. The archive passes installed CLI + DeepSeek tool use and deleted-file same-session recall in ephemeral tmux, all three native DeepSeek picker entries and Pro selection, Node/Bun SDK/API/CLI/MCP checks, and SQLite/PostgreSQL Compose persistence plus upgrade/rollback/re-upgrade. Image identity is `sha256:24222a427ed714cdb8f167ec3e2eb301a86407f6e911d56afc4c59a44e5f7490`. Evidence lives in task scratch `reviews/parent-opencode2/`, `release-candidate/authority-latest-consumer.json`, `release-candidate/surface-smoke/` and `release-image-authority-0.1.1/`. Required exact-head CI, PR merge, publication and registry-installed repetition remain open.
+## Completion contract
 
-The withdrawn Switcher 0.1.1 candidate archive is SHA-1 `fd8eb1cecad2ef8f37d87d3e818c14f1a1113773`, from `dfb778237c3fd12a6490493551e03a96a20729a5`. It resolves published Contracts 1.0.2 through a normal npm install. Package verification passes 76 tests / 743 assertions with real SQLite/PostgreSQL and installed Pi/Ori opt-ins. Independent review verifies native process/terminal ownership and cancellation of active bridge streams before shutdown. The archive passes installed OpenCode + DeepSeek tool/resume checks in headless and TTY-input sessions, full native OpenCode/Codex catalog checks, public package surfaces and container upgrade/rollback checks detailed below. A later independent native test showed that project or per-model OpenCode 2 settings can redirect the selected credential. The archive is withdrawn and must never be published. Its functional test results are historical evidence only; a corrected archive needs independent review and fresh release acceptance.
+The released `switcher launch HARNESS --provider PROVIDER --model MODEL` path owns API lifecycle, credential resolution and automatic discovery for supported built-in providers. No external supervisor or manually maintained replacement catalog is needed for DeepSeek/OpenRouter. Explicit operator deployment catalogs remain necessary where the provider has no deployment-list API. Remote API failures never fall back silently.
 
-Contracts 1.0.2 was published at `2026-09-06T09:31:01.120Z`; its registry archive matches reviewed SHA-1 `8dface63212fb4dd234e38b86567c1923f6eb473`. Independent normal consumer installation verifies both CLI aliases and all 19 module exports, with no optional Secrets/Events/Paths chain. Full Contracts verification passes 1,561 tests / 15,662 assertions with real PostgreSQL; one hosted-credential test is skipped. The six required consumer version/lock updates preserve the upstream Skills 0.4.1 history beneath this wave's 0.4.2 version.
-
-Earlier candidate `d542620bc412a71b07ebb5a34faa6a56c683e302` passed installed Claude, Codex, Grok and Pi read-tool proof plus same-session recall; Ori Codex/Grok also passed tool proof and recall with documented initial answer-format discrepancies. It exposed the OpenCode shutdown hang fixed in the current archive. Earlier candidates `e78464c7aaa6d88a4e251d096b67b22fe5474eff`, `7b6c403317d1206a060a2fecacd3f870b9b5a05f` and `29431898c73dcff0b7fa44975f98c32e609e8812` remain historical evidence, not release-byte acceptance. Their original results are retained in task scratch. Final registry repetition remains K07.
-
-All live launches use the installed command and its built-in vault binding, with the operator credential read from Keychain. No external provider-key wrapper, API supervisor or manual catalog import is required for the tested DeepSeek/OpenRouter paths. The original user's DeepSeek tmux session is preserved.
-
-DeepSeek Harness G16 and Gemini/Azure routes have independent integration approval; their paid-provider and registry acceptance remain open. Hermes G17 passes all three native protocols through two fresh source CLI launches; fixture cleanup candidate `3f32e765` remains separate. Prime `894bc91d` passes independent delayed-supervisor timeout/cancellation probes while same-tick run finalization is under review. Legacy OpenCode `91686df0` passes four native root/agent permission-deny cases; full source CLI fresh-resume remains open. OMP `bff55395` passes six source CLI protocol/auth/read/resume cells; native policy-flag review is in progress. Cline `5dc69f17` independently passes all three source CLI ACP protocols, full catalogs, explicit read permission, deleted-file fresh-process resume and credential-value absence in saved files. Kilo remains incomplete with a fail-closed unsupported boundary; Gemini CLI custom gateway authentication and Aider implementation remain open. These candidates have not been integrated into the replacement release archive.
-
-## Definition of complete
-
-The user can install the released package, supply a credential through a supported secure resolver, and launch a named harness/provider/model with the actual `switcher` command. No Python supervisor, direct native launch, manually maintained provider model JSON, or source-file imports may be needed for a built-in provider. A managed loopback API or an explicitly configured remote API continues to own application data. Never silently change provider, model, protocol, API authority or credential account.
-
-Every adapter has a recorded endpoint/auth/catalog contract, capability matrix, failure behavior, automated contract tests and an explicit live status. A successful greeting is not a tool-loop, model-switching, resume, concurrency or full-catalog test. Missing credentials and upstream limitations stay open rather than being reported as passes. Additional providers with different wire/auth contracts require real adapters; a renamed base URL is insufficient evidence.
-
-### Release candidate follow-up
-
-The withdrawn historical archive SHA-1 `fd8eb1cecad2ef8f37d87d3e818c14f1a1113773` passed installed OpenCode headless, TTY-input and interactive picker checks. All three DeepSeek model IDs are visible in the native picker; selecting Pro from a Flash launch updates the UI, and normal exit removes launch settings. The native `models --standalone` diagnostic still returns an early empty list; that diagnostic is not counted as picker failure or success. The installed Codex app-server model list exactly matches all 364 compatible entries from the 582-entry OpenRouter catalog, with no inference requested. Evidence: task scratch `live/installed-opencode-models-5wHRr4/picker-result.json` and `live/installed-codex-catalog-nFnNS2/result.json`.
-
-The same archive passes Node 26.8.1 and Bun 1.3.14 SDK/API/CLI/standalone MCP checks, with no MCP registration. Exact candidate image `sha256:6de1712ffc8ab9ae9eabffe4daee3bf7a0a56f98bd1c0fb8ea5774a2e1dae014` passes both Compose profiles and legacy upgrade/rollback/re-upgrade. Extended checks verify all records after re-upgrade and rejection of a Pi run by 0.1.0. New adapters are usable only on a supporting version. Evidence: task scratch `release-image-0.1.1/` and `release-candidate/surface-smoke/`.
-
-PR #1810 CI run 34025645307 passed gates, standard/versioning, generated artifacts, publish guard and 65 affected tasks before Projects rejected its stale generated storage-kit stamp. Projects was regenerated from Contracts 1.0.2; its existing regression fails before the regeneration and passes afterward. Switcher source/archive bytes are unchanged by that correction. Local affected tests separately expose an existing intermittent Events watcher race and Files macOS path assumptions; the Files remote-content checks pass with an explicit Workspace scratch temporary directory. These are recorded limitations, not waived checks. The full local root gate passed after an unchanged retry: 147 standard tests / 560 assertions, all package publish scans and frozen locks. The first attempt hit a five-second Ori fixture timeout; its unchanged isolated test and full retry passed. No timeout was increased. All 36 current package files match the reviewed archive. The subsequent d118 CI attempt failed an unchanged Dispatch native tmux startup fixture. Required exact-head CI and replacement-archive acceptance remain open; the independent OpenCode 2 credential-routing finding holds publication.
+A checkbox closes only its stated contract. The 0.1.1 delivery rows are complete; K01–K09 below now track the expanded 0.1.2 delivery. Source fixtures do not establish registry or live-provider acceptance. Model-list APIs, visual pickers and actual request selection are separate claims. The [compatibility matrix](COMPATIBILITY.md) records each native interface and upstream limitation.
 
 ### Newly reproduced adapter regressions
 
-- [x] R01 OpenCode 2: prevent global, project, per-model and per-agent endpoint/header overrides from changing the selected provider authority; preserve native JSONC/YAML permissions, prompts, AGENTS instructions and existing session data. Verify the actual native full catalog after initialization settles. Exact correction `0574a1c` has independent source/native approval: all three protocol fixtures pass tool/read/deleted-file resume, per-agent deny enforcement, exact complete native catalog, zero hostile requests and no credential files; nine focused tests / 30 assertions pass. Replacement release acceptance remains R06.
-- [ ] R02 Prime: own the foreground supervisor from process creation through readiness and shutdown. A delayed bind after the old one-second cleanup grace must not leave a daemon alive.
-- [ ] R03 Legacy OpenCode: preserve all supported policy sources, including JSONC, legacy tools booleans, environment overlays, global/project/agent layers and home-relative deny patterns. Prove denied tools cannot return protected contents.
-- [ ] R04 OMP: retain the authenticated local bridge for credentialless providers and verify all three native protocol paths through separate fresh CLI launches, tool use, deleted-file resume and full catalog.
-- [ ] R05 Cline: separate generated launch configuration from durable session history, preserve concurrent launches, reserve every native provider/model alias, and verify all three protocols, instruction input, actual tools, fresh resume and native catalog.
-- [ ] R07 Preserve profile authority for attached and clustered native arguments, native fallback/provider selectors and Ori forwarding; keep option values and literal prompts intact. Verify exact committed correction independently.
-- [ ] R06 Replace the withdrawn archives, repeat package/container/installed-harness acceptance against exact new bytes, pass required CI and publish through the reviewed PR. Repeat live tests from the registry-installed station command.
+- [x] R01 OpenCode 2: prevent global, project, per-model and per-agent endpoint/header overrides from changing the selected provider authority; preserve native JSONC/YAML permissions, prompts, AGENTS instructions and existing session data. Verify the actual native full catalog after initialization settles. Exact correction `0574a1c` has independent source/native approval: all three protocol fixtures pass tool/read/deleted-file resume, per-agent deny enforcement, exact complete native catalog, zero hostile requests and no credential files; nine focused tests / 30 assertions pass. Published 0.1.1 acceptance is R06; expanded shared-code rechecks remain K02/K07.
+- [x] R02 Implementation verified: foreground supervision, delayed readiness, six signal/callback orderings, long-TMPDIR fallback and native file/resume pass; final combined/installed acceptance remains K01/K07.
+- [x] R03 Corrected JSONC, root/agent deny and native grammar checks pass; all three integrated native tool/resume paths pass. Exact combined/package acceptance remains K01/K07.
+- [x] R04 Six source CLI protocol/auth/no-auth read/resume cells and native catalog/second selection pass. Literal api-key followup passes direct Chat/Responses and bridged Messages; exact package/live acceptance remains open.
+- [x] R05 Cline implementation and all three controlled ACP read/resume/second-model paths pass; installed baseline DeepSeek read/deleted-file resume also passes. Registry release remains K04–K07.
+- [x] R07 Preserve profile authority for attached and clustered native arguments, native fallback/provider selectors and Ori forwarding; keep option values and literal prompts intact. Verify exact committed correction independently.
+- [x] R06 Replace the withdrawn archives, repeat package/container/installed-harness acceptance against exact new bytes, pass required CI and publish through the reviewed PR. Repeat live tests from the registry-installed station command.
 
 ## A. Audit, scope and release ownership
 
@@ -65,21 +45,21 @@ PR #1810 CI run 34025645307 passed gates, standard/versioning, generated artifac
 - [x] A02 Create an isolated worktree from fetched main after checking open Switcher PRs and branch ownership.
 - [x] A03 Capture the full-delivery directive and preserve the user's active DeepSeek tmux session.
 - [x] A04 Complete independent audits of provider/catalog, lifecycle/credentials, and native harness/Ori seams.
-- [ ] A05 Publish a finite provider × protocol × harness coverage matrix with exact versions, transport/auth requirements and acceptance status.
-- [ ] A06 Inventory every currently advertised route and unsupported combination; remove misleading universal/complete claims until evidence exists.
-- [ ] A07 Turn newly discovered omissions into stable checklist entries and implementation work; do not silently defer named acceptance gates.
+- [x] A05 Publish a finite provider × protocol × harness coverage matrix with exact versions, transport/auth requirements and acceptance status.
+- [x] A06 Audit advertised routes and unsupported combinations in COMPATIBILITY; distinguish implementation, controlled native evidence, installed live paths and external account prerequisites.
+- [x] A07 Track discovered omissions explicitly, including corrected Gemini generation-method eligibility and the upstream Hermes/DeepSeek auxiliary-title format limitation; preserve pending release/access gates.
 
 ## B. Installed CLI and onboarding
 
 - [x] B01 Provide `switcher launch HARNESS --provider PROVIDER --model MODEL` as a complete built-in path while retaining existing saved-profile launches.
 - [x] B02 Provide provider/harness discovery, model search and interactive selection using the same registry and API as noninteractive commands.
 - [x] B03 Create or reuse the provider/profile automatically without overwriting a user's customized profile or racing another launch.
-- [ ] B04 Resolve executable paths and versions; show precise installation guidance when absent and an explicitly requested install path where supported.
+- [x] B04 Resolve executable paths and versions; doctor and missing-launch errors identify each native executable, verified version and official installation instructions. `--executable` selects an explicitly installed path. Switcher does not install or upgrade native harnesses.
 - [ ] B05 Supply machine-readable plans, structured errors, exit codes, dry-run/diagnostic output and actionable remediation without revealing keys.
 - [x] B06 Keep noninteractive automation deterministic: explicit missing credential/model errors, no hidden prompts or paid discovery probes.
-- [ ] B07 Install the actual package CLI onto a test PATH and verify its bin/shebang/runtime resolution; include a normal station install within quarantine rules.
+- [x] B07 Install the actual package CLI onto a test PATH and verify its bin/shebang/runtime resolution; include a normal station install within quarantine rules.
 - [ ] B08 Add first-run, repeat-run, upgrade and restart acceptance using the documented commands exactly as a user would execute them.
-- [ ] B09 Document one-command DeepSeek and OpenRouter examples plus local and remote API modes; remove dependency on external setup scripts.
+- [x] B09 Document one-command DeepSeek and OpenRouter examples plus local and remote API modes; remove dependency on external setup scripts.
 
 ## C. Local API lifecycle and remote API behavior
 
@@ -100,10 +80,10 @@ PR #1810 CI run 34025645307 passed gates, standard/versioning, generated artifac
 - [x] D02 Add a configured approved-vault resolver so existing credentials can be used by the installed command without an outside launch wrapper.
 - [ ] D03 Support macOS Keychain and documented Linux secret-manager/runtime injection paths; never create alternative fleet credential stores.
 - [x] D04 Separate local credential locators from remote API data and keep operator/provider/catalog credentials independently scoped.
-- [ ] D05 Support bearer, x-api-key and credentialless local endpoints; add other header/auth schemes only with explicit validated contracts.
+- [x] D05 Bearer, x-api-key, literal api-key and credentialless compatible endpoints have validated protocol/header contracts and native fixtures; live account coverage remains provider-specific.
 - [ ] D06 Treat native harness subscription/OAuth authentication as its own supported mode where appropriate; never extract or pool native login credentials.
 - [ ] D07 Distinguish missing, revoked, expired and inaccessible credentials; report stale or rotation-flagged vault metadata without automatic account switching.
-- [ ] D08 Validate destination authority before attaching keys; reject redirects and require explicit separate credentials/consent for cross-origin catalog destinations.
+- [x] D08 Validate catalog/inference authority before credential resolution or attachment; reject redirects and require a separate explicit credential reference for another catalog origin. Negative fixtures pass.
 - [ ] D09 Test redaction across stderr, debug/JSON, API errors, tmux capture, process arguments, settings files and persisted run metadata.
 - [x] D10 Ensure child harnesses receive only the credentials they require; strip unrelated fleet, provider and cloud secrets.
 
@@ -124,20 +104,20 @@ Each preset must declare supported inference protocols, inference/catalog base U
 - [ ] E11 Audit and implement other material compatible provider families (Mistral, Groq, Cerebras, Together, Fireworks, Moonshot/Kimi, Qwen/DashScope, Z.ai, MiniMax, SiliconFlow) with verified presets rather than assumed endpoint strings.
 - [ ] E12 Audit Gemini, Azure OpenAI, Bedrock and Vertex separately: inventory distinct wire/auth/deployment contracts and implement explicit adapters or supported gateway integrations; do not label them generic-compatible without evidence.
 - [ ] E13 Supply an extension interface for unlisted providers with schema validation, explicit protocol/capabilities and the same security/test contract.
-- [ ] E14 For every named built-in provider, record live credential availability and run all applicable acceptance cells; missing access remains an open gate.
+- [ ] E14 Record availability and access prerequisites for every named provider. Run the finite live cells in COMPATIBILITY with usable authorized credentials; missing access remains an explicit open gate, without requiring paid inference for every model/harness permutation.
 
 ## F. Catalog discovery and model metadata
 
 - [x] F01 Add independent catalog base URL/path and parser/auth metadata to the provider schema, API, generated SDK and both database upgrade paths.
 - [x] F02 Normalize inference/version path conventions centrally; cover DeepSeek's split path, custom prefixes and optional version suffixes.
-- [ ] F03 Implement applicable OpenAI/Anthropic/Ollama/provider-specific catalog parsers and pagination without truncating models.
-- [ ] F04 Verify refresh, retry/backoff, rate limits, bounded response/page sizes, cache freshness, offline behavior and upstream changes.
+- [x] F03 Implemented bounded native OpenAI/Anthropic/Ollama/Gemini/Mistral/Together/Fireworks/DashScope catalog parsers and their documented pagination contracts; no usable catalog is claimed for unsupported endpoints.
+- [x] F04 Verify refresh, retry/backoff, rate limits, bounded response/page sizes, cache freshness, offline behavior and upstream changes. Refresh uses at most two transient retries per catalog page, honors valid `Retry-After` delays, enforces 20-second request and 60-second aggregate deadlines, preserves the last committed snapshot on failure, and keeps launch fail-closed while cached model listing remains available offline. Loopback regressions cover HTTP-date and numeric delays, network recovery, terminal responses, oversized delays, pagination deadlines and snapshot retention.
 - [ ] F05 Preserve exact upstream model IDs and metadata provenance; keep aliases explicit and inspectable.
 - [ ] F06 Fill context, output, reasoning, modalities and tools fields only from verified catalog or documented provider overrides; expose unknown values clearly.
-- [ ] F07 Generate every native picker from compatible provider entries while keeping the complete unfiltered provider catalog in the API/CLI.
+- [x] F07 Generate native catalogs from compatible entries and retain the complete provider catalog in CLI/API. Explicit incompatible Gemini generation methods are now excluded; unknown capabilities remain unknown. Upstream native listing/picker differences remain documented.
 - [ ] F08 Verify selecting another native model changes the actual request model and keeps the intended provider/auth authority.
 - [ ] F09 Handle model removal, renamed IDs, stale plans, deprecated aliases and unsupported selections without silent fallback.
-- [ ] F10 Retain manual catalogs as an explicit custom-provider feature, never a hidden requirement for a built-in preset.
+- [x] F10 Manual catalogs remain explicit for custom/deployment providers; built-ins discover automatically where documented. Azure foundation-model definitions are never treated as deployment inventory.
 
 ## G. Native harness adapters
 
@@ -153,66 +133,68 @@ Each preset must declare supported inference protocols, inference/catalog base U
 - [ ] G10 All four: verify SIGINT/SIGTERM, timeout, failed spawn, bridge error and API-finalization failure; no surviving owned children, listeners or generated settings.
 - [ ] G11 All four: test concurrent sessions, model changes and resumed sessions; never modify unrelated global provider configuration.
 - [ ] G12 Add a documented harness adapter/extension contract with detection, supported versions/protocols, preparation, catalog and cleanup tests.
-- [ ] G13 Inventory additional harnesses from Ori/local evidence and add explicit adapter tasks for supported launch interfaces; keep the named four mandatory.
-- [ ] G14 Pi: implement verified executable/config/provider/catalog/session integration and apply the same installed-CLI live acceptance contract.
-- [ ] G15 Prime Agent: implement verified launch/provider/full-catalog integration and test native model changes and lifecycle.
-- [ ] G16 DeepSeek Harness: implement an actual native launch adapter, distinct from using DeepSeek as Claude Code's provider; do not count Ori's setup-only command as a running harness.
-- [ ] G17 Hermes: verify and implement isolated provider/auth/model configuration, catalog behavior, tool loop and resume.
-- [ ] G18 Legacy OpenCode: keep its executable/schema separate from OpenCode 2 and test both without ambiguous executable substitution.
-- [ ] G19 OMP: verify the native launch/config contract and implement model selection plus truthful catalog support.
-- [ ] G20 Kilo: verify the CLI distribution/launch contract and implement supported provider/catalog/session behavior.
-- [ ] G21 Cline: verify the CLI distribution/launch contract and implement supported provider/catalog/session behavior.
-- [ ] G22 Gemini CLI: verify its distinct provider/auth/wire contract before implementing an adapter or explicit compatible gateway path.
-- [ ] G23 Aider: implement its verified provider/model/config path and distinguish available model listing from a native interactive picker.
+- [x] G13 Inventory additional harnesses from Ori/local evidence and add explicit adapter tasks for supported launch interfaces; keep the named four mandatory.
+- [x] G14 Published 0.1.1 Pi native adapter and registry DeepSeek tool/deleted-file same-session resume pass; remaining unverified interactive behavior is listed in COMPATIBILITY.
+- [x] G15 Prime implementation, foreground supervision, short runtime fallback, native read/deleted-file resume, exact RPC catalog and second-model request pass; installed baseline DeepSeek acceptance passes. Final registry gate is K07.
+- [x] G16 DeepSeek Harness: direct native `dsh` web/headless/ACP adapter with isolated catalog, all three wire protocols and persistent sessions/attachments. Installed official 0.1.2-rc.1 fixtures verify nine protocol/auth tool/resume cells and browser catalog/auth/trust/shutdown. SDK/custom profiles and Ori's setup-only command are rejected. Independent integration review and real-provider live acceptance remain separate release gates.
+- [x] G17 Hermes Chat/Responses/Messages controlled read/resume and selected-provider inventory pass; installed baseline DeepSeek Chat read/resume passes. Built-in free/MOA rows remain visible. Native auxiliary title generation can warn HTTP400 on DeepSeek Chat json_schema; main execution and fallback naming work. Registry gate is K07.
+- [x] G18 Legacy OpenCode 1.18.29 has its own executable/schema and reviewed permissions/argument contract. All three controlled protocol paths and installed baseline DeepSeek read/resume/catalog pass. Registry gate is K07.
+- [x] G19 OMP 18.1.11 native catalog, model selection, six protocol/auth/no-auth paths and RPC switches pass; installed baseline DeepSeek read/deleted-file resume passes. Literal api-key Messages uses the public bridge. Registry gate is K07.
+- [x] G20 Kilo 7.5.15 integration has exact independent source review reconciled to final source; all three controlled protocol paths, cancellation, permissions and installed baseline DeepSeek read/resume/catalog pass. Native project MCP may use the ephemeral bridge token; it never receives the upstream credential. Registry gate is K07.
+- [x] G21 Cline 3.0.61 ACP permissioned tool loops, full catalog, three protocols and second-model request pass; installed baseline DeepSeek read/deleted-file resume passes. Registry gate is K07.
+- [x] G22 Gemini CLI0.58.0 native generateContent implementation, routing/trust/config hardening, cancellation and controlled native catalog pass. Installed baseline Gemini Flash-Lite read/deleted-file resume passes. Final generation-method fix is independently reviewed; final archive catalog/read/deleted-file resume now passes; registry acceptance remains K07.
+- [x] G23 Aider 0.86.2 has independent review and 16 controlled native Chat/Responses/Messages edit/history/catalog launches; installed baseline DeepSeek edit/deleted-file history continuation passes. Responses is buffered and native listings include built-in definitions. Registry and unclaimed-platform checks remain separate.
 
 ## H. Ori and protocol adaptation
 
 - [x] H01 Inspect the installed Ori command contract/version and implement an optional built-in backend using supported interfaces (Codex/Grok subset; other pairs rejected explicitly).
-- [ ] H02 Validate Ori provider/model limits, executable mapping including opencode2, argument passthrough, exit codes and catalog ownership.
+- [x] H02 Validate Ori provider/model limits, executable mapping including opencode2, argument passthrough, exit codes and catalog ownership.
 - [x] H03 Keep direct adapters available; reject unsupported Ori/provider combinations explicitly and never route DeepSeek through OpenRouter silently.
-- [ ] H04 Add Ori dry-run/configuration, subprocess tests and live acceptance with the installed package command.
+- [x] H04 Add Ori dry-run/configuration, subprocess tests and live acceptance with the installed package command.
 - [ ] H05 Define exact Messages/Responses/Chat feature compatibility and report unsupported combinations before spawning a harness.
-- [ ] H06 Implement required opt-in compatibility adapters or supported external gateways for missing native protocol combinations; no implicit translation/fallback.
+- [x] H06 Implement required opt-in compatibility adapters or supported external gateways for missing native protocol combinations; no implicit translation/fallback.
 - [ ] H07 Test streaming event order, tool-call IDs/arguments/results, cancellation, usage, errors and reasoning state for every translation path shipped.
 - [ ] H08 Explicitly handle parallel tools, multimodal content, context limits and resume across translated protocols; reject lossy unsupported features rather than silently dropping them.
 
 ## I. API, SDK, storage and self-hosting
 
 - [x] I01 Extend OpenAPI and generated SDK for provider registry, discovery settings, capabilities, credential references and launch diagnostics; verify drift.
-- [ ] I02 Migrate existing 0.1.0 SQLite/PostgreSQL data without losing provider/profile/catalog/run history; prove rollback and restart persistence.
+- [x] I02 Verified SQLite/PostgreSQL data preservation through 0.1.0→0.1.1 and 0.1.1→final 0.1.2→0.1.1→0.1.2. Providers/profiles/catalogs/runs and generation-method metadata persist; old clients deliberately reject unsupported new writes.
 - [x] I03 Preserve transactional plan fingerprints, optimistic concurrency, durable idempotency and referential integrity with all new provider/launch fields.
 - [x] I04 Run the same contract suite against real SQLite and PostgreSQL, including concurrent process startup.
-- [ ] I05 Execute Docker build, SQLite compose and PostgreSQL compose on a Docker-capable host; verify health, persistence, upgrades and graceful stop.
+- [x] I05 Final archive Docker image passes SQLite/PostgreSQL health, restart persistence, upgrades, rollback/re-upgrade and owned cleanup. Existing user services and the Docker VM remain intact.
 - [x] I06 Verify hosted/remote API use from a separate CLI process and prevent remote API requests from executing local commands without the local launcher.
 - [x] I07 Resolve the deprecated contracts → secrets → events → paths dependency chain through the owning contract boundary; published Contracts 1.0.2 and independent ordinary consumer acceptance prove removal without overrides or legacy-peer flags.
-- [ ] I08 Verify CLI, serve, required MCP packaging surface and Node/Bun SDK entrypoints from the actual npm tarball; never register Hasna MCP in an agent.
-- [ ] I09 Keep remote execution workers as a separately identified product architecture; account for authentication, worker enrollment and process ownership before advertising remote launches.
+- [x] I08 Final 49-file npm consumer passes CLI, serve, standalone MCP protocol and Node/Bun SDK/API surfaces, including generation-method contract. No Hasna MCP server was registered in an agent. Registry acceptance remains K06–K07.
+- [x] I09 Keep remote execution workers as a separately identified product architecture; account for authentication, worker enrollment and process ownership before advertising remote launches.
 
 ## J. Automated and live acceptance
 
-- [ ] J01 Add a regression reproducing the DeepSeek inference/catalog split; prove it fails on 0.1.0 and passes through the new installed CLI.
+- [x] J01 DeepSeek inference/catalog split is reproduced and fixed; installed 0.1.1 and expanded baseline launch through the built-in flow without a replacement catalog or external API setup.
 - [x] J02 Add clean-environment subprocess tests for first launch, secure auth resolution, autostart, repeat launch, config persistence and remote-mode failure.
 - [ ] J03 Test every preset with deterministic contract servers for advertised protocols/auth/catalogs and meaningful negative cases.
 - [ ] J04 Validate missing/revoked keys, 401/403/404/429/5xx, broken streams, malformed catalogs, redirects and unavailable local servers.
-- [ ] J05 Maintain a provider × protocol × harness matrix with separate configured, fixture-tested, live-inference, live-tool-loop, picker and resume outcomes.
+- [x] J05 Maintain the finite COMPATIBILITY matrix with separately identified configured, controlled-native, real-provider, catalog/selection, resume and release outcomes; do not equate protocol fixtures with provider entitlement.
 - [x] J06 Run DeepSeek + Claude via the installed `switcher` command in ephemeral tmux with no external supervisor or catalog import; verify full native list, model change and proof-file tool loop.
 - [ ] J07 Repeat live acceptance for Claude Code, Codex, Grok and OpenCode 2 across applicable named built-in providers; include direct provider and gateway/local-server paths.
-- [ ] J08 Run the optional Ori backend through the installed CLI and verify its declared model/provider boundaries.
+- [x] J08 Run the optional Ori backend through the installed CLI and verify its declared model/provider boundaries.
 - [ ] J09 Live-test SQLite and PostgreSQL, concurrent sessions, interruption, resume and cleanup; retain sanitized evidence and exact versions/model IDs.
 - [ ] J10 Use approved credentials and bounded prompts; record missing access as a blocker, not a skipped success; never rotate credentials without separate authority.
 - [x] J11 Preserve the user's existing DeepSeek session; use separate task-owned tmux sockets, directories, databases and ports for acceptance.
 - [ ] J12 Remove all test-only setup assumptions from README examples and prove the documented install/launch path on a fresh configuration.
 
-## K. Ship and close
+## K. Ship and close — expanded 0.1.2
 
-- [ ] K01 Obtain independent review of exact implementation commits and correct/verify findings.
-- [ ] K02 Run package typecheck/tests/build/generated/artifact checks plus required root names/secrets/manifests/standard/frozen-lock gates and affected build/test.
-- [ ] K03 Add the appropriate changeset/version/changelog and update reproducible root/app lockfiles.
+Published 0.1.1 completed these delivery steps; this section tracks their repetition for the expanded candidate.
+
+- [x] K01 Independent implementation and final delta reviews report no actionable P1/P2 findings; 19 exact reviewed file hashes reconcile to source ef217dd749c4 and unchanged adapter files bind baseline native evidence.
+- [x] K02 Final source passes 152 package tests / 1,584 assertions with PostgreSQL/native opt-ins, generated/type/build/artifact/conformance checks,147 root tests / 560 assertions, 43 affected builds and frozen locks. PR CI remains K04.
+- [x] K03 Apply only the owned Changesets patch to 0.1.2, update changelog/version/generated API and reproducible root/app lockfiles; unrelated main package versions remain intact.
 - [ ] K04 Scan staged changes before every commit/push; open reviewed PRs and merge only after required CI.
 - [ ] K05 Announce publication, verify version absence, publish with npm through protected vault injection, and verify fresh timestamp/integrity.
 - [ ] K06 Install the exact released package as the command being tested, preserving quarantine; resolve `command -v switcher` and prove runtime version.
 - [ ] K07 Repeat the live acceptance matrix against registry bytes; verify artifacts match reviewed builds.
-- [ ] K08 Update PLAN.md, this checklist, compatibility matrix and release evidence with actual PRs/commits/version/results and remaining upstream limitations.
+- [x] K08 Update PLAN.md, this checklist, compatibility matrix and release evidence with actual PRs/commits/version/results and remaining upstream limitations.
 - [ ] K09 Confirm publication in the required thread/task, stop only owned acceptance processes, and preserve the user's interactive session.
 - [ ] K10 Close the goal only after the full required matrix and release gates are complete; no completion claim based solely on scaffolding, fixtures or OpenRouter smoke.
 
@@ -332,13 +314,13 @@ Historical 0.1.0 verification and limitations are recorded in `RELEASE.md`. Curr
 
 ## Maintenance follow-ups
 
-- [ ] Execute the published Dockerfile and both compose profiles on a Docker-capable host.
-- [ ] Investigate intermittent Grok overlay cleanup and make state removal independent of bridge shutdown; one credential-free overlay required manual cleanup, while 30 controlled subprocess repetitions and two additional real runs cleaned normally.
-- [ ] Remove the deprecated transitive `@hasna/paths` dependency through an upstream contracts/secrets peer-dependency fix; the current explicit environment credential path does not load that SDK chain.
+- [x] Superseded by 0.1.1: executed both Docker Compose profiles, persistence, upgrade/rollback/re-upgrade on the accepted image.
+- [x] Corrected and registry verified in 0.1.1: investigate intermittent Grok overlay cleanup and make state removal independent of bridge shutdown; one credential-free overlay required manual cleanup, while 30 controlled subprocess repetitions and two additional real runs cleaned normally.
+- [x] Completed by published Contracts 1.0.2: remove the deprecated transitive `@hasna/paths` dependency through an upstream contracts/secrets peer-dependency fix; the current explicit environment credential path does not load that SDK chain.
 
 ## Deferred product extensions
 These do not reduce the first-release requirements above.
-- [ ] Add other harness adapters after the required four are verified.
-- [ ] Add an optional Ori launcher backend without making it mandatory.
+- [ ] Expanded adapters are the active G14–G23 scope, with 0.1.2 release gates above.
+- [x] Published in 0.1.1: optional Ori Codex/Grok OpenRouter backend; direct adapters remain available.
 - [ ] Add protocol translators only with explicit feature contracts and streaming tests.
 - [ ] Add remote execution workers only as a separately authorized product scope.

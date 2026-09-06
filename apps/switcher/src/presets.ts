@@ -20,8 +20,16 @@ export const providerPresets: readonly ProviderPreset[] = [
     ["https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties", "https://openrouter.ai/docs/guides/overview"], "OPENROUTER_API_KEY"),
   preset("anthropic", "Anthropic", [route("anthropic-messages", "https://api.anthropic.com/v1", {authStyle: "x-api-key"})],
     ["https://platform.claude.com/docs/en/api/overview", "https://platform.claude.com/docs/en/api/models/list"], "ANTHROPIC_API_KEY"),
+  preset("gemini", "Google Gemini", [route("gemini-generate-content", "https://generativelanguage.googleapis.com/v1beta", {
+    authStyle: "x-api-key", catalogBaseUrl: "https://generativelanguage.googleapis.com/v1beta", catalogFormat: "gemini", catalogAuthStyle: "x-api-key",
+    notes: ["Gemini CLI uses the native generateContent wire with x-goog-api-key authentication; model IDs are returned as models/{id}."],
+  }), route("openai-chat", "https://generativelanguage.googleapis.com/v1beta/openai")], ["https://ai.google.dev/api", "https://ai.google.dev/api/models", "https://github.com/google-gemini/gemini-cli", "https://ai.google.dev/gemini-api/docs/openai"], "GEMINI_API_KEY"),
   preset("openai", "OpenAI", [route("openai-responses", "https://api.openai.com/v1"), route("openai-chat", "https://api.openai.com/v1")],
     ["https://platform.openai.com/docs/api-reference/introduction", "https://platform.openai.com/docs/api-reference/models/list"], "OPENAI_API_KEY"),
+  preset("azure-openai", "Azure OpenAI (v1)", [
+    route("openai-responses", undefined, {authStyle: "api-key", catalogFormat: "none", notes: ["Pass the Azure OpenAI v1 resource endpoint ending in /openai/v1. The request model is your deployment name. Azure's model-definition list is not a deployment catalog, so configure manual deployment models or an explicit deployment catalog parser; Switcher does not synthesize deployment paths or api-version query parameters."]}),
+    route("openai-chat", undefined, {authStyle: "api-key", catalogFormat: "none", notes: ["Pass the Azure OpenAI v1 resource endpoint ending in /openai/v1. Chat Completions is POST /chat/completions and accepts the literal api-key header. The request model is your deployment name; configure manual deployment models or an explicit deployment catalog parser because GET /models does not establish deployment names."]}),
+  ], ["https://learn.microsoft.com/en-us/rest/api/aifoundry/azureopenai/models", "https://learn.microsoft.com/en-us/rest/api/microsoft-foundry/azureopenai/chat", "https://learn.microsoft.com/en-us/rest/api/aifoundry/azureopenai/responses"], "AZURE_OPENAI_API_KEY"),
   preset("xai", "xAI", ["openai-chat", "openai-responses", "anthropic-messages"].map(protocol => route(protocol as Protocol, "https://api.x.ai/v1")),
     ["https://api.x.ai/docs/", "https://docs.x.ai/developers/model-capabilities/text/generate-text"], "XAI_API_KEY"),
   preset("ollama", "Ollama", ["openai-chat", "openai-responses"].map(protocol => route(protocol as Protocol, "http://127.0.0.1:11434/v1", {
@@ -79,8 +87,8 @@ export function getProviderPreset(id: string) {
 }
 export type PresetOptions = {
   id?: string; protocol?: Protocol; harness?: Profile["harness"]; baseUrl?: string;
-  credentialEnv?: string; authStyle?: "bearer" | "x-api-key";
-  catalogBaseUrl?: string; catalogCredentialEnv?: string; catalogAuthStyle?: "bearer" | "x-api-key" | "none";
+  credentialEnv?: string; authStyle?: "bearer" | "x-api-key" | "api-key";
+  catalogBaseUrl?: string; catalogCredentialEnv?: string; catalogAuthStyle?: "bearer" | "x-api-key" | "api-key" | "none";
   modelsPath?: string; catalogFormat?: ProviderInput["catalogFormat"]; catalogAccountId?: string;
 };
 export function providerFromPreset(presetId: string, options: PresetOptions = {}) {
@@ -89,6 +97,8 @@ export function providerFromPreset(presetId: string, options: PresetOptions = {}
   if (!selected) throw new Fault(422, "protocol_mismatch", "This provider preset has no native protocol compatible with the requested harness. Choose an explicitly compatible gateway.");
   const baseUrl = options.baseUrl ?? selected.baseUrl;
   if (!baseUrl) throw new Fault(400, "endpoint_required", "This preset requires an explicit --url for its inference endpoint.");
+  if (presetId === "azure-openai" && !/\/openai\/v1$/.test(endpoint(baseUrl)))
+    throw new Fault(400, "invalid_url", "Azure OpenAI v1 requires an explicit endpoint ending in /openai/v1; deployment and api-version URLs are unsupported.");
   // An override is not authority to send a built-in account's key to another host.
   if (options.baseUrl && selected.baseUrl && new URL(endpoint(options.baseUrl)).origin !== new URL(selected.baseUrl).origin && preset.credentialEnv && !options.credentialEnv)
     throw new Fault(422, "credential_authority", "An endpoint on another origin requires an explicit --credential-env reference.");
@@ -117,7 +127,7 @@ export function providerCredential(provider: ProviderInput, env: NodeJS.ProcessE
   let value = env[provider.credentialEnv];
   if (!value) {
     const preset = providerPresets.find(p => p.credentialEnv === provider.credentialEnv && p.protocols.some(route =>
-      route.protocol === provider.protocol && route.baseUrl && new URL(route.baseUrl).origin === new URL(provider.baseUrl).origin));
+      route.protocol === provider.protocol && (route.baseUrl ? new URL(route.baseUrl).origin === new URL(provider.baseUrl).origin : p.id === "azure-openai")));
     value = preset?.credentialAliases.map(name => env[name]).find(Boolean);
   }
   if (value && /[\r\n]/.test(value)) throw new Fault(422, "credential_invalid", "Provider credential contains invalid header characters.");

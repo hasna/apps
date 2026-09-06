@@ -55,6 +55,7 @@ export async function runHarnessProcess(options: {executable:string;args:string[
       return events;
     })();
     let interrupted = false;
+    let interruptionExitCode: number | undefined;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     const signalGroup = (signal:NodeJS.Signals) => {
       if (!child.pid) return;
@@ -66,6 +67,7 @@ export async function runHarnessProcess(options: {executable:string;args:string[
       try { process.kill(-child.pid,0);return true; } catch { return false; }
     };
     const forward = (signal:NodeJS.Signals) => {
+      interruptionExitCode ??= signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;
       interrupted = true;signalGroup(signal);
       killTimer ??= setTimeout(()=>signalGroup("SIGKILL"),5000).unref();
     };
@@ -110,7 +112,9 @@ export async function runHarnessProcess(options: {executable:string;args:string[
       }
       cleanup();
       if(terminalFailure){reject(terminalFailure);return;}
-      const exitCode=code??(signal==="SIGINT"?130:signal==="SIGTERM"?143:signal==="SIGHUP"?129:137);
+      // Native clients may handle termination and exit zero. A caller's
+      // cancellation or expired deadline must still be visible to automation.
+      const exitCode=interruptionExitCode??code??(signal==="SIGINT"?130:signal==="SIGTERM"?143:signal==="SIGHUP"?129:137);
       resolveResult({code:exitCode,interrupted:interrupted||exitCode===130||exitCode===143||exitCode===129});
     });
     if(interactive) {

@@ -1,5 +1,6 @@
 import { type Catalog, type Model, type Provider, type ProviderInput, Fault, modelSchema } from "./domain";
 import { boundedJson } from "./http";
+import { authHeader } from "./auth";
 const positive = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined;
 const strings = (v: unknown) => Array.isArray(v) && v.every(i => typeof i === "string") ? v : undefined;
 const modalities = (v: unknown): string[] | undefined => {
@@ -8,6 +9,69 @@ const modalities = (v: unknown): string[] | undefined => {
   return v.map(i => i.toLowerCase());
 };
 export type CatalogCredentialResolver = (provider: ProviderInput) => Promise<string | undefined>;
+
+const CATALOG_REQUEST_TIMEOUT_MS = 20_000;
+const CATALOG_REFRESH_DEADLINE_MS = 60_000;
+const CATALOG_MAX_RETRIES = 2;
+const TRANSIENT_CATALOG_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function retryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    try {
+      const milliseconds = BigInt(trimmed) * 1000n;
+      if (milliseconds > BigInt(Number.MAX_SAFE_INTEGER)) return Number.POSITIVE_INFINITY;
+      return Number(milliseconds);
+    } catch {
+      return Number.POSITIVE_INFINITY;
+    }
+  }
+  const date = Date.parse(trimmed);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+}
+
+function catalogDeadlineFault(): Fault {
+  return new Fault(502, "provider_unavailable", "Provider catalog refresh exceeded its bounded deadline.");
+}
+
+async function waitForCatalogRetry(delayMs: number, deadline: number): Promise<void> {
+  if (Date.now() + delayMs > deadline) throw catalogDeadlineFault();
+  if (delayMs > 0) await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+}
+
+async function fetchCatalogPage(
+  url: URL,
+  headers: Record<string, string>,
+  deadline: number,
+): Promise<Response> {
+  for (let retry = 0; ; retry++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw catalogDeadlineFault();
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers,
+        redirect: "manual",
+        signal: AbortSignal.timeout(Math.max(1, Math.min(CATALOG_REQUEST_TIMEOUT_MS, remaining))),
+      });
+    } catch {
+      if (retry >= CATALOG_MAX_RETRIES) throw new Fault(502, "provider_unavailable", "Provider catalog request failed.");
+      await waitForCatalogRetry(100 * (2 ** retry), deadline);
+      continue;
+    }
+    if (response.ok) return response;
+    const retryable = TRANSIENT_CATALOG_STATUSES.has(response.status);
+    await response.body?.cancel().catch(() => {});
+    if (!retryable || retry >= CATALOG_MAX_RETRIES)
+      throw new Fault(502, "provider_rejected", `Provider catalog returned HTTP ${response.status}.`);
+    // A provider-supplied Retry-After is a lower bound. If it cannot be
+    // honoured inside our finite refresh budget, fail rather than retry early.
+    const delay = retryAfterMs(response.headers.get("retry-after"));
+    await waitForCatalogRetry(delay ?? 100 * (2 ** retry), deadline);
+  }
+}
+
 export async function discover(provider: Provider, env: Record<string, string | undefined> = process.env, resolveCredential?: CatalogCredentialResolver): Promise<Catalog> {
   const refreshedAt = new Date().toISOString();
   if (provider.manualModels.length) return {models: provider.manualModels, source: "manual", refreshedAt};
@@ -30,19 +94,18 @@ export async function discover(provider: Provider, env: Record<string, string | 
     const credential = resolveCredential ? await resolveCredential({...provider,baseUrl:provider.catalogBaseUrl ?? provider.baseUrl,credentialEnv}) : env[credentialEnv];
     if (!credential) throw new Fault(422, "credential_missing", "Provider credential environment variable is not available on the server.");
     if (/[\r\n]/.test(credential)) throw new Fault(422, "credential_invalid", "Catalog credential contains invalid header characters.");
-    headers[authStyle === "x-api-key" ? "x-api-key" : "authorization"] = authStyle === "x-api-key" ? credential : `Bearer ${credential}`;
+    const [header, value] = authHeader(authStyle, credential);
+    headers[provider.catalogFormat === "gemini" && header === "x-api-key" ? "x-goog-api-key" : header] = value;
   }
   if (provider.protocol === "anthropic-messages" && url.hostname !== "openrouter.ai") headers["anthropic-version"] = "2023-06-01";
   // OpenRouter defaults to text-only; retain other modalities for truthful catalog browsing.
   if (url.hostname === "openrouter.ai") url.searchParams.set("output_modalities", "all");
   const models = new Map<string, Model>(); const seenCursors = new Set<string>();
   const seenPages = new Set<string>([url.href]);
+  const deadline = Date.now() + CATALOG_REFRESH_DEADLINE_MS;
   let fireworksTotal: number | undefined;
   for (let page = 0; page < 100; page++) {
-    let response: Response;
-    try { response = await fetch(url, {headers, redirect: "manual", signal: AbortSignal.timeout(20_000)}); }
-    catch { throw new Fault(502, "provider_unavailable", "Provider catalog request failed."); }
-    if (!response.ok) { await response.body?.cancel(); throw new Fault(502, "provider_rejected", `Provider catalog returned HTTP ${response.status}.`); }
+    const response = await fetchCatalogPage(url, headers, deadline);
     const data = await boundedJson(response);
     if (provider.catalogFormat === "fireworks" && data?.totalSize !== undefined) {
       if (typeof data.totalSize !== "number" || !Number.isInteger(data.totalSize) || data.totalSize < 0)
@@ -54,21 +117,24 @@ export async function discover(provider: Provider, env: Record<string, string | 
     // Together's native catalog is a bare array despite its inference API's
     // OpenAI compatibility. Do not silently accept that shape for other parsers.
     const rows = provider.catalogFormat === "together" ? data : provider.catalogFormat === "ollama" ? data?.models
-      : provider.catalogFormat === "fireworks" ? data?.models : provider.catalogFormat === "dashscope" ? data?.output?.models : data?.data;
+      : provider.catalogFormat === "fireworks" || provider.catalogFormat === "gemini" ? data?.models : provider.catalogFormat === "dashscope" ? data?.output?.models : data?.data;
     if (!Array.isArray(rows)) throw new Fault(502, "invalid_catalog", "Expected a provider catalog with a model array matching its configured format.");
     for (const row of rows) {
       const id = provider.catalogFormat === "ollama" ? row?.model ?? row?.name : provider.catalogFormat === "fireworks" ? row?.name
+        : provider.catalogFormat === "gemini" ? typeof row?.name === "string" ? row.name.replace(/^models\//, "") : undefined
         : provider.catalogFormat === "dashscope" ? row?.model : row?.id;
       if (typeof id !== "string") throw new Fault(502, "invalid_catalog", "Catalog entry is missing a model ID.");
       const candidate = {
         id, name: row.displayName ?? row.name ?? row.display_name ?? id,
         available: provider.catalogFormat === "mistral" && typeof row.archived === "boolean" ? !row.archived : undefined,
         description: typeof row.description === "string" ? row.description.slice(0, 8000) : undefined,
-        contextWindow: positive(row.context_length ?? row.context_window ?? row.contextLength ?? row.model_info?.context_window ?? (provider.catalogFormat === "mistral" ? row.max_context_length : undefined)),
-        maxOutputTokens: positive(row.top_provider?.max_completion_tokens ?? row.max_output_tokens ?? row.model_info?.max_output_tokens),
+        contextWindow: positive(row.context_length ?? row.context_window ?? row.contextLength ?? row.inputTokenLimit ?? row.model_info?.context_window ?? (provider.catalogFormat === "mistral" ? row.max_context_length : undefined)),
+        maxOutputTokens: positive(row.top_provider?.max_completion_tokens ?? row.max_output_tokens ?? row.outputTokenLimit ?? row.model_info?.max_output_tokens),
         inputModalities: strings(row.architecture?.input_modalities ?? row.input_modalities) ?? modalities(row.inference_metadata?.request_modality),
         outputModalities: strings(row.architecture?.output_modalities ?? row.output_modalities) ?? modalities(row.inference_metadata?.response_modality),
         supportedParameters: strings(row.supported_parameters),
+        ...(provider.catalogFormat === "gemini" && row.supportedGenerationMethods !== undefined
+          ? {supportedGenerationMethods: row.supportedGenerationMethods} : {}),
       };
       if (provider.catalogFormat === "mistral") {
         const capabilities = row.capabilities;
@@ -117,6 +183,17 @@ export async function discover(provider: Provider, env: Record<string, string | 
     if (provider.catalogFormat === "fireworks") {
       if (fireworksTotal !== undefined && fireworksTotal !== models.size) throw new Fault(502, "incomplete_catalog", "Provider catalog count does not match the collected models; retry the refresh.");
       return {models: [...models.values()], source: "remote", refreshedAt};
+    }
+    if (provider.catalogFormat === "gemini") {
+      const nextPageToken=data.nextPageToken;
+      if(nextPageToken!==undefined&&nextPageToken!==null) {
+        if(typeof nextPageToken!=="string"||nextPageToken.length>2000) throw new Fault(502,"invalid_catalog","Gemini catalog pagination token is malformed.");
+        if(nextPageToken) {
+          if(seenCursors.has(nextPageToken)) throw new Fault(502,"invalid_catalog","Provider catalog pagination did not advance.");
+          seenCursors.add(nextPageToken); url.searchParams.set("pageToken",nextPageToken); continue;
+        }
+      }
+      return {models:[...models.values()],source:"remote",refreshedAt};
     }
     if (provider.catalogFormat === "dashscope") {
       const output = data.output;

@@ -7,6 +7,39 @@ import {mkdir,mkdtemp,readFile,rm} from "node:fs/promises";
 import {homedir} from "node:os";
 import {join} from "node:path";
 
+test("Gemini and Azure v1 routes preserve documented prefixes and exact auth headers", async () => {
+  const seen: Array<{method:string;path:string;authorization:string|null;apiKey:string|null}> = [];
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, async fetch(request) {
+    const parsed = new URL(request.url);
+    seen.push({method:request.method,path:parsed.pathname,authorization:request.headers.get("authorization"),apiKey:request.headers.get("api-key")});
+    if (request.method === "GET" && parsed.pathname === "/v1beta/openai/models")
+      return Response.json({data:[{id:"gemini-2.5-pro",context_window:1_000_000}]});
+    if (request.method === "POST" && parsed.pathname === "/openai/v1/chat/completions")
+      return Response.json({id:"fixture",choices:[]});
+    return Response.json({error:{message:"fixture route not found"}},{status:404});
+  }});
+  try {
+    const gemini = providerFromPreset("gemini", {protocol:"openai-chat", baseUrl:upstream.url.origin+"/v1beta/openai", credentialEnv:"SWITCHER_PROVIDER_GEMINI"});
+    const geminiCatalog = await discover({...gemini,version:1,updatedAt:"now"},{SWITCHER_PROVIDER_GEMINI:"gemini-fixture"});
+    expect(geminiCatalog.models[0]).toMatchObject({id:"gemini-2.5-pro",contextWindow:1_000_000});
+    expect(seen.find(request=>request.path === "/v1beta/openai/models")).toMatchObject({authorization:"Bearer gemini-fixture",apiKey:null});
+
+    const azure = providerFromPreset("azure-openai", {protocol:"openai-chat", baseUrl:upstream.url.origin+"/openai/v1", credentialEnv:"SWITCHER_PROVIDER_AZURE_OPENAI"});
+    expect(azure.baseUrl).toBe(upstream.url.origin+"/openai/v1");
+    expect(azure.authStyle).toBe("api-key");
+    expect(azure.catalogFormat).toBe("none");
+    expect(providerCredential(azure,{AZURE_OPENAI_API_KEY:"azure-fixture"})).toBe("azure-fixture");
+    await expect(discover({...azure,version:1,updatedAt:"now"},{SWITCHER_PROVIDER_AZURE_OPENAI:"azure-fixture"})).rejects.toMatchObject({code:"catalog_unsupported"});
+    const inference = await fetch(azure.baseUrl+"/chat/completions", {method:"POST",headers:{"api-key":"azure-fixture","content-type":"application/json"},body:JSON.stringify({model:"deployment-prod",messages:[]})});
+    expect(inference.status).toBe(200);
+    expect(seen.find(request=>request.method === "POST")?.apiKey).toBe("azure-fixture");
+    expect(seen.find(request=>request.method === "POST")?.authorization).toBeNull();
+    expect(seen.find(request=>request.method === "POST")?.path).toBe("/openai/v1/chat/completions");
+    expect(()=>providerFromPreset("azure-openai",{baseUrl:upstream.url.origin+"/openai/deployments/my-model"})).toThrow("ending in /openai/v1");
+    expect(()=>providerFromPreset("azure-openai",{baseUrl:upstream.url.origin+"/openai/v1",protocol:"anthropic-messages"})).toThrow("compatible");
+  } finally { await upstream.stop(true); }
+});
+
 test("material compatible provider presets expose only documented routes and credential aliases",()=>{
   const expected={
     fireworks:{protocols:["openai-chat","openai-responses","anthropic-messages"],alias:"FIREWORKS_API_KEY",base:"https://api.fireworks.ai/inference/v1"},
@@ -45,6 +78,22 @@ test("provider routes resolve to complete documented inference paths",()=>{
     const actual=preset.protocols.map(route=>new URL(`${route.baseUrl}/${route.protocol === "anthropic-messages" ? "messages" : route.protocol === "openai-responses" ? "responses" : "chat/completions"}`).pathname);
     expect(actual).toEqual(expected);
   }
+});
+
+test("Gemini discovery uses the documented models shape, x-goog-api-key and page tokens",async()=>{
+  const requests:{path:string;token:string|null;page:string|null}[]=[];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){
+    const url=new URL(request.url); requests.push({path:url.pathname,token:request.headers.get("x-goog-api-key"),page:url.searchParams.get("pageToken")});
+    return Response.json(url.searchParams.has("pageToken")
+      ? {models:[{name:"models/gemini-2",displayName:"Gemini 2",inputTokenLimit:32768,outputTokenLimit:4096,supportedGenerationMethods:["generateContent"]}]}
+      : {models:[{name:"models/gemini-1",displayName:"Gemini 1",inputTokenLimit:8192,outputTokenLimit:1024,supportedGenerationMethods:["generateContent"]}],nextPageToken:"next"});
+  }});
+  try {
+    const provider={...parse(providerInputSchema,{id:"gemini",name:"Gemini",baseUrl:upstream.url.origin+"/v1beta",catalogBaseUrl:upstream.url.origin+"/v1beta",modelsPath:"models",catalogFormat:"gemini",catalogAuthStyle:"x-api-key",credentialEnv:"SWITCHER_PROVIDER_TEST",protocol:"gemini-generate-content",authStyle:"x-api-key"}),version:1,updatedAt:"now"};
+    const result=await discover(provider,{SWITCHER_PROVIDER_TEST:"fixture"});
+    expect(result.models).toMatchObject([{id:"gemini-1",name:"Gemini 1",contextWindow:8192,maxOutputTokens:1024},{id:"gemini-2",name:"Gemini 2",contextWindow:32768,maxOutputTokens:4096}]);
+    expect(requests).toEqual([{path:"/v1beta/models",token:"fixture",page:null},{path:"/v1beta/models",token:"fixture",page:"next"}]);
+  } finally {await upstream.stop(true);}
 });
 
 test("MiniMax Anthropic catalog route uses its documented separate x-api-key model endpoint",async()=>{
@@ -267,4 +316,158 @@ test("linked catalog pages retain all models and reject changed authority, loops
     mode="loop";calls=0;await expect(discover(provider)).rejects.toMatchObject({code:"invalid_catalog"});expect(calls).toBe(2);
     mode="incomplete";await expect(discover(provider)).rejects.toMatchObject({code:"incomplete_catalog"});
   } finally {await upstream.stop(true);}
+});
+
+test("Gemini keeps the complete catalog but excludes models without generateContent from coding selection",async()=>{
+  let methods:unknown=["generateContent","countTokens"];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(){return Response.json({models:[
+    {name:"models/chat",supportedGenerationMethods:methods},
+    {name:"models/embedding",supportedGenerationMethods:["embedContent","countTokens"]},
+    {name:"models/video",supportedGenerationMethods:["predictLongRunning"]},
+    {name:"models/no-actions",supportedGenerationMethods:[]},
+    {name:"models/unknown"},
+  ]});}});
+  try{
+    const provider={...parse(providerInputSchema,{id:"methods",name:"Methods",baseUrl:upstream.url.origin,catalogFormat:"gemini",catalogAuthStyle:"none",protocol:"gemini-generate-content",authStyle:"x-api-key"}),version:1,updatedAt:"now"};
+    const result=await discover(provider);
+    expect(result.models.map(m=>m.id)).toEqual(["chat","embedding","video","no-actions","unknown"]);
+    expect(result.models.filter(codingEligible).map(m=>m.id)).toEqual(["chat","unknown"]);
+    expect(result.models[0]).toMatchObject({supportedGenerationMethods:["generateContent","countTokens"]});
+    expect(result.models[0].supportedParameters).toBeUndefined();
+    expect(result.models[4]).not.toHaveProperty("supportedGenerationMethods");
+    const {harnessEligible}=await import("../src/domain");
+    expect(result.models.filter(m=>harnessEligible(m,"aider")).map(m=>m.id)).toEqual(["chat","unknown"]);
+    for(const malformed of [null,"generateContent",["generateContent",3],Array(101).fill("generateContent")]){
+      methods=malformed;
+      await expect(discover(provider)).rejects.toMatchObject({code:"invalid_catalog"});
+    }
+  }finally{await upstream.stop(true);}
+});
+
+test("catalog refresh retries transient responses and honors Retry-After", async () => {
+  let calls = 0;
+  const requestTimes: number[] = [];
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    calls++;
+    requestTimes.push(Date.now());
+    if (calls === 1) return new Response("temporary", {status:503, headers:{"retry-after":new Date(Date.now() + 2_500).toUTCString()}});
+    if (calls === 2) return new Response("busy", {status:429, headers:{"retry-after":"1"}});
+    return Response.json({data:[{id:"retry-model"}]});
+  }});
+  try {
+    const provider = {...parse(providerInputSchema, {
+      id:"retry-provider", name:"Retry provider", baseUrl:upstream.url.origin,
+      protocol:"openai-chat", catalogFormat:"openai",
+    }), version:1, updatedAt:"now"};
+    const catalog = await discover(provider);
+    expect(calls).toBe(3);
+    expect(catalog.models.map(model => model.id)).toEqual(["retry-model"]);
+    expect(requestTimes[1] - requestTimes[0]).toBeGreaterThanOrEqual(1_200);
+    expect(requestTimes[2] - requestTimes[1]).toBeGreaterThanOrEqual(900);
+  } finally { await upstream.stop(true); }
+});
+
+test("catalog refresh retries a transient network failure before accepting a loopback response", async () => {
+  let fetchCalls = 0;
+  let serverCalls = 0;
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    serverCalls++;
+    return Response.json({data:[{id:"network-recovered-model"}]});
+  }});
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+    if (fetchCalls++ === 0) throw new TypeError("synthetic connection reset");
+    return originalFetch(...args);
+  }) as typeof fetch;
+  try {
+    const provider = {...parse(providerInputSchema, {
+      id:"network-provider", name:"Network provider", baseUrl:upstream.url.origin,
+      protocol:"openai-chat", catalogFormat:"openai",
+    }), version:1, updatedAt:"now"};
+    await expect(discover(provider)).resolves.toMatchObject({models:[{id:"network-recovered-model"}]});
+    expect(fetchCalls).toBe(2);
+    expect(serverCalls).toBe(1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await upstream.stop(true);
+  }
+});
+
+test("catalog refresh enforces its aggregate deadline between paginated pages", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    calls++;
+    return Response.json({data:[{id:"first-page-model"}],links:{next:"?offset=1"}});
+  }});
+  const originalNow = Date.now;
+  const start = originalNow();
+  Date.now = () => calls > 0 ? start + 60_001 : start;
+  try {
+    const provider = {...parse(providerInputSchema, {
+      id:"deadline-pagination-provider", name:"Deadline pagination provider", baseUrl:upstream.url.origin,
+      protocol:"openai-chat", catalogFormat:"openai",
+    }), version:1, updatedAt:"now"};
+    await expect(discover(provider)).rejects.toMatchObject({code:"provider_unavailable"});
+    expect(calls).toBe(1);
+  } finally {
+    Date.now = originalNow;
+    await upstream.stop(true);
+  }
+});
+
+test("catalog refresh does not retry non-transient rejection or exceed retries", async () => {
+  let terminalCalls = 0;
+  const terminal = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    terminalCalls++;
+    return new Response("forbidden", {status:403});
+  }});
+  let transientCalls = 0;
+  const transient = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    transientCalls++;
+    return new Response("unavailable", {status:503});
+  }});
+  const provider = (baseUrl:string) => ({...parse(providerInputSchema, {
+    id:"rejection-provider", name:"Rejection provider", baseUrl, protocol:"openai-chat", catalogFormat:"openai",
+  }), version:1, updatedAt:"now"});
+  try {
+    await expect(discover(provider(terminal.url.origin))).rejects.toMatchObject({code:"provider_rejected"});
+    expect(terminalCalls).toBe(1);
+    await expect(discover(provider(transient.url.origin))).rejects.toMatchObject({code:"provider_rejected"});
+    expect(transientCalls).toBe(3);
+  } finally {
+    await terminal.stop(true);
+    await transient.stop(true);
+  }
+});
+
+test("catalog refresh fails closed when Retry-After cannot fit its bounded deadline", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    calls++;
+    return new Response("try later", {status:429, headers:{"retry-after":"120"}});
+  }});
+  try {
+    const provider = {...parse(providerInputSchema, {
+      id:"deadline-provider", name:"Deadline provider", baseUrl:upstream.url.origin,
+      protocol:"openai-chat", catalogFormat:"openai",
+    }), version:1, updatedAt:"now"};
+    await expect(discover(provider)).rejects.toMatchObject({code:"provider_unavailable"});
+    expect(calls).toBe(1);
+  } finally { await upstream.stop(true); }
+});
+
+test("catalog refresh fails closed on an oversized numeric Retry-After", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    calls++;
+    return new Response("try later", {status:429, headers:{"retry-after":"9007199254740992"}});
+  }});
+  try {
+    const provider = {...parse(providerInputSchema, {
+      id:"oversized-delay-provider", name:"Oversized delay provider", baseUrl:upstream.url.origin,
+      protocol:"openai-chat", catalogFormat:"openai",
+    }), version:1, updatedAt:"now"};
+    await expect(discover(provider)).rejects.toMatchObject({code:"provider_unavailable"});
+    expect(calls).toBe(1);
+  } finally { await upstream.stop(true); }
 });

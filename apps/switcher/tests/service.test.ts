@@ -75,6 +75,19 @@ for (const engine of ["sqlite","postgresql"] as const) {
       const results=await Promise.all([client.createProvider(input,"concurrent-request"),client.createProvider(input,"concurrent-request")]);
       expect(results[0]).toEqual(results[1]);
     });
+    test("generation methods survive API storage and prevent unsupported launch plans",async()=>{
+      const provider=await client.createProvider({id:"generation-methods",name:"Generation methods",baseUrl:"https://example.com/v1beta",protocol:"gemini-generate-content",authStyle:"x-api-key",manualModels:[
+        {id:"chat",name:"Chat",supportedGenerationMethods:["generateContent","countTokens"]},
+        {id:"embedding",name:"Embedding",supportedGenerationMethods:["embedContent"]},
+      ]});
+      await client.refreshModels(provider.id);
+      const list=await client.listModels(provider.id);
+      expect(list.data).toMatchObject([{id:"chat",supportedGenerationMethods:["generateContent","countTokens"],codingEligible:true},{id:"embedding",supportedGenerationMethods:["embedContent"],codingEligible:false}]);
+      const supported=await client.createProfile({id:"methods-chat",name:"Chat",providerId:provider.id,harness:"gemini",model:"chat"});
+      const rejected=await client.createProfile({id:"methods-embedding",name:"Embedding",providerId:provider.id,harness:"gemini",model:"embedding"});
+      expect((await client.launchPlan(supported.id)).catalog.models).toHaveLength(2);
+      await expect(client.launchPlan(rejected.id)).rejects.toMatchObject({code:"model_ineligible"});
+    });
   });
 }
 test("clients reject missing credentials, cleartext remote URLs and redirects",async()=>{
@@ -108,4 +121,32 @@ test("OpenAPI model lists declare eligibility and catalog provenance",async()=>{
   expect(response.$ref).toBe('#/components/schemas/ModelPage');
   expect(spec.components.schemas.ModelPage.required).toContain('refreshedAt');
   expect(spec.components.schemas.ModelPage.properties.data.items.properties.codingEligible.type).toBe('boolean');
+});
+
+test("exhausted catalog refresh preserves the last committed snapshot", async()=>{
+  let failed = false;
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch(){
+    return failed
+      ? new Response("temporarily unavailable", {status:503})
+      : Response.json({data:[{id:"stable-model",name:"Stable model"}]});
+  }});
+  const base = process.env.SWITCHER_TEST_ROOT ?? join(homedir(), "Workspace", "scratch", "switcher-tests");
+  await mkdir(base,{recursive:true});
+  const root = await mkdtemp(join(base, "f04-service-"));
+  let store: Store | undefined;
+  try {
+    store = await Store.open({sqlitePath:join(root,"store.db")});
+    const handle = createHandler(store, token);
+    const client = new SwitcherClient({baseUrl:"http://127.0.0.1:9911",apiKey:token,fetch:((url:any,init:any)=>handle(new Request(url,init))) as typeof fetch});
+    const provider = await client.createProvider({id:"snapshot-provider",name:"Snapshot provider",baseUrl:upstream.url.origin,protocol:"openai-chat"});
+    await client.refreshModels(provider.id);
+    const before = await client.listModels(provider.id);
+    failed = true;
+    await expect(client.refreshModels(provider.id)).rejects.toMatchObject({code:"provider_rejected"});
+    expect(await client.listModels(provider.id)).toEqual(before);
+  } finally {
+    await store?.close();
+    await upstream.stop(true);
+    await rm(root,{recursive:true,force:true});
+  }
 });

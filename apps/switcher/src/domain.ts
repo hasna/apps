@@ -1,8 +1,9 @@
 import { z } from "zod";
+export type { AuthStyle } from "./auth";
 
-export const VERSION = "0.1.1";
-export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode2", "pi"]);
-export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat"]);
+export const VERSION = "0.1.2";
+export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "aider", "kilo"]);
+export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat", "gemini-generate-content"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
 const label = z.string().min(1).max(200);
 const envRef = z.string().regex(/^SWITCHER_PROVIDER_[A-Z0-9_]+$/);
@@ -24,14 +25,15 @@ export const modelSchema = z.object({
   inputModalities: z.array(z.string().max(50)).max(20).optional(),
   outputModalities: z.array(z.string().max(50)).max(20).optional(),
   supportedParameters: z.array(z.string().max(100)).max(100).optional(),
+  supportedGenerationMethods: z.array(z.string().min(1).max(100)).max(100).optional(),
 }).strict();
 export const providerInputSchema = z.object({
   id: idSchema, name: label, baseUrl: urlSchema, protocol: protocolSchema,
   credentialEnv: envRef.optional(),
-  authStyle: z.enum(["bearer", "x-api-key"]).default("bearer"),
+  authStyle: z.enum(["bearer", "x-api-key", "api-key"]).default("bearer"),
   catalogBaseUrl: urlSchema.optional(),
-  catalogFormat: z.enum(["openai", "ollama", "mistral", "together", "fireworks", "dashscope", "none"]).optional(),
-  catalogAuthStyle: z.enum(["bearer", "x-api-key", "none"]).optional(),
+  catalogFormat: z.enum(["openai", "ollama", "mistral", "together", "fireworks", "dashscope", "gemini", "none"]).optional(),
+  catalogAuthStyle: z.enum(["bearer", "x-api-key", "api-key", "none"]).optional(),
   catalogCredentialEnv: envRef.optional(),
   catalogAccountId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).optional(),
   modelsPath: z.string().regex(/^[a-zA-Z0-9_/-]+$/).max(200).default("models"),
@@ -42,9 +44,9 @@ export const providerPresetSchema = z.object({
   credentialAliases: z.array(z.string().regex(/^[A-Z][A-Z0-9_]+$/)),
   protocols: z.array(z.object({
     protocol: protocolSchema, baseUrl: urlSchema.optional(),
-    authStyle: z.enum(["bearer", "x-api-key"]),
-    catalogBaseUrl: urlSchema.optional(), catalogFormat: z.enum(["openai", "ollama", "mistral", "together", "fireworks", "dashscope", "none"]),
-    catalogAuthStyle: z.enum(["bearer", "x-api-key", "none"]).optional(),
+    authStyle: z.enum(["bearer", "x-api-key", "api-key"]),
+    catalogBaseUrl: urlSchema.optional(), catalogFormat: z.enum(["openai", "ollama", "mistral", "together", "fireworks", "dashscope", "gemini", "none"]),
+    catalogAuthStyle: z.enum(["bearer", "x-api-key", "api-key", "none"]).optional(),
     modelsPath: z.string(), notes: z.array(z.string()),
   }).strict()).min(1),
   sources: z.array(z.string().url()), verification: z.literal("documented"),
@@ -81,9 +83,22 @@ export function parse<T>(schema: z.ZodType<T, any, any>, value: unknown): T {
   return result.data;
 }
 export function compatible(harness: Profile["harness"], protocol: Provider["protocol"]) {
-  return harness === "claude" ? protocol === "anthropic-messages" : harness === "codex" ? protocol === "openai-responses" : true;
+  if(harness === "claude") return protocol === "anthropic-messages";
+  if(harness === "codex") return protocol === "openai-responses";
+  if(harness === "gemini") return protocol === "gemini-generate-content";
+  if(protocol === "gemini-generate-content") return false;
+  return true;
+}
+export function validateHarnessProvider(harness: Profile["harness"], provider: Pick<Provider, "protocol" | "authStyle">): void {
+  if (!compatible(harness, provider.protocol))
+    throw new Fault(422, "protocol_mismatch", "Harness does not support this provider protocol.");
+  if (harness === "gemini" && provider.authStyle !== "x-api-key")
+    throw new Fault(422, "auth_mismatch", "Gemini CLI requires x-api-key authentication for its native generateContent protocol.");
 }
 export function codingEligible(model: Model): boolean {
-  return model.available !== false && (!model.outputModalities || model.outputModalities.includes("text")) &&
+  return model.available !== false && (!model.supportedGenerationMethods || model.supportedGenerationMethods.includes("generateContent")) && (!model.outputModalities || model.outputModalities.includes("text")) &&
     (!model.supportedParameters || model.supportedParameters.includes("tools"));
+}
+export function harnessEligible(model:Model,harness:Profile["harness"]):boolean {
+  return harness==="aider"?model.available!==false&&(!model.supportedGenerationMethods||model.supportedGenerationMethods.includes("generateContent"))&&(!model.inputModalities||model.inputModalities.includes("text"))&&(!model.outputModalities||model.outputModalities.includes("text")):codingEligible(model);
 }
