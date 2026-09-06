@@ -4,6 +4,9 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, sy
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { EnvAssignmentError, prepareEnvAssignment } from "./env-assignment.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
