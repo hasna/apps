@@ -99,7 +99,7 @@ describe("project redaction", () => {
         project: getWorkspaceBySlug("redaction-project", db),
         events: listWorkspaceEvents(project.id, db),
         runs: listAgentRuns({ workspace_id: project.id }, db),
-        handoff: toAgentText(await buildProjectHandoff(resolveProjectStore({}), { target: "redaction-project" })),
+        handoff: toAgentText(await buildProjectHandoff(resolveProjectStore({ HASNA_PROJECTS_LOCAL: "1" }), { target: "redaction-project" })),
       };
 
       const serialized = JSON.stringify(payload);

@@ -8,9 +8,11 @@ Terraform, or live data mutation is allowed by this document.
 ## Runtime Selection
 
 `resolveProjectStore()` routes on the CREDENTIAL and the AUTHORITY only. There
-is no mode switch and no local-registry opt-in: the whole decision belongs to
-the `@hasna/contracts` client resolver, re-run on every call
-(owner rulings 2026-09-04, hasna/apps#1720).
+is no mode switch: the whole decision belongs to the `@hasna/contracts` client
+resolver, re-run on every call (owner rulings 2026-09-04, hasna/apps#1720).
+The on-box SQLite registry is reachable ONLY through the explicit local opt-in
+(`HASNA_PROJECTS_LOCAL=1`, alias `PROJECTS_LOCAL`) — there is no implicit
+fallback for a silent environment; it fails closed instead (see Adapter Rules).
 
 A credential from ANY of the five tiers selects the hosted HTTP connection:
 
@@ -42,11 +44,18 @@ alias; the canonical `HASNA_PROJECTS_*` names always work and win.
   registry commands exit non-zero with the resolver's error, which names every
   place it looked. No local SQLite store is opened, and no local-fallback event
   is written.
-- The on-box SQLite registry is reachable only when NOTHING configures the
-  fleet — no URL in the environment, the Keychain or the credentials file, and
-  no credential from any tier. That is the unhosted OSS mode projects supports
-  by design, and it is never silent: it prints one line on stderr naming every
-  tier that came up empty and the database it is about to use.
+- The on-box SQLite registry is reachable ONLY by explicit opt-in:
+  `HASNA_PROJECTS_LOCAL=1` (alias `PROJECTS_LOCAL`) with no authority and no
+  credential declared in the ENVIRONMENT. The opt-in is answered before the
+  resolver runs, so it never reads the Keychain or a credentials file; any
+  env-declared authority or credential outranks it, and a half-configured
+  opt-in run (URL set, no key) still fails loud. An opt-in run is never silent:
+  it prints one line on stderr saying it is local and naming the database it
+  is about to use.
+- A station that configures NOTHING at all — no URL, no credential, no opt-in —
+  FAILS LOUD like any other missing credential: non-zero exit, no SQLite
+  opened, no local-fallback event. This is the fail-closed ruling; a silent
+  station must not serve a local dataset that looks like the hosted one.
 - A resolved credential routes every registry command through the hosted API.
   The client carries only the API key (never a database DSN), and the key value
   is never logged or embedded in output.

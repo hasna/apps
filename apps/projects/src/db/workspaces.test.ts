@@ -1014,7 +1014,8 @@ describe("workspace domain services", () => {
       delete process.env["HASNA_PROJECTS_API_KEY"];
       closeDatabase();
       __resetProjectStore();
-      const store = resolveProjectStore({});
+      // Explicit local opt-in: this fixture pins the on-box registry.
+      const store = resolveProjectStore({ HASNA_PROJECTS_LOCAL: "1" });
       const rejectedImport = await importWorkspace(store, importPath, {
         metadata: {
           business_area: "finance",
@@ -1482,7 +1483,8 @@ describe("workspace domain services", () => {
     closeDatabase();
     __resetProjectStore();
     const db = getDatabase();
-    const store = resolveProjectStore({});
+    // Explicit local opt-in: this fixture pins the on-box registry.
+    const store = resolveProjectStore({ HASNA_PROJECTS_LOCAL: "1" });
     const rootDir = tmpDir();
     const childDir = join(rootDir, "tooling");
     mkdirSync(childDir);

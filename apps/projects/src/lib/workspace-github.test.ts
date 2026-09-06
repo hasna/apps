@@ -34,7 +34,9 @@ afterEach(() => {
 });
 
 function setup(): { db: ReturnType<typeof getDatabase>; store: ProjectStore } {
-  return { db: getDatabase(), store: resolveProjectStore({}) };
+  // Explicit local opt-in: the fail-closed ruling left no implicit fallback,
+  // and this fixture pins the fresh in-memory on-box registry.
+  return { db: getDatabase(), store: resolveProjectStore({ HASNA_PROJECTS_LOCAL: "1" }) };
 }
 
 function git(path: string, args: string[]): string {
