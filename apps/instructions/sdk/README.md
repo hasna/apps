@@ -9,10 +9,61 @@ works anywhere a standards-compatible `fetch` implementation is available.
 bun add @hasna/instructions-sdk
 ```
 
-## Supported `/v1` client
+## Resolver-wired `/v1` client (`@hasna/instructions-sdk/resolve`)
 
-`InstructionsV1Client` is generated from `src/server/openapi.ts` and calls the
-authenticated `/v1` API exposed by `instructions-serve`.
+The preferred way to build the hosted client on Node/Bun: credentials and the
+service authority come from the ONE shared `@hasna/contracts` resolver
+(hasna/apps#1720), resolved fresh on EVERY request — a rotated key heals a
+long-lived client without rebuilding it.
+
+```typescript
+import { createInstructionsV1ClientFromEnv } from "@hasna/instructions-sdk/resolve";
+
+const client = createInstructionsV1ClientFromEnv(); // env -> Keychain -> disk -> HASNA_INSTRUCTIONS_API_KEY
+
+const { configs = [] } = await client.listConfigs({ category: "rules" });
+```
+
+Resolution precedence (per request):
+
+1. an explicit argument — `apiKey` / `baseUrl` (see the explicit-URL rule below);
+2. a deliberate env pointer — `HASNA_INSTRUCTIONS_API_KEY_OVERRIDE`,
+   `HASNA_PROFILE`, `HASNA_INSTRUCTIONS_API_KEY_REF`;
+3. the macOS Keychain — `hasna.credentials.instructions.api-key` (account
+   `HASNA_STATION` → `hostname -s` → `$USER`);
+4. disk — `~/.hasna/instructions/config/credentials`, owner-only 0400/0600
+   (`HASNA_HOME` / `HASNA_CONFIG_HOME` move the root);
+5. `HASNA_INSTRUCTIONS_API_KEY` in the environment.
+
+The authority follows `HASNA_INSTRUCTIONS_API_URL`, the Keychain `api-url`
+item, the credentials file, and otherwise defaults to the fleet gateway
+`https://api.hasna.com/instructions`. `resolveInstructionsSdkTransport(options)`
+reports WHICH tier supplied the credential (never the value). Retired
+locations (`~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`,
+`$XDG_CONFIG_HOME`) are never read.
+
+**Explicit-URL rule (hasna/apps#1794):** an explicit `baseUrl` without an
+explicit `apiKey` THROWS — the SDK never attaches the machine's fleet key to an
+authority the caller chose itself:
+
+```typescript
+// ✅ pinned pair — sent verbatim
+createInstructionsV1ClientFromEnv({ baseUrl: "https://instructions.example.com", apiKey: "..." });
+
+// ❌ throws: never silently uses the ambient fleet key for an explicit authority
+createInstructionsV1ClientFromEnv({ baseUrl: "https://instructions.example.com" });
+```
+
+No credential anywhere also throws; there is no local mode and no
+unauthenticated client on this surface. The unprefixed
+`INSTRUCTIONS_API_URL` / `INSTRUCTIONS_API_KEY` spellings are accepted for one
+release as silent aliases of the canonical names.
+
+## Supported `/v1` client (`@hasna/instructions-sdk`)
+
+The main entry stays zero-dependency and browser-safe. `InstructionsV1Client`
+is generated from `src/server/openapi.ts` and calls the authenticated `/v1` API
+exposed by `instructions-serve`.
 
 ```typescript
 import {

@@ -1,19 +1,40 @@
 // Single Store abstraction for the instructions app.
 //
-// LOCKED architecture (client -> HTTP API only): when HASNA_INSTRUCTIONS_API_URL
-// and HASNA_INSTRUCTIONS_API_KEY are both set the app uses the HTTP `/v1` API
-// transport. In that transport ALL config/profile/snapshot/machine reads and
-// writes route to `https://<host>/v1` with a bearer key — no local SQLite, no
-// DSN on the client. Without the API env the app FAILS CLOSED (owner directive
-// 2026-09-04): it never silently opens the local SQLite store
-// (LocalConfigStore) as a default. The local store is reachable only through
-// the explicit opt-in HASNA_INSTRUCTIONS_LOCAL=1. Setting exactly one of the
-// two API vars throws (no silent local drift), and any retired storage-mode
-// variable throws via `assertNoLegacyStorageMode` (deployment modes no longer
-// exist).
+// CREDENTIALS ARE NOT RESOLVED HERE ANY MORE. Since the 2026-09-04 adoption
+// ruling (hasna/apps#1720, and #1668 / #1690 / #1613 / #1599) every hosted
+// Hasna CLI resolves its credential and its service authority through the ONE
+// resolver in `@hasna/contracts/client` (see ../lib/transport-resolver.ts), so
+// this module contributes no tier of its own: no direct `HASNA_INSTRUCTIONS_API_URL`
+// read, no Keychain or credentials-file handling of our own, no mode switch.
+// The chain, resolved fresh on every call:
 //
-// EVERY CLI command, MCP tool, and SDK method routes through this interface.
-// No consumer may import `../db/*` or call `fetch` directly.
+//   1. an explicit argument      — `credentials.apiKey` / `credentials.profile`
+//   2. a deliberate env pointer  — `HASNA_INSTRUCTIONS_API_KEY_OVERRIDE`,
+//                                  `HASNA_PROFILE`, `HASNA_INSTRUCTIONS_API_KEY_REF`
+//   3. the macOS Keychain        — generic-password `hasna.credentials.instructions.api-key`,
+//                                  account `HASNA_STATION`, else `hostname -s`, else `USER`
+//   4. disk                      — `~/.hasna/instructions/config/credentials`,
+//                                  owner-only 0400/0600 (`HASNA_HOME` / `HASNA_CONFIG_HOME`
+//                                  move the root; XDG never)
+//   5. `HASNA_INSTRUCTIONS_API_KEY` — a legitimate tier below disk, no deprecation notice
+//
+// and the authority follows `HASNA_INSTRUCTIONS_API_URL`, then the Keychain
+// `api-url` item, then the credentials file, and finally defaults to the fleet
+// gateway `https://api.hasna.com/instructions` (the client appends `/v1`). The
+// legacy unprefixed `INSTRUCTIONS_*` spellings survive only as the resolver's
+// silent alias fallback for one release; the canonical `HASNA_INSTRUCTIONS_*`
+// names are the documented ones and are what every message here names.
+//
+// Retired locations — `~/.hasna/fleet-env/`, `~/.hasna/cloud/`,
+// `~/.config/hasna/` — are inputs nowhere, and no `*_MODE` / `*_STORAGE_MODE`
+// variable is read: the transport is decided by what RESOLVES, never by a mode
+// word.
+//
+// FAIL LOUD. Hosted mode with no credential exits non-zero with one clear line;
+// there is no SQLite fallback and no local-fallback event. The on-box SQLite
+// store is reachable ONLY through the deliberate unhosted opt-in
+// `HASNA_INSTRUCTIONS_LOCAL=1` (../lib/local-opt-in.ts), and every local run
+// says "local" on stderr.
 import { randomUUID } from "node:crypto";
 import type { Database } from "bun:sqlite";
 import {
@@ -77,20 +98,9 @@ import type {
 } from "../types/index.js";
 import { boundedReadPage, normalizeBoundedReadOptions } from "../lib/bounded-read.js";
 import { legacyProfileConfigBinding } from "../lib/instruction-graph.js";
-import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
-
-export interface CloudConfig {
-  apiUrl: string;
-  apiKey: string;
-  timeoutMs?: number;
-}
-
-export class CloudHttpError extends Error {
-  constructor(readonly status: number, message: string, readonly body?: unknown) {
-    super(message);
-    this.name = "CloudHttpError";
-  }
-}
+import { INSTRUCTIONS_LOCAL_OPT_IN_ENV, INSTRUCTIONS_LOCAL_OPT_IN_ENV_KEYS, announceLocalInstructionsMode, isInstructionsLocalOptIn, resolveInstructionsStorageClient, type InstructionsResolverOptions } from "../lib/transport-resolver.js";
+import { selectsInstructionsLocalStore } from "../lib/local-opt-in.js";
+import type { InstructionsClientEnv, InstructionsStorageClient, InstructionsCredentialChainOptions } from "../lib/client-types.js";
 
 function parseBoundedPagePayload<T>(value: unknown, label: string): BoundedReadPage<T> {
   const page = value as Partial<BoundedReadPage<T>> | null;
@@ -114,7 +124,7 @@ function parseBoundedPagePayload<T>(value: unknown, label: string): BoundedReadP
     page.has_more !== !complete ||
     page.next_cursor !== (complete ? null : consumed)
   ) {
-    throw new CloudHttpError(502, `${label} returned an invalid or truncated bounded-read envelope`, value);
+    throw new Error(`${label} returned an invalid or truncated bounded-read envelope`);
   }
   return {
     ...(page as BoundedReadPage<T>),
@@ -141,7 +151,7 @@ function parseBoundedOrLegacyPage<T>(
     }
   }
   if (!Array.isArray(legacyItems)) {
-    throw new CloudHttpError(502, `${label} returned neither a bounded envelope nor a complete legacy array`, value);
+    throw new Error(`${label} returned neither a bounded envelope nor a complete legacy array`);
   }
   const normalized = normalizeBoundedReadOptions(options);
   const page = boundedReadPage(
@@ -152,110 +162,94 @@ function parseBoundedOrLegacyPage<T>(
   return { ...page, source_bounded: false };
 }
 
-const API_URL_ENV = "HASNA_INSTRUCTIONS_API_URL";
-const API_KEY_ENV = "HASNA_INSTRUCTIONS_API_KEY";
-
 /**
  * The explicit opt-in for the on-box SQLite store.
  *
- * Owner directive 2026-09-04: a CLI run without the fleet API env must FAIL
+ * Owner directive 2026-09-04: a CLI run without a hosted credential must FAIL
  * CLOSED (non-zero exit naming the required env) and must never open the local
  * SQLite store as a default. `HASNA_INSTRUCTIONS_LOCAL=1` is the documented
- * opt-in that re-enables the local transport for operators who want it.
+ * opt-in that re-enables the local transport for operators who want it — and
+ * it is honoured only when the environment configures no authority and no
+ * credential (see ../lib/local-opt-in.ts), so a hosted pair can never be
+ * silently overridden by a stale opt-in.
  */
-export const LOCAL_OPT_IN_ENV = "HASNA_INSTRUCTIONS_LOCAL";
+export const LOCAL_OPT_IN_ENV = INSTRUCTIONS_LOCAL_OPT_IN_ENV;
 
 /** True when the operator explicitly opted in to the local SQLite store. */
 export function isLocalOptIn(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env[LOCAL_OPT_IN_ENV]?.trim() === "1";
+  return isInstructionsLocalOptIn(env as InstructionsClientEnv);
 }
 
-/**
- * The fail-closed error thrown when no fleet API env is set and the local
- * store was not explicitly opted in. Actionable: names every variable the
- * operator can set to proceed, and states that the local store is refused
- * rather than silently opened.
- */
-export function missingFleetEnvError(): Error {
-  return new Error(
-    `No fleet API environment configured, and no explicit local-store opt-in. ` +
-      `Set both ${API_URL_ENV} and ${API_KEY_ENV} to use the hosted Instructions ` +
-      `service, or set ${LOCAL_OPT_IN_ENV}=1 to explicitly use the on-box SQLite ` +
-      `store. Refusing to open the local store without an explicit opt-in.`,
-  );
+/** True when the HTTP API transport is active (a hosted credential resolves). */
+export function isApiTransport(env: NodeJS.ProcessEnv = process.env): boolean {
+  // Throws on a refused configuration (URL without key, unusable file), exactly
+  // as the previous "exactly one env var set" refusal did — the caller has
+  // already failed closed through resolveConfigStore by the time this is asked.
+  const { transport } = resolveInstructionsStorageClient(env as InstructionsClientEnv);
+  return transport === "http";
 }
 
 /**
  * True when `err` is a cloud authentication failure — an HTTP 401/403 from the
- * `/v1` API, which is what a missing, expired, or revoked bearer key produces.
+ * `/v1` API, which is what a missing, expired, or revoked key produces.
+ * Matches the @hasna/contracts `HasnaHttpError` shape by name + status (never
+ * `instanceof`, which is unreliable across bundle boundaries).
  */
-export function isCloudAuthError(err: unknown): err is CloudHttpError {
-  return err instanceof CloudHttpError && (err.status === 401 || err.status === 403);
+export function isCloudAuthError(err: unknown): err is Error & { status: number } {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { name?: unknown }).name === "HasnaHttpError" &&
+    ((err as { status?: unknown }).status === 401 || (err as { status?: unknown }).status === 403)
+  );
+}
+
+/**
+ * True when `err` is the transport's not-found error (404). Matched by shape,
+ * never `instanceof`, for the same bundle-boundary reason as above.
+ */
+function isNotFoundHttpError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as { name?: unknown }).name === "HasnaHttpError" &&
+    (err as { status?: unknown }).status === 404
+  );
 }
 
 /**
  * Render an error for CLI/user display. A cloud auth failure (401/403 — e.g. a
- * revoked or invalid `HASNA_INSTRUCTIONS_API_KEY`) is rewritten into a clear,
- * actionable re-auth message so the operator is not blocked by a raw
- * `CloudHttpError`: they can rotate the key or explicitly opt in to the local
- * store (`HASNA_INSTRUCTIONS_LOCAL=1`). All other errors fall back to their
+ * revoked or invalid key) is rewritten into a clear, actionable re-auth message
+ * so the operator is not blocked by a raw transport error: they can rotate the
+ * key or explicitly opt in to the local store (`HASNA_INSTRUCTIONS_LOCAL=1`).
+ * The transport never echoes the server's 401/403 response body (that body is
+ * the one place a rejected request can reflect credential material back into
+ * logs), so no server note is rendered. All other errors fall back to their
  * plain message (unchanged behaviour).
  */
 export function formatCliError(err: unknown, env: NodeJS.ProcessEnv = process.env): string {
   if (isCloudAuthError(err)) {
-    const apiUrl = env[API_URL_ENV]?.trim();
-    const detail = err.message?.trim();
-    // Only echo the server's own message when it adds signal beyond the generic
-    // `HTTP <status> on ...` fallback synthesised by CloudConfigStore.request.
-    const serverNote = detail && !/^HTTP \d+\b/.test(detail) ? `  Server said: ${detail}` : "";
     return [
       `Instructions cloud API rejected the request (HTTP ${err.status}: authentication failed).`,
-      serverNote,
-      `  The API key in ${API_KEY_ENV} is missing, expired, or revoked${apiUrl ? ` for ${apiUrl}` : ""}.`,
+      `  The API key in use is missing, expired, or revoked (the transport never echoes the server's 401/403 body).`,
       `  To continue, either:`,
-      `    - set a valid key:   export ${API_KEY_ENV}=<new-key>`,
+      `    - set a valid key:   export HASNA_INSTRUCTIONS_API_KEY=<new-key>`,
+      `      (or add the Keychain item hasna.credentials.instructions.api-key, or write`,
+      `       ~/.hasna/instructions/config/credentials)`,
       `    - or opt in to the local store explicitly:   export ${LOCAL_OPT_IN_ENV}=1`,
-    ]
-      .filter(Boolean)
-      .join("\n");
+    ].join("\n");
   }
   return err instanceof Error ? err.message : String(err);
 }
 
 /**
- * Resolve the HTTP API config from the environment.
- * - both vars set   -> config (HTTP `/v1` API transport)
- * - neither set     -> null (the caller must then fail closed or honour the
- *   explicit local opt-in `HASNA_INSTRUCTIONS_LOCAL=1` — see resolveConfigStore)
- * - exactly one set -> throws (no silent local drift)
- */
-export function resolveCloudConfig(env: NodeJS.ProcessEnv = process.env): CloudConfig | null {
-  assertNoLegacyStorageMode(env);
-  const apiUrl = env[API_URL_ENV]?.trim();
-  const apiKey = env[API_KEY_ENV]?.trim();
-  if (!apiUrl && !apiKey) return null;
-  if (!apiUrl || !apiKey) {
-    throw new Error(
-      `API mode requires BOTH ${API_URL_ENV} and ${API_KEY_ENV}; only ` +
-        `${apiUrl ? API_URL_ENV : API_KEY_ENV} is set. Set both to use the hosted API, ` +
-        `or unset the stray variable and set ${LOCAL_OPT_IN_ENV}=1 to explicitly use ` +
-        `the local SQLite store.`,
-    );
-  }
-  return { apiUrl, apiKey };
-}
-
-/** True when the HTTP API transport is active (`HASNA_INSTRUCTIONS_API_URL` set). */
-export function isApiTransport(env: NodeJS.ProcessEnv = process.env): boolean {
-  return resolveCloudConfig(env) !== null;
-}
-
-/**
  * The single Store contract. Two transports implement it: LocalConfigStore
- * (on-box SQLite) and CloudConfigStore (HTTP /v1 + bearer key).
+ * (on-box SQLite) and CloudConfigStore (HTTP /v1 through the shared resolver).
  */
 export interface ConfigStore {
   readonly mode: "local" | "api";
+  /** The resolved `<origin>/v1` base for a hosted store; null for the local store. */
+  readonly v1BaseUrl: string | null;
   // Configs
   listConfigs(filter?: ConfigFilter): Promise<Config[]>;
   getConfig(idOrSlug: string): Promise<Config>;
@@ -311,6 +305,7 @@ export interface ConfigStore {
  */
 export class LocalConfigStore implements ConfigStore {
   readonly mode = "local" as const;
+  readonly v1BaseUrl: string | null = null;
   constructor(private readonly db?: Database) {}
 
   // Configs
@@ -443,17 +438,16 @@ export class LocalConfigStore implements ConfigStore {
   }
 }
 
-/** Cloud store: routes every operation to the `/v1` HTTP API with a bearer key. */
+/** Cloud store: routes every operation to the `/v1` HTTP API through the contracts transport. */
 export class CloudConfigStore implements ConfigStore {
   readonly mode = "api" as const;
-  private readonly base: string;
-  private readonly apiKey: string;
-  private readonly timeoutMs: number;
+  /** The resolved `<origin>/v1` authority this store dials. */
+  readonly v1BaseUrl: string;
+  private readonly client: InstructionsStorageClient;
 
-  constructor(config: CloudConfig) {
-    this.base = `${config.apiUrl.replace(/\/+$/, "")}/v1`;
-    this.apiKey = config.apiKey;
-    this.timeoutMs = config.timeoutMs ?? 30000;
+  constructor(client: InstructionsStorageClient) {
+    this.client = client;
+    this.v1BaseUrl = client.baseUrl;
   }
 
   private async request<T>(
@@ -462,41 +456,14 @@ export class CloudConfigStore implements ConfigStore {
     body?: unknown,
     opts: { idempotent?: boolean; allow404?: boolean } = {},
   ): Promise<{ status: number; data: T | null }> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    const headers: Record<string, string> = {
-      Authorization: `Bearer ${this.apiKey}`,
-      Accept: "application/json",
-    };
-    if (body !== undefined) headers["Content-Type"] = "application/json";
-    if (opts.idempotent) headers["Idempotency-Key"] = randomUUID();
     try {
-      const res = await fetch(`${this.base}${path}`, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
+      const data = await this.client.transport.request<T>(method, path, body, {
+        ...(opts.idempotent ? { idempotencyKey: randomUUID() } : {}),
       });
-      if (res.status === 404 && opts.allow404) return { status: 404, data: null };
-      const text = await res.text();
-      let parsed: unknown = null;
-      if (text) {
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          parsed = text;
-        }
-      }
-      if (!res.ok) {
-        const message =
-          (parsed && typeof parsed === "object" && "error" in parsed
-            ? String((parsed as { error: unknown }).error)
-            : undefined) ?? `HTTP ${res.status} on ${method} ${path}`;
-        throw new CloudHttpError(res.status, message, parsed);
-      }
-      return { status: res.status, data: parsed as T };
-    } finally {
-      clearTimeout(timer);
+      return { status: 200, data };
+    } catch (err) {
+      if (opts.allow404 && isNotFoundHttpError(err)) return { status: 404, data: null };
+      throw err;
     }
   }
 
@@ -731,7 +698,7 @@ export class CloudConfigStore implements ConfigStore {
     const first = await request(idOrSlug);
     if (first.status !== 404) {
       if (isUsable(first.data)) return first;
-      throw new CloudHttpError(502, "profile follow-up returned an invalid response", first.data);
+      throw new Error(`Cloud /v1 returned an invalid profile response for ${pathForId(idOrSlug)}`);
     }
 
     // The collection endpoint is authoritative on deployments whose direct
@@ -745,7 +712,7 @@ export class CloudConfigStore implements ConfigStore {
       const response = await request(candidate);
       if (response.status !== 404) {
         if (isUsable(response.data)) return response;
-        throw new CloudHttpError(502, "profile follow-up returned an invalid response", response.data);
+        throw new Error(`Cloud /v1 returned an invalid profile response for ${pathForId(candidate)}`);
       }
     }
     return { status: 404, data: null };
@@ -884,7 +851,7 @@ export class CloudConfigStore implements ConfigStore {
     }
     if (data && "complete" in data) {
       if (data.complete !== true || data.truncated !== false) {
-        throw new CloudHttpError(502, "profile resolve returned an incomplete or truncated read", data);
+        throw new Error("Cloud /v1 profile resolve returned an incomplete or truncated read");
       }
       return { ...data, source_bounded: data.source_bounded ?? true };
     }
@@ -900,7 +867,7 @@ export class CloudConfigStore implements ConfigStore {
       };
     }
     {
-      throw new CloudHttpError(502, "profile resolve returned an incomplete or truncated read", data);
+      throw new Error("Cloud /v1 profile resolve returned an incomplete or truncated read");
     }
   }
 
@@ -936,7 +903,7 @@ export class CloudConfigStore implements ConfigStore {
   async reset(): Promise<void> {
     throw new Error(
       "`init --force` cannot wipe the shared cloud store from a client. " +
-        "Unset HASNA_INSTRUCTIONS_API_URL / HASNA_INSTRUCTIONS_API_KEY to reset the local store instead.",
+        "Point this run at the local store (HASNA_INSTRUCTIONS_LOCAL=1 with no hosted credential) to reset it instead.",
     );
   }
 }
@@ -945,16 +912,32 @@ export class CloudConfigStore implements ConfigStore {
  * Resolve the single Store for the current environment — the choke point every
  * CLI command, MCP tool, and SDK method routes through.
  *
- * Fail-closed (owner directive 2026-09-04): with no fleet API env the local
- * SQLite store is NEVER opened as a silent default. The operator must either
- * configure the hosted service (`HASNA_INSTRUCTIONS_API_URL` +
- * `HASNA_INSTRUCTIONS_API_KEY`) or explicitly opt in to the on-box store with
- * `HASNA_INSTRUCTIONS_LOCAL=1`. Anything else throws `missingFleetEnvError`,
- * which the CLI turns into a non-zero exit naming the required env.
+ * THE OPT-IN IS ANSWERED FIRST, AND THAT ORDER IS LOAD-BEARING IN BOTH
+ * DIRECTIONS (owner ruling 2026-09-04, hasna/apps#1720). An environment that
+ * CONFIGURES an Instructions authority or credential outranks the opt-in: a run
+ * with the API key set goes hosted (and a half-configured pair fails loudly)
+ * rather than quietly serving a different dataset because a stale
+ * `HASNA_INSTRUCTIONS_LOCAL` was lying around. But when the environment
+ * configures nothing, the opt-in is answered WITHOUT calling the resolver at
+ * all — no Keychain item and no credential file is read — and every local run
+ * says "local" once on stderr.
+ *
+ * Otherwise `@hasna/contracts` resolves the credential and the authority, and
+ * any failure to do so is a throw (REMOTE_API_*): hosted mode with no
+ * credential exits non-zero, no SQLite file is opened, and no local-fallback
+ * event is written.
  */
-export function resolveConfigStore(env: NodeJS.ProcessEnv = process.env): ConfigStore {
-  const cloud = resolveCloudConfig(env);
-  if (cloud) return new CloudConfigStore(cloud);
-  if (!isLocalOptIn(env)) throw missingFleetEnvError();
-  return new LocalConfigStore();
+export function resolveConfigStore(
+  env: InstructionsClientEnv = process.env,
+  options: InstructionsResolverOptions = {},
+): ConfigStore {
+  if (selectsInstructionsLocalStore(env)) {
+    if (env === process.env) announceLocalInstructionsMode();
+    return new LocalConfigStore();
+  }
+  const { client } = resolveInstructionsStorageClient(env, options);
+  return new CloudConfigStore(client);
 }
+
+export type { InstructionsCredentialChainOptions, InstructionsClientEnv, InstructionsStorageClient };
+export { INSTRUCTIONS_LOCAL_OPT_IN_ENV_KEYS };

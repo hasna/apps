@@ -90,11 +90,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: LEAN_TOOL
 
 server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const { name, arguments: args = {} } = req.params;
-  // Fail closed: a tool call with no fleet API env and no explicit local opt-in
-  // (HASNA_INSTRUCTIONS_LOCAL=1) must answer as an error naming the required
-  // env, never silently serve the on-box SQLite store (owner directive
-  // 2026-09-04). Resolution sits inside the guard so the refusal is a clean
-  // tool error, not an unhandled handler rejection.
+  // Fail closed: a tool call with no hosted credential and no explicit local
+  // opt-in (HASNA_INSTRUCTIONS_LOCAL=1) must answer as an error naming the
+  // required configuration, never silently serve the on-box SQLite store
+  // (owner directive 2026-09-04). Resolution sits inside the guard so the
+  // refusal is a clean tool error, not an unhandled handler rejection.
   let store: ConfigStore;
   try {
     store = resolveConfigStore();

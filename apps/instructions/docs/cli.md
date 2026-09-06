@@ -24,6 +24,26 @@ returns full records where offered. `list --verbose` and `profile list
 Large JSON and content output is written synchronously so piping it to tools
 such as `jq` does not truncate it.
 
+## Credentials and transports
+
+Every command resolves its credential and service authority through the ONE
+client resolver in `@hasna/contracts` (hasna/apps#1720) — the CLI owns no second
+chain. The tiers, fresh per command: an explicit `--api-key`/`--profile`
+argument, then `HASNA_INSTRUCTIONS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
+`HASNA_INSTRUCTIONS_API_KEY_REF`, then the macOS Keychain item
+`hasna.credentials.instructions.api-key` (account `HASNA_STATION` →
+`hostname -s` → `$USER`), then `~/.hasna/instructions/config/credentials`
+(owner-only 0400/0600), then `HASNA_INSTRUCTIONS_API_KEY`. The authority
+follows `HASNA_INSTRUCTIONS_API_URL`, the Keychain `api-url` item, the
+credentials file, and otherwise defaults to the fleet gateway
+`https://api.hasna.com/instructions`. `whoami` prints the resolved `<origin>/v1`
+authority (never a credential value).
+
+A run with no credential FAILS CLOSED: non-zero exit naming the tiers
+consulted, no SQLite fallback and no local-fallback event. The on-box SQLite
+store is opt-in only (`HASNA_INSTRUCTIONS_LOCAL=1`, honoured when nothing else
+configures an authority), and every local run says `local mode` once on stderr.
+
 ## Config commands
 
 ### `list` (`ls`)

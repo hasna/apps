@@ -81,13 +81,14 @@ keeps the token value in the runtime environment or secret manager.
 
 | Var | Default | Purpose |
 |-----|---------|---------|
-| `HASNA_INSTRUCTIONS_DB_PATH` | `~/.hasna/instructions/instructions.db` | Local SQLite location |
+| `HASNA_INSTRUCTIONS_API_KEY` | unset | Client API key — resolved through the shared `@hasna/contracts` chain (tier 5, below the Keychain item `hasna.credentials.instructions.api-key` and `~/.hasna/instructions/config/credentials`) |
+| `HASNA_INSTRUCTIONS_API_URL` | unset | Client `/v1` base URL — tier above the Keychain `api-url` item and the credentials file; defaults to the fleet gateway `https://api.hasna.com/instructions` once a credential resolves |
+| `HASNA_INSTRUCTIONS_LOCAL` | unset | Explicit opt-in for the on-box SQLite store (`1`); honoured only when no authority/credential is configured, and every local run says `local mode` on stderr |
+| `HASNA_INSTRUCTIONS_DB_PATH` | `~/.hasna/instructions/instructions.db` | Local SQLite location (explicit override) |
 | `INSTRUCTIONS_PROFILE` | `full` | MCP tool profile (minimal/standard/full) |
 | `MCP_HTTP_PORT` | `8853` | Loopback MCP HTTP port |
 | `INSTRUCTIONS_PORT` | `3457` | HTTP API server port (`PORT` takes priority) |
 | `INSTRUCTIONS_HOST` | `localhost` | HTTP API bind address (`HOST` takes priority) |
-| `HASNA_INSTRUCTIONS_API_URL` | unset | Client `/v1` base URL; requires the API key too |
-| `HASNA_INSTRUCTIONS_API_KEY` | unset | Client bearer key; requires the API URL too |
 | `HASNA_CONFIGS_HOME` | `~/.hasna/configs` | Session-render storage root |
 
 ## Secret Redaction

@@ -3,7 +3,7 @@
   "name": "instructions",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.13.1",
+  "kitVersion": "1.0.2",
   "description": "AI coding agent instruction & configuration manager (formerly @hasna/configs). CLI + MCP + HTTP API (instructions-serve). Server data backend is postgresql when HASNA_INSTRUCTIONS_DATABASE_URL is set, else sqlite. The serve process reads/writes the shared Postgres directly with API-key auth via @hasna/contracts. The MCP server keeps the legacy name 'configs' aliased for the existing fleet.",
   "bins": [
     "instructions",

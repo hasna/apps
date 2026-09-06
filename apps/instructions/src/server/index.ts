@@ -111,8 +111,9 @@ app.all("/v1/*", async (c) => {
 // ── MCP is a CLIENT transport, never mounted on the cloud server ─────────────
 // The MCP server (src/mcp) runs on the operator's machine (stdio or the local
 // `instructions mcp --http` process on 127.0.0.1). Its tools resolve the Store
-// from the client env, so with HASNA_INSTRUCTIONS_API_URL/KEY set they route to
-// this server's authenticated /v1 API — the same path the CLI/SDK use.
+// from the client env through the shared @hasna/contracts resolver, so a hosted
+// credential (Keychain / credentials file / HASNA_INSTRUCTIONS_API_KEY) routes
+// them to this server's authenticated /v1 API — the same path the CLI/SDK use.
 //
 // It is deliberately NOT mounted here: on ECS the container holds a DATABASE_URL
 // (not the client API env), so a server-mounted /mcp would resolve to an

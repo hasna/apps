@@ -104,14 +104,20 @@ describe("instructions-mcp answers --version/--help before any bind (row 7e5f8f3
     expect(result.stdout + result.stderr).toContain(BIND_MARKER);
   });
 
-  test("refuses to start without fleet env and without the local opt-in (fail closed)", async () => {
-    // Owner directive 2026-09-04: with no HASNA_INSTRUCTIONS_API_URL/KEY and no
+  test("refuses to start without a hosted credential and without the local opt-in (fail closed)", async () => {
+    // Owner directive 2026-09-04: with no resolvable credential and no
     // HASNA_INSTRUCTIONS_LOCAL=1 the MCP bin must exit non-zero naming the
-    // required env — never silently serve the on-box SQLite store. The child
-    // env is scrubbed so the runner-level test pins cannot mask the refusal.
+    // required configuration — never silently serve the on-box SQLite store.
+    // The child env is scrubbed so the runner-level test pins cannot mask the
+    // refusal.
     const result = await runMcp([], {}, [
       "HASNA_INSTRUCTIONS_API_URL",
       "HASNA_INSTRUCTIONS_API_KEY",
+      "INSTRUCTIONS_API_URL",
+      "INSTRUCTIONS_API_KEY",
+      "HASNA_INSTRUCTIONS_API_KEY_OVERRIDE",
+      "HASNA_INSTRUCTIONS_API_KEY_REF",
+      "HASNA_PROFILE",
       "HASNA_INSTRUCTIONS_DB_PATH",
       "HASNA_CONFIGS_HOME",
       "HASNA_INSTRUCTIONS_LOCAL",
@@ -119,6 +125,7 @@ describe("instructions-mcp answers --version/--help before any bind (row 7e5f8f3
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(1);
     const output = result.stdout + result.stderr;
+    expect(output).toContain("REMOTE_API_CONFIG_MISSING");
     expect(output).toContain("HASNA_INSTRUCTIONS_API_URL");
     expect(output).toContain("HASNA_INSTRUCTIONS_API_KEY");
     expect(output).toContain("HASNA_INSTRUCTIONS_LOCAL");

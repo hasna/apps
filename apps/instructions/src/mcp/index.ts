@@ -40,11 +40,11 @@ Options:
   }
 
   // Fail closed before serving (owner directive 2026-09-04): every tool routes
-  // through the Store, so with no fleet API env and no explicit local opt-in
-  // this server must refuse to start with a non-zero exit — never silently
-  // serve the on-box SQLite store. Resolving here also constructs nothing
-  // (LocalConfigStore opens its database lazily), so no local file is created
-  // on the failure path.
+  // through the Store, so with no hosted credential and no explicit local
+  // opt-in this server must refuse to start with a non-zero exit — never
+  // silently serve the on-box SQLite store. Resolving here also constructs
+  // nothing (LocalConfigStore opens its database lazily), so no local file is
+  // created on the failure path.
   try {
     resolveConfigStore();
   } catch (err) {

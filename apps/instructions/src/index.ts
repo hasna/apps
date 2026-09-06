@@ -3,18 +3,36 @@ export * from "./types/index.js";
 
 // Store — the single data abstraction (LocalStore + ApiStore). Every SDK data
 // operation routes through this interface; no raw sqlite/fetch is exposed.
+// Credential + authority resolution lives in the ONE shared resolver
+// (@hasna/contracts, hasna/apps#1720) — see lib/transport-resolver.ts.
 export {
   CloudConfigStore,
-  CloudHttpError,
   LocalConfigStore,
   LOCAL_OPT_IN_ENV,
   isApiTransport,
+  isCloudAuthError,
   isLocalOptIn,
-  missingFleetEnvError,
-  resolveCloudConfig,
+  formatCliError,
   resolveConfigStore,
 } from "./data/config-store.js";
-export type { CloudConfig, ConfigStore } from "./data/config-store.js";
+export type { ConfigStore } from "./data/config-store.js";
+export {
+  INSTRUCTIONS_LOCAL_OPT_IN_ENV,
+  INSTRUCTIONS_LOCAL_OPT_IN_ENV_KEYS,
+  announceLocalInstructionsMode,
+  getInstructionsTransportStatus,
+  instructionsLocalModeNotice,
+  isInstructionsLocalOptIn,
+} from "./lib/transport-resolver.js";
+export type { InstructionsTransportStatus } from "./lib/transport-resolver.js";
+export type {
+  InstructionsClientEnv,
+  InstructionsCredentialChainOptions,
+  InstructionsKeychainOptions,
+  InstructionsRequestOptions,
+  InstructionsStorageClient,
+  InstructionsStorageTransport,
+} from "./lib/client-types.js";
 export { boundedReadPage, normalizeBoundedReadOptions } from "./lib/bounded-read.js";
 
 // Machine + slug helpers (pure)
