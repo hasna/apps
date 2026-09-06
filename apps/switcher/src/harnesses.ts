@@ -20,16 +20,18 @@ import { isolateOpenCode2, openCode2ConfigText } from "./opencode2-config";
 import { prepareOmpLaunch } from "./omp-backend";
 import { dshArguments } from "./dsh-args";
 import { prepareHermesLaunch } from "./hermes-backend";
+import { harnessInstallation } from "./harness-installation";
 import type { HarnessId, HarnessLaunchInput, PreparedLaunch } from "./harness-types";
 const execute = promisify(execFile);
 const KEY = "SWITCHER_HARNESS_API_KEY";
 const quote = (value: unknown) => JSON.stringify(value);
 export async function detectHarness(harness: HarnessId, override?: string) {
   const executable = override ?? Bun.which(harness) ?? harness;
+  const installation = harnessInstallation(harness);
   try {
     const {stdout,stderr} = await execute(executable,["--version"],{timeout:8000,maxBuffer:65536,env:childEnvironment()});
-    return {harness,executable,available:true,version:(stdout.trim()||stderr.trim()).slice(0,200)};
-  } catch { return {harness,executable,available:false,version:undefined}; }
+    return {harness,executable,available:true,version:(stdout.trim()||stderr.trim()).slice(0,200),installation};
+  } catch { return {harness,executable,available:false,version:undefined,installation}; }
 }
 export async function validateHarnessConfiguration(harness:HarnessId,cwd:string,args:readonly string[]=[]):Promise<void> {
   if(harness==="kilo") await validateKiloConfiguration(cwd,[...args]);

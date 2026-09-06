@@ -4,7 +4,7 @@ title: "Switcher"
 type: "package-documentation"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:50:21.698672Z"
-updated_at: "2026-09-06T14:21:11.994837+00:00"
+updated_at: "2026-09-06T15:23:09.568156+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -14,6 +14,32 @@ source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 Launch Claude Code, Codex, Grok Build, OpenCode 2, legacy OpenCode, Kilo, Pi, OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, Gemini CLI or Aider with a chosen compatible provider and its model catalog. An authenticated API owns profiles and run metadata; the CLI starts the native harness on your computer. Import the same HTTP client from `@hasna/switcher/sdk`.
 
 Requires Bun 1.3.14 or newer. Install the native harnesses separately.
+
+Switcher never installs or upgrades a native harness. `switcher doctor` reports
+the executable name, verified version requirement, upstream project and
+installation guidance for every adapter. If a harness is installed outside
+`PATH`, pass its trusted absolute executable path with `--executable PATH`.
+
+| Harness | Executable and verified version | Install target | Official instructions |
+| --- | --- | --- | --- |
+| Claude Code | `claude`, >=2.1.242 | Claude Code official distribution | [Quickstart](https://code.claude.com/docs/en/quickstart) |
+| Codex CLI | `codex`, >=0.153.0 | OpenAI Codex official distribution | [Project](https://github.com/openai/codex) |
+| Grok Build | `grok`, >=1.0.13 | xAI Grok Build official project | [Project](https://github.com/xai-org/grok-build) |
+| OpenCode (legacy) | `opencode`, >=1.18.0 | `opencode-ai` | [CLI guide](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/cli.mdx) |
+| OpenCode 2 | `opencode2`, beta-19157 or newer (including stable >=2.0.0) | OpenCode 2 official distribution | [v2 docs](https://opencode.ai/v2/docs/) |
+| Pi Coding Agent | `pi`, >=0.85.1 | `@earendil-works/pi-coding-agent` | [Coding agent README](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/README.md) |
+| OMP (oh-my-pi) | `omp`, >=18.1.11 | `@oh-my-pi/pi-coding-agent` | [Project](https://github.com/can1357/oh-my-pi) |
+| DeepSeek Harness | `dsh`, >=0.1.2-rc.1 | `@deepseek-ai/dsh` | [CLI reference](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/cli/reference/README.md) |
+| Cline | `cline`, >=3.0.61 | `cline` | [CLI project](https://github.com/cline/cline/tree/main/apps/cli) |
+| Hermes Agent | `hermes`, >=0.21.0 | NousResearch Hermes Agent official installer | [Quick install](https://github.com/NousResearch/hermes-agent#quick-install) |
+| Prime Agent | `prime-agent`, >=0.9.2 | PrimeIntellect versioned release artifact | [Project](https://github.com/PrimeIntellect-ai/prime-agent) |
+| Gemini CLI | `gemini`, exactly 0.58.0 | `@google/gemini-cli` | [Project](https://github.com/google-gemini/gemini-cli) |
+| Aider | `aider`, exactly 0.86.2 | `aider-chat` | [Installation](https://aider.chat/docs/install.html) |
+| Kilo Code | `kilo`, >=7.5.15 | `@kilocode/cli` | [Release v7.5.15](https://github.com/Kilo-Org/kilocode/releases/tag/v7.5.15) |
+
+For project distributions without a verified package command, follow the
+linked upstream instructions and pass the resulting executable explicitly.
+Launch rejects unsupported native versions before starting a coding session.
 
 ```sh
 npm install -g @hasna/switcher
@@ -61,6 +87,15 @@ switcher launch claude --provider deepseek --model deepseek-v4-pro
 For provider keys already stored in macOS Keychain, use `--keychain-service SERVICE --keychain-account ACCOUNT` instead of vault options. Bindings contain only references and authorized origins under `~/.hasna/switcher/config/credential-bindings`, in owner-only files. They remain local even when Switcher uses a remote API. A configured binding takes precedence over environment aliases; an unavailable binding never falls back to another account.
 
 `credentials list` displays bindings; `credentials remove PRESET_OR_REFERENCE` removes only the locator. Replacement requires explicit removal. Custom credential references require `--origin URL` (repeatable); preset bindings authorize their documented origins by default. `credentials check` reports availability, length and hash, not successful provider authentication. Provider credentials needed by a remote API's catalog discovery must still be configured on that server independently.
+
+On Linux, use a vault binding without `--vault-account` and have your approved secret manager inject `HASNA_SECRETS_API_KEY` into each Switcher process. The binding records the vault URL and key locator; it stores no credential value. Alternatively, let the authenticated `secrets` CLI inject a provider credential for one command:
+
+```sh
+secrets exec providers/deepseek/live/api_key --as DEEPSEEK_API_KEY -- \
+  switcher launch claude --provider deepseek --model deepseek-v4-flash --dry-run
+```
+
+Authenticate that Secrets process through your existing secret manager or service environment. `--dry-run` performs authenticated model discovery, creates provider/profile records as needed and returns a launch plan without starting the native harness or inference; remove it to launch. Every new process needs its own runtime injection. `credentials check` inspects configured bindings, not environment aliases. Keychain bindings are macOS-only; on Linux they fail with `keychain_unavailable` and recommend a vault binding or runtime environment. Native subscription/OAuth login is separate from Switcher's provider-key mode; Switcher does not import or reuse it.
 
 ## OpenCode 2 configuration
 
@@ -195,6 +230,12 @@ For Claude use `--harness claude` with `anthropic-messages`; for Grok, Hermes or
 
 When the API runs remotely, inject the provider credential into the API process for authenticated catalog discovery and into the local launcher for direct inference. The API never returns a provider key. An external compatible gateway can be the configured provider. Switcher does not translate between wire protocols.
 
+## Catalog refresh and offline use
+
+`switcher models PROVIDER` reads an existing stored catalog without contacting the provider. When no catalog exists, it discovers one. `--refresh` and every `launch` request fetch the upstream catalog. Failed refreshes preserve the previous snapshot, but launch fails instead of silently using that snapshot. API launch plans warn when their catalog is more than five minutes old.
+
+Discovery allows at most two retries per page for network failures and HTTP 408, 425, 429, 500, 502, 503 or 504. A request has a 20-second limit and the refresh has a 60-second aggregate limit. Valid numeric or HTTP-date `Retry-After` values are honored; a delay beyond the remaining budget fails immediately. Otherwise, retry delays are 100 ms and 200 ms. Redirects and other HTTP failures are terminal. Existing limits remain 16 MiB per response, 100 pages and 10,000 unique models. Credentials, origin restrictions and parser validation stay the same on every retry.
+
 ## Optional Ori backend
 
 `switcher launch codex --provider openrouter --model MODEL --backend ori` uses installed Ori 0.12.x. Add `--ori-executable PATH` to choose its installation. `--dry-run` validates the Ori contract without resolving a launch credential. The Codex picker uses Switcher's complete compatible catalog. Grok is supported through Ori's Chat route and its entitled OpenRouter catalog. Direct adapters remain the default. Ori launches reject other provider authorities, Claude's global-configuration mutations, and the legacy OpenCode target; use the direct Claude and OpenCode 2 adapters. Ori live acceptance remains tracked separately from fixture checks.
@@ -246,6 +287,8 @@ console.log(plan.catalog.models.length);
 ```
 
 The SDK supports Node and Bun. It has no database or launcher imports. Explicit credentials may be supplied as a string or a fresh resolver function; `clientFromEnv()` uses the shared contracts resolver with environment-only inputs and no disk fallback.
+
+SDK and CLI API-error diagnostics validate code/request-ID fields, bound message length, remove terminal control characters, and redact the operator credential actually sent with that request. Redaction covers raw, JSON-string-escaped, URL-encoded and Base64/Base64url representations. Native harness stdout and terminal output remain under the native client's control.
 
 Public lifecycle endpoints: `GET /health`, `/ready`, `/version`. Authenticated OpenAPI: `GET /v1/openapi.json`. Provider/profile CRUD, `/v1/provider-presets`, catalog list/refresh, launch-plan validation and run metadata are under `/v1`. The SDK includes `listProviderPresets()`, `getProviderPreset()`, `health()`, `ready()`, and `version()`. SDK types are generated from that OpenAPI document. API errors include code, message and request ID.
 

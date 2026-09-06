@@ -343,3 +343,131 @@ test("Gemini keeps the complete catalog but excludes models without generateCont
     }
   }finally{await upstream.stop(true);}
 });
+
+test("catalog refresh retries transient responses and honors Retry-After", async () => {
+  let calls = 0;
+  const requestTimes: number[] = [];
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    calls++;
+    requestTimes.push(Date.now());
+    if (calls === 1) return new Response("temporary", {status:503, headers:{"retry-after":new Date(Date.now() + 2_500).toUTCString()}});
+    if (calls === 2) return new Response("busy", {status:429, headers:{"retry-after":"1"}});
+    return Response.json({data:[{id:"retry-model"}]});
+  }});
+  try {
+    const provider = {...parse(providerInputSchema, {
+      id:"retry-provider", name:"Retry provider", baseUrl:upstream.url.origin,
+      protocol:"openai-chat", catalogFormat:"openai",
+    }), version:1, updatedAt:"now"};
+    const catalog = await discover(provider);
+    expect(calls).toBe(3);
+    expect(catalog.models.map(model => model.id)).toEqual(["retry-model"]);
+    expect(requestTimes[1] - requestTimes[0]).toBeGreaterThanOrEqual(1_200);
+    expect(requestTimes[2] - requestTimes[1]).toBeGreaterThanOrEqual(900);
+  } finally { await upstream.stop(true); }
+});
+
+test("catalog refresh retries a transient network failure before accepting a loopback response", async () => {
+  let fetchCalls = 0;
+  let serverCalls = 0;
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    serverCalls++;
+    return Response.json({data:[{id:"network-recovered-model"}]});
+  }});
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (...args: Parameters<typeof fetch>) => {
+    if (fetchCalls++ === 0) throw new TypeError("synthetic connection reset");
+    return originalFetch(...args);
+  }) as typeof fetch;
+  try {
+    const provider = {...parse(providerInputSchema, {
+      id:"network-provider", name:"Network provider", baseUrl:upstream.url.origin,
+      protocol:"openai-chat", catalogFormat:"openai",
+    }), version:1, updatedAt:"now"};
+    await expect(discover(provider)).resolves.toMatchObject({models:[{id:"network-recovered-model"}]});
+    expect(fetchCalls).toBe(2);
+    expect(serverCalls).toBe(1);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await upstream.stop(true);
+  }
+});
+
+test("catalog refresh enforces its aggregate deadline between paginated pages", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    calls++;
+    return Response.json({data:[{id:"first-page-model"}],links:{next:"?offset=1"}});
+  }});
+  const originalNow = Date.now;
+  const start = originalNow();
+  Date.now = () => calls > 0 ? start + 60_001 : start;
+  try {
+    const provider = {...parse(providerInputSchema, {
+      id:"deadline-pagination-provider", name:"Deadline pagination provider", baseUrl:upstream.url.origin,
+      protocol:"openai-chat", catalogFormat:"openai",
+    }), version:1, updatedAt:"now"};
+    await expect(discover(provider)).rejects.toMatchObject({code:"provider_unavailable"});
+    expect(calls).toBe(1);
+  } finally {
+    Date.now = originalNow;
+    await upstream.stop(true);
+  }
+});
+
+test("catalog refresh does not retry non-transient rejection or exceed retries", async () => {
+  let terminalCalls = 0;
+  const terminal = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    terminalCalls++;
+    return new Response("forbidden", {status:403});
+  }});
+  let transientCalls = 0;
+  const transient = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    transientCalls++;
+    return new Response("unavailable", {status:503});
+  }});
+  const provider = (baseUrl:string) => ({...parse(providerInputSchema, {
+    id:"rejection-provider", name:"Rejection provider", baseUrl, protocol:"openai-chat", catalogFormat:"openai",
+  }), version:1, updatedAt:"now"});
+  try {
+    await expect(discover(provider(terminal.url.origin))).rejects.toMatchObject({code:"provider_rejected"});
+    expect(terminalCalls).toBe(1);
+    await expect(discover(provider(transient.url.origin))).rejects.toMatchObject({code:"provider_rejected"});
+    expect(transientCalls).toBe(3);
+  } finally {
+    await terminal.stop(true);
+    await transient.stop(true);
+  }
+});
+
+test("catalog refresh fails closed when Retry-After cannot fit its bounded deadline", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    calls++;
+    return new Response("try later", {status:429, headers:{"retry-after":"120"}});
+  }});
+  try {
+    const provider = {...parse(providerInputSchema, {
+      id:"deadline-provider", name:"Deadline provider", baseUrl:upstream.url.origin,
+      protocol:"openai-chat", catalogFormat:"openai",
+    }), version:1, updatedAt:"now"};
+    await expect(discover(provider)).rejects.toMatchObject({code:"provider_unavailable"});
+    expect(calls).toBe(1);
+  } finally { await upstream.stop(true); }
+});
+
+test("catalog refresh fails closed on an oversized numeric Retry-After", async () => {
+  let calls = 0;
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch() {
+    calls++;
+    return new Response("try later", {status:429, headers:{"retry-after":"9007199254740992"}});
+  }});
+  try {
+    const provider = {...parse(providerInputSchema, {
+      id:"oversized-delay-provider", name:"Oversized delay provider", baseUrl:upstream.url.origin,
+      protocol:"openai-chat", catalogFormat:"openai",
+    }), version:1, updatedAt:"now"};
+    await expect(discover(provider)).rejects.toMatchObject({code:"provider_unavailable"});
+    expect(calls).toBe(1);
+  } finally { await upstream.stop(true); }
+});

@@ -6,6 +6,7 @@ import { CommandInterrupted, codingEligible, harnessEligible, validateHarnessPro
 import { providerCredential } from "./presets";
 import { privateDirectory, switcherHome } from "./runtime";
 import { prepareHarnessLaunch, detectHarness, codexModel, validateHarnessVersion, validateHarnessConfiguration } from "./harnesses";
+import { harnessInstallationMessage } from "./harness-installation";
 import { runHarnessProcess } from "./harness-process";
 import { oriLaunchWarnings, assertOriLoginAllowed, inspectOri, prepareOriLaunch, requireOriHarness, validateOriLaunchRequest, type OriContract, type OriLaunchPlan } from "./ori-backend";
 
@@ -105,7 +106,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   if (backend === "ori" && options.executable) throw new Error("--executable is ambiguous with --backend ori; use --ori-executable PATH.");
   if (backend === "direct" && options.oriExecutable) throw new Error("--ori-executable requires --backend ori.");
   const detection = backend === "direct" ? await detectHarness(plan.profile.harness, options.executable) : undefined;
-  if (backend === "direct" && !detection?.available) throw new Error(`Harness ${plan.profile.harness} is not installed; use --executable PATH after installing it.`);
+  if (backend === "direct" && !detection?.available) throw new Error(harnessInstallationMessage(plan.profile.harness, detection?.executable ?? plan.profile.harness, Boolean(options.executable)));
   if (backend === "direct" && plan.profile.harness === "gemini") validateHarnessVersion("gemini", detection?.version);
   if(backend==="direct"&&plan.profile.harness==="aider")validateHarnessVersion(plan.profile.harness,detection?.version);
   const root = resolve(options.stateDir ?? join(switcherHome(),"state"));

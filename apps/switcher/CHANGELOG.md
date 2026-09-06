@@ -4,7 +4,7 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-06T13:53:41.691Z"
+updated_at: "2026-09-06T15:15:27Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -12,6 +12,8 @@ source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ## 0.1.2
 
 ### Patch Changes
+
+- Sanitize remote API error diagnostics before SDK or CLI output, validating bounded fields and redacting common representations of the operator credential sent with the request.
 
 - Add built-in OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, legacy OpenCode, Kilo, Gemini CLI and Aider adapters with provider catalogs, native model selection and persistent sessions. Preserve each supported native permission and instruction contract with validation before provider discovery or credential resolution.
 

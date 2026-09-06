@@ -9,6 +9,69 @@ const modalities = (v: unknown): string[] | undefined => {
   return v.map(i => i.toLowerCase());
 };
 export type CatalogCredentialResolver = (provider: ProviderInput) => Promise<string | undefined>;
+
+const CATALOG_REQUEST_TIMEOUT_MS = 20_000;
+const CATALOG_REFRESH_DEADLINE_MS = 60_000;
+const CATALOG_MAX_RETRIES = 2;
+const TRANSIENT_CATALOG_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function retryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    try {
+      const milliseconds = BigInt(trimmed) * 1000n;
+      if (milliseconds > BigInt(Number.MAX_SAFE_INTEGER)) return Number.POSITIVE_INFINITY;
+      return Number(milliseconds);
+    } catch {
+      return Number.POSITIVE_INFINITY;
+    }
+  }
+  const date = Date.parse(trimmed);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+}
+
+function catalogDeadlineFault(): Fault {
+  return new Fault(502, "provider_unavailable", "Provider catalog refresh exceeded its bounded deadline.");
+}
+
+async function waitForCatalogRetry(delayMs: number, deadline: number): Promise<void> {
+  if (Date.now() + delayMs > deadline) throw catalogDeadlineFault();
+  if (delayMs > 0) await new Promise<void>(resolve => setTimeout(resolve, delayMs));
+}
+
+async function fetchCatalogPage(
+  url: URL,
+  headers: Record<string, string>,
+  deadline: number,
+): Promise<Response> {
+  for (let retry = 0; ; retry++) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw catalogDeadlineFault();
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers,
+        redirect: "manual",
+        signal: AbortSignal.timeout(Math.max(1, Math.min(CATALOG_REQUEST_TIMEOUT_MS, remaining))),
+      });
+    } catch {
+      if (retry >= CATALOG_MAX_RETRIES) throw new Fault(502, "provider_unavailable", "Provider catalog request failed.");
+      await waitForCatalogRetry(100 * (2 ** retry), deadline);
+      continue;
+    }
+    if (response.ok) return response;
+    const retryable = TRANSIENT_CATALOG_STATUSES.has(response.status);
+    await response.body?.cancel().catch(() => {});
+    if (!retryable || retry >= CATALOG_MAX_RETRIES)
+      throw new Fault(502, "provider_rejected", `Provider catalog returned HTTP ${response.status}.`);
+    // A provider-supplied Retry-After is a lower bound. If it cannot be
+    // honoured inside our finite refresh budget, fail rather than retry early.
+    const delay = retryAfterMs(response.headers.get("retry-after"));
+    await waitForCatalogRetry(delay ?? 100 * (2 ** retry), deadline);
+  }
+}
+
 export async function discover(provider: Provider, env: Record<string, string | undefined> = process.env, resolveCredential?: CatalogCredentialResolver): Promise<Catalog> {
   const refreshedAt = new Date().toISOString();
   if (provider.manualModels.length) return {models: provider.manualModels, source: "manual", refreshedAt};
@@ -39,12 +102,10 @@ export async function discover(provider: Provider, env: Record<string, string | 
   if (url.hostname === "openrouter.ai") url.searchParams.set("output_modalities", "all");
   const models = new Map<string, Model>(); const seenCursors = new Set<string>();
   const seenPages = new Set<string>([url.href]);
+  const deadline = Date.now() + CATALOG_REFRESH_DEADLINE_MS;
   let fireworksTotal: number | undefined;
   for (let page = 0; page < 100; page++) {
-    let response: Response;
-    try { response = await fetch(url, {headers, redirect: "manual", signal: AbortSignal.timeout(20_000)}); }
-    catch { throw new Fault(502, "provider_unavailable", "Provider catalog request failed."); }
-    if (!response.ok) { await response.body?.cancel(); throw new Fault(502, "provider_rejected", `Provider catalog returned HTTP ${response.status}.`); }
+    const response = await fetchCatalogPage(url, headers, deadline);
     const data = await boundedJson(response);
     if (provider.catalogFormat === "fireworks" && data?.totalSize !== undefined) {
       if (typeof data.totalSize !== "number" || !Number.isInteger(data.totalSize) || data.totalSize < 0)

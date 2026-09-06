@@ -4,10 +4,12 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T14:35:14.192834+00:00"
+updated_at: "2026-09-06T15:24:32.222793+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+The 0.1.2 release candidate is being rebuilt before publication. An independent error-path probe reproduced an operator-credential reflection in SDK/CLI remote API errors; the correction, bounded catalog retries and native installation guidance are being integrated and checked. Archive `453bc3d6180a523286ab10f0a0154316cbf75672` is retained as historical evidence and must not be published. New archive identity, combined verification, CI and registry acceptance remain pending.
 
 Switcher 0.1.1 is published and registry accepted. Expanded adapters are implemented and candidate-accepted for 0.1.2; they are not features of the published 0.1.1 package. This matrix distinguishes advertised wire contracts, controlled native tests and real-provider acceptance. It does not imply that every provider model works in every harness.
 
