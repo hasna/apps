@@ -25,6 +25,7 @@ export const modelSchema = z.object({
   inputModalities: z.array(z.string().max(50)).max(20).optional(),
   outputModalities: z.array(z.string().max(50)).max(20).optional(),
   supportedParameters: z.array(z.string().max(100)).max(100).optional(),
+  supportedGenerationMethods: z.array(z.string().min(1).max(100)).max(100).optional(),
 }).strict();
 export const providerInputSchema = z.object({
   id: idSchema, name: label, baseUrl: urlSchema, protocol: protocolSchema,
@@ -95,9 +96,9 @@ export function validateHarnessProvider(harness: Profile["harness"], provider: P
     throw new Fault(422, "auth_mismatch", "Gemini CLI requires x-api-key authentication for its native generateContent protocol.");
 }
 export function codingEligible(model: Model): boolean {
-  return model.available !== false && (!model.outputModalities || model.outputModalities.includes("text")) &&
+  return model.available !== false && (!model.supportedGenerationMethods || model.supportedGenerationMethods.includes("generateContent")) && (!model.outputModalities || model.outputModalities.includes("text")) &&
     (!model.supportedParameters || model.supportedParameters.includes("tools"));
 }
 export function harnessEligible(model:Model,harness:Profile["harness"]):boolean {
-  return harness==="aider"?model.available!==false&&(!model.inputModalities||model.inputModalities.includes("text"))&&(!model.outputModalities||model.outputModalities.includes("text")):codingEligible(model);
+  return harness==="aider"?model.available!==false&&(!model.supportedGenerationMethods||model.supportedGenerationMethods.includes("generateContent"))&&(!model.inputModalities||model.inputModalities.includes("text"))&&(!model.outputModalities||model.outputModalities.includes("text")):codingEligible(model);
 }

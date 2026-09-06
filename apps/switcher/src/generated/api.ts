@@ -299,6 +299,7 @@ export interface components {
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
             }[];
         };
         Provider: {
@@ -333,6 +334,7 @@ export interface components {
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
             }[];
             version: number;
             updatedAt: string;
@@ -365,6 +367,7 @@ export interface components {
             inputModalities?: string[];
             outputModalities?: string[];
             supportedParameters?: string[];
+            supportedGenerationMethods?: string[];
         };
         ModelPage: {
             data: {
@@ -377,6 +380,7 @@ export interface components {
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
                 codingEligible: boolean;
             }[];
             total: number;
@@ -397,6 +401,7 @@ export interface components {
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
             }[];
             refreshedAt: string;
             /** @enum {string} */
@@ -435,6 +440,7 @@ export interface components {
                     inputModalities?: string[];
                     outputModalities?: string[];
                     supportedParameters?: string[];
+                    supportedGenerationMethods?: string[];
                 }[];
                 version: number;
                 updatedAt: string;
@@ -460,6 +466,7 @@ export interface components {
                     inputModalities?: string[];
                     outputModalities?: string[];
                     supportedParameters?: string[];
+                    supportedGenerationMethods?: string[];
                 }[];
                 refreshedAt: string;
                 /** @enum {string} */

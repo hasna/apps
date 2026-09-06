@@ -4,7 +4,7 @@ title: "Switcher"
 type: "package-documentation"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:50:21.698672Z"
-updated_at: "2026-09-06T13:55:25.189763+00:00"
+updated_at: "2026-09-06T14:21:11.994837+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -127,6 +127,8 @@ Aider has no session ID. Each launch writes a separate owner-only transcript und
 
 The native Gemini adapter supports exactly Gemini CLI 0.58.0 and the `gemini-generate-content` protocol with `x-api-key` authentication (the native wire header is `x-goog-api-key`). Use `switcher launch gemini --provider gemini --model MODEL`, selecting an ID from the discovered catalog. A compatible custom gateway must implement the same Gemini protocol and discovery contract. Chat Completions, OAuth, Vertex/ADC and Ori are separate interfaces and are not provided by this native adapter.
 
+The API retains Gemini's full catalog and its documented `supportedGenerationMethods` metadata. Models that explicitly lack `generateContent`, such as embedding or prediction-only entries, are excluded from coding selections. Absent metadata remains unknown; support for `generateContent` alone does not establish text output or function-tool support. See the [Gemini model catalog contract](https://ai.google.dev/api/models).
+
 Switcher holds the upstream key in an authenticated loopback bridge; the native CLI receives a temporary local token. The bridge accepts only catalog model IDs and the `generateContent`, `streamGenerateContent` and `countTokens` routes, preserves the configured deployment prefix, and cancels unfinished streams on exit. It does not allow a native client to replace the upstream endpoint or headers. Native helper requests for models outside the catalog fail closed.
 
 Each launch gets private user, default and system settings. The complete compatible catalog replaces native picker visibility, and explicit model resolution preserves upstream IDs. Native profile sessions remain durable across fresh launches: pass `-- --resume latest --prompt PROMPT` for headless continuation. Concurrent launches share session storage but have separate configuration and native session IDs.
@@ -189,7 +191,7 @@ switcher launch coding
 
 The model ID is an example; choose an exact ID from the current catalog and verify account access. Use `--url https://provider.example/api/v1` instead of the preset for any compatible endpoint. The base URL includes the provider API version/path. Presets declare the appropriate discovery URL separately; DeepSeek discovers models at its root while Messages inference uses its Anthropic path. Select a separate provider profile for each wire protocol. The launch adapters normalize native endpoint conventions.
 
-For Claude use `--harness claude` with `anthropic-messages`; for Grok, Hermes or OpenCode 2 use their supported protocol. Pass native arguments after `--`, such as `switcher launch coding -- exec "Reply with exactly: connected"`. `--backend direct` is the default; the optional `--backend ori` is OpenRouter-only and accepts `--ori-executable PATH`, while `--executable` remains the direct adapter option. `--cwd`, `--state-dir`, and `--timeout SECONDS` are local launcher options. Native approval and sandbox settings remain in effect. See [the Ori backend contract](docs/ori-backend-integration.md) for its supported target and catalog boundaries.
+For Claude use `--harness claude` with `anthropic-messages`; for Grok, Hermes or OpenCode 2 use their supported protocol. Pass native arguments after `--`, such as `switcher launch coding -- exec "Reply with exactly: connected"`. `--backend direct` is the default; the optional `--backend ori` is OpenRouter-only and accepts `--ori-executable PATH`, while `--executable` remains the direct adapter option. `--cwd`, `--state-dir`, and `--timeout SECONDS` are local launcher options. Native approval and sandbox settings remain in effect. See [the Ori backend contract](https://github.com/hasna/apps/blob/main/apps/switcher/docs/ori-backend-integration.md) for its supported target and catalog boundaries.
 
 When the API runs remotely, inject the provider credential into the API process for authenticated catalog discovery and into the local launcher for direct inference. The API never returns a provider key. An external compatible gateway can be the configured provider. Switcher does not translate between wire protocols.
 
@@ -204,7 +206,6 @@ When the API runs remotely, inject the provider credential into the API process 
 | Claude Code ≥2.1.242 | Anthropic Messages | Per-launch `modelPicker` on compatible Claude versions |
 | Codex ≥0.153.0 | OpenAI Responses | Startup `model_catalog_json` |
 | Grok Build ≥1.0.13 | Chat Completions, Responses or Messages | Authenticated loopback remote catalog with upstream model IDs |
-| Hermes Agent ≥0.21.0 | Chat Completions, Responses or Messages | Per-launch custom-provider loopback catalog |
 | OpenCode 2 (tested beta-19157) | Chat Completions, Responses or Messages | Version 2 provider/model configuration and standalone server |
 | Pi ≥0.85.1 | Chat, Responses, Messages | Provider-scoped native picker and model cycling |
 | OMP ≥18.1.11 | Chat, Responses, Messages | Native models.yml catalog and model roles |
@@ -216,9 +217,8 @@ When the API runs remotely, inject the provider credential into the API process 
 | Kilo ≥7.5.15 | Chat, Responses, Messages | Native provider catalog with scoped bridge |
 | Gemini CLI 0.58.0 | Gemini generateContent | Exact native dynamic model catalog |
 | Aider 0.86.2 | Chat, Responses, Messages | Native available-model listing; Responses is buffered |
-| DeepSeek Harness ≥0.1.2-rc.1 | Chat Completions, Responses or Messages | Native web/ACP catalog from an isolated provider composition; persistent sessions |
 
-The CLI catalog includes all provider output modalities. Native coding pickers exclude unavailable models and those explicitly lacking text output or tool support; unknown metadata remains unknown. This is a capability filter, not a guarantee of successful tool use. Catalog refresh happens before every launch. Native pickers are startup snapshots, not promised live reloads. OpenCode requires a complete capability object; missing fields use text-only/tool-enabled native defaults with a warning. Its beta `models --standalone` command may return an early empty snapshot; the native `/api/model` API and interactive picker expose the settled catalog.
+The CLI catalog includes all provider output modalities. Native coding pickers exclude unavailable models and those explicitly lacking a required generation method, text output or tool support; unknown metadata remains unknown. This is a capability filter, not a guarantee of successful tool use. Catalog refresh happens before every launch. Native pickers are startup snapshots, not promised live reloads. OpenCode requires a complete capability object; missing fields use text-only/tool-enabled native defaults with a warning. Its beta `models --standalone` command may return an early empty snapshot; the native `/api/model` API and interactive picker expose the settled catalog.
 
 The Claude adapter sets `ANTHROPIC_DEFAULT_MODEL` and the default subagent model to the selected provider model. Explicit subagent definitions and managed model restrictions still apply. These follow the [native model precedence rules](https://code.claude.com/docs/en/model-config).
 

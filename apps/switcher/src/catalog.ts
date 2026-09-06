@@ -72,6 +72,8 @@ export async function discover(provider: Provider, env: Record<string, string | 
         inputModalities: strings(row.architecture?.input_modalities ?? row.input_modalities) ?? modalities(row.inference_metadata?.request_modality),
         outputModalities: strings(row.architecture?.output_modalities ?? row.output_modalities) ?? modalities(row.inference_metadata?.response_modality),
         supportedParameters: strings(row.supported_parameters),
+        ...(provider.catalogFormat === "gemini" && row.supportedGenerationMethods !== undefined
+          ? {supportedGenerationMethods: row.supportedGenerationMethods} : {}),
       };
       if (provider.catalogFormat === "mistral") {
         const capabilities = row.capabilities;

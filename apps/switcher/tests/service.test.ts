@@ -75,6 +75,19 @@ for (const engine of ["sqlite","postgresql"] as const) {
       const results=await Promise.all([client.createProvider(input,"concurrent-request"),client.createProvider(input,"concurrent-request")]);
       expect(results[0]).toEqual(results[1]);
     });
+    test("generation methods survive API storage and prevent unsupported launch plans",async()=>{
+      const provider=await client.createProvider({id:"generation-methods",name:"Generation methods",baseUrl:"https://example.com/v1beta",protocol:"gemini-generate-content",authStyle:"x-api-key",manualModels:[
+        {id:"chat",name:"Chat",supportedGenerationMethods:["generateContent","countTokens"]},
+        {id:"embedding",name:"Embedding",supportedGenerationMethods:["embedContent"]},
+      ]});
+      await client.refreshModels(provider.id);
+      const list=await client.listModels(provider.id);
+      expect(list.data).toMatchObject([{id:"chat",supportedGenerationMethods:["generateContent","countTokens"],codingEligible:true},{id:"embedding",supportedGenerationMethods:["embedContent"],codingEligible:false}]);
+      const supported=await client.createProfile({id:"methods-chat",name:"Chat",providerId:provider.id,harness:"gemini",model:"chat"});
+      const rejected=await client.createProfile({id:"methods-embedding",name:"Embedding",providerId:provider.id,harness:"gemini",model:"embedding"});
+      expect((await client.launchPlan(supported.id)).catalog.models).toHaveLength(2);
+      await expect(client.launchPlan(rejected.id)).rejects.toMatchObject({code:"model_ineligible"});
+    });
   });
 }
 test("clients reject missing credentials, cleartext remote URLs and redirects",async()=>{

@@ -103,7 +103,7 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
           catch (e) { if (e instanceof Fault && e.status === 404) throw new Fault(422, "catalog_missing", "Refresh the provider catalog before launching."); throw e; }
           const selected = catalog.models.find(m => m.id === profile.model);
           if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
-          if (!harnessEligible(selected,profile.harness)) throw new Fault(422, "model_ineligible", "Selected model explicitly lacks text output or tool support.");
+          if (!harnessEligible(selected,profile.harness)) throw new Fault(422, "model_ineligible", "Selected model is unavailable or explicitly lacks a required generation method, text output or tool support.");
           const warnings: string[] = [];
           if (profile.harness!=="aider"&&!selected.supportedParameters) warnings.push("Provider does not declare tool capabilities; execution compatibility is unverified.");
           if (profile.harness === "claude" && !/claude/i.test(profile.model)) warnings.push("Anthropic does not support non-Claude models in Claude Code; this combination is experimental.");

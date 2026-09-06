@@ -317,3 +317,29 @@ test("linked catalog pages retain all models and reject changed authority, loops
     mode="incomplete";await expect(discover(provider)).rejects.toMatchObject({code:"incomplete_catalog"});
   } finally {await upstream.stop(true);}
 });
+
+test("Gemini keeps the complete catalog but excludes models without generateContent from coding selection",async()=>{
+  let methods:unknown=["generateContent","countTokens"];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(){return Response.json({models:[
+    {name:"models/chat",supportedGenerationMethods:methods},
+    {name:"models/embedding",supportedGenerationMethods:["embedContent","countTokens"]},
+    {name:"models/video",supportedGenerationMethods:["predictLongRunning"]},
+    {name:"models/no-actions",supportedGenerationMethods:[]},
+    {name:"models/unknown"},
+  ]});}});
+  try{
+    const provider={...parse(providerInputSchema,{id:"methods",name:"Methods",baseUrl:upstream.url.origin,catalogFormat:"gemini",catalogAuthStyle:"none",protocol:"gemini-generate-content",authStyle:"x-api-key"}),version:1,updatedAt:"now"};
+    const result=await discover(provider);
+    expect(result.models.map(m=>m.id)).toEqual(["chat","embedding","video","no-actions","unknown"]);
+    expect(result.models.filter(codingEligible).map(m=>m.id)).toEqual(["chat","unknown"]);
+    expect(result.models[0]).toMatchObject({supportedGenerationMethods:["generateContent","countTokens"]});
+    expect(result.models[0].supportedParameters).toBeUndefined();
+    expect(result.models[4]).not.toHaveProperty("supportedGenerationMethods");
+    const {harnessEligible}=await import("../src/domain");
+    expect(result.models.filter(m=>harnessEligible(m,"aider")).map(m=>m.id)).toEqual(["chat","unknown"]);
+    for(const malformed of [null,"generateContent",["generateContent",3],Array(101).fill("generateContent")]){
+      methods=malformed;
+      await expect(discover(provider)).rejects.toMatchObject({code:"invalid_catalog"});
+    }
+  }finally{await upstream.stop(true);}
+});
