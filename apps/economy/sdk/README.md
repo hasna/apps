@@ -22,11 +22,13 @@ For an authenticated self-hosted service, pass `apiKey`; the client sends it as 
 ```ts
 const economy = new EconomyClient({
   baseUrl: 'https://economy.example.com',
-  apiKey: process.env.ECONOMY_API_KEY,
+  apiKey: process.env.HASNA_ECONOMY_API_KEY,
 })
 ```
 
-`EconomyClient.fromEnv()` reads `ECONOMY_API_URL` (falling back to `ECONOMY_URL`) and `ECONOMY_API_KEY`. Client methods use the canonical `/v1` API and unwrap its `{ data, meta }` response envelope. See the repository [REST reference](../docs/rest-api.md) for routes and server authentication.
+An explicit `baseUrl` with no `apiKey` sends NO key at all — the SDK never attaches the ambient fleet credential (hasna/apps#1794).
+
+`EconomyClient.fromEnv()` reads `HASNA_ECONOMY_API_URL` (legacy fallbacks `ECONOMY_API_URL`, then `ECONOMY_URL`) and `HASNA_ECONOMY_API_KEY` (legacy fallback `ECONOMY_API_KEY`). Client methods use the canonical `/v1` API and unwrap its `{ data, meta }` response envelope. See the repository [REST reference](../docs/rest-api.md) for routes and server authentication.
 
 ## Development
 

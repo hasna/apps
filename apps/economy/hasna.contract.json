@@ -3,8 +3,8 @@
  "name": "economy",
  "class": "service",
  "contractVersion": "v1",
- "kitVersion": "0.13.4",
- "description": "AI coding cost tracker — CLI + MCP + HTTP API (economy-serve) + generated SDK. The server data backend is sqlite | postgresql, selected by the presence of HASNA_ECONOMY_DATABASE_URL; with postgresql the serve process reads AND writes the shared PostgreSQL directly with API-key auth via @hasna/contracts.",
+ "kitVersion": "1.0.2",
+ "description": "AI coding cost tracker — CLI + MCP + HTTP API (economy-serve) + generated SDK. The server data backend is sqlite | postgresql, selected by the presence of HASNA_ECONOMY_DATABASE_URL; with postgresql the serve process reads AND writes the shared PostgreSQL directly with API-key auth via @hasna/contracts. Hosted clients resolve their credential through the @hasna/contracts 1.0.2 resolver (Keychain, ~/.hasna/economy/config/credentials, HASNA_ECONOMY_API_KEY; default gateway https://api.hasna.com/economy) and fail closed with no credential.",
  "bins": [
   "economy",
   "economy-mcp",
@@ -86,8 +86,8 @@
    "auth": "api-key"
   },
   "client": {
-   "apiUrlEnv": "ECONOMY_API_URL",
-   "apiKeyEnv": "ECONOMY_API_KEY"
+   "apiUrlEnv": "HASNA_ECONOMY_API_URL",
+   "apiKeyEnv": "HASNA_ECONOMY_API_KEY"
   },
   "release": {
    "artifactScan": {

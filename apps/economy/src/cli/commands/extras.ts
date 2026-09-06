@@ -16,6 +16,7 @@ import { join } from 'path'
 import { printCompletion } from './completion.js'
 import { agentPaths } from '../../lib/paths.js'
 import { billingDriftCheck } from '../../lib/billing-diff.js'
+import { economyTransportReport } from '../../lib/cloud-storage.js'
 import { gatewayApiV1Root } from '../../lib/api-display-url.js'
 
 function fmt(usd: number): string {
@@ -209,7 +210,7 @@ export function registerExtendedCommands(program: Command): void {
         }
         checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
       }
-      checks.push({ ok: true, msg: `storage: ${cloud ? 'self_hosted/cloud (HASNA_ECONOMY_API_URL + key)' : 'local'}` })
+      checks.push({ ok: true, msg: `storage: ${cloud ? 'shared API (credential resolved via @hasna/contracts)' : 'local (explicit opt-in)'}` })
 
       // The storage check announces the resolved `/v1` authority when the
       // configured URL is the api.hasna.com gateway form, so the line
@@ -218,6 +219,12 @@ export function registerExtendedCommands(program: Command): void {
       if (cloud) {
         const gatewayRoot = gatewayApiV1Root(process.env.HASNA_ECONOMY_API_URL ?? process.env.ECONOMY_API_URL)
         if (gatewayRoot) checks.push({ ok: true, msg: `api: ${gatewayRoot}` })
+        // The credential SOURCE (never the value): which tier of the
+        // @hasna/contracts chain resolved the key for this run.
+        const report = economyTransportReport()
+        if (report.ok && report.authority) {
+          checks.push({ ok: true, msg: `credential source: ${report.authority.apiKeySource ?? '(unknown)'} (tier ${report.authority.apiKeyTier ?? '?'})` })
+        }
       }
 
       // Zero-cost tokenized-request detection and dedupe are LOCAL-DB maintenance
@@ -260,12 +267,46 @@ export function registerExtendedCommands(program: Command): void {
     })
 
   program
+    .command('transport')
+    .description('Report the resolved client transport and credential source (never the key)')
+    .option('--json', 'Output JSON')
+    .action((opts: { json?: boolean }) => {
+      const report = economyTransportReport()
+
+      if (opts.json) {
+        console.log(JSON.stringify(report, null, 2))
+        return
+      }
+
+      if (!report.ok) {
+        console.log(chalk.red('  economy transport: no hosted credential resolves.'))
+        for (const issue of report.issues) console.log(chalk.dim(`    ${issue}`))
+        console.log(chalk.dim('    Set HASNA_ECONOMY_API_KEY (Keychain, ~/.hasna/economy/config/credentials, or env), or set HASNA_ECONOMY_LOCAL=1 for the local store.'))
+        return
+      }
+
+      if (report.transport === 'sqlite') {
+        console.log(`  transport: ${report.transport} (${report.source}) — on-box SQLite store`)
+        return
+      }
+      console.log(`  transport: ${report.transport} (${report.source ?? 'http'})`)
+      const a = report.authority
+      if (a) {
+        console.log(`  api url:   ${a.baseUrl}`)
+        console.log(`  url source: ${a.apiUrlSource ?? '(none)'}`)
+        console.log(`  key source: ${a.apiKeySource ?? '(none)'}`)
+        console.log(`  key tier:   ${a.apiKeyTier ?? '(none)'}`)
+        if (a.warning) console.log(chalk.dim(`  warning:    ${a.warning}`))
+      }
+    })
+
+  program
     .command('init')
     .description('First-run setup wizard hints')
     .action(async () => {
       console.log(chalk.bold.cyan('\n  Economy Init\n'))
       console.log('  Local mode (on-box SQLite):')
-      console.log('  1. Set machine id:  export ECONOMY_MACHINE_ID=spark01')
+      console.log('  1. Set machine id:  export HASNA_ECONOMY_MACHINE_ID=spark01')
       console.log('  2. Cursor token:    export CURSOR_SESSION_TOKEN=...')
       console.log('  3. Run ingest:      economy sync --verbose')
       console.log('  4. MCP install:     economy mcp --all')

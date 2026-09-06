@@ -32,9 +32,12 @@ const localDb = (): ReturnType<typeof openDatabase> => {
 }
 
 // Every DATA tool routes through the Store. `getStore()` returns an ApiStore
-// (self_hosted/cloud HTTP /v1) when HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY
-// are set, else a LocalStore over the on-box SQLite — one interface, no per-tool
-// branching, so the MCP shares the same fleet state as the CLI.
+// (shared HTTP /v1 at the @hasna/contracts-resolved authority) when a credential
+// resolves from the chain — Keychain, ~/.hasna/economy/config/credentials,
+// HASNA_ECONOMY_API_KEY, default fleet gateway — else a LocalStore over the
+// on-box SQLite via the explicit HASNA_ECONOMY_LOCAL=1 opt-in; nothing
+// configured FAILS CLOSED. One interface, no per-tool branching, so the MCP
+// shares the same fleet state as the CLI.
 const store = getStore()
 
 // The MCP SDK's tool-registration generics are expensive enough to make
@@ -577,7 +580,7 @@ server.tool(
     if (isCloudStore()) {
       const cloud = economyCloudStorage()
       if (!cloud.active) {
-        return text('cloud mode: sync transport unavailable (set HASNA_ECONOMY_API_URL and HASNA_ECONOMY_API_KEY)')
+        return text('cloud mode: sync transport unavailable (no credential resolved; set HASNA_ECONOMY_API_KEY or write ~/.hasna/economy/config/credentials)')
       }
       const result = await syncAllToCloud(cloud, opts)
       if (json) return text(JSON.stringify(result, null, 2))

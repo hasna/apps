@@ -1,4 +1,4 @@
-import { appliedProfileName, resolveStore } from './accounts-store.js'
+import { appliedProfileName, resolveStore, type ResolveAccountsStoreOptions } from './accounts-store.js'
 import type { AccountsStore, Profile as AccountsProfile, ToolDef as AccountsTool } from './accounts-store.js'
 import type { Agent } from './agents.js'
 
@@ -96,11 +96,12 @@ async function profileForEnvDir(
 export async function resolveAccountForAgent(
   agent: Agent,
   env: NodeJS.ProcessEnv = process.env,
+  options: ResolveAccountsStoreOptions = {},
 ): Promise<AccountAttribution | null> {
   const override = envOverride(agent, env)
   if (override) return override
 
-  const store = resolveStore(env)
+  const store = resolveStore(env, options)
   const tools = new Map((await store.listTools()).map((tool) => [tool.id, tool]))
   for (const toolId of AGENT_ACCOUNT_TOOLS[agent]) {
     const tool = tools.get(toolId)

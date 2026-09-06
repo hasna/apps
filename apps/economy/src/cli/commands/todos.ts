@@ -616,7 +616,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '12.4',
-        title: 'economy init — detect agents, set ECONOMY_MACHINE_ID, cloud URL, MCP install, cloud schedule, cron hint',
+        title: 'economy init — detect agents, set HASNA_ECONOMY_MACHINE_ID, cloud URL, MCP install, cloud schedule, cron hint',
         status: 'done',
         deps: ['9.7', '12.1'],
       },
@@ -695,7 +695,7 @@ export const ROADMAP_PHASES: TodoPhase[] = [
       },
       {
         id: '14.5',
-        title: 'economy serve auth token (ECONOMY_API_TOKEN) — localhost-only default, optional LAN bind',
+        title: 'economy serve auth token (HASNA_ECONOMY_API_TOKEN) — localhost-only default, optional LAN bind',
         status: 'done',
       },
     ],

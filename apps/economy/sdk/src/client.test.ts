@@ -20,6 +20,10 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch
   delete process.env['ECONOMY_URL']
+  delete process.env['ECONOMY_API_URL']
+  delete process.env['ECONOMY_API_KEY']
+  delete process.env['HASNA_ECONOMY_API_URL']
+  delete process.env['HASNA_ECONOMY_API_KEY']
 })
 
 describe('EconomyClient', () => {
@@ -52,6 +56,73 @@ describe('EconomyClient', () => {
     await client.getMachines()
 
     expect(calls[0]!.url).toBe('http://economy.env/v1/machines')
+  })
+
+  it('prefers the canonical HASNA_ECONOMY_* env pair over the legacy aliases', async () => {
+    process.env['HASNA_ECONOMY_API_URL'] = 'https://economy.canonical.example'
+    process.env['HASNA_ECONOMY_API_KEY'] = 'canonical-key'
+    process.env['ECONOMY_API_URL'] = 'http://economy.legacy'
+    process.env['ECONOMY_API_KEY'] = 'legacy-key'
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      return mockJson({ data: [], meta: {} })
+    }) as typeof fetch
+
+    const client = EconomyClient.fromEnv()
+    await client.getMachines()
+
+    expect(calls[0]!.url).toBe('https://economy.canonical.example/v1/machines')
+    const headers = new Headers(calls[0]!.init?.headers)
+    expect(headers.get('x-api-key')).toBe('canonical-key')
+  })
+
+  it('accepts the legacy unprefixed env pair when the canonical one is unset', async () => {
+    process.env['ECONOMY_API_URL'] = 'http://economy.legacy'
+    process.env['ECONOMY_API_KEY'] = 'legacy-key'
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      return mockJson({ data: [], meta: {} })
+    }) as typeof fetch
+
+    const client = EconomyClient.fromEnv()
+    await client.getMachines()
+
+    expect(calls[0]!.url).toBe('http://economy.legacy/v1/machines')
+    const headers = new Headers(calls[0]!.init?.headers)
+    expect(headers.get('x-api-key')).toBe('legacy-key')
+  })
+
+  // hasna/apps#1794: a credential is pinned to the authority it resolved
+  // with. An explicit baseUrl WITHOUT an apiKey must not pick up the ambient
+  // fleet key just because one exists in the environment — the SDK only ever
+  // sends the key it was explicitly handed.
+  it('never attaches an ambient fleet key when only a baseUrl is given', async () => {
+    process.env['HASNA_ECONOMY_API_KEY'] = 'ambient-fleet-key'
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      return mockJson({ data: [], meta: {} })
+    }) as typeof fetch
+
+    const client = new EconomyClient({ baseUrl: 'http://127.0.0.1:3456', retries: 0 })
+    await client.getMachines()
+
+    expect(calls[0]!.url).toBe('http://127.0.0.1:3456/v1/machines')
+    const headers = new Headers(calls[0]!.init?.headers)
+    expect(headers.get('x-api-key')).toBeNull()
+  })
+
+  it('sends the apiKey it was explicitly given with the baseUrl', async () => {
+    process.env['HASNA_ECONOMY_API_KEY'] = 'ambient-fleet-key'
+    globalThis.fetch = (async (url, init) => {
+      calls.push({ url: String(url), init })
+      return mockJson({ data: [], meta: {} })
+    }) as typeof fetch
+
+    const client = new EconomyClient({ baseUrl: 'http://127.0.0.1:3456', apiKey: 'explicit-key', retries: 0 })
+    await client.getMachines()
+
+    const headers = new Headers(calls[0]!.init?.headers)
+    expect(headers.get('x-api-key')).toBe('explicit-key')
   })
 
   it('maps read helpers to their REST API endpoints', async () => {

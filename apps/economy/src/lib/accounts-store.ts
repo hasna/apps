@@ -13,16 +13,18 @@
  *    (env overrides `ACCOUNTS_HOME` / `ACCOUNTS_STORE_PATH`), store shape
  *    `{ version: 1, current, applied, toolLocks, profiles, tools }`, and the
  *    same parse/validation failure modes.
- *  - API transport: self-hosted accounts-serve at `<API_URL>/v1` via
- *    `HASNA_ACCOUNTS_API_URL` + `HASNA_ACCOUNTS_API_KEY` (legacy aliases
- *    `ACCOUNTS_API_URL` / `ACCOUNTS_API_KEY`), bearer + `x-api-key` auth,
- *    30s timeout, 2 retries on 408/425/429/5xx with jittered backoff — the
- *    contracts 0.5.2 HTTP-transport defaults @hasna/accounts shipped with.
- *  - Transport selection is the env contract alone: the API when
- *    `HASNA_ACCOUNTS_API_URL` + `HASNA_ACCOUNTS_API_KEY` are both present,
- *    else the local JSON store. Deployment modes no longer exist; any retired
- *    `*_STORAGE_MODE` / `*_MODE` variable still set is a hard error (owner
- *    directive 2026-07-29), never a hint or a selector.
+ *  - API transport: accounts-serve at the `@hasna/contracts`-resolved `/v1`
+ *    authority (env `HASNA_ACCOUNTS_API_URL` + `HASNA_ACCOUNTS_API_KEY`, the
+ *    credentials file, or the Keychain, default gateway
+ *    `https://api.hasna.com/accounts`), bearer + `x-api-key` auth, 30s timeout,
+ *    2 retries on 408/425/429/5xx with jittered backoff — the contracts HTTP
+ *    transport defaults @hasna/accounts shipped with, resolved through the
+ *    shared client chain rather than by hand.
+ *  - Transport selection is the resolved credential alone: the API when
+ *    `@hasna/contracts` resolves an accounts credential for the environment,
+ *    else the local JSON registry. Deployment modes no longer exist; any
+ *    retired `*_STORAGE_MODE` / `*_MODE` variable still set is a hard error
+ *    (owner directive 2026-07-29), never a hint or a selector.
  *
  * When @hasna-internal/subscriptions is published, this file can be replaced
  * by a thin adapter over its SubscriptionsStore (same shape, new env vars).
@@ -31,6 +33,15 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
+import { resolveClientTransport, resolveCredential, type CredentialChainOptions } from '@hasna/contracts/client'
+
+/** The accounts app slug for the @hasna/contracts credential chain. */
+const ACCOUNTS_APP = 'accounts'
+
+/** Test injection for the accounts credential chain (keychain runner, tier-1 key). */
+export interface ResolveAccountsStoreOptions {
+  credentials?: CredentialChainOptions
+}
 
 /** Profile-name validator: same slug rule as @hasna/accounts. */
 const profileNameSchema = z.string().min(1).max(64).regex(/^[a-z0-9][a-z0-9-]*$/, 'must be lowercase alphanumeric/hyphen and start with a letter or digit')
@@ -214,18 +225,6 @@ function assertNoRetiredStorageMode(env: NodeJS.ProcessEnv): void {
 
 const RETRY_STATUSES = [408, 425, 429, 500, 502, 503, 504]
 
-/** Normalize an API URL to its `<origin>/v1` base (contracts 0.5.2 semantics). */
-function toV1BaseUrl(apiUrl: string): string {
-  const url = new URL(apiUrl)
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('API URL must use http or https.')
-  let path = url.pathname.replace(/\/+$/, '')
-  if (path.endsWith('/v1')) path = path.slice(0, -'/v1'.length)
-  url.pathname = `${path}/v1`
-  url.search = ''
-  url.hash = ''
-  return url.toString().replace(/\/+$/, '')
-}
-
 class AccountsApiError extends Error {
   readonly status: number
   readonly body: unknown
@@ -400,27 +399,33 @@ class ApiStore implements AccountsStore {
 }
 
 /**
- * Resolve the active registry store for this process — the env contract alone:
- * the API when the URL + key pair is present (never selected by a storage
- * mode), else the local JSON store. Retired `*_STORAGE_MODE` / `*_MODE`
- * variables are a hard error so a half-migrated deployment fails loudly
- * instead of silently reading the wrong dataset.
+ * Resolve the active registry store for this process — the credential chain
+ * alone: the API transport when `@hasna/contracts` resolves an accounts
+ * credential for this environment (env `HASNA_ACCOUNTS_API_KEY` / legacy
+ * `ACCOUNTS_API_KEY`, the accounts credentials file, or the Keychain, with the
+ * authority defaulted to the fleet gateway `https://api.hasna.com/accounts`),
+ * else the local JSON registry. Retired `*_STORAGE_MODE` / `*_MODE` variables
+ * are a hard error so a half-migrated deployment fails loudly instead of
+ * silently reading the wrong dataset.
  */
-export function resolveStore(env: NodeJS.ProcessEnv = process.env): AccountsStore {
+export function resolveStore(
+  env: NodeJS.ProcessEnv = process.env,
+  options: ResolveAccountsStoreOptions = {},
+): AccountsStore {
   assertNoRetiredStorageMode(env)
-  const url = env.HASNA_ACCOUNTS_API_URL || env.ACCOUNTS_API_URL
-  const key = env.HASNA_ACCOUNTS_API_KEY || env.ACCOUNTS_API_KEY
-  if (url && key) return cloudStore(url, key)
-  return new LocalStore()
-}
-
-function cloudStore(url: string, key: string): AccountsStore {
+  const clientEnv = env as Record<string, string | undefined>
   try {
-    return new ApiStore(toV1BaseUrl(url), key)
+    const credential = resolveCredential(ACCOUNTS_APP, clientEnv, options.credentials)
+    if (credential === null) return new LocalStore()
+    const resolution = resolveClientTransport(ACCOUNTS_APP, clientEnv, {
+      credentials: credential ? { ...options.credentials, apiKey: credential.apiKey } : options.credentials,
+    })
+    return new ApiStore(resolution.baseUrl, credential.apiKey)
   } catch (err) {
-    // Same degradation as @hasna/accounts: an unusable API URL falls back to
-    // the local store rather than crashing attribution.
-    console.warn(`accounts: invalid API URL "${url}" (${err instanceof Error ? err.message : String(err)}); using local store`)
+    // Same degradation as @hasna/accounts: an unusable accounts API
+    // configuration falls back to the local registry rather than crashing
+    // attribution.
+    console.warn(`accounts: API configuration unusable (${err instanceof Error ? err.message : String(err)}); using local store`)
     return new LocalStore()
   }
 }

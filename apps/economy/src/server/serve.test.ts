@@ -217,8 +217,8 @@ describe('REST API server', () => {
     expect(typeof d['is_alert']).toBe('boolean')
   })
 
-  it('rejects API requests without token when ECONOMY_API_TOKEN is set', async () => {
-    process.env['ECONOMY_API_TOKEN'] = 'test-token'
+  it('rejects API requests without token when HASNA_ECONOMY_API_TOKEN is set', async () => {
+    process.env['HASNA_ECONOMY_API_TOKEN'] = 'test-token'
     try {
       const authed = await req(handler, '/api/summary?period=today', 'GET', undefined, {
         Authorization: 'Bearer test-token',
@@ -231,7 +231,7 @@ describe('REST API server', () => {
       const health = await req(handler, '/health')
       expect(health.status).toBe(200)
     } finally {
-      delete process.env['ECONOMY_API_TOKEN']
+      delete process.env['HASNA_ECONOMY_API_TOKEN']
     }
   })
 

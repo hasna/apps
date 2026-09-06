@@ -114,7 +114,7 @@ export async function runTui(opts: { watch?: boolean; interval?: number }): Prom
     if (data.quota) console.log(`  Quota:     ${data.quota}`)
     console.log(`  Fleet:     ${data.machineCount} machines`)
     console.log(`  Store:     ${data.transport === 'cloud-http' ? 'self_hosted (cloud API)' : 'local'}`)
-    if (getServeApiToken()) console.log(chalk.dim('  API auth:  ECONOMY_API_TOKEN set'))
+    if (getServeApiToken()) console.log(chalk.dim('  API auth:  HASNA_ECONOMY_API_TOKEN set'))
     console.log(chalk.dim(`\n  ${opts.watch ? `Refreshing every ${interval}s — Ctrl+C to exit` : 'Run with --watch for live refresh'}`))
   }
 
