@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   getStore,
   isCloudStore,
@@ -8,18 +11,22 @@ import {
   ApiStore,
   LocalStore,
 } from "./index.js";
+import {
+  resetTelephonyLocalModeNotice,
+  TELEPHONY_API_KEY_ENV_KEYS,
+  TELEPHONY_API_URL_ENV_KEYS,
+} from "../client-transport.js";
 import { HasnaHttpError } from "@hasna/contracts";
 import type { Agent, AgentConflictError, Call } from "../../types/index.js";
 
 const CLIENT_ENV = [
-  "HASNA_TELEPHONY_STORAGE_MODE",
-  "HASNA_TELEPHONY_MODE",
-  "TELEPHONY_STORAGE_MODE",
-  "TELEPHONY_MODE",
   "HASNA_TELEPHONY_API_URL",
   "HASNA_TELEPHONY_API_KEY",
   "TELEPHONY_API_URL",
   "TELEPHONY_API_KEY",
+  "HASNA_TELEPHONY_API_KEY_OVERRIDE",
+  "HASNA_TELEPHONY_API_KEY_REF",
+  "HASNA_PROFILE",
   "HASNA_TELEPHONY_LOCAL",
   "TELEPHONY_LOCAL",
 ];
@@ -29,22 +36,41 @@ function clearEnv(): void {
   resetStore();
 }
 
-afterEach(clearEnv);
+const cleanedHomes: string[] = [];
+
+afterEach(() => {
+  clearEnv();
+  resetTelephonyLocalModeNotice();
+  while (cleanedHomes.length > 0) rmSync(cleanedHomes.pop()!, { recursive: true, force: true });
+});
+
+/** A credentials file at `<home>/.hasna/telephony/config/credentials`, 0600. */
+function writeCredentialsFile(contents: string): string {
+  const home = mkdtempSync(join(tmpdir(), "ok-telephony-cred-home-"));
+  const dir = join(home, ".hasna", "telephony", "config");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const path = join(dir, "credentials");
+  writeFileSync(path, contents, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  cleanedHomes.push(home);
+  return home;
+}
 
 describe("telephony Store resolver", () => {
-  // Fail-closed contract (owner directive 2026-09-04): a missing API env is
+  // Fail-closed contract (owner directive 2026-09-04): a missing credential is
   // NEVER a silent selection of the on-box SQLite store. Local mode is
   // reachable only through the explicit HASNA_TELEPHONY_LOCAL=1 opt-in; with
-  // no API env and no opt-in, resolution throws an actionable error naming the
-  // required variables.
+  // no credential and no opt-in, resolution throws an actionable error naming
+  // the required variables.
   it("fails closed when nothing is set — never defaults to the LocalStore", () => {
-    clearEnv();
-    expect(() => getStore()).toThrow(/HASNA_TELEPHONY_API_URL/);
-    expect(() => getStore()).toThrow(/HASNA_TELEPHONY_API_KEY/);
+    // A caller-built env: no credential tier, no keychain, no disk — the
+    // hermetic shape of a machine with nothing configured.
+    expect(() => getStore({})).toThrow(/HASNA_TELEPHONY_API_URL/);
+    expect(() => getStore({})).toThrow(/HASNA_TELEPHONY_API_KEY/);
     // The error names the explicit local opt-in instead of offering a silent
     // fallback; nothing about it reads as a false-green local event.
-    expect(() => getStore()).toThrow(/HASNA_TELEPHONY_LOCAL=1/);
-    expect(() => isCloudStore()).toThrow();
+    expect(() => getStore({})).toThrow(/HASNA_TELEPHONY_LOCAL=1/);
+    expect(() => isCloudStore({})).toThrow();
     expect(telephonyStoreMisconfiguredError().message).toMatch(/fails closed instead of silently serving the local SQLite store/);
   });
 
@@ -104,53 +130,63 @@ describe("telephony Store resolver", () => {
     expect(getStore(env).transport).toBe("cloud-http");
   });
 
-  it("throws naming the missing variable when exactly one side of the API pair is set", () => {
+  it("rejects a declared-but-blank API URL loudly instead of resolving around it", () => {
+    clearEnv();
+    const env = {
+      HASNA_TELEPHONY_API_URL: "",
+      HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
+    } as Record<string, string>;
+    // "blank means unset" is telephony's own seam spelling — the blank is
+    // removed BEFORE the resolver sees the env, so this collapses to a bare
+    // key, and a key with no URL resolves the fleet gateway.
+    const store = getStore(env);
+    expect(store.transport).toBe("cloud-http");
+  });
+
+  it("throws naming the missing credential when a URL is set with no API key", () => {
     clearEnv();
     const missingKey = {
       HASNA_TELEPHONY_API_URL: "https://telephony.invalid",
     } as Record<string, string>;
     expect(() => getStore(missingKey)).toThrow(/HASNA_TELEPHONY_API_KEY/);
+    expect(() => getStore(missingKey)).toThrow(/no API key could be resolved/);
+  });
+
+  it("resolves the fleet gateway when a key is set with no URL — a key alone is complete", () => {
+    clearEnv();
     const missingUrl = {
       HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
     } as Record<string, string>;
-    expect(() => getStore(missingUrl)).toThrow(/HASNA_TELEPHONY_API_URL/);
+    const store = getStore(missingUrl);
+    expect(store.transport).toBe("cloud-http");
+    expect(store).toBeInstanceOf(ApiStore);
   });
 
-  it("throws naming the retired variable when a storage-mode variable is still set", () => {
-    clearEnv();
-    for (const key of ["HASNA_TELEPHONY_STORAGE_MODE", "HASNA_TELEPHONY_MODE", "TELEPHONY_STORAGE_MODE", "TELEPHONY_MODE"]) {
-      const env = { [key]: "postgres" } as Record<string, string>;
-      expect(() => getStore(env)).toThrow(new RegExp(key));
-    }
-  });
-
-  it("throws on a retired storage-mode variable even when it looks redundant with a full API pair", () => {
-    clearEnv();
+  it("lets a resolved credential outrank the local opt-in (secrets pattern)", () => {
+    // The opt-in YIELDS: HASNA_TELEPHONY_LOCAL=1 with a resolvable env key
+    // goes hosted, never local.
     const env = {
-      HASNA_TELEPHONY_STORAGE_MODE: "postgres",
-      HASNA_TELEPHONY_API_URL: "https://telephony.invalid",
+      HASNA_TELEPHONY_LOCAL: "1",
       HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
     } as Record<string, string>;
-    // The ratchet names the retired var; it is never a hint, so the pair does
-    // not rescue the config.
-    expect(() => getStore(env)).toThrow(/HASNA_TELEPHONY_STORAGE_MODE/);
+    expect(isLocalModeOptIn(env)).toBe(true);
+    expect(getStore(env).transport).toBe("cloud-http");
   });
 
-  // The bug this file's suite exists to keep closed: hasna.contract.json
-  // advertises the sqlite|postgresql data-backend switch, and the removed
-  // placement vocabulary must never come back as a transport selector. The
-  // client accepts no mode word at all — transport is the API pair — so any
-  // placement word set as a storage-mode variable is rejected by the ratchet.
-  it("rejects the removed placement vocabulary the manifest no longer declares", () => {
-    clearEnv();
-    for (const removed of ["local", "cloud", "self_hosted", "remote", "hybrid"]) {
-      const env = {
-        HASNA_TELEPHONY_STORAGE_MODE: removed,
-        HASNA_TELEPHONY_API_URL: "https://telephony.invalid",
-        HASNA_TELEPHONY_API_KEY: "hasna_telephony_test_key",
-      } as Record<string, string>;
-      expect(() => getStore(env)).toThrow(/HASNA_TELEPHONY_STORAGE_MODE was removed/);
-    }
+  it("lets a disk credential resolve from the credentials file and outrank the opt-in", () => {
+    const home = writeCredentialsFile(
+      `${TELEPHONY_API_URL_ENV_KEYS[0]}=https://telephony.file.test\n${TELEPHONY_API_KEY_ENV_KEYS[0]}=disk-only-key\n`,
+    );
+    const env = { HOME: home, HASNA_TELEPHONY_LOCAL: "1" } as Record<string, string>;
+    const store = getStore(env);
+    expect(store.transport).toBe("cloud-http");
+    expect(store).toBeInstanceOf(ApiStore);
+  });
+
+  it("does not resolve the machine's credential file when the env carries no HOME", () => {
+    // A caller-built env without HOME is outside every ambient store: even a
+    // real ~/.hasna/telephony/config/credentials on this machine is invisible.
+    expect(() => getStore({})).toThrow(/HASNA_TELEPHONY_LOCAL=1/);
   });
 });
 

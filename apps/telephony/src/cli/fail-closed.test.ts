@@ -5,34 +5,39 @@ import { join } from "node:path";
 
 /**
  * Fail-closed regression probes (owner directive 2026-09-04): a fleet bin run
- * WITHOUT its API env (HASNA_TELEPHONY_API_URL / HASNA_TELEPHONY_API_KEY, or
- * the TELEPHONY_API_URL / TELEPHONY_API_KEY aliases) must exit non-zero with
- * an actionable error naming the required environment — never silently serve
- * local SQLite (~/.hasna/telephony/telephony.db), never emit a local-fallback
- * event with exit 0, never default to local mode. The on-box SQLite store is
- * reachable only through the explicit opt-in HASNA_TELEPHONY_LOCAL=1 (alias
- * TELEPHONY_LOCAL=1).
+ * WITHOUT a resolvable credential (HASNA_TELEPHONY_API_KEY and its aliases are
+ * resolved by the shared @hasna/contracts chain — Keychain on macOS, the
+ * ~/.hasna/telephony/config/credentials file, then the env) must exit non-zero
+ * with an actionable error naming the required environment — never silently
+ * serve local SQLite (~/.hasna/telephony/telephony.db), never emit a
+ * local-fallback event with exit 0, never default to local mode. The on-box
+ * SQLite store is reachable only through the explicit opt-in
+ * HASNA_TELEPHONY_LOCAL=1 (alias TELEPHONY_LOCAL=1), and only when nothing at
+ * all resolves a credential.
  *
  * These spawn the real entrypoints as subprocesses — the only way to assert
  * process exit codes and filesystem side effects — under a scratch HOME so any
  * accidental ~/.hasna write would land in the probe directory and be detected
  * instead of touching the operator's real home. The spawned env is scrubbed of
- * every TELEPHONY-prefixed variable and the HASNA data-home overrides a shell
- * or wrapper might export, so an ambient fleet env cannot flip these probes
- * onto the network or past the fail-closed gate.
+ * every TELEPHONY-prefixed variable, the HASNA data-home overrides, and the
+ * credential home/pointers a shell or wrapper might export, so an ambient
+ * fleet env cannot flip these probes onto the network or past the fail-closed
+ * gate.
  */
 
 const APP_ROOT = new URL("../../", import.meta.url).pathname; // apps/telephony/
 const CLI_ENTRY = new URL("./index.ts", import.meta.url).pathname; // src/cli/index.ts
 const MCP_ENTRY = new URL("../mcp/index.ts", import.meta.url).pathname; // src/mcp/index.ts
 
-/** Strip every variable this suite must not inherit (fleet env, data-home overrides). */
+/** Strip every variable this suite must not inherit (fleet env, credential tiers, data-home overrides). */
 function scrubEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
     if (name.includes("TELEPHONY")) continue; // HASNA_TELEPHONY_* and TELEPHONY_*
     if (/^HASNA_(DATA|STATE|CONFIG|CACHE)_HOME$/.test(name)) continue;
+    if (name === "HASNA_HOME" || name === "HASNA_CONFIG_HOME") continue; // moves the credential disk tier
+    if (name === "HASNA_STATION" || name === "HASNA_PROFILE") continue; // keychain account / profile pointer
     env[name] = value;
   }
   return env;
@@ -94,7 +99,7 @@ describe("telephony CLI fails closed without the fleet API env", () => {
     }
   });
 
-  test("a partially configured pair (URL without key) fails closed naming the missing member", async () => {
+  test("a partially configured authority (URL without a credential) fails loud naming the missing key", async () => {
     const home = scratchHome();
     try {
       const result = await runEntry(CLI_ENTRY, ["sms", "list"], home, {
@@ -102,8 +107,11 @@ describe("telephony CLI fails closed without the fleet API env", () => {
       });
       expect(result.timedOut).toBe(false);
       expect(result.code).not.toBe(0);
+      // A configured authority with no resolvable credential is a HOSTED
+      // process with a broken credential: it fails loud and never falls to
+      // the on-box store.
       expect(result.stderr).toContain("HASNA_TELEPHONY_API_KEY");
-      expect(result.stderr).toContain("only HASNA_TELEPHONY_API_URL is set");
+      expect(result.stderr).toContain("no API key could be resolved");
       expect(existsSync(join(home, ".hasna", "telephony"))).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -137,6 +145,9 @@ describe("telephony CLI explicit local opt-in", () => {
       });
       expect(result.timedOut).toBe(false);
       expect(result.code).toBe(0);
+      // Local mode says so on stderr — it is never a silent state — while
+      // stdout stays JSON-clean.
+      expect(result.stderr.toLowerCase()).toContain("local");
       // LocalStore on the scratch data home: no agents yet, but the opt-in run
       // DID open the local database — proving local mode is reachable, and
       // only through the opt-in.
