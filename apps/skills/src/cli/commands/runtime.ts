@@ -68,10 +68,10 @@ export function registerRuntime(parent: Command) {
     .option("--remote", "List runs on the configured server", false)
     .option("--json", "Output as JSON", false)
     .option("--limit <n>", "Maximum number of runs", "20")
-    .option("--cursor <n>", "Numeric offset for human-output pagination", "0")
+    .option("--cursor <n>", "Local human-output offset; remote accepts only 0", "0")
     .description("List recent skill runs")
     .action((options: { json: boolean; limit: string; cursor?: string; remote?: boolean }) => options.remote
-      ? executeRemote(options, client => client.listRuns(Number(options.limit))) : handleRunsList(options));
+      ? handleRemoteRunsList(options) : handleRunsList(options));
 
   runs.command("logs").argument("<run-id>").option("--json", "Output as JSON", false)
     .action((id: string, options: { json: boolean }) => executeRemote(options, client => client.getRunLogs(id)));
@@ -562,6 +562,19 @@ function writeBlogArticleValidationError(errors: string[], json: boolean) {
     for (const error of errors) console.error(chalk.dim(`  ${error}`));
   }
   process.exitCode = 1;
+}
+
+function handleRemoteRunsList(options: { json: boolean; limit: string; cursor?: string }) {
+  // The remote contract accepts a limit, not a continuation cursor. Validate
+  // before resolving credentials or sending a request that would repeat page one.
+  if (!/^0+$/.test(options.cursor ?? "0")) {
+    const error = "Remote runs do not support cursor pagination. Omit --cursor or use --cursor 0; use --limit 1–100 to choose the number of recent runs.";
+    if (options.json) console.log(JSON.stringify({ error, code: "REMOTE_CURSOR_UNSUPPORTED" }));
+    else console.error(error);
+    process.exitCode = 1;
+    return;
+  }
+  return executeRemote(options, client => client.listRuns(Number(options.limit)));
 }
 
 function handleRunsList(options: { json: boolean; limit: string; cursor?: string }) {

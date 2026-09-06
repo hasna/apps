@@ -33,8 +33,14 @@ export function registerSchedule(parent: Command) {
     .action((skill: string, cron: string, options: { name?: string; args?: string; json: boolean }) => {
       const args = options.args ? options.args.split(" ").filter(Boolean) : undefined;
       const { schedule, error } = addSchedule(skill, cron, { name: options.name, args });
-      if (options.json) { console.log(JSON.stringify(schedule ? { schedule } : { error })); return; }
-      if (error || !schedule) { console.error(chalk.red(`✗ ${error || "Failed to add schedule"}`)); process.exitCode = 1; return; }
+      if (error || !schedule) {
+        const message = error || "Failed to add schedule";
+        if (options.json) console.log(JSON.stringify({ error: message }));
+        else console.error(chalk.red(`✗ ${message}`));
+        process.exitCode = 1;
+        return;
+      }
+      if (options.json) { console.log(JSON.stringify({ schedule })); return; }
       console.log(chalk.green(`✓ Scheduled '${schedule.name}'`));
       console.log(chalk.dim(`  Cron: ${schedule.cron}`));
       if (schedule.nextRun) console.log(chalk.dim(`  Next run: ${new Date(schedule.nextRun).toLocaleString()}`));
