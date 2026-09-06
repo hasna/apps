@@ -11,7 +11,7 @@ source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 
 # Switcher
 
-Launch Claude Code, Codex, Grok Build, OpenCode 2 or Pi with a chosen compatible provider and its model catalog. An authenticated API owns profiles and run metadata; the CLI starts the native harness on your computer. Import the same HTTP client from `@hasna/switcher/sdk`.
+Launch Claude Code, Codex, Grok Build, OpenCode 2, Pi or OMP with a chosen compatible provider and its model catalog. An authenticated API owns profiles and run metadata; the CLI starts the native harness on your computer. Import the same HTTP client from `@hasna/switcher/sdk`.
 
 Requires Bun 1.3.14 or newer. Install the native harnesses separately.
 
@@ -67,6 +67,10 @@ For provider keys already stored in macOS Keychain, use `--keychain-service SERV
 Pi 0.85.1 or newer supports all three wire protocols. Use `switcher launch pi --provider deepseek --model deepseek-v4-flash`. Switcher supplies the provider catalog and scopes the native picker and model cycling to that provider. Pi's `--list-models` diagnostic still lists global model definitions. Catalog IDs that differ only by letter case are rejected because Pi cannot select them unambiguously.
 
 Pi sessions persist under Switcher state per profile; pass native `--continue` or `--session PATH` after `--`. Each launch uses a temporary Pi agent directory. Global settings, keybindings, extensions, themes and skills are not loaded, and changes to that temporary configuration disappear at exit. Project customization follows Pi's native behavior.
+
+## OMP
+
+OMP 18.1.11 or newer supports the three Switcher wire protocols through its native `models.yml` provider API. Switcher writes a per-launch provider catalog and `config.yml` under `PI_CODING_AGENT_DIR`, selects the exact provider-qualified model, and keeps the API key in the child environment. OMP's native project instructions, tools and permissions stay enabled. Sessions persist under the profile's Switcher-owned `--session-dir`; model, provider, profile and config overrides are reserved by the launch profile.
 
 ## Run a persistent service
 

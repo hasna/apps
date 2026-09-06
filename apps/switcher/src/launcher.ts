@@ -6,7 +6,7 @@ import { providerCredential } from "./presets";
 import { privateDirectory, switcherHome } from "./runtime";
 import { prepareHarnessLaunch, detectHarness, codexModel, validateHarnessVersion } from "./harnesses";
 import { runHarnessProcess } from "./harness-process";
-import { oriLaunchWarnings, assertOriLoginAllowed, inspectOri, prepareOriLaunch, requireOriHarness, validateOriLaunchRequest, type OriContract, type OriLaunchPlan } from "./ori-backend";
+import { oriLaunchWarnings, assertOriLoginAllowed, inspectOri, prepareOriLaunch, requireOriHarness, validateOriLaunchRequest, type OriContract, type OriLaunchPlan, type OriTarget } from "./ori-backend";
 
 import { childEnvironment } from "./harness-environment";
 export { childEnvironment } from "./harness-environment";
@@ -23,6 +23,8 @@ async function writeOriCodexCatalog(stateDir: string, models: LaunchPlan["catalo
 type OriPreparationOptions = Pick<LaunchOptions, "oriExecutable" | "args" | "resolveCredential" | "credentialEnv"> & {stateDir?: string; cwd?: string};
 
 async function oriRequestForPlan(plan: LaunchPlan, options: OriPreparationOptions = {}) {
+  if (plan.profile.harness === "omp") throw new Error("OMP is available through the direct adapter; Ori has no OMP target.");
+  const oriTarget = plan.profile.harness as OriTarget;
   if (options.oriExecutable === "") throw new Error("--ori-executable requires a non-empty executable path.");
   if (plan.provider.authStyle !== "bearer") throw new Error("Ori requires the OpenRouter Bearer authentication contract; use the direct adapter for other auth styles.");
   assertOriLoginAllowed({...process.env, ...options.credentialEnv});
@@ -32,24 +34,24 @@ async function oriRequestForPlan(plan: LaunchPlan, options: OriPreparationOption
   if (plan.profile.harness === "grok" && policyEnvironment.GROK_FORCE_LOGIN_TEAM_ID?.trim())
     throw new Error("Grok requires a native team login through GROK_FORCE_LOGIN_TEAM_ID. This provider launch cannot proceed under that native authentication policy.");
   const contract = await inspectOri({executable: options.oriExecutable, cwd: options.cwd ? resolve(options.cwd) : undefined});
-  const native = requireOriHarness(contract, plan.profile.harness);
+  const native = requireOriHarness(contract, oriTarget);
   if (!native.path) throw new Error("Ori did not report the native harness executable path.");
   const detection = await detectHarness(plan.profile.harness, native.path);
   if (!detection.available) throw new Error("The native harness reported by Ori could not report its version.");
-  validateHarnessVersion(plan.profile.harness, detection.version);
-  const catalogPath = plan.profile.harness === "codex" && options.stateDir ? await writeOriCodexCatalog(options.stateDir, plan.catalog.models) : undefined;
-  const request = buildOriRequest(plan, catalogPath, options.args ?? []);
+  validateHarnessVersion(oriTarget, detection.version);
+  const catalogPath = oriTarget === "codex" && options.stateDir ? await writeOriCodexCatalog(options.stateDir, plan.catalog.models) : undefined;
+  const request = buildOriRequest(plan, catalogPath, options.args ?? [], oriTarget);
   validateOriLaunchRequest(request);
   return {contract, request};
 }
 
 export async function validateOriForPlan(plan: LaunchPlan, options: Pick<OriPreparationOptions, "oriExecutable" | "args" | "credentialEnv" | "cwd"> = {}): Promise<{contract: OriContract; request: ReturnType<typeof buildOriRequest>; warnings: string[]}> {
-  return {...await oriRequestForPlan(plan, options),warnings:oriLaunchWarnings(plan.profile.harness)};
+  return {...await oriRequestForPlan(plan, options),warnings:oriLaunchWarnings(plan.profile.harness as OriTarget)};
 }
 
-function buildOriRequest(plan: LaunchPlan, catalogPath: string | undefined, args: string[]) {
+function buildOriRequest(plan: LaunchPlan, catalogPath: string | undefined, args: string[], target: OriTarget = plan.profile.harness as OriTarget) {
   return {
-    target: plan.profile.harness, provider: plan.provider.id, providerBaseUrl: plan.provider.baseUrl,
+    target, provider: plan.provider.id, providerBaseUrl: plan.provider.baseUrl,
     protocol: plan.provider.protocol, model: plan.profile.model,
     catalog: {source: "switcher-openrouter" as const, modelIds: plan.catalog.models.filter(codingEligible).map(model => model.id), ...(catalogPath ? {codexModelCatalogPath: catalogPath} : {})}, args,
   } as const;
@@ -105,7 +107,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
       model:plan.profile.model, models:plan.catalog.models.filter(codingEligible),
       credential, authStyle:plan.provider.authStyle, executable:options.executable, args:options.args ?? [], stateDir,
       cwd:resolve(options.cwd ?? process.cwd()), version:detection?.version,
-      ...(plan.profile.harness === "pi" ? {sessionDir:join(root,"sessions","pi",profileId)} : {}),
+      ...(["pi", "omp"].includes(plan.profile.harness) ? {sessionDir:join(root,"sessions",plan.profile.harness,profileId)} : {}),
     });
     cleanup = prepared.cleanup;
     for (const warning of [...plan.warnings,...prepared.warnings]) console.error(`switcher: ${warning}`);

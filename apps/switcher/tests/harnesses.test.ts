@@ -57,6 +57,31 @@ test("Pi uses the selected provider/model across all supported wire protocols an
     await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.0"})).rejects.toThrow("0.85.1");
   } finally { await rm(input.stateDir,{recursive:true,force:true}); }
 });
+test("OMP writes an isolated provider-qualified catalog for all native APIs without persisting credentials",async()=>{
+  const input=await fixture();
+  const models=[...input.models,{...input.models[0],id:"vendor/team/model",name:"Nested"}];
+  try {
+    for(const [protocol,api,authStyle] of [["anthropic-messages","anthropic-messages","x-api-key"],["openai-responses","openai-responses","bearer"],["openai-chat","openai-completions","bearer"]] as const) {
+      const prepared=await prepareHarnessLaunch({...input,stateDir:join(input.stateDir,protocol),harness:"omp",protocol,authStyle,version:"omp/18.1.11",models,args:["-p","prompt"]});
+      try {
+        const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
+        const settings=JSON.parse(await readFile(prepared.configPaths[1],"utf8"));
+        const provider:any=config.providers.switcher;
+        expect(provider.api).toBe(api);expect(provider.baseUrl).toBe(input.baseUrl);expect(provider.models.map((m:any)=>m.id)).toEqual(models.map(m=>m.id));
+        expect(settings.enabledModels).toEqual([`switcher/${input.model}`]);expect(settings.modelRoles).toEqual({default:`switcher/${input.model}`,smol:`switcher/${input.model}`,slow:`switcher/${input.model}`,plan:`switcher/${input.model}`});
+        expect(prepared.args.slice(0,6)).toEqual(["--model",`switcher/${input.model}`,"--models","switcher/**","--session-dir",join(input.stateDir,protocol,"sessions")]);
+        expect(provider.apiKey ?? provider.headers?.["x-api-key"]).toBe("SWITCHER_HARNESS_API_KEY");
+        if(authStyle==="x-api-key") expect(provider.auth).toBe("none"); else expect(provider.authHeader).toBe(true);
+        expect(JSON.stringify(config)).not.toContain(input.credential);expect(JSON.stringify(settings)).not.toContain(input.credential);
+      } finally { await prepared.cleanup?.(); }
+    }
+    await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args:["--model","outside"]})).rejects.toThrow("reserved");
+    await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args:["--config","outside"]})).rejects.toThrow("reserved");
+    await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args:["--no-rules"]})).rejects.toThrow("reserved");
+    await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",models:[...models,{...models[0],id:"VENDOR/MODEL"}] })).rejects.toThrow("letter case");
+    await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.10"})).rejects.toThrow("18.1.11");
+  } finally { await rm(input.stateDir,{recursive:true,force:true}); }
+});
 test("Pi bridges protocol/auth mismatches without leaking bridge credentials upstream",async()=>{
   const input=await fixture();
   const upstreamRequests:any[]=[];

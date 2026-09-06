@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { compatible, endpoint, codingEligible } from "./domain";
 import { childEnvironment } from "./harness-environment";
 import { validateGrokResume } from "./grok-args";
+import { prepareOmpLaunch } from "./omp-backend";
 import type { HarnessId, HarnessLaunchInput, PreparedLaunch } from "./harness-types";
 const execute = promisify(execFile);
 const KEY = "SWITCHER_HARNESS_API_KEY";
@@ -26,6 +27,7 @@ const versionAtLeast = (raw: string | undefined, minimum: number[]) => {
 export function validateHarnessVersion(harness: HarnessId, version: string | undefined): void {
   if(harness==="claude"&&!versionAtLeast(version,[2,1,242])) throw new Error("Claude Code >=2.1.242 is required for a full native modelPicker.");
   if(harness==="pi"&&!versionAtLeast(version,[0,85,1])) throw new Error("Pi >=0.85.1 is required by this catalog adapter.");
+  if(harness==="omp"&&!versionAtLeast(version,[18,1,11])) throw new Error("OMP >=18.1.11 is required by this catalog adapter.");
   if(harness==="codex"&&!versionAtLeast(version,[0,153,0])) throw new Error("Codex >=0.153.0 is required by this catalog adapter.");
   if(harness==="grok"&&!versionAtLeast(version,[1,0,13])) throw new Error("Grok Build >=1.0.13 is required by this remote catalog adapter.");
   if(harness==="opencode2"&&!version?.includes("opencode2")&&!versionAtLeast(version,[2,0,0])) throw new Error("Use the OpenCode 2 executable, not legacy OpenCode.");
@@ -232,6 +234,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     warnings.push("Pi scopes its picker and model cycling to this provider; its --list-models diagnostic still enumerates global model definitions.");
     return {executable,args:["--provider",providerId,"--model",input.model,"--models",`${providerId}/**`,...args],env,configPaths,warnings};
   }
+  if(input.harness==="omp") return prepareOmpLaunch({...input,baseUrl:providerBaseUrl});
   // Session model references must identify the upstream provider, not the
   // allocated port of a temporary auth bridge which changes each launch.
   const providerID="switcher-"+createHash("sha256").update(endpoint(providerBaseUrl)+input.protocol).digest("hex").slice(0,12);
@@ -261,6 +264,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
     codex:["--model","-m","--profile","-p"],
     grok:["--model","-m","--oauth","--leader","--leader-socket"],
     pi:["--model","--provider","--api-key","--models"],
+    omp:["--model","--provider","--api-key","--profile","--cwd","--config","--session-dir","--models","--no-rules","--no-tools","--smol","--slow","--plan","--prewalk","--prewalk-into","--plan-yolo-into"],
     opencode2:["--model","-m","--server"],
   };
   for(let i=0;i<(input.args??[]).length;i++){

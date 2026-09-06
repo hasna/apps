@@ -4,7 +4,7 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T10:31:20.164273+00:00"
+updated_at: "2026-09-06T13:58:12+03:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -22,6 +22,7 @@ This matrix covers Switcher 0.1.1 candidate SHA-1 `fd8eb1cecad2ef8f37d87d3e818c1
 | Grok Build | >=1.0.13 / 1.0.13 | Chat, Responses, Messages | Authenticated loopback catalog | Installed development CLI passes local Messages fixture and live DeepSeek Flash tool/read/resume; exact model confirmed by native usage; remaining protocols and registry cells open |
 | OpenCode 2 | Tested beta-19157 | Chat, Responses, Messages | Version 2 provider/models | Current candidate passes DeepSeek Flash tool/resume in headless and TTY-input runs; interactive picker shows all three DeepSeek models and selects Pro; stream cleanup passes; registry cells open |
 | Pi | >=0.85.1 / 0.85.1 | Chat, Responses, Messages | Per-launch models.json; provider-scoped picker/cycling | Native nine-cell auth/path fixtures and installed candidate DeepSeek Flash read-tool/same-session resume pass; interactive model changes and registry acceptance remain open |
+| OMP | >=18.1.11 / 18.1.11 | Chat, Responses, Messages | Per-launch models.yml + config.yml; provider-qualified picker | Installed native OMP loopback Chat fixture proves exact model, `read` tool loop, project rules, environment-only auth and two-process deleted-file resume; focused config tests cover all three API mappings and auth styles; registry acceptance remains open |
 
 Claude + non-Claude models remains experimental and unsupported by Anthropic. Messages, Responses and Chat are distinct protocols. A matrix intersection is a candidate for testing, not an automatic compatibility guarantee.
 
@@ -80,7 +81,7 @@ For every implemented row, the release gate still requires applicable native har
 | DeepSeek Harness | Candidate independently approved for integration; actual native ACP tool/resume and web authentication/cleanup pass, real-provider and registry acceptance open (G16) |
 | Hermes | Candidate implementation; current native fixture proves tool schemas and conversation resume, with actual CLI tool-loop and picker verification required before acceptance (G17) |
 | Legacy OpenCode | Distinct native adapter; legacy OpenCode is not OpenCode 2 (G18) |
-| OMP, Kilo, Cline | Distribution/launch/provider/model interfaces and honest catalog support (G19–G21) |
+| Kilo, Cline | Distribution/launch/provider/model interfaces and honest catalog support (G20–G21) |
 | Gemini CLI, Aider | Distinct auth/wire/config adapters and native listing limits (G22–G23) |
 | Protocol translation | Explicit opt-in gateway or implemented translators, with streaming/tool/reasoning/multimodal/cancellation coverage (H05–H08) |
 
