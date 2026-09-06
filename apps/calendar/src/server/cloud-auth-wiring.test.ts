@@ -33,8 +33,15 @@
  * a keyless request must fail closed through it.
  */
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import type { ApiKeyVerifier } from "@hasna/contracts/auth";
-import { closeCloud, getCloudVerifier, resolveSigningSecret } from "./cloud.js";
+import type { ApiKeyVerifier, ApiKeyStore } from "@hasna/contracts/auth";
+import { closeCloud, getCloudVerifier, resolveSigningSecret, type CalendarApiKeyVerifier, type CalendarApiKeyStore } from "./cloud.js";
+
+// Structural conformance (hasna/apps#1782): the local spellings this package
+// PUBLISHES must accept the real @hasna/contracts values — the runtime values
+// at the seam ARE the contracts objects, cast only here. A drift fails this
+// assignment at compile time.
+const _verifierConformance: ApiKeyVerifier = undefined as unknown as CalendarApiKeyVerifier;
+const _storeConformance: ApiKeyStore = undefined as unknown as CalendarApiKeyStore;
 
 const SIGNING_SECRET_ENV_VARS = [
   "HASNA_CALENDAR_API_SIGNING_KEY",

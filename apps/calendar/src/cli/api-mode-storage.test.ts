@@ -17,11 +17,14 @@
  *
  * Fail-closed without env (fleet doctrine — never a silent local fallback):
  *
- *  5. With NO API env configured at all, a store-backed command fails closed
- *     (non-zero exit, error naming `HASNA_CALENDAR_API_URL`) and creates no
- *     local database — local mode is never the default.
- *  6. A partially configured pair (URL without key, or key without URL) fails
- *     closed naming the missing member — never defaults to local mode.
+ *  5. With NO credential or authority configured at all, a store-backed command
+ *     fails closed (non-zero exit, error naming `HASNA_CALENDAR_API_URL`) and
+ *     creates no local database — local mode is never the default.
+ *  6. A URL without a key fails closed naming the missing member — never
+ *     defaults to local mode. A KEY without a URL is no longer half-configured:
+ *     per the 2026-09-04 resolver ruling (hasna/apps#1720) the fleet gateway
+ *     `https://api.hasna.com/calendar` is the default authority once a
+ *     credential resolves, so a key alone is a COMPLETE configuration.
  *  7. `--json` mode reports the same refusal as a parseable JSON error with a
  *     non-zero exit (never a false-green `exit 0` local fallback event).
  *
@@ -35,6 +38,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
+import { resolveStorageClient } from "../store/http-storage.js";
 
 const repoRoot = join(dirname(new URL(import.meta.url).pathname), "..", "..");
 
@@ -195,16 +199,18 @@ test("partial API env fails closed naming the missing member — never defaults 
     );
     expect(urlOnly.exitCode).toBe(1);
     expect(urlOnly.stdout + urlOnly.stderr).toMatch(/HASNA_CALENDAR_API_KEY is required/);
+    expect(urlOnly.stdout + urlOnly.stderr).not.toMatch(/local-fallback/);
 
-    // Key without URL: same refusal from the other side.
-    const keyOnly = await runCalendar(
-      ["org-list"],
-      { HOME: home, BUN_TEST: "", HASNA_CALENDAR_API_KEY: "fixture-key" },
-    );
-    expect(keyOnly.exitCode).toBe(1);
-    expect(keyOnly.stdout + keyOnly.stderr).toMatch(/HASNA_CALENDAR_API_URL is required/);
+    // Key without URL is no longer a refusal: the fleet gateway is the default
+    // authority once a credential resolves (hasna/apps#1720), so a key alone
+    // is a COMPLETE configuration. The seam resolves it to the gateway; the
+    // CLI then fails loudly only when the authority is unreachable — never by
+    // reading local data.
+    const viaGateway = resolveStorageClient("calendar", { HASNA_CALENDAR_API_KEY: "fixture-key" });
+    expect(viaGateway.client.baseUrl).toBe("https://api.hasna.com/calendar/v1");
+    expect(viaGateway.resolution.apiUrlSource).toBe("default");
 
-    // Neither run may create local storage.
+    // The URL-only run may not create local storage.
     const hasna = join(home, ".hasna");
     expect(await exists(hasna)).toBe(false);
   } finally {

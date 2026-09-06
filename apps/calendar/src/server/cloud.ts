@@ -9,6 +9,43 @@ import { CalendarPgStore } from "./pg-store.js";
 import { validateDatabaseUrl, readPostgresCa } from "./database-config.js";
 export { validateDatabaseUrl } from "./database-config.js";
 
+// ── Local spellings of the @hasna/contracts/auth types (hasna/apps#1782) ────
+// `@hasna/contracts` is a BUILD-TIME dependency (inlined into every bundle),
+// so the declarations `tsc` emits must not import it — a TypeScript consumer
+// with only the runtime deps installed would otherwise hit TS2307 on the
+// shipped `dist/server/cloud.d.ts`. These interfaces are structurally checked
+// against the contracts declarations by `cloud-auth-wiring.test.ts`; the
+// runtime values are the contracts objects themselves, cast only at this seam.
+export type CalendarAuthHeaderSource =
+  | Headers
+  | Record<string, string | string[] | undefined>
+  | ((name: string) => string | null | undefined);
+export type CalendarAuthDecision =
+  | { ok: true; status: 200; principal: { kid: string; app: string; scopes: string[]; agent: string | null; tid: string | null; claims: object } }
+  | { ok: false; status: 401 | 403 | 503; reason: string; message: string };
+export interface CalendarApiKeyAuthContext {
+  method?: string | null;
+  path?: string | null;
+  requiredScopes?: readonly string[];
+  expectedTid?: string;
+}
+export interface CalendarApiKeyVerifier {
+  authenticate(headers: CalendarAuthHeaderSource, context?: CalendarApiKeyAuthContext): Promise<CalendarAuthDecision>;
+  readonly app: string;
+}
+export interface CalendarMintedApiKey {
+  token: string;
+  kid: string;
+  claims: object;
+  tokenHash: string;
+  prefix: string;
+}
+export interface CalendarApiKeyStore {
+  ensureSchema(): Promise<void>;
+  keyStatus: (kid: string) => Promise<"active" | "revoked" | "expired" | "unknown">;
+  insertMinted(minted: CalendarMintedApiKey, createdBy?: string): Promise<void>;
+}
+
 export const CALENDAR_APP_SLUG = "calendar";
 
 /** Resolve the app-scoped database URL that selects the PostgreSQL backend. */
@@ -111,7 +148,7 @@ function authClient(): AuthQueryClient {
   };
 }
 
-export function getApiKeyStore(): ApiKeyStore {
+export function getApiKeyStore(): CalendarApiKeyStore {
   if (cachedKeyStore) return cachedKeyStore;
   cachedKeyStore = new ApiKeyStore(authClient());
   return cachedKeyStore;
@@ -122,7 +159,7 @@ export function getApiKeyStore(): ApiKeyStore {
  * HMAC-signed by the contracts issuer; revocation is checked against the RDS
  * `api_keys` table. Fails closed when no signing secret is configured.
  */
-export function getCloudVerifier(): ApiKeyVerifier {
+export function getCloudVerifier(): CalendarApiKeyVerifier {
   if (cachedVerifier) return cachedVerifier;
   const signingSecret = resolveSigningSecret();
   if (!signingSecret) {

@@ -8,11 +8,12 @@ domain operations are authenticated HTTPS clients. Embedded Events/channel/repla
 commands and explicit `db-migrate` retain their existing local semantics pending
 an approved migration contract; legacy data is not moved or deleted by this change.
 
-**Fleet storage doctrine (`docs/fleet-local-storage.md`): in api mode the CLI
-creates, opens, and migrates NO local database.** Installation no longer
-pre-creates `~/.hasna/calendar`; `db-migrate` is `LOCAL-ONLY` and refuses to
-run whenever an API URL/key is configured, loading the SQLite layer only when
-it is actually allowed to run.
+**Fleet storage doctrine (`docs/fleet-local-storage.md`): whenever a hosted
+Calendar credential or authority resolves, the CLI creates, opens, and migrates
+NO local database.** Installation no longer pre-creates `~/.hasna/calendar`;
+`db-migrate` is `LOCAL-ONLY`, refuses to run on any machine with hosted
+intent, and says "local" on stderr when it runs — the SQLite layer loads only
+when it is actually allowed to run.
 
 ## Install
 
@@ -29,19 +30,44 @@ The package requires Bun. Installed binaries:
 
 ## Storage And Configuration
 
-Calendar domain CLI commands, MCP tools, root `getStore()`, and `./sdk` require
-both `HASNA_CALENDAR_API_URL` (explicit HTTPS) and `HASNA_CALENDAR_API_KEY`.
-The `CALENDAR_*` aliases are accepted only when nonblank and nonconflicting.
-Absent, partial, blank, malformed and conflicting configuration fails closed.
-Retired placement selectors are rejected. Network/authentication failures never
+Calendar domain CLI commands, MCP tools, root `getStore()`, and `./sdk` all
+resolve their credential AND their service authority through the ONE fleet
+client resolver in `@hasna/contracts` (owner directive 2026-09-04,
+hasna/apps#1720), fresh on every call:
+
+| tier | what supplies the credential |
+|---|---|
+| 1 | an explicit argument — `apiKey` / `profile` (SDK options; CLI flags reserved) |
+| 2 | a deliberate env pointer — `HASNA_CALENDAR_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_CALENDAR_API_KEY_REF` (a secrets-vault ITEM KEY; calendar's synchronous transport refuses pointers loudly) |
+| 3 | the macOS Keychain — `hasna.credentials.calendar.api-key` (and `.api-url` beside it), account `HASNA_STATION`, else `hostname -s`, else `USER` |
+| 4 | disk, read at call time — `~/.hasna/calendar/config/credentials`, owner-only 0400/0600 (`HASNA_HOME` / `HASNA_CONFIG_HOME` move the root) |
+| 5 | `HASNA_CALENDAR_API_KEY` — a legitimate tier, deliberately BELOW disk, with no deprecation notice |
+
+The authority follows `HASNA_CALENDAR_API_URL`, the Keychain `api-url` item,
+or the credentials file, and DEFAULTS to the fleet gateway
+`https://api.hasna.com/calendar` (the client appends `/v1`) once a credential
+resolves — a key alone is a complete configuration, so URLs never need
+configuring on a station. The unprefixed `CALENDAR_API_URL` /
+`CALENDAR_API_KEY` spellings remain as the resolver's documented silent alias;
+the canonical `HASNA_CALENDAR_*` names always win.
+
+Absent, partial, blank, malformed and conflicting configuration FAILS LOUD:
+hosted with no credential is a non-zero exit with an actionable error naming
+every tier consulted — there is no SQLite fallback, no local-store default and
+no `*-local-fallback` event. Retired placement selectors
+(`*_MODE`, `*_STORAGE_MODE`, `*_BACKEND`, `*_LOCAL`, `*_SELF_HOSTED`,
+`*_CLOUD`) are rejected, and the retired locations
+(`~/.hasna/fleet-env`, the old cloud folder, `~/.config/hasna` with
+`$XDG_CONFIG_HOME`) are inputs nowhere. Network/authentication failures never
 fall back to a local domain database. Clients do not consume database DSNs.
 
-In api mode the CLI loads no local database at all: no SQLite adapter is
+In hosted runs the CLI loads no local database at all: no SQLite adapter is
 instantiated, no shadow mirror or outbox exists, and `~/.hasna/calendar` is
 never created by the package (there is no `postinstall` and no command path
-that touches a local database when `HASNA_CALENDAR_API_URL` is set). The only
-local database surface is the explicit legacy `db-migrate` command, which is
-LOCAL-ONLY and refuses to run in api mode.
+that touches a local database when a hosted credential or authority
+resolves). The only local database surface is the explicit legacy `db-migrate`
+command, which is LOCAL-ONLY, refuses to run on any machine with hosted
+intent, and says "local" on stderr when it runs.
 
 Each client snapshots its authority and credential. Redirects and authentication
 header overrides are refused. Only reads may retry; server write deduplication
@@ -76,15 +102,16 @@ product/API decisions; no tenant mapping or administrative scope was invented.
   that package's local event/channel/delivery store. They are distinct from
   Calendar scheduling events and have no matching Calendar API routes.
 - Explicit `db-migrate` retains its existing legacy SQLite copy semantics
-  as a LOCAL-ONLY surface: it refuses to run when `HASNA_CALENDAR_API_URL`
-  (or an alias) is configured, and its SQLite layer is loaded lazily so an
-  api-mode CLI never opens the local tier. It is not a server import and does
-  not establish remote authority.
+  as a LOCAL-ONLY surface: it refuses to run whenever a hosted Calendar
+  credential or authority resolves (env, Keychain item, or credentials file),
+  and its SQLite layer is loaded lazily so a hosted CLI never opens the local
+  tier. It is not a server import and does not establish remote authority.
 - `LocalStore` is no longer a public root export or a selectable domain
   transport. Internal SQLite code remains for fixtures and the explicit legacy
   command. No new runtime paths are introduced; legacy data stays untouched.
-- The canonical shared Contracts revision is unpublished. This package keeps
-  its existing released dependency and does not claim the new kit is released.
+- The canonical shared Contracts revision is released: this package resolves
+  client credentials and authority through `@hasna/contracts` 1.0.2 (inlined
+  at build time; the published `.d.ts` spells the crossing types locally).
 
 ## SDK
 
@@ -92,7 +119,9 @@ product/API decisions; no tenant mapping or administrative scope was invented.
 import { getStore } from "@hasna/calendar";
 import { createCalendarClient } from "@hasna/calendar/sdk";
 
-// Both validate the canonical environment pair before operating.
+// Both resolve through the @hasna/contracts chain before operating; neither
+// falls back to local data. An explicit baseUrl pins the authority — pass an
+// explicit apiKey with it, or the SDK refuses (never an ambient key attach).
 const store = getStore();
 const org = await store.createOrg({ name: "Platform" });
 console.log(await store.listCalendars(org.id));
@@ -178,11 +207,11 @@ calendar status
 ```
 
 `calendar status` prints the CLI version, the resolved store transport, and
-org/calendar record counts (`--json` supported). A box without
-`HASNA_CALENDAR_API_URL` set reports transport `unconfigured` instead of
-crashing, and a failed request on a configured box reports transport `error` —
-the two are kept distinct so the drift the command exists to expose is never
-relabeled.
+org/calendar record counts (`--json` supported). A box where the
+`@hasna/contracts` chain resolves no credential and no authority reports
+transport `unconfigured` instead of crashing, and a failed request on a
+configured box reports transport `error` — the two are kept distinct so the
+drift the command exists to expose is never relabeled.
 
 The CLI also registers `events` and `channels` command groups from
 `@hasna/events` for local event-log and webhook operations:
@@ -356,9 +385,9 @@ resolved **once at startup, before the socket is bound**:
 active a request is only served anonymously if its **raw transport peer** is loopback
 (`x-forwarded-for` is deliberately ignored, so a proxy header cannot forge it).
 
-On a **hosted** deployment, setting `CALENDAR_SERVE_API_KEY` without also setting
-`HASNA_CALENDAR_API_URL` + `HASNA_CALENDAR_API_KEY` is refused at startup
-(`SPLIT_STORE_PLANE`): the MCP domain client is unconfigured; it never falls back to SQLite.
+On a **hosted** deployment, setting `CALENDAR_SERVE_API_KEY` without a Calendar
+client credential that resolves is refused at startup (`SPLIT_STORE_PLANE`): the
+MCP domain client is unconfigured — it never falls back to SQLite.
 
 `CALENDAR_SERVE_API_KEY` is intentionally a different variable from the client-flip
 `CALENDAR_API_KEY` / `HASNA_CALENDAR_API_KEY`: those point the CLI/MCP *at* a remote
