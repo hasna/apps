@@ -398,7 +398,7 @@
     },
     "apps/events": {
       "name": "@hasna/events",
-      "version": "0.1.17",
+      "version": "0.1.18",
       "bin": {
         "events": "dist/cli/index.js",
         "hasna-events": "dist/cli/index.js",
