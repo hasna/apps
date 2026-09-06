@@ -118,6 +118,9 @@ describe("published bundle content guard", () => {
     }
   });
 
+  // tsc --emitDeclarationOnly over the whole package takes well over bun's 5 s
+  // default on a cold CI runner (it timed out at 5153 ms on ubuntu); the guard
+  // itself is cheap once the declarations exist.
   test("published declaration entries and their closure never import @hasna/contracts (#1782)", () => {
     const [declOut] = outDirs;
     emitDeclarations(declOut);
@@ -132,5 +135,5 @@ describe("published bundle content guard", () => {
       offenders.map((file) => file.slice(declOut.length + 1)),
       "published entry declarations (and their imports) must not reference @hasna/contracts — a TS consumer would hit TS2307",
     ).toEqual([]);
-  });
+  }, 120_000);
 });
