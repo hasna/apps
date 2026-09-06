@@ -32,6 +32,7 @@
   "files": [
     "dist/",
     "!dist/**/*.test.d.ts",
+    "!dist/**/*.fixture.d.ts",
     "!dist/test-preload.d.ts",
     "!dist/platform",
     "bin/",
@@ -57,8 +58,9 @@
     "migrate": "bun run ./src/server/migrate.ts",
     "typecheck": "tsc --noEmit",
     "verify:release": "bun run scripts/release-guard.ts",
+    "verify:consumer-types": "bun run scripts/consumer-types.ts",
     "prepare": "bun run build:js",
-    "prepack": "bun run build && bun run verify:release",
+    "prepack": "bun run build && bun run verify:release && bun run verify:consumer-types",
     "prepublishOnly": "bun run typecheck && bun run test"
   },
   "keywords": [
