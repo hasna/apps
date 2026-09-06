@@ -4,14 +4,14 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T11:57:49.938506+00:00"
+updated_at: "2026-09-06T12:20:01.564707+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
 # Evidence boundaries
 
-Switcher 0.1.1 remains unpublished. Both tested archives are withdrawn: SHA-1 `fd8eb1cecad2ef8f37d87d3e818c14f1a1113773` failed OpenCode 2 provider authority; replacement `42f91a38db414053e290b3706e3020de5e808252` includes that correction but still accepts an attached Codex model override. Their functional results below are historical evidence, not permission to publish. Shared argument parsing is being corrected and independently reviewed before a new archive repeats release acceptance.
+The shared native argument correction is committed as `3b6a4fd2cf4ff6824cb465b5495eae2e198cd5fa` and independently approved. It rejects attached/clustered provider and model overrides, quoted Codex configuration roots and Claude fallback selection while preserving literal prompt values and end-of-options text. Package verification passes 92 tests / 816 assertions with real PostgreSQL and installed Pi/Ori. Replacement archive SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed` passes normal npm dependency resolution, all 38 installed file identities, Node/Bun package surfaces, and real installed-CLI read/delete/fresh-resume tests for Claude, Codex, Grok, OpenCode 2, Pi and Codex/Grok through Ori. SQLite/PostgreSQL Compose, upgrade, rollback and re-upgrade pass on exact image `sha256:c515c2d85103d8e8fcb4aaccc5ef812725d3941196fa8ac1f775bf3ad950fd2d`. Source has been reconciled with main after Contracts PR #1813. Fresh CI, merge, publication and registry-installed repetition remain open. Both earlier archives remain withdrawn.
 
 The replacement's prior checks passed 85 tests / 769 assertions with real PostgreSQL and installed Pi/Ori, live installed OpenCode 2 DeepSeek read/resume/full picker, Node/Bun package surfaces and SQLite/PostgreSQL container persistence/upgrade/rollback. Its image is `sha256:24222a427ed714cdb8f167ec3e2eb301a86407f6e911d56afc4c59a44e5f7490`. All those outcomes remain bound to the withdrawn archive. Registry-installed repetition is open.
 

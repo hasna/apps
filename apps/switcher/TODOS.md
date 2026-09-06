@@ -4,7 +4,7 @@ title: "Switcher full adapter and installed CLI delivery checklist"
 type: "task-checklist"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T11:57:49.938506+00:00"
+updated_at: "2026-09-06T12:20:01.564707+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -19,7 +19,7 @@ Owner: parent Codex task `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Worktree: `~/Wo
 
 ## Latest implementation evidence
 
-Publication remains held after actual native Codex on `d490cb840` accepted `-mvendor/second` despite the selected profile model. Archive SHA-1 `42f91a38db414053e290b3706e3020de5e808252` is also withdrawn. Shared argument parsing now distinguishes attached/clustered options from values and end-of-options prompt text, reserves alternate provider/server paths and Claude fallback selection, and preflights direct/saved/dry-run/SDK launches. The correction passes 92 package tests / 816 assertions with real PostgreSQL and installed Pi/Ori, and the full root gate passes 147 standard tests / 560 assertions plus all package scans and frozen locks. Exact-commit independent review, new archive acceptance, CI and publication remain pending; neither withdrawn archive may be published. Evidence: task scratch `reviews/parent-args/` and `release-candidate/argument-guard-*.log`.
+The shared native argument correction is committed as `3b6a4fd2cf4ff6824cb465b5495eae2e198cd5fa` and independently approved. It rejects attached/clustered provider and model overrides, quoted Codex configuration roots and Claude fallback selection while preserving literal prompt values and end-of-options text. Package verification passes 92 tests / 816 assertions with real PostgreSQL and installed Pi/Ori. Replacement archive SHA-1 `fe0aee17e92a46d2500bbc69f85d53ecda4b22ed` passes normal npm dependency resolution, all 38 installed file identities, Node/Bun package surfaces, and real installed-CLI read/delete/fresh-resume tests for Claude, Codex, Grok, OpenCode 2, Pi and Codex/Grok through Ori. SQLite/PostgreSQL Compose, upgrade, rollback and re-upgrade pass on exact image `sha256:c515c2d85103d8e8fcb4aaccc5ef812725d3941196fa8ac1f775bf3ad950fd2d`. Source has been reconciled with main after Contracts PR #1813. Fresh CI, merge, publication and registry-installed repetition remain open. Both earlier archives remain withdrawn.
 
 The source CLI owns its authenticated local API lifecycle, creates or reuses provider/profile records, resolves secure credential references and refreshes the provider catalog before launch. Claude Code, Codex, Grok, OpenCode 2 and Pi have direct adapters; Ori has an explicit Codex/Grok subset. The provider registry includes separate inference/discovery endpoints and vLLM/LiteLLM operator routes. [COMPATIBILITY.md](COMPATIBILITY.md) records implemented contracts and remaining live cells.
 
@@ -33,7 +33,7 @@ Earlier candidate `d542620bc412a71b07ebb5a34faa6a56c683e302` passed installed Cl
 
 All live launches use the installed command and its built-in vault binding, with the operator credential read from Keychain. No external provider-key wrapper, API supervisor or manual catalog import is required for the tested DeepSeek/OpenRouter paths. The original user's DeepSeek tmux session is preserved.
 
-DeepSeek Harness G16 and Gemini/Azure provider routes have independent integration approval, without registry or live-provider acceptance. Hermes G17 commit `36f06c2` independently passes all three native protocols, a real file-read tool and deleted-file recall through two fresh Switcher CLI launches. They remain separate implementation candidates. Prime G15 remains held on delayed supervisor ownership. Legacy OpenCode G18 fixes JSONC parsing in `c0f8dca` but still drops supported legacy `tools` deny rules. OMP G19 fixes the no-auth bridge-token leak in `9be6899`; independent native Chat verification passes, while full fresh-launch protocol acceptance remains open. Cline G21 candidate `cd7c79b` fails the second same-profile preparation with EEXIST and accepts an unreserved provider alias; its author is correcting both. Kilo G20 and Gemini CLI G22 remain in progress. These candidates do not close release or live-provider requirements.
+DeepSeek Harness G16 and Gemini/Azure routes have independent integration approval; their paid-provider and registry acceptance remain open. Hermes G17 passes all three native protocols through two fresh source CLI launches; fixture cleanup candidate `3f32e765` remains separate. Prime `894bc91d` passes independent delayed-supervisor timeout/cancellation probes while same-tick run finalization is under review. Legacy OpenCode `91686df0` passes four native root/agent permission-deny cases; full source CLI fresh-resume remains open. OMP `bff55395` passes six source CLI protocol/auth/read/resume cells; native policy-flag review is in progress. Cline `5dc69f17` independently passes all three source CLI ACP protocols, full catalogs, explicit read permission, deleted-file fresh-process resume and credential-value absence in saved files. Kilo remains incomplete with a fail-closed unsupported boundary; Gemini CLI custom gateway authentication and Aider implementation remain open. These candidates have not been integrated into the replacement release archive.
 
 ## Definition of complete
 

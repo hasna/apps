@@ -1,61 +1,60 @@
 ---
-id: "contracts-release-1-0-2"
-title: "Contracts 1.0.2 optional secrets peer release evidence"
-type: "release-report"
-owner: "codex-fixer"
-created_at: "2026-09-06T08:05:24Z"
-updated_at: "2026-09-06T09:46:58.620668+00:00"
-status: "published"
-source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
+id: contracts-1-0-2-source-reconciliation
+title: Contracts 1.0.2 published source reconciliation
+type: release-report
+owner: codex
+created_at: 2026-09-06
+status: verified
 ---
 
-# Scope and provenance
+# Published artifact and source
 
-Patch release preparation for `@hasna/contracts` 1.0.2. The consumed Changeset
-`.changeset/contracts-optional-secrets-peer.md` marks `@hasna/secrets` as an
-optional peer while preserving the `^0.3.10 || ^0.4.0` range. The package
-manifest and generated changelog carry the resulting 1.0.2 release metadata.
+`@hasna/contracts@1.0.2` was published at `2026-09-06T09:31:01.120Z` while
+[PR #1810](https://github.com/hasna/apps/pull/1810) remained open. This change
+separates its Contracts release and required consumer dependency pins from
+the unrelated Switcher implementation and consumer version releases. It does
+not publish another package.
 
-The Changesets front matter is intentionally limited to package/bump pairs by
-the parser contract. This report carries the required artifact metadata for
-that machine-consumed entry. Unrelated pending Changesets were isolated during
-versioning and restored unchanged.
+The Contracts files come from reviewed candidate commit
+`8f8e888713329fdef4e03ef8098e504bcb759f88`. The registry archive has SHA-1
+`8dface63212fb4dd234e38b86567c1923f6eb473` and SHA-512
+`Wq6ma5qR+ozmMabPZ1EyHb3TVRi37jYkrjiEmIpd6ZpTQY5H2gRept/e8kxlA/xOyxFN6bPhKcFQ7FmhuCpnwQ==`.
+Both digests were independently recomputed from the
+[published archive](https://registry.npmjs.org/@hasna/contracts/-/contracts-1.0.2.tgz).
+The registry metadata does not include a Git head or provenance attestation.
 
-# Verification state
+All 238 tracked package files match that archive exactly. An isolated Bun
+1.3.14 build also reproduced its three untracked generated declarations:
+`dist/cli/check-signing-secret.d.ts`, `dist/deployment-envelope-fixtures.d.ts`,
+and `dist/deployment-envelope.d.ts`. All 241 published files therefore match
+the rebuilt package byte for byte.
 
-- The npm registry negative control for `@hasna/contracts@1.0.2` returned E404
-  before preparation.
-- Root `bun.lock` records Contracts 1.0.2 and its optional peer metadata.
-- `apps/contracts/bun.lock` records the union peer range and `optionalPeers`.
-- Published 2026-09-06T09:31:01.120Z through the independently reviewed PR #1810 dependency wave. Registry bytes exactly match the candidate digests below. The source PR remains open until all required checks pass.
-- Independent ordinary npm installation passed with four packages and no Secrets/Events/Paths. Both CLI aliases report 1.0.2 and list all 47 schemas; all 19 JavaScript exports import under Bun 1.3.14 and Node 26.8.1. Missing optional-peer credential pointers fail closed with zero network calls and no ambient fallback.
-- Publication intent and confirmation were recorded in the required publishing channel and tracking task. No global install or quarantine change was needed.
+# Dependency and validation boundaries
 
-# Candidate lock provenance
+The Secrets peer becomes optional; its existing `^0.3.10 || ^0.4.0` range is
+preserved. The package version, kit version, source constant, and bundled
+version constants agree at 1.0.2. Credential resolution behavior is unchanged.
 
-The six dependent app locks were regenerated in a temporary loopback registry
-fixture from the exact reviewed npm-packed candidate. The fixture forwarded
-normal npm metadata and added only the unpublished 1.0.2 version, whose
-measured tarball digests were:
+The existing versioning gate rejects six exact consumer pins one patch behind
+Contracts. Knowledge, Projects, Secrets, Skills, Switcher, and Todos therefore
+pin published Contracts 1.0.2; the three corresponding explicit validator kit
+versions also align. A pending six-package patch Changeset records the changes.
+Consumer package versions and application source remain unchanged.
+Knowledge's four committed bundles are regenerated from its unchanged source
+because they embed its package dependency metadata; its own version stays
+0.3.0. The unminified bundle changes are only the Contracts pin, and the
+minified CLI is rebuilt with the required Bun 1.3.14 compiler.
 
-- SHA512: `Wq6ma5qR+ozmMabPZ1EyHb3TVRi37jYkrjiEmIpd6ZpTQY5H2gRept/e8kxlA/xOyxFN6bPhKcFQ7FmhuCpnwQ==`
-- SHA1 shasum: `8dface63212fb4dd234e38b86567c1923f6eb473`
+Bun 1.3.14 regenerated the root lock and each consumer lock. Each standalone
+consumer was installed frozen in an isolated directory against the real npm
+registry; both installed Contracts CLI aliases report 1.0.2 in all six. The
+Todos fixture includes its declared `ai` workspace. No temporary registry URL
+or candidate archive path is committed in the locks.
 
-Bun 1.3.14 generated each lock with the supported registry option. The
-committed entries contain the measured SHA512 and no loopback URL. Fresh
-frozen installs against the fixture resolved `@hasna/contracts@1.0.2` in all
-six apps; the optional `@hasna/secrets` peer was not installed unless another
-declared dependency required it.
-
-The dependent wave Changeset `.changeset/contracts-dependent-wave.md` uses the
-standard Changesets front matter required by its parser; its release metadata
-and candidate lock provenance are recorded in this report because that format
-cannot accept the repository-wide metadata fields.
-
-# Independent review corrections
-
-The initial candidate was rejected because its runtime version remained 1.0.1 and the temporary registry metadata omitted CLI bins. The corrected archive aligns the source version, package manifest, service kitVersion and packed CLI at 1.0.2. Full release verification passes 1,561 tests and 15,662 assertions, including real PostgreSQL; the credential-dependent hosted-service test remains skipped.
-
-The replacement fixture derives all candidate metadata from the actual archive package.json, including both CLI bins, and binds only to loopback. All six clean frozen consumers resolve the measured archive, link both contracts and contracts-cli to this package, and report CLI version 1.0.2. Existing successful installs were retained while the Todos fixture was completed with its declared ai workspace. Evidence is retained in the task scratch release-candidate/locks-F0iy7Q directory.
-
-The producer conformance gate now invokes the canonical source validator only for a literal version equal to the in-tree Contracts version. Older versions, ranges and latest retain registry resolution. Real valid/invalid manifest tests and a missing-source negative probe verify that this allows prepublication conformance without waiving any validator result.
+Local verification passed the package build, typecheck, conformance, frozen
+root install, and registry-backed frozen-lock gate. Package tests passed
+1,555 tests and 15,643 assertions; eight PostgreSQL checks and one
+credential-backed hosted check were skipped in the isolated environment.
+The ordinary npm packed-consumer smoke passed without installing Secrets or
+Events; ordinary credentials resolve, and an unavailable vault pointer fails
+closed without falling back to an ambient credential.

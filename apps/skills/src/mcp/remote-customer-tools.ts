@@ -3,7 +3,7 @@ import { z } from "zod";
 import { RemoteSkillsAuthClient } from "../lib/remote-auth.js";
 import { getApiUrl } from "../lib/auth-store.js";
 import { REMOTE_CUSTOMER_OPERATIONS } from "../lib/remote-customer-operations.js";
-import { createRemoteSkillsClient, type RemoteSkillsClient } from "../lib/remote-client.js";
+import { createRemoteSkillsClient, RemoteCapabilityUnavailableError, type RemoteSkillsClient } from "../lib/remote-client.js";
 import { mcpError, mcpJson } from "./helpers.js";
 
 export function registerRemoteCustomerTools(server: McpServer) {
@@ -57,6 +57,9 @@ async function callRemote(action: (client: RemoteSkillsClient) => Promise<unknow
     if (!client) return mcpError("AUTH_REQUIRED", "Configure a Skills API and sign in with skills auth login");
     return mcpJson(await action(client));
   } catch (error) {
+    if (error instanceof RemoteCapabilityUnavailableError) {
+      return { ...mcpJson({ code: error.code, message: error.message, status: error.status }), isError: true };
+    }
     return mcpError("REMOTE_REQUEST_FAILED", error instanceof Error ? error.message : "Skills server request failed");
   }
 }
