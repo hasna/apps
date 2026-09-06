@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { useDefaultTestTimeout } from "../../test-preload.js";
+useDefaultTestTimeout();
+
 import { createSubmitRunService, digestInput } from "./admission.js";
 import { createImageProfileRegistry } from "./image-profile.js";
 import { MemoryRunExecutionStore, SqliteRunExecutionStore, type RunExecutionStore } from "./storage.js";
