@@ -5,7 +5,8 @@ import { listMemories } from "../db/memories.js";
 import { listAgents } from "../db/agents.js";
 import { listProjects } from "../db/projects.js";
 import { getDatabase } from "../db/database.js";
-import { announceMementosLocalMode } from "../lib/local-opt-in.js";
+import { announceMementosLocalMode, selectsMementosLocalStore } from "../lib/local-opt-in.js";
+import { assertClientStoreConfigured } from "../db/api-mode.js";
 import { getPrimaryMachineStartupWarning } from "../db/machines.js";
 import { detectProject } from "../lib/project-detect.js";
 import { loadWebhooksFromDb } from "../lib/built-in-hooks.js";
@@ -175,6 +176,18 @@ async function ensureRestServerRunning(): Promise<void> {
 }
 
 async function prepareMcpRuntime(): Promise<void> {
+  // FAIL-CLOSED (owner ruling 2026-09-04, fleet fail-closed wave): the MCP
+  // server must never start against the default on-box SQLite file. With no
+  // fleet API credential resolvable (HASNA_MEMENTOS_API_URL +
+  // HASNA_MEMENTOS_API_KEY, Keychain item, credentials file) and no explicit
+  // local opt-in there is no store to serve: exit non-zero naming the required
+  // env, and create nothing — mirrors the CLI preAction gate.
+  try {
+    assertClientStoreConfigured();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   // A local-mode server says so on stderr once, at startup (fail-closed wave).
   announceMementosLocalMode();
   try {
@@ -186,7 +199,13 @@ async function prepareMcpRuntime(): Promise<void> {
     // Best-effort warning only — startup should continue.
   }
 
-  await ensureRestServerRunning();
+  // The companion REST server (`mementos-serve`) is an on-box process that
+  // serves the on-box store; spawning it from a hosted MCP would create the
+  // local SQLite file the gate above just refused. Only an explicitly local
+  // run may start it.
+  if (selectsMementosLocalStore()) {
+    await ensureRestServerRunning();
+  }
   await loadWebhooksFromDb();
 }
 
