@@ -242,7 +242,7 @@ describe("processForwardingRules storage gate", () => {
     closeDatabase();
     clearStoreSettings();
 
-    await expect(processForwardingRules()).rejects.toThrow("No Emails API configuration is present");
+    await expect(processForwardingRules()).rejects.toThrow("refusing to start");
     // The refusal names the API setting to provide and the explicit opt-ins that do select
     // local storage, so an operator can act on it.
     await expect(processForwardingRules()).rejects.toThrow(new RegExp(API_BASE_URL_SETTING));

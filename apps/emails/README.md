@@ -26,15 +26,21 @@ bun install -g @hasna/emails
 ## Deployment
 
 The data backend is selected by `EMAILS_DATABASE_URL`: unset or blank means
-local SQLite, a PostgreSQL URL means PostgreSQL. On the client, storage
-configuration alone routes the client: set `EMAILS_SELF_HOSTED_URL` and one
-credential (`EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN` or
-`EMAILS_SELF_HOSTED_API_KEY`) — or point `EMAILS_CLIENT_ENV_SECRET` at a vault
-entry that carries them — to talk to a server's HTTP API, or set
-`EMAILS_DB_PATH` / `HASNA_EMAILS_DB_PATH` to a database file for the local
-database. Deployment modes no longer exist (hasna/apps#1566): the deployment-mode
-environment variable is retired — a carried-forward value is refused with an
-error naming it — and so is the `emails_mode` config-file key. Local SQLite
+local SQLite, a PostgreSQL URL means PostgreSQL. On the client, the shared
+credential resolver (hasna/apps#1720) routes the process: the hosted Emails API is
+used whenever the resolver produces a URL and a credential — the canonical
+`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY` environment names (or the
+one-release `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` aliases), the
+macOS Keychain items for this app (`api-url` / `api-key`), or the
+`~/.hasna/emails/config/credentials` file. A live user session
+(`EMAILS_SESSION_TOKEN`) or agent identity token (`EMAILS_IDP_TOKEN`) wins as the
+bearer credential. Local SQLite is reachable ONLY by an explicit choice: set
+`EMAILS_DB_PATH` / `HASNA_EMAILS_DB_PATH` to a database file, and a local run
+prints `emails: local mode` on stderr. Nothing configured fails closed instead of
+serving an empty local database (owner ruling 2026-09-04, incident 715712).
+Deployment modes no longer exist (hasna/apps#1566/#1720): the deployment-mode
+environment variables and the `emails_mode` config-file key select nothing and
+are deleted. Local SQLite
 storage keeps the database,
 files, and credentials on the current machine; a PostgreSQL backend serves the
 authenticated `/v1` API from operator-owned infrastructure. Provider
@@ -44,6 +50,30 @@ account or control-plane service.
 Local provider credentials are envelope-encrypted with a root key kept outside
 SQLite. Rotation, locked-keyring recovery, and backup rebind procedures are in
 [Provider credential storage](docs/PROVIDER_SECRETS.md).
+
+### Client env table
+
+| Variable | Meaning |
+|---|---|
+| `HASNA_EMAILS_API_URL` | Hosted API origin (canonical). Overrides the Keychain `api-url` item and the credentials file. |
+| `HASNA_EMAILS_API_KEY` | Hosted API key (canonical). One of the five resolver tiers. |
+| `EMAILS_SELF_HOSTED_URL` | Accepted alias for `HASNA_EMAILS_API_URL` for one release (one rung below canonical). |
+| `EMAILS_SELF_HOSTED_API_KEY` | Accepted alias for `HASNA_EMAILS_API_KEY` for one release (one rung below canonical). |
+| `EMAILS_SESSION_TOKEN` | The app's own user session (issued by `emails auth login`). Wins as the bearer credential. |
+| `EMAILS_IDP_TOKEN` | The app's own agent identity token (ADR-0002). Wins over the resolved key. |
+| `EMAILS_CLIENT_ENV_SECRET` | Secrets-vault pointer that persists `EMAILS_SESSION_TOKEN` / `EMAILS_IDP_TOKEN` across processes. No longer delivers the URL or API key. |
+| `HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` | Explicit local SQLite file — the ONLY way into local mode. A local run prints `emails: local mode` on stderr. |
+| `HASNA_HOME` / `HASNA_CONFIG_HOME` | Relocate `~/.hasna/emails/config/credentials` (never XDG). |
+| `HASNA_STATION` | Keychain account (falls back to `hostname -s`, then `$USER`). |
+
+The resolver tiers, in order: an explicit `--api-key` / `--profile` argument;
+`HASNA_EMAILS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_EMAILS_API_KEY_REF`
+pointers; the macOS Keychain items for this app (`api-key`, and `api-url` for the
+authority); the `~/.hasna/emails/config/credentials` file (0600); then
+`HASNA_EMAILS_API_KEY`. The authority follows `HASNA_EMAILS_API_URL` → Keychain
+`api-url` → credentials file → the shared default gateway once a credential
+resolves. Nothing configured fails closed; a URL without a credential refuses
+rather than falling back to local data.
 
 ## Quick Start
 
@@ -492,22 +522,24 @@ allowlists before it confirms or syncs a notification.
 
 ## Self-Hosted Runtime (PostgreSQL/S3/SES)
 
-The server uses operator-owned Postgres and provider accounts. A client must
-select `self_hosted` using the [client mode settings](#deployment), configure `EMAILS_SELF_HOSTED_URL`, and one of
-`EMAILS_SESSION_TOKEN`, `EMAILS_IDP_TOKEN`, or
-`EMAILS_SELF_HOSTED_API_KEY`. The service requires `EMAILS_DATABASE_URL`,
+The server uses operator-owned Postgres and provider accounts. A client
+resolves the hosted API through the shared credential resolver — the canonical
+`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY` (or the one-release
+`EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` aliases), the macOS
+Keychain, or `~/.hasna/emails/config/credentials`. The service requires `EMAILS_DATABASE_URL`,
 `EMAILS_API_SIGNING_KEY`, `EMAILS_SEND_PROVIDER=ses|resend`,
 `EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS`, and `EMAILS_AUTH_FROM`. SES uses the
 deployment IAM role; Resend uses `RESEND_API_KEY`. See
 [docs/AUTHENTICATION.md](docs/AUTHENTICATION.md) for signup, sessions,
 tenant-scoped keys, and optional IdP verification.
 
-`EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS` is the allowlist of email domains that may sign up, log in, or be invited (comma- or space-separated globs, `*` matching one DNS label — e.g. `example.com` or `example.*`), and `EMAILS_AUTH_FROM` is the sender identity for confirmation/reset/invite mail. **Neither has a default and the service refuses to boot without them**: this package ships no domain and no sender of its own, so a default would either lock your auth surface to someone else's organisation or open signup to everyone. See [docs/SELF_HOSTED_RUNTIME.md](docs/SELF_HOSTED_RUNTIME.md).
-
-Self-hosted client commands fail closed when the mode, URL, or selected bearer
-credential is missing or invalid. With `--json`, the CLI emits one structured error object on
+Self-hosted client commands fail closed when the URL or credential is missing
+or invalid — a configured authority with no credential refuses rather than
+falling back to local data. With `--json`, the CLI emits one structured error object on
 stderr, exits nonzero, and leaves stdout empty. It does not open, create, or
 fall back to the local SQLite database.
+
+`EMAILS_AUTH_ALLOWED_EMAIL_DOMAINS` is the allowlist of email domains that may sign up, log in, or be invited (comma- or space-separated globs, `*` matching one DNS label — e.g. `example.com` or `example.*`), and `EMAILS_AUTH_FROM` is the sender identity for confirmation/reset/invite mail. **Neither has a default and the service refuses to boot without them**: this package ships no domain and no sender of its own, so a default would either lock your auth surface to someone else's organisation or open signup to everyone. See [docs/SELF_HOSTED_RUNTIME.md](docs/SELF_HOSTED_RUNTIME.md).
 
 Expose the service through an HTTPS reverse proxy or load balancer with edge
 rate limits, the 1 MiB request limit, bounded upstream timeouts, and network
@@ -579,8 +611,10 @@ never replaced by S3-key fallback. MIME `To`/`Cc` headers are
 sender-controlled and are never used to select a tenant.
 
 ```bash
-export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
-export EMAILS_SELF_HOSTED_API_KEY="..."
+# Hosted client — canonical names (the one-release EMAILS_SELF_HOSTED_* aliases
+# still work beneath them)
+export HASNA_EMAILS_API_URL="https://emails.example.com"
+export HASNA_EMAILS_API_KEY="..."
 
 # On the self-hosted server
 export EMAILS_DATABASE_URL="postgresql://..."

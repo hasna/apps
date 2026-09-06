@@ -97,7 +97,6 @@
     "@aws-sdk/client-sqs": "^3.1072.0",
     "@aws-sdk/client-sts": "^3.1072.0",
     "@aws-sdk/credential-provider-ini": "^3.972.55",
-    "@hasna/contracts": "0.13.4",
     "@hasna/domains": "0.0.44",
     "@hasna/events": "^0.1.16",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -109,7 +108,8 @@
     "pdf-lib": "^1.17.1",
     "pg": "^8.22.0",
     "resend": "6.20.0",
-    "zod": "^3.25.76"
+    "zod": "^3.25.76",
+    "@hasna/contracts": "1.0.2"
   },
   "devDependencies": {
     "@opentui/keymap": "0.4.1",

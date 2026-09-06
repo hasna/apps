@@ -90,7 +90,7 @@ describe("readStorageWiring", () => {
     const wiring = readStorageWiring(configure({}));
     expect(wiring.kind).toBe("unresolved");
     const message = wiring.kind === "unresolved" ? wiring.message : "";
-    expect(message).toContain("No Emails API configuration");
+    expect(message).toContain("refusing to start");
     expect(message).toContain("never served on an absence of configuration");
   });
 

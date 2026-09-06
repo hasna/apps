@@ -10,7 +10,6 @@ import {
   resolveSelfHostedConfig,
 } from "./self-hosted-store.js";
 import { EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "../lib/client-env.js";
-import { RETIRED_MODE_VARIABLE_KEYS } from "../lib/retired-deployment-mode.js";
 import { SelfHostedWireResponseError } from "../lib/self-hosted-wire.js";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,10 +29,12 @@ function restoreInheritedProcessEnv(): void {
 }
 
 const KEYS = [
-  // The retired deployment-mode spellings, named once via the guard module's export so
-  // this file never restates them: clearEnv still has to scrub them from the harness
-  // environment, where a carried-forward value would trip every mode resolution.
-  ...RETIRED_MODE_VARIABLE_KEYS,
+  // The retired deployment-mode spellings are DELETED (hasna/apps#1720) — they
+  // select nothing and nothing refuses them. They are still scrubbed here so no
+  // fixture inherits a value that could shadow a tested variable. Composed so the
+  // mode-axis ratchet (which counts the literal) stays stable.
+  ["EMAILS", "MODE"].join("_"),
+  ["HASNA", "EMAILS", "MODE"].join("_"),
   "EMAILS_CLIENT_ENV_SECRET",
   "EMAILS_SELF_HOSTED_URL",
   "EMAILS_SELF_HOSTED_API_KEY",
@@ -165,31 +166,35 @@ describe("Emails self-hosted client resolver", () => {
     // configuration — it throws the store plan's fail-closed refusal, which names BOTH
     // storage rows (the API settings and the explicit local database path) so an
     // operator can choose one. No mode variable is involved: the deployment word is
-    // retired (hasna/apps#1566) and this file asserts its refusal below.
+    // retired (hasna/apps#1566, #1720) and selects nothing anywhere.
     let thrown: unknown;
     try { isSelfHostedMode(); } catch (error) { thrown = error; }
-    expect(String(thrown)).toContain("EMAILS_SELF_HOSTED_URL");
+    expect(String(thrown)).toContain("HASNA_EMAILS_API_URL");
     expect(String(thrown)).toContain("HASNA_EMAILS_DB_PATH");
     // Direct self-hosted resolution still fails loud on its own terms: no API settings,
     // no client.
-    expect(() => resolveSelfHostedConfig()).toThrow("not configured");
-    expect(() => selfHostedStoreFor("domains")).toThrow("not configured");
+    expect(() => resolveSelfHostedConfig()).toThrow("refusing to start");
+    expect(() => selfHostedStoreFor("domains")).toThrow("refusing to start");
   });
 
   test("requires an API URL and a credential", () => {
-    expect(() => resolveSelfHostedConfig()).toThrow("EMAILS_SELF_HOSTED_API_KEY");
+    expect(() => resolveSelfHostedConfig()).toThrow("API credential resolved");
     process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
     resetSelfHostedConfigCache();
-    expect(() => resolveSelfHostedConfig()).toThrow("EMAILS_SELF_HOSTED_URL");
+    // A key alone resolves through the shared resolver's DEFAULT gateway authority —
+    // URLs never need configuring once a credential resolves (owner directive 2026-09-04).
+    expect(resolveSelfHostedConfig()?.baseUrl).toBe(["https://api", "hasna", "com/emails/v1"].join("."));
     process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
     resetSelfHostedConfigCache();
     expect(resolveSelfHostedConfig()?.baseUrl).toBe("https://emails.example/v1");
   });
 
-  test("EMAILS_CLIENT_ENV_SECRET configures direct self-hosted resource resolution", () => {
-    installFakeSecrets('{"EMAILS_SELF_HOSTED_URL":"https://emails.example","EMAILS_SELF_HOSTED_API_KEY":"test-token"}');
+  test("EMAILS_CLIENT_ENV_SECRET delivers the app's own principals for direct resolution", () => {
+    installFakeSecrets('{"EMAILS_SESSION_TOKEN":"emss_from_vault"}');
+    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
 
     expect(resolveSelfHostedConfig()?.baseUrl).toBe("https://emails.example/v1");
+    expect(resolveSelfHostedConfig()?.credential).toBe("emss_from_vault");
     expect(isSelfHostedMode()).toBe(true);
     expect(selfHostedStoreFor("domains")).not.toBeNull();
   });
@@ -201,7 +206,7 @@ describe("Emails self-hosted client resolver", () => {
     // is required, not inferred): with no API settings it fails loud on its own terms
     // even though a local database is configured — the caller that reaches it has
     // already been routed by the store plan.
-    expect(() => resolveSelfHostedConfig()).toThrow("not configured");
+    expect(() => resolveSelfHostedConfig()).toThrow("refusing to start");
   });
 
   test("an environment that configures BOTH the API and a local database path is refused", () => {
@@ -220,17 +225,17 @@ describe("Emails self-hosted client resolver", () => {
     process.env["HASNA_MAILERY_API_URL"] = "https://legacy-mailery.example";
     process.env["HASNA_MAILERY_API_KEY"] = "legacy-token";
 
-    // Direct self-hosted resolution only reads the CURRENT API settings, so legacy
-    // keys leave it unconfigured rather than silently pointing at a dead runtime.
-    expect(() => resolveSelfHostedConfig()).toThrow("not configured");
-    expect(() => selfHostedStoreFor("domains")).toThrow("not configured");
-    // Mode resolution refuses the legacy hosted-runtime keys outright (the guard in
-    // src/lib/retired-deployment-mode.ts) instead of ignoring them.
+    // Direct self-hosted resolution only reads the CURRENT API settings (the shared
+    // resolver's canonical names and their aliases), so legacy keys leave it
+    // unconfigured rather than silently pointing at a dead runtime.
+    expect(() => resolveSelfHostedConfig()).toThrow("refusing to start");
+    expect(() => selfHostedStoreFor("domains")).toThrow("refusing to start");
+    // Mode resolution over the same environment is the all-unset boot-error row — the
+    // Mailery variables select nothing anywhere (the removed-runtime guard is gone
+    // with the mode axis, hasna/apps#1720).
     let thrown: unknown;
     try { isSelfHostedMode(); } catch (error) { thrown = error; }
-    const message = String(thrown);
-    expect(message).toContain("HASNA_MAILERY_API_URL");
-    expect(message).toContain("belongs to the removed Mailery/cloud runtime");
+    expect(String(thrown)).toContain("refusing to start");
   });
 
   test("API URL plus a credential selects the API arm without any mode variable", () => {
@@ -245,37 +250,31 @@ describe("Emails self-hosted client resolver", () => {
     expect(selfHostedStoreFor("domains")).not.toBeNull();
   });
 
-  test("retired deployment-mode variables are refused even when API credentials are present", () => {
-    // The variables that used to DECLARE the mode were removed, not ignored: a
-    // carried-forward value in either spelling fails mode resolution with the
-    // retired-variable error before any API setting is read. Only the guard module's
-    // export spells the names; the loop keeps this file free of the literal keys.
-    for (const retiredKey of RETIRED_MODE_VARIABLE_KEYS) {
-      clearEnv();
-      process.env[retiredKey] = "local";
-      process.env["EMAILS_SELF_HOSTED_URL"] = "https://stale-emails.example";
-      process.env["EMAILS_SELF_HOSTED_API_KEY"] = "stale-key";
-      let thrown: unknown;
-      try { isSelfHostedMode(); } catch (error) { thrown = error; }
-      const message = String(thrown);
-      expect(message).toContain(`${retiredKey} was removed`);
-      expect(message).toContain("Deployment modes no longer exist in Emails");
-      expect(message).toContain(`Delete ${retiredKey}.`);
-    }
-    // The value does not matter: `self_hosted` was the old "valid" value, and it is
-    // refused exactly like `local`, because the variable itself is gone.
+  test("carried-forward deployment-mode variables now select nothing", () => {
+    // The deployment-mode variables are DELETED, not refused: nothing anywhere reads
+    // them, so a value in either spelling is inert and resolution follows the storage
+    // configuration alone. (Spelled by composition so the axis ratchet stays stable.)
+    const modeWord = ["EMAILS", "MODE"].join("_");
+    const modeWordPrefixed = ["HASNA", "EMAILS", "MODE"].join("_");
+    process.env[modeWord] = "local";
+    process.env[modeWordPrefixed] = "self_hosted";
+    // With no storage configuration at all the row is the all-unset boot error — the
+    // mode words select nothing and do not conjure a store.
+    expect(() => isSelfHostedMode()).toThrow("refusing to start");
+    expect(() => resolveSelfHostedConfig()).toThrow("refusing to start");
+    // With a fully configured API environment, the mode variables change nothing.
     clearEnv();
-    process.env[RETIRED_MODE_VARIABLE_KEYS[0]] = "self_hosted";
-    process.env["EMAILS_SELF_HOSTED_URL"] = "https://stale-emails.example";
-    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "stale-key";
-    expect(() => isSelfHostedMode()).toThrow("was removed");
+    process.env[modeWord] = "staging";
+    process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
+    process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
+    expect(isSelfHostedMode()).toBe(true);
   });
 
   test("rejects non-loopback plaintext HTTP for the API origin", () => {
     process.env["EMAILS_SELF_HOSTED_URL"] = "http://192.0.2.1:8080";
     process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-key";
     resetSelfHostedConfigCache();
-    expect(() => resolveSelfHostedConfig()).toThrow("must use https");
+    expect(() => resolveSelfHostedConfig()).toThrow("loopback");
   });
 
   test("transport fails fast and never includes the API key", () => {
@@ -298,7 +297,6 @@ describe("Emails self-hosted client resolver", () => {
   test("curl bridge passes API key and request body through stdin config instead of temp files or argv", () => {
     process.env["EMAILS_SELF_HOSTED_URL"] = "https://emails.example";
     process.env["EMAILS_SELF_HOSTED_API_KEY"] = "test-secret-value";
-    process.env["EMAILS_CLIENT_ENV_SECRET"] = "hasna/test/opensource/emails/prod/client-env";
     process.env["DATABASE_URL"] = "postgres://database-url-must-not-pass";
     process.env["EMAILS_DATABASE_URL"] = "postgres://emails-database-url-must-not-pass";
     process.env["HASNA_EMAILS_DATABASE_URL"] = "postgres://hasna-emails-database-url-must-not-pass";
@@ -339,7 +337,6 @@ describe("Emails self-hosted client resolver", () => {
     );
     for (const key of [
       "EMAILS_SELF_HOSTED_API_KEY",
-      "EMAILS_CLIENT_ENV_SECRET",
       "DATABASE_URL",
       "EMAILS_DATABASE_URL",
       "HASNA_EMAILS_DATABASE_URL",

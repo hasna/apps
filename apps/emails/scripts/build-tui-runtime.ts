@@ -19,6 +19,8 @@ import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin";
 // enforces exactly that against the built artifact.
 const externalPackages = [
   "@aws-sdk/*",
+  "@hasna/contracts",
+  "@hasna/contracts/*",
   "@hasna/domains",
   "@modelcontextprotocol/sdk",
   "@opentui/core",

@@ -24,6 +24,24 @@ breaks for each one.
 - **Manage** domains, addresses, templates, contacts, sequences
 - **Serve** a local dashboard API and REST API
 
+## Credential resolution (hosted client)
+
+The hosted Emails API client resolves its URL and key through the shared
+`@hasna/contracts` 1.0.2 resolver (apps/emails/src/lib/emails-credentials.ts) —
+the same five tiers every hosted Hasna CLI uses, FRESH on every request:
+`--api-key`/`--profile`, `HASNA_EMAILS_API_KEY_REF` pointers, the macOS
+Keychain items for this app (`api-key`, `api-url`), the
+`~/.hasna/emails/config/credentials` file, then `HASNA_EMAILS_API_KEY`. The
+canonical env names are `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`; the
+legacy `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` spellings stay
+accepted as aliases for one release. A live `EMAILS_SESSION_TOKEN` / agent
+`EMAILS_IDP_TOKEN` (the app's own multi-tenancy principals) wins as the bearer
+credential; the URL always comes from the resolver. Hosted runs with no
+credential FAIL CLOSED; local SQLite is reached only by an explicit
+`HASNA_EMAILS_DB_PATH` / `EMAILS_DB_PATH` and prints `emails: local mode` on
+stderr. The deployment-mode word (`EMAILS_MODE` / `HASNA_EMAILS_MODE`) and all
+`*_STORAGE_MODE` switches are DELETED — nothing reads them.
+
 Local data is stored in the effective data root resolved through the
 `@hasna/paths` resolver (XDG/macOS home layout): the legacy
 `~/.hasna/emails/emails.db` stays the default until the store is migrated to
