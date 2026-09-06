@@ -166,7 +166,8 @@ function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value !== null && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    const sorted: Record<string, unknown> = {};
+    // JSON keys are data, including __proto__; never invoke inherited setters.
+    const sorted: Record<string, unknown> = Object.create(null);
     for (const key of Object.keys(record).sort()) {
       sorted[key] = sortKeys(record[key]);
     }
