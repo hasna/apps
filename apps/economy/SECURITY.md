@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-Security fixes are handled for the latest published versions of `@hasna/economy` and `@hasna/economy-sdk`.
+Security fixes are handled for the latest published version of `@hasna/economy` (the CLI, MCP, server and `./sdk` surfaces ship in that one package).
 
 ## Reporting A Vulnerability
 

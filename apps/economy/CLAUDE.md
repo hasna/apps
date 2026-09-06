@@ -10,7 +10,7 @@ AI coding cost tracker — `@hasna/economy`
 - MCP: @modelcontextprotocol/sdk
 - Server: Bun.serve
 - Menubar: native SwiftUI menu bar app (menubar/)
-- SDK: @hasna/economy-sdk (sdk/)
+- SDK: the `./sdk` export subpath of this one package (`src/index.ts` — the Store abstraction). There is no separate `-sdk` package.
 
 ## Data Sources
 - **Claude Code**: `~/.claude/telemetry/*.json` — `tengu_api_success` events with exact `costUSD`

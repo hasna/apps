@@ -845,12 +845,13 @@ server.tool(
 )
 
 // register_agent, heartbeat, set_focus, and list_agents are the canonical
-// agent-lifecycle tools (persistent SQLite-backed registry) — implemented
-// locally in ./agent-registry.ts since the @hasna/agent-registry package was
-// deleted (hasna/apps#1529) rather than a hand-rolled in-memory Map. economy's
-// own send_feedback (below)
-// routes through the Store (local feedback table or POST /v1/feedback) so it
-// carries the category enum and never bypasses the cloud in self_hosted mode.
+// agent-lifecycle tools — implemented locally in ./agent-registry.ts since the
+// @hasna/agent-registry package was deleted (hasna/apps#1529). The registry
+// store is resolved on first tool use, never here: a hosted client keeps it in
+// memory (no SQLite under the app home), the explicit local opt-in persists it
+// as agent-registry.db beside the local store. economy's own send_feedback
+// (below) routes through the Store (local feedback table or POST /v1/feedback)
+// so it carries the category enum and never bypasses the cloud in hosted mode.
 registerAgentTools(server, { service: 'economy' })
 
 server.tool(

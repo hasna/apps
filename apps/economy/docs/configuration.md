@@ -95,5 +95,7 @@ See [REST API authentication](rest-api.md#authentication) for request headers an
 | `MCP_HTTP_PORT` | MCP HTTP port; default 8860 and overridden by `--port`. |
 | `ECONOMY_OTEL_PORT` | OTLP sidecar port; default 4318 and overridden by `--port`. |
 | `ECONOMY_OTEL_BIND` | OTLP sidecar bind host; default `127.0.0.1`. |
+| `HASNA_ECONOMY_INGEST_CACHE` | Path of the hosted `economy sync` mtime cache (a JSON file, never SQLite). Default `<cache root>/economy/ingest-cache.json`, where the cache root is `HASNA_CACHE_HOME`, else `~/Library/Caches/Hasna` (macOS) or `~/.cache/hasna`. Losing it costs one re-read; the server upserts are idempotent. |
+| `HASNA_AGENT_REGISTRY_DB_PATH` | File for the MCP agent registry. Default: in memory when hosted, `agent-registry.db` under the data directory under `HASNA_ECONOMY_LOCAL=1`. |
 
 Source- and billing-specific environment variables are listed in [Ingestion](ingestion.md).

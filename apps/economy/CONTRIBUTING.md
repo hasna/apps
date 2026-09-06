@@ -13,7 +13,7 @@ bun run typecheck
 bun run build
 ```
 
-SDK work lives under `sdk/`. Run package-local commands from that directory when changing that package.
+The SDK is the `./sdk` export subpath of this package (`src/index.ts`, the Store abstraction); there is no separate `sdk/` package to build or publish.
 
 ## Release And Package Hygiene
 
