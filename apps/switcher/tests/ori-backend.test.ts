@@ -82,6 +82,8 @@ test("Ori Grok is restricted to its verified Chat contract and keeps resume/lead
 
 test("Ori rejects OpenCode 2, Claude global-config mutation, and provider/model overrides", () => {
   expect(() => prepareOriLaunch({...request(), target: "opencode2"})).toThrow("OpenCode 2");
+  expect(() => prepareOriLaunch({...request(), target: "pi"})).toThrow("direct Switcher adapter");
+  expect(() => requireOriHarness({version:"0.12.1",executable:"ori",harnesses:[{kind:"pi",installed:true,path:"/fixture/pi"}]},"pi")).toThrow("direct Switcher adapter");
   expect(() => prepareOriLaunch({...request(), target: "claude", protocol: "anthropic-messages"})).toThrow("preservation subset");
   for (const args of [["--model=other/model"], ["-mother/model"], ["--provider", "other"], ["--provider=other"], ["-c", "model_providers.switcher.base_url=https://other.example"], ["-cmodel_provider=other"]])
     expect(() => prepareOriLaunch({...request(), args})).toThrow("reserved");

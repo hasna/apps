@@ -25,6 +25,7 @@ const versionAtLeast = (raw: string | undefined, minimum: number[]) => {
 };
 export function validateHarnessVersion(harness: HarnessId, version: string | undefined): void {
   if(harness==="claude"&&!versionAtLeast(version,[2,1,242])) throw new Error("Claude Code >=2.1.242 is required for a full native modelPicker.");
+  if(harness==="pi"&&!versionAtLeast(version,[0,85,1])) throw new Error("Pi >=0.85.1 is required by this catalog adapter.");
   if(harness==="codex"&&!versionAtLeast(version,[0,153,0])) throw new Error("Codex >=0.153.0 is required by this catalog adapter.");
   if(harness==="grok"&&!versionAtLeast(version,[1,0,13])) throw new Error("Grok Build >=1.0.13 is required by this remote catalog adapter.");
   if(harness==="opencode2"&&!version?.includes("opencode2")&&!versionAtLeast(version,[2,0,0])) throw new Error("Use the OpenCode 2 executable, not legacy OpenCode.");
@@ -90,6 +91,21 @@ function grokBridge(input: HarnessLaunchInput) {
 function grokAlias(input: HarnessLaunchInput, model: string) {
   return "switcher-" + createHash("sha256").update(JSON.stringify([input.baseUrl,input.protocol])).digest("hex").slice(0,12) + "/" + model;
 }
+function piProviderId(input: HarnessLaunchInput, providerBaseUrl: string) {
+  return "switcher-" + createHash("sha256").update(JSON.stringify([endpoint(providerBaseUrl),input.protocol])).digest("hex").slice(0,12);
+}
+function piModel(input: HarnessLaunchInput, api: string) {
+  return input.models.map(model=>({
+    id:model.id,
+    name:model.name,
+    api,
+    ...(model.contextWindow?{contextWindow:model.contextWindow}:{}),
+    ...(model.maxOutputTokens?{maxTokens:model.maxOutputTokens}:{}),
+    input:(model.inputModalities??["text"]).filter(modality=>modality==="text"||modality==="image").length>0
+      ? (model.inputModalities??["text"]).filter(modality=>modality==="text"||modality==="image") : ["text"],
+    ...(model.supportedParameters?.includes("reasoning")?{reasoning:true}:{}),
+  }));
+}
 async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = input.baseUrl): Promise<PreparedLaunch> {
   input={...input,baseUrl:endpoint(input.baseUrl)};
   if(!compatible(input.harness,input.protocol)) throw new Error("Harness and provider protocol are incompatible.");
@@ -145,6 +161,35 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
     // own a standalone backend and its current short-lived bridge credentials.
     return {executable,args:["--model",grokAlias(input,input.model),"--no-leader",...args],env,configPaths,warnings,cleanup:bridge.cleanup};
   }
+  if(input.harness==="pi") {
+    if(input.authStyle==="x-api-key"&&input.protocol!=="anthropic-messages") throw new Error("Pi can use x-api-key authentication only with the Anthropic Messages protocol.");
+    if(new Set(input.models.map(model=>model.id.toLowerCase())).size!==input.models.length)
+      throw new Error("Pi cannot safely select model IDs that differ only by letter case; update the provider catalog.");
+    const api={"anthropic-messages":"anthropic-messages","openai-responses":"openai-responses","openai-chat":"openai-completions"}[input.protocol];
+    const providerId=piProviderId(input,providerBaseUrl);
+    const agentDir=join(input.stateDir,"pi-agent");
+    const sessionDir=input.sessionDir??join(input.stateDir,"sessions");
+    // Pi's Anthropic client appends /v1/messages to baseUrl. Switcher provider
+    // URLs conventionally include the /v1 prefix, so keep deployment prefixes
+    // while removing only that terminal protocol segment.
+    const piBaseUrl=input.protocol==="anthropic-messages"?input.baseUrl.replace(/\/v1$/i,""):input.baseUrl;
+    await mkdir(agentDir,{recursive:true,mode:0o700});
+    await mkdir(sessionDir,{recursive:true,mode:0o700});
+    const file=await jsonFile(agentDir,"models.json",{providers:{[providerId]:{
+      name:"Switcher",
+      baseUrl:piBaseUrl,
+      api,
+      apiKey:`$${KEY}`,
+      models:piModel(input,api),
+    }}});
+    configPaths.push(file);
+    env.PI_CODING_AGENT_DIR=agentDir;
+    env.PI_CODING_AGENT_SESSION_DIR=sessionDir;
+    env[KEY]=input.credential??"switcher-local-no-auth";
+    warnings.push("Pi uses an isolated per-launch catalog and keeps sessions under Switcher state. Global settings, keybindings, extensions, themes and skills are not loaded; changes to this temporary agent configuration are removed at exit. Project customization remains native.");
+    warnings.push("Pi scopes its picker and model cycling to this provider; its --list-models diagnostic still enumerates global model definitions.");
+    return {executable,args:["--provider",providerId,"--model",input.model,"--models",`${providerId}/**`,...args],env,configPaths,warnings};
+  }
   // Session model references must identify the upstream provider, not the
   // allocated port of a temporary auth bridge which changes each launch.
   const providerID="switcher-"+createHash("sha256").update(endpoint(providerBaseUrl)+input.protocol).digest("hex").slice(0,12);
@@ -173,6 +218,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
     claude:["--model","--settings","--setting-sources"],
     codex:["--model","-m","--profile","-p"],
     grok:["--model","-m","--oauth","--leader","--leader-socket"],
+    pi:["--model","--provider","--api-key","--models"],
     opencode2:["--model","-m","--server"],
   };
   for(let i=0;i<(input.args??[]).length;i++){
@@ -184,7 +230,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
     }
   }
   const nativeAuth=input.protocol==="anthropic-messages"?"x-api-key":"bearer";
-  const adaptAuth=input.harness==="opencode2"&&(input.authStyle??"bearer")!==nativeAuth;
+  const adaptAuth=(input.harness==="opencode2"||input.harness==="pi")&&(input.authStyle??"bearer")!==nativeAuth;
   if((input.credential&&!adaptAuth)||input.harness==="grok") return prepareNativeLaunch(input);
   // No-auth endpoints must not receive a native login credential or even a
   // synthetic token. Authenticate only to this loopback hop, then strip auth.

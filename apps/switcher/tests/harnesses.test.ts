@@ -35,6 +35,54 @@ test("unsupported protocols, old clients and unsafe model catalogs fail before l
     await expect(prepareHarnessLaunch({...input,harness:"codex",version:"0.153.4",models:[]})).rejects.toThrow("missing");
   } finally {await rm(input.stateDir,{recursive:true,force:true});}
 });
+test("Pi uses the selected provider/model across all supported wire protocols and preserves native resume flags",async()=>{
+  const input=await fixture();
+  try {
+    for (const [protocol,api,authStyle] of [["anthropic-messages","anthropic-messages","x-api-key"],["openai-responses","openai-responses","bearer"],["openai-chat","openai-completions","bearer"]] as const) {
+      const prepared=await prepareHarnessLaunch({...input,stateDir:join(input.stateDir,protocol),harness:"pi",protocol,authStyle,version:"0.85.1",args:["--session","/owned/session.jsonl","--continue","-p","prompt"]});
+      try {
+        const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
+        const provider:any=Object.values(config.providers)[0];
+        expect(provider.api).toBe(api);expect(provider.baseUrl).toBe(protocol==="anthropic-messages"?input.baseUrl.replace(/\/v1$/i,""):input.baseUrl);expect(provider.models).toHaveLength(input.models.length);
+        expect(config.providers[Object.keys(config.providers)[0]].apiKey).toBe("$SWITCHER_HARNESS_API_KEY");
+        expect(prepared.args.slice(0,6)).toEqual(["--provider",Object.keys(config.providers)[0],"--model",input.model,"--models",`${Object.keys(config.providers)[0]}/**`]);
+        expect(prepared.args.slice(6)).toEqual(["--session","/owned/session.jsonl","--continue","-p","prompt"]);
+        expect(JSON.stringify(config)).not.toContain(input.credential);expect(prepared.env.PI_CODING_AGENT_DIR).toEndWith("/pi-agent");
+      } finally { await prepared.cleanup?.(); }
+    }
+    await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.1",args:["--model","outside"]})).rejects.toThrow("reserved");
+    await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.1",args:["--models","google/*"]})).rejects.toThrow("reserved");
+    await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.1",models:[...input.models,{...input.models[0],id:"VENDOR/MODEL"}]})).rejects.toThrow("letter case");
+    await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.1",models:[...input.models,{...input.models[0],id:"other"},{...input.models[0],id:"OTHER"}]})).rejects.toThrow("letter case");
+    await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.0"})).rejects.toThrow("0.85.1");
+  } finally { await rm(input.stateDir,{recursive:true,force:true}); }
+});
+test("Pi bridges protocol/auth mismatches without leaking bridge credentials upstream",async()=>{
+  const input=await fixture();
+  const upstreamRequests:any[]=[];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,async fetch(request){upstreamRequests.push({path:new URL(request.url).pathname,authorization:request.headers.get("authorization"),key:request.headers.get("x-api-key")});return Response.json({ok:true});}});
+  const cases=[
+    {protocol:"anthropic-messages" as const,authStyle:"bearer" as const,path:"/v1/messages",upstreamPath:"/v1/messages",native:"x-api-key" as const},
+    {protocol:"openai-responses" as const,authStyle:"x-api-key" as const,path:"/responses",upstreamPath:"/v1/responses",native:"authorization" as const},
+    {protocol:"openai-chat" as const,authStyle:"x-api-key" as const,path:"/chat/completions",upstreamPath:"/v1/chat/completions",native:"authorization" as const},
+  ];
+  try {
+    for(const [i,entry] of cases.entries()) {
+      const prepared=await prepareHarnessLaunch({...input,stateDir:join(input.stateDir,String(i)),harness:"pi",baseUrl:upstream.url.origin+"/v1",protocol:entry.protocol,authStyle:entry.authStyle,version:"0.85.1"});
+      try {
+        const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
+        const base=(Object.values(config.providers)[0] as any).baseUrl;
+        const headers:Record<string,string>={"content-type":"application/json"};headers[entry.native]=entry.native==="authorization"?`Bearer ${prepared.env.SWITCHER_HARNESS_API_KEY}`:prepared.env.SWITCHER_HARNESS_API_KEY;
+        expect((await fetch(base+entry.path,{method:"POST",headers,body:JSON.stringify({model:input.model})})).status).toBe(200);
+        expect((await fetch(base+entry.path,{method:"POST",headers:{...headers,[entry.native]:entry.native==="authorization"?"Bearer wrong-key":"wrong-key"},body:JSON.stringify({model:input.model})})).status).toBe(401);
+      } finally { await prepared.cleanup?.(); }
+    }
+    expect(upstreamRequests.map(request=>request.path)).toEqual(cases.map(entry=>entry.upstreamPath));
+    expect(upstreamRequests[0].authorization).toBe(`Bearer ${input.credential}`);expect(upstreamRequests[0].key).toBeNull();
+    expect(upstreamRequests[1].authorization).toBeNull();expect(upstreamRequests[1].key).toBe(input.credential);
+    expect(upstreamRequests[2].authorization).toBeNull();expect(upstreamRequests[2].key).toBe(input.credential);
+  } finally { await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true}); }
+});
 test("Grok resumes with a fresh bridge and the selected profile model; unsafe interactive queued prompts fail",async()=>{
   const input=await fixture();
   const safe=[
@@ -139,4 +187,21 @@ test("OpenCode provider identity stays stable when its per-launch auth bridge ch
     await Promise.all(prepared.map(p=>p.cleanup?.()));
     await rm(first.stateDir,{recursive:true,force:true}); await rm(second.stateDir,{recursive:true,force:true});
   }
+});
+
+
+test.skipIf(!process.env.SWITCHER_TEST_PI_PACKAGE)("installed Pi picker scope retains nested model IDs and excludes another provider",async()=>{
+  const {pathToFileURL}=await import("node:url");
+  const native=await import(pathToFileURL(join(process.env.SWITCHER_TEST_PI_PACKAGE!,"dist/core/model-resolver.js")).href);
+  const input=await fixture();
+  try {
+    const models=[...input.models,{...input.models[0],id:"bare-model"},{...input.models[0],id:"vendor/team/model"}];
+    const prepared=await prepareHarnessLaunch({...input,models,harness:"pi",protocol:"openai-chat",authStyle:"bearer",version:"0.85.1"});
+    const provider=prepared.args[1],scope=prepared.args[prepared.args.indexOf("--models")+1];
+    const available=[...models.map(model=>({...model,provider})),{id:"vendor/model",name:"Another account",provider:"outside-provider"}];
+    const resolved=native.resolveModelScopeFromModels([scope],available);
+    expect(resolved.diagnostics).toEqual([]);
+    expect(resolved.scopedModels.map((row:any)=>row.model.id)).toEqual(models.map(model=>model.id));
+    expect(resolved.scopedModels.every((row:any)=>row.model.provider===provider)).toBe(true);
+  } finally {await rm(input.stateDir,{recursive:true,force:true});}
 });

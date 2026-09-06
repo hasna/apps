@@ -4,7 +4,7 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T08:36:07.031980+00:00"
+updated_at: "2026-09-06T09:29:38.856913+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -21,13 +21,13 @@ Delivery order:
 2. Complete secure credential resolution, native catalogs/settings, cleanup and resume for Claude Code, Codex, Grok and OpenCode 2.
 3. Complete the audited provider/gateway and Ori adapters, with explicit native versus translated protocol contracts and no implicit provider substitution.
 4. Verify API/SDK migrations, real SQLite/PostgreSQL concurrency, Docker execution, the documented installed-CLI flow, and all applicable live provider/harness cells.
-5. Obtain exact-commit review, pass required CI, merge, publish a new version, and repeat the matrix using the registry-installed command.
+5. Open the reviewed release PR and publish the exact Contracts 1.0.2 dependency candidate within that wave so registry-dependent gates can run normally. Pass all required gates and CI before merging, then publish Switcher and repeat the matrix using the registry-installed command.
 
 The target direct form is `switcher launch claude --provider deepseek --model deepseek-v4-pro`; the source CLI implements this form. Split-catalog subprocess tests pass, and an independently installed development tarball completed live DeepSeek Pro/Flash proof-file tool loops and native picker selection without an API supervisor or catalog import. The built-in vault/Keychain resolver now passes subprocess coverage and installed-development-CLI live acceptance: DeepSeek Pro/Flash proof-file tool loops, all three native picker models, and the corrected Default mapping. The remaining adapter matrix and registry-installed release acceptance are still pending. Provider credentials may be supplied through a supported runtime or secure-store reference, but no outside launch supervisor or manual catalog JSON should be required for a built-in provider. An explicit remote API must never silently fall back to a local database.
 
-The current installed development CLI also passes live DeepSeek Flash proof-file reads and same-session resume in Grok 1.0.13 and OpenCode 2 beta-19157. All four first/resumed processes exited 0 and their generated settings were removed. Current source verification passes 54 tests and 536 assertions against real SQLite/PostgreSQL. Two exact-commit P2 review fixes were independently verified. The Contracts optional-peer fix and canonical candidate locks are prepared; dependency release and repository gates remain in progress. See the dated evidence in TODOS.md.
+The Pi-integrated source passes 75 tests / 739 assertions with real SQLite/PostgreSQL and installed Pi/Ori checks enabled. Reviewed source includes the installed-CLI setup and credential flow, process-group/terminal ownership, optional Ori integration, and the expanded provider/gateway registry. A fresh npm-installed candidate passed Claude + DeepSeek Flash tool use and Codex + OpenRouter tool use/resume through both direct and Ori backends in ephemeral tmux. Candidate bytes predate the final review corrections, so registry-byte repetition remains mandatory. Contracts 1.0.2 and six dependent candidate locks are prepared and independently reviewed; Skills' strict clean-consumer gate and the hard published-pins gate require Contracts 1.0.2 to exist on npm. The dependency will be published within the open PR wave before dependent-package merge; no gate exemption or failed-check merge is planned. See [TODOS.md](TODOS.md) for hashes, evidence and the remaining finite adapter matrix.
 
-Both Docker Compose storage profiles now pass actual container health/authentication and recreation-persistence checks in an isolated task VM. The latest package verification is 54 tests/536 assertions; root publishing guard, the retried 145-test standard suite and frozen locks pass. Native process-group and terminal regressions now pass on macOS and Linux, including redirected-input keyboard prompts. Upgrades from published 0.1.0 preserve provider/profile/catalog/run history in both storage engines. Final review, dependency release integration and publication remain open.
+Both Docker Compose storage profiles passed health/authentication and recreation persistence in an isolated task VM. Upgrades from published 0.1.0 preserve all four data record kinds in SQLite and PostgreSQL. Release-image verification and rollback acceptance remain open. Pi's corrected three-protocol adapter is integrated and undergoing combined review and verification; the remaining named harness/cloud adapters stay in scope.
 
 The user-owned live session `switcher-deepseek` is preserved. New acceptance sessions use separate task-owned paths, sockets, ports and databases. New worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/complete-adapters`; branch `codex/fixer/2026-09-05-switcher-complete-adapters`; fetched base `48f8c1d020d5138fa542461c19ff137d9ea69819`.
 

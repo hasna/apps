@@ -4,14 +4,14 @@ title: "Switcher"
 type: "package-documentation"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:50:21.698672Z"
-updated_at: "2026-09-06T08:58:51.655382+00:00"
+updated_at: "2026-09-06T09:29:38.856913+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
 # Switcher
 
-Launch Claude Code, Codex, Grok Build or OpenCode 2 with a chosen compatible provider and its model catalog. An authenticated API owns profiles and run metadata; the CLI starts the native harness on your computer. Import the same HTTP client from `@hasna/switcher/sdk`.
+Launch Claude Code, Codex, Grok Build, OpenCode 2 or Pi with a chosen compatible provider and its model catalog. An authenticated API owns profiles and run metadata; the CLI starts the native harness on your computer. Import the same HTTP client from `@hasna/switcher/sdk`.
 
 Requires Bun 1.3.14 or newer. Install the native harnesses separately.
 
@@ -61,6 +61,12 @@ switcher launch claude --provider deepseek --model deepseek-v4-pro
 For provider keys already stored in macOS Keychain, use `--keychain-service SERVICE --keychain-account ACCOUNT` instead of vault options. Bindings contain only references and authorized origins under `~/.hasna/switcher/config/credential-bindings`, in owner-only files. They remain local even when Switcher uses a remote API. A configured binding takes precedence over environment aliases; an unavailable binding never falls back to another account.
 
 `credentials list` displays bindings; `credentials remove PRESET_OR_REFERENCE` removes only the locator. Replacement requires explicit removal. Custom credential references require `--origin URL` (repeatable); preset bindings authorize their documented origins by default. `credentials check` reports availability, length and hash, not successful provider authentication. Provider credentials needed by a remote API's catalog discovery must still be configured on that server independently.
+
+## Pi
+
+Pi 0.85.1 or newer supports all three wire protocols. Use `switcher launch pi --provider deepseek --model deepseek-v4-flash`. Switcher supplies the provider catalog and scopes the native picker and model cycling to that provider. Pi's `--list-models` diagnostic still lists global model definitions. Catalog IDs that differ only by letter case are rejected because Pi cannot select them unambiguously.
+
+Pi sessions persist under Switcher state per profile; pass native `--continue` or `--session PATH` after `--`. Each launch uses a temporary Pi agent directory. Global settings, keybindings, extensions, themes and skills are not loaded, and changes to that temporary configuration disappear at exit. Project customization follows Pi's native behavior.
 
 ## Run a persistent service
 

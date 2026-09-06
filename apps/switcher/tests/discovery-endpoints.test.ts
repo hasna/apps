@@ -101,6 +101,16 @@ test("Fireworks preserves earlier page counts and rejects changing or incomplete
   } finally {await upstream.stop(true);}
 });
 
+test("custom Fireworks deployments must declare their catalog prefix instead of losing it",async()=>{
+  let calls=0;
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(){calls++;return Response.json({models:[]});}});
+  try {
+    const provider={...parse(providerInputSchema,{id:"custom-fireworks",name:"Custom",protocol:"openai-chat",baseUrl:upstream.url.origin+"/deployment/inference/v1",catalogFormat:"fireworks",catalogAccountId:"acct"}),version:1,updatedAt:"now"};
+    await expect(discover(provider)).rejects.toMatchObject({code:"catalog_url_required"});expect(calls).toBe(0);
+    expect((await discover({...provider,catalogBaseUrl:upstream.url.origin+"/deployment/catalog"})).models).toEqual([]);expect(calls).toBe(1);
+  } finally {await upstream.stop(true);}
+});
+
 test("DashScope discovery parses its output.models response and page_no pagination only when explicitly configured",async()=>{
   const requests:string[]=[];
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){

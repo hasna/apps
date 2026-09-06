@@ -16,8 +16,10 @@ export async function discover(provider: Provider, env: Record<string, string | 
   const headers: Record<string, string> = {"accept": "application/json"};
   if (provider.catalogFormat === "fireworks" && !provider.catalogBaseUrl && !provider.catalogAccountId)
     throw new Fault(422, "catalog_account_required", "Fireworks model discovery requires a catalog account ID or an explicit catalog URL.");
+  if (provider.catalogFormat === "fireworks" && !provider.catalogBaseUrl && new URL(provider.baseUrl).origin !== "https://api.fireworks.ai")
+    throw new Fault(422, "catalog_url_required", "A custom Fireworks inference authority requires an explicit catalog URL; its deployment prefix cannot be inferred.");
   const catalogRoot = provider.catalogBaseUrl ?? (provider.catalogFormat === "fireworks"
-    ? `${new URL(provider.baseUrl).origin}/v1/accounts/${encodeURIComponent(provider.catalogAccountId!)}` : provider.baseUrl);
+    ? `https://api.fireworks.ai/v1/accounts/${encodeURIComponent(provider.catalogAccountId!)}` : provider.baseUrl);
   const url = new URL(`${catalogRoot}/${provider.modelsPath}`);
   if (provider.catalogFormat === "fireworks") url.searchParams.set("pageSize", "200");
   const authStyle = provider.catalogAuthStyle ?? provider.authStyle;

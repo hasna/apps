@@ -5,7 +5,7 @@ import { validateGrokResume } from "./grok-args";
 const exec = promisify(execFile);
 
 /** The Ori 0.12.1 command name for a Switcher harness. */
-export type OriTarget = "claude" | "codex" | "grok" | "opencode2";
+export type OriTarget = "claude" | "codex" | "grok" | "opencode2" | "pi";
 export type OriProtocol = "anthropic-messages" | "openai-responses" | "openai-chat";
 export type OriReasoningEffort = "max" | "xhigh" | "high" | "medium" | "low" | "minimal" | "none";
 
@@ -174,6 +174,8 @@ export function assertSupportedOriVersion(contract: OriContract): void {
 /** Fail before Ori's interactive installer offer when the native binary is absent. */
 export function requireOriHarness(contract: OriContract, target: OriTarget): OriHarnessAvailability {
   assertSupportedOriVersion(contract);
+  if (target === "pi")
+    throw new OriBackendError("unsupported_harness", "Pi is supported through the direct Switcher adapter; the Ori preservation subset supports Codex and Grok only.");
   if (target === "opencode2")
     throw new OriBackendError("unsupported_harness", "Ori 0.12.1 targets legacy `opencode`; it cannot launch OpenCode 2 (`opencode2`).");
   const row = contract.harnesses.find(harness => harness.kind === target);
@@ -230,6 +232,8 @@ function assertPassthrough(target: OriTarget, args: readonly string[]): void {
 
 /** Validate target, provider and catalog authority before resolving a key. */
 export function validateOriLaunchRequest(request: OriLaunchRequest): void {
+  if (request.target === "pi")
+    throw new OriBackendError("unsupported_harness", "Pi is supported through the direct Switcher adapter; the Ori preservation subset supports Codex and Grok only.");
   assertProviderAuthority(request.target, request.provider, request.providerBaseUrl, request.protocol);
   if (!request.model.trim()) throw new OriBackendError("model_required", "An OpenRouter model ID is required for an Ori launch.");
   assertPassthrough(request.target, request.args ?? []);
