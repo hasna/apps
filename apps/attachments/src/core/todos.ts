@@ -1,16 +1,61 @@
-import { validateClientConfig } from "./client-config";
+/**
+ * Todos and Sessions integrations, resolved through the ONE shared credential
+ * seam (@hasna/contracts/client) — this module contributes no tier of its own.
+ *
+ * Each integration resolves the sibling service's own chain fresh per call
+ * (Keychain item, `~/.hasna/<service>/config/credentials`, env pair,
+ * default fleet gateway), exactly as that service's own client would, and the
+ * credential is pinned to the authority it resolved with: a request outside
+ * the configured service URL is refused before any header is attached.
+ */
+import {
+  resolveClientTransport,
+  resolveCredential,
+} from "@hasna/contracts/client";
+import { stripV1, type AttachmentsCredentialChainOptions, type Env } from "./client-config";
 
-export function serviceConfig(service: "TODOS" | "SESSIONS", env: NodeJS.ProcessEnv = process.env) {
-  const read = (suffix: string) => {
-    const keys = [`HASNA_${service}_${suffix}`, `${service}_${suffix}`];
-    const values = keys.map(k => env[k]).filter((v): v is string => v !== undefined);
-    if (!values.length || values.some(v => !v.trim()) || new Set(values).size !== 1) throw new Error(`Missing, blank, or conflicting ${service} ${suffix} configuration.`);
-    return values[0]!;
-  };
-  return validateClientConfig(read("API_URL"), read("API_KEY"));
+export type IntegrationService = "TODOS" | "SESSIONS";
+
+export interface ServiceCredentialsConfig {
+  url: string;
+  key: string;
 }
 
-export function withServiceAuth(service: "TODOS" | "SESSIONS", requestUrl?: string | URL, init?: RequestInit): RequestInit {
+export interface ResolveServiceConfigOptions {
+  /** Tier-1 credential inputs and Keychain-tier controls, as accepted by the shared seam. */
+  credentials?: AttachmentsCredentialChainOptions;
+}
+
+/**
+ * Resolve one integration's authority and credential, fresh.
+ *
+ * Throws when the service's chain resolves an authority but no credential, or
+ * when a declared pair is blank or conflicting — integrations never fall back
+ * to anything else.
+ */
+export function serviceConfig(
+  service: IntegrationService,
+  env: Env = process.env,
+  options: ResolveServiceConfigOptions = {},
+): ServiceCredentialsConfig {
+  const name = service.toLowerCase();
+  const credentials = options.credentials ?? {};
+  const credential = resolveCredential(name, env, credentials);
+  const chainOptions = credential
+    ? { credentials: { ...credentials, apiKey: credential.apiKey } }
+    : { credentials };
+  const resolution = resolveClientTransport(name, env, chainOptions);
+  if (!credential) {
+    throw new Error(`Missing ${service} API configuration: no credential resolved through the shared chain.`);
+  }
+  return { url: stripV1(resolution.baseUrl), key: credential.apiKey };
+}
+
+export function withServiceAuth(
+  service: IntegrationService,
+  requestUrl?: string | URL,
+  init?: RequestInit,
+): RequestInit {
   const config = serviceConfig(service);
   const url = new URL(String(requestUrl));
   const apiBoundary = url.href.indexOf("/api/");

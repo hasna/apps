@@ -1,4 +1,5 @@
 beforeEach(() => {
+  process.env.HASNA_HOME = mkdtempSync(join(tmpdir(), "attachments-mcp-"));
   process.env.HASNA_TODOS_API_URL = "https://todos.example.test";
   process.env.HASNA_TODOS_API_KEY = "remote-key";
   process.env.HASNA_SESSIONS_API_URL = "https://sessions.example.test";
@@ -6,6 +7,7 @@ beforeEach(() => {
 });
 import { describe, it, expect, mock, beforeAll, beforeEach, afterEach, afterAll, spyOn } from "bun:test";
 import { tmpdir } from "os";
+import { join } from "path";
 
 // Keep the server under test on the local store: with
 // HASNA_ATTACHMENTS_API_URL/KEY present in the operator's environment, the
@@ -15,7 +17,7 @@ import { tmpdir } from "os";
 delete process.env.HASNA_ATTACHMENTS_API_URL;
 delete process.env.HASNA_ATTACHMENTS_API_KEY;
 import { join } from "path";
-import { mkdirSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import * as configModule from "../core/config";
 
 // ---------------------------------------------------------------------------

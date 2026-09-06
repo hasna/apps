@@ -34,12 +34,12 @@ function scrubEnv(): Record<string, string> {
 
 type ProbeResult = { code: number; stdout: string; stderr: string; timedOut: boolean };
 
-async function runEntry(entry: string, args: string[], home: string): Promise<ProbeResult> {
+async function runEntry(entry: string, args: string[], home: string, extraEnv: Record<string, string> = {}): Promise<ProbeResult> {
   const proc = Bun.spawn([process.execPath, "run", entry, ...args], {
     cwd: APP_ROOT,
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...scrubEnv(), HOME: home, PORT: "0" },
+    env: { ...scrubEnv(), HOME: home, PORT: "0", ...extraEnv },
   });
   const stdoutPromise = new Response(proc.stdout).text();
   const stderrPromise = new Response(proc.stderr).text();
@@ -70,6 +70,41 @@ describe("fleet CLI fail-closed without API env", () => {
       expect(result.stderr).toContain("HASNA_ATTACHMENTS_API_URL");
       expect(result.stdout).toBe("");
       // Never touch ~/.hasna/attachments — no SQLite file, no config dir.
+      expect(existsSync(join(home, ".hasna", "attachments"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a partial pair is STRICT: URL without a key exits non-zero and never falls back to local", async () => {
+    const home = scratchHome();
+    try {
+      const result = await runEntry(CLI_ENTRY, ["list"], home, {
+        HASNA_ATTACHMENTS_API_URL: "https://api.hasna.com/attachments",
+      });
+      expect(result.timedOut).toBe(false);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toMatch(/no API key could be resolved/i);
+      expect(result.stderr).toMatch(/local|fallback/i);
+      // No SQLite, no local-fallback event, no data dir.
+      expect(existsSync(join(home, ".hasna", "attachments"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a key without a URL resolves the fleet gateway — never a local fallback", async () => {
+    const home = scratchHome();
+    try {
+      const result = await runEntry(CLI_ENTRY, ["list"], home, {
+        HASNA_ATTACHMENTS_API_KEY: "fixture-key",
+      });
+      // The resolver accepts a key alone as a complete configuration (default
+      // gateway); the run is HOSTED — it must therefore reach the network
+      // (and fail with a network/HTTP error), never select a local store.
+      expect(result.timedOut).toBe(false);
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).not.toMatch(/no API key could be resolved/i);
       expect(existsSync(join(home, ".hasna", "attachments"))).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });

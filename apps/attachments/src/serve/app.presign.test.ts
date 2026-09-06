@@ -56,6 +56,8 @@ function makeApp() {
     version: "test",
     mode: "cloud",
     signingSecret: SIGNING,
+    // Strict 1.0.2 verifier: a permissive test fixture declares its posture.
+    keyStatus: async () => 'active' as const,
   });
 }
 
@@ -228,6 +230,8 @@ describe("/v1 presigned direct upload (ported from local-only)", () => {
       version: "test",
       mode: "cloud",
       signingSecret: SIGNING,
+    // Strict 1.0.2 verifier: a permissive test fixture declares its posture.
+    keyStatus: async () => 'active' as const,
     });
     const res = await appSmall.request("/v1/attachments/att_pending1/presign-upload/complete", {
       method: "POST",

@@ -1,7 +1,7 @@
 import { describe, it, expect } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { CONTRACTS_KIT_VERSION, scannerCommand, scanPackedArtifact } from "./scan-artifact";
+import { CONTRACTS_KIT_VERSION, packArtifact, scannerCommand, scanPackedArtifact } from "./scan-artifact";
 
 const repoRoot = join(import.meta.dir, "..");
 
@@ -130,11 +130,54 @@ describe("scan:artifact release gate", () => {
     expect(readJson("hasna.contract.json").kitVersion).toBe(CONTRACTS_KIT_VERSION);
     expect(readText("src/server-storage/README.md")).toContain("0.8.2");
     expect(readText("src/server-storage/README.md")).toContain("unpublished");
-    expect(rangeBaseVersion(readJson("package.json").dependencies["@hasna/contracts"])).toBe(
+    // Adopted client seam: @hasna/contracts 1.0.2 is a devDependency only —
+    // `bun build --target bun` inlines it into dist, so nothing published
+    // declares it as a runtime dependency. The scanner pin stays in lockstep.
+    expect(rangeBaseVersion(readJson("package.json").devDependencies["@hasna/contracts"])).toBe(
       CONTRACTS_KIT_VERSION,
     );
+    expect(readJson("package.json").dependencies?.["@hasna/contracts"]).toBeUndefined();
     // The pinned version must be quarantine-excluded or a fresh install stalls.
     expect(readText("pnpm-workspace.yaml")).toContain(`'@hasna/contracts@${CONTRACTS_KIT_VERSION}'`);
+  });
+
+  it("keeps the packed artifact free of @hasna/contracts in runtime deps and declarations", async () => {
+    // #1782: the bundler inlines @hasna/contracts into every dist entry, so
+    // the published .d.ts files must never import it — a declaration import
+    // would break consumers who do not install the devDependency. Assert on
+    // the PACKED tarball, not on src: dist is the gate.
+    const { workspace, archive } = packArtifact();
+    try {
+      const extracted = join(workspace, "extracted");
+      mkdirSync(extracted, { recursive: true });
+      const extract = Bun.spawnSync(["tar", "-xzf", archive, "-C", extracted], { stdout: "pipe", stderr: "pipe" });
+      expect(extract.exitCode).toBe(0);
+      const walk = (dir: string): string[] => {
+        const out: string[] = [];
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          const full = join(dir, entry.name);
+          if (entry.isDirectory()) out.push(...walk(full));
+          else if (entry.isFile()) out.push(full);
+        }
+        return out;
+      };
+      const declarations = walk(extracted).filter((path) => path.endsWith(".d.ts"));
+      expect(declarations.length).toBeGreaterThan(0);
+      // #1782 is about IMPORTS, not prose: a declaration that names the
+      // package in a comment is harmless, one that imports it breaks
+      // consumers who do not install the devDependency. Match the import
+      // shapes tsc can emit (static, dynamic, re-export, reference).
+      const importShape = /(?:from\s*|import\s*\(|require\s*\()\s*["'][^"']*@hasna\/contracts|["'][^"']*@hasna\/contracts["']\s*(?:;|,)|^\/\/\/\s*<reference\s+[^>]*@hasna\/contracts/m;
+      for (const declaration of declarations) {
+        expect(readFileSync(declaration, "utf8")).not.toMatch(importShape);
+      }
+      const packedPkg = JSON.parse(readFileSync(join(extracted, "package", "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      expect(packedPkg.dependencies?.["@hasna/contracts"]).toBeUndefined();
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
   });
 
   it("packs the artifact and passes the scan with the pinned kit", () => {
