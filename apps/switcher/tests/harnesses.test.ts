@@ -236,3 +236,37 @@ test("auth bridges cancel unfinished upstream SSE before shutting down",async()=
     await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true});
   }
 },5000);
+
+
+test("native attached and clustered options cannot override the launch profile",async()=>{
+  const input=await fixture();
+  const cases:[HarnessLaunchInput["harness"],string,string[][]][]=[
+    ["codex","0.153.4",[["exec","-mvendor/second"],["-pother"],["-hmvendor/second"],["-hcmodel=other"],["--oss"],["--local-provider=ollama"],["--remote","ws://127.0.0.1:9999"],["-c",'"model_provider"="outside"']]],
+    ["grok","1.0.13",[["-mvendor/second"],["-cmvendor/second"]]],
+    ["opencode2","2.0.0-beta-19157",[["run","-moutside/model"],["run","-cmoutside/model"]]],
+  ];
+  try{
+    for(const [harness,version,arguments_] of cases)for(const args of arguments_)
+      await expect(prepareHarnessLaunch({...input,harness,version,args})).rejects.toThrow("profile");
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});
+
+test("native argument values and end-of-options prompts keep literal model-looking text",async()=>{
+  const input=await fixture();
+  try{
+    for(const [index,args] of [["exec","-oresult-mmodel.txt","--","-mvendor/second"],["exec","-capproval_policy=never","--","--model=literal"]].entries()){
+      const prepared=await prepareHarnessLaunch({...input,harness:"codex",version:"0.153.4",stateDir:join(input.stateDir,String(index)),args});
+      expect(prepared.args.slice(-args.length)).toEqual(args);
+    }
+    const grok=await prepareHarnessLaunch({...input,harness:"grok",version:"1.0.13",stateDir:join(input.stateDir,"grok"),args:["-p-mvendor/second"]});
+    try{expect(grok.args.at(-1)).toBe("-p-mvendor/second");}finally{await grok.cleanup?.();}
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});
+
+test("Claude fallback model selection is owned by the launch profile",async()=>{
+  const input=await fixture();
+  try{
+    for(const args of [["--fallback-model","outside/model"],["--fallback-model=outside/model,other/model"]])
+      await expect(prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.263",args})).rejects.toThrow("profile");
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});

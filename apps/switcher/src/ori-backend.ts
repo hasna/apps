@@ -1,3 +1,4 @@
+import { assertHarnessArguments } from "./harness-arguments";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { validateGrokResume } from "./grok-args";
@@ -204,30 +205,9 @@ function assertProviderAuthority(target: OriTarget, provider: string, providerBa
     throw new OriBackendError("provider_authority", "Ori provider credentials may only be sent to https://openrouter.ai/api/v1.");
 }
 
-function configOverride(value: string): boolean {
-  const compact = value.toLowerCase().replace(/[\s"']/g, "");
-  return compact.includes("model_provider") || compact.includes("base_url") || compact.includes("wire_api") ||
-    compact.includes("model_catalog_json") || compact.includes("auth_command") || compact.includes("env_http_headers");
-}
-
 function assertPassthrough(target: OriTarget, args: readonly string[]): void {
-  for (let index = 0; index < args.length; index++) {
-    const arg = args[index];
-    if (arg === "--model" || arg.startsWith("--model=") || arg === "-m" || (arg.startsWith("-m") && !arg.startsWith("--")) ||
-      arg === "--reasoning-effort" || arg.startsWith("--reasoning-effort="))
-    throw new OriBackendError("reserved_argument", "Ori model and reasoning options are reserved by the launch profile.");
-    if (/^--(?:provider|model-provider|model_provider)(?:=|$)/.test(arg))
-      throw new OriBackendError("reserved_argument", "Provider selection is reserved by the Ori launch profile.");
-    if (target === "grok" && ["--leader", "--leader-socket", "--oauth"].some(name => arg === name || arg.startsWith(`${name}=`)))
-      throw new OriBackendError("reserved_argument", "Grok leader and authentication options are reserved by the Ori launch profile.");
-    if (target !== "codex") continue;
-    if (arg === "--profile" || arg === "-p" || arg === "--config" || arg === "-c" || arg.startsWith("--profile=") || arg.startsWith("--config="))
-      throw new OriBackendError("reserved_argument", "Codex profile and provider configuration are reserved by the Ori launch profile.");
-    if (arg.startsWith("-c") && arg.length > 2 && configOverride(arg.slice(2)))
-      throw new OriBackendError("reserved_argument", "Codex provider configuration is reserved by the Ori launch profile.");
-    if ((arg === "--config" || arg === "-c") && configOverride(args[index + 1] ?? ""))
-      throw new OriBackendError("reserved_argument", "Codex provider configuration is reserved by the Ori launch profile.");
-  }
+  try { assertHarnessArguments(target,args,{additionalReserved:["--reasoning-effort","--provider","--model-provider","--model_provider"],reserveCodexConfig:true}); }
+  catch { throw new OriBackendError("reserved_argument", "Provider, model, profile, leader and authentication options are reserved by the Ori launch profile."); }
 }
 
 /** Validate target, provider and catalog authority before resolving a key. */

@@ -1,3 +1,4 @@
+import { assertHarnessArguments } from "./harness-arguments";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { SwitcherClient } from "./sdk";
@@ -67,6 +68,7 @@ export async function prepareOriForPlan(plan: LaunchPlan, options: OriPreparatio
 
 export async function launch(client: SwitcherClient, profileId: string, options: LaunchOptions = {}): Promise<number> {
   const profile = await client.getProfile(profileId);
+  assertHarnessArguments(profile.harness,options.args ?? []);
   // Respect Grok's deployment lockdown. Silently dropping this setting could
   // bypass policy; inheriting it without checking can switch to native login.
   if (profile.harness === "grok" && !["","0","false","no","off"].includes((process.env.GROK_DISABLE_API_KEY_AUTH ?? "").trim().toLowerCase()))
@@ -76,6 +78,7 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   // A fresh snapshot is required for each launch. Errors remain visible.
   if (options.refresh !== false) await client.refreshModels(profile.providerId);
   const plan = await client.launchPlan(profileId);
+  assertHarnessArguments(plan.profile.harness,options.args ?? []);
   const backend = options.backend ?? "direct";
   if (backend !== "direct" && backend !== "ori") throw new Error("Unknown launch backend; use direct or ori.");
   if (backend === "ori" && options.executable) throw new Error("--executable is ambiguous with --backend ori; use --ori-executable PATH.");

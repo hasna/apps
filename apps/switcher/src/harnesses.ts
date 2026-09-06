@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { compatible, endpoint, codingEligible } from "./domain";
 import { childEnvironment } from "./harness-environment";
 import { validateGrokResume } from "./grok-args";
+import { assertHarnessArguments } from "./harness-arguments";
 import { isolateOpenCode2, openCode2ConfigText } from "./opencode2-config";
 import type { HarnessId, HarnessLaunchInput, PreparedLaunch } from "./harness-types";
 const execute = promisify(execFile);
@@ -264,21 +265,7 @@ async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = 
   return {executable,args:native,env,configPaths,warnings};
 }
 export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
-  const reserved:Record<HarnessId,string[]>={
-    claude:["--model","--settings","--setting-sources"],
-    codex:["--model","-m","--profile","-p"],
-    grok:["--model","-m","--oauth","--leader","--leader-socket"],
-    pi:["--model","--provider","--api-key","--models"],
-    opencode2:["--model","-m","--server"],
-  };
-  for(let i=0;i<(input.args??[]).length;i++){
-    const arg=input.args![i],flag=arg.split("=")[0];
-    if(reserved[input.harness].includes(flag)) throw new Error("Provider/model configuration arguments are reserved by the launch profile; update the profile instead.");
-    if(input.harness==="codex"&&(flag==="-c"||flag==="--config"||arg.startsWith("-c"))){
-      const value=arg==="-c"||arg==="--config"?input.args![i+1]??"":arg.replace(/^(-c|--config=)/,"");
-      if(/^(model|model_provider|model_providers|model_catalog_json)([.=]|$)/.test(value.trim())) throw new Error("Codex provider/model configuration must come from the launch profile.");
-    }
-  }
+  assertHarnessArguments(input.harness,input.args ?? []);
   const nativeAuth=input.protocol==="anthropic-messages"?"x-api-key":"bearer";
   const adaptAuth=(input.harness==="opencode2"||input.harness==="pi")&&(input.authStyle??"bearer")!==nativeAuth;
   if((input.credential&&!adaptAuth)||input.harness==="grok") return prepareNativeLaunch(input);

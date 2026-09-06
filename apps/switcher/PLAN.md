@@ -4,10 +4,12 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T11:27:05.462563+00:00"
+updated_at: "2026-09-06T11:57:49.938506+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+Current release hold: both 0.1.1 candidate archives are withdrawn. The OpenCode 2 authority correction is integrated, but native Codex still accepted an attached model override in `d490cb840`. A shared native argument correction is undergoing exact source review and replacement acceptance. Keep publication, registry installation and the expanded adapter goal open until their recorded gates pass. See R07/R06 in TODOS.md and task scratch `reviews/parent-args/`.
 
 # Current delivery: complete built-in adapters and installed CLI
 
