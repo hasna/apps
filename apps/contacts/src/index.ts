@@ -154,9 +154,12 @@ export {
 export {
   ContactsV1Client,
   ContactsV1ApiError,
+  createContactsClient,
+  contactsSdkAuthorityPinMessage,
 } from "./sdk/index.js";
 export type {
   ContactsV1ClientOptions,
+  CreateContactsClientOptions,
   ContactsV1Contact,
   ContactsV1Company,
   ContactsV1Tag,

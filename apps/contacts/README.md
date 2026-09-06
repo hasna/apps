@@ -54,15 +54,37 @@ PostgreSQL URLs belong only to `contacts-serve` and the migration task.
 ## CLI Usage
 
 ```bash
-contacts status            # CLI version, API endpoint, storage mode, record counts
+contacts status            # CLI version, resolved /v1 authority + sources, storage mode, record counts
 contacts status --json
 contacts --help
 ```
 
-`contacts status` answers even on a box without an API key: an unconfigured
-client reports storage `unconfigured` (a failed request on a configured box
-reports storage `error` with the failure message) instead of crashing, so
-agents can observe the configuration drift the command exists to expose.
+`contacts status` reports the authority the shared resolver actually decided
+(`api`, the `/v1` base URL) and where each half came from — `api_url_source`,
+`api_key_source`, `api_key_tier`: an env key name, a Keychain item reference,
+a credentials-file path, or `default` for the fleet gateway; never a value.
+It answers even on a box without an API key: an unconfigured client reports
+storage `unconfigured` with the resolver's `issue` (a failed request on a
+configured box reports storage `error` with the failure message) instead of
+crashing, so agents can observe the configuration drift the command exists to
+expose. `status` and `connection` are diagnostics and exit 0 with that report;
+every data verb fails closed (non-zero exit, no local store).
+
+## SDK
+
+```ts
+import { createContactsClient, ContactsV1Client } from "@hasna/contacts/sdk";
+
+// Through the fleet resolver — the same @hasna/contracts chain the CLI and MCP
+// server use: credential and authority resolved at construction, the key
+// re-resolved on every request, the authority pinned. Nothing resolving throws.
+const client = createContactsClient();
+const { contacts } = await client.listContacts();
+
+// Explicit pin: a caller-supplied baseUrl always requires a caller-supplied
+// apiKey — the SDK never attaches an ambient credential to it.
+const pinned = new ContactsV1Client({ baseUrl: "https://contacts.example.com", apiKey: "…" });
+```
 
 
 ## Audiences, consent, and suppression

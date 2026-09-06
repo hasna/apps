@@ -21,7 +21,16 @@ function testEnv(): Record<string, string> {
     "CONTACTS_DB_PATH",
     "HASNA_CONTACTS_DATABASE_URL",
     "CONTACTS_DATABASE_URL",
+    "HASNA_CONTACTS_API_KEY_OVERRIDE",
+    "HASNA_CONTACTS_API_KEY_REF",
+    "HASNA_PROFILE",
+    "HASNA_CONFIG_HOME",
   ]) delete env[key];
+  // Hermetic against the station's ambient tiers: an absent Keychain account
+  // (`security` exits 44 → tier absent) and an empty HASNA_HOME with no
+  // credentials file, so only what a test sets configures the child.
+  env.HASNA_HOME = tempHome;
+  env.HASNA_STATION = "no-such-station";
   return env;
 }
 

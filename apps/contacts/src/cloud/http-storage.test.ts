@@ -227,6 +227,15 @@ describe("canonical contacts client transport", () => {
     // A caller-built env that @hasna/contracts itself marked ambient (its
     // snapshot symbol) must keep the Keychain tier enabled when the request
     // path copies it — the #1788 regression this package must not ship.
+    //
+    // Hermetic AND discriminating: the tier is observed through its account
+    // derivation. With no HASNA_STATION the resolver asks the injected
+    // `hostname` for the account; an empty host and no USER mean no account,
+    // so no `security` process ever runs and nothing on this machine is
+    // consulted — the tier simply falls through to the env key. A copy that
+    // lost the gate never asks. (The station Keychain must not decide this
+    // test: on a populated Mac the real api-url item disagreed with the URL
+    // below and the real api-key outranked the env key.)
     const marked = env({
       HASNA_CONTACTS_API_URL: "https://one.example.invalid",
       HASNA_CONTACTS_API_KEY: "first-key",
@@ -235,7 +244,17 @@ describe("canonical contacts client transport", () => {
       value: true,
       enumerable: false,
     });
-    const client = resolveContactsStorageClient("contacts", marked).client;
+    let accountLookups = 0;
+    const keychain = {
+      platform: "darwin",
+      hostname: () => {
+        accountLookups += 1;
+        return "";
+      },
+    };
+    const client = resolveContactsStorageClient("contacts", marked, { keychain }).client;
+    expect(accountLookups).toBeGreaterThan(0);
+    accountLookups = 0;
     marked.HASNA_CONTACTS_API_KEY = "second-key";
     const capture = captureFetch();
     try {
@@ -244,6 +263,40 @@ describe("canonical contacts client transport", () => {
       capture.restore();
     }
     expect(capture.calls[0]?.key).toBe("second-key");
+    // The request re-resolved on a snapshot COPY of `marked`, and that copy
+    // still consulted the tier: the gate travelled with the chain options.
+    expect(accountLookups).toBeGreaterThan(0);
+
+    // Control: an unmarked copy of the same env is hermetic — the tier is off
+    // and the account is never derived.
+    accountLookups = 0;
+    resolveContactsStorageClient("contacts", { ...marked }, { keychain });
+    expect(accountLookups).toBe(0);
+  });
+
+  test("re-reads an injected Keychain runner on every request", async () => {
+    // The runner route of #1788: an injected `security` runner counts as an
+    // enabled tier and must be consulted fresh through the per-request
+    // snapshot, so a Keychain rotation heals a long-lived client.
+    let stored = "keychain-first";
+    let keyReads = 0;
+    const run: KeychainCommandRunner = (argv) => {
+      const service = argv.find((arg) => arg.startsWith("hasna.credentials.contacts."));
+      if (service?.endsWith("api-url")) return { status: 44, stdout: "", stderr: "" };
+      keyReads += 1;
+      return { status: 0, stdout: `${stored}\n`, stderr: "" };
+    };
+    const client = resolveContactsStorageClient("contacts", env(), { keychain: { platform: "darwin", run } }).client;
+    expect(client.baseUrl).toBe("https://api.hasna.com/contacts/v1");
+    stored = "keychain-second";
+    const capture = captureFetch();
+    try {
+      await client.list("contacts");
+    } finally {
+      capture.restore();
+    }
+    expect(capture.calls[0]).toEqual({ url: "https://api.hasna.com/contacts/v1/contacts", key: "keychain-second" });
+    expect(keyReads).toBeGreaterThanOrEqual(2);
   });
 
   test("transport report names sources and tiers without exposing values", () => {
