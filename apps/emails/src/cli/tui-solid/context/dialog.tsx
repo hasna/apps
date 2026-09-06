@@ -80,16 +80,6 @@ export function DialogViewport() {
           else dialog.pop();
         },
       },
-      {
-        key: "ctrl+c",
-        desc: "Close dialog",
-        group: "Dialog",
-        cmd: () => {
-          if (dialog.stack().length === 0) return;
-          if (renderer.getSelection()) renderer.clearSelection();
-          else dialog.pop();
-        },
-      },
     ],
   }));
 

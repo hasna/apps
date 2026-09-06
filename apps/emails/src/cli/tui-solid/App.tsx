@@ -1,13 +1,13 @@
 /** @jsxImportSource @opentui/solid */
 import { Match, Switch, onCleanup, onMount, type ParentProps } from "solid-js";
-import { useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid";
+import { useKeyboard, useRenderer, useSelectionHandler, useTerminalDimensions } from "@opentui/solid";
 import type { Mailbox } from "../tui/data.js";
 import { copyTextToClipboardAsync } from "../tui/clipboard.js";
 import { startEventLoopWatchdog } from "../tui/watchdog.js";
 import { ThemeProvider, useTheme } from "./context/theme.js";
 import { EmailsProvider, useEmails } from "./context/emails-state.js";
 import { ToastProvider, ToastViewport, useToast } from "./context/toast.js";
-import { DialogProvider, DialogViewport } from "./context/dialog.js";
+import { DialogProvider, DialogViewport, useDialog } from "./context/dialog.js";
 import { CommandProvider } from "./context/commands.js";
 import { Sidebar, sidebarWidth } from "./component/sidebar.js";
 import { MailboxRoute } from "./component/mailbox.js";
@@ -15,7 +15,6 @@ import { ReaderRoute } from "./component/reader.js";
 import { ComposeWindow } from "./component/compose.js";
 import { EmailsDialogs } from "./component/dialogs.js";
 import { DomainsRoute } from "./routes/workspace.js";
-import { useStaticBindings } from "./context/keymap.js";
 
 export interface AppProps {
   initialMailbox?: Mailbox;
@@ -42,6 +41,8 @@ function RoutedContent() {
 
 function AppShell() {
   const renderer = useRenderer();
+  const emails = useEmails();
+  const dialog = useDialog();
   const dimensions = useTerminalDimensions();
   const theme = useTheme();
   const toast = useToast();
@@ -55,20 +56,17 @@ function AppShell() {
     });
   });
 
-  useStaticBindings(() => ({
-    priority: 10,
-    bindings: [
-      {
-        key: "ctrl+c",
-        desc: "Exit",
-        group: "System",
-        cmd: () => {
-          if (renderer.getSelection()) renderer.clearSelection();
-          else renderer.destroy();
-        },
-      },
-    ],
-  }));
+  // Apply Ctrl+C to the active surface before exiting. Empty selections left
+  // by clicking a control must not swallow the interrupt.
+  useKeyboard((key) => {
+    if (!key.ctrl || key.name !== "c") return;
+    key.preventDefault();
+    key.stopPropagation();
+    if (renderer.getSelection()?.getSelectedText()) renderer.clearSelection();
+    else if (dialog.stack().length) dialog.pop();
+    else if (emails.state.compose) emails.actions.closeCompose();
+    else renderer.destroy();
+  });
 
   const sidebarW = () => sidebarWidth(dimensions().width);
   return (

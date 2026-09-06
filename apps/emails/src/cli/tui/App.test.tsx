@@ -204,6 +204,21 @@ describe("Emails Solid TUI", () => {
     expect(frame()).toContain("Markdown enabled");
   });
 
+  it("closes settings with Ctrl+C, then exits when no dialog is open", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await key("c", { ctrl: true });
+    expect(setup?.renderer.isDestroyed).toBe(false);
+    expect(frame()).not.toContain("Preferences");
+    await clickText("Compose");
+    await key("c", { ctrl: true });
+    expect(frame()).not.toContain("Markdown enabled");
+    expect(setup?.renderer.isDestroyed).toBe(false);
+    setup?.mockInput.pressKey("c", { ctrl: true });
+    await Bun.sleep(0);
+    expect(setup?.renderer.isDestroyed).toBe(true);
+  });
+
   it("distinguishes empty searches and clears the filters from the empty state", async () => {
     seedMessage("Find this message");
     await renderApp();
