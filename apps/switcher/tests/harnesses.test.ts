@@ -81,6 +81,20 @@ test("OMP writes an isolated provider-qualified catalog for all native APIs with
     await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args:["--model","outside"]})).rejects.toThrow("reserved");
     await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args:["--config","outside"]})).rejects.toThrow("reserved");
     await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args:["--no-rules"]})).rejects.toThrow("reserved");
+    for (const args of [
+      ["--auto-approve"], ["--yolo"], ["--approval-mode", "yolo"], ["--approval-mode=yolo"], ["--plan-yolo"],
+      ["--alias", "switcher-profile"], ["--plugin-dir", "/outside/plugin"], ["--hook", "/outside/hook.ts"],
+      ["--extension", "/outside/extension.ts"], ["-e", "/outside/extension.ts"], ["--trusted-extension", "/outside/extension.ts"],
+      ["--from-claude"], ["--from-codex"],
+    ]) {
+      await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args})).rejects.toThrow("reserved");
+    }
+    for (const args of [["--tools", "read"], ["--no-tools"], ["--add-dir", input.cwd]]) {
+      const prepared=await prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",args});
+      try {
+        expect(prepared.args.slice(-args.length)).toEqual(args);
+      } finally { await prepared.cleanup?.(); }
+    }
     await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.11",models:[...models,{...models[0],id:"VENDOR/MODEL"}] })).rejects.toThrow("letter case");
     await expect(prepareHarnessLaunch({...input,harness:"omp",version:"omp/18.1.10"})).rejects.toThrow("18.1.11");
   } finally { await rm(input.stateDir,{recursive:true,force:true}); }

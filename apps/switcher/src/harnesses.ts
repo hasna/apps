@@ -264,12 +264,18 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
     codex:["--model","-m","--profile","-p"],
     grok:["--model","-m","--oauth","--leader","--leader-socket"],
     pi:["--model","--provider","--api-key","--models"],
-    omp:["--model","--provider","--api-key","--profile","--cwd","--config","--session-dir","--models","--no-rules","--smol","--slow","--plan","--prewalk","--prewalk-into","--plan-yolo-into"],
+    // OMP's launch profile owns provider/model/config/session state and the
+    // permission boundary. Keep native flags that can change those values,
+    // install code, import foreign sessions, or mutate global shell state out
+    // of the caller's control. Tool selection and workspace expansion remain
+    // pass-through so an operator can deliberately request a read-only tool
+    // subset or an additional project directory.
+    omp:["--model","--provider","--api-key","--profile","--cwd","--config","--session-dir","--models","--no-rules","--smol","--slow","--plan","--prewalk","--prewalk-into","--plan-yolo-into","--plan-yolo","--auto-approve","--yolo","--approval-mode","--alias","--plugin-dir","--hook","--extension","-e","--trusted-extension","--from-claude","--from-codex"],
     opencode2:["--model","-m","--server"],
   };
   for(let i=0;i<(input.args??[]).length;i++){
     const arg=input.args![i],flag=arg.split("=")[0];
-    if(reserved[input.harness].includes(flag)) throw new Error("Provider/model configuration arguments are reserved by the launch profile; update the profile instead.");
+    if(reserved[input.harness].includes(flag)) throw new Error("Provider/model, policy, and isolation arguments are reserved by the launch profile; update the profile instead.");
     if(input.harness==="codex"&&(flag==="-c"||flag==="--config"||arg.startsWith("-c"))){
       const value=arg==="-c"||arg==="--config"?input.args![i+1]??"":arg.replace(/^(-c|--config=)/,"");
       if(/^(model|model_provider|model_providers|model_catalog_json)([.=]|$)/.test(value.trim())) throw new Error("Codex provider/model configuration must come from the launch profile.");
