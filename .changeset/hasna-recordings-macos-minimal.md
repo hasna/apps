@@ -8,3 +8,5 @@ Add a configurable native API connection with an endpoint-scoped Keychain creden
 and exclude live Swift build caches from the embedded CLI build.
 Read the saved OpenAI provider key from Keychain on Finder launches, save new provider
 keys securely, and pass them to the helper without confusing service authentication.
+Flush complete JSON output before the companion exits so large recording histories,
+search results, and long transcripts load without truncated responses.

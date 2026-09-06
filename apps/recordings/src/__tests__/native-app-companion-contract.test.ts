@@ -52,6 +52,42 @@ afterAll(() => {
 });
 
 describe("native app companion contract", () => {
+  test("compiled companion flushes history pages and transcripts larger than a pipe buffer", async () => {
+    const text = "Recording café 🦆 ".repeat(80);
+    const rows = Array.from({ length: 500 }, (_, index) => ({
+      id: `fixture-${index}`, raw_text: text, duration_ms: 1000, tags: [],
+    }));
+    const detail = { ...rows[0], raw_text: text.repeat(100) };
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      fetch(req) {
+        if (req.headers.get("authorization") !== "Bearer fixture-service-credential") return new Response(null, { status: 401 });
+        return new URL(req.url).pathname.endsWith("/fixture-0")
+          ? Response.json({ recording: detail })
+          : Response.json({ recordings: rows, count: rows.length });
+      },
+    });
+    try {
+      for (const args of [["list", "-n", "500"], ["search", "café", "--limit", "500"], ["show", "fixture-0"]]) {
+        const child = Bun.spawn([compiledCompanion, "--json", ...args], {
+          env: {
+            HOME: compiledCompanionDirectory, PATH: process.env.PATH,
+            HASNA_RECORDINGS_CLIENT_STORE: "http",
+            HASNA_RECORDINGS_API_URL: `http://127.0.0.1:${server.port}/recordings/v1`,
+            HASNA_RECORDINGS_API_KEY_OVERRIDE: "fixture-service-credential",
+          },
+          stdout: "pipe", stderr: "pipe",
+        });
+        const [stdout, stderr, exitCode] = await withTimeout(Promise.all([
+          new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+        ]), 15_000, "large companion JSON").finally(() => stopAndReap(child, "large companion JSON"));
+        expect(exitCode, stderr).toBe(0);
+        expect(Buffer.byteLength(stdout)).toBeGreaterThan(65_536);
+        expect(JSON.parse(stdout)).toEqual(args[0] === "show" ? detail : rows);
+      }
+    } finally { server.stop(true); }
+  }, 60_000);
+
   test("the compiled app companion saves, lists, and deletes through a configurable prefixed API", async () => {
     const home = mkdtempSync(join(tmpdir(), "recordings-native-api-"));
     const seen: string[] = [];

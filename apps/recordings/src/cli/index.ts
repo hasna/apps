@@ -231,7 +231,7 @@ program
     });
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(recording, null, 2));
+      await printJSON(recording);
     } else {
       console.log(
         chalk.dim(`\nSaved as ${recording.id.slice(0, 8)}`)
@@ -308,7 +308,7 @@ program
     }, recordingId);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(recording, null, 2));
+      await printJSON(recording);
     } else if (processed.mode === "enhanced") {
       console.log(chalk.green("Enhanced:"));
       console.log(processed.text);
@@ -391,7 +391,7 @@ program
     }, recordingId);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(recording, null, 2));
+      await printJSON(recording);
     } else if (processed.mode === "enhanced") {
       console.log(processed.text);
     } else {
@@ -426,17 +426,11 @@ program
     try {
       const result = await enhanceText(text, instruction, config);
       if (parentOpts.json) {
-        console.log(
-          JSON.stringify(
-            {
-              raw_text: text,
-              processed_text: result.enhanced,
-              model_used: result.model,
-            },
-            null,
-            2
-          )
-        );
+        await printJSON({
+          raw_text: text,
+          processed_text: result.enhanced,
+          model_used: result.model,
+        });
       } else {
         console.log(result.enhanced);
       }
@@ -488,7 +482,7 @@ program
       });
 
       if (parentOpts.json) {
-        console.log(JSON.stringify(recording, null, 2));
+        await printJSON(recording);
       } else {
         console.log(chalk.green(`✓ Saved recording ${recording.id}`));
       }
@@ -531,7 +525,7 @@ program
     const recordings = await store.listRecordings(filter);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(recordings, null, 2));
+      await printJSON(recordings);
       return;
     }
     const total = await countStoreRecordings(store, withoutPagination(filter));
@@ -591,7 +585,7 @@ program
     const results = await store.searchRecordings(query, filter);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(results, null, 2));
+      await printJSON(results);
       return;
     }
     const total = await countStoreRecordings(store, withoutPagination({ ...filter, search: query }));
@@ -632,7 +626,7 @@ program
     const stats = await getStore().getRecordingStats();
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(stats, null, 2));
+      await printJSON(stats);
       return;
     }
 
@@ -674,7 +668,7 @@ program
       : pageItems(agents, pagination);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(page, null, 2));
+      await printJSON(page);
       return;
     }
 
@@ -712,7 +706,7 @@ projectCommand
     const parentOpts = program.opts();
     const project = await getStore().registerProject(opts.name, opts.path, opts.description);
     if (parentOpts.json) {
-      console.log(JSON.stringify(project, null, 2));
+      await printJSON(project);
       return;
     }
     console.log(`${chalk.cyan(truncateText(project.id, 80))} ${chalk.bold(truncateText(project.name, 80))} — ${truncatePath(project.path, 120)}`);
@@ -735,7 +729,7 @@ program
       : pageItems(projects, pagination);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(page, null, 2));
+      await printJSON(page);
       return;
     }
 
@@ -2500,7 +2494,7 @@ async function printRecordingDetail(id: string): Promise<void> {
   }
 
   if (parentOpts.json) {
-    console.log(JSON.stringify(recording, null, 2));
+    await printJSON(recording);
     return;
   }
 
@@ -3058,6 +3052,18 @@ function findPackageRoot(): string {
 
 function getMacOSInstallerPath(packageRoot = findPackageRoot()): string {
   return pathJoin(packageRoot, "scripts", "install_macos_app.sh");
+}
+
+// Bun's console output can stop at the pipe buffer boundary when a compiled
+// helper exits. Wait for the writable stream to flush every JSON byte so native
+// callers can decode large history pages and long transcripts.
+async function printJSON(value: unknown): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 // ── Run ─────────────────────────────────────────────────────────────────────
