@@ -15,6 +15,9 @@ test("Claude and Codex configurations preserve model IDs, endpoint prefixes and 
   try{
     const claude=await prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.261",authStyle:"bearer",args:["-p","hello"]});
     expect(claude.env.ANTHROPIC_BASE_URL).toBe("https://example.com/prefix");expect(claude.env.ANTHROPIC_AUTH_TOKEN).toBe(input.credential);
+    expect(claude.env.ANTHROPIC_DEFAULT_MODEL).toBe(input.model);
+    expect(claude.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe(input.model);
+    expect(claude.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE).toBeUndefined();
     const settings=JSON.parse(await readFile(claude.configPaths[0],"utf8"));expect(settings.modelPicker.options[0].model).toBe(input.model);
     expect(JSON.stringify(settings)).not.toContain(input.credential);expect(claude.args).toContain("hello");
     const codex=await prepareHarnessLaunch({...input,harness:"codex",version:"codex-cli 0.153.4",args:["exec","hello"]});
@@ -29,15 +32,90 @@ test("unsupported protocols, old clients and unsafe model catalogs fail before l
     await expect(prepareHarnessLaunch({...input,harness:"codex",protocol:"openai-chat",version:"0.153.4"})).rejects.toThrow("incompatible");
     await expect(prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.100"})).rejects.toThrow("2.1.242");
     await expect(prepareHarnessLaunch({...input,harness:"opencode2",version:"1.2.0"})).rejects.toThrow("legacy");
-    await expect(prepareHarnessLaunch({...input,harness:"grok",version:"1.0.13",args:["--resume"]})).rejects.toThrow("resume");
-    await expect(prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-18999",credential:undefined,args:["run","--continue"]})).rejects.toThrow("resume");
     await expect(prepareHarnessLaunch({...input,harness:"codex",version:"0.153.4",models:[]})).rejects.toThrow("missing");
   } finally {await rm(input.stateDir,{recursive:true,force:true});}
+});
+test("Pi uses the selected provider/model across all supported wire protocols and preserves native resume flags",async()=>{
+  const input=await fixture();
+  try {
+    for (const [protocol,api,authStyle] of [["anthropic-messages","anthropic-messages","x-api-key"],["openai-responses","openai-responses","bearer"],["openai-chat","openai-completions","bearer"]] as const) {
+      const prepared=await prepareHarnessLaunch({...input,stateDir:join(input.stateDir,protocol),harness:"pi",protocol,authStyle,version:"0.85.1",args:["--session","/owned/session.jsonl","--continue","-p","prompt"]});
+      try {
+        const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
+        const provider:any=Object.values(config.providers)[0];
+        expect(provider.api).toBe(api);expect(provider.baseUrl).toBe(protocol==="anthropic-messages"?input.baseUrl.replace(/\/v1$/i,""):input.baseUrl);expect(provider.models).toHaveLength(input.models.length);
+        expect(config.providers[Object.keys(config.providers)[0]].apiKey).toBe("$SWITCHER_HARNESS_API_KEY");
+        expect(prepared.args.slice(0,6)).toEqual(["--provider",Object.keys(config.providers)[0],"--model",input.model,"--models",`${Object.keys(config.providers)[0]}/**`]);
+        expect(prepared.args.slice(6)).toEqual(["--session","/owned/session.jsonl","--continue","-p","prompt"]);
+        expect(JSON.stringify(config)).not.toContain(input.credential);expect(prepared.env.PI_CODING_AGENT_DIR).toEndWith("/pi-agent");
+      } finally { await prepared.cleanup?.(); }
+    }
+    await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.1",args:["--model","outside"]})).rejects.toThrow("reserved");
+    await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.1",args:["--models","google/*"]})).rejects.toThrow("reserved");
+    await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.1",models:[...input.models,{...input.models[0],id:"VENDOR/MODEL"}]})).rejects.toThrow("letter case");
+    await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.1",models:[...input.models,{...input.models[0],id:"other"},{...input.models[0],id:"OTHER"}]})).rejects.toThrow("letter case");
+    await expect(prepareHarnessLaunch({...input,harness:"pi",protocol:"openai-chat",version:"0.85.0"})).rejects.toThrow("0.85.1");
+  } finally { await rm(input.stateDir,{recursive:true,force:true}); }
+});
+test("Pi bridges protocol/auth mismatches without leaking bridge credentials upstream",async()=>{
+  const input=await fixture();
+  const upstreamRequests:any[]=[];
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,async fetch(request){upstreamRequests.push({path:new URL(request.url).pathname,authorization:request.headers.get("authorization"),key:request.headers.get("x-api-key")});return Response.json({ok:true});}});
+  const cases=[
+    {protocol:"anthropic-messages" as const,authStyle:"bearer" as const,path:"/v1/messages",upstreamPath:"/v1/messages",native:"x-api-key" as const},
+    {protocol:"openai-responses" as const,authStyle:"x-api-key" as const,path:"/responses",upstreamPath:"/v1/responses",native:"authorization" as const},
+    {protocol:"openai-chat" as const,authStyle:"x-api-key" as const,path:"/chat/completions",upstreamPath:"/v1/chat/completions",native:"authorization" as const},
+  ];
+  try {
+    for(const [i,entry] of cases.entries()) {
+      const prepared=await prepareHarnessLaunch({...input,stateDir:join(input.stateDir,String(i)),harness:"pi",baseUrl:upstream.url.origin+"/v1",protocol:entry.protocol,authStyle:entry.authStyle,version:"0.85.1"});
+      try {
+        const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
+        const base=(Object.values(config.providers)[0] as any).baseUrl;
+        const headers:Record<string,string>={"content-type":"application/json"};headers[entry.native]=entry.native==="authorization"?`Bearer ${prepared.env.SWITCHER_HARNESS_API_KEY}`:prepared.env.SWITCHER_HARNESS_API_KEY;
+        expect((await fetch(base+entry.path,{method:"POST",headers,body:JSON.stringify({model:input.model})})).status).toBe(200);
+        expect((await fetch(base+entry.path,{method:"POST",headers:{...headers,[entry.native]:entry.native==="authorization"?"Bearer wrong-key":"wrong-key"},body:JSON.stringify({model:input.model})})).status).toBe(401);
+      } finally { await prepared.cleanup?.(); }
+    }
+    expect(upstreamRequests.map(request=>request.path)).toEqual(cases.map(entry=>entry.upstreamPath));
+    expect(upstreamRequests[0].authorization).toBe(`Bearer ${input.credential}`);expect(upstreamRequests[0].key).toBeNull();
+    expect(upstreamRequests[1].authorization).toBeNull();expect(upstreamRequests[1].key).toBe(input.credential);
+    expect(upstreamRequests[2].authorization).toBeNull();expect(upstreamRequests[2].key).toBe(input.credential);
+  } finally { await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true}); }
+});
+test("Grok resumes with a fresh bridge and the selected profile model; unsafe interactive queued prompts fail",async()=>{
+  const input=await fixture();
+  const safe=[
+    ["--resume"], ["--resume","session"], ["--resume=session"], ["--load","session"],
+    ["--load=session"], ["--continue"], ["-c"], ["-rsession"], ["-crsession"],
+    ["--resume","session","-p","prompt"], ["--continue","--single=prompt"],
+    ["--continue","--print","prompt"], ["--continue","--prompt-file","prompt.txt"],
+    ["--continue","--prompt-json","[]"], ["--continue","-pprompt"],
+    ["--resume","session","--reasoning-effort","high","--rules","A rule"],
+    ["--resume","session","--no-alt-screen"],
+    ["--rules","--resume","ordinary new prompt"],
+  ];
+  let stableModel:string|undefined;
+  try {
+    for(const [i,args] of safe.entries()) {
+      const prepared=await prepareHarnessLaunch({...input,stateDir:join(input.stateDir,String(i)),harness:"grok",version:"1.0.13",args});
+      try { stableModel??=prepared.args[1]; expect(prepared.args[1]).toBe(stableModel); expect(prepared.args[2]).toBe("--no-leader"); expect(prepared.args.slice(3)).toEqual(args); expect(JSON.parse(await readFile(prepared.configPaths[0],"utf8")).models.session_summary).toBe(stableModel); }
+      finally { await prepared.cleanup?.(); }
+    }
+    for(const args of [
+      ["--resume","session","prompt"], ["--resume=session","prompt"], ["--load=session","prompt"],
+      ["--load","session","prompt"], ["--continue","prompt"], ["-c","prompt"],
+      ["-rsession","prompt"], ["-crsession","prompt"], ["--continue","--","-p"],
+      ["--continue","--rules","-p","prompt"], ["--continue","--system-prompt=--print","prompt"],
+    ]) await expect(prepareHarnessLaunch({...input,harness:"grok",version:"1.0.13",args})).rejects.toThrow("inline prompt");
+    for(const args of [["--leader"],["--leader-socket","/some/socket"],["--leader-socket=/some/socket"]])
+      await expect(prepareHarnessLaunch({...input,harness:"grok",version:"1.0.13",args})).rejects.toThrow("reserved");
+  } finally { await rm(input.stateDir,{recursive:true,force:true}); }
 });
 test("OpenCode2 config uses v2 schema and isolated execution without broad permission flags",async()=>{
   const input=await fixture();
   try{
-    const prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-18999",args:["run","hello"]});
+    const prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-19157",args:["run","hello"]});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
     const provider:any=Object.values(config.providers)[0];expect(provider.package).toEndWith("/openai/responses");
     expect(provider.models[input.model].capabilities).toEqual({tools:true,input:["text"],output:["text"]});
@@ -87,9 +165,108 @@ test("OpenCode's fixed native auth convention can bridge a provider's different 
   let auth:string|null=null,key:string|null=null;
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req){auth=req.headers.get("authorization");key=req.headers.get("x-api-key");return Response.json({ok:true});}});
   try{
-    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-18999",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1"});
+    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-19157",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1"});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const provider:any=Object.values(config.providers)[0];
     const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model})});
     expect(response.status).toBe(200);expect(auth).toBe(`Bearer ${input.credential}`);expect(key).toBeNull();
   }finally{await prepared?.cleanup?.();await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true});}
+});
+test("OpenCode provider identity stays stable when its per-launch auth bridge changes",async()=>{
+  const first = await fixture(); const second = await fixture();
+  const prepared: Awaited<ReturnType<typeof prepareHarnessLaunch>>[] = [];
+  try {
+    for (const input of [first,second]) prepared.push(await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-19157",protocol:"anthropic-messages",authStyle:"bearer",args:["run","--session","fixture-session"]}));
+    const configs = await Promise.all(prepared.map(async p=>JSON.parse(await readFile(p.configPaths[0],"utf8"))));
+    expect(Object.keys(configs[0].providers)).toEqual(Object.keys(configs[1].providers));
+    expect(configs[0].model).toBe(configs[1].model);
+    const providers = configs.map(c=>Object.values(c.providers)[0] as any);
+    expect(providers[0].settings.baseURL).not.toBe(providers[1].settings.baseURL);
+    expect(prepared[0].env.SWITCHER_HARNESS_API_KEY).not.toBe(prepared[1].env.SWITCHER_HARNESS_API_KEY);
+    expect(prepared[1].args).toContain("fixture-session");
+  } finally {
+    await Promise.all(prepared.map(p=>p.cleanup?.()));
+    await rm(first.stateDir,{recursive:true,force:true}); await rm(second.stateDir,{recursive:true,force:true});
+  }
+});
+
+
+test.skipIf(!process.env.SWITCHER_TEST_PI_PACKAGE)("installed Pi picker scope retains nested model IDs and excludes another provider",async()=>{
+  const {pathToFileURL}=await import("node:url");
+  const native=await import(pathToFileURL(join(process.env.SWITCHER_TEST_PI_PACKAGE!,"dist/core/model-resolver.js")).href);
+  const input=await fixture();
+  try {
+    const models=[...input.models,{...input.models[0],id:"bare-model"},{...input.models[0],id:"vendor/team/model"}];
+    const prepared=await prepareHarnessLaunch({...input,models,harness:"pi",protocol:"openai-chat",authStyle:"bearer",version:"0.85.1"});
+    const provider=prepared.args[1],scope=prepared.args[prepared.args.indexOf("--models")+1];
+    const available=[...models.map(model=>({...model,provider})),{id:"vendor/model",name:"Another account",provider:"outside-provider"}];
+    const resolved=native.resolveModelScopeFromModels([scope],available);
+    expect(resolved.diagnostics).toEqual([]);
+    expect(resolved.scopedModels.map((row:any)=>row.model.id)).toEqual(models.map(model=>model.id));
+    expect(resolved.scopedModels.every((row:any)=>row.model.provider===provider)).toBe(true);
+  } finally {await rm(input.stateDir,{recursive:true,force:true});}
+});
+
+test("auth bridges cancel unfinished upstream SSE before shutting down",async()=>{
+  const input=await fixture();let source:ReadableStreamDefaultController<Uint8Array>|undefined;
+  let upstreamSignal:AbortSignal|undefined;
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch(request){
+    upstreamSignal=request.signal;
+    return new Response(new ReadableStream<Uint8Array>({start(controller){source=controller;controller.enqueue(new TextEncoder().encode('data: {"type":"message_stop"}\n\n'));}}),{headers:{"content-type":"text/event-stream"}});
+  }});
+  let prepared:Awaited<ReturnType<typeof prepareHarnessLaunch>>|undefined;
+  let reader:ReadableStreamDefaultReader<Uint8Array>|undefined;
+  let closing:Promise<void>|undefined;
+  try {
+    prepared=await prepareHarnessLaunch({...input,harness:"opencode2",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1",version:"opencode2 v0.0.0-beta-19157"});
+    const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const provider:any=Object.values(config.providers)[0];
+    const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model,messages:[],stream:true})});
+    reader=response.body!.getReader();expect(new TextDecoder().decode((await reader.read()).value)).toContain("message_stop");
+    // The native harness can stop consuming once it sees the terminal event,
+    // leaving the provider's streaming response open when the process exits.
+    let stopped=false;closing=Promise.all([prepared.cleanup!(),prepared.cleanup!()]).then(()=>{stopped=true;});
+    await Promise.race([closing,Bun.sleep(500)]);
+    expect(stopped).toBe(true);
+    await expect(fetch(provider.settings.baseURL+"/models")).rejects.toThrow();
+    expect(upstreamSignal?.aborted).toBe(true);
+  } finally {
+    try{source?.close();}catch{}
+    await reader?.cancel().catch(()=>{});
+    await closing?.catch(()=>{});
+    if(!closing)await prepared?.cleanup?.();
+    await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true});
+  }
+},5000);
+
+
+test("native attached and clustered options cannot override the launch profile",async()=>{
+  const input=await fixture();
+  const cases:[HarnessLaunchInput["harness"],string,string[][]][]=[
+    ["codex","0.153.4",[["exec","-mvendor/second"],["-pother"],["-hmvendor/second"],["-hcmodel=other"],["--oss"],["--local-provider=ollama"],["--remote","ws://127.0.0.1:9999"],["-c",'"model_provider"="outside"']]],
+    ["grok","1.0.13",[["-mvendor/second"],["-cmvendor/second"]]],
+    ["opencode2","2.0.0-beta-19157",[["run","-moutside/model"],["run","-cmoutside/model"]]],
+  ];
+  try{
+    for(const [harness,version,arguments_] of cases)for(const args of arguments_)
+      await expect(prepareHarnessLaunch({...input,harness,version,args})).rejects.toThrow("profile");
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});
+
+test("native argument values and end-of-options prompts keep literal model-looking text",async()=>{
+  const input=await fixture();
+  try{
+    for(const [index,args] of [["exec","-oresult-mmodel.txt","--","-mvendor/second"],["exec","-capproval_policy=never","--","--model=literal"]].entries()){
+      const prepared=await prepareHarnessLaunch({...input,harness:"codex",version:"0.153.4",stateDir:join(input.stateDir,String(index)),args});
+      expect(prepared.args.slice(-args.length)).toEqual(args);
+    }
+    const grok=await prepareHarnessLaunch({...input,harness:"grok",version:"1.0.13",stateDir:join(input.stateDir,"grok"),args:["-p-mvendor/second"]});
+    try{expect(grok.args.at(-1)).toBe("-p-mvendor/second");}finally{await grok.cleanup?.();}
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
+});
+
+test("Claude fallback model selection is owned by the launch profile",async()=>{
+  const input=await fixture();
+  try{
+    for(const args of [["--fallback-model","outside/model"],["--fallback-model=outside/model,other/model"]])
+      await expect(prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.263",args})).rejects.toThrow("profile");
+  }finally{await rm(input.stateDir,{recursive:true,force:true});}
 });

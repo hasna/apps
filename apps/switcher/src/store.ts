@@ -19,22 +19,39 @@ export class Store {
   private constructor(sql: SQL, engine: "sqlite" | "postgresql") { this.sql = sql; this.engine = engine; }
   static async open(config: {databaseUrl?: string; sqlitePath?: string}) {
     if (!!config.databaseUrl === !!config.sqlitePath) throw new Fault(500, "storage_config", "Choose exactly one PostgreSQL URL or SQLite path.");
-    let sql: SQL; let engine: "sqlite" | "postgresql";
-    if (config.databaseUrl) {
-      if (!/^postgres(ql)?:\/\//.test(config.databaseUrl)) throw new Fault(500, "storage_config", "Database URL must use PostgreSQL.");
-      sql = new SQL(config.databaseUrl); engine = "postgresql";
-    } else {
-      const file = config.sqlitePath!;
-      if (file !== ":memory:") await mkdir(dirname(resolve(file)), {recursive: true, mode: 0o700});
-      sql = new SQL({adapter: "sqlite", filename: file}); engine = "sqlite";
-      await sql.unsafe("PRAGMA foreign_keys = ON");
-      await sql.unsafe("PRAGMA busy_timeout = 5000");
-      await sql.unsafe("PRAGMA journal_mode = WAL");
-      if (file !== ":memory:") await chmod(file, 0o600);
+    const engine = config.databaseUrl ? "postgresql" : "sqlite";
+    if (config.databaseUrl && !/^postgres(ql)?:\/\//.test(config.databaseUrl))
+      throw new Fault(500, "storage_config", "Database URL must use PostgreSQL.");
+    const file = config.sqlitePath;
+    if (engine === "sqlite" && file !== ":memory:") await mkdir(dirname(resolve(file!)), {recursive: true, mode: 0o700});
+    const deadline = Date.now() + 10_000;
+    for (let attempt = 0; ; attempt++) {
+      let sql: SQL | undefined;
+      try {
+        sql = engine === "postgresql" ? new SQL(config.databaseUrl!) : new SQL({adapter: "sqlite", filename: file!});
+        if (engine === "sqlite") {
+          // Bun opens SQLite lazily on the first query; that connection itself
+          // can encounter SQLITE_BUSY before busy_timeout has taken effect.
+          await sql.unsafe("PRAGMA busy_timeout = 5000");
+          await sql.unsafe("PRAGMA foreign_keys = ON");
+          await sql.unsafe("PRAGMA journal_mode = WAL");
+          if (file !== ":memory:") await chmod(file!, 0o600);
+        }
+        const store = new Store(sql, engine);
+        await store.migrate();
+        return store;
+      } catch (error) {
+        await sql?.close().catch(() => {});
+        const code = (error as {code?: string})?.code;
+        if (engine === "sqlite" && ["SQLITE_BUSY", "SQLITE_BUSY_SNAPSHOT", "SQLITE_LOCKED"].includes(code ?? "") && Date.now() < deadline) {
+          // Retry a fresh connection after the failed transaction is closed.
+          // Never retry arbitrary configuration, permission or schema failures.
+          await new Promise(resolve => setTimeout(resolve, Math.min(200, 20 * (attempt + 1))));
+          continue;
+        }
+        throw new Fault(500, "storage_unavailable", "Database startup failed; check configuration, permissions and other database users.");
+      }
     }
-    const store = new Store(sql, engine);
-    try { await store.migrate(); } catch { await sql.close(); throw new Fault(500, "storage_unavailable", "Database migration failed; check server database configuration."); }
-    return store;
   }
   private async migrate() {
     await this.sql.begin(async tx => {

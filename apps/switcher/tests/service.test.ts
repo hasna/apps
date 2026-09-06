@@ -31,7 +31,7 @@ for (const engine of ["sqlite","postgresql"] as const) {
     test("auth, input validation, durable idempotency, conflicts and restart persistence",async()=>{
       expect((await handle(new Request("http://localhost/health"))).status).toBe(200);
       expect((await handle(new Request("http://localhost/v1/providers"))).status).toBe(401);
-      const input={id:"test-provider",name:"Test provider",baseUrl:"https://example.com/api/v1",protocol:"openai-responses" as const,manualModels:[{id:"test-model",name:"Test model",outputModalities:["text"],supportedParameters:["tools"]}]};
+      const input={id:"test-provider",name:"Test provider",baseUrl:"https://example.com/api/v1",protocol:"openai-responses" as const,catalogBaseUrl:"https://example.com/catalog/v1",catalogFormat:"openai" as const,catalogAuthStyle:"none" as const,manualModels:[{id:"test-model",name:"Test model",outputModalities:["text"],supportedParameters:["tools"]}]};
       const p=await client.createProvider(input,"stable-request-001");
       expect(p.version).toBe(1);
       expect(await client.createProvider(input,"stable-request-001")).toEqual(p);
@@ -61,6 +61,8 @@ for (const engine of ["sqlite","postgresql"] as const) {
       await expect(client.launchPlan(profile.id)).rejects.toMatchObject({code:"catalog_missing"});
       await store.close(); store=await Store.open(config); handle=createHandler(store,token);
       expect((await client.getProvider(p.id)).name).toBe("Updated");
+      expect((await client.getProvider(p.id)).catalogBaseUrl).toBe(input.catalogBaseUrl);
+      expect((await client.getProvider(p.id)).catalogAuthStyle).toBe("none");
       expect(await client.createProvider(input,"stable-request-001")).toEqual(p);
       expect((await client.getRun(run.id)).exitCode).toBe(0);
     });

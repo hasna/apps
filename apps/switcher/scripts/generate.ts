@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import openapiTS, { astToString } from "openapi-typescript";
-import { providerInputSchema, profileInputSchema, modelSchema, runInputSchema, runUpdateSchema, idSchema, VERSION } from "../src/domain";
+import { providerInputSchema, providerPresetSchema, profileInputSchema, modelSchema, runInputSchema, runUpdateSchema, idSchema, VERSION } from "../src/domain";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 const meta = {version: z.number().int().positive(), updatedAt: z.string()};
 const provider = providerInputSchema.innerType().required({authStyle: true, modelsPath: true, manualModels: true}).extend(meta);
@@ -9,7 +9,7 @@ const profile = profileInputSchema.extend(meta);
 const catalog = z.object({models: z.array(modelSchema), refreshedAt: z.string(), source: z.enum(["remote", "manual"])});
 const run = runInputSchema.extend({...meta, providerId:idSchema,providerVersion:z.number().int().positive(),profileVersion:z.number().int().positive(), id: idSchema, status: z.enum(["running","exited","failed","interrupted"]), startedAt: z.string(), endedAt: z.string().optional(), exitCode: z.number().int().optional()});
 const definitions = {
-  ProviderInput: providerInputSchema, Provider: provider, ProfileInput: profileInputSchema, Profile: profile,
+  ProviderPreset: providerPresetSchema, ProviderInput: providerInputSchema, Provider: provider, ProfileInput: profileInputSchema, Profile: profile,
   Model: modelSchema, ModelPage:z.object({data:z.array(modelSchema.extend({codingEligible:z.boolean()})),total:z.number().int(),limit:z.number().int(),offset:z.number().int(),refreshedAt:z.string(),source:z.enum(["remote","manual"])}),Catalog: catalog, LaunchPlan: z.object({provider, profile, catalog, planToken:z.string(),warnings: z.array(z.string())}),
   RunInput: runInputSchema, RunUpdate: runUpdateSchema, Run: run,
   Health: z.object({status:z.enum(["ok","degraded","unavailable"]),version:z.string(),backend:z.enum(["sqlite","postgresql"])}), Ready:z.object({ready:z.boolean(),reason:z.string().optional()}), Version:z.object({version:z.string()}),
@@ -39,6 +39,8 @@ for (const [plural, singular] of [["providers","Provider"],["profiles","Profile"
   op(`/v1/${plural}/{id}`,"put",`update${singular}`,ref(singular),`${singular}Input`);
   op(`/v1/${plural}/{id}`,"delete",`delete${singular}`,{type:"object",properties:{deleted:{type:"string"}},required:["deleted"]});
 }
+op("/v1/provider-presets","get","listProviderPresets",{type:"object",required:["data"],properties:{data:{type:"array",items:ref("ProviderPreset")}}});
+op("/v1/provider-presets/{id}","get","getProviderPreset",ref("ProviderPreset"));
 op("/v1/providers/{id}/models","get","listModels",ref("ModelPage"),undefined,true);
 op("/v1/providers/{id}/refresh","post","refreshModels",ref("Catalog"),"Empty");
 op("/v1/launch-plans","post","launchPlan",ref("LaunchPlan"),"LaunchInput");
