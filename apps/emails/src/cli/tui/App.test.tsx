@@ -101,6 +101,7 @@ function seedMessage(
   to = "ops@example.com",
   labels: string[] = [],
   attachments: Array<{ filename: string; content_type: string; size: number; local_path?: string; s3_url?: string }> = [],
+  content?: { text?: string; html?: string },
 ) {
   return storeInboundEmail({
     provider_id: providerId,
@@ -109,8 +110,8 @@ function seedMessage(
     to_addresses: [to],
     cc_addresses: [],
     subject,
-    text_body: `# ${subject}\n\nbody for ${subject}\n\nhttps://example.com/${encodeURIComponent(subject)}`,
-    html_body: null,
+    text_body: content?.text ?? `# ${subject}\n\nbody for ${subject}\n\nhttps://example.com/${encodeURIComponent(subject)}`,
+    html_body: content?.html ?? null,
     attachments: attachments.map(({ filename, content_type, size }) => ({ filename, content_type, size })),
     attachment_paths: attachments.flatMap((attachment) => attachment.local_path || attachment.s3_url ? [{
       filename: attachment.filename,
@@ -186,6 +187,116 @@ async function typeText(value: string) {
 }
 
 describe("Emails Solid TUI", () => {
+  it("switches from the mailbox title, scopes messages, and returns from a reader to All mailboxes", async () => {
+    const billing = createAddress({ provider_id: providerId, email: "billing@example.com" });
+    markVerified(billing.id);
+    seedMessage("Operations update", undefined, "ops@example.com");
+    seedMessage("Billing update", undefined, "billing@example.com");
+    await renderApp();
+    await clickText("All mailboxes ▾");
+    await typeText("ops@example.com");
+    await key("enter");
+    expect(frame()).toContain("ops@example.com ▾");
+    expect(frame()).toContain("Operations update");
+    expect(frame()).not.toContain("Billing update");
+    await clickText("Operations update");
+    await key("enter");
+    expect(frame()).toContain("From:");
+    await clickText("ops@example.com ▾");
+    await key("enter");
+    expect(frame()).toContain("ops@example.com ▾");
+    await clickText("ops@example.com ▾");
+    await clickText("All mailboxes", 0);
+    expect(frame()).toContain("All mailboxes ▾");
+    expect(frame()).toContain("Billing update");
+    expect(frame()).not.toContain("No message selected");
+  });
+
+  it("renders rich mail and toggles code and reply history with mouse and keyboard", async () => {
+    seedMessage("Rich mail", undefined, undefined, [], [], {
+      text: "# Release notes\n\n**Ready** and `inline`\n\n```sh\ncd project\n  bun test\n```\n\n> Earlier message text\n",
+    });
+    await renderApp();
+    await clickText("Rich mail");
+    await key("enter");
+    expect(frame()).toContain("Release notes");
+    expect(frame()).not.toContain("**Ready**");
+    expect(frame()).toContain("Ready and inline");
+    expect(frame()).toContain("Code · sh");
+    expect(frame()).not.toContain("cd project");
+    expect(frame()).not.toContain("Earlier message text");
+    await clickText("Code · sh");
+    expect(frame()).toContain("cd project");
+    const codeSpan = setup?.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("cd project"));
+    expect(codeSpan).toBeDefined();
+    expect(codeSpan!.fg.equals(codeSpan!.bg)).toBe(false);
+    await key("enter");
+    expect(frame()).not.toContain("cd project");
+    await key("tab");
+    await key("enter");
+    expect(frame()).toContain("Earlier message text");
+    await clickText("Quoted message");
+    expect(frame()).not.toContain("Earlier message text");
+  });
+
+  it("scrolls the entire reader with keys, preserving the selected message and reflowing after resize", async () => {
+    seedMessage("Long message", "2026-01-02T10:00:00.000Z", undefined, [], [], {
+      text: Array.from({ length: 220 }, (_, i) => `Paragraph ${i}. This sentence wraps within the message pane.`).join("\n\n"),
+    });
+    seedMessage("Other message", "2026-01-01T10:00:00.000Z");
+    await renderApp();
+    await clickText("Long message");
+    await key("enter");
+    expect(frame()).toContain("Paragraph 0.");
+    await key("pagedown");
+    expect(frame()).not.toContain("Paragraph 0.");
+    expect(frame()).toContain("Long message");
+    await key("down");
+    expect(frame()).toContain("Long message");
+    setup?.mockInput.pressKey("\x1b[F");
+    await flush();
+    expect(frame()).toContain("Paragraph 219.");
+    setup?.resize(80, 24);
+    await flush();
+    setup?.mockInput.pressKey("\x1b[H");
+    await flush();
+    expect(frame()).toContain("Paragraph 0.");
+    expect(frame()).toContain("message pane.");
+    await key("escape");
+    expect(frame()).toContain("Other message");
+  });
+
+  it("renders an HTML email as rich text with a real table and trimmed Gmail history", async () => {
+    seedMessage("HTML update", undefined, undefined, [], [], { html: '<h1>Deployment report</h1><p><b>Ready</b> for <a href="https://example.com/review">review</a>.</p><div style="display:none">invisible preview</div><table><tr><th>Service</th><th>Status</th></tr><tr><td>API</td><td>Healthy</td></tr></table><div class="gmail_quote"><p>Previous deployment report</p></div>' });
+    await renderApp();
+    await clickText("HTML update");
+    await key("enter");
+    expect(frame()).toContain("Deployment report");
+    expect(frame()).toContain("Ready for review.");
+    expect(frame()).toContain("Service");
+    expect(frame()).toContain("Healthy");
+    expect(frame()).not.toContain("<table>");
+    expect(frame()).not.toContain("invisible preview");
+    expect(frame()).not.toContain("Previous deployment report");
+    await clickText("Quoted message");
+    expect(frame()).toContain("Previous deployment report");
+  });
+
+  it("collapses older thread messages while keeping the selected message open", async () => {
+    seedMessage("Thread story", "2026-01-01T10:00:00.000Z", undefined, [], [], { text: "Earlier thread body" });
+    seedMessage("Re: Thread story", "2026-01-02T10:00:00.000Z", undefined, [], [], { text: "Latest thread body" });
+    await renderApp();
+    await clickText("Re: Thread");
+    await key("enter");
+    await setup?.waitForFrame((value) => value.includes("Latest thread body"));
+    expect(frame()).not.toContain("Earlier thread body");
+    await clickText("Sender Thread story");
+    expect(frame()).toContain("Earlier thread body");
+    await clickText("Sender Thread story");
+    expect(frame()).not.toContain("Earlier thread body");
+  });
+
+
   it("resolves a searched-for inbox to its real address, never falling back to All inboxes", () => {
     // Regression: the picker caps the address list (200). An address found by TYPING in the
     // search box but sitting beyond that cap used to make reload() fall back to list[0] =
@@ -218,7 +329,7 @@ describe("Emails Solid TUI", () => {
       await setup?.flush();
     }
 
-    expect(frame()).toContain("Emails");
+    expect(frame()).toContain("All mailboxes ▾");
     expect(frame()).toContain("Mail");
     expect(frame()).toContain("Labels");
     expect(frame()).toContain("Actions");
@@ -392,8 +503,8 @@ describe("Emails Solid TUI", () => {
     await renderApp();
     expect(frame()).not.toContain("Profiles");
 
-    await clickText("All inboxes");
-    expect(frame()).toContain("Inboxes");
+    await clickText("All mailboxes ▾");
+    expect(frame()).toContain("Mailboxes");
     expect(frame()).toContain("ops@example.com");
     // The picker detail is a short receive-status token ("ready" for a verified
     // address); the provider now lives in the Domains view.

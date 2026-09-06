@@ -46,7 +46,9 @@ describe("format helpers", () => {
     const yesterday = listDateTime(new Date(2026, 5, 2, 9, 30, 0).toISOString(), now);
     const twoDays = listDateTime(new Date(2026, 5, 1, 9, 30, 0).toISOString(), now);
     const older = listDateTime(new Date(2026, 4, 1, 8, 5, 0).toISOString(), now);
-    expect(today).toBe("13:33 PM");
+    expect(today).toBe("1:33 PM");
+    expect(listDateTime(new Date(2026, 5, 3, 0, 5).toISOString(), now)).toBe("12:05 AM");
+    expect(listDateTime(new Date(2026, 5, 3, 12, 5).toISOString(), now)).toBe("12:05 PM");
     expect(yesterday).toBe("Yesterday");
     expect(twoDays).toBe("2 days ago");
     expect(older).toBe("May 1");

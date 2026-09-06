@@ -4,18 +4,17 @@ import { useTerminalDimensions } from "@opentui/solid";
 import { useEmails } from "../context/emails-state.js";
 import { labelColor, selectedForeground, useTheme } from "../context/theme.js";
 import { Button, EmptyState, Row } from "../ui/primitives.js";
-import { bareAddress, listDateTime, truncate } from "../../tui/format.js";
+import { listDateTime, senderName, truncate } from "../../tui/format.js";
 import { isImportantMessage, labelDisplayName, mailboxGroupModeLabel } from "../../tui/data.js";
 import { sidebarWidth } from "./sidebar.js";
 
 interface MailboxColumns {
   from: number;
-  to: number;
   subject: number;
   date: number;
 }
 
-function MessageRow(props: { message: ReturnType<typeof useEmails>["state"]["messages"][number]; selected: boolean; showTo: boolean; columns: MailboxColumns }) {
+function MessageRow(props: { message: ReturnType<typeof useEmails>["state"]["messages"][number]; selected: boolean; columns: MailboxColumns }) {
   const theme = useTheme();
   const emails = useEmails();
   const message = () => props.message;
@@ -34,17 +33,13 @@ function MessageRow(props: { message: ReturnType<typeof useEmails>["state"]["mes
         </box>
         <box width={props.columns.from} flexShrink={0}>
           <text fg={rowFg()} attributes={unread() ? TextAttributes.BOLD : 0}>
-            {truncate(bareAddress(message().from), props.columns.from)}
+            {truncate(senderName(message().from), props.columns.from)}
           </text>
         </box>
-        <Show when={props.showTo}>
-          <box width={props.columns.to} flexShrink={0}>
-            <text fg={props.selected ? rowFg() : theme.textMuted}>{truncate(bareAddress(message().to), props.columns.to)}</text>
-          </box>
-        </Show>
         <box width={props.columns.subject} flexShrink={0}>
-          <text fg={rowFg()} attributes={unread() ? TextAttributes.BOLD : 0}>
-            {truncate(message().subject || "(no subject)", props.columns.subject)}
+          <text fg={rowFg()}>
+            <span style={{ bold: unread() }}>{truncate(message().subject || "(no subject)", props.columns.subject)}</span>
+            <span style={{ fg: props.selected ? rowFg() : theme.textMuted }}>{(message().subject || "(no subject)").length + 4 < props.columns.subject ? ` — ${truncate(message().snippet.replace(/\s+/g, " "), props.columns.subject - (message().subject || "(no subject)").length - 3)}` : ""}</span>
           </text>
         </box>
         <box width={props.columns.date} flexShrink={0}>
@@ -59,85 +54,48 @@ export function MailboxRoute() {
   const theme = useTheme();
   const emails = useEmails();
   const dimensions = useTerminalDimensions();
-  const showTo = () => !emails.selectedAddress().address && dimensions().width >= 108;
-  const contentWidth = () => Math.max(48, dimensions().width - sidebarWidth(dimensions().width) - 6);
+  const contentWidth = () => Math.max(24, dimensions().width - sidebarWidth(dimensions().width) - 6);
   const emptyDetail = () => {
     if (emails.state.search && emails.state.activeLabel) return "No messages match this search and label.";
     if (emails.state.search) return "No messages match this search.";
     if (emails.state.activeLabel) return `No messages match ${labelDisplayName(emails.state.activeLabel)}.`;
-    return "Pull mail or choose another inbox.";
+    return "Choose another mailbox or refresh to check for new messages.";
   };
   const columns = (): MailboxColumns => {
     const width = contentWidth();
-    const date = 10;
-    // A live search is a subject-first view: the query was matched against
-    // subject, sender and body, so the subject deserves the room the From/To
-    // pair would otherwise take. Only the search state does this — the plain
-    // mailbox layout (and its truncation) is unchanged.
-    const searching = emails.state.search !== "";
-    if (!showTo()) {
-      const targetFrom = width < 64 ? 20 : width < 82 ? 32 : width < 110 ? 40 : 48;
-      const from = Math.max(16, Math.min(targetFrom, width - date - 17));
-      return {
-        from,
-        to: 0,
-        subject: Math.max(searching ? 20 : 14, width - from - date - 5),
-        date,
-      };
-    }
-    const minSubject = searching ? 22 : 14;
-    const availableForAddresses = Math.max(34, width - date - minSubject - 6);
-    const targetFrom = width < 76 ? 24 : width < 96 ? 28 : 36;
-    const targetTo = width < 76 ? 24 : width < 96 ? 28 : 34;
-    const from = Math.max(18, Math.min(targetFrom, Math.floor(availableForAddresses * 0.52)));
-    const to = Math.max(16, Math.min(targetTo, availableForAddresses - from));
-    return {
-      from,
-      to,
-      subject: Math.max(minSubject, width - from - to - date - 6),
-      date,
-    };
+    const date = width < 45 ? 9 : 10;
+    const from = Math.max(10, Math.min(22, Math.floor(width * 0.25)));
+    return { from, date, subject: Math.max(4, width - from - date - 5) };
   };
+
   return (
     <box width="100%" height="100%" flexDirection="column" backgroundColor={theme.background} paddingTop={1} paddingLeft={2} paddingRight={2}>
-      <box height={2} flexDirection="row" justifyContent="space-between">
-        <box flexDirection="row" columnGap={1}>
-          <Button label={emails.state.sort === "newest" ? "Newest first" : "Oldest first"} onPress={() => emails.actions.cycleSort()} />
-	          <Button
-	            label="Filter"
-	            active={!!emails.state.search || !!emails.state.activeLabel || !!emails.state.activeFilterId || emails.state.mailbox !== "inbox" || emails.state.selectedSourceId !== "all"}
-	            onPress={() => emails.actions.openDialog("filter")}
-	          />
-          <Button
-            label="Group"
-            active={emails.state.groupMode !== "none"}
-            onPress={() => emails.actions.openDialog("group")}
-          />
-	          <Button label="Search" onPress={() => emails.actions.openDialog("search")} />
-	          <Button label="Sources" active={emails.state.selectedSourceId !== "all"} onPress={() => emails.actions.openDialog("source")} />
-	          <Button label="Digest" onPress={() => emails.actions.openDialog("digest")} />
+      <box width="100%" height={1} flexShrink={0} flexDirection="row" columnGap={1}>
+        <box flexGrow={1} flexShrink={1} paddingLeft={1} backgroundColor={theme.backgroundElement}
+          onMouseUp={(event) => { if (event.button !== 0) return; event.stopPropagation(); emails.actions.openDialog("search"); }}>
+          <text fg={theme.textMuted} wrapMode="none">{emails.state.search ? `Search mail: ${emails.state.search}` : "Search mail  (Ctrl+F)"}</text>
         </box>
+        <Button label="Filter" active={!!emails.state.search || !!emails.state.activeLabel || !!emails.state.activeFilterId || emails.state.mailbox !== "inbox" || emails.state.selectedSourceId !== "all"}
+          onPress={() => emails.actions.openDialog("filter")} />
+      </box>
+      <box width="100%" flexDirection="row" flexWrap="wrap" flexShrink={0} columnGap={1} rowGap={1} marginTop={1} marginBottom={1}>
+        <Button label={emails.state.sort === "newest" ? "Newest first" : "Oldest first"} onPress={() => emails.actions.cycleSort()} />
+        <Button label="Group" active={emails.state.groupMode !== "none"} onPress={() => emails.actions.openDialog("group")} />
+        <Button label="Sources" active={emails.state.selectedSourceId !== "all"} onPress={() => emails.actions.openDialog("source")} />
+        <Button label="Digest" onPress={() => emails.actions.openDialog("digest")} />
         <text fg={theme.textMuted}>Page {emails.state.page + 1}</text>
       </box>
-
-	      <box height={1} paddingLeft={1}>
-	        <Show when={emails.state.selectedSourceId !== "all"}>
-	          <text fg={theme.textMuted}>Source: {emails.selectedSource().label}</text>
-	        </Show>
-	      </box>
+      <Show when={emails.state.selectedSourceId !== "all"}>
+        <text fg={theme.textMuted} flexShrink={0}>Source: {emails.selectedSource().label}</text>
+      </Show>
 
       <box height={1} flexDirection="row" columnGap={1} paddingLeft={1}>
         <box width={2} flexShrink={0} />
         <box width={columns().from} flexShrink={0}>
-          <text fg={theme.textMuted}>From</text>
+          <text fg={theme.textMuted}>Sender</text>
         </box>
-        <Show when={showTo()}>
-          <box width={columns().to} flexShrink={0}>
-            <text fg={theme.textMuted}>To</text>
-          </box>
-        </Show>
         <box width={columns().subject} flexShrink={0}>
-          <text fg={theme.textMuted}>Subject</text>
+          <text fg={theme.textMuted}>Subject / preview</text>
         </box>
         <box width={columns().date} flexShrink={0}>
           <text fg={theme.textMuted}>{"Date".padStart(columns().date)}</text>
@@ -148,7 +106,7 @@ export function MailboxRoute() {
         when={emails.state.messages.length > 0}
         fallback={<EmptyState title="No messages" detail={emptyDetail()} />}
       >
-        <scrollbox flexGrow={1} width="100%">
+        <scrollbox flexGrow={1} minHeight={0} width="100%" scrollX={false}>
           <For each={emails.groupedMessages()}>
             {(group) => (
               <>
@@ -158,7 +116,7 @@ export function MailboxRoute() {
                   </box>
                 </Show>
                 <For each={group.messages}>
-                  {(message) => <MessageRow message={message} selected={emails.state.selectedMessageId === message.id} showTo={showTo()} columns={columns()} />}
+                  {(message) => <MessageRow message={message} selected={emails.state.selectedMessageId === message.id} columns={columns()} />}
                 </For>
               </>
             )}
@@ -166,8 +124,10 @@ export function MailboxRoute() {
         </scrollbox>
       </Show>
 
-      <box height={1} />
-      <box height={2} flexDirection="row" columnGap={1}>
+      <Show when={emails.selectedMessage()}>
+        <text fg={theme.textMuted} wrapMode="none" width="100%" flexShrink={0} marginTop={1} marginBottom={1}>To: {emails.selectedMessage()?.to}</text>
+      </Show>
+      <box flexDirection="row" flexWrap="wrap" width="100%" flexShrink={0} columnGap={1} rowGap={1}>
         <Button label="Previous page" onPress={() => emails.actions.page(-1)} />
         <Button label="Next page" active={emails.state.hasMore} onPress={() => emails.actions.page(1)} />
         <Button label="Open" onPress={() => emails.actions.openMessage()} />

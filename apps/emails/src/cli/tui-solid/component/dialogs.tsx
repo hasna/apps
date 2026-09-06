@@ -36,7 +36,7 @@ export function EmailsDialogs() {
 
   const addressItems = createMemo<SelectDialogItem[]>(() => emails.state.addresses.map((address) => ({
     id: address.id,
-    title: address.label,
+    title: address.id === "all" ? "All mailboxes" : address.label,
     detail: inboxDetail(address),
     marker: emails.state.selectedAddressId === address.id ? "●" : " ",
     markerColor: theme.primary,
@@ -146,9 +146,10 @@ export function EmailsDialogs() {
     if (kind === "address") {
       dialog.replace(() => (
         <SelectDialog
-          title="Inboxes"
-          placeholder="Search inboxes"
+          title="Mailboxes"
+          placeholder="Search mailboxes"
           items={addressItems()}
+          selectedId={emails.state.selectedAddressId}
           query={emails.state.addressSearch}
           onQuery={emails.actions.setAddressSearch}
           onSelect={(item) => {

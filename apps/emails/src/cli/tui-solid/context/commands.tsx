@@ -47,7 +47,7 @@ function createCommands(): Accessor<EmailsCommand[]> {
     },
     {
       id: "inboxes.open",
-      title: "Inboxes",
+      title: "Switch mailbox",
       category: "Mail",
       run: () => emails.actions.openDialog("address"),
     },
@@ -153,12 +153,12 @@ export function CommandProvider(props: ParentProps) {
         if (emails.state.dialog || emails.state.compose) return;
         emails.state.route === "reader" ? emails.actions.backToList() : renderer.destroy();
       } },
-      { key: "up", desc: "Previous message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.selectOffset(-1) },
-      { key: "down", desc: "Next message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.selectOffset(1) },
-      { key: "right", desc: "Open message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.openMessage() },
-      { key: "enter", desc: "Open message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.openMessage() },
-      { key: "pageup", desc: "Previous page", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.page(-1) },
-      { key: "pagedown", desc: "Next page", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.page(1) },
+      { key: "up", desc: "Previous message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.selectOffset(-1) },
+      { key: "down", desc: "Next message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.selectOffset(1) },
+      { key: "right", desc: "Open message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.openMessage() },
+      { key: "enter", desc: "Open message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.openMessage() },
+      { key: "pageup", desc: "Previous page", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.page(-1) },
+      { key: "pagedown", desc: "Next page", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.page(1) },
     ],
   }));
 
@@ -190,6 +190,7 @@ export function CommandProvider(props: ParentProps) {
       consume();
       return;
     }
+    if (emails.state.route !== "mailbox") return;
     if (key.name === "up") {
       emails.actions.selectOffset(-1);
       consume();

@@ -464,8 +464,12 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     },
     openDialog(dialog: DialogName) {
       if (dialog === "address") {
+        if (addressSearchTimer) clearTimeout(addressSearchTimer);
+        addressSearchTimer = undefined;
         setState("addressSearch", "");
-        setState("addresses", loadAddresses());
+        const selected = resolveAddressChoice(state.selectedAddressId, state.addresses);
+        const addresses = loadAddresses();
+        setState("addresses", addresses.some((item) => item.id === selected.id) ? addresses : [ALL_ADDRESSES, selected, ...addresses.filter((item) => item.id !== ALL_ADDRESSES.id)]);
       }
       if (dialog === "filter" || dialog === "search") setState("searchDraft", state.search);
       if (dialog === "saved-filters" || dialog === "save-filter") void loadSavedFilters();
@@ -479,6 +483,8 @@ function createEmailsStore(initialMailbox?: Mailbox) {
       setState("dialog", dialog);
     },
     closeDialog() {
+      if (addressSearchTimer) clearTimeout(addressSearchTimer);
+      addressSearchTimer = undefined;
       setState("dialog", null);
       setState("commandSearch", "");
       setState("addressSearch", "");
@@ -534,7 +540,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
       reload({ preserveSelection: false });
     },
 	    setAddress(id: string) {
-	      setState({ selectedAddressId: id, page: 0, selectedMessageId: null });
+	      setState({ selectedAddressId: id, page: 0, selectedMessageId: null, route: "mailbox", readerScroll: 0 });
 	      const address = state.addresses.find((item) => item.id === id);
 	      // REMEMBERING the choice is a convenience; MAKING it is the action. Self-hosted
 	      // mode has no settings store at all — getSettings() returns the defaults and
@@ -628,6 +634,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
       if (addressSearchTimer) clearTimeout(addressSearchTimer);
       addressSearchTimer = setTimeout(() => {
         addressSearchTimer = undefined;
+        if (state.dialog !== "address" || state.addressSearch !== value) return;
         setState("addresses", loadAddresses(value));
 	      }, 160);
 	    },
