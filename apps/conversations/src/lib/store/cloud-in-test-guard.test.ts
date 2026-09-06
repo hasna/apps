@@ -220,9 +220,11 @@ describe("detectTestRuntime", () => {
 });
 
 describe("isLoopbackApiUrl", () => {
-  test("covers the whole 127.0.0.0/8 range this repo's suites actually bind", () => {
-    // poll.test.ts uses 127.0.0.9 and channel.test.ts uses 127.0.0.1; a guard
-    // that only knew 127.0.0.1 would refuse a legitimate local fixture.
+  test("isLoopbackApiUrl covers every loopback shape the suites or the resolver can reach", () => {
+    // 127.0.0.1 is the exact-loopback authority the shared @hasna/contracts
+    // resolver accepts for http; the /8 coverage here is defence in depth for
+    // any future widening of that rule. Either way the guard must never refuse
+    // a legitimate loopback fixture.
     expect(isLoopbackApiUrl("http://127.0.0.1:9/v1")).toBe(true);
     expect(isLoopbackApiUrl("http://127.0.0.9:9/v1")).toBe(true);
     expect(isLoopbackApiUrl("http://localhost:3000/v1")).toBe(true);
@@ -365,7 +367,7 @@ describe("the guard stays silent where it must — known-negative cases", () => 
         const store = getStore();
         expect(store.transport).toBe("cloud-http");
       },
-      { [URL_VAR]: "http://127.0.0.9:9/v1" },
+      { [URL_VAR]: "http://127.0.0.1:9/v1" },
     );
   });
 

@@ -3,8 +3,8 @@ import { startApiServer, type ApiServerDeps } from "./api.js";
 import { mintApiKey } from "@hasna/contracts/auth";
 import { verifyApiKey, ApiKeyStore, type ApiKeyStatus } from "@hasna/contracts/auth";
 import { gzipSync } from "node:zlib";
-import { createHasnaHttpTransport } from "../lib/contracts-client/transport.js";
-import { createHasnaStorageClient } from "../lib/contracts-client/storage.js";
+import { createHasnaHttpTransport } from "@hasna/contracts/client";
+import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
 import { ApiStore } from "../lib/store/api-store.js";
 
 // In-memory query shim standing in for the vendored kit's TypedQueryClient.

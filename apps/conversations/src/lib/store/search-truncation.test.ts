@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { ApiStore, SERVER_SEARCH_MAX_ROWS } from "./api-store.js";
-import type { HasnaStorageClient } from "../contracts-client/storage.js";
+import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 
 /**
  * Regression cover for todos 83852845 — `search` silently caps at 500 rows and
