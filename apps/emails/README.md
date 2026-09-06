@@ -181,8 +181,7 @@ A full-screen Solid/OpenTUI mail client with a persistent mailbox sidebar and a
 workspace for message lists, the reader, and domain status. Inbox can be scoped
 to all addresses or one address and filtered by ingestion source, folder,
 label, and search. Grouping, digests, attachment/link/raw views, live read
-state, local refresh, background auto-pull, and `auto`/`light`/`dark` themes are
-available in both local and self-hosted clients.
+state, automatic refresh, and `auto`/`light`/`dark` themes are available.
 
 ```bash
 emails ui
@@ -190,12 +189,34 @@ emails ui --mailbox unread
 ```
 
 The app uses visible buttons and the Shortcuts command palette for actions.
-The address and source dialogs select mailbox scope; sidebar labels filter
+Click the mailbox name at the top left to switch mailboxes or choose **All
+mailboxes**. Search mail from the top bar or with Ctrl+F; Compose stays at the
+top of the sidebar. Message rows show sender names, subjects, and previews.
+
+The reader renders HTML and Markdown with headings, emphasis, links, lists,
+and tables. Code blocks and quoted history start collapsed; click their header
+to expand or collapse them. In a thread, the selected message opens while other
+messages stay collapsed. Use arrows or Page Up/Down to scroll, Home/End to jump,
+and Tab then Enter/Space to toggle a section. Long messages reflow to the terminal
+width; unusually large bodies show a clipping notice and remain available in Raw.
+
+The mailbox and source dialogs select scope; sidebar labels filter
 mailbox content, and mail categories show Primary, Social, Promotions, Updates,
 and Forums separately from custom labels. Reader dialogs expose attachments,
 links, and raw details. Composer writes **markdown** rendered to HTML on send.
-Settings controls sync, defaults, and display. Folders: Inbox · Unread ·
-Starred · Sent · Archived · Spam · Trash.
+Empty folders and searches show a helpful empty state with a relevant next action;
+message-only actions and unavailable page buttons are hidden.
+
+Settings uses a sidebar and descriptive controls for automatic refresh, mailbox
+selection, appearance, reading preferences, priority senders, and keyboard shortcuts.
+Use Ctrl+Left/Right to switch sections, Tab to focus controls, and Enter to change
+them. View preferences apply to the current session in API-only mode; priority
+sender rules are saved to the account. No local email database is created.
+Folders: Inbox · Priority Inbox · Unread · Starred · Sent · Archived · Spam · Trash.
+
+Developers can capture the native TUI with synthetic mail, without a live account:
+`bun scripts/capture-tui-review.tsx /tmp/emails-tui-review` from this package.
+This writes character frames and colored span JSON at normal and narrow sizes.
 
 ## Command Structure
 

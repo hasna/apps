@@ -94,7 +94,7 @@ function sameLocalDate(a: Date, b: Date): boolean {
 }
 
 function localTime(date: Date): string {
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  return `${date.getHours() % 12 || 12}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
 function localTimeWithPeriod(date: Date): string {

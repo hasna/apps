@@ -35,8 +35,8 @@ export function DomainsRoute() {
       </Show>
       <box height={1} />
       <box height={2} flexDirection="row" columnGap={1}>
-        <Button label="Previous page" onPress={() => emails.actions.workspacePage(-1)} />
-        <Button label="Next page" active={emails.state.domainsHasMore} onPress={() => emails.actions.workspacePage(1)} />
+        <Show when={emails.state.domainsPage > 0}><Button label="Previous page" onPress={() => emails.actions.workspacePage(-1)} /></Show>
+        <Show when={emails.state.domainsHasMore}><Button label="Next page" onPress={() => emails.actions.workspacePage(1)} /></Show>
       </box>
     </box>
   );

@@ -31,6 +31,7 @@ export function Button(props: {
       paddingRight={1}
       backgroundColor={bg()}
       onMouseUp={(event: MouseEvent) => {
+        if (event.button !== 0) return;
         event.stopPropagation();
         props.onPress?.();
       }}
@@ -49,6 +50,7 @@ export function SectionHeader(props: { label: string; muted?: string; onPress?: 
       marginTop={1}
       marginBottom={0}
       onMouseUp={(event: MouseEvent) => {
+        if (event.button !== 0) return;
         event.stopPropagation();
         props.onPress?.();
       }}
@@ -76,6 +78,7 @@ export function Row(props: {
       paddingRight={1}
       backgroundColor={props.active ? theme.primary : undefined}
       onMouseUp={(event: MouseEvent) => {
+        if (event.button !== 0) return;
         event.stopPropagation();
         props.onPress?.();
       }}
@@ -85,12 +88,15 @@ export function Row(props: {
   );
 }
 
-export function EmptyState(props: { title: string; detail?: string }) {
+export function EmptyState(props: { title: string; detail?: string; icon?: string; fill?: boolean; children?: JSX.Element }) {
   const theme = useTheme();
   return (
-    <box flexDirection="column" paddingLeft={2} paddingTop={2} rowGap={1}>
-      <text fg={theme.text}>{props.title}</text>
-      {props.detail ? <text fg={theme.textMuted}>{props.detail}</text> : null}
+    <box flexDirection="column" width="100%" flexGrow={props.fill ? 1 : 0} minHeight={0}
+      justifyContent={props.fill ? "center" : undefined} alignItems={props.fill ? "center" : undefined} padding={2} rowGap={1}>
+      {props.icon ? <text fg={theme.primary}>{props.icon}</text> : null}
+      <text fg={theme.text} attributes={TextAttributes.BOLD} wrapMode="word">{props.title}</text>
+      {props.detail ? <text fg={theme.textMuted} wrapMode="word">{props.detail}</text> : null}
+      {props.children}
     </box>
   );
 }

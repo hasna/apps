@@ -80,16 +80,6 @@ export function DialogViewport() {
           else dialog.pop();
         },
       },
-      {
-        key: "ctrl+c",
-        desc: "Close dialog",
-        group: "Dialog",
-        cmd: () => {
-          if (dialog.stack().length === 0) return;
-          if (renderer.getSelection()) renderer.clearSelection();
-          else dialog.pop();
-        },
-      },
     ],
   }));
 
@@ -105,7 +95,7 @@ export function DialogViewport() {
           width={dimensions().width}
           height={dimensions().height}
           alignItems="center"
-          paddingTop={Math.floor(dimensions().height / 4)}
+          justifyContent="center"
           backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
           onMouseDown={() => {
             selectionDrag = !!renderer.getSelection();
