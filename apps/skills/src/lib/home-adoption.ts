@@ -33,6 +33,7 @@ import { getDataDir } from "./config.js";
 import { resolveCorpusRoot } from "./home-migration.js";
 import { hashSkillMarkdownFile } from "./skill-hash.js";
 import type { PortableSkillOptions } from "./portable-skills.js";
+import { normalizePortableSkillName } from "./portable-skills-files.js";
 
 export const CONFLICTS_LEDGER_FILE = "conflicts.json";
 export const ROLLBACK_DIRNAME = "rollback";
@@ -68,6 +69,8 @@ export interface AdoptionScan {
 
 export interface AdoptionOptions extends PortableSkillOptions {
   agents?: SyncAgent[];
+  /** Optional selected home/corpus names; omitted means all names. */
+  names?: string[];
   /** Write markers and the conflicts ledger. Without it, scan only. */
   apply?: boolean;
 }
@@ -159,6 +162,22 @@ function readUnmarkedHomeSkills(homeDir: string, agents: SyncAgent[]): Array<{ a
   return found;
 }
 
+/** A prune selection may name a stray home with no canonical corpus entry. */
+function selectedHomeNames(options: AdoptionOptions, index: Map<string, string>, homeDir: string, agents: SyncAgent[]): Set<string> | undefined {
+  if (!options.names?.length) return undefined;
+  const names = new Set(options.names.map(name => name.trim()).filter(Boolean).map(normalizePortableSkillName));
+  if (names.size === 0) throw new Error("At least one non-empty skill name is required");
+  for (const name of names) {
+    if (index.has(name)) continue;
+    const present = agents.some(agent => {
+      try { return statSync(join(agentGlobalSkillsDir(agent, homeDir), name)).isDirectory(); }
+      catch { return false; }
+    });
+    if (!present) throw new Error(`Skill '${name}' not found in the selected corpus or agent homes`);
+  }
+  return names;
+}
+
 /**
  * Census of unmarked home skill dirs against the canonical corpus. Read-only.
  */
@@ -167,6 +186,7 @@ export function scanUnmarkedHomes(options: AdoptionOptions = {}): AdoptionScan {
   const corpusRoot = resolveCorpusRoot(options);
   const index = indexCanonicalCorpus(corpusRoot);
   const agents = options.agents?.length ? options.agents : [...SYNC_AGENTS];
+  const names = selectedHomeNames(options, index, homeDir, agents);
 
   const scan: AdoptionScan = { adoptable: [], conflicts: [], unknown: [], managed: 0 };
 
@@ -181,6 +201,7 @@ export function scanUnmarkedHomes(options: AdoptionOptions = {}): AdoptionScan {
     }
     for (const skill of entries.sort()) {
       if (skill.startsWith(".")) continue;
+      if (names && !names.has(skill)) continue;
       const dir = join(home, skill);
       try {
         if (!statSync(dir).isDirectory()) continue;
@@ -287,6 +308,7 @@ export function pruneStrayHomes(options: AdoptionOptions = {}): PruneResult {
   const corpusRoot = resolveCorpusRoot(options);
   const index = indexCanonicalCorpus(corpusRoot);
   const agents = options.agents?.length ? options.agents : [...SYNC_AGENTS];
+  const names = selectedHomeNames(options, index, homeDir, agents);
 
   const candidates: PruneCandidate[] = [];
   for (const agent of agents) {
@@ -300,6 +322,7 @@ export function pruneStrayHomes(options: AdoptionOptions = {}): PruneResult {
     }
     for (const skill of entries.sort()) {
       if (skill.startsWith(".")) continue;
+      if (names && !names.has(skill)) continue;
       const dir = join(home, skill);
       try {
         if (!statSync(dir).isDirectory()) continue;
@@ -312,7 +335,7 @@ export function pruneStrayHomes(options: AdoptionOptions = {}): PruneResult {
       let marker: SyncMarker;
       try {
         const parsed = JSON.parse(readFileSync(markerPath, "utf-8"));
-        if (!parsed || typeof parsed !== "object" || typeof parsed.managedBy !== "string") continue;
+        if (!parsed || typeof parsed !== "object" || parsed.managedBy !== SYNC_MARKER_MANAGED_BY) continue;
         marker = parsed as SyncMarker;
       } catch {
         continue;

@@ -298,6 +298,7 @@ them alone by design. Adoption is the migration mode for that population:
 ```bash
 skills sync --adopt             # dry-run: hash unmarked home skills vs the corpus
 skills sync --adopt --apply     # write markers for exact matches; ledger the rest
+skills sync my-skill --adopt --for codex --source ./skills --apply
 ```
 
 Each unmarked home skill's `SKILL.md` is hashed (line endings normalized,
@@ -324,5 +325,13 @@ Compares each existing agent home against the canonical corpus and lists
 candidates, not drift. `skills diff <name>` and `skills outdated` use the same
 home-vs-canonical comparison; the pinned-skill version comparison remains as a
 subset. `skills sync --prune [--apply]` removes only marked-and-stray dirs,
-recording each removal in the rollback store before it happens.
+recording each removal in the rollback store before it happens. Adoption and
+prune honor `--source` (then `$SKILLS_SOURCE`, then the installed cache), `--for`
+and optional skill names. Names are normalized and must exist in the selected
+corpus or selected agent homes; a stale prune target need not exist in the corpus.
+Invalid selections fail before any apply write. Prune requires the marker
+`managedBy` to be exactly `@hasna/skills`; another tool's marker never grants
+deletion authority. Adoption also leaves every already-marked directory alone.
+Rollback records contain identities, hashes and markers, not backups of removed
+file content.
 
