@@ -31,6 +31,16 @@ export const providerPresets: readonly ProviderPreset[] = [
   preset("lmstudio", "LM Studio", ["openai-chat", "openai-responses", "anthropic-messages"].map(protocol => route(protocol as Protocol, "http://127.0.0.1:1234/v1", {
     notes: ["Server authentication is optional. Use --credential-env when authentication is enabled."],
   })), ["https://lmstudio.ai/docs/developer/rest"]),
+  preset("vllm", "vLLM (operator endpoint)", [
+    route("openai-chat", undefined, {notes: ["Pass the operator's OpenAI-compatible URL, normally ending in /v1. vLLM exposes Chat Completions at /chat/completions and GET /models under that prefix; configure --credential-env only when the server was started with --api-key or VLLM_API_KEY."]}),
+    route("openai-responses", undefined, {notes: ["Pass the operator's OpenAI-compatible URL, normally ending in /v1. Responses is available for supported text-generation models at /responses; configure --credential-env only when the server was started with --api-key or VLLM_API_KEY."]}),
+    route("anthropic-messages", undefined, {notes: ["Pass the operator's URL, normally ending in /v1. vLLM exposes the Anthropic Messages API at /messages for supported deployments. Chat templates and the configured tool parser determine whether streaming and tool calls work for a served model; configure --credential-env only when the server was started with --api-key or VLLM_API_KEY."]}),
+  ], ["https://docs.vllm.ai/en/latest/serving/online_serving/openai_compatible_server/", "https://github.com/vllm-project/vllm/blob/main/docs/serving/online_serving/README.md"]),
+  preset("litellm", "LiteLLM Proxy (operator endpoint)", [
+    route("openai-chat", undefined, {notes: ["Pass the proxy's documented OpenAI-compatible base URL exactly; the official quick start uses the root server URL, while a deployment may add a prefix such as /v1. LiteLLM serves Chat Completions and GET /models relative to that URL; use --credential-env for the proxy's configured master key or other bearer token."]}),
+    route("openai-responses", undefined, {notes: ["Pass the proxy's documented OpenAI-compatible base URL exactly; LiteLLM documents the Responses API under the same proxy root or deployment prefix. Use --credential-env for the proxy's configured master key or other bearer token."]}),
+    route("anthropic-messages", undefined, {notes: ["Pass the complete inference prefix ending in /v1, including any deployment prefix. LiteLLM registers /v1/messages; Switcher appends /messages to the stored prefix and discovers /models there. This is a gateway adapter: streaming and tool behavior depend on the configured upstream model and route, so verify those capabilities independently. Use --credential-env for the proxy's configured master key or other bearer token."]}),
+  ], ["https://docs.litellm.ai/", "https://docs.litellm.ai/docs/proxy/quick_start", "https://github.com/BerriAI/litellm/blob/main/litellm/proxy/anthropic_endpoints/endpoints.py"]),
   preset("groq", "Groq", [route("openai-chat", "https://api.groq.com/openai/v1"), route("openai-responses", "https://api.groq.com/openai/v1", {notes: ["Responses is an upstream beta API."]})],
     ["https://console.groq.com/docs/api-reference"], "GROQ_API_KEY"),
   preset("cerebras", "Cerebras", [route("openai-chat", "https://api.cerebras.ai/v1")],
