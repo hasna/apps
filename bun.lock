@@ -578,7 +578,7 @@
     },
     "apps/logs": {
       "name": "@hasna/logs",
-      "version": "0.4.8",
+      "version": "0.5.0",
       "bin": {
         "logs": "./dist/cli/index.js",
         "logs-mcp": "./dist/mcp/index.js",
