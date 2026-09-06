@@ -62,6 +62,7 @@ export interface GovernanceStore {
     estimatedCents: number;
   }): Promise<CreditReservation>;
   reservationsForRun(orgId: string, runId: string): Promise<CreditReservation[]>;
+  /** First terminal reconciliation wins; retries return that persisted state unchanged. */
   reconcileReservation(reservationId: string, actualCents: number, status: "charged" | "released"): Promise<CreditReservation | null>;
   /** Sum of cost_cents of runs created in the given calendar month (YYYY-MM), plus un-reconciled reservations. */
   monthlySpendCents(orgId: string, monthPrefix: string): Promise<number>;
@@ -250,17 +251,16 @@ export class SqliteGovernanceStore implements GovernanceStore {
   }
 
   async reconcileReservation(reservationId: string, actualCents: number, status: "charged" | "released"): Promise<CreditReservation | null> {
-    const row = this.db
-      .query("SELECT * FROM skills_credit_reservations WHERE id = ? LIMIT 1")
+    // The predicate and transition must be one SQLite statement: separate
+    // connections can both observe reserved before either writes a result.
+    const updated = this.db.query(
+      `UPDATE skills_credit_reservations SET actual_cents = ?, status = ?, reconciled_at = ?
+       WHERE id = ? AND status = 'reserved' RETURNING *`,
+    ).get(actualCents, status, nowIso(), reservationId) as Record<string, unknown> | null;
+    if (updated) return this.reservationFrom(updated);
+    const existing = this.db.query("SELECT * FROM skills_credit_reservations WHERE id = ? LIMIT 1")
       .get(reservationId) as Record<string, unknown> | null;
-    if (!row || String(row.status) !== "reserved") return row ? this.reservationFrom(row) : null;
-    const reconciledAt = nowIso();
-    this.db.run(
-      "UPDATE skills_credit_reservations SET actual_cents = ?, status = ?, reconciled_at = ? WHERE id = ?",
-      [actualCents, status, reconciledAt, reservationId],
-    );
-    const updated = this.db.query("SELECT * FROM skills_credit_reservations WHERE id = ? LIMIT 1").get(reservationId) as Record<string, unknown>;
-    return this.reservationFrom(updated);
+    return existing ? this.reservationFrom(existing) : null;
   }
 
   async monthlySpendCents(orgId: string, monthPrefix: string): Promise<number> {

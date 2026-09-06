@@ -208,6 +208,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills create <name>` | | Scaffold a new custom skill directory |
 | `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
 | `skills sync --from claude` | | Disabled by design; agent skill folders are not used |
+| `skills sync [names...] --check --for <agent> --source <path>` | `render` | Read-only drift census for the selected corpus, skills and agent; explicit source overrides `SKILLS_SOURCE`, then the installed cache. Unknown selections or drift exit nonzero. Without selectors, check all existing agent homes. |
 | `skills sync --station <id>` | | Per-station snapshot mode: snapshot the installed skill homes into `resources/<station>/skills` with a v3 sync-manifest (dry-run by default; `--populate` writes) |
 | `skills hydrate --station <id>` | | Restore the canonical corpus cache from a reviewed per-station snapshot (dry-run by default; `--apply` writes) |
 | `skills validate <name>` | | Check a skill's directory structure |
@@ -798,3 +799,14 @@ same name operations for an explicitly supplied interactive session. Servers
 retain the final permission checks; ordinary API keys may be refused. MCP tools
 `update_account_profile` and `update_workspace_name` accept a name, email and
 fresh verification code, and return only the safe updated projection.
+
+## Admin user-list authority
+
+The `./admin-contract` user-list response retains a global identity whose default
+workspace membership is absent or revoked. Its required `role` is `null` in that
+case, and its `organizationId` remains the default workspace pointer. Null grants
+no workspace authority. Consumers must handle it explicitly; an organization
+filter lists active members of that workspace. Role assignment still requires a
+concrete role and targets the default membership; a missing default membership
+does not select a different workspace automatically. Active organization rosters
+and role-mutation responses continue to require non-null roles.
