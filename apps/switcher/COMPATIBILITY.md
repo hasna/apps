@@ -4,7 +4,7 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T07:58:36.216970+00:00"
+updated_at: "2026-09-06T08:36:07.031980+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -72,4 +72,6 @@ For every implemented row, the release gate still requires applicable native har
 | Gemini CLI, Aider | Distinct auth/wire/config adapters and native listing limits (G22–G23) |
 | Protocol translation | Explicit opt-in gateway or implemented translators, with streaming/tool/reasoning/multimodal/cancellation coverage (H05–H08) |
 
-Built-in vault resolution passes actual installed-CLI live acceptance and SIGINT/SIGTERM subprocess cleanup tests; provider Keychain resolution has fixture coverage. Native subscription authentication, live subagent/explicit family-alias behavior, full harness process-tree ownership, remaining protocol/resume cells, Docker deployment, independent verification of review fixes, CI and publication remain open in TODOS.md. Provider environment injection remains available without saving values.
+Built-in vault resolution passes actual installed-CLI live acceptance and SIGINT/SIGTERM subprocess cleanup tests; provider Keychain resolution has fixture coverage. Native subscription authentication, live subagent/explicit family-alias behavior, remaining process/platform and protocol/resume cells, release-image verification, CI and publication remain open in TODOS.md. Provider environment injection remains available without saving values.
+
+Current development container checks pass for both SQLite and PostgreSQL Compose profiles: health/readiness, authentication and recreation persistence. Upgrades from the published 0.1.0 image preserve provider/profile/catalog/run history in both backends. Release-image checks remain open. Current source has 54 passing tests/536 assertions, including native terminal/lifecycle regressions; macOS and Linux tests preserve six descriptor mixes and keyboard reads from `/dev/tty`. Independent exact-commit review is next.

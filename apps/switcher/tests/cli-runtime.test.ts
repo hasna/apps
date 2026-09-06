@@ -53,6 +53,94 @@ test("interactive model selection cancels on Ctrl-C, Ctrl-D and SIGTERM without 
   } finally { await upstream.stop(true); }
 },40_000);
 
+test.skipIf(process.platform === "win32")("owned native process group retains terminal input, resize and Ctrl-C",async()=>{
+  const dir=await directory();
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture-model"}]})});
+  const executable=join(dir,"native-codex");
+  await writeFile(executable,`#!${process.execPath}\nif(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0);}\nconst {openSync,closeSync,writeSync}=await import('node:fs');closeSync(openSync('/dev/tty','r'));console.log('CONTROLLING_TTY');const {spawnSync}=await import('node:child_process');spawnSync('/bin/stty',['-opost'],{stdio:['inherit','ignore','ignore']});writeSync(1,'RAW_BEGIN:A\\nB:RAW_END\\n');spawnSync('/bin/stty',['opost'],{stdio:['inherit','ignore','ignore']});process.on('SIGINT',()=>{console.log('NATIVE_INT');process.exit(130);});process.on('SIGWINCH',()=>console.log('RESIZED:'+spawnSync('/bin/stty',['size'],{stdio:['inherit','pipe','ignore'],encoding:'utf8'}).stdout.trim()));process.stdin.setEncoding('utf8');process.stdin.on('data',value=>console.log('READ:'+value.trim()));console.log('NATIVE_READY:'+process.pid+':'+process.stdin.isTTY+':'+process.stdout.isTTY);\n`,{mode:0o700});
+  let output="",sent=false,interrupted=false,timedOut=false;
+  const child=Bun.spawn([process.execPath,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--model","fixture-model","--executable",executable],{
+    cwd:dir,env:{PATH:process.env.PATH,HOME:process.env.HOME,USER:process.env.USER,HASNA_SWITCHER_HOME:join(dir,"data")},
+    terminal:{cols:80,rows:24,data(terminal,data){
+      output+=new TextDecoder().decode(data);
+      if(!sent&&/NATIVE_READY:\d+:true:true/.test(output)){sent=true;terminal.write("terminal-proof\n");terminal.resize(101,37);}
+      if(!interrupted&&output.includes("READ:terminal-proof")&&output.includes("RESIZED:37 101")){interrupted=true;terminal.write("\x03");}
+    }},
+  });
+  const timer=setTimeout(()=>{timedOut=true;child.kill("SIGKILL");},10_000);
+  try {
+    const code=await child.exited;
+    expect(timedOut,output).toBe(false);expect(output).toMatch(/(?:\r?\n)CONTROLLING_TTY\r?\r?\n/);expect(sent,output).toBe(true);expect(interrupted,output).toBe(true);expect(code,output).toBe(130);expect(output).toContain("RAW_BEGIN:A\nB:RAW_END");expect(output).not.toContain("RAW_BEGIN:A\r\nB:RAW_END");
+    const runs=await command(dir,["runs","list"]);expect(runs.code,runs.stderr).toBe(0);expect(JSON.parse(runs.stdout).data[0].status).toBe("interrupted");
+    expect(await readdir(join(dir,"data/state"))).toEqual([]);
+  } finally {
+    clearTimeout(timer);child.terminal?.close();
+    const pid=output.match(/NATIVE_READY:(\d+):/);if(pid){try{process.kill(-Number(pid[1]),"SIGKILL");}catch{}}
+    await upstream.stop(true);await rm(dir,{recursive:true,force:true});
+  }
+},20_000);
+
+test.skipIf(process.platform === "win32")("terminal setup and restoration failures settle and stop the owned native process",async()=>{
+  const dir=await directory();
+  const module=fileURLToPath(new URL("../src/harness-process.ts",import.meta.url));
+  const native=join(dir,"native.ts"),runner=join(dir,"runner.ts");
+  await writeFile(native,"if(process.argv.includes('restore'))process.exit(7);setInterval(()=>{},1000);\n");
+  await writeFile(runner,`import {runHarnessProcess} from ${JSON.stringify(module)};
+const {spawnSync}=await import('node:child_process');
+const mode=process.argv[2],original=Bun.spawn.bind(Bun);let pid,calls=0;
+Bun.spawn=((...args)=>{const child=original(...args);pid=child.pid;return child;});
+const terminalState=()=>spawnSync('/bin/stty',['-g'],{stdio:['inherit','pipe','ignore'],encoding:'utf8'}).stdout.trim();
+const before=terminalState(),raw=process.stdin.setRawMode.bind(process.stdin);
+process.stdin.setRawMode=(value)=>{calls++;if(calls===(mode==='setup'?1:2))throw Error('fixture terminal failure');return raw(value);};
+let code,rejected=false;try{code=(await runHarnessProcess({executable:process.execPath,args:[${JSON.stringify(native)},mode],cwd:process.cwd(),env:{PATH:process.env.PATH}})).code;}catch{rejected=true;}
+let alive=()=>{try{process.kill(pid,0);return true;}catch{return false;}};
+for(let i=0;i<40&&alive();i++)await Bun.sleep(25);
+console.log('RESULT:'+JSON.stringify({code,rejected,alive:alive(),modeRestored:terminalState()===before}));
+`);
+  try {
+    for(const mode of ["setup","restore"]) {
+      let output="",timedOut=false;
+      const child=Bun.spawn([process.execPath,runner,mode],{cwd:dir,env:{PATH:process.env.PATH},terminal:{data(_terminal,data){output+=new TextDecoder().decode(data);}}});
+      const timer=setTimeout(()=>{timedOut=true;child.kill("SIGKILL");},5000);
+      try {
+        expect(await child.exited,output).toBe(0);expect(timedOut,output).toBe(false);
+        const match=output.match(/RESULT:(\{[^\r\n]+\})/);expect(match,output).not.toBeNull();
+        const result=JSON.parse(match![1]);expect(result.alive).toBe(false);expect(result.modeRestored).toBe(true);
+        expect(result.rejected).toBe(mode==="setup");if(mode==="restore")expect(result.code).toBe(7);
+      } finally {clearTimeout(timer);child.terminal?.close();}
+    }
+  } finally {await rm(dir,{recursive:true,force:true});}
+},15_000);
+
+test.skipIf(process.platform === "win32")("native controlling terminal coexists with redirected stdin, stdout and stderr",async()=>{
+  const dir=await directory(),executable=join(dir,"native-codex");
+  const upstream=Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>Response.json({data:[{id:"fixture-model"}]})});
+  const literal='literal "quoted" $(touch UNEXPECTED) ;\nline';
+  await writeFile(executable,`#!${process.execPath}\nif(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0);}\nconst {openSync,writeSync,closeSync,readSync}=await import('node:fs');const fd=openSync('/dev/tty','w');writeSync(fd,'CONTROL_MARKER\\n');closeSync(fd);const tty=[process.stdin.isTTY===true,process.stdout.isTTY===true,process.stderr.isTTY===true];const input=tty[0]?'':await Bun.stdin.text();let keyboard='';if(!tty[0]){const terminal=openSync('/dev/tty','r+');writeSync(terminal,'TTY_READ_READY\\n');const buffer=Buffer.alloc(128);keyboard=buffer.subarray(0,readSync(terminal,buffer)).toString().trim();closeSync(terminal);}console.log('OUT:'+JSON.stringify({tty,input,keyboard,argument:process.argv[process.argv.indexOf('--fixture-argument')+1]}));console.error('ERR_MARKER');\n`,{mode:0o700});
+  try {
+    for(const redirected of [[2],[1],[1,2],[0],[0,1],[0,2]]) {
+      const project=join(dir,redirected.join('-'));await mkdir(project);await writeFile(join(project,"input"),"input-proof");
+      const script=redirected.map(fd=>`exec ${fd}${fd===0?"<input":fd===1?">stdout":">stderr"};`).join(" ")+' exec "$@"';
+      let output="",timedOut=false,keyboardSent=false;
+      const child=Bun.spawn(["/bin/sh","-c",script,"fixture",process.execPath,cli,"launch","codex","--provider","generic-openai-responses","--url",upstream.url.origin,"--model","fixture-model","--executable",executable,"--","--fixture-argument",literal],{
+        cwd:project,env:{PATH:process.env.PATH,HOME:process.env.HOME,HASNA_SWITCHER_HOME:join(project,"data")},terminal:{data(terminal,data){output+=new TextDecoder().decode(data);if(!keyboardSent&&output.includes("TTY_READ_READY")){keyboardSent=true;terminal.write("keyboard-proof\n");}}},
+      });
+      const timer=setTimeout(()=>{timedOut=true;child.kill("SIGKILL");},10_000);
+      try {
+        expect(await child.exited,output).toBe(0);expect(timedOut,output).toBe(false);expect(output).toContain("CONTROL_MARKER");
+        const stdout=redirected.includes(1)?await Bun.file(join(project,"stdout")).text():output;
+        const stderr=redirected.includes(2)?await Bun.file(join(project,"stderr")).text():output;
+        const row=stdout.match(/OUT:([^\r\n]+)/);expect(row,stdout).not.toBeNull();
+        expect(JSON.parse(row![1])).toEqual({tty:[0,1,2].map(fd=>!redirected.includes(fd)),input:redirected.includes(0)?"input-proof":"",keyboard:redirected.includes(0)?"keyboard-proof":"",argument:literal});
+        expect(stderr).toContain("ERR_MARKER");
+        if(redirected.includes(1))expect(output).not.toContain("OUT:");if(redirected.includes(2))expect(output).not.toContain("ERR_MARKER");
+        expect(await Bun.file(join(project,"UNEXPECTED")).exists()).toBe(false);
+        expect(await readdir(join(project,"data/state"))).toEqual([]);
+      } finally {clearTimeout(timer);child.terminal?.close();}
+    }
+  } finally {await upstream.stop(true);await rm(dir,{recursive:true,force:true});}
+},70_000);
+
 test("owned API is authenticated, persists data on reopen and closes its listener", async () => {
   const dir = await directory();
   let runtime: Awaited<ReturnType<typeof openCliRuntime>> | undefined;

@@ -34,3 +34,30 @@ test("concurrent launches isolate config, preserve child exit on API failure, ti
     expect(records.at(-1).status).toBe("interrupted");expect(await readdir(join(dir,"state"))).toEqual([]);
   }finally{if(previous===undefined)delete process.env.SWITCHER_PROVIDER_TEST;else process.env.SWITCHER_PROVIDER_TEST=previous;await rm(dir,{recursive:true,force:true});}
 });
+
+test.skipIf(process.platform === "win32")("normal exit and timeout stop owned harness descendants before removing launch state",async()=>{
+  const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});
+  const dir=await mkdtemp(join(root,"process-tree-"));
+  const executable=join(dir,"native");const descendant=join(dir,"descendant.ts");
+  await writeFile(descendant,`import {writeFileSync} from 'node:fs';\nprocess.on('SIGTERM',()=>{});writeFileSync('descendant.pid',String(process.pid));setInterval(()=>writeFileSync('heartbeat',String(Date.now())),25);\n`);
+  await writeFile(executable,`#!${process.execPath}\nimport {spawn} from 'node:child_process';import {existsSync} from 'node:fs';\nif(process.argv.includes('--version')){console.log('codex-cli 0.153.4');process.exit(0);}\nspawn(process.execPath,[${JSON.stringify(descendant)}],{stdio:'ignore'}).unref();\nprocess.on('SIGTERM',()=>process.exit(143));\nsetInterval(()=>{if(process.argv.includes('--fixture-exit')&&existsSync('heartbeat'))process.exit(7);},25);\n`,{mode:0o700});
+  const records:any[]=[];
+  const client={getProfile:async()=>({providerId:"fixture"}),refreshModels:async()=>({}),launchPlan:async()=>({profile:{harness:"codex",model:"fixture-model"},provider:{baseUrl:"http://127.0.0.1:1",protocol:"openai-responses"},catalog:{models:[{id:"fixture-model",name:"Fixture"}]},warnings:[]}),createRun:async()=>({id:"fixture",version:1}),finishRun:async(_id:string,_version:number,body:any)=>{records.push(body);}} as unknown as SwitcherClient;
+  try {
+    for(const mode of ["normal","timeout"]) {
+      const project=join(dir,mode);await mkdir(project);
+      try {
+        const code=await launch(client,"fixture",{executable,cwd:project,stateDir:join(project,"state"),args:mode==="normal"?["--fixture-exit"]:[],timeoutMs:mode==="normal"?undefined:500});
+        expect(code).toBe(mode==="normal"?7:143);
+        expect(records.at(-1).status).toBe(mode==="normal"?"failed":"interrupted");
+        const heartbeat=await readFile(join(project,"heartbeat"),"utf8");
+        await Bun.sleep(150);
+        expect(await readFile(join(project,"heartbeat"),"utf8")).toBe(heartbeat);
+        expect(await readdir(join(project,"state"))).toEqual([]);
+      } finally {
+        // Preserve a failing regression's evidence without leaving its fixture running.
+        try {process.kill(Number(await readFile(join(project,"descendant.pid"),"utf8")),"SIGKILL");} catch {}
+      }
+    }
+  } finally {await rm(dir,{recursive:true,force:true});}
+},25_000);
