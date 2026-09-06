@@ -152,7 +152,9 @@ describe("native app companion contract", () => {
     const store = readFileSync("src/native/Recordings/App/RecordingsStore.swift", "utf8");
     const settings = readFileSync("src/native/Recordings/RecordingsLib/SettingsView.swift", "utf8");
     expect(content).toContain("RecordWorkspaceView(store: store)");
-    expect(content).toContain("RecordingsListView(store: store)");
+    const app = readFileSync("src/native/Recordings/App/RecordingsApp.swift", "utf8");
+    expect(app).toContain("RecordingsListView(store: store");
+    expect(content).toContain("openHistory");
     expect(content).not.toContain("SidebarView");
     expect(store).toContain("engine.projectStore = nil");
     expect(store).not.toContain("reconcileWithCanonicalStore");
@@ -382,7 +384,7 @@ describe("native app companion contract", () => {
 
     expect(app).toContain("MenuBarExtra(isInserted: menuBarInsertion)");
     expect(app).toContain(
-      "get: { state.declaresMenuBar && (state.store != nil || state.runtimeSmokeProbe != nil) }",
+      "get: { state.declaresMenuBar && (state.store?.showMenuBar == true || state.runtimeSmokeProbe != nil) }",
     );
     expect(app).not.toContain("if state.declaresMenuBar");
     expect(app).toContain("if plan.isRuntimeSmoke");
@@ -533,7 +535,7 @@ describe("native app companion contract", () => {
     expect(theme).toContain("ChromeSurface.forReducedTransparency(reduceTransparency)");
     expect(workspace).not.toContain("ultraThinMaterial");
     expect(theme).not.toContain("ultraThinMaterial");
-    expect(workspace).toContain("Color(NSColor.windowBackgroundColor)");
+    expect(workspace).toContain("GlassCircle(");
     expect(theme).toContain("Color(NSColor.windowBackgroundColor)");
   });
 
@@ -548,8 +550,8 @@ describe("native app companion contract", () => {
     expect(presentation).toContain("canStartRecording: Bool");
     expect(menuView).toContain("canStartRecording: store.engine.canStartRecording");
     expect(menuView).toContain(".disabled(!presentation.primaryActionEnabled)");
-    expect(workspace).toContain("heroSizingTemplate");
-    expect(workspace).toContain("liveTextReservation");
+    expect(workspace).toContain(".frame(width: 304, height: 374)");
+    expect(workspace).toContain(".disabled(busy)");
     expect(workspace).toContain("engine.cancelIntentProcessing()");
   });
 

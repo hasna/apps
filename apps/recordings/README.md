@@ -14,24 +14,35 @@ npm install -g @hasna/recordings
 ## macOS App
 
 **Hasna Recordings** is a native macOS 26 app with a companion menu bar control.
-The app has one compact window: a recording control, searchable recording history,
-and a transcript detail sheet with copy and audio playback. There is no sidebar or
-project UI. New app recordings are unassigned; existing recordings and their metadata
+The app opens a compact glass recorder with a microphone/stop/play control and timer.
+The clock opens a separate searchable history panel; the gear opens Settings.
+A floating transcription bar shows live words, the microphone waveform, pause/resume,
+playback, and an Auto-paste switch. Recent pastes show delivery evidence from this session.
+There is no sidebar or project UI. New app recordings are unassigned; existing recordings and their metadata
 are preserved.
 
 - Click Record, or hold the global shortcut (F5 by default).
-- Select a recording to read, copy, or play it.
-- Open **Settings** (⌘,) from the app or menu bar to configure the API, transcription,
-  shortcuts, and permissions.
+- Click the clock or press **⌘L** for recordings; select a row to read its transcript.
+  Audio playback is available when its file is retained on this Mac.
+- Press **⇧⌘B** for the floating transcription bar, or choose **Keep bar visible** from
+  the menu bar’s More menu. Its play control opens Recent pastes.
+- Pause/resume from the bar or the recorder’s context menu. Paused microphone samples
+  are excluded from the transcript and recording duration.
+- Turn **Auto-paste** off to keep transcripts available without typing into another app.
+  Recordings still save through the configured API. Clearing Recent pastes only clears
+  this session’s delivery list; it does not delete recordings.
+- Open **Settings** (⌘,), then **API & Advanced…** to configure the service connection,
+  transcription cleanup, shortcuts, and permissions. The input follows the macOS default
+  microphone; audio remains uncompressed 24 kHz PCM.
 
 New installations default to dictation. Question and edit-command detection is
 optional in Settings; enabling it can add a model request before delivery. For
 verbatim dictation with the shortest delivery path, keep intent detection off and
-set Transcription Cleanup to Off. Settled realtime text can paste while the API save
+set Transcription Cleanup to Raw (Off). Settled realtime text can paste while the API save
 continues in the background. Capture shutdown runs off the UI thread, and the
 recording panel avoids animated glass so rendering does not stall live transcription.
 
-In **Settings → General → Recordings API**, enter your API URL and service key,
+In **Settings → API & Advanced… → General → Recordings API**, enter your API URL and service key,
 then choose **Save Connection** and **Test Connection**. There is no compiled-in API
 hostname. Both a service prefix such as `https://api.example.com/recordings` and its
 versioned form `https://api.example.com/recordings/v1/` work; requests append the

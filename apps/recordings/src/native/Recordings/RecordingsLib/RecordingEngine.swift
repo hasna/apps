@@ -874,6 +874,46 @@ public final class RecordingEngine: ObservableObject {
     @Published public var isTranscribing = false
     @Published public var recordingDuration: TimeInterval = 0
     @Published public var liveTranscriptionText = ""
+    @Published public private(set) var isPaused = false
+    @Published public private(set) var audioLevel: Double = 0
+    @Published public private(set) var recentPastes: [RecentPaste] = []
+    @Published public private(set) var latestAudioPath: String?
+    @Published public var autoPasteEnabled = true {
+        didSet {
+            if home == FileManager.default.homeDirectoryForCurrentUser.path {
+                UserDefaults.standard.set(autoPasteEnabled, forKey: "recordingsAutoPaste")
+            }
+        }
+    }
+    private var captureMonitor = CaptureMonitor()
+
+    public func togglePause() {
+        guard isRecording else { return }
+        isPaused.toggle()
+        captureMonitor.setPaused(isPaused)
+        statusMessage = isPaused ? "Paused" : "Recording…"
+    }
+
+    public func clearRecentPastes() { recentPastes.removeAll() }
+
+    #if DEBUG
+    /// Explicitly isolated design review only; does not open a microphone or connection.
+    public func configureVisualPreview() {
+        isRecording = true
+        recordingDuration = 12
+        audioLevel = 0.65
+        liveTranscriptionText = "Here are the key takeaways from today’s meeting…"
+        let samples = [
+            ("com.apple.MobileSMS", "To: James", "Schedule a review for tomorrow at 2 PM…"),
+            ("com.apple.Notes", "New Note", "Here are the key takeaways from today’s…"),
+            ("com.tinyspeck.slackmacgap", "#product", "Can you confirm we’re still on for Friday?"),
+            ("com.apple.mail", "New message", "Sharing the updated timeline and next steps."),
+            ("notion.id", "Page", "Write a short summary of the discussion…")
+        ]
+        recentPastes = zip(samples, ["Messages", "Notes", "Slack", "Mail", "Notion"]).map { sample, name in RecentPaste(text: sample.2, bundleIdentifier: sample.0, appName: name, location: sample.1, status: "Pasted", verified: true) }
+    }
+    #endif
+
     @Published public var transcriptionLanguage = OpenAIAPIKeyStore.defaultLanguage {
         didSet {
             UserDefaults.standard.set(transcriptionLanguage, forKey: "recordingsLanguage")
@@ -1198,15 +1238,19 @@ public final class RecordingEngine: ObservableObject {
     let home: String
     private var audioDir: String { "\(home)/.hasna/recordings/audio" }
 
-    public init(homePath: String = FileManager.default.homeDirectoryForCurrentUser.path) {
+    public init(homePath: String = FileManager.default.homeDirectoryForCurrentUser.path, installsGlobalHandlers: Bool = true) {
         home = homePath
         try? FileManager.default.createDirectory(atPath: audioDir, withIntermediateDirectories: true)
         log("RecordingEngine init; microphone=\(microphonePermissionLabel); accessibility=\(accessibilityPermissionLabel)")
 
         // Load preferences
+        if home == FileManager.default.homeDirectoryForCurrentUser.path {
+            autoPasteEnabled = UserDefaults.standard.object(forKey: "recordingsAutoPaste") as? Bool ?? true
+        }
         intentDetectionEnabled = UserDefaults.standard.object(forKey: "intentDetectionEnabled") as? Bool ?? false
         transcriptionLanguage = OpenAIAPIKeyStore.loadLanguage(homePath: home)
         useFnKey = UserDefaults.standard.object(forKey: "useFnKey") as? Bool ?? false
+        guard installsGlobalHandlers else { statusMessage = "Ready"; return }
         if KeyboardShortcuts.getShortcut(for: .toggleRecording) == nil {
             KeyboardShortcuts.setShortcut(.init(.f5), for: .toggleRecording)
         }
@@ -1983,7 +2027,12 @@ public final class RecordingEngine: ObservableObject {
             self?.confirmCaptureIsLive(generation: generation)
         }
         let firstChunkLogged = LockedFlag()
+        let monitor = CaptureMonitor()
+        captureMonitor = monitor
+        isPaused = false
+        audioLevel = 0
         let recorder = recorderFactory { data in
+            guard monitor.admit(data) else { return }
             if firstChunkLogged.take() {
                 NativeAppLog.write("native recorder received first PCM chunk bytes=\(data.count)", homePath: homePath)
                 // The first sample is the only honest signal that this recording exists.
@@ -2015,7 +2064,10 @@ public final class RecordingEngine: ObservableObject {
 
             recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 Task { @MainActor [weak self] in
-                    self?.recordingDuration += 0.1
+                    guard let self else { return }
+                    let sample = monitor.snapshot()
+                    self.recordingDuration = sample.duration
+                    self.audioLevel = sample.level
                 }
             }
         } catch {
@@ -2189,6 +2241,9 @@ public final class RecordingEngine: ObservableObject {
         pcmStreamPipe = nil
 
         isRecording = false
+        isPaused = false
+        audioLevel = 0
+        recordingDuration = 0
         isTranscribing = false
         liveTranscriptionText = ""
         recordedPCM.removeAll(keepingCapacity: true)
@@ -2241,6 +2296,9 @@ public final class RecordingEngine: ObservableObject {
         let targetAppBundleIdentifier = captureConfiguration.targetAppBundleIdentifier
         let targetAppPid = captureConfiguration.targetAppPid
         let audioPath = activeAudioPath
+        latestAudioPath = audioPath
+        isPaused = false
+        audioLevel = 0
         let pcmStreamPipe = pcmStreamPipe
         let client = realtimeClient
         let pipelineGeneration = recordingGeneration
@@ -2256,6 +2314,7 @@ public final class RecordingEngine: ObservableObject {
             await Task.detached(priority: .userInitiated) { recorder?.stop() }.value
             if let pcmStreamPipe {
                 self.recordedPCM = await pcmStreamPipe.finish()
+                self.recordingDuration = Double(self.recordedPCM.count) / 48_000
             }
             self.log(pipelineTrace.message(
                 stage: "pcm_drain_complete",
@@ -4021,6 +4080,11 @@ public final class RecordingEngine: ObservableObject {
             deliveryCompleted?()
             return
         }
+        if !autoPasteEnabled && deliveryKind != .manualPaste {
+            updateDeliveryStatus("Transcript ready — auto-paste is off", kind: .success, pipelineGeneration: pipelineGeneration)
+            deliveryCompleted?()
+            return
+        }
         if let pasteInterceptorForTesting {
             pasteInterceptorForTesting(text, deliveryKind, pipelineGeneration)
             deliveryCompleted?()
@@ -4190,6 +4254,12 @@ public final class RecordingEngine: ObservableObject {
                     detail: "chars=\(transaction.text.count)"
                 ))
             }
+            let verified = Self.pasteTraceStage(for: outcome) == "paste_delivery_confirmed"
+            self.recentPastes.insert(RecentPaste(
+                text: transaction.text, bundleIdentifier: app.bundleIdentifier, appName: app.localizedName ?? "Application",
+                location: "Focused field", status: verified ? "Pasted" : "Unconfirmed", verified: verified
+            ), at: 0)
+            if self.recentPastes.count > 50 { self.recentPastes.removeLast() }
             deliveryCompleted?()
             let message = switch outcome {
             case .pasted: "Pasted (\(transaction.text.count) chars)"

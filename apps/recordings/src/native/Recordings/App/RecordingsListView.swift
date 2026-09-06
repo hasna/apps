@@ -1,117 +1,78 @@
 import SwiftUI
 import RecordingsLib
 
-/// The recordings library list: a search field, then a flat list of transcripts on the white
-/// canvas, separated by hairline dividers. Selecting a row shows it in the detail pane.
 struct RecordingsListView: View {
     @ObservedObject var store: RecordingsStore
+    var close: () -> Void = {}
+    @State private var searching = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            searchRow
-            Divider().opacity(0.5)
-            list
-        }
-    }
-
-    private var searchRow: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search transcripts", text: $store.searchText)
-                .textFieldStyle(.plain)
-                .font(.system(.body, design: .rounded))
-            if !store.searchText.isEmpty {
-                Button { store.searchText = "" } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
+        VStack(spacing: 14) {
+            HStack {
+                Text("Recordings").font(.system(size: 20, weight: .medium))
+                Spacer()
+                Button { searching.toggle() } label: { Image(systemName: "magnifyingglass") }
+                    .help("Search transcripts").accessibilityLabel("Search transcripts")
+                Button { store.loadLibrary() } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Refresh recordings").accessibilityLabel("Refresh recordings")
+                Button(action: close) { Image(systemName: "xmark") }.help("Close recordings").accessibilityLabel("Close recordings")
             }
-        }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-    }
-
-    @ViewBuilder
-    private var list: some View {
-        if store.isLoadingLibrary && store.library.isEmpty {
-            centered { ProgressView() }
-        } else if let error = store.loadError, store.library.isEmpty {
-            centered {
-                VStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange)
-                    Text(error.contains("HASNA_RECORDINGS") ? "Connect your Recordings API in Settings to see your history." : error).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button("Retry") { store.loadLibrary() }
-                }
-                .padding(24)
+            .buttonStyle(.plain).foregroundStyle(Theme.accent)
+            .padding(.horizontal, 14).padding(.top, 10)
+            if searching {
+                TextField("Search transcripts", text: $store.searchText).textFieldStyle(.roundedBorder).padding(.horizontal, 12)
             }
-        } else if store.visibleRecordings.isEmpty {
-            centered {
-                VStack(spacing: 8) {
-                    Image(systemName: "waveform").font(.largeTitle).foregroundStyle(.quaternary)
-                    Text(emptyMessage).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Text("Your transcripts will appear here.").font(.caption).foregroundStyle(.tertiary)
-                }
-            }
-        } else {
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(store.visibleRecordings) { rec in
-                        Button { store.selection = rec.id } label: {
-                            RecordingRow(rec: rec, selected: store.selection == rec.id)
-                                .contentShape(Rectangle())
-                        }
-                            .buttonStyle(.plain)
-                            .contextMenu {
-                                Button("Copy") {
-                                    let pb = NSPasteboard.general
-                                    pb.clearContents(); pb.setString(rec.displayText, forType: .string)
-                                }
-                                Button("Paste into front app") { store.engine.pasteIntoFrontApp(rec.displayText) }
-                                Divider()
-                                Button("Delete", role: .destructive) { store.delete(id: rec.id) }
+            if store.isLoadingLibrary && store.library.isEmpty {
+                Spacer(); ProgressView(); Spacer()
+            } else if let error = store.loadError, store.library.isEmpty {
+                Spacer()
+                Text(error.contains("HASNA_RECORDINGS") ? "Connect your Recordings API in Settings to see your history." : error)
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).padding()
+                Button("Retry") { store.loadLibrary() }; Spacer()
+            } else if store.visibleRecordings.isEmpty {
+                Spacer(); Text(store.searchText.isEmpty ? "No recordings yet" : "No matching recordings").foregroundStyle(.secondary); Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(store.visibleRecordings) { rec in
+                            HStack(spacing: 20) {
+                                GlassIconButton(symbol: store.playbackRecordingID == rec.id && store.isPlaying ? "pause.fill" : "play.fill", label: "Play recording", size: 44) { store.play(rec) }
+                                    .disabled(!store.canPlay(rec) || store.engine.captureIsActive)
+                                    .help(store.canPlay(rec) ? "Play recording" : "Audio is not stored on this Mac")
+                                Button { store.selection = rec.id } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(rec.snippet).font(.system(size: 16)).lineLimit(1)
+                                        Text(rec.createdDate?.recordingDateLabel ?? "Recording").font(.system(size: 13)).foregroundStyle(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                                }.buttonStyle(.plain)
+                                Text(Theme.clock(rec.durationSeconds)).font(.system(size: 14)).monospacedDigit().foregroundStyle(.secondary)
+                                Menu {
+                                    Button("Open transcript") { store.selection = rec.id }
+                                    Button("Copy transcript") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(rec.displayText, forType: .string) }
+                                    Button("Delete recording", role: .destructive) { store.delete(id: rec.id) }
+                                } label: { Image(systemName: "ellipsis").font(.system(size: 18)) }
+                                .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 28)
                             }
-                        Divider().opacity(0.35).padding(.leading, 16)
+                            .padding(.horizontal, 15).padding(.vertical, 11)
+                            .background(.white.opacity(0.25), in: RoundedRectangle(cornerRadius: 18))
+                        }
                     }
                 }
             }
         }
-    }
-
-    private var emptyMessage: String {
-        if !store.searchText.isEmpty { return "No matches for “\(store.searchText)”" }
-        return "No recordings yet"
-    }
-
-    @ViewBuilder
-    private func centered<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack { Spacer(); content(); Spacer() }.frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-private struct RecordingRow: View {
-    let rec: Recording
-    let selected: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(rec.snippet)
-                .font(.system(.headline, design: .rounded)).lineLimit(2)
-            HStack(spacing: 6) {
-                if let date = rec.createdDate {
-                    Text(date.relativeDescription).font(.caption2).foregroundStyle(.secondary)
-                }
-                if rec.durationMs > 0 {
-                    Text("·").font(.caption2).foregroundStyle(.secondary)
-                    Text(rec.durationLabel).font(.caption2).foregroundStyle(.secondary)
-                }
-                if rec.isEnhanced {
-                    Text("·").font(.caption2).foregroundStyle(.secondary)
-                    Label("Enhanced", systemImage: "wand.and.stars")
-                        .labelStyle(.titleAndIcon).font(.caption2).foregroundStyle(Theme.accent.opacity(0.9))
-                }
-            }
+        .padding(15)
+        .background(FrostedBackground())
+        .frame(minWidth: 610, minHeight: 430)
+        .onAppear { store.loadLibrary() }
+        .sheet(isPresented: Binding(get: { store.selectedRecording != nil }, set: { if !$0 { store.selection = nil } })) {
+            VStack(spacing: 0) {
+                HStack { Spacer(); Button("Done") { store.selection = nil }.keyboardShortcut(.cancelAction) }.padding(14)
+                RecordingDetailView(store: store)
+            }.frame(width: 610, height: 460).background(FrostedBackground())
         }
-        .padding(.horizontal, 16).padding(.vertical, 11)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background { if selected { Theme.accent.opacity(0.12) } }
+        .alert("Recordings Error", isPresented: Binding(get: { store.operationError != nil }, set: { if !$0 { store.operationError = nil } })) {
+            Button("OK") { store.operationError = nil }
+        } message: { Text(store.operationError ?? "The operation failed.") }
     }
 }

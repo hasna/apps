@@ -1,344 +1,66 @@
 import SwiftUI
 import RecordingsLib
-@preconcurrency import KeyboardShortcuts
 
-/// A lightweight recording panel with live text and optional assistant actions.
 struct RecordWorkspaceView: View {
     @ObservedObject var store: RecordingsStore
-    @Environment(\.colorScheme) private var colorScheme
-
     private var engine: RecordingEngine { store.engine }
-    private var phase: RecordingFlowPhase { engine.flowPhase }
+    private var busy: Bool { !engine.canStartRecording && !engine.captureIsActive }
+    private var symbol: String {
+        if engine.captureIsActive { return engine.isPaused ? "play.fill" : "stop.fill" }
+        if busy { return "ellipsis" }
+        return store.hasPlayback ? (store.isPlaying ? "pause.fill" : "play.fill") : "mic.fill"
+    }
 
     var body: some View {
-        VStack {
-            VStack(spacing: 22) {
-                hero
-                    .frame(maxWidth: 560)
-                    .padding(.top, 12)
-
-                if let reply = engine.conversationReply {
-                    replyCard(reply)
-                }
-
-                Spacer(minLength: 12)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 28)
-            .padding(.bottom, 12)
-        }
-        .onChange(of: engine.isTranscribing) { wasTranscribing, isTranscribing in
-            // Refresh promptly when the foreground path finishes. RecordingsStore also
-            // observes confirmed persistence so async saves still refresh after this view
-            // has been unmounted, without treating failed saves as completed recordings.
-            if wasTranscribing && !isTranscribing { store.loadLibrary() }
-        }
-    }
-
-    // MARK: - Recording panel
-
-    @ViewBuilder
-    private var hero: some View {
-        // The hidden template is the tallest phase layout (listening, with the full
-        // three-line live-text reservation). Every phase renders inside that fixed envelope,
-        // so streaming live text and phase transitions can never shift the content below
-        // the hero. The template scales with Dynamic Type because it uses the real fonts.
-        let content = ZStack {
-            heroSizingTemplate
-                .hidden()
-                .accessibilityHidden(true)
-            VStack(spacing: 14) { heroContent }
-        }
-        .frame(maxWidth: .infinity, minHeight: 156)
-        .padding(18)
-        content
-            .background(Color(NSColor.windowBackgroundColor), in: .rect(cornerRadius: Theme.cornerLarge))
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.cornerLarge, style: .continuous)
-                    .strokeBorder(.separator, lineWidth: 1)
-            )
-    }
-
-    @ViewBuilder
-    private var heroContent: some View {
-        switch phase {
-        case .idle:
-            idleContent
-        case .listening:
-            listeningContent
-        case .finalizing:
-            busyContent(label: "Finishing up…", detail: "Capturing the last words", showsLiveText: true)
-        case .processing(let label):
-            busyContent(
-                label: label,
-                detail: nil,
-                showsLiveText: false,
-                showsCancel: engine.canCancelIntentDelivery
-            )
-        case .ready(let summary):
-            readyContent(summary: summary)
-        case .failed(let message):
-            failedContent(message: message)
-        }
-    }
-
-    /// Invisible layout twin of the listening phase; see `hero`. Uses the same controls and
-    /// fonts so its height tracks the real layout at every Dynamic Type size.
-    private var heroSizingTemplate: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 12) {
-                Image(systemName: "waveform").font(.largeTitle)
-                Text("0:00:00")
-                    .font(.system(size: 34, weight: .semibold, design: .rounded).monospacedDigit())
-            }
-            liveTextReservation
-            HStack(spacing: 12) {
-                Button {} label: { Label("Discard", systemImage: "xmark") }
-                    .buttonStyle(.bordered)
-                Button {} label: { Label("Stop & Transcribe", systemImage: "stop.fill") }
-                    .buttonStyle(.borderedProminent)
-            }
-            .controlSize(.large)
-            .disabled(true)
-        }
-    }
-
-    /// Reserves exactly three lines at the live-text font so the region cannot grow as words
-    /// stream in.
-    private var liveTextReservation: some View {
-        Text(String(repeating: "M\n", count: 2) + "M")
-            .font(.system(.title3, design: .rounded))
-            .lineLimit(3)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: Idle
-
-    private var idleContent: some View {
-        let presentation = RecordingStartControlPresentation(
-            kind: .record,
-            canStartRecording: engine.canStartRecording
-        )
-        return VStack(spacing: 14) {
+        VStack(spacing: 0) {
+            Spacer().frame(height: 104)
             Button {
-                engine.startRecording()
+                if engine.isPaused { engine.togglePause() }
+                else if engine.captureIsActive { engine.stopAndTranscribe() }
+                else if store.hasPlayback { store.toggleLatestPlayback() }
+                else { store.beginRecording() }
             } label: {
-                VStack(spacing: 10) {
-                    Image(systemName: "mic.fill").font(.system(size: 32, weight: .semibold)).foregroundStyle(.tint)
-                    Text(presentation.title).font(.system(.title, design: .rounded).weight(.semibold)).foregroundStyle(.primary)
-                    Text(idleHint).font(.callout).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity).padding(.vertical, 14).contentShape(.rect)
+                GlassCircle(symbol: symbol, size: 136,
+                            red: engine.captureIsActive && !engine.isPaused,
+                            progress: store.hasPlayback && !engine.captureIsActive ? store.playbackProgress : nil)
             }
             .buttonStyle(.plain)
+            .disabled(busy)
+            .accessibilityLabel(engine.captureIsActive ? (engine.isPaused ? "Resume recording" : "Stop and transcribe") : (store.hasPlayback ? "Play recording" : "Start recording"))
             .keyboardShortcut(.defaultAction)
-            .disabled(!presentation.isEnabled)
-            .accessibilityLabel(presentation.accessibilityLabel)
-
-            Text(engine.intentDetectionEnabled
-                 ? "Speak to dictate, ask a question, or edit selected text."
-                 : "Speak to transcribe and paste. Your words appear as you talk.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-
-            if engine.statusMessage != "Ready" {
-                Text(engine.statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(Color.orange)
-                    .multilineTextAlignment(.center)
-            }
-        }
-        .tint(Theme.accent)
-    }
-
-    private var idleHint: String {
-        if let shortcut = KeyboardShortcuts.getShortcut(for: .toggleRecording) {
-            return "Click, or hold \(shortcut.description)"
-        }
-        return "Click to start"
-    }
-
-    // MARK: Listening
-
-    private var listeningContent: some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 12) {
-                Image(systemName: "waveform")
-                    .foregroundStyle(Theme.recordRed).font(.largeTitle)
-                    .accessibilityHidden(true)
-                Text(fmt(engine.recordingDuration))
-                    .font(.system(size: 34, weight: .semibold, design: .rounded).monospacedDigit())
-                    .accessibilityLabel("Recording, \(fmt(engine.recordingDuration))")
-            }
-            liveText(placeholder: "Listening…")
-            HStack(spacing: 12) {
-                Button(role: .cancel) { engine.cancelRecording() } label: {
-                    Label("Discard", systemImage: "xmark")
+            .contextMenu {
+                if engine.captureIsActive {
+                    Button(engine.isPaused ? "Resume recording" : "Pause recording") { engine.togglePause() }.disabled(!engine.isRecording)
+                    Button("Discard recording") { engine.cancelRecording() }
+                } else if store.hasPlayback {
+                    Button("New recording") { store.clearPlayback(); store.beginRecording() }
                 }
-                .buttonStyle(.bordered)
-                .keyboardShortcut(.cancelAction)
-                .accessibilityLabel("Discard recording")
-                Button { engine.stopAndTranscribe() } label: {
-                    Label("Stop & Transcribe", systemImage: "stop.fill")
+            }
+            Text(Theme.clock(store.hasPlayback && !engine.captureIsActive ? store.playbackTime : engine.recordingDuration))
+                .font(.system(size: 22, weight: .regular)).monospacedDigit()
+                .foregroundStyle(.secondary).shadow(color: .white.opacity(0.85), radius: 0, y: 1)
+                .padding(.top, 28)
+            if busy {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text(engine.statusMessage).lineLimit(1)
+                    if engine.canCancelIntentDelivery {
+                        Button { engine.cancelIntentProcessing() } label: { Image(systemName: "xmark.circle") }
+                            .buttonStyle(.plain).accessibilityLabel("Cancel processing")
+                    }
                 }
-                .buttonStyle(.borderedProminent).tint(Theme.recordRed)
-                .keyboardShortcut(.defaultAction)
-                .accessibilityLabel("Stop and transcribe")
+                    .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 13)
+            } else if let blocked = engine.blockedReason {
+                Text(blocked).font(.system(size: 10)).foregroundStyle(.orange).lineLimit(2)
+                    .multilineTextAlignment(.center).padding(.horizontal, 20).padding(.top, 8)
+            } else if case .failed(let message) = engine.flowPhase {
+                Text(message).font(.system(size: 10)).foregroundStyle(.orange).lineLimit(2)
+                    .multilineTextAlignment(.center).padding(.horizontal, 20).padding(.top, 8)
+            } else if engine.canCancelIntentDelivery {
+                Button("Cancel") { engine.cancelIntentProcessing() }.font(.caption)
             }
-            .controlSize(.large)
+            Spacer(minLength: 0)
         }
-    }
-
-    // MARK: Finalizing / Processing
-
-    private func busyContent(
-        label: String,
-        detail: String?,
-        showsLiveText: Bool,
-        showsCancel: Bool = false
-    ) -> some View {
-        VStack(spacing: 14) {
-            HStack(spacing: 10) {
-                ProgressView().controlSize(.large)
-                Text(label).font(.system(.title2, design: .rounded)).foregroundStyle(.secondary)
-            }
-            .accessibilityElement(children: .combine)
-            if let detail {
-                Text(detail).font(.caption).foregroundStyle(.tertiary)
-            }
-            if showsLiveText {
-                liveText(placeholder: "Finishing up…")
-            }
-            if showsCancel {
-                Button(role: .cancel) {
-                    engine.cancelIntentProcessing()
-                } label: {
-                    Label("Cancel", systemImage: "xmark")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .keyboardShortcut(.cancelAction)
-                .help("Stop waiting — the transcript stays in Recent")
-                .accessibilityLabel("Cancel and keep the transcript")
-            }
-        }
-    }
-
-    // MARK: Ready
-
-    private func readyContent(summary: String) -> some View {
-        let presentation = RecordingStartControlPresentation(
-            kind: .recordAgain,
-            canStartRecording: engine.canStartRecording
-        )
-        return VStack(spacing: 14) {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 40, weight: .semibold))
-                .foregroundStyle(.green)
-                .accessibilityHidden(true)
-            Text(summary)
-                .font(.system(.title3, design: .rounded))
-                .multilineTextAlignment(.center)
-            Button {
-                engine.startRecording()
-            } label: {
-                Label(presentation.title, systemImage: "mic.fill")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
-            .disabled(!presentation.isEnabled)
-            .accessibilityLabel(presentation.accessibilityLabel)
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    // MARK: Error
-
-    private func failedContent(message: String) -> some View {
-        let presentation = RecordingStartControlPresentation(
-            kind: .tryAgain,
-            canStartRecording: engine.canStartRecording
-        )
-        return VStack(spacing: 14) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 36, weight: .semibold))
-                .foregroundStyle(.orange)
-                .accessibilityHidden(true)
-            Text(message)
-                .font(.system(.title3, design: .rounded))
-                .multilineTextAlignment(.center)
-            Button {
-                engine.startRecording()
-            } label: {
-                Label(presentation.title, systemImage: "mic.fill")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .keyboardShortcut(.defaultAction)
-            .disabled(!presentation.isEnabled)
-            .accessibilityLabel(presentation.accessibilityLabel)
-        }
-        .accessibilityElement(children: .contain)
-    }
-
-    /// Live text renders inside a fixed three-line reservation: the region's size never
-    /// depends on how much has been transcribed, so nothing below it can shift.
-    private func liveText(placeholder: String) -> some View {
-        ZStack(alignment: .topLeading) {
-            liveTextReservation
-                .hidden()
-                .accessibilityHidden(true)
-            if !engine.liveTranscriptionText.isEmpty {
-                Text(engine.liveTranscriptionText)
-                    .font(.system(.title3, design: .rounded))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(3)
-            } else {
-                Text(placeholder).font(.callout).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-
-    // MARK: - Conversation reply
-
-    /// Content surface, deliberately not glass: answers must stay highly readable.
-    private func replyCard(_ reply: ConversationReply) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label("You asked", systemImage: "questionmark.bubble")
-                    .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    engine.copyToClipboard(reply.answer)
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .help("Copy the answer")
-                .accessibilityLabel("Copy answer")
-            }
-            Text(reply.question)
-                .font(.callout).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Divider().opacity(0.4)
-            Text(reply.answer)
-                .font(.body)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .padding(14)
-        .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: Theme.cornerMedium))
-        .frame(maxWidth: 560)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Answer: \(reply.answer)")
-    }
-
-    private func fmt(_ t: TimeInterval) -> String {
-        let total = Int(t)
-        let h = total / 3600, m = (total % 3600) / 60, s = total % 60
-        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+        .frame(width: 304, height: 374)
     }
 }
