@@ -17,33 +17,23 @@ struct RecordWorkspaceView: View {
     private var phase: RecordingFlowPhase { engine.flowPhase }
 
     var body: some View {
-        ScrollView {
+        VStack {
             VStack(spacing: 22) {
                 GlassEffectContainer(spacing: 12) {
                     hero
                         .frame(maxWidth: 560)
                 }
-                .padding(.top, 28)
+                .padding(.top, 12)
 
                 if let reply = engine.conversationReply {
                     replyCard(reply)
-                }
-
-                activeProjectRow
-
-                if let synchronizationError = store.projectStore.synchronizationError {
-                    projectSynchronizationWarning(synchronizationError)
-                }
-
-                if !engine.recentTranscriptions.isEmpty {
-                    recentStrip
                 }
 
                 Spacer(minLength: 12)
             }
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 28)
-            .padding(.bottom, 24)
+            .padding(.bottom, 12)
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.28), value: phase)
         .onChange(of: engine.isTranscribing) { wasTranscribing, isTranscribing in
@@ -59,7 +49,7 @@ struct RecordWorkspaceView: View {
     @ViewBuilder
     private var hero: some View {
         // The hidden template is the tallest phase layout (listening, with the full
-        // six-line live-text reservation). Every phase renders inside that fixed envelope,
+        // three-line live-text reservation). Every phase renders inside that fixed envelope,
         // so streaming live text and phase transitions can never shift the content below
         // the hero. The template scales with Dynamic Type because it uses the real fonts.
         let content = ZStack {
@@ -68,8 +58,8 @@ struct RecordWorkspaceView: View {
                 .accessibilityHidden(true)
             VStack(spacing: 14) { heroContent }
         }
-        .frame(maxWidth: .infinity, minHeight: 208)
-        .padding(26)
+        .frame(maxWidth: .infinity, minHeight: 156)
+        .padding(18)
         switch ChromeSurface.forReducedTransparency(reduceTransparency) {
         case .opaque:
             // Reduce Transparency: a fully opaque system background — never a material,
@@ -144,12 +134,12 @@ struct RecordWorkspaceView: View {
         }
     }
 
-    /// Reserves exactly six lines at the live-text font so the region cannot grow as words
+    /// Reserves exactly three lines at the live-text font so the region cannot grow as words
     /// stream in.
     private var liveTextReservation: some View {
-        Text(String(repeating: "M\n", count: 5) + "M")
+        Text(String(repeating: "M\n", count: 2) + "M")
             .font(.system(.title3, design: .rounded))
-            .lineLimit(6)
+            .lineLimit(3)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
@@ -165,7 +155,7 @@ struct RecordWorkspaceView: View {
                 engine.startRecording()
             } label: {
                 VStack(spacing: 10) {
-                    Image(systemName: "mic.fill").font(.system(size: 44, weight: .semibold)).foregroundStyle(.tint)
+                    Image(systemName: "mic.fill").font(.system(size: 32, weight: .semibold)).foregroundStyle(.tint)
                     Text(presentation.title).font(.system(.title, design: .rounded).weight(.semibold)).foregroundStyle(.primary)
                     Text(idleHint).font(.callout).foregroundStyle(.secondary)
                 }
@@ -324,7 +314,7 @@ struct RecordWorkspaceView: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// Live text renders inside a fixed six-line reservation: the region's size never
+    /// Live text renders inside a fixed three-line reservation: the region's size never
     /// depends on how much has been transcribed, so nothing below it can shift.
     private func liveText(placeholder: String) -> some View {
         ZStack(alignment: .topLeading) {
@@ -335,7 +325,7 @@ struct RecordWorkspaceView: View {
                 Text(engine.liveTranscriptionText)
                     .font(.system(.title3, design: .rounded))
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .lineLimit(6).contentTransition(.opacity)
+                    .lineLimit(3).contentTransition(.opacity)
             } else {
                 Text(placeholder).font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -375,89 +365,6 @@ struct RecordWorkspaceView: View {
         .frame(maxWidth: 560)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Answer: \(reply.answer)")
-    }
-
-    @ViewBuilder
-    private var activeProjectRow: some View {
-        if !store.projects.isEmpty {
-            HStack(spacing: 8) {
-                Image(systemName: "folder.fill")
-                    .foregroundStyle(store.projectStore.activeProject != nil ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                Menu {
-                    Button("None") { selectProject(nil) }
-                    Divider()
-                    ForEach(store.projects) { project in
-                        Button {
-                            selectProject(project.id)
-                        } label: {
-                            if project.id == store.projectStore.settings.activeProjectId {
-                                Label(project.name, systemImage: "checkmark")
-                            } else { Text(project.name) }
-                        }
-                    }
-                } label: {
-                    Text(store.projectStore.activeProject?.name ?? "No project")
-                }
-                .menuStyle(.borderlessButton).fixedSize()
-                .disabled(!store.projectStore.canMutateProjects)
-                Text("· transcripts are tagged to this project").font(.caption).foregroundStyle(.tertiary)
-                Spacer()
-            }
-            .font(.system(.callout, design: .rounded))
-            .tint(Theme.accent)
-            .frame(maxWidth: 560)
-        }
-    }
-
-    private func selectProject(_ id: String?) {
-        do {
-            try store.projectStore.setActive(id)
-        } catch {
-            store.operationError = store.projectStore.persistenceError ?? error.localizedDescription
-        }
-    }
-
-    private func projectSynchronizationWarning(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-            Spacer()
-            Button("Retry") { store.reconcileProjects() }
-                .buttonStyle(.borderless)
-                .disabled(store.projectStore.isSynchronizingProjects)
-        }
-        .frame(maxWidth: 560)
-        .accessibilityElement(children: .combine)
-    }
-
-    // MARK: - Recent strip
-
-    private var recentStrip: some View {
-        let items = Array(engine.recentTranscriptions.prefix(3))
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("JUST NOW").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "text.alignleft").font(.caption).foregroundStyle(.tertiary).padding(.top, 2)
-                    Text(item.displayText).font(.callout).lineLimit(2)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Button {
-                        engine.pasteIntoFrontApp(item.displayText)
-                    } label: { Image(systemName: "arrow.up.right.square") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Paste into front app")
-                    .accessibilityLabel("Paste transcript into front app")
-                }
-                .padding(.vertical, 4)
-                if i < items.count - 1 { Divider().opacity(0.3) }
-            }
-        }
-        .frame(maxWidth: 560)
-        .padding(14)
-        .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: Theme.cornerMedium))
     }
 
     private func fmt(_ t: TimeInterval) -> String {

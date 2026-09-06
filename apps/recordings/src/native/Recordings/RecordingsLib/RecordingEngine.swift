@@ -891,7 +891,17 @@ public final class RecordingEngine: ObservableObject {
     private var targetAppPid: pid_t?
     private var pasteTargetProcessIdentityByGeneration: [UInt64: PasteTargetProcessIdentity] = [:]
     public var projectStore: ProjectStore?
+    /// The minimal app uses only global cleanup preferences from the legacy settings
+    /// file. Keeping this separate prevents old active projects from tagging new captures.
+    public var globalRecordingPreferences: ProjectStore?
     public var voiceShortcuts: VoiceShortcuts?
+
+    var recordingCleanupPreferences: (prompt: String, mode: String) {
+        if let settings = globalRecordingPreferences?.settings {
+            return (settings.globalSystemPrompt, (PostProcessingMode(rawValue: settings.postProcessingMode) ?? .auto).rawValue)
+        }
+        return (projectStore?.effectiveSystemPrompt ?? "", projectStore?.effectivePostProcessingMode ?? PostProcessingMode.auto.rawValue)
+    }
 
     // MARK: - Injectable boundaries
     // Production defaults perform the real I/O; tests replace them to drive the production
@@ -1722,6 +1732,7 @@ public final class RecordingEngine: ObservableObject {
         // recording pipeline awaits this context only after the recorder has stopped.
         let generation = recordingGeneration
         let projectStore = projectStore
+        let cleanupPreferences = recordingCleanupPreferences
         let targetBundleIdentifierForProjects = targetAppBundleIdentifier
         let transcriptionLanguageAtStart = transcriptionLanguage
         let intentDetectionEnabledAtStart = intentDetectionEnabled
@@ -1756,8 +1767,8 @@ public final class RecordingEngine: ObservableObject {
                 activeProjectName: projectStore?.activeProject?.name,
                 processing: RecordingProcessingConfiguration(
                     transcriptionPrompt: modelSelection.transcriptionPrompt,
-                    transcriberPrompt: projectStore?.effectiveSystemPrompt ?? "",
-                    postProcessingMode: projectStore?.effectivePostProcessingMode ?? PostProcessingMode.auto.rawValue,
+                    transcriberPrompt: cleanupPreferences.prompt,
+                    postProcessingMode: cleanupPreferences.mode,
                     transcriptionLanguage: transcriptionLanguageAtStart,
                     transcriptionModel: modelSelection.transcriptionModel,
                     transcriberModel: modelSelection.transcriberModel,
@@ -4792,14 +4803,17 @@ enum CLIRunner: Sendable {
         _ args: [String],
         home: String,
         timeout: TimeInterval = 120,
-        totalWallClockBudget: TimeInterval? = nil
+        totalWallClockBudget: TimeInterval? = nil,
+        environment suppliedEnvironment: [String: String]? = nil
     ) -> String {
         let command = resolveCommand(home: home)
         let arguments = command.argumentsPrefix + args
-        let environment = ProcessInfo.processInfo.environment.merging([
-            "PATH": "\(home)/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        ]) { _, new in new }
         do {
+            let environment = try suppliedEnvironment ?? ServiceAPIConfiguration.childEnvironment(
+                base: ProcessInfo.processInfo.environment.merging([
+                    "PATH": "\(home)/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+                ]) { _, new in new }
+            )
             let output = try runExecutable(
                 command.executable,
                 arguments: arguments,

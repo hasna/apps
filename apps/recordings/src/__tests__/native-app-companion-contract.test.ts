@@ -52,6 +52,77 @@ afterAll(() => {
 });
 
 describe("native app companion contract", () => {
+  test("the compiled app companion saves, lists, and deletes through a configurable prefixed API", async () => {
+    const home = mkdtempSync(join(tmpdir(), "recordings-native-api-"));
+    const seen: string[] = [];
+    const saved = new Map<string, Record<string, unknown>>();
+    const server = Bun.serve({
+      hostname: "127.0.0.1", port: 0,
+      async fetch(req) {
+        if (req.headers.get("authorization") !== "Bearer fixture-service-credential") return new Response(null, { status: 401 });
+        const url = new URL(req.url);
+        seen.push(`${req.method} ${url.pathname}`);
+        if (url.pathname === "/custom/recordings/v1/recordings") {
+          if (req.method === "POST") {
+            const body = await req.json() as Record<string, unknown>;
+            const id = String(body.id ?? crypto.randomUUID());
+            const recording = { ...body, id, created_at: new Date().toISOString() };
+            saved.set(id, recording);
+            return Response.json({ recording }, { status: 201 });
+          }
+          return Response.json({ recordings: [...saved.values()], count: saved.size });
+        }
+        if (req.method === "DELETE" && url.pathname.startsWith("/custom/recordings/v1/recordings/")) {
+          saved.delete(decodeURIComponent(url.pathname.split("/").at(-1)!));
+          return Response.json({ deleted: true });
+        }
+        return new Response(null, { status: 404 });
+      },
+    });
+    try {
+      const run = async (...args: string[]) => {
+        const child = Bun.spawn([compiledCompanion, "--json", ...args], {
+          env: {
+            HOME: home, PATH: process.env.PATH,
+            HASNA_RECORDINGS_CLIENT_STORE: "http",
+            HASNA_RECORDINGS_API_URL: `http://127.0.0.1:${server.port}/custom/recordings/v1/`,
+            HASNA_RECORDINGS_API_KEY_OVERRIDE: "fixture-service-credential",
+          },
+          stdout: "pipe", stderr: "pipe",
+        });
+        const [stdout, stderr, exitCode] = await withTimeout(Promise.all([
+          new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+        ]), 15_000, "API companion request").finally(() => stopAndReap(child, "API companion"));
+        expect(exitCode, stderr).toBe(0);
+        return args[0] === "delete" ? stdout : JSON.parse(stdout);
+      };
+      const recording = await run("save-text", "Native API round trip", "--post-processing", "off");
+      const listed = await run("list", "-n", "10");
+      expect(listed).toHaveLength(1);
+      expect(listed[0].raw_text).toBe("Native API round trip");
+      await run("delete", recording.id);
+      expect(await run("list", "-n", "10")).toEqual([]);
+      expect(seen).toContain("POST /custom/recordings/v1/recordings");
+      expect(seen.every((path) => !path.includes("/v1/v1"))).toBe(true);
+      expect(existsSync(join(home, ".hasna/recordings/recordings.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  test("the native app has one recording surface without project navigation", () => {
+    const content = readFileSync("src/native/Recordings/App/ContentView.swift", "utf8");
+    const store = readFileSync("src/native/Recordings/App/RecordingsStore.swift", "utf8");
+    const settings = readFileSync("src/native/Recordings/RecordingsLib/SettingsView.swift", "utf8");
+    expect(content).toContain("RecordWorkspaceView(store: store)");
+    expect(content).toContain("RecordingsListView(store: store)");
+    expect(content).not.toContain("SidebarView");
+    expect(store).toContain("engine.projectStore = nil");
+    expect(store).not.toContain("reconcileWithCanonicalStore");
+    expect(settings).not.toContain("projectsTab");
+  });
+
   test("build embeds a self-contained recordings CLI and runtime prefers it", () => {
     const build = readFileSync("src/native/Recordings/build.sh", "utf8");
     const companionBuild = readFileSync("scripts/build_companion_cli.sh", "utf8");
@@ -443,6 +514,17 @@ describe("native app companion contract", () => {
     expect(workspace).toContain("heroSizingTemplate");
     expect(workspace).toContain("liveTextReservation");
     expect(workspace).toContain("engine.cancelIntentProcessing()");
+  });
+
+  test("both Settings entry points open the retained native Settings window", () => {
+    const app = readFileSync("src/native/Recordings/App/RecordingsApp.swift", "utf8");
+    const menu = readFileSync("src/native/Recordings/App/MenuBarStatusView.swift", "utf8");
+    expect(app).toContain("CommandGroup(replacing: .appSettings)");
+    expect(app).toContain('Button("Settings…", action: state.openSettings)');
+    expect(app).toContain("openSettings: state.openSettings");
+    expect(app).toContain("settingsWindowController?.show()");
+    expect(menu).toContain("Button(action: openSettings)");
+    expect(menu).not.toContain("SettingsLink");
   });
 
   test("showing either a new or retained main window activates the app", () => {

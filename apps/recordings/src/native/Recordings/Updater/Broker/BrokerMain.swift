@@ -276,7 +276,7 @@ final class UpdateBrokerSession: NSObject, RecordingsUpdateXPCProtocol {
         guard mkdir(candidateRoot, 0o700) == 0 else {
             throw BrokerOperationError.candidateRejected
         }
-        let candidateApplication = candidateRoot + "/HasnaRecordings.app"
+        let candidateApplication = candidateRoot + "/Hasna Recordings.app"
         let verifierIDs = try verifierAccountIDs()
         try CanonicalTreeCopier.copyApplication(
             from: verifierOutput,

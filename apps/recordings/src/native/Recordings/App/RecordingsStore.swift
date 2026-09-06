@@ -3,57 +3,38 @@ import SwiftUI
 import Combine
 import RecordingsLib
 
-/// Which main pane the canvas shows.
-enum Pane: Equatable {
-    case record       // the recording workspace (default / first screen)
-    case library      // browse past recordings
-}
-
-/// Sidebar filter selection for the library.
-enum LibraryFilter: Hashable {
-    case all
-    case project(String)     // project id
-    case noProject
-    case mode(String)        // "raw" | "enhanced"
-    case thisMachine
-    case machine(String)
-}
-
 /// Observable application state for the full macOS app. Bridges the live `RecordingEngine`,
-/// the `ProjectStore` / `VoiceShortcuts`, and the `recordings` CLI Store.
+/// global cleanup preferences, voice shortcuts, and the `recordings` CLI Store.
 @MainActor
 final class RecordingsStore: ObservableObject {
     let engine: RecordingEngine
-    let projectStore: ProjectStore
+    let preferences: ProjectStore
     let voiceShortcuts: VoiceShortcuts
 
-    @Published var pane: Pane = .record
     @Published var library: [Recording] = []
     @Published var selection: String?
-    @Published var filter: LibraryFilter = .all
     @Published var searchText: String = ""
     @Published var isLoadingLibrary = false
     @Published var loadError: String?
     @Published var operationError: String?
 
-    @Published var stats: RecordingStats?
-    let localMachineID: String
     private let home: String
     private var cancellables = Set<AnyCancellable>()
+    private var connectionRevision = 0
 
     init(engine: RecordingEngine = RecordingEngine(),
-         projectStore: ProjectStore = ProjectStore(),
+         preferences: ProjectStore = ProjectStore(),
          voiceShortcuts: VoiceShortcuts = VoiceShortcuts()) {
         self.engine = engine
-        self.projectStore = projectStore
+        self.preferences = preferences
         self.voiceShortcuts = voiceShortcuts
         self.home = FileManager.default.homeDirectoryForCurrentUser.path
-        self.localMachineID = NativeMachineIdentity.current()
-        engine.projectStore = projectStore
+        engine.projectStore = nil
+        engine.globalRecordingPreferences = preferences
         engine.voiceShortcuts = voiceShortcuts
 
         // Re-publish the wrapped ObservableObjects so views that observe only this store
-        // refresh on live recording changes (timer, live text) and project edits.
+        // refresh on live recording changes (timer, live text) and preference edits.
         engine.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
@@ -61,56 +42,26 @@ final class RecordingsStore: ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in self?.loadLibrary() }
             .store(in: &cancellables)
-        projectStore.objectWillChange
+        preferences.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
         voiceShortcuts.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
-
-        reconcileProjects()
-    }
-
-    func reconcileProjects() {
-        let home = self.home
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await projectStore.reconcileWithCanonicalStore(home: home)
-                self.operationError = nil
-            } catch {
-                self.operationError = projectStore.persistenceError
-                    ?? (error as? RecordingsCLI.Failure)?.message
-                    ?? error.localizedDescription
+        NotificationCenter.default.publisher(for: ServiceAPIConfiguration.didChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.connectionRevision += 1
+                self.library = []
+                self.selection = nil
+                self.loadError = nil
+                self.loadLibrary()
             }
-        }
+            .store(in: &cancellables)
     }
 
-    // MARK: - Derived collections
-
-    var projects: [RecProject] { projectStore.settings.projects }
-
-    var machines: [String] {
-        Set(library.compactMap { $0.machineId }.filter { !$0.isEmpty })
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-    }
-
-    var lastUpdated: Date? { library.compactMap(\.createdDate).max() }
-
-    var visibleRecordings: [Recording] {
-        library.filter { matchesFilter($0) && matchesSearch($0) }
-    }
-
-    private func matchesFilter(_ r: Recording) -> Bool {
-        switch filter {
-        case .all: return true
-        case .project(let id): return r.projectId == id
-        case .noProject: return r.projectId == nil
-        case .mode(let m): return r.processingMode == m
-        case .thisMachine: return r.machineId == localMachineID
-        case .machine(let m): return r.machineId == m
-        }
-    }
+    var visibleRecordings: [Recording] { library.filter(matchesSearch) }
 
     private func matchesSearch(_ r: Recording) -> Bool {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -120,27 +71,9 @@ final class RecordingsStore: ObservableObject {
         return false
     }
 
-    func count(for filter: LibraryFilter) -> Int {
-        library.filter {
-            switch filter {
-            case .all: return true
-            case .project(let id): return $0.projectId == id
-            case .noProject: return $0.projectId == nil
-            case .mode(let m): return $0.processingMode == m
-            case .thisMachine: return $0.machineId == localMachineID
-            case .machine(let m): return $0.machineId == m
-            }
-        }.count
-    }
-
     var selectedRecording: Recording? {
         guard let id = selection else { return nil }
         return library.first { $0.id == id }
-    }
-
-    func projectName(_ id: String?) -> String? {
-        guard let id else { return nil }
-        return projects.first { $0.id == id }?.name
     }
 
     // MARK: - Library loading
@@ -151,27 +84,29 @@ final class RecordingsStore: ObservableObject {
         guard !isLoadingLibrary else { reloadRequestedDuringLoad = true; return }
         isLoadingLibrary = true
         let home = home
+        let revision = connectionRevision
         Task.detached(priority: .userInitiated) {
-            let result: Result<([Recording], RecordingStats?), Error>
+            let result: Result<[Recording], Error>
             do {
                 let recs = try RecordingsCLI.listAll(home: home)
-                let stats = try? RecordingsCLI.stats(home: home)
-                result = .success((recs, stats))
+                result = .success(recs)
             } catch {
                 result = .failure(error)
             }
             await MainActor.run {
                 self.isLoadingLibrary = false
-                switch result {
-                case .success(let (recs, stats)):
-                    self.library = recs
-                    self.stats = stats
-                    self.loadError = nil
-                    if self.selection == nil || !recs.contains(where: { $0.id == self.selection }) {
-                        self.selection = self.visibleRecordings.first?.id
+                // A response from the previous endpoint must not repopulate this library.
+                if revision == self.connectionRevision {
+                    switch result {
+                    case .success(let recs):
+                        self.library = recs
+                        self.loadError = nil
+                        if let selection = self.selection, !recs.contains(where: { $0.id == selection }) {
+                            self.selection = nil
+                        }
+                    case .failure(let error):
+                        self.loadError = (error as? RecordingsCLI.Failure)?.message ?? error.localizedDescription
                     }
-                case .failure(let error):
-                    self.loadError = (error as? RecordingsCLI.Failure)?.message ?? error.localizedDescription
                 }
                 if self.reloadRequestedDuringLoad {
                     self.reloadRequestedDuringLoad = false
@@ -195,7 +130,7 @@ final class RecordingsStore: ObservableObject {
                 switch result {
                 case .success:
                     self.library.removeAll { $0.id == id }
-                    if self.selection == id { self.selection = self.visibleRecordings.first?.id }
+                    if self.selection == id { self.selection = nil }
                 case .failure(let error):
                     self.operationError = (error as? RecordingsCLI.Failure)?.message ?? error.localizedDescription
                 }

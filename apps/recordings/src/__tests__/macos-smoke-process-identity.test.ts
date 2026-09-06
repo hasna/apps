@@ -96,7 +96,7 @@ function createSmokeFixture(
   const root = mkdtempSync(join(tmpdir(), "recordings-smoke-identity-"));
   temporaryPaths.push(root);
   const bin = join(root, "bin");
-  const app = join(root, "HasnaRecordings.app");
+  const app = join(root, "Hasna Recordings.app");
   const executable = join(app, "Contents", "MacOS", "Recordings");
   const appAcknowledgementPath = join(root, "app-acknowledgement.path");
   const preexistingAppPid = join(root, "preexisting-app.pid");
@@ -515,7 +515,7 @@ describe("macOS runtime smoke process identity", () => {
     const result = await runSmoke(fixture);
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("completion handshake timed out");
-    expect(result.stderr).toContain("Refusing to signal HasnaRecordings.app");
+    expect(result.stderr).toContain("Refusing to signal Hasna Recordings.app");
     expect(existsSync(fixture.signalMarker)).toBeFalse();
   });
 

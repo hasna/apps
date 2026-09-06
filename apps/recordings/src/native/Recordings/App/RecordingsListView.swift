@@ -38,7 +38,7 @@ struct RecordingsListView: View {
             centered {
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange)
-                    Text(error).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Text(error.contains("HASNA_RECORDINGS") ? "Connect your Recordings API in Settings to see your history." : error).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     Button("Retry") { store.loadLibrary() }
                 }
                 .padding(24)
@@ -48,18 +48,18 @@ struct RecordingsListView: View {
                 VStack(spacing: 8) {
                     Image(systemName: "waveform").font(.largeTitle).foregroundStyle(.quaternary)
                     Text(emptyMessage).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button("Record") { store.pane = .record }.buttonStyle(.borderless)
+                    Text("Your transcripts will appear here.").font(.caption).foregroundStyle(.tertiary)
                 }
             }
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(store.visibleRecordings) { rec in
-                        RecordingRow(rec: rec,
-                                     projectName: store.projectName(rec.projectId),
-                                     selected: store.selection == rec.id)
-                            .contentShape(Rectangle())
-                            .onTapGesture { store.selection = rec.id }
+                        Button { store.selection = rec.id } label: {
+                            RecordingRow(rec: rec, selected: store.selection == rec.id)
+                                .contentShape(Rectangle())
+                        }
+                            .buttonStyle(.plain)
                             .contextMenu {
                                 Button("Copy") {
                                     let pb = NSPasteboard.general
@@ -78,14 +78,7 @@ struct RecordingsListView: View {
 
     private var emptyMessage: String {
         if !store.searchText.isEmpty { return "No matches for “\(store.searchText)”" }
-        switch store.filter {
-        case .project(let id):
-            return "No recordings in \(store.projectName(id) ?? "this project") yet"
-        case .noProject: return "No unassigned recordings"
-        case .mode(let m): return "No \(m) recordings yet"
-        case .thisMachine, .machine: return "No recordings from this machine"
-        case .all: return "No recordings yet"
-        }
+        return "No recordings yet"
     }
 
     @ViewBuilder
@@ -96,7 +89,6 @@ struct RecordingsListView: View {
 
 private struct RecordingRow: View {
     let rec: Recording
-    let projectName: String?
     let selected: Bool
 
     var body: some View {
@@ -115,11 +107,6 @@ private struct RecordingRow: View {
                     Text("·").font(.caption2).foregroundStyle(.secondary)
                     Label("Enhanced", systemImage: "wand.and.stars")
                         .labelStyle(.titleAndIcon).font(.caption2).foregroundStyle(Theme.accent.opacity(0.9))
-                }
-                if let projectName {
-                    Text("·").font(.caption2).foregroundStyle(.secondary)
-                    Label(projectName, systemImage: "folder").labelStyle(.titleAndIcon)
-                        .font(.caption2).foregroundStyle(.secondary)
                 }
             }
         }

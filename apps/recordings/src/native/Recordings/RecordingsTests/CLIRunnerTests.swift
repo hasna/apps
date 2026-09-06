@@ -8,7 +8,7 @@ struct CLIRunnerTests {
     func bundledCLIIsPreferred() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("recordings-bundled-cli-\(UUID().uuidString)")
-        let app = root.appendingPathComponent("HasnaRecordings.app")
+        let app = root.appendingPathComponent("Hasna Recordings.app")
         let helper = app.appendingPathComponent("Contents/Helpers/recordings")
         let home = root.appendingPathComponent("home")
         let external = home.appendingPathComponent(".bun/bin/recordings")
@@ -34,7 +34,7 @@ struct CLIRunnerTests {
     func packagedAppDoesNotUseGlobalFallback() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("recordings-missing-companion-\(UUID().uuidString)")
-        let app = root.appendingPathComponent("HasnaRecordings.app")
+        let app = root.appendingPathComponent("Hasna Recordings.app")
         let home = root.appendingPathComponent("home")
         let external = home.appendingPathComponent(".bun/bin/recordings")
         try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)

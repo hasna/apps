@@ -173,7 +173,7 @@ validate_target_ancestry() {
 
 validate_target_ancestry
 
-CLIENT="/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client"
+CLIENT="/Applications/Hasna Recordings.app/Contents/Helpers/recordings-update-client"
 STATE="/var/db/com.hasna.recordings.updater/release-state.json"
 AUTHORIZATION_ROOT="/private/var/db/com.hasna.recordings.bootstrap-authorization"
 AUTHORIZATION_JOURNAL="${AUTHORIZATION_ROOT}/journal"
@@ -182,7 +182,7 @@ COHORT_PATHS=(
   "/Library/PrivilegedHelperTools/com.hasna.recordings.updater"
   "/Library/PrivilegedHelperTools/com.hasna.recordings.artifact-verifier"
   "/Library/LaunchDaemons/com.hasna.recordings.updater.plist"
-  "/Applications/HasnaRecordings.app"
+  "/Applications/Hasna Recordings.app"
   "$CLIENT"
   "/Library/Application Support/Hasna/Recordings/Trust"
   "/Library/Application Support/Hasna/Recordings/Bootstrap"
@@ -304,7 +304,7 @@ PAYLOAD="$EXPANDED/Payload"
 PREFLIGHT="$EXPANDED/Scripts/recordings-bootstrap-preflight"
 EXPANDED_PREINSTALL="$EXPANDED/Scripts/preinstall"
 EXPANDED_POSTINSTALL="$EXPANDED/Scripts/postinstall"
-PAYLOAD_CLIENT="$PAYLOAD/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client"
+PAYLOAD_CLIENT="$PAYLOAD/Applications/Hasna Recordings.app/Contents/Helpers/recordings-update-client"
 [ -d "$PAYLOAD" ] && [ ! -L "$PAYLOAD" ] && \
   [ -x "$PREFLIGHT" ] && [ ! -L "$PREFLIGHT" ] && \
   [ -x "$EXPANDED_PREINSTALL" ] && [ ! -L "$EXPANDED_PREINSTALL" ] && \
@@ -512,7 +512,7 @@ cohort_expected_mode() {
     "/Library/PrivilegedHelperTools/com.hasna.recordings.updater"|\
     "/Library/PrivilegedHelperTools/com.hasna.recordings.artifact-verifier") printf '555\n' ;;
     "/Library/LaunchDaemons/com.hasna.recordings.updater.plist") printf '444\n' ;;
-    "/Applications/HasnaRecordings.app"|"$CLIENT") printf '755\n' ;;
+    "/Applications/Hasna Recordings.app"|"$CLIENT") printf '755\n' ;;
     "/Library/Application Support/Hasna/Recordings/Trust") printf '700-or-755\n' ;;
     "/Library/Application Support/Hasna/Recordings/Bootstrap"|\
     "/Library/Application Support/Hasna/Recordings/Updates"|\

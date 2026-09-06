@@ -1,5 +1,5 @@
 /**
- * Canonical macOS bundle identity for HasnaRecordings.app.
+ * Canonical macOS bundle identity for Hasna Recordings.app.
  *
  * Why this module exists at all, rather than the constant living next to its first caller:
  * three branches in the #24-#29 queue each introduced their own copy of this literal —

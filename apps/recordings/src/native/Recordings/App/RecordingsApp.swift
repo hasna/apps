@@ -64,6 +64,7 @@ final class RecordingsAppState: ObservableObject {
     private let runtimeSmokeAcknowledgementPath: String?
     private let runtimeSmokeCompletionPath: String?
     private var mainWindow: NSWindow?
+    private var settingsWindowController: SettingsWindowController?
     private(set) var windowCreationCount = 0
     private(set) var windowActivationCount = 0
 
@@ -99,10 +100,24 @@ final class RecordingsAppState: ObservableObject {
         // deterministically on every build.
         guard declaresWindow else { return }
         if let store {
-            showWindow(contentView: NSHostingView(rootView: ContentView(store: store)))
+            showWindow(contentView: NSHostingView(rootView: ContentView(store: store, openSettings: openSettings)))
         } else if runtimeSmokeMode == "normal" {
             showWindow(contentView: NSHostingView(rootView: Text("Recordings runtime smoke")))
         }
+    }
+
+    func openSettings() {
+        guard let store else { return }
+        if settingsWindowController == nil {
+            settingsWindowController = SettingsWindowController {
+                NSHostingView(rootView: SettingsView(
+                    engine: store.engine,
+                    shortcuts: store.voiceShortcuts,
+                    preferences: store.preferences
+                ))
+            }
+        }
+        settingsWindowController?.show()
     }
 
     private func showWindow(contentView: NSView) {
@@ -116,12 +131,12 @@ final class RecordingsAppState: ObservableObject {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 700, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        window.title = "Recordings"
+        window.title = "Hasna Recordings"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.isReleasedWhenClosed = false
@@ -351,6 +366,7 @@ struct RecordingsApp: App {
                 MenuBarStatusView(
                     store: store,
                     openRecordings: state.openRecordings,
+                    openSettings: state.openSettings,
                     barOnly: state.barOnly
                 )
             } else if state.runtimeSmokeProbe != nil {
@@ -370,22 +386,27 @@ struct RecordingsApp: App {
 
         Settings {
             if let store = state.store {
-                SettingsView(engine: store.engine, shortcuts: store.voiceShortcuts, projectStore: store.projectStore)
+                SettingsView(engine: store.engine, shortcuts: store.voiceShortcuts, preferences: store.preferences)
             } else {
                 EmptyView()
             }
         }
         .commands {
             if let store = state.store {
+                CommandGroup(replacing: .appSettings) {
+                    Button("Settings…", action: state.openSettings)
+                        .keyboardShortcut(",", modifiers: .command)
+                }
                 CommandGroup(replacing: .newItem) {
                     Button("New Recording") {
-                        store.pane = .record
+                        self.state.openRecordings()
                         store.engine.startRecording()
                     }
                     .keyboardShortcut("n", modifiers: .command)
+                    .disabled(!store.engine.canStartRecording)
                 }
                 CommandGroup(after: .toolbar) {
-                    Button("Recordings Library") { store.pane = .library }
+                    Button("Recordings") { state.openRecordings() }
                         .keyboardShortcut("l", modifiers: .command)
                 }
             }

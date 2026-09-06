@@ -88,7 +88,6 @@ struct RecordingDetailView: View {
             if rec.durationMs > 0 { metaItem("clock", rec.durationLabel) }
             if let model = rec.modelUsed { metaItem("cpu", model) }
             if let lang = rec.language, !lang.isEmpty { metaItem("globe", lang) }
-            if let name = store.projectName(rec.projectId) { metaItem("folder", name) }
             if let machine = rec.machineId, !machine.isEmpty { metaItem("desktopcomputer", machine) }
             if !rec.tags.isEmpty { metaItem("number", rec.tags.joined(separator: ", ")) }
             Spacer()

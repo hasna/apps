@@ -8,7 +8,7 @@
 // class for nested deploy lanes, todos 9b1828c9). The workflows API for hasna/apps
 // lists exactly six root workflows and none under apps/recordings, so the Swift
 // half compiles NOWHERE in the monorepo and no automation assembles
-// HasnaRecordings.app from main. The stale-sweep comment named this the "CI
+// Hasna Recordings.app from main. The stale-sweep comment named this the "CI
 // build-and-sign path" — a merged main still produces no installable artifact.
 //
 // These tests lock the fix: the native compile gate must be discoverable at the

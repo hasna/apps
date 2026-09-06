@@ -24,6 +24,7 @@ struct MenuBarStatusLabel: View {
 struct MenuBarStatusView: View {
     @ObservedObject var store: RecordingsStore
     let openRecordings: () -> Void
+    let openSettings: () -> Void
     /// Bar-only builds have no workspace window to open; the entry point is hidden so
     /// the affordance does not exist where the surface cannot exist.
     let barOnly: Bool
@@ -34,7 +35,7 @@ struct MenuBarStatusView: View {
                 Image(systemName: presentation.iconName)
                     .foregroundStyle(statusColor)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Recordings")
+                    Text("Hasna Recordings")
                         .font(.headline)
                     Text(presentation.statusText)
                         .font(.caption)
@@ -55,13 +56,13 @@ struct MenuBarStatusView: View {
 
             if !barOnly {
                 Button(action: openRecordings) {
-                    Label("Open Recordings", systemImage: "macwindow")
+                    Label("Open Hasna Recordings", systemImage: "macwindow")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
             }
 
-            SettingsLink {
+            Button(action: openSettings) {
                 Label("Settings", systemImage: "gearshape")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -70,7 +71,7 @@ struct MenuBarStatusView: View {
             Button {
                 NSApplication.shared.terminate(nil)
             } label: {
-                Label("Quit Recordings", systemImage: "power")
+                Label("Quit Hasna Recordings", systemImage: "power")
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)

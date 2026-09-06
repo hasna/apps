@@ -220,7 +220,7 @@ describe("root-owned macOS updater packaging contract", () => {
     expect(managedBootstrap).toContain('"$PAYLOAD_CLIENT" bootstrap');
     expect(managedBootstrap).not.toContain('"$CLIENT" bootstrap');
     expect(managedBootstrap).toContain(
-      'PAYLOAD_CLIENT="$PAYLOAD/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client"',
+      'PAYLOAD_CLIENT="$PAYLOAD/Applications/Hasna Recordings.app/Contents/Helpers/recordings-update-client"',
     );
     expect(managedBootstrap).toContain('--artifact "$SNAPSHOT_PKG"');
     expect(bootstrapPreflight).toContain("payload.packageSHA256 == packageDigest");
@@ -592,7 +592,7 @@ describe("root-owned macOS updater packaging contract", () => {
     expect(appModeValidator).toBeDefined();
 
     const root = mkdtempSync(join(tmpdir(), "recordings-pkg-modes-"));
-    const app = join(root, "HasnaRecordings.app");
+    const app = join(root, "Hasna Recordings.app");
     const main = join(app, "Contents", "MacOS", "Recordings");
     const companion = join(app, "Contents", "Helpers", "recordings");
     const client = join(app, "Contents", "Helpers", "recordings-update-client");
@@ -689,7 +689,7 @@ describe("root-owned macOS updater packaging contract", () => {
     expectOrder(
       pkg,
       'require_safe_signed_app_bundle_modes "$APP"',
-      '/usr/bin/ditto "$APP" "$ROOT/Applications/HasnaRecordings.app"',
+      '/usr/bin/ditto "$APP" "$ROOT/Applications/Hasna Recordings.app"',
     );
     expectOrder(pkg, 'require_safe_signed_app_bundle_modes "$STAGED_APP"', "/usr/bin/pkgbuild");
   });

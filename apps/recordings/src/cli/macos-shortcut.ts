@@ -95,7 +95,7 @@ export const TOGGLE_RECORDING_DEFAULTS_KEY = `${SHORTCUT_USER_DEFAULTS_PREFIX}${
  * thing — and so the claim can be pinned against the Swift source that implements it.
  *
  * Verified against the shipped bundle on 2026-07-27 with `nm -u` on
- * HasnaRecordings.app/Contents/MacOS/Recordings, which lists `_RegisterEventHotKey` (the
+ * Hasna Recordings.app/Contents/MacOS/Recordings, which lists `_RegisterEventHotKey` (the
  * hotkey) and `_CGEventTapCreate` + `_AXIsProcessTrusted` (the fn monitor).
  */
 export interface TriggerGrantRequirement {
@@ -350,7 +350,7 @@ export interface BundleScanProbes {
  * Same rule as `TRIGGER_DEFAULTS_EXECUTABLE`: pinned on macOS so PATH cannot substitute the
  * process listing that decides which bundle holds the live trigger, and overridable only off
  * macOS, where it is the one way to exercise the "an instance is running, so your write is not
- * armed" exit path — a path that by definition needs a running HasnaRecordings.app to reach.
+ * armed" exit path — a path that by definition needs a running Hasna Recordings.app to reach.
  */
 const PROCESS_LISTER_EXECUTABLE =
   process.platform === "darwin"
@@ -359,7 +359,7 @@ const PROCESS_LISTER_EXECUTABLE =
 
 const defaultProcessLister: ProcessLister = () => {
   // `comm=` prints the executable path and nothing else. `args=` would include arguments,
-  // and a wrapper such as `/bin/sh -c /path/HasnaRecordings.app/...` would then make the start
+  // and a wrapper such as `/bin/sh -c /path/Hasna Recordings.app/...` would then make the start
   // of the path ambiguous — the pattern below cannot tell an argument boundary from a
   // directory name once spaces are legal in the path. `-ww` stops ps truncating to the
   // terminal width, which would silently cut long bundle paths short.
@@ -369,7 +369,7 @@ const defaultProcessLister: ProcessLister = () => {
 };
 
 /**
- * Bundle paths of the HasnaRecordings.app instances currently running.
+ * Bundle paths of the Hasna Recordings.app instances currently running.
  *
  * TCC grants key to a specific bundle (and, for an unstably-signed build, to its cdhash),
  * so "which bundle is running" is the only honest answer to "where does the Accessibility
@@ -407,7 +407,7 @@ export function runningAppBundlePaths(probes: BundleScanProbes = {}): string[] {
     const bundle = line.slice(0, suffix.index);
 
     // Spaces are legal in a bundle path, so text alone cannot say where the path begins:
-    // "/bin/sh -c /Applications/HasnaRecordings.app" and "/Users/first last/HasnaRecordings.app" are
+    // "/bin/sh -c /Applications/Hasna Recordings.app" and "/Users/first last/Hasna Recordings.app" are
     // the same shape. Resolve it by asking the bundle instead of guessing — try the longest
     // candidate first and accept the first one that identifies as this app.
     for (let index = bundle.indexOf("/"); index !== -1; index = bundle.indexOf("/", index + 1)) {
@@ -428,7 +428,7 @@ export function runningAppBundlePaths(probes: BundleScanProbes = {}): string[] {
  * name-shaped test produces a wrong answer in one direction or the other:
  *
  *   - `/Applications/Hasna Recordings.app` (id `com.hasna.recordings.launcher`) ends with
- *     "HasnaRecordings.app" and exists on disk, so a suffix test accepts a bundle a grant would
+ *     "Hasna Recordings.app" and exists on disk, so a suffix test accepts a bundle a grant would
  *     do nothing for.
  *   - a renamed bundle (`/Applications/Dictation.app` carrying `com.hasna.recordings`) and a
  *     case variant (`recordings.app` on case-insensitive APFS) are genuinely this app, and

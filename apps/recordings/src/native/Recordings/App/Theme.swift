@@ -1,9 +1,7 @@
 import RecordingsLib
 import SwiftUI
 
-/// Design tokens and Liquid Glass helpers for the Recordings app. Mirrors the Hasna Notes
-/// visual system (narrow colored Liquid-Glass sidebar + one continuous canvas, hairline
-/// dividers, rounded type) with a Recordings identity: an "infinity violet→indigo" sidebar.
+/// Shared colors and glass surfaces for the minimal recordings window.
 enum Theme {
     /// Accent used for selection highlights and small affordances.
     static let accent = Color(red: 0.42, green: 0.34, blue: 0.92)
@@ -13,31 +11,17 @@ enum Theme {
     static let cornerMedium: CGFloat = 14
     static let cornerSmall: CGFloat = 9
 
-    /// Deliberately narrow, Apple-style sidebar.
-    static let sidebarWidth: CGFloat = 204
-
     /// Continuous main canvas color: pure white in light mode, system window background in dark.
     static func canvas(_ scheme: ColorScheme) -> Color {
         scheme == .dark ? Color(NSColor.windowBackgroundColor) : .white
     }
 
-    /// "Infinity violet" sidebar gradient rendered behind the Liquid Glass rows so the glass
-    /// refracts the color. Darkened in dark mode so white text stays legible.
-    static func sidebarGradient(_ scheme: ColorScheme) -> LinearGradient {
-        let colors: [Color] = scheme == .dark
-            ? [Color(red: 0.16, green: 0.09, blue: 0.34),
-               Color(red: 0.20, green: 0.12, blue: 0.44),
-               Color(red: 0.28, green: 0.12, blue: 0.46)]
-            : [Color(red: 0.30, green: 0.18, blue: 0.66),
-               Color(red: 0.28, green: 0.20, blue: 0.76),
-               Color(red: 0.44, green: 0.18, blue: 0.70)]
-        return LinearGradient(colors: colors, startPoint: .top, endPoint: .bottom)
-    }
+
 }
 
 extension View {
     /// Liquid Glass surface on macOS 26, honoring reduce-transparency. Used sparingly —
-    /// chiefly the sidebar rows and the record hero — never as boxed panels in the canvas.
+    /// chiefly the record control — never as boxed panels in the canvas.
     @ViewBuilder
     func glassSurface(cornerRadius: CGFloat, tint: Color? = nil, interactive: Bool = false) -> some View {
         modifier(GlassSurface(cornerRadius: cornerRadius, tint: tint, interactive: interactive))
