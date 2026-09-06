@@ -1,15 +1,34 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterAll, afterEach, describe, expect, it } from 'bun:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { existsSync, mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { resetEconomyCloudStorageCache } from '../lib/cloud-storage.js'
 
 // server.js resolves the storage seam (getStore()) at module scope, and that
 // resolution now FAILS CLOSED unless the fleet API env or the explicit local
 // opt-in is present. These tests serve the on-box SQLite store under
 // HASNA_ECONOMY_DB_PATH, so pin the local opt-in and a hermetic no-API env
 // BEFORE the server module is first evaluated (dynamic import, below).
+//
+// Snapshot BEFORE mutating, restore in afterAll: the pinned opt-in must not
+// leak into the rest of the suite. Left on process.env it turned the #1788
+// ambient-gate test in credential-resolution.test.ts (which resolves from the
+// LIVE process env on purpose) into a local-mode run — green alone, red in
+// the full run.
+const PINNED_ENV_KEYS = [
+  'HASNA_ECONOMY_API_URL',
+  'HASNA_ECONOMY_API_KEY',
+  'ECONOMY_API_URL',
+  'ECONOMY_API_KEY',
+  'HASNA_ECONOMY_LOCAL',
+  'ECONOMY_LOCAL',
+  'HASNA_ECONOMY_DB_PATH',
+] as const
+const savedEnv: Record<string, string | undefined> = Object.fromEntries(
+  PINNED_ENV_KEYS.map((key) => [key, process.env[key]]),
+)
 for (const key of [
   'HASNA_ECONOMY_API_URL',
   'HASNA_ECONOMY_API_KEY',
@@ -34,6 +53,17 @@ afterEach(() => {
   for (const root of roots.splice(0)) {
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
   }
+})
+
+afterAll(() => {
+  for (const key of PINNED_ENV_KEYS) {
+    const value = savedEnv[key]
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  // The seam memoizes its resolution for the process; drop the local-mode
+  // resolution this file pinned so the next file resolves its own env.
+  resetEconomyCloudStorageCache()
 })
 
 describe('economy-mcp HTTP transport', () => {

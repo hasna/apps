@@ -40,6 +40,17 @@ function spawnOtel(args: string[], port: string) {
     ...process.env,
     ECONOMY_OTEL_PORT: port,
     ECONOMY_DB: ":memory:",
+    // The sidecar follows the storage seam (fail-closed without a credential
+    // or the explicit opt-in), so the negative probe — a REAL bind — needs a
+    // legal storage lane: pin the local opt-in and blank every inherited
+    // fleet authority so the run is hermetic on any station.
+    HOME: "",
+    HASNA_ECONOMY_API_URL: "",
+    HASNA_ECONOMY_API_KEY: "",
+    ECONOMY_API_URL: "",
+    ECONOMY_API_KEY: "",
+    HASNA_ECONOMY_LOCAL: "1",
+    ECONOMY_LOCAL: "1",
   };
   const proc = Bun.spawn([process.execPath, "run", "src/otel/index.ts", ...args], {
     cwd: OTEL_ROOT,

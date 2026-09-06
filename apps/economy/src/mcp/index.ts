@@ -44,6 +44,9 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error('MCP server error:', error)
+  // The MESSAGE, not the Error object: Bun renders an Error with its code
+  // frame first, which buried the fail-closed diagnostic (the Keychain item,
+  // the credentials file and HASNA_ECONOMY_API_KEY) under a stack excerpt.
+  console.error('MCP server error:', error instanceof Error ? error.message : String(error))
   process.exit(1)
 })

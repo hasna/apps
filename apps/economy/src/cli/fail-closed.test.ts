@@ -21,6 +21,10 @@ function hermeticEnv(tempRoot: string): Record<string, string> {
   const env: Record<string, string> = {
     HOME: tempRoot,
     PATH: process.env['PATH'] ?? '',
+    // The Keychain tier is ambient (this IS the child's live env) and keys the
+    // item on HASNA_STATION -> `hostname -s`; naming a station no item exists
+    // for keeps the run hermetic on a Mac whose hostname matches its Keychain.
+    HASNA_STATION: 'no-such-station',
     HASNA_ECONOMY_API_URL: '',
     HASNA_ECONOMY_API_KEY: '',
     ECONOMY_API_URL: '',
@@ -119,5 +123,37 @@ describe('fail-closed storage resolution', () => {
     expect(result.stderr).toContain('HASNA_ECONOMY_API_URL')
     expect(existsSync(join(tempRoot, 'economy.db'))).toBe(false)
     expect(sqliteFilesUnder(tempRoot)).toEqual([])
+  })
+
+  // `economy transport` is the one surface that REPORTS a refusal instead of
+  // throwing — but a refusal is still exit 1, in text and in --json, so a
+  // script can never read "no credential resolves" as a hosted transport.
+  test('transport reports the refusal and still exits non-zero', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'economy-transport-refusal-'))
+    tempRoots.push(tempRoot)
+    const env = hermeticEnv(tempRoot)
+
+    const text = await runCli(['transport'], env)
+    expect(text.exitCode).not.toBe(0)
+    expect(text.stdout).toContain('no hosted credential resolves')
+    expect(text.stdout).toContain('HASNA_ECONOMY_API_KEY')
+
+    const json = await runCli(['transport', '--json'], env)
+    expect(json.exitCode).not.toBe(0)
+    const report = JSON.parse(json.stdout) as { ok: boolean; issues: string[] }
+    expect(report.ok).toBe(false)
+    expect(report.issues.join(' ')).toMatch(/API key/i)
+    expect(sqliteFilesUnder(tempRoot)).toEqual([])
+  })
+
+  test('transport exits 0 and reports the sqlite lane under the explicit local opt-in', async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'economy-transport-local-'))
+    tempRoots.push(tempRoot)
+    const env = hermeticEnv(tempRoot)
+    env['HASNA_ECONOMY_LOCAL'] = '1'
+
+    const json = await runCli(['transport', '--json'], env)
+    expect(json.exitCode).toBe(0)
+    expect(JSON.parse(json.stdout)).toMatchObject({ ok: true, transport: 'sqlite', source: 'local-opt-in' })
   })
 })

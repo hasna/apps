@@ -272,6 +272,9 @@ export function registerExtendedCommands(program: Command): void {
     .option('--json', 'Output JSON')
     .action((opts: { json?: boolean }) => {
       const report = economyTransportReport()
+      // The report stays printable — it IS the diagnostic — but a refusal is an
+      // exit 1: a script must never read "no credential resolves" as hosted.
+      if (!report.ok) process.exitCode = 1
 
       if (opts.json) {
         console.log(JSON.stringify(report, null, 2))

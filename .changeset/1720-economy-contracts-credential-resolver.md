@@ -40,12 +40,10 @@ What this keeps and adds:
   credential SOURCE — `/v1` authority, `api_url_source`, `api_key_source`,
   `api_key_tier` — never the key value; `--json` for the full report. It is the
   one surface that reports a refusal instead of throwing.
-- The `./sdk` store surface (`getStore`) is unchanged in shape; the bundled
-  `@hasna/economy-sdk` package (`apps/economy/sdk`, published separately)
-  canonicalises its env reads (`HASNA_ECONOMY_API_URL` / `HASNA_ECONOMY_API_KEY`
-  first, legacy `ECONOMY_*` aliases for one release) and never attaches an
-  ambient fleet key to an explicit `baseUrl` without an `apiKey`
-  (hasna/apps#1794).
+- The `./sdk` store surface (`getStore`) is unchanged in shape, and it is the
+  ONLY SDK: the Store takes no `baseUrl`, so the package can never attach an
+  ambient fleet key to a caller-supplied one (hasna/apps#1794) — the authority
+  and the credential both come from the resolver, per call.
 - `@hasna/contracts` stays a runtime dependency (economy builds with
   `--packages external`), so the published declarations importing its types
   resolve for consumers. The `/v1/machines` and `/v1/fleet` surfaces are

@@ -60,6 +60,8 @@ Shared agent lifecycle tools:
 
 - `register_agent`, `heartbeat`, `set_focus`, `list_agents`
 
+The agent registry behind these tools is opened on first use, never at startup. A hosted server (a resolved credential) keeps it in memory for the life of the process — no SQLite file is created under `~/.hasna/economy` in hosted mode; under the explicit local opt-in (`HASNA_ECONOMY_LOCAL=1`) it persists as `agent-registry.db` beside the local store and is shared by every MCP process on the box. `HASNA_AGENT_REGISTRY_DB_PATH` names a file explicitly in either lane.
+
 High-cardinality tools return compact text by default. Where the schema offers them, use `limit`, `verbose=true`, or `json=true`. Limits are clamped to 100 for MCP calls.
 
 The `sync` tool accepts `all`, any supported coding agent, or `loops`. It ingests on-box files (in local mode into the local SQLite; in cloud-client mode it reads the on-box files on this machine and pushes the rows to the shared API).

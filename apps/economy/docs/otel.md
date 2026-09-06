@@ -1,6 +1,6 @@
 # OTLP/HTTP sidecar
 
-`economy-otel` writes application/service metrics into the local Economy SQLite database:
+`economy-otel` ingests application/service metrics into Economy — forwarded to the hosted API when a credential resolves, or written to the on-box SQLite store under the explicit local opt-in (see [Storage](#storage)):
 
 ```bash
 economy-otel --port 4318
@@ -50,4 +50,10 @@ The OTLP parser reads sum or gauge data points. Metric names containing cost or 
 
 Resource and point attributes may use plain names (`model`, `session_id`, `request_id`, `project_path`, and the attribution fields above) or common dotted aliases such as `ai.model`, `session.id`, `event.id`, `service.name`, `economy.cost_center`, and `account.email`.
 
-The sidecar always opens the local SQLite database. It does not forward to a cloud API; use the authenticated REST bulk-ingest path for remote ingestion.
+## Storage
+
+The sidecar follows the same storage seam as the CLI and the MCP server ([configuration](configuration.md#climcp-cloud-client)), decided once at startup, before the listener binds:
+
+- **Hosted** — a credential resolves through the `@hasna/contracts` chain (Keychain, `~/.hasna/economy/config/credentials`, `HASNA_ECONOMY_API_KEY`): every accepted payload is ingested into a scratch in-memory store and its request/session rows are pushed to the shared API's `/v1/ingest` (idempotent upserts). The response adds `forwarded` (rows the server accepted). Nothing is written under `~/.hasna/economy`; the `cost_centers` table is not part of `/v1/ingest`, so pushed rows carry their `cost_center_id` but the server's cost-center registry is not updated by the sidecar. A failed push answers 502 and the payload is not retried.
+- **Local** — `HASNA_ECONOMY_LOCAL=1`: rows are written to the on-box `economy.db`, and the sidecar prints `economy: local mode …` on stderr once.
+- **Neither** — the sidecar fails closed: exit 1 with the resolver's diagnostic and no listener, no SQLite file.

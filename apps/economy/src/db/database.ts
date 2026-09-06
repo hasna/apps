@@ -88,6 +88,10 @@ function pathsResolverResolve(kind: PathKind, options: PathsResolverOptions): st
 export function dataDir(options: PathsResolverOptions): string {
   return pathsResolverResolve("data", options);
 }
+/** The resolver (XDG / macOS) CACHE root for an app; `HASNA_CACHE_HOME` overrides it. */
+export function cacheDir(options: PathsResolverOptions): string {
+  return pathsResolverResolve("cache", options);
+}
 import type {
   EconomyRequest,
   EconomySession,
