@@ -3,7 +3,7 @@
  */
 
 import chalk from "chalk";
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import type { Command } from "commander";
 import { execSync } from "child_process";
@@ -12,6 +12,7 @@ import { getSkill } from "../../lib/registry.js";
 import { getSkillRequirements, getSkillDependencyStatus } from "../../lib/skillinfo.js";
 import { getInstallMeta, getInstalledSkills, getSkillPath, getAgentSkillsDir, AGENT_TARGETS, AGENT_LABELS } from "../../lib/installer.js";
 import { censusHomeDrift } from "../../lib/home-census.js";
+import { EnvAssignmentError, setEnvAssignment } from "../env-assignment.js";
 import { resolveCorpusRoot } from "../../lib/home-migration.js";
 import { credentialFileMode, getAuthFilePath } from "../../lib/auth-store.js";
 import { resolveSkillsFleet } from "../../lib/fleet-credentials.js";
@@ -134,25 +135,16 @@ function handleAuth(name: string | undefined, options: { set?: string; json: boo
   const cwd = process.cwd();
   const envFilePath = join(cwd, ".env");
 
-  if (options.set) {
-    const eqIdx = options.set.indexOf("=");
-    if (eqIdx === -1) {
-      const error = `Invalid format for --set. Expected KEY=VALUE, got: ${options.set}`;
-      if (options.json) console.log(JSON.stringify({ set: false, error }));
-      else console.error(chalk.red(error));
+  if (options.set !== undefined) {
+    let key: string;
+    try {
+      key = setEnvAssignment(envFilePath, options.set);
+    } catch (error) {
+      const message = error instanceof EnvAssignmentError ? error.message : "Cannot safely update the project .env file.";
+      if (options.json) console.log(JSON.stringify({ set: false, error: message }));
+      else console.error(chalk.red(message));
       process.exitCode = 1; return;
     }
-    const key = options.set.slice(0, eqIdx).trim();
-    const value = options.set.slice(eqIdx + 1);
-    if (!key) {
-      if (options.json) console.log(JSON.stringify({ set: false, error: "Key cannot be empty" }));
-      else console.error(chalk.red("Key cannot be empty"));
-      process.exitCode = 1; return;
-    }
-    let existing = existsSync(envFilePath) ? readFileSync(envFilePath, "utf-8") : "";
-    const keyPattern = new RegExp(`^${key}=.*$`, "m");
-    const updated = keyPattern.test(existing) ? existing.replace(keyPattern, `${key}=${value}`) : existing.endsWith("\n") || existing === "" ? existing + `${key}=${value}\n` : existing + `\n${key}=${value}\n`;
-    writeFileSync(envFilePath, updated, "utf-8");
     if (options.json) console.log(JSON.stringify({ set: true, key, path: envFilePath }));
     else console.log(chalk.green(`Set ${key} in ${envFilePath}`));
     return;
