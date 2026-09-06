@@ -265,7 +265,9 @@ test("same-turn signal and createRun resolution finalize exactly once in either 
 
 test.skipIf(process.platform === "win32")("Prime launch cancellation during supervisor readiness cleans up before native client spawn",async()=>{
   const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});
-  const dir=await mkdtemp(join(root,"prime-signal-"));const runtime="/Users/hasna/Workspace/scratch/u";await mkdir(runtime,{recursive:true});
+  const dir=await mkdtemp(join(root,"prime-signal-"));
+  // Keep the owned runtime short enough for Unix socket paths on macOS and Linux.
+  const runtime=await mkdtemp(join(homedir(),"Workspace","scratch","u"));
   const executable=join(dir,"prime-fixture"),runner=join(dir,"runner.ts"),spawned=join(dir,"daemon-spawned"),clientStarted=join(dir,"client-started");
   const launcherSource = await Bun.file(join(process.cwd(),"src/launcher.ts")).exists() ? join(process.cwd(),"src/launcher.ts") : join(process.cwd(),"apps/switcher/src/launcher.ts");
   await writeFile(executable,`#!${process.execPath}
@@ -296,7 +298,7 @@ try{const code=await launch(client,'fixture',{executable:fixture,cwd:${JSON.stri
     expect(code,stderr).toBe(143);expect(await readFile(clientStarted).catch(()=>"")).toBe("");
     const socket=await readFile(spawned,"utf8");expect(await readFile(socket).catch(()=>"")).toBe("");expect(await readdir(join(dir,"state")).catch(()=>[])).toEqual(["sessions"]);
     await Bun.sleep(1600);expect(await readFile(socket).catch(()=>"")).toBe("");
-  } finally {if(!child.killed)child.kill("SIGKILL");await rm(dir,{recursive:true,force:true});}
+  } finally {if(!child.killed)child.kill("SIGKILL");await rm(dir,{recursive:true,force:true});await rm(runtime,{recursive:true,force:true});}
 },15_000);
 
 test.skipIf(process.platform === "win32")("normal exit and timeout stop owned harness descendants before removing launch state",async()=>{
