@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { KeychainCommandRunner } from "@hasna/contracts/client";
 import {
   ContactsClientConfigurationError,
   resolveContactsClientTransport,
@@ -13,7 +14,33 @@ const tempHomes: string[] = [];
 function env(overrides: Record<string, string> = {}): Record<string, string> {
   const tempHome = mkdtempSync(join(tmpdir(), "contacts-transport-home-"));
   tempHomes.push(tempHome);
-  return { HOME: tempHome, XDG_CONFIG_HOME: join(tempHome, "config"), ...overrides };
+  return { HOME: tempHome, ...overrides };
+}
+
+function writeCredentialsFile(home: string, lines: string[]): void {
+  const dir = join(home, ".hasna", "contacts", "config");
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "credentials");
+  writeFileSync(file, lines.join("\n"));
+  chmodSync(file, 0o600);
+}
+
+function captureFetch() {
+  const calls: Array<{ url: string; key: string | null }> = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    calls.push({
+      url: String(input),
+      key: new Headers(init?.headers).get("x-api-key"),
+    });
+    return Response.json([]);
+  }) as typeof fetch;
+  return {
+    calls,
+    restore: () => {
+      globalThis.fetch = previousFetch;
+    },
+  };
 }
 
 afterEach(() => {
@@ -27,19 +54,24 @@ describe("canonical contacts client transport", () => {
     expect(() => resolveContactsStorageClient("contacts", env())).toThrow(ContactsClientConfigurationError);
   });
 
-  test("does not treat a key without an authority as configured", () => {
-    expect(resolveContactsClientTransport("contacts", env({ HASNA_CONTACTS_API_KEY: "test-key" }))).toMatchObject({
-      transport: "unconfigured",
-      configured: false,
+  test("resolves a key without an explicit authority to the fleet gateway", () => {
+    const resolution = resolveContactsClientTransport("contacts", env({ HASNA_CONTACTS_API_KEY: "test-key" }));
+    expect(resolution).toMatchObject({
+      transport: "https",
+      configured: true,
+      baseUrl: "https://api.hasna.com/contacts/v1",
+      apiUrlSource: "default",
       apiKeyPresent: true,
+      apiKeySource: "HASNA_CONTACTS_API_KEY",
+      apiKeyTier: "env",
     });
+    expect(resolveContactsStorageClient("contacts", env({ HASNA_CONTACTS_API_KEY: "test-key" })).transport).toBe("https");
   });
 
   test("does not treat an authority without a key as configured", () => {
-    expect(resolveContactsClientTransport("contacts", env({ HASNA_CONTACTS_API_URL: "https://contacts.example.invalid" }))).toMatchObject({
-      transport: "unconfigured",
-      configured: false,
-    });
+    const resolution = resolveContactsClientTransport("contacts", env({ HASNA_CONTACTS_API_URL: "https://contacts.example.invalid" }));
+    expect(resolution).toMatchObject({ transport: "unconfigured", configured: false, misconfigured: true });
+    expect(resolution.issue).toContain("no API key");
   });
 
   test("requires HTTPS even for loopback", () => {
@@ -51,6 +83,13 @@ describe("canonical contacts client transport", () => {
     expect(resolution.issue).toContain("CONTACTS_API_HTTPS_REQUIRED");
   });
 
+  test("rejects plain HTTP for a non-loopback authority even lazily", () => {
+    expect(() => resolveContactsClientTransport("contacts", env({
+      HASNA_CONTACTS_API_URL: "http://contacts.example.invalid",
+      HASNA_CONTACTS_API_KEY: "test-key",
+    }))).toThrow("CONTACTS_CLIENT_CONFIG_INVALID");
+  });
+
   test("accepts one explicit authenticated HTTPS authority", () => {
     const resolved = resolveContactsStorageClient("contacts", env({
       HASNA_CONTACTS_API_URL: "https://contacts.example.invalid",
@@ -58,6 +97,13 @@ describe("canonical contacts client transport", () => {
     }));
     expect(resolved.transport).toBe("https");
     expect(resolved.client.baseUrl).toBe("https://contacts.example.invalid/v1");
+    expect(resolved.resolution).toMatchObject({
+      transport: "https",
+      configured: true,
+      apiUrlSource: "HASNA_CONTACTS_API_URL",
+      apiKeySource: "HASNA_CONTACTS_API_KEY",
+      apiKeyTier: "env",
+    });
   });
 
   test("rejects retired database and mode selectors", () => {
@@ -84,6 +130,53 @@ describe("canonical contacts client transport", () => {
     }))).toThrow("CONTACTS_CLIENT_CONFIG_INVALID");
   });
 
+  test("resolves the disk tier from a fake HOME credentials file", () => {
+    const home = mkdtempSync(join(tmpdir(), "contacts-disk-home-"));
+    tempHomes.push(home);
+    writeCredentialsFile(home, ["HASNA_CONTACTS_API_KEY=disk-key"]);
+    const resolution = resolveContactsClientTransport("contacts", { HOME: home });
+    expect(resolution).toMatchObject({
+      transport: "https",
+      configured: true,
+      baseUrl: "https://api.hasna.com/contacts/v1",
+      apiKeyPresent: true,
+      apiKeyTier: "disk",
+    });
+    expect(resolution.apiKeySource).toContain(".hasna/contacts/config/credentials");
+  });
+
+  test("refuses an ambient-mode-untrusted credential file loudly", () => {
+    const home = mkdtempSync(join(tmpdir(), "contacts-unsafe-home-"));
+    tempHomes.push(home);
+    const dir = join(home, ".hasna", "contacts", "config");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "credentials"), "HASNA_CONTACTS_API_KEY=world-readable-key\n"); // default 0644
+    expect(() => resolveContactsClientTransport("contacts", { HOME: home })).toThrow(/owner-only/);
+  });
+
+  test("resolves the Keychain tier through an injected security runner", () => {
+    const runner: KeychainCommandRunner = (argv) => {
+      const service = argv.find((arg) => arg.startsWith("hasna.credentials.contacts."));
+      return {
+        status: 0,
+        stdout: service?.endsWith("api-key") ? "keychain-key" : "https://keychain.example.invalid",
+        stderr: "",
+      };
+    };
+    const resolution = resolveContactsClientTransport("contacts", env(), {
+      keychain: { enabled: true, platform: "darwin", run: runner },
+    });
+    expect(resolution).toMatchObject({
+      transport: "https",
+      configured: true,
+      baseUrl: "https://keychain.example.invalid/v1",
+      apiKeyPresent: true,
+      apiKeyTier: "keychain",
+    });
+    expect(resolution.apiUrlSource).toContain("keychain:hasna.credentials.contacts.api-url@");
+    expect(resolution.apiKeySource).toContain("keychain:hasna.credentials.contacts.api-key@");
+  });
+
   test("binds a rotating credential to its original authority", async () => {
     const mutable = env({
       HASNA_CONTACTS_API_URL: "https://one.example.invalid",
@@ -102,21 +195,67 @@ describe("canonical contacts client transport", () => {
     });
     const client = resolveContactsStorageClient("contacts", mutable).client;
     mutable.HASNA_CONTACTS_API_KEY = "replacement-key";
-    const previousFetch = globalThis.fetch;
-    let seenUrl = "";
-    let seenKey = "";
-    globalThis.fetch = (async (input, init) => {
-      seenUrl = String(input);
-      seenKey = new Headers(init?.headers).get("x-api-key") ?? "";
-      return Response.json([]);
-    }) as typeof fetch;
+    const capture = captureFetch();
     try {
       await client.list("contacts");
     } finally {
-      globalThis.fetch = previousFetch;
+      capture.restore();
     }
-    expect(seenUrl).toBe("https://one.example.invalid/v1/contacts");
-    expect(seenKey).toBe("replacement-key");
-    expect(seenKey).not.toBe("first-key");
+    expect(capture.calls[0]).toEqual({
+      url: "https://one.example.invalid/v1/contacts",
+      key: "replacement-key",
+    });
+  });
+
+  test("re-reads the disk credential fresh on every request", async () => {
+    const home = mkdtempSync(join(tmpdir(), "contacts-rotation-home-"));
+    tempHomes.push(home);
+    writeCredentialsFile(home, ["HASNA_CONTACTS_API_KEY=disk-first"]);
+    const client = resolveContactsStorageClient("contacts", { HOME: home }).client;
+    const capture = captureFetch();
+    try {
+      await client.list("contacts");
+      writeCredentialsFile(home, ["HASNA_CONTACTS_API_KEY=disk-second"]);
+      await client.list("contacts");
+    } finally {
+      capture.restore();
+    }
+    expect(capture.calls.map((call) => call.key)).toEqual(["disk-first", "disk-second"]);
+  });
+
+  test("keeps the Keychain gate ambient across the per-request snapshot", async () => {
+    // A caller-built env that @hasna/contracts itself marked ambient (its
+    // snapshot symbol) must keep the Keychain tier enabled when the request
+    // path copies it — the #1788 regression this package must not ship.
+    const marked = env({
+      HASNA_CONTACTS_API_URL: "https://one.example.invalid",
+      HASNA_CONTACTS_API_KEY: "first-key",
+    });
+    Object.defineProperty(marked, Symbol.for("hasna:contracts:ambientClientEnvironment"), {
+      value: true,
+      enumerable: false,
+    });
+    const client = resolveContactsStorageClient("contacts", marked).client;
+    marked.HASNA_CONTACTS_API_KEY = "second-key";
+    const capture = captureFetch();
+    try {
+      await client.list("contacts");
+    } finally {
+      capture.restore();
+    }
+    expect(capture.calls[0]?.key).toBe("second-key");
+  });
+
+  test("transport report names sources and tiers without exposing values", () => {
+    const resolution = resolveContactsClientTransport("contacts", env({
+      HASNA_CONTACTS_API_URL: "https://contacts.example.invalid",
+      HASNA_CONTACTS_API_KEY: "super-secret-value",
+    }));
+    const report = JSON.stringify(resolution);
+    expect(resolution.apiKeySource).toBe("HASNA_CONTACTS_API_KEY");
+    expect(resolution.apiUrlSource).toBe("HASNA_CONTACTS_API_URL");
+    expect(resolution.apiKeyTier).toBe("env");
+    expect(resolution.baseUrl).toBe("https://contacts.example.invalid/v1");
+    expect(report).not.toContain("super-secret-value");
   });
 });
