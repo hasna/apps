@@ -168,6 +168,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills categories` | | List all categories with skill counts |
 | `skills tags` | | List all unique tags with occurrence counts |
 | `skills doctor` | | Check env vars, system deps, and pinned skill health |
+| `skills env-check [name]` | `check-env` | Show required environment variables; `--set KEY=VALUE` updates the project's `.env` |
 | `skills test [name]` | | Test skill readiness (env, system, npm deps) |
 | `skills outdated` | | Compare pinned vs registry versions |
 | `skills auth login --api-key <key>` | | Verify and store a Skills API key |
@@ -197,6 +198,21 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills mcp --register claude` | | Register the Skills MCP server in an agent config (also `codex`, `gemini`, `opencode`, `all`) |
 | `skills self-update` | | Update this package to the latest version |
 | `skills completion <shell>` | | Generate shell completions (bash, zsh, fish) |
+
+### Local environment assignments
+
+`skills env-check --set 'KEY=value'` writes one literal value to the current
+project's `.env`. Keys must match `[A-Za-z_][A-Za-z0-9_]*`. Empty values and `=`
+within a value are supported; output confirms the key and path without printing
+the value. Quote the shell argument when it contains shell metacharacters.
+
+The writer preserves unrelated lines, comments, line endings and existing file
+permissions. New files use mode `0600`. Symlinks and special files are rejected.
+Values containing control characters, newlines, all three quote delimiters, or an
+odd trailing backslash are rejected because literal Bun dotenv serialization is
+not supported for those cases. Multiline or ambiguous existing assignments also
+require manual editing; refusal leaves the file unchanged. Literal round trips
+are tested with Bun 1.3.14 and 1.4.0.
 
 ### Common Options
 
