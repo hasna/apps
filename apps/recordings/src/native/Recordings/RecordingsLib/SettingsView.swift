@@ -4,29 +4,29 @@ import SwiftUI
 public struct SettingsView: View {
     @ObservedObject public var engine: RecordingEngine
     @ObservedObject public var shortcuts: VoiceShortcuts
-    @ObservedObject public var projectStore: ProjectStore
-    @AppStorage("openAIAPIKey") private var openAIAPIKey = ""
+    @ObservedObject public var preferences: ProjectStore
+    @State private var openAIAPIKey = ""
+    @State private var providerStatus = ""
 
-    public init(engine: RecordingEngine, shortcuts: VoiceShortcuts, projectStore: ProjectStore) {
+    public init(engine: RecordingEngine, shortcuts: VoiceShortcuts, preferences: ProjectStore) {
         self.engine = engine
         self.shortcuts = shortcuts
-        self.projectStore = projectStore
+        self.preferences = preferences
     }
 
     public var body: some View {
         TabView {
             generalTab.tabItem { Label("General", systemImage: "gear") }
-            projectsTab.tabItem { Label("Projects", systemImage: "folder") }
             shortcutsTab.tabItem { Label("Voice Shortcuts", systemImage: "text.badge.star") }
         }
         .frame(width: 520, height: 500)
-        .alert("Project Settings Error", isPresented: Binding(
-            get: { projectStore.persistenceError != nil },
-            set: { if !$0 { projectStore.clearPersistenceError() } }
+        .alert("Settings Error", isPresented: Binding(
+            get: { preferences.persistenceError != nil },
+            set: { if !$0 { preferences.clearPersistenceError() } }
         )) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(projectStore.persistenceError ?? "The project settings could not be saved.")
+            Text(preferences.persistenceError ?? "The settings could not be saved.")
         }
     }
 
@@ -34,18 +34,38 @@ public struct SettingsView: View {
 
     private var generalTab: some View {
         Form {
+            ServiceConnectionView(home: engine.home)
             Section("OpenAI") {
                 SecureField("API key", text: $openAIAPIKey)
                     .textFieldStyle(.roundedBorder)
-                    .onChange(of: openAIAPIKey) {
-                        // Keep the CLI config in sync — final transcription shells out to it.
-                        try? OpenAIAPIKeyStore.save(key: openAIAPIKey, homePath: engine.home)
+                Button("Save OpenAI Key") {
+                    do {
+                        try OpenAIAPIKeyStore.save(key: openAIAPIKey, homePath: engine.home)
+                        openAIAPIKey = ""
+                        providerStatus = "OpenAI key saved in Keychain."
+                    } catch {
+                        providerStatus = error.localizedDescription
+                    }
+                }
+                .disabled(openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Connect Saved Key") {
+                    do {
+                        providerStatus = (try OpenAIAPIKeyStore.loadKeychain(allowInteraction: true))?.isEmpty == false
+                            ? "OpenAI key available from Keychain."
+                            : "No saved OpenAI key found in Keychain."
+                    } catch { providerStatus = error.localizedDescription }
+                }
+                Text(providerStatus).foregroundStyle(.secondary)
+                    .onAppear {
+                        providerStatus = OpenAIAPIKeyStore.load(homePath: engine.home).isEmpty
+                            ? "Add an OpenAI key for transcription."
+                            : "OpenAI key available for transcription."
                     }
                 Picker("Language", selection: $engine.transcriptionLanguage) {
                     Text("English").tag("en")
                     Text("Auto Detect").tag("auto")
                 }
-                Text("Used for live transcription and the final paste. Stored in ~/.hasna/recordings/config.json.")
+                Text("Used for live transcription and the final paste. New keys are stored in macOS Keychain.")
                     .foregroundStyle(.secondary)
             }
 
@@ -143,82 +163,26 @@ public struct SettingsView: View {
             }
 
             Section("Transcription Cleanup") {
-                Picker("Mode", selection: $projectStore.settings.postProcessingMode) {
+                Picker("Mode", selection: $preferences.settings.postProcessingMode) {
                     ForEach(PostProcessingMode.allCases) { mode in
                         Text(mode.label).tag(mode.rawValue)
                     }
                 }
                 .pickerStyle(.segmented)
-                .onChange(of: projectStore.settings.postProcessingMode) {
-                    try? projectStore.save()
+                .onChange(of: preferences.settings.postProcessingMode) {
+                    try? preferences.save()
                 }
-                TextEditor(text: $projectStore.settings.globalSystemPrompt)
+                TextEditor(text: $preferences.settings.globalSystemPrompt)
                     .frame(height: 80)
-                    .onChange(of: projectStore.settings.globalSystemPrompt) {
-                        try? projectStore.save()
+                    .onChange(of: preferences.settings.globalSystemPrompt) {
+                        try? preferences.save()
                     }
                 Text("Instructions for post-transcription cleanup and formatting.")
                     .foregroundStyle(.secondary)
             }
-            .disabled(!projectStore.canMutateProjects)
+            .disabled(!preferences.canMutateProjects)
         }
         .formStyle(.grouped).padding()
-    }
-
-    // MARK: - Projects
-
-    @State private var newProjectName = ""
-    @State private var editingProject: RecProject?
-
-    private var projectsTab: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                TextField("New project name", text: $newProjectName)
-                    .textFieldStyle(.roundedBorder)
-                Button("Add") {
-                    guard !newProjectName.isEmpty else { return }
-                    let name = newProjectName
-                    Task {
-                        do {
-                            try await projectStore.addProject(name: name)
-                            newProjectName = ""
-                        } catch {}
-                    }
-                }
-                .disabled(newProjectName.isEmpty)
-            }
-            .padding()
-
-            Divider()
-
-            if projectStore.settings.projects.isEmpty {
-                Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "folder").font(.largeTitle).foregroundStyle(.quaternary)
-                    Text("No projects yet").foregroundStyle(.secondary)
-                }
-                Spacer()
-            } else {
-                List {
-                    ForEach(projectStore.settings.projects) { project in
-                        ProjectRow(project: project) {
-                            editingProject = project
-                        }
-                    }
-                    .onDelete { indexSet in
-                        for i in indexSet {
-                            try? projectStore.removeProject(id: projectStore.settings.projects[i].id)
-                        }
-                    }
-                }
-            }
-        }
-        .disabled(!projectStore.canMutateProjects)
-        .sheet(item: $editingProject) { project in
-            ProjectEditView(project: project, store: projectStore) {
-                editingProject = nil
-            }
-        }
     }
 
     // MARK: - Voice Shortcuts
@@ -261,75 +225,5 @@ public struct SettingsView: View {
                 }
             }
         }
-    }
-}
-
-// MARK: - Project Row
-
-struct ProjectRow: View {
-    let project: RecProject
-    let onEdit: () -> Void
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(project.name)
-                if let path = project.path, !path.isEmpty {
-                    Text(path).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
-            Spacer()
-            Button("Edit") { onEdit() }
-                .controlSize(.small)
-        }
-    }
-}
-
-// MARK: - Project Edit
-
-struct ProjectEditView: View {
-    @State var project: RecProject
-    let store: ProjectStore
-    let onDismiss: () -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Form {
-                Section("Project") {
-                    TextField("Name", text: $project.name)
-                    TextField("Path", text: Binding(
-                        get: { project.path ?? "" },
-                        set: { project.path = $0.isEmpty ? nil : $0 }
-                    ))
-                    .textFieldStyle(.roundedBorder)
-                }
-
-                Section("Transcriber Instructions") {
-                    TextEditor(text: Binding(
-                        get: { project.systemPrompt ?? "" },
-                        set: { project.systemPrompt = $0.isEmpty ? nil : $0 }
-                    ))
-                    .frame(height: 100)
-                    Text("Project-specific cleanup and formatting instructions.")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .formStyle(.grouped)
-            .disabled(!store.canMutateProjects)
-
-            HStack {
-                Spacer()
-                Button("Cancel") { onDismiss() }
-                Button("Save") {
-                    do {
-                        try store.updateProject(project)
-                        onDismiss()
-                    } catch {}
-                }
-                .disabled(!store.canMutateProjects)
-            }
-            .padding()
-        }
-        .frame(width: 420, height: 340)
     }
 }

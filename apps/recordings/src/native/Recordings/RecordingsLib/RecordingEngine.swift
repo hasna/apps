@@ -95,7 +95,7 @@ struct FrontmostAppSnapshot: Equatable, Sendable {
 
 /// The one capability `RecordingEngine` needs from an audio recorder; lets tests run the
 /// production start path without microphone hardware or TCC grants.
-protocol PCMRecordingSource: AnyObject {
+protocol PCMRecordingSource: AnyObject, Sendable {
     func start() throws
     func stop()
 }
@@ -854,7 +854,7 @@ public final class RecordingEngine: ObservableObject {
     private var deliveryBlockedReasonGeneration: UInt64?
     /// Advanced fallback policy (Settings only): when off, every recording is dictated
     /// literally and the classifier is never consulted.
-    @Published public var intentDetectionEnabled: Bool = true {
+    @Published public var intentDetectionEnabled: Bool = false {
         didSet {
             UserDefaults.standard.set(intentDetectionEnabled, forKey: "intentDetectionEnabled")
         }
@@ -891,7 +891,17 @@ public final class RecordingEngine: ObservableObject {
     private var targetAppPid: pid_t?
     private var pasteTargetProcessIdentityByGeneration: [UInt64: PasteTargetProcessIdentity] = [:]
     public var projectStore: ProjectStore?
+    /// The minimal app uses only global cleanup preferences from the legacy settings
+    /// file. Keeping this separate prevents old active projects from tagging new captures.
+    public var globalRecordingPreferences: ProjectStore?
     public var voiceShortcuts: VoiceShortcuts?
+
+    var recordingCleanupPreferences: (prompt: String, mode: String) {
+        if let settings = globalRecordingPreferences?.settings {
+            return (settings.globalSystemPrompt, (PostProcessingMode(rawValue: settings.postProcessingMode) ?? .auto).rawValue)
+        }
+        return (projectStore?.effectiveSystemPrompt ?? "", projectStore?.effectivePostProcessingMode ?? PostProcessingMode.auto.rawValue)
+    }
 
     // MARK: - Injectable boundaries
     // Production defaults perform the real I/O; tests replace them to drive the production
@@ -1194,7 +1204,7 @@ public final class RecordingEngine: ObservableObject {
         log("RecordingEngine init; microphone=\(microphonePermissionLabel); accessibility=\(accessibilityPermissionLabel)")
 
         // Load preferences
-        intentDetectionEnabled = UserDefaults.standard.object(forKey: "intentDetectionEnabled") as? Bool ?? true
+        intentDetectionEnabled = UserDefaults.standard.object(forKey: "intentDetectionEnabled") as? Bool ?? false
         transcriptionLanguage = OpenAIAPIKeyStore.loadLanguage(homePath: home)
         useFnKey = UserDefaults.standard.object(forKey: "useFnKey") as? Bool ?? false
         if KeyboardShortcuts.getShortcut(for: .toggleRecording) == nil {
@@ -1722,6 +1732,7 @@ public final class RecordingEngine: ObservableObject {
         // recording pipeline awaits this context only after the recorder has stopped.
         let generation = recordingGeneration
         let projectStore = projectStore
+        let cleanupPreferences = recordingCleanupPreferences
         let targetBundleIdentifierForProjects = targetAppBundleIdentifier
         let transcriptionLanguageAtStart = transcriptionLanguage
         let intentDetectionEnabledAtStart = intentDetectionEnabled
@@ -1756,8 +1767,8 @@ public final class RecordingEngine: ObservableObject {
                 activeProjectName: projectStore?.activeProject?.name,
                 processing: RecordingProcessingConfiguration(
                     transcriptionPrompt: modelSelection.transcriptionPrompt,
-                    transcriberPrompt: projectStore?.effectiveSystemPrompt ?? "",
-                    postProcessingMode: projectStore?.effectivePostProcessingMode ?? PostProcessingMode.auto.rawValue,
+                    transcriberPrompt: cleanupPreferences.prompt,
+                    postProcessingMode: cleanupPreferences.mode,
                     transcriptionLanguage: transcriptionLanguageAtStart,
                     transcriptionModel: modelSelection.transcriptionModel,
                     transcriberModel: modelSelection.transcriberModel,
@@ -2208,12 +2219,12 @@ public final class RecordingEngine: ObservableObject {
 
         let recorder = nativeRecorder
         nativeRecorder = nil
-        recorder?.stop()
 
         isRecording = false
         isTranscribing = true
 
         guard let captureConfiguration = activeCaptureConfiguration else {
+            recorder?.stop()
             realtimeClient?.stop()
             realtimeClient = nil
             streamingTask?.cancel()
@@ -2240,6 +2251,9 @@ public final class RecordingEngine: ObservableObject {
         self.pcmStreamPipe = nil
 
         Task {
+            // AVAudioEngine shutdown can block for hundreds of milliseconds. Keep
+            // receiving realtime text and repainting while capture drains completely.
+            await Task.detached(priority: .userInitiated) { recorder?.stop() }.value
             if let pcmStreamPipe {
                 self.recordedPCM = await pcmStreamPipe.finish()
             }
@@ -4792,14 +4806,17 @@ enum CLIRunner: Sendable {
         _ args: [String],
         home: String,
         timeout: TimeInterval = 120,
-        totalWallClockBudget: TimeInterval? = nil
+        totalWallClockBudget: TimeInterval? = nil,
+        environment suppliedEnvironment: [String: String]? = nil
     ) -> String {
         let command = resolveCommand(home: home)
         let arguments = command.argumentsPrefix + args
-        let environment = ProcessInfo.processInfo.environment.merging([
-            "PATH": "\(home)/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        ]) { _, new in new }
         do {
+            let environment = try suppliedEnvironment ?? ServiceAPIConfiguration.childEnvironment(
+                base: OpenAIAPIKeyStore.childEnvironment(base: ProcessInfo.processInfo.environment.merging([
+                    "PATH": "\(home)/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+                ]) { _, new in new }, homePath: home)
+            )
             let output = try runExecutable(
                 command.executable,
                 arguments: arguments,
@@ -5611,7 +5628,7 @@ enum CLIRunner: Sendable {
         }
     }
 
-    static func parseError(_ output: String) -> String? {
+    static func parseError(_ output: String, serviceAPI: Bool = false) -> String? {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("ERROR:") else { return nil }
         let message = NativeErrorSanitizer.sanitize(
@@ -5620,10 +5637,12 @@ enum CLIRunner: Sendable {
         let lowercased = message.lowercased()
         if lowercased.contains("401") || lowercased.contains("incorrect api key")
             || lowercased.contains("invalid_api_key") || lowercased.contains("invalid or expired") {
+            if serviceAPI { return "Recordings API authentication failed — check the API connection in Settings" }
             return "OpenAI API key invalid or expired — update it in Recordings Settings"
         }
         if lowercased.contains("429") || lowercased.contains("exceeded your current quota")
             || lowercased.contains("insufficient_quota") || lowercased.contains("quota exceeded") {
+            if serviceAPI { return "Recordings API request limit reached — try again later" }
             return "OpenAI quota exceeded — check the OpenAI account billing"
         }
         if message.contains("OpenAI API key not configured") {

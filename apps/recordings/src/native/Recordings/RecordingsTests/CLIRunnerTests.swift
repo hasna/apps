@@ -8,7 +8,7 @@ struct CLIRunnerTests {
     func bundledCLIIsPreferred() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("recordings-bundled-cli-\(UUID().uuidString)")
-        let app = root.appendingPathComponent("HasnaRecordings.app")
+        let app = root.appendingPathComponent("Hasna Recordings.app")
         let helper = app.appendingPathComponent("Contents/Helpers/recordings")
         let home = root.appendingPathComponent("home")
         let external = home.appendingPathComponent(".bun/bin/recordings")
@@ -34,7 +34,7 @@ struct CLIRunnerTests {
     func packagedAppDoesNotUseGlobalFallback() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("recordings-missing-companion-\(UUID().uuidString)")
-        let app = root.appendingPathComponent("HasnaRecordings.app")
+        let app = root.appendingPathComponent("Hasna Recordings.app")
         let home = root.appendingPathComponent("home")
         let external = home.appendingPathComponent(".bun/bin/recordings")
         try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
@@ -1275,6 +1275,12 @@ struct CLIRunnerTests {
         #expect(CLIRunner.parseError(input) == "OpenAI quota exceeded — check the OpenAI account billing")
     }
 
+    @Test("Service authentication and quota errors identify the Recordings API")
+    func serviceErrors() {
+        #expect(CLIRunner.parseError("ERROR: 401 Unauthorized", serviceAPI: true) == "Recordings API authentication failed — check the API connection in Settings")
+        #expect(CLIRunner.parseError("ERROR: 429 Too Many Requests", serviceAPI: true) == "Recordings API request limit reached — try again later")
+    }
+
     @Test("parseError truncates long messages to 120 chars")
     func truncation() {
         let longMsg = String(repeating: "a", count: 200)
@@ -1297,9 +1303,12 @@ struct CLIRunnerTests {
         #expect(result?.contains(token) == false)
         #expect(result?.contains("[REDACTED]") == true)
 
+        let plainFixture = "plain-synthetic-secret"
+        let clientFixture = "client-synthetic-secret"
+        let passwordFixture = "password-synthetic-secret"
         let structured = CLIRunner.parseError(
-            "ERROR: OPENAI_API_KEY=plain-synthetic-secret CLIENT_SECRET=client-synthetic-secret "
-                + "PASSWORD=password-synthetic-secret payload={\"api_key\":\"json-synthetic-secret\","
+            "ERROR: OPENAI_API_KEY=\(plainFixture) CLIENT_SECRET=\(clientFixture) "
+                + "PASSWORD=\(passwordFixture) payload={\"api_key\":\"json-synthetic-secret\","
                 + "\"private_key\":\"private-synthetic-secret\"}"
         )
         #expect(structured?.contains("plain-synthetic-secret") == false)

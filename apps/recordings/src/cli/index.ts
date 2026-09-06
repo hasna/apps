@@ -231,7 +231,7 @@ program
     });
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(recording, null, 2));
+      await printJSON(recording);
     } else {
       console.log(
         chalk.dim(`\nSaved as ${recording.id.slice(0, 8)}`)
@@ -308,7 +308,7 @@ program
     }, recordingId);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(recording, null, 2));
+      await printJSON(recording);
     } else if (processed.mode === "enhanced") {
       console.log(chalk.green("Enhanced:"));
       console.log(processed.text);
@@ -391,7 +391,7 @@ program
     }, recordingId);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(recording, null, 2));
+      await printJSON(recording);
     } else if (processed.mode === "enhanced") {
       console.log(processed.text);
     } else {
@@ -426,17 +426,11 @@ program
     try {
       const result = await enhanceText(text, instruction, config);
       if (parentOpts.json) {
-        console.log(
-          JSON.stringify(
-            {
-              raw_text: text,
-              processed_text: result.enhanced,
-              model_used: result.model,
-            },
-            null,
-            2
-          )
-        );
+        await printJSON({
+          raw_text: text,
+          processed_text: result.enhanced,
+          model_used: result.model,
+        });
       } else {
         console.log(result.enhanced);
       }
@@ -488,7 +482,7 @@ program
       });
 
       if (parentOpts.json) {
-        console.log(JSON.stringify(recording, null, 2));
+        await printJSON(recording);
       } else {
         console.log(chalk.green(`✓ Saved recording ${recording.id}`));
       }
@@ -531,7 +525,7 @@ program
     const recordings = await store.listRecordings(filter);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(recordings, null, 2));
+      await printJSON(recordings);
       return;
     }
     const total = await countStoreRecordings(store, withoutPagination(filter));
@@ -591,7 +585,7 @@ program
     const results = await store.searchRecordings(query, filter);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(results, null, 2));
+      await printJSON(results);
       return;
     }
     const total = await countStoreRecordings(store, withoutPagination({ ...filter, search: query }));
@@ -632,7 +626,7 @@ program
     const stats = await getStore().getRecordingStats();
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(stats, null, 2));
+      await printJSON(stats);
       return;
     }
 
@@ -674,7 +668,7 @@ program
       : pageItems(agents, pagination);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(page, null, 2));
+      await printJSON(page);
       return;
     }
 
@@ -712,7 +706,7 @@ projectCommand
     const parentOpts = program.opts();
     const project = await getStore().registerProject(opts.name, opts.path, opts.description);
     if (parentOpts.json) {
-      console.log(JSON.stringify(project, null, 2));
+      await printJSON(project);
       return;
     }
     console.log(`${chalk.cyan(truncateText(project.id, 80))} ${chalk.bold(truncateText(project.name, 80))} — ${truncatePath(project.path, 120)}`);
@@ -735,7 +729,7 @@ program
       : pageItems(projects, pagination);
 
     if (parentOpts.json) {
-      console.log(JSON.stringify(page, null, 2));
+      await printJSON(page);
       return;
     }
 
@@ -802,8 +796,8 @@ const appCommand = program
 
 appCommand
   .command("install")
-  .description("Install a release or explicitly approved local-only HasnaRecordings.app artifact")
-  .requiredOption("--artifact <path>", "Finalized HasnaRecordings.app ZIP artifact")
+  .description("Install a release or explicitly approved local-only Hasna Recordings.app artifact")
+  .requiredOption("--artifact <path>", "Finalized Hasna Recordings.app ZIP artifact")
   .requiredOption("--manifest <path>", "Artifact provenance manifest")
   .option("--envelope <path>", "Signed release envelope (required for release artifacts)")
   .option("--expected-team-id <team>", "Required Developer ID TeamIdentifier for release artifacts")
@@ -875,7 +869,7 @@ appCommand
     launchTimeout?: string;
   }) => {
     if (process.platform !== "darwin") {
-      console.error(chalk.red("HasnaRecordings.app installation is only supported on macOS"));
+      console.error(chalk.red("Hasna Recordings.app installation is only supported on macOS"));
       process.exit(1);
     }
     if (opts.variant !== "full" && opts.variant !== "bar") {
@@ -938,7 +932,7 @@ appCommand
       // failing with "broker client is not installed". The update client owns the cohort and
       // rollback state, so upgrading the resolved bundle in place preserves anti-rollback.
       const home = process.env.HOME || process.env.USERPROFILE || "";
-      const canonicalAppPath = pathJoin(home, "Applications", "HasnaRecordings.app");
+      const canonicalAppPath = pathJoin(home, "Applications", "Hasna Recordings.app");
       const legacyInstallPaths = findLegacyMacOSAppPaths(home, canonicalAppPath);
       const installedAppPath = resolveInstalledAppPath(home, canonicalAppPath, legacyInstallPaths);
       const updateClientPath = pathJoin(installedAppPath, "Contents", "Helpers", "recordings-update-client");
@@ -1070,7 +1064,7 @@ appCommand
 
 appCommand
   .command("status")
-  .description("Show installed HasnaRecordings.app status")
+  .description("Show installed Hasna Recordings.app status")
   .option("--verbose", "Show package paths, code hash, and log path")
   .action((opts: { verbose?: boolean }) => {
     const status = getMacOSAppStatus();
@@ -1123,7 +1117,7 @@ appCommand
 
 appCommand
   .command("permissions")
-  .description("Show macOS permission state for HasnaRecordings.app")
+  .description("Show macOS permission state for Hasna Recordings.app")
   .action(() => {
     const status = getMacOSAppStatus();
     const permissions = {
@@ -1170,7 +1164,7 @@ appCommand
 
 appCommand
   .command("reset-permissions")
-  .description("Reset macOS Microphone and Accessibility permissions for HasnaRecordings.app")
+  .description("Reset macOS Microphone and Accessibility permissions for Hasna Recordings.app")
   .action(() => {
     if (process.platform !== "darwin") {
       console.error(chalk.red("Permission reset is only available on macOS"));
@@ -1181,7 +1175,7 @@ appCommand
 
 appCommand
   .command("request-permissions")
-  .description("Open HasnaRecordings.app and trigger macOS Microphone and Accessibility permission prompts")
+  .description("Open Hasna Recordings.app and trigger macOS Microphone and Accessibility permission prompts")
   .option("--reset", "Reset existing Microphone and Accessibility decisions before requesting")
   .action((opts: { reset?: boolean }) => {
     if (process.platform !== "darwin") {
@@ -1191,7 +1185,7 @@ appCommand
 
     const status = getMacOSAppStatus();
     if (!status.installed) {
-      console.error(chalk.red("HasnaRecordings.app is not installed. Run: recordings app install"));
+      console.error(chalk.red("Hasna Recordings.app is not installed. Run: recordings app install"));
       process.exit(1);
     }
 
@@ -1208,7 +1202,7 @@ appCommand
 
 appCommand
   .command("log")
-  .description("Show the HasnaRecordings.app diagnostic log")
+  .description("Show the Hasna Recordings.app diagnostic log")
   .option("-n, --lines <lines>", "Number of lines to print", String(DEFAULT_LOG_LINES))
   .action((opts: { lines: string }) => {
     const status = getMacOSAppStatus();
@@ -1242,15 +1236,15 @@ appCommand
 
 appCommand
   .command("open")
-  .description("Open the installed HasnaRecordings.app")
+  .description("Open the installed Hasna Recordings.app")
   .action(() => {
     const status = getMacOSAppStatus();
     if (process.platform !== "darwin") {
-      console.error(chalk.red("HasnaRecordings.app can only be opened on macOS"));
+      console.error(chalk.red("Hasna Recordings.app can only be opened on macOS"));
       process.exit(1);
     }
     if (!status.installed) {
-      console.error(chalk.red("HasnaRecordings.app is not installed. Run: recordings app install"));
+      console.error(chalk.red("Hasna Recordings.app is not installed. Run: recordings app install"));
       process.exit(1);
     }
 
@@ -1548,7 +1542,7 @@ program
       if (!micOk && !micUnreadable) {
         console.log(
           chalk.dim(
-            "  HasnaRecordings.app cannot capture audio without this. macOS does not error when it is " +
+            "  Hasna Recordings.app cannot capture audio without this. macOS does not error when it is " +
               "missing — it delivers silent audio. This grant CANNOT be set remotely; it needs a " +
               "human at the keyboard:"
           )
@@ -1793,7 +1787,7 @@ program
   .command("shortcut")
   .description(
     "Show or change the global recording trigger (macOS). Exits non-zero when a change was " +
-      "written while HasnaRecordings.app was running, because the running instance keeps the " +
+      "written while Hasna Recordings.app was running, because the running instance keeps the " +
       "trigger it registered with — the write is stored but not armed until it is reopened."
   )
   .option("--set <chord>", 'Set the app hotkey, e.g. "f13" or "ctrl+opt+r"')
@@ -1903,7 +1897,7 @@ program
        * Name the bundle every grant below applies to, and refuse to imply anything about
        * this process. A CLI launched from a terminal inherits the *terminal's* TCC grants,
        * so "Accessibility is allowed" measured here would describe Ghostty or Terminal, not
-       * HasnaRecordings.app. Only the bundle that actually runs can hold the app's grant.
+       * Hasna Recordings.app. Only the bundle that actually runs can hold the app's grant.
        */
       function showGrantTargets(): void {
         const running = runningBundles();
@@ -1976,11 +1970,11 @@ program
     function reportPickup(): void {
       const pickup = describeTriggerPickup(runningBundles());
       if (pickup.armed) {
-        console.log(chalk.dim("  HasnaRecordings.app is not running; it will register this on next launch."));
+        console.log(chalk.dim("  Hasna Recordings.app is not running; it will register this on next launch."));
         return;
       }
       console.log(
-        chalk.yellow("  HasnaRecordings.app is running and still holds the previous trigger.") +
+        chalk.yellow("  Hasna Recordings.app is running and still holds the previous trigger.") +
           "\n  Quit and reopen it to arm this one:",
       );
       for (const path of pickup.runningBundlePaths) console.log(chalk.dim(`    ${path}`));
@@ -2061,7 +2055,7 @@ program
           // The grant keys to a bundle, so name the one that has to appear in that list.
           const target = grantTargetPaths();
           if (target.paths.length === 0) {
-            console.log(chalk.dim("    (no installed HasnaRecordings.app found to grant it to)"));
+            console.log(chalk.dim("    (no installed Hasna Recordings.app found to grant it to)"));
           }
           for (const path of target.paths) {
             console.log(
@@ -2107,7 +2101,7 @@ program
 # Toggle recording on/off. Run this from a global hotkey.
 # Each press toggles: start recording -> stop + transcribe + copy to clipboard
 #
-# This is the app-less path. If HasnaRecordings.app is running, prefer its own hotkey
+# This is the app-less path. If Hasna Recordings.app is running, prefer its own hotkey
 # ("recordings shortcut --set ..."): the app streams transcription and pastes into
 # the focused field, which this script cannot do.
 set -e
@@ -2500,7 +2494,7 @@ async function printRecordingDetail(id: string): Promise<void> {
   }
 
   if (parentOpts.json) {
-    console.log(JSON.stringify(recording, null, 2));
+    await printJSON(recording);
     return;
   }
 
@@ -2803,7 +2797,7 @@ type MacOSAppStatus = {
 function getMacOSAppStatus(): MacOSAppStatus {
   const packageRoot = findPackageRoot();
   const home = process.env.HOME || process.env.USERPROFILE || "";
-  const canonicalAppPath = pathJoin(home, "Applications", "HasnaRecordings.app");
+  const canonicalAppPath = pathJoin(home, "Applications", "Hasna Recordings.app");
   const legacyInstallPaths = findLegacyMacOSAppPaths(home, canonicalAppPath);
   // Report on the bundle that is actually on disk. Pinning the canonical path meant that on a
   // machine where the app lives anywhere else, every permission answer described a bundle that
@@ -2874,7 +2868,7 @@ function buildPermissionWarnings(status: MacOSAppStatus): string[] {
   }
   if (status.ambiguous_installations) {
     warnings.push(
-      "more than one HasnaRecordings.app is installed, so the states above may describe a bundle "
+      "more than one Hasna Recordings.app is installed, so the states above may describe a bundle "
         + `other than the one macOS granted: reporting on ${status.installed_app_path}, also `
         + `present are ${status.legacy_install_paths.join(", ")}`,
     );
@@ -2908,7 +2902,7 @@ function buildPermissionWarnings(status: MacOSAppStatus): string[] {
 /// Picks the bundle to report on when the canonical install is absent.
 ///
 /// The order is deliberate rather than lexicographic: sorting picked whichever path sorted
-/// first, so `/Applications/HasnaRecordings.app` could silently answer for a grant held by the
+/// first, so `/Applications/Hasna Recordings.app` could silently answer for a grant held by the
 /// bundle in `~/.hasna/recordings`. Preference follows the installer's own policy —
 /// `install_macos_app.sh` installs to `$HOME/Applications` and classifies the
 /// `~/.hasna/recordings` copy as a duplicate to archive — so a real install location wins over
@@ -2921,8 +2915,11 @@ function resolveInstalledAppPath(
 ): string {
   const preference = [
     canonicalPath,
+    pathJoin("/", "Applications", "Hasna Recordings.app"),
+    pathJoin(home, "Applications", "HasnaRecordings.app"),
     pathJoin("/", "Applications", "HasnaRecordings.app"),
     pathJoin("/", "Applications", "Recordings.app"),
+    pathJoin(home, ".hasna", "recordings", "Hasna Recordings.app"),
     pathJoin(home, ".hasna", "recordings", "HasnaRecordings.app"),
     pathJoin(home, ".hasna", "recordings", "Recordings.app"),
   ];
@@ -2934,17 +2931,20 @@ function resolveInstalledAppPath(
 
 function findLegacyMacOSAppPaths(home: string, canonicalPath: string): string[] {
   const candidates = [
-    pathJoin(home, ".hasna", "recordings", "Recordings.app"),
+    pathJoin(home, "Applications", "HasnaRecordings.app"),
     pathJoin(home, ".hasna", "recordings", "HasnaRecordings.app"),
-    pathJoin("/", "Applications", "Recordings.app"),
     pathJoin("/", "Applications", "HasnaRecordings.app"),
+    pathJoin(home, ".hasna", "recordings", "Recordings.app"),
+    pathJoin(home, ".hasna", "recordings", "Hasna Recordings.app"),
+    pathJoin("/", "Applications", "Recordings.app"),
+    pathJoin("/", "Applications", "Hasna Recordings.app"),
   ];
   const userApplications = pathJoin(home, "Applications");
   if (existsSync(userApplications)) {
     for (const entry of readdirSync(userApplications, { withFileTypes: true })) {
       if (
         entry.isDirectory() &&
-        (entry.name.startsWith("Recordings.app.") || entry.name.startsWith("HasnaRecordings.app."))
+        (entry.name.startsWith("Recordings.app.") || entry.name.startsWith("Hasna Recordings.app.") || entry.name.startsWith("HasnaRecordings.app."))
       ) {
         candidates.push(pathJoin(userApplications, entry.name));
       }
@@ -3052,6 +3052,18 @@ function findPackageRoot(): string {
 
 function getMacOSInstallerPath(packageRoot = findPackageRoot()): string {
   return pathJoin(packageRoot, "scripts", "install_macos_app.sh");
+}
+
+// Bun's console output can stop at the pipe buffer boundary when a compiled
+// helper exits. Wait for the writable stream to flush every JSON byte so native
+// callers can decode large history pages and long transcripts.
+async function printJSON(value: unknown): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
 }
 
 // ── Run ─────────────────────────────────────────────────────────────────────

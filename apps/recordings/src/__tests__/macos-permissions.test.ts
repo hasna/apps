@@ -15,7 +15,7 @@ import {
   type TccPermissionProbe,
 } from "../cli/macos-permissions.js";
 
-const APP_PATH = "/Users/tester/.hasna/recordings/HasnaRecordings.app";
+const APP_PATH = "/Users/tester/.hasna/recordings/Hasna Recordings.app";
 
 /// Real blob taken from station03's system TCC.db row for
 /// kTCCServiceAccessibility / com.hasna.recordings. Decodes (via `csreq -r <file> -t`) to:
@@ -52,11 +52,11 @@ describe("macOS permission helper exit relay", () => {
       return { status: 1 };
     };
 
-    const result = runMacOSPermissionRequest("/Applications/HasnaRecordings.app", runner);
+    const result = runMacOSPermissionRequest("/Applications/Hasna Recordings.app", runner);
 
     expect(result).toEqual({ exitCode: 1, errorMessage: undefined });
     expect(invocations).toEqual([{
-      executable: "/Applications/HasnaRecordings.app/Contents/MacOS/Recordings",
+      executable: "/Applications/Hasna Recordings.app/Contents/MacOS/Recordings",
       arguments_: ["--request-permissions", "--open-permission-settings"],
       options: { stdio: "inherit" },
     }]);
@@ -64,7 +64,7 @@ describe("macOS permission helper exit relay", () => {
 
   test("relays a fully granted helper status as success", () => {
     const result = runMacOSPermissionRequest(
-      "/Applications/HasnaRecordings.app",
+      "/Applications/Hasna Recordings.app",
       () => ({ status: 0 }),
     );
 
@@ -74,11 +74,11 @@ describe("macOS permission helper exit relay", () => {
 
   test("maps launch errors and missing statuses to failure", () => {
     const failed = runMacOSPermissionRequest(
-      "/Applications/HasnaRecordings.app",
+      "/Applications/Hasna Recordings.app",
       () => ({ status: null, error: new Error("launch failed") }),
     );
     const missingStatus = runMacOSPermissionRequest(
-      "/Applications/HasnaRecordings.app",
+      "/Applications/Hasna Recordings.app",
       () => ({ status: null }),
     );
 
@@ -491,15 +491,15 @@ describe("TCC database read failures", () => {
 });
 
 /// A CLI inherits its terminal's Accessibility grant, so a report that does not name its
-/// subject can read "allowed" on the strength of Ghostty's grant while HasnaRecordings.app is
+/// subject can read "allowed" on the strength of Ghostty's grant while Hasna Recordings.app is
 /// denied. The subject string must always identify the bundle being reported on.
 describe("authorization subject disclosure", () => {
   test("names the installed bundle path and the bundle identifier", () => {
     const subject = describeTccAuthorizationSubject(
-      "/Users/hasna/.hasna/recordings/HasnaRecordings.app",
+      "/Users/hasna/.hasna/recordings/Hasna Recordings.app",
     );
 
-    expect(subject).toContain("/Users/hasna/.hasna/recordings/HasnaRecordings.app");
+    expect(subject).toContain("/Users/hasna/.hasna/recordings/Hasna Recordings.app");
     expect(subject).toContain(RECORDINGS_BUNDLE_IDENTIFIER);
   });
 

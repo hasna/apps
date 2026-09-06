@@ -148,9 +148,9 @@ function createInstallerFixture() {
   const home = join(root, "home");
   const bin = join(root, "bin");
   const markers = join(root, "markers");
-  const candidate = join(root, "candidate", "HasnaRecordings.app");
-  const artifact = join(root, "HasnaRecordings-0.2.12-macos.zip");
-  const manifest = join(root, "HasnaRecordings-0.2.12-macos.manifest.json");
+  const candidate = join(root, "candidate", "Hasna Recordings.app");
+  const artifact = join(root, "Hasna Recordings-0.2.12-macos.zip");
+  const manifest = join(root, "Hasna Recordings-0.2.12-macos.manifest.json");
   const installer = join(root, "scripts", "install_macos_app.sh");
   const tailscaleApp = join(root, "Tailscale.app");
   mkdirSync(home, { recursive: true });
@@ -326,7 +326,7 @@ case "$*" in
   *" manifest-get "*"--field minimum_macos"*) printf '26.0\n'; exit 0 ;;
   *" manifest-get "*"--field architectures"*) printf 'arm64\n'; exit 0 ;;
   *" manifest-get "*"--field identity"*) printf '%064d\n' 0 | tr '0' c; exit 0 ;;
-  *" manifest-get "*"--field bundle_name"*) printf '%s\n' "\${REQUIRED_BUNDLE_NAME:-HasnaRecordings.app}"; exit 0 ;;
+  *" manifest-get "*"--field bundle_name"*) printf '%s\n' "\${REQUIRED_BUNDLE_NAME:-Hasna Recordings.app}"; exit 0 ;;
   *" requirement-digest "*)
     if [ "\${NO_DESIGNATED_REQUIREMENT:-0}" = 1 ]; then
       [[ "$*" == *"--artifact-policy local_only"* ]] || exit 1
@@ -349,10 +349,10 @@ case "$*" in
     done
     [ -n "$staging_target" ] || exit 1
     if [ "\${EXTRA_ARCHIVE_ENTRY:-0}" = 1 ]; then
-      echo "release ZIP contains an entry outside the canonical HasnaRecordings.app tree" >&2
+      echo "release ZIP contains an entry outside the canonical Hasna Recordings.app tree" >&2
       exit 1
     fi
-    cp -R "$CANDIDATE_SOURCE" "$staging_target/HasnaRecordings.app"
+    cp -R "$CANDIDATE_SOURCE" "$staging_target/Hasna Recordings.app"
     ;;
   *" verify-archive "*)
     [ "\${FAIL_ARCHIVE_VERIFY:-0}" = 1 ] && exit 1
@@ -377,7 +377,7 @@ exit 0
 set -euo pipefail
 if [ "$1" = "-x" ]; then
   destination="\${@: -1}"
-  cp -R "$CANDIDATE_SOURCE" "$destination/HasnaRecordings.app"
+  cp -R "$CANDIDATE_SOURCE" "$destination/Hasna Recordings.app"
 elif [ "$1" = "-c" ]; then
   if [ "\${FAIL_ARCHIVE_COPY:-0}" = 1 ]; then exit 1; fi
   printf archive > "\${@: -1}"
@@ -596,7 +596,7 @@ async function runInstaller(
   environment: Record<string, string> = {},
   cwd?: string,
 ) {
-  const app = join(fixture.home, "Applications", "HasnaRecordings.app");
+  const app = join(fixture.home, "Applications", "Hasna Recordings.app");
   const state = join(fixture.home, ".hasna", "recordings");
   if (existsSync(state) && mode(state) === 0o775) chmodSync(state, 0o755);
   const normalizeFixtureDescendants = (path: string): void => {
@@ -774,7 +774,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("does not nest an original app when its archival destination appears after precheck", async () => {
     const fixture = createInstallerFixture();
-    const source = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const source = join(fixture.home, "Applications", "Hasna Recordings.app");
     const readyFifo = join(fixture.root, "archive-destination-ready.fifo");
     const resumeFifo = join(fixture.root, "archive-destination-resume.fifo");
     createApp(source, "installed");
@@ -801,12 +801,12 @@ describe("macOS finalized artifact installer", () => {
     expect(readFileSync(join(destination!, "concurrent-sentinel.txt"), "utf8")).toBe(
       "preserve\n",
     );
-    expect(existsSync(join(destination!, "HasnaRecordings.app"))).toBeFalse();
+    expect(existsSync(join(destination!, "Hasna Recordings.app"))).toBeFalse();
   });
 
   testOnNonDarwin("rejects original source substitution after retaining the authenticated handle", async () => {
     const fixture = createInstallerFixture();
-    const source = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const source = join(fixture.home, "Applications", "Hasna Recordings.app");
     const parkedSource = join(fixture.root, "parked-original.app");
     const readyFifo = join(fixture.root, "archive-source-ready.fifo");
     const resumeFifo = join(fixture.root, "archive-source-resume.fifo");
@@ -839,7 +839,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("does not replace or nest into a candidate destination created after precheck", async () => {
     const fixture = createInstallerFixture();
-    const destination = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const destination = join(fixture.home, "Applications", "Hasna Recordings.app");
     const readyFifo = join(fixture.root, "candidate-destination-ready.fifo");
     const resumeFifo = join(fixture.root, "candidate-destination-resume.fifo");
     createFifo(readyFifo);
@@ -862,13 +862,13 @@ describe("macOS finalized artifact installer", () => {
     expect(readFileSync(join(destination, "concurrent-sentinel.txt"), "utf8")).toBe(
       "preserve\n",
     );
-    expect(existsSync(join(destination, "HasnaRecordings.app"))).toBeFalse();
+    expect(existsSync(join(destination, "Hasna Recordings.app"))).toBeFalse();
     expect(existsSync(staging!)).toBeFalse();
   });
 
   testOnNonDarwin("rejects staged candidate substitution after retaining the authenticated handle", async () => {
     const fixture = createInstallerFixture();
-    const destination = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const destination = join(fixture.home, "Applications", "Hasna Recordings.app");
     const parkedCandidate = join(fixture.root, "parked-candidate.app");
     const readyFifo = join(fixture.root, "candidate-source-ready.fifo");
     const resumeFifo = join(fixture.root, "candidate-source-resume.fifo");
@@ -909,7 +909,7 @@ describe("macOS finalized artifact installer", () => {
     async (operation, point) => {
       const fixture = createInstallerFixture();
       const applications = join(fixture.home, "Applications");
-      const installed = join(applications, "HasnaRecordings.app");
+      const installed = join(applications, "Hasna Recordings.app");
       createApp(installed, "installed");
 
       const crashed = await runInstaller(fixture, [], {
@@ -1016,7 +1016,7 @@ describe("macOS finalized artifact installer", () => {
       REQUIRED_ARTIFACT_POLICY: "local_only",
     });
     expect(result.exitCode).not.toBe(0);
-    expect(existsSync(join(fixture.home, "Applications", "HasnaRecordings.app"))).toBeFalse();
+    expect(existsSync(join(fixture.home, "Applications", "Hasna Recordings.app"))).toBeFalse();
   });
 
   testOnNonDarwin("release install rejects a local target identity kind before verification or mutation", async () => {
@@ -1089,7 +1089,7 @@ describe("macOS finalized artifact installer", () => {
     const wrongTeam = createInstallerFixture();
     const teamMismatch = await runLocalInstaller(wrongTeam, ["--expected-team-id", "EXAMPLE123"]);
     expect(teamMismatch.exitCode).not.toBe(0);
-    expect(existsSync(join(wrongTeam.home, "Applications", "HasnaRecordings.app"))).toBeFalse();
+    expect(existsSync(join(wrongTeam.home, "Applications", "Hasna Recordings.app"))).toBeFalse();
 
     // A MALFORMED team is still refused up front, before any verification or mutation.
     const malformedTeam = createInstallerFixture();
@@ -1321,7 +1321,7 @@ describe("macOS finalized artifact installer", () => {
   testOnNonDarwin("recovers app and state before restoring legacy mode after candidate activation", async () => {
     const fixture = createInstallerFixture();
     const state = createLegacyState(fixture);
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const crashed = await runTailscaleLocalInstaller(fixture, [], {
       RECORDINGS_TEST_CRASH_AFTER_PHASE: "candidate-installed",
@@ -1461,10 +1461,10 @@ describe("macOS finalized artifact installer", () => {
     writeFileSync(join(stateDir, "recordings.db"), "preserve-me");
     const result = await runLocalInstaller(fixture);
     expect(result.exitCode, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Installed local-only HasnaRecordings.app for station06");
+    expect(result.stdout).toContain("Installed local-only Hasna Recordings.app for station06");
     expect(result.stdout).toContain("may require manual reauthorization");
     expect(readFileSync(join(stateDir, "recordings.db"), "utf8")).toBe("preserve-me");
-    expect(existsSync(join(fixture.home, "Applications", "HasnaRecordings.app"))).toBeTrue();
+    expect(existsSync(join(fixture.home, "Applications", "Hasna Recordings.app"))).toBeTrue();
     expect(existsSync(join(fixture.markers, "xcrun.log"))).toBeFalse();
     expect(existsSync(join(fixture.markers, "spctl.log"))).toBeFalse();
     expect(existsSync(join(fixture.markers, "syspolicy.log"))).toBeFalse();
@@ -1479,7 +1479,7 @@ describe("macOS finalized artifact installer", () => {
   testOnNonDarwin("refuses a local ad-hoc replacement of an app without a textual designated requirement until it is approved", async () => {
     const refused = await (async () => {
       const fixture = createInstallerFixture();
-      const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+      const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
       createApp(installed, "installed");
       const result = await runLocalInstaller(fixture, [], { NO_DESIGNATED_REQUIREMENT: "1" });
       return {
@@ -1494,7 +1494,7 @@ describe("macOS finalized artifact installer", () => {
     expect(refused.installedExecutable).toBe("installed");
 
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const result = await runLocalInstaller(fixture, ["--allow-adhoc-identity-migration"], {
       NO_DESIGNATED_REQUIREMENT: "1",
@@ -1516,12 +1516,12 @@ describe("macOS finalized artifact installer", () => {
     const result = await runInstaller(fixture, [], { NO_DESIGNATED_REQUIREMENT: "1" });
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("Candidate app has no designated requirement");
-    expect(existsSync(join(fixture.home, "Applications", "HasnaRecordings.app"))).toBeFalse();
+    expect(existsSync(join(fixture.home, "Applications", "Hasna Recordings.app"))).toBeFalse();
   });
 
   testOnNonDarwin("rolls back app and state when local-only postactivation verification fails", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const stateDir = join(fixture.home, ".hasna", "recordings");
     createApp(installed, "installed");
     mkdirSync(stateDir, { recursive: true });
@@ -1535,7 +1535,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("rejects archive or manifest tampering before mutating an installed app", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const result = await runInstaller(fixture, [], { FAIL_ARCHIVE_VERIFY: "1" });
     expect(result.exitCode).not.toBe(0);
@@ -1547,8 +1547,8 @@ describe("macOS finalized artifact installer", () => {
     const fixture = createInstallerFixture();
     const result = await runInstaller(fixture, [], { EXTRA_ARCHIVE_ENTRY: "1" });
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain("canonical HasnaRecordings.app tree");
-    expect(existsSync(join(fixture.home, "Applications", "HasnaRecordings.app"))).toBeFalse();
+    expect(result.stderr).toContain("canonical Hasna Recordings.app tree");
+    expect(existsSync(join(fixture.home, "Applications", "Hasna Recordings.app"))).toBeFalse();
   });
 
   testOnNonDarwin("requires the pinned Team ID and trusted timestamp before mutation", async () => {
@@ -1557,12 +1557,12 @@ describe("macOS finalized artifact installer", () => {
     expect(wrongTeam.exitCode).not.toBe(0);
     const missingTimestamp = await runInstaller(fixture, [], { MISSING_TIMESTAMP: "1" });
     expect(missingTimestamp.exitCode).not.toBe(0);
-    expect(existsSync(join(fixture.home, "Applications", "HasnaRecordings.app"))).toBeFalse();
+    expect(existsSync(join(fixture.home, "Applications", "Hasna Recordings.app"))).toBeFalse();
   });
 
   testOnNonDarwin("requires explicit migration when the forward designated requirement fails", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const result = await runInstaller(fixture, [], { FAIL_FORWARD_REQUIREMENT: "1" });
     expect(result.exitCode).not.toBe(0);
@@ -1571,7 +1571,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("requires explicit migration when the reverse designated requirement fails", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const result = await runInstaller(fixture, [], { FAIL_REVERSE_REQUIREMENT: "1" });
     expect(result.exitCode).not.toBe(0);
@@ -1580,8 +1580,8 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("fails before mutation for a Spotlight duplicate outside managed paths", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
-    const external = join(fixture.root, "external", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
+    const external = join(fixture.root, "external", "Hasna Recordings.app");
     createApp(installed, "installed");
     createApp(external, "external");
     const result = await runInstaller(fixture, [], { MDFIND_RESULT: external });
@@ -1592,7 +1592,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("does not stop the current app when duplicate archival fails", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const process = Bun.spawn(["sleep", "300"]);
     try {
@@ -1633,7 +1633,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("binds an existing process when the exact executable is not the first lsof text record", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const expectedExecutable = join(installed, "Contents", "MacOS", "Recordings");
     createApp(installed, "installed");
     const prior = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
@@ -1657,8 +1657,8 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("keeps the committed app and duplicate cleanup when post-commit launch fails", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
-    const duplicate = join(fixture.home, ".hasna", "recordings", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
+    const duplicate = join(fixture.home, ".hasna", "recordings", "Hasna Recordings.app");
     createApp(installed, "installed");
     createApp(duplicate, "duplicate");
     const priorProcess = Bun.spawn(["sleep", "300"]);
@@ -1686,8 +1686,8 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("installs one canonical app and archives duplicates without touching TCC", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
-    const duplicate = join(fixture.home, ".hasna", "recordings", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
+    const duplicate = join(fixture.home, ".hasna", "recordings", "Hasna Recordings.app");
     createApp(installed, "installed");
     createApp(duplicate, "duplicate");
     const result = await runInstaller(fixture, ["--launch", "--launch-timeout", "3"]);
@@ -1730,7 +1730,7 @@ describe("macOS finalized artifact installer", () => {
 
     expect(result.exitCode).toBe(0);
     expect(existsSync(hostileMarker)).toBe(false);
-    expect(readFileSync(join(fixture.markers, "open.log"), "utf8")).toContain("HasnaRecordings.app");
+    expect(readFileSync(join(fixture.markers, "open.log"), "utf8")).toContain("Hasna Recordings.app");
   });
 
   testOnNonDarwin("installer pins deterministic locale and timezone before invoking host tools", async () => {
@@ -1748,7 +1748,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("stops a legacy same-path relaunch after the stopped snapshot and never accepts it as the candidate", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const prior = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
     let relaunchedPid = 0;
     createApp(installed, "installed");
@@ -1791,7 +1791,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("does not signal a reused PID whose start identity changed after discovery", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const reused = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
     createApp(installed, "installed");
     try {
@@ -1811,7 +1811,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("holds the barrier while a legacy relaunch after bundle move is quiesced", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const readyFifo = join(fixture.root, "legacy-relaunch-ready.fifo");
     const resumeFifo = join(fixture.root, "legacy-relaunch-resume.fifo");
     let relaunched: ReturnType<typeof Bun.spawn> | undefined;
@@ -1870,7 +1870,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery preserves safe standalone writes while restoring ambiguous deletions", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
     const stateFile = join(state, "config.json");
     const deletedFile = join(state, "keep-on-ambiguous-delete.json");
@@ -1919,7 +1919,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery replays after SIGKILL during an atomic missing-file copy", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
     const restoredDirectory = join(state, "nested", "state");
     const restoredFile = join(restoredDirectory, "large-state.bin");
@@ -1990,7 +1990,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery replays after SIGKILL following durable archive unlink", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
     const restored = join(state, "restore-after-archive-unlink.json");
     const journalPath = join(fixture.home, "Applications", ".Recordings-install-transaction.json");
@@ -2036,7 +2036,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("a concurrent live file wins atomic recovery publication", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
     const restoredFile = join(state, "concurrent-state.bin");
     const readyFifo = join(fixture.root, "recovery-publish-ready.fifo");
@@ -2079,7 +2079,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("refreshes the stopped snapshot after a bundled relaunch writes state", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
     const config = join(state, "config.json");
     const legacyLog = join(state, "logs", "legacy.log");
@@ -2122,7 +2122,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery rejects unsafe post-snapshot state before restoring the app", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
     const outside = join(fixture.root, "outside-state");
     createApp(installed, "installed");
@@ -2151,7 +2151,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery rejects an altered installer-owned archive before restoring the app", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     await runInstaller(fixture, [], {
       RECORDINGS_TEST_CRASH_AFTER_PHASE: "candidate-installed",
@@ -2179,7 +2179,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery rejects a same-owner state-root swap after pinning without external mutation", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
     const parkedState = join(fixture.home, ".hasna", "recordings.parked");
     const external = join(fixture.root, "external-state-root");
@@ -2227,7 +2227,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery rejects a nested state ancestor swap after validation without external mutation", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
     const nested = join(state, "nested");
     const parkedNested = join(state, "nested.parked");
@@ -2279,7 +2279,7 @@ describe("macOS finalized artifact installer", () => {
     const fixture = createInstallerFixture();
     const applications = join(fixture.home, "Applications");
     const parkedApplications = join(fixture.home, "Applications.parked");
-    const installed = join(applications, "HasnaRecordings.app");
+    const installed = join(applications, "Hasna Recordings.app");
     const external = join(fixture.root, "external-applications");
     const readyFifo = join(fixture.root, "app-publish-ready.fifo");
     const resumeFifo = join(fixture.root, "app-publish-resume.fifo");
@@ -2296,11 +2296,11 @@ describe("macOS finalized artifact installer", () => {
 
     const recovery = runInstaller(fixture, [], {
       RECORDINGS_TEST_ENABLE_RECOVERY_HOOKS: "1",
-      RECORDINGS_TEST_RECOVERY_BEFORE_APP_PUBLISH_TARGET: "HasnaRecordings.app",
+      RECORDINGS_TEST_RECOVERY_BEFORE_APP_PUBLISH_TARGET: "Hasna Recordings.app",
       RECORDINGS_TEST_RECOVERY_BEFORE_APP_PUBLISH_READY_FIFO: readyFifo,
       RECORDINGS_TEST_RECOVERY_BEFORE_APP_PUBLISH_RESUME_FIFO: resumeFifo,
     });
-    expect(await readFifoLine(readyFifo)).toBe("HasnaRecordings.app");
+    expect(await readFifoLine(readyFifo)).toBe("Hasna Recordings.app");
     renameSync(applications, parkedApplications);
     symlinkSync(external, applications);
     writeFileSync(resumeFifo, "continue\n");
@@ -2318,7 +2318,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery rejects authenticated app-backup leaf substitution before publication", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const readyFifo = join(fixture.root, "app-source-ready.fifo");
     const resumeFifo = join(fixture.root, "app-source-resume.fifo");
     const journalPath = join(fixture.home, "Applications", ".Recordings-install-transaction.json");
@@ -2340,11 +2340,11 @@ describe("macOS finalized artifact installer", () => {
     createFifo(resumeFifo);
 
     const recovery = runInstaller(fixture, [], {
-      RECORDINGS_TEST_RECOVERY_BEFORE_APP_PUBLISH_TARGET: "HasnaRecordings.app",
+      RECORDINGS_TEST_RECOVERY_BEFORE_APP_PUBLISH_TARGET: "Hasna Recordings.app",
       RECORDINGS_TEST_RECOVERY_BEFORE_APP_PUBLISH_READY_FIFO: readyFifo,
       RECORDINGS_TEST_RECOVERY_BEFORE_APP_PUBLISH_RESUME_FIFO: resumeFifo,
     });
-    expect(await readFifoLine(readyFifo)).toBe("HasnaRecordings.app");
+    expect(await readFifoLine(readyFifo)).toBe("Hasna Recordings.app");
     renameSync(backup, parkedBackup);
     createApp(backup, "substituted-backup");
     writeFileSync(resumeFifo, "continue\n");
@@ -2366,7 +2366,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery rejects a rollback archive-parent swap before unlink without external mutation", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings");
     const rollbacks = join(state, "rollbacks");
     const parkedRollbacks = join(state, "rollbacks.parked");
@@ -2419,7 +2419,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery quarantines the proven archive and preserves final-delete leaf substitutions", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const journalPath = join(fixture.home, "Applications", ".Recordings-install-transaction.json");
     const readyFifo = join(fixture.root, "archive-quarantine-ready.fifo");
     const resumeFifo = join(fixture.root, "archive-quarantine-resume.fifo");
@@ -2466,7 +2466,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("schema-v6 recovery fails closed instead of using destructive state restore", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     await runInstaller(fixture, [], {
       RECORDINGS_TEST_CRASH_AFTER_PHASE: "candidate-installed",
@@ -2511,7 +2511,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("legacy recovery rejects injected candidate-tree deletion evidence", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     await runInstaller(fixture, [], {
       RECORDINGS_TEST_CRASH_AFTER_PHASE: "candidate-installed",
@@ -2539,7 +2539,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovers a committed pre-launch crash without launching the app", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const crashed = await runInstaller(fixture, ["--launch", "--launch-timeout", "2"], {
       SPAWN_LAUNCHED_PROCESS: "1",
@@ -2560,7 +2560,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("committed journal write failure rolls back before launching and restarts the prior app", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const prior = Bun.spawn(["sleep", "300"]);
     try {
@@ -2590,7 +2590,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("committed crash recovery does not launch a second canonical instance", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const prior = Bun.spawn(["sleep", "300"]);
     let launchedPid = 0;
@@ -2619,7 +2619,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery rejects a journal redirected to a noncanonical state directory", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const victim = join(fixture.root, "victim-state");
     createApp(installed, "installed");
     mkdirSync(victim, { recursive: true });
@@ -2639,7 +2639,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery fails closed before mutation when the state backup digest changes", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const state = join(fixture.home, ".hasna", "recordings", "config.json");
     createApp(installed, "installed");
     mkdirSync(dirname(state), { recursive: true });
@@ -2658,7 +2658,7 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("a crash during stopped-state refresh recovers from the immutable initial backup", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const prior = Bun.spawn(["sleep", "300"]);
     try {
@@ -2681,8 +2681,8 @@ describe("macOS finalized artifact installer", () => {
 
   testOnNonDarwin("recovery restarts only the recorded legacy app after maintenance release and rejects pathless journals", async () => {
     const prepareRunningLegacyRecovery = async (fixture: ReturnType<typeof createInstallerFixture>) => {
-      const legacyApp = join(fixture.home, ".hasna", "recordings", "HasnaRecordings.app");
-      const canonicalApp = join(fixture.home, "Applications", "HasnaRecordings.app");
+      const legacyApp = join(fixture.home, ".hasna", "recordings", "Hasna Recordings.app");
+      const canonicalApp = join(fixture.home, "Applications", "Hasna Recordings.app");
       createApp(legacyApp, "legacy-installed");
       createApp(canonicalApp, "canonical-installed");
       const prior = Bun.spawn(["sleep", "300"], { stdout: "ignore", stderr: "ignore" });
@@ -2817,7 +2817,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
 
   testOnNonDarwin("recovery fails closed before restoring a modified original app backup", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     await runInstaller(fixture, [], { RECORDINGS_TEST_CRASH_AFTER_PHASE: "candidate-installed" });
     const journalPath = join(fixture.home, "Applications", ".Recordings-install-transaction.json");
@@ -2836,7 +2836,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
 
   testOnNonDarwin("recovery refuses a missing original app backup before removing the candidate", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     await runInstaller(fixture, [], { RECORDINGS_TEST_CRASH_AFTER_PHASE: "candidate-installed" });
     const journalPath = join(fixture.home, "Applications", ".Recordings-install-transaction.json");
@@ -2854,7 +2854,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
 
   testOnNonDarwin("recovery refuses a missing noncommitted transaction directory before mutation", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     await runInstaller(fixture, [], { RECORDINGS_TEST_CRASH_AFTER_PHASE: "candidate-installed" });
     const journalPath = join(fixture.home, "Applications", ".Recordings-install-transaction.json");
@@ -2872,8 +2872,8 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
 
   testOnNonDarwin("recovery replays after a crash between restoring canonical and duplicate apps", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
-    const duplicate = join(fixture.home, ".hasna", "recordings", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
+    const duplicate = join(fixture.home, ".hasna", "recordings", "Hasna Recordings.app");
     createApp(installed, "installed");
     createApp(duplicate, "duplicate");
     await runInstaller(fixture, [], { RECORDINGS_TEST_CRASH_AFTER_PHASE: "candidate-installed" });
@@ -2896,7 +2896,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
 
   testOnNonDarwin("recovery transaction cleanup rejects a swapped leaf without deleting its substitute", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const readyFifo = join(fixture.root, "transaction-cleanup-ready.fifo");
     const resumeFifo = join(fixture.root, "transaction-cleanup-resume.fifo");
     const journalPath = join(fixture.home, "Applications", ".Recordings-install-transaction.json");
@@ -2966,7 +2966,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     expect(result.exitCode, result.stderr).toBe(0);
     expect(
       readFileSync(
-        join(fixture.home, "Applications", "HasnaRecordings.app", "Contents", "MacOS", "Recordings"),
+        join(fixture.home, "Applications", "Hasna Recordings.app", "Contents", "MacOS", "Recordings"),
         "utf8",
       ),
     ).toBe("candidate");
@@ -2974,7 +2974,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
 
   testOnNonDarwin("first-install SIGKILL after candidate move removes the uncommitted app on recovery", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const crashed = await runInstaller(fixture, [], {
       RECORDINGS_TEST_CRASH_AFTER_PHASE: "candidate-moved-before-journal",
     });
@@ -2991,7 +2991,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
 
   testOnNonDarwin("recovery preserves a manual candidate replacement that does not match durable evidence", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const parkedCandidate = join(fixture.home, "Applications", "Recordings.candidate.parked");
     const readyFifo = join(fixture.root, "candidate-proof-ready.fifo");
     const resumeFifo = join(fixture.root, "candidate-proof-resume.fifo");
@@ -3014,11 +3014,11 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     createFifo(resumeFifo);
     const recovery = runInstaller(fixture, [], {
       RECORDINGS_TEST_ENABLE_RECOVERY_HOOKS: "1",
-      RECORDINGS_TEST_RECOVERY_BEFORE_CANDIDATE_REMOVE_TARGET: "HasnaRecordings.app",
+      RECORDINGS_TEST_RECOVERY_BEFORE_CANDIDATE_REMOVE_TARGET: "Hasna Recordings.app",
       RECORDINGS_TEST_RECOVERY_BEFORE_CANDIDATE_REMOVE_READY_FIFO: readyFifo,
       RECORDINGS_TEST_RECOVERY_BEFORE_CANDIDATE_REMOVE_RESUME_FIFO: resumeFifo,
     });
-    expect(await readFifoLine(readyFifo)).toBe("HasnaRecordings.app");
+    expect(await readFifoLine(readyFifo)).toBe("Hasna Recordings.app");
     renameSync(installed, parkedCandidate);
     createApp(installed, "manual-replacement");
     writeFileSync(resumeFifo, "continue\n");
@@ -3038,7 +3038,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
   testOnNonDarwin("candidate quarantine final-delete swap preserves both substitute leaves", async () => {
     const fixture = createInstallerFixture();
     const applications = join(fixture.home, "Applications");
-    const installed = join(applications, "HasnaRecordings.app");
+    const installed = join(applications, "Hasna Recordings.app");
     const readyFifo = join(fixture.root, "candidate-quarantine-ready.fifo");
     const resumeFifo = join(fixture.root, "candidate-quarantine-resume.fifo");
     const journalPath = join(applications, ".Recordings-install-transaction.json");
@@ -3051,12 +3051,12 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
     createFifo(resumeFifo);
     const recovery = runInstaller(fixture, [], {
       RECORDINGS_TEST_ENABLE_RECOVERY_HOOKS: "1",
-      RECORDINGS_TEST_RECOVERY_BEFORE_QUARANTINE_REMOVE_TARGET: "HasnaRecordings.app",
+      RECORDINGS_TEST_RECOVERY_BEFORE_QUARANTINE_REMOVE_TARGET: "Hasna Recordings.app",
       RECORDINGS_TEST_RECOVERY_BEFORE_QUARANTINE_REMOVE_READY_FIFO: readyFifo,
       RECORDINGS_TEST_RECOVERY_BEFORE_QUARANTINE_REMOVE_RESUME_FIFO: resumeFifo,
     });
     const [reportedLeaf, quarantineLeaf] = (await readFifoLine(readyFifo)).split("\t");
-    expect(reportedLeaf).toBe("HasnaRecordings.app");
+    expect(reportedLeaf).toBe("Hasna Recordings.app");
     const quarantinePath = join(applications, quarantineLeaf!);
     const parkedCandidate = `${quarantinePath}.parked`;
     renameSync(quarantinePath, parkedCandidate);
@@ -3081,7 +3081,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
 
   testOnNonDarwin("candidate-moving recovery stops an externally launched uncommitted process", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     const crashed = await runInstaller(fixture, [], {
       RECORDINGS_TEST_CRASH_AFTER_PHASE: "candidate-moved-before-journal",
     });
@@ -3137,7 +3137,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
         HOME: fixture.home,
         PATH: `${fixture.bin}:${Bun.env.PATH ?? ""}`,
         CANDIDATE_SOURCE: fixture.candidate,
-        CANONICAL_EXECUTABLE: join(fixture.home, "Applications", "HasnaRecordings.app", "Contents", "MacOS", "Recordings"),
+        CANONICAL_EXECUTABLE: join(fixture.home, "Applications", "Hasna Recordings.app", "Contents", "MacOS", "Recordings"),
         MARKER_DIRECTORY: fixture.markers,
         REAL_BUN: bunExecutable,
         ...installerToolOverrides(fixture),
@@ -3184,7 +3184,7 @@ printf '%s\\n' "$*" >> "$REJECTED_OPEN_LOG"
   testOnNonDarwin("holds the real SQLite writer barrier through the stopped-state snapshot and rollback", async () => {
     const runBarrierContract = async (releaseBeforeSnapshot: boolean) => {
       const fixture = createInstallerFixture();
-      const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+      const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
       const state = join(fixture.home, ".hasna", "recordings");
       const databasePath = join(state, "recordings.db");
       createApp(installed, "installed");
@@ -3228,7 +3228,7 @@ release_sqlite_barrier
 set -euo pipefail
 if [ "$1" = -x ]; then
   destination="\${@: -1}"
-  cp -R "$CANDIDATE_SOURCE" "$destination/HasnaRecordings.app"
+  cp -R "$CANDIDATE_SOURCE" "$destination/Hasna Recordings.app"
 elif [ "$1" = -c ]; then
   printf archive > "\${@: -1}"
 else
@@ -3308,7 +3308,7 @@ SQL
   testOnNonDarwin("an existing bun:sqlite handle writes through recovery without path-replacing SQLite files", async () => {
     const runOpenHandleContract = async (replaceCanonicalDatabase: boolean) => {
       const fixture = createInstallerFixture();
-      const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+      const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
       const state = join(fixture.home, ".hasna", "recordings");
       const databasePath = join(state, "recordings.db");
       const sqlitePaths = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
@@ -3458,7 +3458,7 @@ SQL
         HOME: fixture.home,
         PATH: `${fixture.bin}:${Bun.env.PATH ?? ""}`,
         CANDIDATE_SOURCE: fixture.candidate,
-        CANONICAL_EXECUTABLE: join(fixture.home, "Applications", "HasnaRecordings.app", "Contents", "MacOS", "Recordings"),
+        CANONICAL_EXECUTABLE: join(fixture.home, "Applications", "Hasna Recordings.app", "Contents", "MacOS", "Recordings"),
         MARKER_DIRECTORY: fixture.markers,
         REAL_BUN: bunExecutable,
         ...installerToolOverrides(fixture),
@@ -3475,7 +3475,7 @@ SQL
 set -euo pipefail
 mkdir -p "$HOME/.hasna/recordings/audio" "$HOME/.hasna/recordings/rollbacks" "$HOME/Applications"
 if mkdir "$HOME/Applications/.Recordings-install-lock" 2>/dev/null; then
-  mkdir -p "$HOME/Applications/HasnaRecordings.app"
+  mkdir -p "$HOME/Applications/Hasna Recordings.app"
   exit 0
 fi
 exit 73
@@ -3486,7 +3486,7 @@ exit 73
       expect(existsSync(owner)).toBeTrue();
       const oldAttempt = Bun.spawnSync(["bash", legacy], { env: { ...Bun.env, HOME: fixture.home } });
       expect(oldAttempt.exitCode).toBe(73);
-      expect(existsSync(join(fixture.home, "Applications", "HasnaRecordings.app"))).toBeFalse();
+      expect(existsSync(join(fixture.home, "Applications", "Hasna Recordings.app"))).toBeFalse();
       // Old binaries may create their historical child paths before the shared lock.
       expect(existsSync(join(state, "audio"))).toBeTrue();
       expect(existsSync(join(state, "rollbacks"))).toBeTrue();
@@ -3521,7 +3521,7 @@ exit 73
 
   testOnNonDarwin("rejects a dangling canonical app symlink before transition handling", async () => {
     const fixture = createInstallerFixture();
-    const app = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const app = join(fixture.home, "Applications", "Hasna Recordings.app");
     mkdirSync(dirname(app), { recursive: true });
     symlinkSync(join(fixture.root, "missing.app"), app);
     const result = await runInstaller(fixture);
@@ -3531,7 +3531,7 @@ exit 73
 
   testOnNonDarwin("rejects insufficient transaction space before moving an installed app", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const result = await runInstaller(fixture, [], { AVAILABLE_KB: "1" });
     expect(result.exitCode).not.toBe(0);
@@ -3541,7 +3541,7 @@ exit 73
 
   testOnNonDarwin("fsyncs state, app backups, and candidate before advancing durable phases", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const result = await runInstaller(fixture);
     expect(result.exitCode).toBe(0);
@@ -3587,7 +3587,7 @@ exit 73
 
   testOnNonDarwin("rolls back when post-activation packaged helper verification fails", async () => {
     const fixture = createInstallerFixture();
-    const installed = join(fixture.home, "Applications", "HasnaRecordings.app");
+    const installed = join(fixture.home, "Applications", "Hasna Recordings.app");
     createApp(installed, "installed");
     const result = await runInstaller(fixture, [], { FAIL_ACTIVE_VERIFY: "1" });
     expect(result.exitCode).not.toBe(0);
@@ -3613,7 +3613,7 @@ exit 73
 
   testOnNonDarwin("runtime smoke rejects evidence from a process that already exited", async () => {
     const fixture = createInstallerFixture();
-    const app = join(fixture.root, "smoke", "HasnaRecordings.app");
+    const app = join(fixture.root, "smoke", "Hasna Recordings.app");
     createApp(app, "app");
     cpSync(
       join(repositoryRoot, "scripts", "smoke_macos_app.sh"),
@@ -3659,7 +3659,7 @@ while [ ! -e "$acknowledgement" ]; do /bin/sleep 0.01; done
 
   testOnNonDarwin("runtime smoke timeout does not wait forever on a live open process", async () => {
     const fixture = createInstallerFixture();
-    const app = join(fixture.root, "smoke-timeout", "HasnaRecordings.app");
+    const app = join(fixture.root, "smoke-timeout", "Hasna Recordings.app");
     createApp(app, "app");
     cpSync(
       join(repositoryRoot, "scripts", "smoke_macos_app.sh"),
@@ -3713,9 +3713,9 @@ while [ ! -e "$acknowledgement" ]; do /bin/sleep 0.01; done
     const physicalRelease = join(fixture.root, "physical", "release");
     const driftRelease = join(fixture.root, "drift", "release");
     const releaseLink = join(fixture.root, "linked-release");
-    const physicalApp = join(physicalRelease, "HasnaRecordings.app");
+    const physicalApp = join(physicalRelease, "Hasna Recordings.app");
     createApp(physicalApp, "physical-app");
-    createApp(join(driftRelease, "HasnaRecordings.app"), "drift-app");
+    createApp(join(driftRelease, "Hasna Recordings.app"), "drift-app");
     symlinkSync(physicalRelease, releaseLink, "dir");
     cpSync(
       join(repositoryRoot, "scripts", "smoke_macos_app.sh"),
@@ -3805,7 +3805,7 @@ if [ "$pid" = "$state_pid" ]; then printf 'p%s\\nn%s\\n' "$pid" "$executable"; f
     delete baseEnvironment.SSH_CONNECTION;
     const spawnSmoke = (env: Record<string, string | undefined>) =>
       Bun.spawn(
-        ["bash", join(fixture.root, "scripts", "smoke_macos_app.sh"), join(releaseLink, "HasnaRecordings.app"), bunExecutable],
+        ["bash", join(fixture.root, "scripts", "smoke_macos_app.sh"), join(releaseLink, "Hasna Recordings.app"), bunExecutable],
         { env, stdout: "pipe", stderr: "pipe" },
       );
     const strictSmoke = spawnSmoke(baseEnvironment);
@@ -3993,7 +3993,7 @@ done
 [ -n "$expires_at_utc" ] || exit 68
 [ -f "$private_key" ] && [ ! -L "$private_key" ] || exit 69
 [ -f "$public_key" ] && [ ! -L "$public_key" ] || exit 70
-[ "$artifact_basename" = "HasnaRecordings-0.2.12-macos-initial-bootstrap" ] || exit 71
+[ "$artifact_basename" = "Hasna Recordings-0.2.12-macos-initial-bootstrap" ] || exit 71
 case "$bun_executable" in /*) ;; *) exit 73 ;; esac
 [ -x "$bun_executable" ] || exit 73
 [[ "$publication_identity_sha256" =~ ^[a-f0-9]{64}$ ]] || exit 74
@@ -4470,10 +4470,10 @@ fi
     expect(codesignLog).toContain("--options runtime");
     expect(codesignLog).toContain("--entitlements RecordingsLib/RecordingsCLI.entitlements");
     expect(codesignLog).not.toContain("--timestamp");
-    expect(readFileSync(join(fixture.markers, "ui-smoke.log"), "utf8")).toContain("HasnaRecordings.app");
-    expect(existsSync(join(fixture.native, ".build", "debug", "HasnaRecordings.app"))).toBeTrue();
-    expect(existsSync(join(fixture.native, ".build", "debug", "HasnaRecordings.app", "Contents", "Helpers", "recordings"))).toBeTrue();
-    expect(existsSync(join(fixture.native, ".build", "debug", "HasnaRecordings-0.2.12-macos.zip"))).toBeFalse();
+    expect(readFileSync(join(fixture.markers, "ui-smoke.log"), "utf8")).toContain("Hasna Recordings.app");
+    expect(existsSync(join(fixture.native, ".build", "debug", "Hasna Recordings.app"))).toBeTrue();
+    expect(existsSync(join(fixture.native, ".build", "debug", "Hasna Recordings.app", "Contents", "Helpers", "recordings"))).toBeTrue();
+    expect(existsSync(join(fixture.native, ".build", "debug", "Hasna Recordings-0.2.12-macos.zip"))).toBeFalse();
   });
 
   testOnNonDarwin("local-only build is explicit, target-bound, ad-hoc, and non-notarized", async () => {
@@ -4497,8 +4497,8 @@ fi
     expect(bunLog).toContain("finalize-local");
     expect(existsSync(join(fixture.markers, "xcrun.log"))).toBeFalse();
     expect(existsSync(join(fixture.markers, "syspolicy.log"))).toBeFalse();
-    expect(existsSync(join(fixture.native, ".build", "release", "HasnaRecordings-0.2.12-macos-station06-local-only.zip"))).toBeTrue();
-    expect(existsSync(join(fixture.native, ".build", "release", "HasnaRecordings-0.2.12-macos-station06-local-only.manifest.json"))).toBeTrue();
+    expect(existsSync(join(fixture.native, ".build", "release", "Hasna Recordings-0.2.12-macos-station06-local-only.zip"))).toBeTrue();
+    expect(existsSync(join(fixture.native, ".build", "release", "Hasna Recordings-0.2.12-macos-station06-local-only.manifest.json"))).toBeTrue();
   });
 
   testOnNonDarwin("local-only build accepts every target the policy file declares, not just the first", async () => {
@@ -4515,11 +4515,11 @@ fi
     expect(bunLog).toContain("--approved-target-identity-kind tailscale_node_id_sha256");
     expect(bunLog).toContain(`--approved-target-identity-sha256 ${targetTailscaleIdentitySha256}`);
     expect(
-      existsSync(join(fixture.native, ".build", "release", "HasnaRecordings-0.2.12-macos-station03-local-only.zip")),
+      existsSync(join(fixture.native, ".build", "release", "Hasna Recordings-0.2.12-macos-station03-local-only.zip")),
     ).toBeTrue();
     expect(
       existsSync(
-        join(fixture.native, ".build", "release", "HasnaRecordings-0.2.12-macos-station03-local-only.manifest.json"),
+        join(fixture.native, ".build", "release", "Hasna Recordings-0.2.12-macos-station03-local-only.manifest.json"),
       ),
     ).toBeTrue();
   });
@@ -4561,7 +4561,7 @@ fi
     expect(bunLog).toContain("--approved-target-identity-kind tailscale_node_id_sha256");
     expect(existsSync(join(fixture.markers, "xcrun.log"))).toBeFalse();
     expect(
-      existsSync(join(fixture.native, ".build", "release", "HasnaRecordings-0.2.12-macos-station03-local-only.zip")),
+      existsSync(join(fixture.native, ".build", "release", "Hasna Recordings-0.2.12-macos-station03-local-only.zip")),
     ).toBeTrue();
   });
 
@@ -4789,7 +4789,7 @@ fi
     );
     expect(result.exitCode, result.stderr).toBe(0);
     const outputRoot = join(fixture.releaseBuildRoot, "release-output");
-    const basename = "HasnaRecordings-0.2.12-macos-app-update";
+    const basename = "Hasna Recordings-0.2.12-macos-app-update";
     expect(existsSync(join(outputRoot, `${basename}.zip`))).toBeTrue();
     expect(existsSync(join(outputRoot, `${basename}.manifest.json`))).toBeTrue();
     expect(existsSync(join(outputRoot, `${basename}.update-envelope.json`))).toBeTrue();
@@ -4897,7 +4897,7 @@ fi
         join(
           fixture.releaseBuildRoot,
           "release-output",
-          "HasnaRecordings-0.2.12-macos-initial-bootstrap.zip",
+          "Hasna Recordings-0.2.12-macos-initial-bootstrap.zip",
         ),
       ),
     ).toBeTrue();
@@ -4906,7 +4906,7 @@ fi
         join(
           fixture.releaseBuildRoot,
           "release-output",
-          "HasnaRecordings-0.2.12-macos-initial-bootstrap.manifest.json",
+          "Hasna Recordings-0.2.12-macos-initial-bootstrap.manifest.json",
         ),
       ),
     ).toBeTrue();
@@ -4923,7 +4923,7 @@ fi
     expect(releasePackageLog).toContain("public_key=");
     expect(releasePackageLog).toContain("/release-envelope-public.raw");
     expect(releasePackageLog).toContain(
-      "artifact_basename=HasnaRecordings-0.2.12-macos-initial-bootstrap",
+      "artifact_basename=Hasna Recordings-0.2.12-macos-initial-bootstrap",
     );
     expect(releasePackageLog).toContain(`bun_executable=${bunExecutable}`);
     expect(releasePackageLog).toContain("bootstrap_preflight_verifier=");

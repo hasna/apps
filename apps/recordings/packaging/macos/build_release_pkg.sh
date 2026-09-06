@@ -224,7 +224,7 @@ case "$VERSION" in
 esac
 # The artifact basename is derived from the canonical bundle identity, never hardcoded:
 # build.sh emits ${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE} with APP_BASENAME
-# taken from the bundle name (currently HasnaRecordings.app). The legacy
+# taken from the bundle name (currently Hasna Recordings.app). The legacy
 # Recordings-* form was dropped with the bundle rename and must not be re-required.
 [ -n "$APP" ] && [ -d "$APP" ] || { echo "Package app bundle path is missing or invalid." >&2; exit 2; }
 expected_basename="$(/usr/bin/basename "$APP" .app)-${VERSION}-macos-initial-bootstrap"
@@ -533,7 +533,7 @@ PACKAGE_BOOTSTRAP_ID="$(/usr/bin/uuidgen | /usr/bin/tr '[:upper:]' '[:lower:]')"
   "$SCRIPTS"
 require_no_extended_acl "$PACKAGE_STAGE_DIR"
 
-/usr/bin/ditto "$APP" "$ROOT/Applications/HasnaRecordings.app"
+/usr/bin/ditto "$APP" "$ROOT/Applications/Hasna Recordings.app"
 /bin/cp "$BROKER" "$ROOT/Library/PrivilegedHelperTools/com.hasna.recordings.updater"
 /bin/cp "$VERIFIER" "$ROOT/Library/PrivilegedHelperTools/com.hasna.recordings.artifact-verifier"
 /bin/cp "$PUBLIC_KEY" "$ROOT/Library/Application Support/Hasna/Recordings/Trust/envelope-keys/${KEY_EPOCH}.raw"
@@ -582,7 +582,7 @@ require_tree_without_extended_acl "$SCRIPTS"
   "$ROOT/Library/LaunchDaemons/com.hasna.recordings.updater.plist"
 /usr/bin/plutil -lint "$ROOT/Library/LaunchDaemons/com.hasna.recordings.updater.plist" >/dev/null
 
-STAGED_APP="$ROOT/Applications/HasnaRecordings.app"
+STAGED_APP="$ROOT/Applications/Hasna Recordings.app"
 STAGED_BROKER="$ROOT/Library/PrivilegedHelperTools/com.hasna.recordings.updater"
 STAGED_CLIENT="$STAGED_APP/Contents/Helpers/recordings-update-client"
 STAGED_VERIFIER="$ROOT/Library/PrivilegedHelperTools/com.hasna.recordings.artifact-verifier"

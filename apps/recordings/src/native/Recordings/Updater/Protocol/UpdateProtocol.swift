@@ -7,7 +7,7 @@ public enum RecordingsUpdateConstants {
     public static let rootMaintenanceSupported = false
     public static let keyRotationSupported = false
     public static let machServiceName = "com.hasna.recordings.updater"
-    public static let applicationPath = "/Applications/HasnaRecordings.app"
+    public static let applicationPath = "/Applications/Hasna Recordings.app"
     public static let brokerExecutablePath = "/Library/PrivilegedHelperTools/com.hasna.recordings.updater"
     public static let stateRoot = "/Library/Application Support/Hasna/Recordings/Updates"
     public static let trustRoot = "/Library/Application Support/Hasna/Recordings/Trust"

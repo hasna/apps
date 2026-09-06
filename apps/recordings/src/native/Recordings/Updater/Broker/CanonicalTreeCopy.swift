@@ -22,7 +22,7 @@ enum CanonicalTreeCopier {
         }
         defer { Darwin.close(source) }
         let destinationRoot = URL(fileURLWithPath: rootCandidatePath).deletingLastPathComponent().path
-        guard URL(fileURLWithPath: rootCandidatePath).lastPathComponent == "HasnaRecordings.app" else {
+        guard URL(fileURLWithPath: rootCandidatePath).lastPathComponent == "Hasna Recordings.app" else {
             throw CanonicalCopyError.nonCanonicalRoot
         }
         let destination = Darwin.open(

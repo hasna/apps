@@ -253,7 +253,7 @@ struct DurableInstallJournal {
         let leaf = URL(fileURLWithPath: transactionDirectory).lastPathComponent
         guard leaf.hasPrefix("transaction-") else { throw InstallJournalError.invalidJournal }
         let transactionID = String(leaf.dropFirst("transaction-".count))
-        let expectedCandidate = transactionDirectory + "/candidate/HasnaRecordings.app"
+        let expectedCandidate = transactionDirectory + "/candidate/Hasna Recordings.app"
         let activationPhases: Set<String> = [
             "prepared", "launch-barrier-pending", "launch-barrier-held",
             "swap-pending", "swapped", "previous-retaining",

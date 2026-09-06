@@ -1096,12 +1096,12 @@ describe("running bundle detection", () => {
         listProcesses: () =>
           [
             "/sbin/launchd",
-            psLine("/Users/hasna/.hasna/recordings/HasnaRecordings.app"),
+            psLine("/Users/hasna/.hasna/recordings/Hasna Recordings.app"),
             "/usr/libexec/cfprefsd",
           ].join("\n"),
-        readBundleIdentifier: appBundles("/Users/hasna/.hasna/recordings/HasnaRecordings.app"),
+        readBundleIdentifier: appBundles("/Users/hasna/.hasna/recordings/Hasna Recordings.app"),
       }),
-    ).toEqual(["/Users/hasna/.hasna/recordings/HasnaRecordings.app"]);
+    ).toEqual(["/Users/hasna/.hasna/recordings/Hasna Recordings.app"]);
   });
 
   test("reports every distinct bundle when more than one copy runs", () => {
@@ -1109,20 +1109,20 @@ describe("running bundle detection", () => {
       runningAppBundlePaths({
         listProcesses: () =>
           [
-            psLine("/Applications/HasnaRecordings.app"),
-            psLine("/Users/hasna/Applications/HasnaRecordings.app"),
-            psLine("/Applications/HasnaRecordings.app"),
+            psLine("/Applications/Hasna Recordings.app"),
+            psLine("/Users/hasna/Applications/Hasna Recordings.app"),
+            psLine("/Applications/Hasna Recordings.app"),
           ].join("\n"),
         readBundleIdentifier: appBundles(
-          "/Applications/HasnaRecordings.app",
-          "/Users/hasna/Applications/HasnaRecordings.app",
+          "/Applications/Hasna Recordings.app",
+          "/Users/hasna/Applications/Hasna Recordings.app",
         ),
       }),
-    ).toEqual(["/Applications/HasnaRecordings.app", "/Users/hasna/Applications/HasnaRecordings.app"]);
+    ).toEqual(["/Applications/Hasna Recordings.app", "/Users/hasna/Applications/Hasna Recordings.app"]);
   });
 
   test("keeps a bundle path that contains spaces", () => {
-    const bundle = "/Users/first last/Applications/HasnaRecordings.app";
+    const bundle = "/Users/first last/Applications/Hasna Recordings.app";
     expect(
       runningAppBundlePaths({
         listProcesses: () => psLine(bundle),
@@ -1132,15 +1132,15 @@ describe("running bundle detection", () => {
   });
 
   test("resolves argument text by asking the bundle instead of guessing", () => {
-    // "/bin/sh -c /Applications/HasnaRecordings.app" and "/Users/first last/HasnaRecordings.app" are
+    // "/bin/sh -c /Applications/Hasna Recordings.app" and "/Users/first last/Hasna Recordings.app" are
     // the same shape, so text alone cannot say where the path starts. The longest candidate
     // here is not a bundle, so the real one is what survives.
     expect(
       runningAppBundlePaths({
-        listProcesses: () => `/bin/sh -c ${psLine("/Applications/HasnaRecordings.app")}`,
-        readBundleIdentifier: appBundles("/Applications/HasnaRecordings.app"),
+        listProcesses: () => `/bin/sh -c ${psLine("/Applications/Hasna Recordings.app")}`,
+        readBundleIdentifier: appBundles("/Applications/Hasna Recordings.app"),
       }),
-    ).toEqual(["/Applications/HasnaRecordings.app"]);
+    ).toEqual(["/Applications/Hasna Recordings.app"]);
   });
 
   /**
@@ -1188,8 +1188,8 @@ describe("running bundle detection", () => {
     ).toEqual([variant]);
   });
 
-  test("rejects a bundle named HasnaRecordings.app whose identifier is not this app", () => {
-    const impostor = "/Applications/HasnaRecordings.app";
+  test("rejects a bundle named Hasna Recordings.app whose identifier is not this app", () => {
+    const impostor = "/Applications/Hasna Recordings.app";
     expect(
       runningAppBundlePaths({
         listProcesses: () => psLine(impostor),
@@ -1201,7 +1201,7 @@ describe("running bundle detection", () => {
   test("reports nothing when no candidate is a readable bundle", () => {
     expect(
       runningAppBundlePaths({
-        listProcesses: () => psLine("/bogus/HasnaRecordings.app"),
+        listProcesses: () => psLine("/bogus/Hasna Recordings.app"),
         readBundleIdentifier: () => null,
       }),
     ).toEqual([]);
@@ -1220,17 +1220,17 @@ describe("running bundle detection", () => {
   test("ignores paths that are not the executable inside the bundle", () => {
     const anyBundle = () => "com.hasna.recordings";
     expect(
-      runningAppBundlePaths({ listProcesses: () => "/Applications/HasnaRecordings.app", readBundleIdentifier: anyBundle }),
+      runningAppBundlePaths({ listProcesses: () => "/Applications/Hasna Recordings.app", readBundleIdentifier: anyBundle }),
     ).toEqual([]);
     expect(
       runningAppBundlePaths({
-        listProcesses: () => "/Applications/HasnaRecordings.app/Contents/Helpers/recordings-update-client",
+        listProcesses: () => "/Applications/Hasna Recordings.app/Contents/Helpers/recordings-update-client",
         readBundleIdentifier: anyBundle,
       }),
     ).toEqual([]);
     expect(
       runningAppBundlePaths({
-        listProcesses: () => "/Applications/HasnaRecordings.app/Contents/MacOS/sub/thing",
+        listProcesses: () => "/Applications/Hasna Recordings.app/Contents/MacOS/sub/thing",
         readBundleIdentifier: anyBundle,
       }),
     ).toEqual([]);

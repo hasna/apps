@@ -201,8 +201,8 @@ struct ActivationRecoveryPolicyTests {
             "Contents/Helpers/recordings": 493,
             "Contents/Helpers/recordings-update-client": 493
           },
-          "candidate_application_path": "/Library/Application Support/Hasna/Recordings/Updates/transaction-00000000-0000-0000-0000-000000000001/candidate/HasnaRecordings.app",
-          "application_path": "/Applications/HasnaRecordings.app"
+          "candidate_application_path": "/Library/Application Support/Hasna/Recordings/Updates/transaction-00000000-0000-0000-0000-000000000001/candidate/Hasna Recordings.app",
+          "application_path": "/Applications/Hasna Recordings.app"
         }
         """#.utf8)
         let journal = try JSONDecoder().decode(BrokerInstallJournal.self, from: legacyJSON)

@@ -252,7 +252,7 @@ describe("recordings CLI", () => {
     expect(status.package_root).toBe(process.cwd());
     expect(status.installer_available).toBe(true);
     expect(status.native_sources_available).toBe(true);
-    expect(status.installed_app_path).toBe(join(home, "Applications", "HasnaRecordings.app"));
+    expect(status.installed_app_path).toBe(join(home, "Applications", "Hasna Recordings.app"));
     expect(status.legacy_install_paths).toEqual([]);
     expect(typeof status.ad_hoc_signed).toBe("boolean");
     expect(status.app_code_hash === null || typeof status.app_code_hash === "string").toBe(true);
@@ -742,13 +742,13 @@ describe("recordings CLI", () => {
   test("app status inspects the canonical app and reports legacy duplicates", async () => {
     const home = join(tmpdir(), `open-recordings-cli-app-layout-${Date.now()}`);
     tempDirs.push(home);
-    // The canonical bundle is HasnaRecordings.app since the fleet rename (#519); the
+    // The canonical bundle is Hasna Recordings.app since the fleet rename (#519); the
     // pre-rename 0.3.2-era Recordings.app forms are legacy duplicates.
-    const canonical = join(home, "Applications", "HasnaRecordings.app");
+    const canonical = join(home, "Applications", "Hasna Recordings.app");
     const hiddenLegacy = join(home, ".hasna", "recordings", "Recordings.app");
-    const rollbackLegacy = join(home, "Applications", "HasnaRecordings.app.rollback-pre-test");
+    const rollbackLegacy = join(home, "Applications", "Hasna Recordings.app.rollback-pre-test");
     mkdirSync(join(canonical, "Contents", "MacOS"), { recursive: true });
-    // The bundle is HasnaRecordings.app; the executable inside stays "Recordings".
+    // The bundle is Hasna Recordings.app; the executable inside stays "Recordings".
     writeFileSync(join(canonical, "Contents", "MacOS", "Recordings"), "fixture");
     mkdirSync(hiddenLegacy, { recursive: true });
     mkdirSync(rollbackLegacy, { recursive: true });
