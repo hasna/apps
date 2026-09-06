@@ -9,13 +9,17 @@ function serializeValue(value: string): string {
   if (controls.test(value)) throw new EnvAssignmentError("Environment values cannot contain control characters or newlines.");
   // Preserve the familiar KEY=value form for values needing no dotenv escaping.
   if (/^[A-Za-z0-9_./:@+=,-]*$/.test(value)) return value;
-  const quote = ["'", '"', "`"].find(delimiter => !value.includes(delimiter));
+  // Single quotes/backticks preserve literal backslashes. Bun decodes some
+  // backslash sequences inside double quotes, so use those only without any.
+  const quote = ["'", "`", '"'].find(delimiter => !value.includes(delimiter) && (delimiter !== '"' || !value.includes("\\")));
   const trailingSlashes = value.match(/\\+$/)?.[0].length ?? 0;
-  if (!quote || trailingSlashes % 2 !== 0) {
-    throw new EnvAssignmentError("Cannot safely encode this environment value; all quote delimiters or an odd trailing backslash are unsupported.");
+  // Bun 1.3.14/1.4.0 disagree on retaining a slash immediately before a final dollar.
+  if (!quote || trailingSlashes % 2 !== 0 || value.endsWith("\\$")) {
+    throw new EnvAssignmentError("Cannot safely encode this environment value; incompatible quote/backslash combinations require manual editing.");
   }
-  // Bun expands dollars inside all three quote forms. Other backslashes stay literal.
-  return `${quote}${value.replaceAll("$", "\\$")}${quote}`;
+  // A final dollar cannot expand; escaping it makes Bun retain an extra slash.
+  // Other dollars need escaping, including inside single quotes and backticks.
+  return `${quote}${value.replace(/\$(?=.)/g, "\\$")}${quote}`;
 }
 
 function commentSuffix(value: string): string {

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { prepareEnvAssignment } from "./env-assignment.js";
+import { EnvAssignmentError, prepareEnvAssignment } from "./env-assignment.js";
 
 const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 
@@ -19,13 +19,47 @@ test("literal env updates preserve unrelated lines, export spacing, comments, du
 test("ambiguous existing records and unsupported assignments fail before content is produced", () => {
   for (const assignment of ["", "missing-equals", "=empty", "QA_.*=new", "QA_[=new", "1KEY=new", " A=new", "A =new",
     "QA_TARGET=line\nOTHER=injected", "QA_TARGET=line\rOTHER=injected", "QA_TARGET=control\x1b", "QA_TARGET=control\x00",
-    "QA_TARGET=control\t", "QA_TARGET=separator\u2028", "QA_TARGET=odd\\", "QA_TARGET=all'\"`quotes"]) {
+    "QA_TARGET=control\t", "QA_TARGET=separator\u2028", "QA_TARGET=odd\\", "QA_TARGET=all'\"`quotes", "QA_TARGET=one'`\\ntwo", "QA_TARGET=terminal\\$"]) {
     expect(() => prepareEnvAssignment(assignment, "OTHER=retained\n")).toThrow();
   }
   for (const existing of ['OTHER="first\nQA_TARGET=inside\nlast"\n', "OTHER='unterminated\n", "OTHER=`unterminated\n",
     "not-an-assignment\n", "OTHER='closed' trailing\n", "OTHER=bare\rcarriage\n", "OTHER=control\x00\n"]) {
     expect(() => prepareEnvAssignment("QA_TARGET=simple", existing)).toThrow("Cannot safely update .env");
   }
+});
+
+test("Bun dotenv preserves every accepted quote, backslash and dollar combination in a batched matrix", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "skills-env-matrix-")));
+  const alphabet = ["a", "'", '"', "`", "\\", "$", "n", "r", " ", "#", "=", "é"];
+  const cases: string[] = [];
+  for (const first of alphabet) for (const second of alphabet) for (const third of alphabet) cases.push(first + second + third);
+  cases.push("one'\\ntwo", "one'\\rtwo", "one'\\\\ntwo", "one'`\\ntwo", "one'`\\rtwo", "one'`\\ttwo", "aa$", "aa$$", "aa\\$", "aa\\$$", "aa\\\\$", "aa'\\$", "aa'`$", "aa'`\\$", "aa'\\\\n$", "aa'\\r$");
+  try {
+    const accepted: { key: string; expectedHash: string }[] = [];
+    let content = "", rejected = 0;
+    for (const [index, value] of cases.entries()) {
+      const key = `QA_MATRIX_${index}`;
+      try {
+        content += prepareEnvAssignment(`${key}=${value}`, "").content;
+        accepted.push({ key, expectedHash: hash(value) });
+      } catch (error) { expect(error instanceof EnvAssignmentError).toBe(true); rejected++; }
+    }
+    expect(accepted.length).toBeGreaterThan(1000);
+    expect(accepted.length + rejected).toBe(cases.length);
+    const envFile = join(root, "matrix.env"), keysFile = join(root, "keys.json"), reader = join(root, "read.ts");
+    await writeFile(envFile, content);
+    await writeFile(keysFile, JSON.stringify(accepted.map(row => row.key)));
+    await writeFile(reader, `import{createHash}from'node:crypto';import{readFileSync}from'node:fs';
+      const keys=JSON.parse(readFileSync(process.argv[2],'utf8'));console.log(JSON.stringify(keys.map(key=>createHash('sha256').update(process.env[key]??'').digest('hex'))));\n`);
+    const child = Bun.spawn([process.execPath, "--env-file", envFile, reader, keysFile], { cwd: root,
+      env: { HOME: root, PATH: join(root, "empty-path") }, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(exitCode).toBe(0); expect(stderr.length).toBe(0);
+    const hashes = JSON.parse(stdout) as string[];
+    expect(hashes.length).toBe(accepted.length);
+    // Only case IDs are printed on failure; neither source values nor parsed values leave the fixture.
+    expect(accepted.filter((row, index) => row.expectedHash !== hashes[index]).map(row => row.key)).toEqual([]);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("built CLI env assignment round-trips literal values and rejects unsafe writes without output leaks", async () => {
@@ -55,7 +89,9 @@ test("built CLI env assignment round-trips literal values and rejects unsafe wri
     const reader = join(root, "read-env.ts");
     await writeFile(reader, `import{createHash}from'node:crypto';console.log(JSON.stringify({hash:createHash('sha256').update(process.env.QA_TARGET??'').digest('hex'),unrelated:process.env.UNRELATED==='retained'}));\n`);
     const values = ["simple", "", "a=b==", " spaces ", "a#b", "a$b", "a${UNRELATED}", "a\\b", "a\\nb", "a\\$UNRELATED", "a\\\\$UNRELATED",
-      "a\\\\", "a'b", 'a"b', "a`b", "a'\"b", "a$&b", "a$`b", "a$'b", "a$$b", "a${UNRELATED:-fallback}", "résumé"];
+      "a\\\\", "a'b", 'a"b', "a`b", "a'\"b", "a$&b", "a$`b", "a$'b", "a$$b", "a${UNRELATED:-fallback}", "résumé",
+      "one'\\ntwo", "one'\\rtwo", "one'\\ttwo", "one'\\\\ntwo", "one\"\\ntwo", "one'\"\\rtwo", "one'`dollar$",
+      "aa$", "aa$$", "aa\\$$", "aa'\\\\n$", "aa'\\r$"];
     for (const [index, value] of values.entries()) {
       const before = "# Keep bytes\nUNRELATED=retained\nQA_TARGET=before\nAFTER=retained\n";
       await writeFile(envFile, before, { mode: 0o600 });
@@ -76,7 +112,8 @@ test("built CLI env assignment round-trips literal values and rejects unsafe wri
     const canary = `dummy-${randomUUID()}`;
     const invalid = [canary, "", `=${canary}`, `QA_.*=${canary}`, `QA_[=${canary}`, `9KEY=${canary}`, ` QA_TARGET=${canary}`,
       `QA_TARGET=${canary}\nINJECTED=yes`, `QA_TARGET=${canary}\rINJECTED=yes`, `QA_TARGET=${canary}\t`,
-      `QA_TARGET=${canary}\\`, `QA_TARGET=${canary}'\"\``];
+      `QA_TARGET=${canary}\\`, `QA_TARGET=${canary}'\"\``, `QA_TARGET=${canary}'\`\\n`, `QA_TARGET=${canary}'\`\\r`,
+      `QA_TARGET=${canary}\\$`, `QA_TARGET=${canary}\\\\$`, `QA_TARGET=${canary}'\\$`];
     for (const json of [true, false]) for (const assignment of invalid) {
       const before = "QA_TARGET_OTHER=retained\nQA_TARGET=before\nAFTER=retained\n";
       await writeFile(envFile, before);
