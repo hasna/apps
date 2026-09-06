@@ -66,6 +66,16 @@ describe("testSpawnEnv authority isolation", () => {
     });
   });
 
+  test("declares the explicit local opt-in, since the fail-closed ruling left no implicit fallback", () => {
+    withEnv({ HASNA_PROJECTS_LOCAL: "" }, () => {
+      const isolated = testSpawnEnv();
+      expect(isolated.HASNA_PROJECTS_LOCAL).toBe("1");
+      // An explicit override (including a deliberate blank that restores the
+      // fail-closed case) always wins.
+      expect(testSpawnEnv({ HASNA_PROJECTS_LOCAL: "" }).HASNA_PROJECTS_LOCAL).toBe("");
+    });
+  });
+
   test("an explicit local Projects database cannot inherit hosted Projects selectors", () => {
     const seed: Record<string, string> = {};
     for (const key of PROJECTS_API_ENV_KEYS) {
@@ -86,14 +96,15 @@ describe("testSpawnEnv authority isolation", () => {
       expect(process.env.HASNA_PROJECTS_API_KEY).toBeUndefined();
       expect(process.env.HASNA_STATION).toBe(TEST_KEYCHAIN_STATION);
       expect(process.env.HASNA_HOME).toBe(TEST_HASNA_HOME);
+      expect(process.env.HASNA_PROJECTS_LOCAL).toBe("1");
     });
   });
 });
 
 describe("withoutUnhostedNotice", () => {
-  test("strips only the one unhosted-mode line", () => {
+  test("strips only the one local-mode line", () => {
     const stderr = [
-      "projects: local mode — nothing configures the hosted registry (…)",
+      "projects: local mode — HASNA_PROJECTS_LOCAL is set, so this run reads and writes the on-box SQLite registry (…)",
       "Unknown machine: ghost",
       "",
     ].join("\n");

@@ -40,6 +40,10 @@ function runMcpSession(messages: unknown[], env: Record<string, string>) {
   isolated["HASNA_HOME"] = TEST_HASNA_HOME;
   isolated["HASNA_STATION"] = TEST_KEYCHAIN_STATION;
   delete isolated["HASNA_CONFIG_HOME"];
+  // The fail-closed ruling made the on-box registry opt-in only; these
+  // sessions exercise that registry, so they state the opt-in explicitly
+  // unless the caller already did (including a deliberate blank).
+  if (!("HASNA_PROJECTS_LOCAL" in env)) isolated["HASNA_PROJECTS_LOCAL"] = "1";
   return Bun.spawnSync({
     cmd: ["node", "src/testing/mcp-stdio-client.mjs", JSON.stringify(messages)],
     stdout: "pipe",

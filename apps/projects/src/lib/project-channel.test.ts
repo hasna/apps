@@ -30,8 +30,9 @@ import { silenceHostedApiEnv } from "../testing/spawn-env.js";
 
 // Silence every tier of the shared @hasna/contracts credential resolver, so an
 // operator's env, login Keychain, or ~/.hasna credentials file cannot route
-// these in-process local-registry tests at the real fleet. With all five tiers
-// silent the store takes the unhosted OSS path onto the on-box SQLite registry.
+// these in-process local-registry tests at the real fleet. With all five tiers silent, the local opt-in (HASNA_PROJECTS_LOCAL=1, set by
+// silenceHostedApiEnv) selects the on-box SQLite registry — the fail-closed
+// ruling leaves no implicit fallback for a silent environment.
 silenceHostedApiEnv();
 
 function makeDb(): Database {
