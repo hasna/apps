@@ -340,6 +340,57 @@ const client = new ConversationsClient({
 await client.sendMessage({ from: "me", to: "you", content: "hi", channel: "deploys" });
 ```
 
+The SDK client takes an explicit `baseUrl` and `apiKey`. It does NOT read the
+ambient environment: an explicit `baseUrl` with no `apiKey` sends no `x-api-key`
+header — the credential is pinned to the authority it resolved with, never
+borrowed from the shell, the Keychain, or the credentials file
+(hasna/apps#1794). Use `getStore()` from `@hasna/conversations` (see
+[Credential resolution](#credential-resolution)) when you want the shared
+resolver to decide the credential and the authority for you.
+
+## Credential resolution
+
+The CLI, the MCP server, the hook and the library `getStore()` all resolve the
+credential and the service authority through the ONE client seam in
+`@hasna/contracts` (owner directive 2026-09-04, hasna/apps#1720), re-read fresh
+on EVERY resolution — so a rotated key heals a long-running process instead of
+waiting for it to restart. Precedence, highest first:
+
+| # | Tier | Where |
+|---|------|-------|
+| 1 | explicit argument | `credentials.apiKey` / `credentials.profile` (via `getStore(env, { credentials })`) |
+| 2 | deliberate env pointer | `HASNA_CONVERSATIONS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_CONVERSATIONS_API_KEY_REF` (a secrets-vault ITEM KEY, never a value) |
+| 3 | macOS Keychain | generic-password item `hasna.credentials.conversations.api-key`, account `HASNA_STATION`, else `hostname -s`, else `$USER` |
+| 4 | disk, read at call time | `~/.hasna/conversations/config/credentials`, mode 0400/0600 (`HASNA_HOME` moves the root; `HASNA_CONFIG_HOME` moves the config root) |
+| 5 | process env | `HASNA_CONVERSATIONS_API_KEY` — a legitimate tier, deliberately BELOW disk, with no deprecation notice |
+
+The authority follows `HASNA_CONVERSATIONS_API_URL`, then the Keychain `api-url`
+item, then the credentials file, and finally defaults to the fleet gateway
+`https://api.hasna.com/conversations` (the client appends `/v1`). A key from any
+tier reaches the fleet with no URL configured.
+
+**Fail closed.** A hosted run with no resolvable credential exits non-zero,
+naming every place that was consulted, and never falls back to the on-box
+SQLite store and never emits a `*-local-fallback` event. The legacy `~/.hasna/
+fleet-env/`, `~/.hasna/cloud/` and `~/.config/hasna/` locations are inputs
+nowhere, and no `*_MODE` / `*_STORAGE_MODE` variable is read — the transport is
+decided by what resolves, never by a mode word.
+
+**Local is opt-in.** The on-box SQLite store is reachable ONLY through the
+explicit store path `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH`,
+which wins even when cloud credentials are exported globally — and a local run
+announces itself once on stderr (`conversations: LOCAL mode — …`) so it can
+never be mistaken for a hosted run with an empty store. Nothing configured at
+all is an error, never the local default.
+
+```bash
+# Hosted: a key from any tier is enough; the URL is optional (gateway default)
+HASNA_CONVERSATIONS_API_KEY=<key> conversations read --to codex --json
+
+# Local (explicit opt-in): an on-box SQLite file
+HASNA_CONVERSATIONS_DB_PATH=/path/to/store.db conversations read --to codex --json
+```
+
 ## Channels
 
 Conversations uses flat channels. There is no runtime hierarchy and no

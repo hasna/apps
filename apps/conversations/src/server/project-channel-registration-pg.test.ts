@@ -5,11 +5,8 @@ import type {
   QueryResult,
   TypedQueryClient,
 } from "../generated/storage-kit/query.js";
-import { createHasnaStorageClient } from "../lib/contracts-client/storage.js";
-import {
-  createHasnaHttpTransport,
-  HasnaHttpError,
-} from "../lib/contracts-client/transport.js";
+import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
+import { createHasnaHttpTransport, HasnaHttpError } from "@hasna/contracts/client";
 import { ApiStore } from "../lib/store/api-store.js";
 import {
   createProjectChannelRegistrationAuthority,
@@ -1784,9 +1781,15 @@ describe("PostgreSQL project channel registration authority", () => {
     } as const;
     const lookup = await authority.lookupReceipt(lookupRequest);
     expect(lookup.receipt.receipt_id).toBe(receipt.receipt_id);
-    await expect(authority.lookupReceipt({
-      ...lookupRequest,
-      target_selector: "wrong-selector",
-    })).rejects.toThrow("does not bind target_selector");
+    // The server refuses a target_selector that does not bind the receipt. The
+    // shared transport carries the refusal as a 400 HasnaHttpError whose
+    // server-provided detail lives on `.body` (never stringified into the
+    // message — @hasna/contracts 1.0.2).
+    const wrong = await authority
+      .lookupReceipt({ ...lookupRequest, target_selector: "wrong-selector" })
+      .catch((e: unknown) => e);
+    expect(wrong).toMatchObject({ name: "HasnaHttpError", status: 400 });
+    const body = (wrong as { body?: { error?: string } }).body;
+    expect(body?.error).toContain("does not bind target_selector");
   });
 });

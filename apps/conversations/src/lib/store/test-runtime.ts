@@ -7,15 +7,15 @@
 // with no isolation variable set. The same mechanism wrote 122 rows into the
 // production `@hasna/domains` store in one hour.
 //
-// WHY IT LIVES IN THE APP-OWNED LAYER. `src/lib/contracts-client/*` is a
-// byte-faithful vendored copy of `@hasna/contracts` and is periodically
-// re-vendored; a guard placed there would be silently reverted by the next
-// re-vendor. That reasoning is already recorded in `./index.ts` for this
-// module's sibling guard, and it applies here unchanged. The upstream resolver
-// has no concept of a test context at all — it keys on the API-URL keys and
-// the API-key keys, and has no notion of a local store path — so it cannot see
-// this conflict by construction. That gap is tracked upstream separately; this
-// file is what protects the app in the meantime.
+// WHY IT LIVES IN THE APP-OWNED LAYER. The store resolver in
+// `src/lib/store/index.ts` is the seam that routes to `@hasna/contracts/client`
+// only for the full API pair; a guard placed in the shared package would have
+// no notion of a test context or a local store path and cannot see this
+// conflict by construction. That reasoning is already recorded in `./index.ts`
+// for this module's sibling guard, and it applies here unchanged. The upstream
+// resolver keys on the API-URL keys and the API-key keys, and has no concept of
+// a local store path — so it cannot see this conflict. This file is what
+// protects the app.
 //
 // WHAT THIS DELIBERATELY DOES NOT DO. It is dormant outside a test runner. An
 // operator running the CLI by hand against production is the intended production
@@ -206,8 +206,12 @@ export function detectTestRuntime(inputs: Partial<TestRuntimeProbeInputs> = {}):
  * Is this API URL a loopback address?
  *
  * Covers the whole `127.0.0.0/8` range rather than the single literal
- * `127.0.0.1`, because this repository's own suites bind `127.0.0.9` as well —
- * a guard that knew only `127.0.0.1` would refuse a legitimate local fixture.
+ * `127.0.0.1`, because this repository's own suites have bound `127.0.0.9`
+ * as well — a guard that knew only `127.0.0.1` would refuse a legitimate
+ * local fixture. (The shared @hasna/contracts resolver itself accepts ONLY
+ * the exact loopback authorities `127.0.0.1`, `localhost`, and `[::1]` for
+ * http, so today a resolver-routed fixture must use one of those; the /8
+ * coverage here is defence in depth for any future widening of that rule.)
  * Parsing rather than matching is what keeps `localhost.attacker.example` and
  * `127.0.0.1.attacker.example` from passing as loopback.
  */

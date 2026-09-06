@@ -40,7 +40,8 @@ describe("channel read CLI", () => {
     const empty = runCli(["channel", "read", "empty-read-channel", "--limit", "1"]);
     expect(empty.exitCode).toBe(0);
     expect(empty.stdout).toContain("No messages in #empty-read-channel.");
-    expect(empty.stderr).toBe("");
+    // Local mode announces itself once on stderr (hasna/apps#1720).
+    expect(empty.stderr).toContain("LOCAL mode");
 
     const missing = runCli(["channel", "read", "missing-read-channel", "--limit", "1"]);
     expect(missing.exitCode).toBe(1);
@@ -51,7 +52,7 @@ describe("channel read CLI", () => {
   test("emits a JSON error for a missing channel with --json", () => {
     const missing = runCli(["channel", "read", "missing-json-channel", "--json"]);
     expect(missing.exitCode).toBe(1);
-    expect(missing.stderr).toBe("");
+    expect(missing.stderr).toContain("LOCAL mode");
     expect(JSON.parse(missing.stdout)).toEqual({
       error: "Channel #missing-json-channel not found.",
     });

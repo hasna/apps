@@ -99,7 +99,9 @@ program
   .action(() => {
     if (isCloudStore()) {
       printErrorLine(chalk.red("The interactive TUI is local-mode only."));
-      printErrorLine(chalk.dim("This client is configured for the hosted API (HASNA_CONVERSATIONS_API_URL/_API_KEY set)."));
+      printErrorLine(
+        chalk.dim("This client resolved a hosted credential (HASNA_CONVERSATIONS_API_KEY or the shared chain)."),
+      );
       printErrorLine(chalk.dim("Use the routed subcommands (send, read, sessions, channels, etc.) which talk to the cloud API."));
       process.exit(1);
     }

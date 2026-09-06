@@ -79,6 +79,7 @@ describe("top-level command routing", () => {
       status: "online",
       heartbeat: true,
     });
-    expect(result.stderr).toBe("");
+    // Local mode announces itself once on stderr (hasna/apps#1720).
+    expect(result.stderr).toContain("LOCAL mode");
   });
 });

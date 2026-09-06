@@ -312,17 +312,20 @@ describe("startPolling — store failure visibility (regression d3c6b65e)", () =
    * turned CI red. This test fails on that revision and passes on this one.
    */
   test("stop() drains — a stopped loop never reaches a later fetch stub", async () => {
-    // A DISTINCT loopback address, so this assertion counts THIS loop's traffic
+    // A DISTINCT loopback authority, so this assertion counts THIS loop's traffic
     // and nothing else. Counting every fetch in the process instead makes the
     // test a global canary: it then fails on any unrelated leak elsewhere in
     // the suite, which is a true statement about the suite but not about the
-    // property under test. 127.0.0.9:9 is closed exactly like 127.0.0.1:9.
-    // Its own closed loopback host, and its own private store, so the count
-    // below is THIS loop's traffic and nothing else. Two separate hazards are
-    // being avoided: counting every fetch in the process would make this a
-    // global canary that fails on any unrelated leak, and setting the URL on
-    // process.env would hand this host to every other live loop as well.
-    const PROBE_HOST = "127.0.0.9";
+    // property under test. `localhost:9` is closed exactly like 127.0.0.1:9,
+    // and it is one of the exact loopback authorities the shared
+    // @hasna/contracts resolver accepts for http (127.0.0.9 is deliberately
+    // NOT in that set). Its own closed loopback host, and its own private
+    // store, so the count below is THIS loop's traffic and nothing else. Two
+    // separate hazards are being avoided: counting every fetch in the process
+    // would make this a global canary that fails on any unrelated leak, and
+    // setting the URL on process.env would hand this host to every other live
+    // loop as well.
+    const PROBE_HOST = "localhost";
     const probeStore = getStore({
       [ENV_KEYS.apiUrlKeys[0]]: `http://${PROBE_HOST}:9/v1`,
       [ENV_KEYS.apiKeyKeys[0]]: "placeholder-not-a-credential",

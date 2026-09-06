@@ -52,7 +52,8 @@ describe("conversations project-panel CLI", () => {
     const stderr = Buffer.from(result.stderr).toString("utf-8");
 
     expect(result.exitCode).toBe(0);
-    expect(stderr).toBe("");
+    // Local mode announces itself once on stderr (hasna/apps#1720).
+    expect(stderr).toContain("LOCAL mode");
     const panel = JSON.parse(stdout);
     expect(panel.schema).toBe("hasna.project_panel.v1");
     expect(panel.projectId).toBe("swiss-bank-account");
