@@ -642,11 +642,12 @@ function normalizeUpdatedSincePage(payload: unknown): UpdatedSincePage {
 
 /**
  * The client for the configured instance, or null when this install runs on
- * this machine (no credential and no authority).
+ * this machine — which is now the explicit local opt-in only
+ * (`HASNA_SKILLS_LOCAL=1`); with no credential, no authority and no opt-in the
+ * shared ladder throws (fail-closed ruling), so the caller fails loudly instead
+ * of quietly reading the bundled corpus while authentication is unconfigured.
  *
- * A configured authority with no credential does NOT return null: the shared
- * ladder throws, so the caller fails loudly instead of quietly reading the
- * bundled corpus while authentication is unconfigured.
+ * A configured authority with no credential also throws for the same reason.
  *
  * ASYNC because the credential ladder is: a vault pointer
  * (`HASNA_SKILLS_API_KEY_REF`) is completed through the secrets vault before a

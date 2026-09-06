@@ -124,7 +124,7 @@ The unprefixed `SKILLS_API_KEY` and `SKILLS_API_URL` spellings are still accepte
 as silent aliases one rung below the canonical names, for one release. Use the
 `HASNA_`-prefixed names. `SKILL_API_KEY` (singular) is no longer read at all.
 
-**Three outcomes, and no fourth:**
+**Fail closed, and the local run is a deliberate choice:**
 
 - a credential resolves → **hosted**, against the configured URL or the gateway.
   A credential that resolves but cannot produce a usable key — a deliberate
@@ -133,13 +133,34 @@ as silent aliases one rung below the canonical names, for one release. Use the
 - no credential but a URL is configured → **loud failure**, exit non-zero. There
   is no local fallback: answering from the bundled corpus while authentication is
   unconfigured is a false green;
-- neither → **local**. Skills ships its corpus, so running on this machine is a
-  real mode; it prints one line on stderr saying so.
+- neither a credential nor a URL, and no opt-in → **loud failure**, exit
+  non-zero. Running on this machine is no longer the silence that follows a
+  missing credential: an unconfigured install fails closed, opening no local
+  database and emitting no local-fallback event, and the error names the way
+  out;
+- the explicit local opt-in → **local**. Skills ships its corpus, so running on
+  this machine is a real mode — but it must be asked for:
+  `HASNA_SKILLS_LOCAL=1` (alias `SKILLS_LOCAL=1`). It prints one line saying
+  "local mode" on stderr. A configured environment always outranks the opt-in:
+  with an authority or credential in the environment, `HASNA_SKILLS_LOCAL` is
+  ignored and the run goes (or fails) hosted.
 
 The retired locations are not read: `auth.json` (in either the app directory or
 the legacy `~/.skills/`), the old fleet-env and per-machine cloud env folders
 under `~/.hasna`, and the XDG config directory. `~/.hasna` is a closed namespace
 of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
+
+### Routing environment variables
+
+| Variable | Meaning |
+|---|---|
+| `HASNA_SKILLS_API_KEY` | The API key (tier 5 of the ladder). The silent alias `SKILLS_API_KEY` is accepted for one release. |
+| `HASNA_SKILLS_API_URL` | The Skills API origin (HTTPS, or loopback HTTP). The silent alias `SKILLS_API_URL` is accepted for one release. |
+| `HASNA_SKILLS_LOCAL` | Explicit unhosted opt-in: run on this machine against the bundled corpus when no authority is configured. Any non-blank value (`1`). Alias `SKILLS_LOCAL`. Ignored whenever an authority or credential variable IS set. |
+| `HASNA_SKILLS_API_KEY_OVERRIDE` | Deliberate tier-2 key that outranks every store. |
+| `HASNA_SKILLS_API_KEY_REF` | Deliberate tier-2 vault-item pointer (resolved through `@hasna/secrets`). |
+| `HASNA_PROFILE` | Selects an isolated `credentials-<profile>` file (tier 1). |
+| `HASNA_STATION` | The Keychain account for tier 3; falls back to `hostname -s`, then `$USER`. |
 
 ## CLI Commands
 
@@ -151,7 +172,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills unpin <name>` | | Remove a project pin |
 | `skills pins list` | | List pinned skills |
 | `skills setup --api-url <url>` | | Point the CLI at a Skills API origin for remote runs |
-| `skills setup` | | Show whether an API origin is configured; with none, skills run on this machine |
+| `skills setup` | | Show whether an API origin is configured; with none, running on this machine requires `HASNA_SKILLS_LOCAL=1` |
 | `skills setup agents` | | Register the Skills MCP server with all supported agents |
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
 | `skills search <query>` | `s` | Search by name, description, or tags |

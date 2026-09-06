@@ -154,6 +154,12 @@ export const FLEET_CREDENTIAL_ENV_VARS = [
   "HASNA_PROFILE",
   "HASNA_HOME",
   "HASNA_CONFIG_HOME",
+  // The local-mode opt-in is a routing decision exactly like the credential
+  // variables: a developer's ambient HASNA_SKILLS_LOCAL must never decide the
+  // mode of a child CLI the suite spawns. Tests that WANT the opt-in pass it
+  // explicitly (cli.test-utils.ts does, through its own testEnv()).
+  "HASNA_SKILLS_LOCAL",
+  "SKILLS_LOCAL",
 ] as const;
 
 /**
