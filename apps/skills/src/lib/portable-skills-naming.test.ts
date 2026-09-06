@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,6 +7,9 @@ import {
   portPortableSkill, portPortableSkillDirectory, readPortableSkillManifest, scaffoldPortableSkill,
   validatePortableSkillDirectory,
 } from "./portable-skills.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 function fixture(run: (root: string, sources: string) => void) {
   const scratch = mkdtempSync(join(tmpdir(), "portable-names-"));
@@ -31,8 +34,9 @@ describe("portable skill creation names", () => {
   }));
 
   test("empty normalized names and canonical collisions refuse before overwriting files", () => fixture((root) => {
-    for (const name of ["", "   ", "._---", "💫"]) {
+    for (const name of ["", "   ", "._---", "💫", "../escape", ".hidden", "_hidden"]) {
       expect(() => scaffoldPortableSkill(name, { rootDir: root })).toThrow("Invalid skill name");
+      expect(existsSync(root)).toBe(false);
     }
     const existing = scaffoldPortableSkill("OwnReport", { rootDir: root });
     const bytes = readFileSync(join(existing.path, "skill.json"));
