@@ -2,6 +2,20 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+/**
+ * The Keychain account every hermetic fixture pins.
+ *
+ * The shared @hasna/contracts chain consults the macOS Keychain item
+ * `hasna.credentials.conversations.api-key` for the account named by
+ * HASNA_STATION (else `hostname -s`, else USER) ABOVE the env tier, and the
+ * matching `api-url` item can override — or contradict — a URL the test set.
+ * On a fleet workstation both items exist, so a fixture that only clears the
+ * env still resolves the operator's real credential and fails on the
+ * disagreement. No real item uses this account, so with it pinned the machine's
+ * Keychain can never answer for a test (hasna/apps#1720 validation).
+ */
+export const HERMETIC_STATION = "conversations-hermetic-no-such-station";
+
 export const AMBIENT_TEST_ENV_KEYS = [
   "HASNA_CONVERSATIONS_API_URL",
   "CONVERSATIONS_API_URL",
@@ -17,6 +31,7 @@ export const AMBIENT_TEST_ENV_KEYS = [
   "HASNA_CONVERSATIONS_API_SIGNING_KEY",
   "HASNA_API_SIGNING_KEY",
   "API_KEY_SIGNING_SECRET",
+  "HASNA_STATION",
   "PGHOST",
   "PGPORT",
   "PGDATABASE",
@@ -43,7 +58,9 @@ export const AMBIENT_TEST_ENV_KEYS = [
 export function enterHermeticTestEnv(overrides: Record<string, string> = {}): () => void {
   const snapshot = new Map(AMBIENT_TEST_ENV_KEYS.map((key) => [key, process.env[key]]));
   for (const key of AMBIENT_TEST_ENV_KEYS) delete process.env[key];
-  Object.assign(process.env, overrides);
+  // Pinned by default so the station Keychain stays outside the fixture; an
+  // override may still name a station of its own.
+  Object.assign(process.env, { HASNA_STATION: HERMETIC_STATION }, overrides);
   return () => {
     for (const key of AMBIENT_TEST_ENV_KEYS) {
       const value = snapshot.get(key);
@@ -81,5 +98,5 @@ export function hermeticSpawnEnv(overrides: Record<string, string> = {}): Record
     const value = process.env[key];
     if (value !== undefined) env[key] = value;
   }
-  return { ...env, ...overrides };
+  return { ...env, HASNA_STATION: HERMETIC_STATION, ...overrides };
 }

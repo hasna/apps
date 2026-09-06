@@ -164,9 +164,27 @@ function parseAttachments(raw: string | null): Array<Record<string, unknown>> {
   }
 }
 
+/** The canonical (symlink-resolved) form of a directory, or the path itself when it does not exist yet. */
+function canonicalDir(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * The per-message attachment directory, CANONICALISED on the same terms as the
+ * attachment path it is compared against. `attachmentReferences` resolves the
+ * candidate file through `realpathSync` before the containment check; a base
+ * that is not canonicalised the same way disagrees with it wherever a data dir
+ * sits behind a symlink — on macOS every temp root does (`/var/...` is
+ * `/private/var/...`), so `safe_to_delete` was false there and an apply run
+ * left the leaked attachment on disk.
+ */
 function attachmentsBaseDir(messageId: number): string {
-  const root = process.env.CONVERSATIONS_ATTACHMENTS_DIR || join(getDataDir(), "attachments");
-  return resolve(root, String(messageId));
+  const root = resolve(process.env.CONVERSATIONS_ATTACHMENTS_DIR || join(getDataDir(), "attachments"));
+  return resolve(canonicalDir(root), String(messageId));
 }
 
 function attachmentReferences(row: RawMessageRow): AttachmentReference[] {

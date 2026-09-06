@@ -5,7 +5,7 @@ import chalk from "chalk";
 import { render } from "ink";
 import React from "react";
 import { resolveIdentity, IdentityError } from "../lib/identity.js";
-import { ConversationsStoreConfigError, isCloudStore } from "../lib/store/index.js";
+import { ConversationsStoreConfigError, isCloudStore, requireConversationsLocalStore } from "../lib/store/index.js";
 import { App } from "./components/App.js";
 import { registerMessagingCommands } from "./commands/messaging.js";
 import { registerAttachmentCommands } from "./commands/attachments.js";
@@ -75,11 +75,20 @@ program
   });
 
 // ---- events-drain: Conversations→Events source outbox worker (local path) ----
+// The outbox table lives in the on-box SQLite store, so this worker is
+// local-only by nature — and local is an explicit opt-in, never a default.
+// Without HASNA_CONVERSATIONS_DB_PATH it refuses through the same config error
+// every other surface raises (non-zero exit, JSON error contract under --json,
+// nothing opened); with it, the LOCAL-mode notice is printed before the store
+// is touched. Calling getDb() straight away used to open (and create)
+// ~/.hasna/conversations/messages.db on a hosted station and exit 0 with
+// "scanned 0" (hasna/apps#1720 validation).
 program
   .command("events-drain")
-  .description("Drain the Conversations→Events source outbox into the Events durable spool inbox")
+  .description("Drain the Conversations→Events source outbox into the Events durable spool inbox (local store only)")
   .option("--limit <n>", "Maximum pending rows to transport per run", parseInt)
   .action(async (opts) => {
+    requireConversationsLocalStore("events-drain");
     const { getDb } = await import("../lib/db.js");
     const { drainConversationEventOutbox } = await import("../lib/events-bridge.js");
     const db = getDb();

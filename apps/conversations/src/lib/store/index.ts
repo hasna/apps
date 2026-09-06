@@ -42,7 +42,6 @@
 
 import { resolveStorageClient } from "@hasna/contracts/client/storage";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
-import { defaultFleetGatewayBaseUrl } from "@hasna/contracts/client";
 import type { HasnaHttpTransportOptions } from "@hasna/contracts/client";
 import type { CredentialChainOptions } from "@hasna/contracts/client";
 import {
@@ -189,6 +188,38 @@ const LOCAL_ESCAPE_HATCH =
 function wrapConversationsChainFailure(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
   throw new ConversationsStoreConfigError(`${message} ${LOCAL_ESCAPE_HATCH}`);
+}
+
+/**
+ * The gate for the few surfaces that are LOCAL-ONLY by nature — the
+ * `events-drain` worker over the on-box outbox table and the MCP feedback
+ * table — which have no hosted transport and used to call `getDb()` directly.
+ *
+ * A direct `getDb()` is a fallback nobody asked for: on a hosted station with
+ * no credential resolvable it exited 0, printed no LOCAL notice, and created
+ * `messages.db` (plus WAL/SHM) under the app home, which the fail-closed
+ * ruling forbids for every surface, not only the Store-routed ones. So such a
+ * surface asks HERE first: the on-box store is used only when the operator
+ * named it (`HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH`), it is
+ * announced once on stderr exactly as `getStore()` announces it, and the
+ * resolved path is returned for the caller's own reporting. Anything else is
+ * the app's config refusal — exit non-zero, nothing opened, the JSON error
+ * contract honoured by the CLI's error surface — naming the opt-in.
+ *
+ * `surface` is the command or tool name, so the refusal says what would have
+ * run. Never reads or embeds a credential value.
+ */
+export function requireConversationsLocalStore(surface: string, env: Env = process.env): string {
+  if (!isConversationsLocalOptIn(env)) {
+    throw new ConversationsStoreConfigError(
+      `${surface} is local-only: it works on the on-box SQLite store and has no hosted transport, ` +
+        `and neither ${DB_PATH_KEYS[0]} nor ${DB_PATH_KEYS[1]} names a local store — so nothing was opened. ` +
+        LOCAL_ESCAPE_HATCH,
+    );
+  }
+  const dbPath = getDbPath(env);
+  announceConversationsLocalMode(dbPath);
+  return dbPath;
 }
 
 /**
@@ -340,12 +371,23 @@ export function isCloudStore(env: Env = process.env): boolean {
   return resolveCloudClientUnguarded(env) !== null;
 }
 
-/** The resolved cloud API base URL when the hosted API is selected (else null). */
+/**
+ * The resolved cloud API authority when the hosted API is selected (else null).
+ *
+ * THE AUTHORITY THE CLIENT ACTUALLY TARGETS, not env-or-default. This used to
+ * read `HASNA_CONVERSATIONS_API_URL ?? CONVERSATIONS_API_URL ?? <gateway>`
+ * beside the chain, which is a second, disagreeing resolver: the shared chain
+ * also honours the Keychain `api-url` item and the credentials file's
+ * authority, so `status`, `status --json` and `/api/status` printed the fleet
+ * gateway while requests went elsewhere. Now the value is the base URL of the
+ * client the chain minted, in the origin form every caller expects (the
+ * chain's `/v1` root with the version segment removed — `status-location.ts`
+ * re-derives the `/v1` root for display).
+ */
 export function cloudApiUrl(env: Env = process.env): string | null {
-  if (!isCloudStore(env)) return null;
-  // A URL named in the env wins; with only a resolved credential, the fleet
-  // gateway default is what the client actually targets.
-  return env.HASNA_CONVERSATIONS_API_URL ?? env.CONVERSATIONS_API_URL ?? defaultFleetGatewayBaseUrl(APP);
+  const client = resolveCloudClientUnguarded(env);
+  if (!client) return null;
+  return client.baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
 }
 
 // ── The single data interface ────────────────────────────────────────────────

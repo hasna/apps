@@ -344,9 +344,32 @@ The SDK client takes an explicit `baseUrl` and `apiKey`. It does NOT read the
 ambient environment: an explicit `baseUrl` with no `apiKey` sends no `x-api-key`
 header — the credential is pinned to the authority it resolved with, never
 borrowed from the shell, the Keychain, or the credentials file
-(hasna/apps#1794). Use `getStore()` from `@hasna/conversations` (see
-[Credential resolution](#credential-resolution)) when you want the shared
-resolver to decide the credential and the authority for you.
+(hasna/apps#1794).
+
+To let the shared resolver decide the credential and the authority for you —
+the same `@hasna/contracts` chain the CLI, the MCP server and `getStore()` use,
+re-resolved on every request — build the client through the SDK's resolver
+seam instead of constructing it by hand:
+
+```ts
+import { createConversationsClient, resolveConversationsSdkTransport } from "@hasna/conversations/sdk";
+
+const client = createConversationsClient();       // Keychain → credentials file → HASNA_CONVERSATIONS_API_KEY; gateway default
+await client.sendMessage({ from: "me", to: "you", content: "hi", channel: "deploys" });
+
+const where = resolveConversationsSdkTransport();  // diagnostics: sources only, never values
+console.log(where.baseUrl, where.apiKeySource, where.apiUrlSource);
+```
+
+The SDK is hosted-only. With no credential resolvable anywhere it throws
+`ConversationsSdkResolutionError` (`CONVERSATIONS_CREDENTIAL_MISSING`) naming
+every tier it consulted — never a silent local fallback — and the explicit
+local opt-in `HASNA_CONVERSATIONS_DB_PATH` is refused
+(`CONVERSATIONS_LOCAL_STORE_SELECTED`): an HTTP client cannot serve the on-box
+store, so use `getStore()` from `@hasna/conversations` (see
+[Credential resolution](#credential-resolution)) for local mode. Passing an
+explicit `baseUrl` to `createConversationsClient` keeps the #1794 pin: only an
+explicit `apiKey` beside it is ever sent.
 
 ## Credential resolution
 

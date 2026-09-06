@@ -144,3 +144,57 @@ describe("fail-closed transport resolution (spawned CLI)", () => {
     expect(result.stdout).toContain("Connection: SQLite");
   });
 });
+
+// `events-drain` works the on-box outbox table, so it is local-only by nature
+// — and it used to call getDb() directly, bypassing the Store seam: hosted
+// with no credential it exited 0 with "scanned 0", printed no LOCAL notice,
+// and created messages.db (+ WAL/SHM) under the app home (hasna/apps#1720
+// validation; acceptance (c) and (f)).
+describe("fail-closed: events-drain is local-only and local is opt-in (spawned CLI)", () => {
+  test("hosted with no credential: exits non-zero, no 'scanned' line, no SQLite anywhere under HOME", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-fail-closed-drain-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+
+    const result = await runCli(["events-drain"], env);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("scanned");
+    expect(result.stderr).toContain("events-drain");
+    // The refusal names the explicit local opt-in — the only way local is reachable.
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect(result.stderr).not.toMatch(/-local-fallback/i);
+    expect(result.stderr).not.toMatch(/falling?\s*back/i);
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+    expect(existsSync(join(tempRoot, ".hasna", "conversations"))).toBe(false);
+  });
+
+  test("a resolved hosted credential does not make it hosted: still refused, still nothing opened", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-fail-closed-drain-key-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+    env["HASNA_CONVERSATIONS_API_KEY"] = ["fixture", "not", "a", "credential"].join("-");
+
+    const result = await runCli(["events-drain"], env);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout).not.toContain("scanned");
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+  });
+
+  test("the explicit local opt-in runs the drain over the named store, and says 'local' on stderr", async () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "conversations-drain-local-opt-in-"));
+    tempRoots.push(tempRoot);
+    const env = hermeticEnv(tempRoot);
+    const localDb = join(tempRoot, "store.db");
+    env["HASNA_CONVERSATIONS_DB_PATH"] = localDb;
+
+    const result = await runCli(["events-drain"], env);
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stderr).toContain("LOCAL mode");
+    expect(result.stdout).toContain("events-drain: scanned 0");
+    expect(existsSync(localDb)).toBe(true);
+  });
+});
