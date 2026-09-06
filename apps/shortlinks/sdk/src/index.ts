@@ -7,11 +7,20 @@
  * (apps/shortlinks/src/serve/openapi.ts). Regenerate with `bun run sdk:generate`
  * in the repo root.
  *
- * Usage:
+ * This standalone package stays zero-dependency: it takes an explicit
+ * `baseUrl` + `apiKey` and never resolves credentials itself. For the
+ * resolver-backed client (Keychain, ~/.hasna/shortlinks/config/credentials,
+ * HASNA_SHORTLINKS_API_KEY, default fleet gateway URL, refreshed per request),
+ * use the in-package `@hasna/shortlinks/sdk` surface instead:
+ *
+ *   import { createShortlinksApiClient } from "@hasna/shortlinks/sdk";
+ *   const client = createShortlinksApiClient(); // resolves via @hasna/contracts
+ *
+ * Usage (standalone, explicit options):
  *   import { ShortlinksApiClient } from "@hasna/shortlinks-sdk";
  *   const client = new ShortlinksApiClient({
- *     baseUrl: process.env.SHORTLINKS_API_URL!,
- *     apiKey: process.env.SHORTLINKS_API_KEY!,
+ *     baseUrl: "https://api.hasna.com/shortlinks",
+ *     apiKey: "hsk_...",
  *   });
  */
 

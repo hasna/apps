@@ -29,8 +29,14 @@ const STRIP_ENV_KEYS = [
   "HASNA_SHORTLINKS_API_KEY",
   "SHORTLINKS_API_URL",
   "SHORTLINKS_API_KEY",
+  // The contracts resolver's deliberate-pointer and profile tiers: ambient
+  // values would configure a hosted client the test never intended.
+  "HASNA_SHORTLINKS_API_KEY_OVERRIDE",
+  "HASNA_SHORTLINKS_API_KEY_REF",
+  "HASNA_PROFILE",
   "HASNA_SHORTLINKS_DATABASE_URL",
   "SHORTLINKS_DATABASE_URL",
+  "HASNA_SHORTLINKS_LOCAL",
   "SHORTLINKS_LOCAL",
   "SHORTLINKS_DB",
   "SHORTLINKS_CLICK_SALT",
@@ -120,25 +126,21 @@ describe("fail closed without the fleet API env", () => {
     expect(existsSync(join(tempHome, "shortlinks.db"))).toBe(false);
   });
 
-  test("partial API env fails closed naming both keys — never defaults to local mode", () => {
-    // URL without key: the pair is incomplete, so the CLI must not open local
-    // mode or guess a credential.
+  test("a URL without a key fails closed naming both keys — never defaults to local mode", () => {
+    // URL without key: the hosted side declares intent, so the CLI must not
+    // open local mode or guess a credential. (The reverse — a key with no URL —
+    // now resolves the fleet gateway by design, hasna/apps#1720; that case is
+    // covered at the resolver level in client-store.test.ts.)
     const urlOnly = runCli(["init", "--domain", "has.na"], {
       db: false,
       env: { HASNA_SHORTLINKS_API_URL: "https://shortlinks.example.test" },
     });
     expect(urlOnly.exitCode).toBe(1);
-    expect(output(urlOnly)).toMatch(/HASNA_SHORTLINKS_API_KEY/);
+    const urlOnlyText = output(urlOnly);
+    expect(urlOnlyText).toMatch(/HASNA_SHORTLINKS_API_URL/);
+    expect(urlOnlyText).toMatch(/HASNA_SHORTLINKS_API_KEY/);
 
-    // Key without URL: same refusal from the other side.
-    const keyOnly = runCli(["init", "--domain", "has.na"], {
-      db: false,
-      env: { HASNA_SHORTLINKS_API_KEY: "fixture-key" },
-    });
-    expect(keyOnly.exitCode).toBe(1);
-    expect(output(keyOnly)).toMatch(/HASNA_SHORTLINKS_API_URL/);
-
-    // Neither run may create local storage.
+    // The refusing run may not create local storage.
     expect(existsSync(join(tempHome, "shortlinks.db"))).toBe(false);
   });
 });
@@ -150,6 +152,8 @@ describe("explicit local opt-in still works", () => {
     const initJson = JSON.parse(init.stdout.toString()) as { store: string; config: { defaultDomain: string } };
     expect(initJson.store).toBe("local");
     expect(initJson.config.defaultDomain).toBe("has.na");
+    // Local mode is never silent: the opt-in says "local" on stderr.
+    expect(init.stderr.toString()).toMatch(/local/);
 
     const doctor = runCli(["doctor"], { db: false, local: true });
     expect(doctor.exitCode).toBe(0);
@@ -166,6 +170,8 @@ describe("explicit local opt-in still works", () => {
     expect(init.exitCode).toBe(0);
     const initJson = JSON.parse(init.stdout.toString()) as { store: string };
     expect(initJson.store).toBe("local");
+    // Local mode is never silent: --db says "local" on stderr too.
+    expect(init.stderr.toString()).toMatch(/local/);
     expect(existsSync(dbPath)).toBe(true);
   });
 });

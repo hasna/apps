@@ -25,6 +25,11 @@ function runCli(args: string[], options: { env?: Record<string, string>; json?: 
       HASNA_SHORTLINKS_API_KEY: "",
       SHORTLINKS_API_URL: "",
       SHORTLINKS_API_KEY: "",
+      // The contracts resolver's deliberate-pointer and profile tiers: nothing
+      // ambient may configure a hosted client behind the tests' backs.
+      HASNA_SHORTLINKS_API_KEY_OVERRIDE: "",
+      HASNA_SHORTLINKS_API_KEY_REF: "",
+      HASNA_PROFILE: "",
       HASNA_EVENTS_HOME: join(tempHome, "events"),
       ...options.env,
     },

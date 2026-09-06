@@ -1,24 +1,37 @@
 // Hosted-API shortlinks store.
 //
 // Implements the same store surface as `ShortlinksStore` / `PgShortlinksStore`,
-// but routes every read and write to the hosted `/v1` HTTP API
-// (https://shortlinks.hasna.xyz/v1) using the @hasna/contracts HTTP storage
-// client with a bearer API key. This is the client-side hosted-API path:
+// but routes every read and write to the hosted `/v1` HTTP API using the
+// @hasna/contracts client resolver with a bearer API key. This is the
+// client-side hosted-API path:
 //
-//   hosted client selected  ⇔  HASNA_SHORTLINKS_API_URL is set
-//                              AND HASNA_SHORTLINKS_API_KEY is set
+//   hosted client selected  ⇔  a shortlinks credential resolves somewhere in
+//                              the @hasna/contracts chain — the Keychain item
+//                              `hasna.credentials.shortlinks.api-key`, the disk
+//                              credential `~/.hasna/shortlinks/config/credentials`,
+//                              or `HASNA_SHORTLINKS_API_KEY` / its legacy alias —
+//                              and the authority follows the resolved URL or the
+//                              fleet gateway `https://api.hasna.com/shortlinks`.
 //
+// The resolver is the ONLY chain: this app no longer reads the client env
+// itself (the `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY` pair was
+// the app's own chain, deleted by the 2026-09-04 adoption, hasna/apps#1720).
 // There is NO DSN / Postgres / local SQLite here — the raw RDS is never touched
-// from a client. If the flip does not resolve, `fromEnv` returns null and the
+// from a client. A missing credential leaves `fromEnv` returning null and the
 // caller (resolveStore in ./client-store.ts) FAILS CLOSED unless local mode was
-// explicitly opted into — unset env is never an implicit local store.
+// explicitly opted into — unset env is never an implicit local store. A
+// MISCONFIGURED hosted side (a URL with no key, a declared-but-blank variable,
+// disagreeing authorities, an unreadable credential file) always throws: it is
+// never resolved around and never degrades to local.
 //
 // SAFETY: the API key lives only inside the transport; it is never logged.
 
-import {
-  resolveStorageClient,
-  type HasnaStorageClient,
-} from "@hasna/contracts/client/storage";
+import { resolveStorageClient } from "@hasna/contracts/client/storage";
+import type {
+  ShortlinksHttpTransport,
+  ShortlinksStorageClient,
+  ShortlinksTransportOverrides,
+} from "./client-types.js";
 import type { Env, ListLinksOptions, Store, TotalStats } from "./store-interface.js";
 import type {
   AddDomainInput,
@@ -32,18 +45,33 @@ import type {
 
 const APP = "shortlinks";
 
-/** Read the first set env value as an OWN property (guards prototype pollution). */
-function ownEnv(env: Env, keys: readonly string[]): string | null {
-  for (const key of keys) {
-    if (!Object.hasOwn(env, key)) continue;
-    const value = env[key]?.trim();
-    if (value) return value;
-  }
-  return null;
-}
-
 function enc(value: string): string {
   return encodeURIComponent(value);
+}
+
+/**
+ * True when the error is the resolver's "nothing configured a credential at
+ * all" refusal — the only hosted-resolution outcome that may fall through to
+ * the local opt-in. Every other refusal (URL set but no key, blank or
+ * disagreeing variables, an unreadable credential file, a failing Keychain
+ * item) is a misconfiguration that MUST surface.
+ *
+ * The check is shape-based (error `name` + message), not `instanceof`: the
+ * published @hasna/contracts package builds `./client` and `./client/storage`
+ * as separate bundles, each carrying its own copy of the error class, so an
+ * `instanceof` test against the `./client` copy is false for an error thrown
+ * through `resolveStorageClient` (the `./client/storage` copy). Match what the
+ * documented error declares instead, as the storage client itself does for
+ * 404s (see isNotFoundHttpError in @hasna/contracts/client/storage).
+ */
+export function isNoCredentialConfigurationError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { name?: unknown; message?: unknown };
+  return (
+    candidate.name === "ClientTransportConfigurationError" &&
+    typeof candidate.message === "string" &&
+    candidate.message.includes("is not set and no API key could be resolved")
+  );
 }
 
 /**
@@ -53,9 +81,9 @@ function enc(value: string): string {
  */
 export class CloudShortlinksStore implements Store {
   readonly kind = "http" as const;
-  readonly transport: HasnaStorageClient["transport"];
+  readonly transport: ShortlinksHttpTransport;
 
-  private constructor(private readonly client: HasnaStorageClient) {
+  private constructor(private readonly client: ShortlinksStorageClient) {
     this.transport = client.transport;
   }
 
@@ -65,31 +93,30 @@ export class CloudShortlinksStore implements Store {
   }
 
   /**
-   * Resolve a hosted-API store from the environment. The contracts client
-   * seam (`resolveStorageClient`) decides: an explicit API URL + API key in
-   * the environment selects the hosted client, and the fleet app-config /
-   * credential on disk is the accepted tier. `null` means NO hosted client
-   * resolved — the caller must then fail closed unless local mode was
-   * explicitly opted into (never a silent switch to the on-box store).
-   * Throws when only one of URL/key is set in the environment tier — a
-   * partially configured hosted client must fail loudly, never silently
-   * drift to the local dataset.
+   * Resolve a hosted-API store via the @hasna/contracts client resolver
+   * (`resolveStorageClient`) — the ONLY chain, consulted fresh per request.
+   * Returns a store when a shortlinks credential resolves anywhere in the
+   * chain (Keychain, disk credential file, `HASNA_SHORTLINKS_API_KEY` / legacy
+   * alias); the authority follows the resolved URL or the fleet gateway
+   * default, so a credential alone is enough — URLs never need configuring.
+   *
+   * `null` means NO credential resolved anywhere — the caller must then fail
+   * closed unless local mode was explicitly opted into (never a silent switch
+   * to the on-box store). Anything else — a URL without a credential, a
+   * declared-but-blank variable, disagreeing authorities, an unreadable
+   * credential file — THROWS: a partially configured hosted client must fail
+   * loudly, never silently drift to the local dataset.
    */
   static fromEnv(
     env: Env = process.env,
-    overrides?: Parameters<typeof resolveStorageClient>[2],
+    overrides?: ShortlinksTransportOverrides,
   ): CloudShortlinksStore | null {
-    const apiUrl = ownEnv(env, ["HASNA_SHORTLINKS_API_URL", "SHORTLINKS_API_URL"]);
-    const apiKey = ownEnv(env, ["HASNA_SHORTLINKS_API_KEY", "SHORTLINKS_API_KEY"]);
-    if (Boolean(apiUrl) !== Boolean(apiKey)) {
-      throw new Error(
-        "Hosted API client is partially configured: set both HASNA_SHORTLINKS_API_URL " +
-          "and HASNA_SHORTLINKS_API_KEY (or neither).",
-      );
+    try {
+      return new CloudShortlinksStore(resolveStorageClient(APP, env, overrides).client);
+    } catch (error) {
+      if (isNoCredentialConfigurationError(error)) return null;
+      throw error;
     }
-    const resolved = resolveStorageClient(APP, env, overrides);
-    if (!resolved.client) return null;
-    return new CloudShortlinksStore(resolved.client);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-empty-function

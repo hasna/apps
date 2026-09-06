@@ -2,7 +2,7 @@
 
 Shortlink management for custom domains — CLI, MCP server, REST API, and a generated SDK.
 
-`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers and `@hasna/domains`. The client resolves one store: the hosted shortlinks API when `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY` are configured, or the on-box SQLite database (`~/.hasna/shortlinks/shortlinks.db`) when local mode is explicitly opted into with `SHORTLINKS_LOCAL=1` (or `--db <path>`). With neither, store-backed commands fail closed — the CLI never falls back to local storage on its own. The `shortlinks-serve` service reads/writes an app-owned PostgreSQL database when `HASNA_SHORTLINKS_DATABASE_URL` is configured.
+`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers and `@hasna/domains`. The client resolves one store through the `@hasna/contracts` 1.0.2 client resolver: the hosted `/v1` API when a shortlinks credential resolves (the macOS Keychain, `~/.hasna/shortlinks/config/credentials`, or `HASNA_SHORTLINKS_API_KEY` — the URL defaults to the fleet gateway `https://api.hasna.com/shortlinks` and never needs configuring), or the on-box SQLite database (`~/.hasna/shortlinks/shortlinks.db`) when local mode is explicitly opted into with `HASNA_SHORTLINKS_LOCAL=1` (alias `SHORTLINKS_LOCAL`; or `--db <path>`), which is announced on stderr. With neither, store-backed commands fail closed — the CLI never falls back to local storage on its own. The `shortlinks-serve` service reads/writes an app-owned PostgreSQL database when `HASNA_SHORTLINKS_DATABASE_URL` is configured.
 
 ## Surfaces
 
@@ -13,7 +13,7 @@ Four surfaces share one core library:
 | CLI | `shortlinks` | Interactive/scriptable link + domain management (`--json` for agents). |
 | MCP | `shortlinks-mcp` | Model Context Protocol server (stdio or `--http`) exposing link/domain tools to agents. |
 | REST API | `shortlinks-serve` | HTTP service: `GET /health`, `/ready`, `/version`, `/openapi.json`, and a versioned `/v1` CRUD API guarded by API-key auth. |
-| SDK | `@hasna/shortlinks-sdk` (+ `@hasna/shortlinks/sdk`) | Typed fetch client generated from the serve OpenAPI (`bun run sdk:generate`). |
+| SDK | `@hasna/shortlinks-sdk` (+ `@hasna/shortlinks/sdk`) | Typed fetch client generated from the serve OpenAPI (`bun run sdk:generate`); the in-package `@hasna/shortlinks/sdk` also ships the resolver-backed `createShortlinksApiClient`. |
 
 ### Hosted service
 
@@ -26,10 +26,15 @@ shortlinks-serve            # migrate (idempotent) then serve on :8080
 shortlinks-serve migrate    # one-shot migration task
 ```
 
-Clients use `HASNA_SHORTLINKS_API_URL` + `HASNA_SHORTLINKS_API_KEY` (legacy aliases `SHORTLINKS_API_URL` / `SHORTLINKS_API_KEY`; never a DSN).
+Clients resolve the same hosted API through the `@hasna/contracts` client
+resolver — Keychain, `~/.hasna/shortlinks/config/credentials`, or
+`HASNA_SHORTLINKS_API_KEY` (legacy aliases `SHORTLINKS_API_URL` /
+`SHORTLINKS_API_KEY`; never a DSN). The URL defaults to the fleet gateway.
 
 [![npm](https://img.shields.io/npm/v/@hasna/shortlinks)](https://www.npmjs.com/package/@hasna/shortlinks)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
+Clients resolve their authority and credential through the `@hasna/contracts` client resolver (never a DSN, never a hand-rolled env read).
 
 ## Install
 
@@ -44,13 +49,37 @@ The on-box SQLite database (used only under the explicit local opt-in, see
 ~/.hasna/shortlinks/shortlinks.db
 ```
 
+## Client environment
+
+The CLI, MCP server, and `@hasna/shortlinks/sdk` all resolve the same way,
+through the `@hasna/contracts` 1.0.2 client chain, resolved fresh on every
+request:
+
+| Variable | Purpose |
+| --- | --- |
+| `HASNA_SHORTLINKS_API_KEY` | Hosted API key. The credential chain also accepts the Keychain item `hasna.credentials.shortlinks.api-key` (macOS, account `HASNA_STATION` → hostname → `$USER`) and `~/.hasna/shortlinks/config/credentials` (0600, `HASNA_SHORTLINKS_API_KEY=...`). Prefixed env wins over disk; the Keychain is re-read per call. |
+| `HASNA_SHORTLINKS_API_URL` | Hosted API base URL. Optional: the authority defaults to the fleet gateway `https://api.hasna.com/shortlinks` (the Keychain `api-url` item and the credentials file's `HASNA_SHORTLINKS_API_URL` are also honoured). A declared-but-blank or disagreeing variable fails loudly. |
+| `SHORTLINKS_API_URL` / `SHORTLINKS_API_KEY` | Legacy aliases, accepted by the resolver for one release. |
+| `HASNA_SHORTLINKS_API_KEY_OVERRIDE` | Deliberate per-run key that outranks everything else (never populated automatically). |
+| `HASNA_SHORTLINKS_API_KEY_REF` | Deliberate pointer to a `@hasna/secrets` vault item key (resolved at request time). |
+| `HASNA_PROFILE` | Selects which identity profile's credential file to use. |
+| `HASNA_SHORTLINKS_LOCAL=1` | Explicit opt-in to the on-box SQLite store (alias `SHORTLINKS_LOCAL=1`), announced on stderr. `--db <path>` does the same for one command. |
+| `HASNA_SHORTLINKS_DATABASE_URL` | Server only (`shortlinks-serve`): Postgres DSN for the service's own pool. Never read by clients. |
+
+With no credential resolvable and no local opt-in, store-backed commands exit
+non-zero with an error naming the chain — never a silent fallback.
+
+| SDK | Purpose |
+| --- | --- |
+| `createShortlinksApiClient(options)` | Build the typed `/v1` client with the resolver behind it; the credential is refreshed on every request. |
+| `resolveShortlinksSdkTransport(options)` | Read WHERE the authority and credential came from without building a client. An explicit `baseUrl` with no `apiKey` pins the authority: the ambient fleet key is never attached to a caller-chosen URL. |
+
 ## Quick Start
 
 Point the CLI at the hosted shortlinks API, or opt into the on-box store:
 
 ```bash
-# Hosted API (requires a fleet API key):
-export HASNA_SHORTLINKS_API_URL=https://api.hasna.com/shortlinks
+# Hosted API (requires a fleet API key — the URL defaults to the gateway):
 export HASNA_SHORTLINKS_API_KEY=hsk_...
 
 # Or explicit local mode:
@@ -61,9 +90,9 @@ shortlinks create https://example.com --slug docs
 shortlinks serve --host 127.0.0.1 --port 8787
 ```
 
-With neither the hosted API env nor `SHORTLINKS_LOCAL=1`/`--db`, store-backed
-commands exit non-zero with an error naming the required configuration — they
-never silently serve local data.
+With neither a resolvable credential nor `SHORTLINKS_LOCAL=1`/`--db`,
+store-backed commands exit non-zero with an error naming the required
+configuration — they never silently serve local data.
 
 Then a request for `https://has.na/docs` redirects to `https://example.com` and records a click.
 
@@ -205,29 +234,31 @@ This package does not install or call any removed `connect-*` packages.
 
 ## Storage selection
 
-The client resolves ONE `Store` from the environment — there is no DSN on any client:
+The client resolves ONE `Store` through the `@hasna/contracts` client resolver — there is no DSN on any client:
 
-- **hosted `/v1` HTTP API** (default when configured): set `HASNA_SHORTLINKS_API_URL`
-  + `HASNA_SHORTLINKS_API_KEY` to route every call to the hosted `/v1` API with a
-  bearer key (legacy aliases `SHORTLINKS_API_URL` / `SHORTLINKS_API_KEY`). Setting
-  only one of the two is a configuration error and fails loudly — never silent
-  local drift.
+- **hosted `/v1` HTTP API** (when a credential resolves): the @hasna/contracts
+  chain supplies the key — the Keychain item `hasna.credentials.shortlinks.api-key`,
+  `~/.hasna/shortlinks/config/credentials` (0400/0600), or `HASNA_SHORTLINKS_API_KEY`
+  (legacy alias `SHORTLINKS_API_KEY`) — and the authority follows
+  `HASNA_SHORTLINKS_API_URL` (alias `SHORTLINKS_API_URL`) or defaults to the
+  fleet gateway `https://api.hasna.com/shortlinks`, so URLs never need
+  configuring. A URL without a credential (or a declared-but-blank or
+  disagreeing variable) fails loudly — never silent local drift.
 - **on-box SQLite** (explicit opt-in only): the local database at
   `~/.hasna/shortlinks/shortlinks.db` is used ONLY when local mode is explicitly
-  selected with `SHORTLINKS_LOCAL=1` or the `--db <path>` flag.
-- **fail closed** (no configuration): with neither the hosted API env nor the
-  local opt-in, store-backed commands exit non-zero with an error naming
-  `HASNA_SHORTLINKS_API_URL` / `HASNA_SHORTLINKS_API_KEY` and the local opt-in —
-  the CLI never silently serves local data and never creates
-  `~/.hasna/shortlinks/shortlinks.db` on its own.
+  selected with `HASNA_SHORTLINKS_LOCAL=1` / `SHORTLINKS_LOCAL=1` or the
+  `--db <path>` flag — and selecting it says "local" on stderr.
+- **fail closed** (no configuration): with no resolvable credential and no
+  local opt-in, store-backed commands exit non-zero with an error naming the
+  chain and the local opt-in — the CLI never silently serves local data and
+  never creates `~/.hasna/shortlinks/shortlinks.db` on its own.
 
 ```bash
-# Route the client to the hosted API (bearer key, never a DSN):
-export HASNA_SHORTLINKS_API_URL=https://shortlinks.example.com
+# Route the client to the hosted API (bearer key, never a DSN; URL optional):
 export HASNA_SHORTLINKS_API_KEY=hsk_...
 shortlinks doctor
 
-# Explicit local mode (on-box SQLite):
+# Explicit local mode (on-box SQLite — prints "local" on stderr):
 export SHORTLINKS_LOCAL=1
 shortlinks init --domain has.na
 ```
