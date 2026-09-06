@@ -587,6 +587,82 @@
         }
       }
     },
+    "/v1/provider-presets": {
+      "get": {
+        "operationId": "listProviderPresets",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProviderPreset"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/provider-presets/{id}": {
+      "get": {
+        "operationId": "getProviderPreset",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderPreset"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Structured error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/providers/{id}/models": {
       "get": {
         "operationId": "listModels",
@@ -1107,6 +1183,119 @@
       }
     },
     "schemas": {
+      "ProviderPreset": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "credentialEnv": {
+            "type": "string",
+            "pattern": "^SWITCHER_PROVIDER_[A-Z0-9_]+$"
+          },
+          "credentialAliases": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]+$"
+            }
+          },
+          "protocols": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "protocol": {
+                  "type": "string",
+                  "enum": [
+                    "anthropic-messages",
+                    "openai-responses",
+                    "openai-chat"
+                  ]
+                },
+                "baseUrl": {
+                  "type": "string",
+                  "maxLength": 2000
+                },
+                "authStyle": {
+                  "type": "string",
+                  "enum": [
+                    "bearer",
+                    "x-api-key"
+                  ]
+                },
+                "catalogBaseUrl": {
+                  "type": "string",
+                  "maxLength": 2000
+                },
+                "catalogFormat": {
+                  "type": "string",
+                  "enum": [
+                    "openai",
+                    "ollama",
+                    "mistral",
+                    "together"
+                  ]
+                },
+                "catalogAuthStyle": {
+                  "type": "string",
+                  "enum": [
+                    "bearer",
+                    "x-api-key",
+                    "none"
+                  ]
+                },
+                "modelsPath": {
+                  "type": "string"
+                },
+                "notes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "protocol",
+                "authStyle",
+                "catalogFormat",
+                "modelsPath",
+                "notes"
+              ],
+              "additionalProperties": false
+            },
+            "minItems": 1
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "verification": {
+            "type": "string",
+            "enum": [
+              "documented"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "credentialAliases",
+          "protocols",
+          "sources",
+          "verification"
+        ],
+        "additionalProperties": false
+      },
       "ProviderInput": {
         "type": "object",
         "properties": {
@@ -1143,6 +1332,31 @@
             ],
             "default": "bearer"
           },
+          "catalogBaseUrl": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "catalogFormat": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "ollama",
+              "mistral",
+              "together"
+            ]
+          },
+          "catalogAuthStyle": {
+            "type": "string",
+            "enum": [
+              "bearer",
+              "x-api-key",
+              "none"
+            ]
+          },
+          "catalogCredentialEnv": {
+            "type": "string",
+            "pattern": "^SWITCHER_PROVIDER_[A-Z0-9_]+$"
+          },
           "modelsPath": {
             "type": "string",
             "pattern": "^[a-zA-Z0-9_/-]+$",
@@ -1167,6 +1381,9 @@
                 "description": {
                   "type": "string",
                   "maxLength": 8000
+                },
+                "available": {
+                  "type": "boolean"
                 },
                 "contextWindow": {
                   "type": "integer",
@@ -1257,6 +1474,31 @@
             ],
             "default": "bearer"
           },
+          "catalogBaseUrl": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "catalogFormat": {
+            "type": "string",
+            "enum": [
+              "openai",
+              "ollama",
+              "mistral",
+              "together"
+            ]
+          },
+          "catalogAuthStyle": {
+            "type": "string",
+            "enum": [
+              "bearer",
+              "x-api-key",
+              "none"
+            ]
+          },
+          "catalogCredentialEnv": {
+            "type": "string",
+            "pattern": "^SWITCHER_PROVIDER_[A-Z0-9_]+$"
+          },
           "modelsPath": {
             "type": "string",
             "pattern": "^[a-zA-Z0-9_/-]+$",
@@ -1281,6 +1523,9 @@
                 "description": {
                   "type": "string",
                   "maxLength": 8000
+                },
+                "available": {
+                  "type": "boolean"
                 },
                 "contextWindow": {
                   "type": "integer",
@@ -1452,6 +1697,9 @@
             "type": "string",
             "maxLength": 8000
           },
+          "available": {
+            "type": "boolean"
+          },
           "contextWindow": {
             "type": "integer",
             "exclusiveMinimum": true,
@@ -1514,6 +1762,9 @@
                 "description": {
                   "type": "string",
                   "maxLength": 8000
+                },
+                "available": {
+                  "type": "boolean"
                 },
                 "contextWindow": {
                   "type": "integer",
@@ -1612,6 +1863,9 @@
                 "description": {
                   "type": "string",
                   "maxLength": 8000
+                },
+                "available": {
+                  "type": "boolean"
                 },
                 "contextWindow": {
                   "type": "integer",
@@ -1712,6 +1966,31 @@
                 ],
                 "default": "bearer"
               },
+              "catalogBaseUrl": {
+                "type": "string",
+                "maxLength": 2000
+              },
+              "catalogFormat": {
+                "type": "string",
+                "enum": [
+                  "openai",
+                  "ollama",
+                  "mistral",
+                  "together"
+                ]
+              },
+              "catalogAuthStyle": {
+                "type": "string",
+                "enum": [
+                  "bearer",
+                  "x-api-key",
+                  "none"
+                ]
+              },
+              "catalogCredentialEnv": {
+                "type": "string",
+                "pattern": "^SWITCHER_PROVIDER_[A-Z0-9_]+$"
+              },
               "modelsPath": {
                 "type": "string",
                 "pattern": "^[a-zA-Z0-9_/-]+$",
@@ -1736,6 +2015,9 @@
                     "description": {
                       "type": "string",
                       "maxLength": 8000
+                    },
+                    "available": {
+                      "type": "boolean"
                     },
                     "contextWindow": {
                       "type": "integer",
@@ -1871,6 +2153,9 @@
                     "description": {
                       "type": "string",
                       "maxLength": 8000
+                    },
+                    "available": {
+                      "type": "boolean"
                     },
                     "contextWindow": {
                       "type": "integer",

@@ -1,26 +1,33 @@
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { homedir } from "node:os";
 import { SwitcherClient } from "./sdk";
-import { codingEligible } from "./domain";
+import { codingEligible, type ProviderInput } from "./domain";
+import { providerCredential } from "./presets";
+import { privateDirectory, switcherHome } from "./runtime";
 import { prepareHarnessLaunch, detectHarness } from "./harnesses";
 
 export function childEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const allowed = /^(PATH|HOME|USER|LOGNAME|SHELL|TMPDIR|TEMP|TMP|TERM|COLORTERM|LANG|LC_[A-Z_]+|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_STATE_HOME|XDG_CACHE_HOME|SSH_AUTH_SOCK|GIT_SSH_COMMAND|EDITOR|VISUAL|NO_COLOR|FORCE_COLOR|CODEX_HOME|GROK_HOME|GROK_SANDBOX|GROK_DISABLE_API_KEY_AUTH|CLAUDE_CONFIG_DIR)$/;
   return Object.fromEntries(Object.entries(env).filter((entry): entry is [string,string] => allowed.test(entry[0]) && entry[1] !== undefined));
 }
-export async function launch(client: SwitcherClient, profileId: string, options: {cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number} = {}): Promise<number> {
+export async function launch(client: SwitcherClient, profileId: string, options: {cwd?: string; executable?: string; stateDir?: string; args?: string[]; timeoutMs?: number; refresh?: boolean; credentialEnv?: NodeJS.ProcessEnv; resolveCredential?: (provider: ProviderInput)=>Promise<string | undefined>} = {}): Promise<number> {
   const profile = await client.getProfile(profileId);
+  // Respect Grok's deployment lockdown. Silently dropping this setting could
+  // bypass policy; inheriting it without checking can switch to native login.
+  if (profile.harness === "grok" && !["","0","false","no","off"].includes((process.env.GROK_DISABLE_API_KEY_AUTH ?? "").trim().toLowerCase()))
+    throw new Error("Grok API-key authentication is disabled by GROK_DISABLE_API_KEY_AUTH. This provider launch cannot proceed under that native authentication policy.");
+  if (profile.harness === "grok" && process.env.GROK_FORCE_LOGIN_TEAM_ID?.trim())
+    throw new Error("Grok requires a native team login through GROK_FORCE_LOGIN_TEAM_ID. This provider launch cannot proceed under that native authentication policy.");
   // A fresh snapshot is required for each launch. Errors remain visible.
-  await client.refreshModels(profile.providerId);
+  if (options.refresh !== false) await client.refreshModels(profile.providerId);
   const plan = await client.launchPlan(profileId);
   const detection = await detectHarness(plan.profile.harness, options.executable);
   if (!detection.available) throw new Error(`Harness ${plan.profile.harness} is not installed; use --executable PATH after installing it.`);
-  const credential = plan.provider.credentialEnv ? process.env[plan.provider.credentialEnv] : undefined;
+  const credential = options.resolveCredential ? await options.resolveCredential(plan.provider) : providerCredential(plan.provider, options.credentialEnv);
   if (plan.provider.credentialEnv && !credential) throw new Error("Provider credential environment reference is not available in this local launcher process.");
-  const root = resolve(options.stateDir ?? join(process.env.HASNA_SWITCHER_HOME ?? join(homedir(), ".hasna", "switcher"),"state"));
-  await mkdir(root, {recursive:true,mode:0o700});
+  const root = resolve(options.stateDir ?? join(switcherHome(),"state"));
+  await privateDirectory(root);
   const stateDir = await mkdtemp(join(root,"launch-"));
   let run: Awaited<ReturnType<SwitcherClient["createRun"]>> | undefined;
   let cleanup: (() => Promise<void>) | undefined;
@@ -52,5 +59,8 @@ export async function launch(client: SwitcherClient, profileId: string, options:
   } catch (error) {
     if (run) await client.finishRun(run.id,run.version,{status:"failed",exitCode:1}).catch(() => console.error("switcher: Could not persist final run status; inspect the run through the API."));
     throw error;
-  } finally { await cleanup?.(); await rm(stateDir,{recursive:true,force:true}); }
+  } finally {
+    try { await cleanup?.(); }
+    finally { await rm(stateDir,{recursive:true,force:true}); }
+  }
 }

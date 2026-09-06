@@ -19,6 +19,7 @@ const urlSchema = z.string().max(2000).superRefine((v, ctx) => {
 }).transform(endpoint);
 export const modelSchema = z.object({
   id: z.string().min(1).max(300), name: label, description: z.string().max(8000).optional(),
+  available: z.boolean().optional(),
   contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(),
   inputModalities: z.array(z.string().max(50)).max(20).optional(),
   outputModalities: z.array(z.string().max(50)).max(20).optional(),
@@ -28,9 +29,26 @@ export const providerInputSchema = z.object({
   id: idSchema, name: label, baseUrl: urlSchema, protocol: protocolSchema,
   credentialEnv: envRef.optional(),
   authStyle: z.enum(["bearer", "x-api-key"]).default("bearer"),
+  catalogBaseUrl: urlSchema.optional(),
+  catalogFormat: z.enum(["openai", "ollama", "mistral", "together"]).optional(),
+  catalogAuthStyle: z.enum(["bearer", "x-api-key", "none"]).optional(),
+  catalogCredentialEnv: envRef.optional(),
   modelsPath: z.string().regex(/^[a-zA-Z0-9_/-]+$/).max(200).default("models"),
   manualModels: z.array(modelSchema).max(10000).default([]),
 }).strict().refine(p => !p.modelsPath.split("/").includes("..") && !p.modelsPath.startsWith("/"), "modelsPath must be relative");
+export const providerPresetSchema = z.object({
+  id: idSchema, name: label, credentialEnv: envRef.optional(),
+  credentialAliases: z.array(z.string().regex(/^[A-Z][A-Z0-9_]+$/)),
+  protocols: z.array(z.object({
+    protocol: protocolSchema, baseUrl: urlSchema.optional(),
+    authStyle: z.enum(["bearer", "x-api-key"]),
+    catalogBaseUrl: urlSchema.optional(), catalogFormat: z.enum(["openai", "ollama", "mistral", "together"]),
+    catalogAuthStyle: z.enum(["bearer", "x-api-key", "none"]).optional(),
+    modelsPath: z.string(), notes: z.array(z.string()),
+  }).strict()).min(1),
+  sources: z.array(z.string().url()), verification: z.literal("documented"),
+}).strict();
+export type ProviderPreset = z.infer<typeof providerPresetSchema>;
 export const profileInputSchema = z.object({
   id: idSchema, name: label, providerId: idSchema, harness: harnessSchema,
   model: z.string().min(1).max(300),
@@ -62,6 +80,6 @@ export function compatible(harness: Profile["harness"], protocol: Provider["prot
   return harness === "claude" ? protocol === "anthropic-messages" : harness === "codex" ? protocol === "openai-responses" : true;
 }
 export function codingEligible(model: Model): boolean {
-  return (!model.outputModalities || model.outputModalities.includes("text")) &&
+  return model.available !== false && (!model.outputModalities || model.outputModalities.includes("text")) &&
     (!model.supportedParameters || model.supportedParameters.includes("tools"));
 }

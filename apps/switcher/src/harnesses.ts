@@ -4,6 +4,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { compatible, endpoint, codingEligible } from "./domain";
+import { validateGrokResume } from "./grok-args";
 import type { HarnessId, HarnessLaunchInput, PreparedLaunch } from "./harness-types";
 const execute = promisify(execFile);
 const KEY = "SWITCHER_HARNESS_API_KEY";
@@ -82,7 +83,7 @@ function grokBridge(input: HarnessLaunchInput) {
 function grokAlias(input: HarnessLaunchInput, model: string) {
   return "switcher-" + createHash("sha256").update(JSON.stringify([input.baseUrl,input.protocol])).digest("hex").slice(0,12) + "/" + model;
 }
-async function prepareNativeLaunch(input: HarnessLaunchInput): Promise<PreparedLaunch> {
+async function prepareNativeLaunch(input: HarnessLaunchInput, providerBaseUrl = input.baseUrl): Promise<PreparedLaunch> {
   input={...input,baseUrl:endpoint(input.baseUrl)};
   if(!compatible(input.harness,input.protocol)) throw new Error("Harness and provider protocol are incompatible.");
   if(!isAbsolute(input.stateDir)||!isAbsolute(input.cwd)) throw new Error("Launch state and working directories must be absolute.");
@@ -99,6 +100,10 @@ async function prepareNativeLaunch(input: HarnessLaunchInput): Promise<PreparedL
     if(!versionAtLeast(input.version,[2,1,242])) throw new Error("Claude Code >=2.1.242 is required for a full native modelPicker.");
     env.ANTHROPIC_BASE_URL=input.baseUrl.replace(/\/v1$/,"");
     env.ANTHROPIC_MODEL=input.model;
+    // The native Default picker row has separate precedence from --model.
+    // Keep it and unassigned subagents on the selected provider model.
+    env.ANTHROPIC_DEFAULT_MODEL=input.model;
+    env.CLAUDE_CODE_SUBAGENT_MODEL=input.model;
     env[input.authStyle==="x-api-key"?"ANTHROPIC_API_KEY":"ANTHROPIC_AUTH_TOKEN"]=input.credential??"switcher-local-no-auth";
     const file=await jsonFile(input.stateDir,"claude-settings.json",{modelPicker:{replaceBuiltInOptions:true,options:input.models.map(m=>({model:m.id,label:m.name,description:m.description?.slice(0,300)}))}});
     configPaths.push(file);
@@ -122,8 +127,8 @@ async function prepareNativeLaunch(input: HarnessLaunchInput): Promise<PreparedL
   }
   if(input.harness==="grok") {
     if(!versionAtLeast(input.version,[1,0,13])) throw new Error("Grok Build >=1.0.13 is required by this remote catalog adapter.");
-    if(args.some(a=>["--resume","-r","--continue","-c"].includes(a))) throw new Error("Grok resume is not supported by the per-launch bridge yet; start a new session.");
-    const file=await jsonFile(input.stateDir,"grok-overlay.json",{models:{default:grokAlias(input,input.model),allowed_models:input.models.map(m=>grokAlias(input,m.id))}});
+    validateGrokResume(args);
+    const file=await jsonFile(input.stateDir,"grok-overlay.json",{models:{default:grokAlias(input,input.model),session_summary:grokAlias(input,input.model),allowed_models:input.models.map(m=>grokAlias(input,m.id))}});
     configPaths.push(file);
     const bridge=grokBridge(input);
     env.GROK_MODELS_BASE_URL=bridge.baseUrl;env.GROK_MODELS_LIST_URL=bridge.baseUrl+"/models";
@@ -131,10 +136,14 @@ async function prepareNativeLaunch(input: HarnessLaunchInput): Promise<PreparedL
     env.XAI_API_KEY=bridge.token;env[KEY]=bridge.token;
     env.GROK_CONFIG_PATH=file;
     warnings.push("Grok uses a per-launch loopback catalog/auth bridge; native managed model policies still apply.");
-    return {executable,args:["--model",grokAlias(input,input.model),...args],env,configPaths,warnings,cleanup:bridge.cleanup};
+    // A leader keeps its original backend configuration; a new profile must
+    // own a standalone backend and its current short-lived bridge credentials.
+    return {executable,args:["--model",grokAlias(input,input.model),"--no-leader",...args],env,configPaths,warnings,cleanup:bridge.cleanup};
   }
   if(!input.version?.includes("opencode2")&&!versionAtLeast(input.version,[2,0,0])) throw new Error("Use the OpenCode 2 executable, not legacy OpenCode.");
-  const providerID="switcher-"+createHash("sha256").update(input.baseUrl+input.protocol).digest("hex").slice(0,12);
+  // Session model references must identify the upstream provider, not the
+  // allocated port of a temporary auth bridge which changes each launch.
+  const providerID="switcher-"+createHash("sha256").update(endpoint(providerBaseUrl)+input.protocol).digest("hex").slice(0,12);
   const packageName={"anthropic-messages":"anthropic","openai-responses":"openai/responses","openai-chat":"openai-compatible"}[input.protocol];
   const models=Object.fromEntries(input.models.map(m=>[m.id,{
     modelID:m.id,name:m.name,
@@ -159,7 +168,7 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
   const reserved:Record<HarnessId,string[]>={
     claude:["--model","--settings","--setting-sources"],
     codex:["--model","-m","--profile","-p"],
-    grok:["--model","-m","--oauth"],
+    grok:["--model","-m","--oauth","--leader","--leader-socket"],
     opencode2:["--model","-m","--server"],
   };
   for(let i=0;i<(input.args??[]).length;i++){
@@ -172,13 +181,12 @@ export async function prepareHarnessLaunch(input: HarnessLaunchInput): Promise<P
   }
   const nativeAuth=input.protocol==="anthropic-messages"?"x-api-key":"bearer";
   const adaptAuth=input.harness==="opencode2"&&(input.authStyle??"bearer")!==nativeAuth;
-  if(input.harness==="opencode2"&&(!input.credential||adaptAuth)&&(input.args??[]).some(a=>["--continue","-c","--session","-s","--fork"].includes(a.split("=")[0]))) throw new Error("OpenCode resume with a temporary auth bridge is not supported yet; start a new session.");
   if((input.credential&&!adaptAuth)||input.harness==="grok") return prepareNativeLaunch(input);
   // No-auth endpoints must not receive a native login credential or even a
   // synthetic token. Authenticate only to this loopback hop, then strip auth.
   const bridge=grokBridge({...input,baseUrl:endpoint(input.baseUrl)});
   try{
-    const prepared=await prepareNativeLaunch({...input,baseUrl:bridge.baseUrl,credential:bridge.token,authStyle:input.harness==="opencode2"?nativeAuth:"bearer"});
+    const prepared=await prepareNativeLaunch({...input,baseUrl:bridge.baseUrl,credential:bridge.token,authStyle:input.harness==="opencode2"?nativeAuth:"bearer"},input.baseUrl);
     return {...prepared,cleanup:async()=>{await prepared.cleanup?.();await bridge.cleanup();}};
   }catch(error){await bridge.cleanup();throw error;}
 }

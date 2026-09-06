@@ -1,13 +1,14 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { Store } from "./store";
-import { discover } from "./catalog";
+import { discover, type CatalogCredentialResolver } from "./catalog";
 import { boundedJson } from "./http";
 import { Fault, VERSION, parse, idSchema, providerInputSchema, profileInputSchema, runInputSchema, runUpdateSchema, compatible, codingEligible, type Provider, type Profile, type Run, type Catalog, type LaunchPlan } from "./domain";
+import { providerPresets, getProviderPreset } from "./presets";
 import openapi from "../openapi.json";
 const snapshot=(profile:Profile,provider:Provider,catalog:Catalog)=>createHash("sha256").update(JSON.stringify([profile,provider,{models:catalog.models,source:catalog.source}])).digest("hex");
 const hash = (s: string) => createHash("sha256").update(s).digest();
-export function createHandler(store: Store, apiKey: string, providerEnv: Record<string, string | undefined> = process.env) {
+export function createHandler(store: Store, apiKey: string, providerEnv: Record<string, string | undefined> = process.env, resolveCredential?: CatalogCredentialResolver) {
   if (!apiKey || apiKey.length < 24) throw new Fault(500, "auth_config", "Set HASNA_SWITCHER_API_KEY to a random token of at least 24 characters.");
   const expected = hash(`Bearer ${apiKey}`);
   return async (request: Request): Promise<Response> => {
@@ -33,6 +34,7 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
         search: z.string().max(200).default(""),
       }).strict(), Object.fromEntries(url.searchParams));
       if (request.method === "GET") {
+        if (resource === "provider-presets" && parts.length <= 3) return json(id ? getProviderPreset(id) : {data: providerPresets});
         if (["providers", "profiles", "runs"].includes(resource) && parts.length <= 3) {
           const kind = resource as "providers"|"profiles"|"runs";
           return json(id ? await store.get(kind, id) : await store.list(kind, page()));
@@ -64,7 +66,7 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
       if (resource === "providers" && id && parts[3] === "refresh" && parts.length === 4 && request.method === "POST") {
         parse(z.object({}).strict(), body);
         const provider = await store.get<Provider>("providers", id);
-        refreshed = {provider, catalog: await discover(provider, providerEnv)};
+        refreshed = {provider, catalog: await discover(provider, providerEnv, resolveCredential)};
       }
       const result = await store.mutate(key, fingerprint, async db => {
         if ((resource === "providers" || resource === "profiles") && parts.length <= 3) {

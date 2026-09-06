@@ -4,6 +4,20 @@ import {join} from "node:path";
 import {homedir} from "node:os";
 import {launch} from "../src/launcher";
 import type {SwitcherClient} from "../src/sdk";
+test("Grok authentication lockdown rejects provider launch before discovery or credential lookup",async()=>{
+  const prior=process.env.GROK_DISABLE_API_KEY_AUTH,team=process.env.GROK_FORCE_LOGIN_TEAM_ID;
+  let touched=false;
+  const client={getProfile:async()=>({harness:"grok"}),refreshModels:async()=>{touched=true;throw new Error("unexpected discovery");}} as unknown as SwitcherClient;
+  try {
+    for (const value of ["true","deployment-lockdown"]) {
+      process.env.GROK_DISABLE_API_KEY_AUTH=value;
+      await expect(launch(client,"locked",{resolveCredential:async()=>{touched=true;return "fixture";}})).rejects.toThrow("native authentication policy");
+    }
+    process.env.GROK_DISABLE_API_KEY_AUTH="false";process.env.GROK_FORCE_LOGIN_TEAM_ID="fixture-team";
+    await expect(launch(client,"locked")).rejects.toThrow("native authentication policy");
+    expect(touched).toBe(false);
+  } finally {if(prior===undefined)delete process.env.GROK_DISABLE_API_KEY_AUTH;else process.env.GROK_DISABLE_API_KEY_AUTH=prior;if(team===undefined)delete process.env.GROK_FORCE_LOGIN_TEAM_ID;else process.env.GROK_FORCE_LOGIN_TEAM_ID=team;}
+});
 test("concurrent launches isolate config, preserve child exit on API failure, time out and clean state",async()=>{
   const root=join(homedir(),"Workspace/scratch/switcher-tests");await mkdir(root,{recursive:true});const dir=await mkdtemp(join(root,"launch-"));
   const executable=join(dir,"fake-codex");const records:any[]=[];

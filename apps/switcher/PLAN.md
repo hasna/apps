@@ -4,10 +4,30 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-05T15:00:05.316596+00:00"
-status: "released"
+updated_at: "2026-09-06T07:46:21.373601+00:00"
+status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+# Current delivery: complete built-in adapters and installed CLI
+
+The 2026-09-05 DeepSeek test demonstrated that 0.1.0 needed an external API supervisor, an explicit provider/profile setup, and a manual model-catalog import. A successful OpenRouter release test did not prove the fresh-install DeepSeek experience. The user has authorized completing the missing adapters, shipping them, and testing the installed command live.
+
+The active specification is the A–K checklist in [TODOS.md](TODOS.md). Its historical 0.1.0 section records earlier evidence only. The new goal remains active until the required adapter matrix and release acceptance are complete.
+
+Delivery order:
+
+1. Fix the DeepSeek catalog/inference split, provider registry, direct launch syntax, and automatic authenticated local API lifecycle.
+2. Complete secure credential resolution, native catalogs/settings, cleanup and resume for Claude Code, Codex, Grok and OpenCode 2.
+3. Complete the audited provider/gateway and Ori adapters, with explicit native versus translated protocol contracts and no implicit provider substitution.
+4. Verify API/SDK migrations, real SQLite/PostgreSQL concurrency, Docker execution, the documented installed-CLI flow, and all applicable live provider/harness cells.
+5. Obtain exact-commit review, pass required CI, merge, publish a new version, and repeat the matrix using the registry-installed command.
+
+The target direct form is `switcher launch claude --provider deepseek --model deepseek-v4-pro`; the source CLI implements this form. Split-catalog subprocess tests pass, and an independently installed development tarball completed live DeepSeek Pro/Flash proof-file tool loops and native picker selection without an API supervisor or catalog import. The built-in vault/Keychain resolver now passes subprocess coverage and installed-development-CLI live acceptance: DeepSeek Pro/Flash proof-file tool loops, all three native picker models, and the corrected Default mapping. The remaining adapter matrix and registry-installed release acceptance are still pending. Provider credentials may be supplied through a supported runtime or secure-store reference, but no outside launch supervisor or manual catalog JSON should be required for a built-in provider. An explicit remote API must never silently fall back to a local database.
+
+The user-owned live session `switcher-deepseek` is preserved. New acceptance sessions use separate task-owned paths, sockets, ports and databases. New worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/complete-adapters`; branch `codex/fixer/2026-09-05-switcher-complete-adapters`; fetched base `48f8c1d020d5138fa542461c19ff137d9ea69819`.
+
+# Original product plan and 0.1.0 provenance
 
 # Product and acceptance
 

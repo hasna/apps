@@ -2,6 +2,8 @@ import type { components } from "./generated/api";
 import { endpoint } from "./domain";
 import { boundedJson } from "./http";
 import { resolveCredential } from "@hasna/contracts/client";
+export { providerFromPreset } from "./presets";
+export type ProviderPreset = components["schemas"]["ProviderPreset"];
 export type ProviderInput = components["schemas"]["ProviderInput"];
 export type Provider = components["schemas"]["Provider"];
 export type ProfileInput = components["schemas"]["ProfileInput"];
@@ -24,7 +26,7 @@ export class SwitcherClient {
     this.options = {...options};
   }
   async request<T>(method: string, path: string, body?: unknown, options: {version?: number; idempotencyKey?: string} = {}): Promise<T> {
-    if (!/^\/v1\/[a-zA-Z0-9/?&=._%+-]+$/.test(path) || path.includes("..")) throw new Error("Invalid API path.");
+    if ((!/^\/v1\/[a-zA-Z0-9/?&=._%+-]+$/.test(path) && !["/health", "/ready", "/version"].includes(path)) || path.includes("..")) throw new Error("Invalid API path.");
     const apiKey = typeof this.options.apiKey === "function" ? this.options.apiKey() : this.options.apiKey;
     if (!apiKey || /[\r\n]/.test(apiKey)) throw new Error("Switcher API key is required.");
     const headers: Record<string, string> = {authorization: `Bearer ${apiKey}`, accept: "application/json"};
@@ -42,6 +44,11 @@ export class SwitcherClient {
   private query(options: {limit?: number; offset?: number; search?: string} = {}) {
     return new URLSearchParams(Object.entries(options).filter(([,v]) => v !== undefined).map(([k,v]) => [k,String(v)])).toString();
   }
+  health() { return this.request<components["schemas"]["Health"]>("GET", "/health"); }
+  ready() { return this.request<components["schemas"]["Ready"]>("GET", "/ready"); }
+  version() { return this.request<components["schemas"]["Version"]>("GET", "/version"); }
+  listProviderPresets() { return this.request<{data: ProviderPreset[]}>("GET", "/v1/provider-presets"); }
+  getProviderPreset(id: string) { return this.request<ProviderPreset>("GET", `/v1/provider-presets/${encodeURIComponent(id)}`); }
   listProviders(options = {}) { return this.request<Page<Provider>>("GET", `/v1/providers?${this.query(options)}`); }
   getProvider(id: string) { return this.request<Provider>("GET", `/v1/providers/${encodeURIComponent(id)}`); }
   createProvider(input: ProviderInput, idempotencyKey?: string) { return this.request<Provider>("POST", "/v1/providers", input, {idempotencyKey}); }
