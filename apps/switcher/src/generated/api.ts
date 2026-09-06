@@ -342,7 +342,7 @@ export interface components {
             name: string;
             providerId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2" | "pi";
+            harness: "claude" | "codex" | "grok" | "opencode2" | "pi" | "dsh";
             model: string;
         };
         Profile: {
@@ -350,7 +350,7 @@ export interface components {
             name: string;
             providerId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2" | "pi";
+            harness: "claude" | "codex" | "grok" | "opencode2" | "pi" | "dsh";
             model: string;
             version: number;
             updatedAt: string;
@@ -444,7 +444,7 @@ export interface components {
                 name: string;
                 providerId: string;
                 /** @enum {string} */
-                harness: "claude" | "codex" | "grok" | "opencode2" | "pi";
+                harness: "claude" | "codex" | "grok" | "opencode2" | "pi" | "dsh";
                 model: string;
                 version: number;
                 updatedAt: string;
@@ -471,7 +471,7 @@ export interface components {
         RunInput: {
             profileId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2" | "pi";
+            harness: "claude" | "codex" | "grok" | "opencode2" | "pi" | "dsh";
             model: string;
             planToken: string;
         };
@@ -483,7 +483,7 @@ export interface components {
         Run: {
             profileId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2" | "pi";
+            harness: "claude" | "codex" | "grok" | "opencode2" | "pi" | "dsh";
             model: string;
             planToken: string;
             version: number;

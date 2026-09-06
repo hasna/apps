@@ -4,7 +4,7 @@ title: "Switcher full adapter and installed CLI delivery checklist"
 type: "task-checklist"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T09:46:58.620668+00:00"
+updated_at: "2026-09-06T10:11:12Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -31,7 +31,7 @@ Contracts release preparation is committed in `8f8e888713329fdef4e03ef8098e504bc
 
 Both Docker Compose storage profiles passed container health/readiness, authentication and recreation persistence in an isolated task VM. Upgrades from published 0.1.0 preserve provider/profile/catalog/run history in SQLite and PostgreSQL. Owned test containers/volumes were removed. Release-image repetition and rollback acceptance remain open. Evidence: task scratch `docker-tests/result.json` and `switcher-upgrade-acceptance/result.json`.
 
-Pi is integrated with all three protocols, authentication bridging, stable provider identity and persistent sessions. Review corrections cover duplicate Anthropic version paths and case-colliding IDs anywhere in the picker. Combined package verification and corrected native CLI tool/resume fixtures pass. Independent review verifies all nine protocol/auth combinations against the installed Pi library. The earlier weaker helper evidence remains historical. An installed-Pi regression proves the picker includes nested model IDs and excludes other providers; case-colliding catalog IDs are rejected. Prime Agent, DeepSeek Harness and the remaining named adapters remain open below. Missing live provider access must be recorded explicitly rather than inferred from successful catalog discovery.
+Pi is integrated with all three protocols, authentication bridging, stable provider identity and persistent sessions. Review corrections cover duplicate Anthropic version paths and case-colliding IDs anywhere in the picker. Combined package verification and corrected native CLI tool/resume fixtures pass. Independent review verifies all nine protocol/auth combinations against the installed Pi library. The earlier weaker helper evidence remains historical. An installed-Pi regression proves the picker includes nested model IDs and excludes other providers; case-colliding catalog IDs are rejected. DeepSeek Harness now has a direct native web/headless/ACP implementation and installed-native fixtures; independent integration review and live provider acceptance remain separate gates. Prime Agent and the remaining named adapters remain open below. Missing live provider access must be recorded explicitly rather than inferred from successful catalog discovery.
 
 The newest installed candidate SHA-1 `d542620bc412a71b07ebb5a34faa6a56c683e302` resolves published Contracts 1.0.2 normally without overrides. Pi + DeepSeek Flash passed actual tmux read-tool proof and same-session recall with tools disabled after deleting the proof file; both launches exited 0 and removed launch settings. Independent latest-candidate Claude, Codex and Grok tool/resume checks also pass. OpenCode 2 returned the correct proof but exposed a bridge shutdown hang; the deterministic failing regression now passes with explicit upstream stream cancellation and ordered bridge shutdown. Independent concurrent/native-cancel fixtures confirm fast cleanup. Its installed-candidate retest remains open, and older OpenCode results do not close this gate. Evidence: task scratch `live/pi-installed-QtVasQ/result.json` and `reviews/credential-runtime/installed-matrix-latest.json`.
 
@@ -138,7 +138,7 @@ Each preset must declare supported inference protocols, inference/catalog base U
 - [ ] G13 Inventory additional harnesses from Ori/local evidence and add explicit adapter tasks for supported launch interfaces; keep the named four mandatory.
 - [ ] G14 Pi: implement verified executable/config/provider/catalog/session integration and apply the same installed-CLI live acceptance contract.
 - [ ] G15 Prime Agent: implement verified launch/provider/full-catalog integration and test native model changes and lifecycle.
-- [ ] G16 DeepSeek Harness: implement an actual native launch adapter, distinct from using DeepSeek as Claude Code's provider; do not count Ori's setup-only command as a running harness.
+- [x] G16 DeepSeek Harness: direct native `dsh` web/headless/ACP adapter with isolated catalog, all three wire protocols and persistent sessions/attachments. Installed official 0.1.2-rc.1 fixtures verify nine protocol/auth tool/resume cells and browser catalog/auth/trust/shutdown. SDK/custom profiles and Ori's setup-only command are rejected. Independent integration review and real-provider live acceptance remain separate release gates.
 - [ ] G17 Hermes: verify and implement isolated provider/auth/model configuration, catalog behavior, tool loop and resume.
 - [ ] G18 Legacy OpenCode: keep its executable/schema separate from OpenCode 2 and test both without ambiguous executable substitution.
 - [ ] G19 OMP: verify the native launch/config contract and implement model selection plus truthful catalog support.

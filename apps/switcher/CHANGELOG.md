@@ -4,7 +4,7 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-06T09:46:58.620668+00:00"
+updated_at: "2026-09-06T10:11:12Z"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -17,6 +17,7 @@ source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 - Resolve origin-scoped Keychain or vault credential bindings through the installed CLI without storing key values. Separate inference and catalog endpoints, including DeepSeek.
 - Preserve native terminal input, resize, redirected descriptors and exit codes; stop owned POSIX tool processes on exit and cancellation. Correct Grok and OpenCode 2 session continuation across fresh bridge ports.
 - Add Pi with an isolated native catalog, provider-scoped picker and persistent sessions; preserve nested model IDs and reject ambiguous case collisions. Add optional Ori launching for the verified OpenRouter Codex/Grok subset.
+- Add the official DeepSeek Harness (`dsh`) with its native browser UI, headless task and ACP profiles, all three wire protocols, isolated provider catalog and persistent sessions/attachments. Reject SDK/custom profiles and Ori's setup-only command as launch paths.
 - Expand documented provider presets and explicit vLLM/LiteLLM gateways, including account/regional discovery and custom deployment prefixes.
 - Cancel unfinished upstream streams before closing launch bridges, so a completed OpenCode 2 response cannot leave the CLI waiting during cleanup.
 - Align the exact `@hasna/contracts` pin with the 1.0.2 optional Secrets peer release.
