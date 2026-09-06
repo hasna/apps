@@ -272,9 +272,10 @@ describe("ApiStore nested resources", () => {
 
 describe("store resolution", () => {
   test("no hosted env and no local opt-in FAILS CLOSED instead of serving local sqlite", () => {
-    // The owner ruling: without the API env the client must never silently
-    // fall back to the default local database. getStore AND isCloudStore throw
-    // so a bare `false` can never be read as a licence to open sqlite.
+    // The owner ruling: without a resolvable credential the client must never
+    // silently fall back to the default local database. getStore AND
+    // isCloudStore throw so a bare `false` can never be read as a licence to
+    // open sqlite.
     expect(() => getStore({})).toThrow(/HASNA_DOMAINS_API_URL/);
     expect(() => getStore({})).toThrow(/HASNA_DOMAINS_API_KEY/);
     expect(() => getStore({})).toThrow(/fails closed/);
@@ -289,20 +290,26 @@ describe("store resolution", () => {
     expect(isCloudStore({ DOMAINS_DB_PATH: "/tmp/scratch.db" })).toBe(false);
   });
 
-  test("supports the unprefixed DOMAINS_API_URL/key aliases", () => {
+  test("the unprefixed DOMAINS_API_URL/key aliases resolve through the shared resolver", () => {
+    // The app itself never reads the unprefixed names (they used to outrank
+    // the canonical pair); the resolver's silent-alias fallback accepts them
+    // for one release.
     const aliased = { DOMAINS_API_URL: "https://api.example", DOMAINS_API_KEY: "secret" };
-    expect(isCloudStore({ ...aliased, NODE_ENV: "production" })).toBe(true);
+    expect(isCloudStore(aliased)).toBe(true);
   });
 
-  test("refuses a partial hosted config (URL without key)", () => {
+  test("refuses a URL WITHOUT a key through the resolver's fail-closed error", () => {
     expect(() => getStore({ HASNA_DOMAINS_API_URL: "https://api.example" })).toThrow(
-      /Misconfigured domains client/,
+      /fails closed/,
+    );
+    expect(() => getStore({ HASNA_DOMAINS_API_URL: "https://api.example" })).toThrow(
+      /no API key could be resolved/,
     );
   });
 
-  test("refuses a partial hosted config (key without URL)", () => {
-    expect(() => getStore({ HASNA_DOMAINS_API_KEY: "secret" })).toThrow(
-      /Misconfigured domains client/,
-    );
+  test("a key WITHOUT a URL is now a COMPLETE configuration: the fleet gateway applies", () => {
+    // The old app chain refused the half pair; the shared resolver defaults
+    // the authority to https://api.hasna.com/domains once a key resolves.
+    expect((getStore({ HASNA_DOMAINS_API_KEY: "secret" }) as unknown as { transport: string }).transport).toBe("http");
   });
 });

@@ -1,12 +1,15 @@
 /**
  * Persistent config stored in the domains config directory.
+ *
+ * This is a SETTINGS store — registrant contact defaults, registrar/DNS
+ * defaults, the purchase AWS profile. It never holds an API key: credentials
+ * come from the shared @hasna/contracts resolver only (see
+ * `../lib/domains-resolver.ts`).
  */
 
-import { createHash } from "node:crypto";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { adoptResolverHome, getDefaultConfigPath, resolverHome } from "./app-home.js";
+import { getDefaultConfigPath } from "./app-home.js";
 
 export interface DomainContact {
   first_name?: string;
@@ -48,84 +51,16 @@ export function applyPurchaseProfile(): string | undefined {
   return profile;
 }
 
-function canonicalHome(env: NodeJS.ProcessEnv): string {
-  return env["HOME"] || env["USERPROFILE"] || homedir();
-}
-
-export interface LegacyConfigMigrationReport {
-  dryRun: boolean;
-  wouldCopy: boolean;
-  copied: boolean;
-}
-
-/**
- * One-time migration from the previous XDG config default
- * ($XDG_CONFIG_HOME/open-domains/config.json) into the canonical
- * ~/.hasna/domains/config.json. Copies, verifies by size and sha256, records a
- * receipt, never deletes the source, never overwrites existing canonical data,
- * and is idempotent (receipt + canonical file both skip it). dryRun reports
- * whether the config would be copied and writes nothing.
- */
-export function migrateLegacyConfig(
-  env: NodeJS.ProcessEnv = process.env,
-  dryRun = false,
-): LegacyConfigMigrationReport {
-  const report: LegacyConfigMigrationReport = { dryRun, wouldCopy: false, copied: false };
-  const home = canonicalHome(env);
-  const canonicalDir = join(home, ".hasna", "domains");
-  const newPath = join(canonicalDir, "config.json");
-  if (existsSync(newPath)) return report;
-  if (existsSync(join(canonicalDir, ".migrated-from-xdg-config.receipt.json"))) return report;
-
-  const xdgConfig = env["XDG_CONFIG_HOME"]?.trim() || join(home, ".config");
-  const oldPath = join(xdgConfig, "open-domains", "config.json");
-  if (!existsSync(oldPath)) return report;
-  report.wouldCopy = true;
-  if (dryRun) return report;
-
-  mkdirSync(canonicalDir, { recursive: true });
-  copyFileSync(oldPath, newPath);
-  const oldBytes = readFileSync(oldPath);
-  const newBytes = readFileSync(newPath);
-  if (!oldBytes.equals(newBytes)) {
-    throw new Error(
-      `Refusing migration: copied ${newPath} does not byte-match ${oldPath}; the canonical config was not populated.`,
-    );
-  }
-  writeFileSync(
-    join(canonicalDir, ".migrated-from-xdg-config.receipt.json"),
-    `${JSON.stringify(
-      {
-        migratedAt: new Date().toISOString(),
-        from: oldPath,
-        to: newPath,
-        bytes: newBytes.byteLength,
-        sha256: createHash("sha256").update(newBytes).digest("hex"),
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  report.copied = true;
-  return report;
-}
-
 /**
  * The default config location — `config.json` at the root of the effective
- * domains home, resolved through `@hasna/paths` (legacy `~/.hasna/domains`
- * until the XDG data home is adopted). Env overrides (DOMAINS_CONFIG_PATH /
+ * local data home (see `app-home.ts`). Env overrides (DOMAINS_CONFIG_PATH /
  * DOMAINS_CONFIG_DIR) are honored unchanged and win over the default.
  */
 export function getConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  if (env["HASNA_DOMAINS_CONFIG_PATH"]) return env["HASNA_DOMAINS_CONFIG_PATH"];
   if (env["DOMAINS_CONFIG_PATH"]) return env["DOMAINS_CONFIG_PATH"];
   const dir = env["DOMAINS_CONFIG_DIR"];
   if (dir) return join(dir, "config.json");
-
-  // The one-time migration from the previous XDG config default targets the
-  // legacy home; when the resolver home is adopted it is unnecessary.
-  if (!adoptResolverHome(resolverHome(env), env)) {
-    migrateLegacyConfig(env);
-  }
   return getDefaultConfigPath(env);
 }
 

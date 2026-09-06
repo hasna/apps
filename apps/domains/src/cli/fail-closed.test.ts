@@ -1,9 +1,8 @@
 /**
  * Fail-closed regression for the fleet ruling (2026-09-04): a domains CLI run
- * WITHOUT its API env pair (HASNA_DOMAINS_API_URL + HASNA_DOMAINS_API_KEY)
- * must exit non-zero with an actionable error — it must never silently fall
- * back to a default local SQLite database, never print a success-shaped
- * answer against the wrong dataset.
+ * WITHOUT a resolvable credential must exit non-zero with an actionable error —
+ * it must never silently fall back to a default local SQLite database, never
+ * print a success-shaped answer against the wrong dataset.
  *
  * These tests spawn the real CLI entry as a subprocess with a constructed
  * minimal env (parent test vars — including the suite's DOMAINS_DIR isolation
@@ -34,7 +33,7 @@ function runCli(args: string[], env: Record<string, string>): { exitCode: number
   };
 }
 
-describe("fail closed without the fleet API env", () => {
+describe("fail closed without a resolvable credential", () => {
   test("a data command exits non-zero, names the required env, and creates no local database", () => {
     const home = mkdtempSync(join(tmpdir(), "domains-fail-closed-home-"));
     try {
@@ -47,13 +46,16 @@ describe("fail closed without the fleet API env", () => {
       const result = runCli(["domain", "list"], env);
 
       expect(result.exitCode).not.toBe(0);
-      // The error must name the required env so an operator knows what to set.
+      // The error must name the canonical env pair so an operator knows what
+      // to set (the shared resolver's fail-closed error, wrapped as
+      // "domains fails closed: …").
+      expect(result.stderr).toContain("fails closed");
       expect(result.stderr).toContain("HASNA_DOMAINS_API_URL");
       expect(result.stderr).toContain("HASNA_DOMAINS_API_KEY");
-      expect(result.stderr).toContain("fails closed");
       // Never a false green: no success-shaped portfolio output, no silent
       // fallback event pretending local storage was the answer.
       expect(result.stdout).not.toContain("No domains found.");
+      expect(result.stderr).not.toContain("LOCAL mode");
       // And no local SQLite anywhere under the scratch home — the default
       // ~/.hasna/domains/domains.db was never opened.
       expect(existsSync(join(home, ".hasna", "domains"))).toBe(false);
@@ -62,7 +64,7 @@ describe("fail closed without the fleet API env", () => {
     }
   });
 
-  test("explicit local opt-in via a local path var still works", () => {
+  test("explicit local opt-in via a local path var still works and says 'local' on stderr", () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-fail-closed-optin-"));
     const dbPath = join(dir, "explicit.db");
     try {
@@ -76,9 +78,10 @@ describe("fail closed without the fleet API env", () => {
       const result = runCli(["domain", "list"], env);
 
       // Local mode survives strictly as an explicit opt-in: the command runs
-      // against the database the operator named.
+      // against the database the operator named, and announces it on stderr.
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("No domains found.");
+      expect(result.stderr).toContain("LOCAL mode");
       expect(existsSync(dbPath)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -106,7 +109,9 @@ describe("fail closed without the fleet API env", () => {
       // a silent local success.
       expect(result.exitCode).not.toBe(0);
       expect(result.stdout).not.toContain("No domains found.");
-      expect(result.stderr).not.toContain("HASNA_DOMAINS_API_KEY are not set");
+      expect(result.stderr).not.toContain("no API key could be resolved");
+      expect(result.stderr).not.toContain("fails closed");
+      expect(result.stderr).not.toContain("LOCAL mode");
       expect(existsSync(join(home, ".hasna", "domains"))).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });

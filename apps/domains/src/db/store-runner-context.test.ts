@@ -1,24 +1,26 @@
 /**
- * Regression: the production-write guard must hold OUTSIDE a test run.
+ * The store-resolution contract must hold OUTSIDE a test run.
  *
- * THE DEFECT. `store-test-isolation.test.ts` pinned that a test run never
- * reaches the production store. It does that by keying on `NODE_ENV=test`, so
- * it protects `bun test` and nothing else. Measured on bun 1.3.14, station01,
- * 2026-08-07:
+ * THE DEFECT THIS PINS. The suite isolates with `DOMAINS_DIR` (a mkdtemp
+ * directory). That variable is read only by `getDbPath()` in `database.ts`,
+ * which is reached only from `LocalStore` — i.e. only AFTER the transport has
+ * been chosen. The transport is chosen by the shared resolver from
+ * `HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY`, so on a box where the API
+ * vars were exported every `createDomain()` in the suite went to the production
+ * API while the author believed it was writing to a temp directory. Measured
+ * evidence: 122 rows in the hour 2026-07-11T18, twelve more across
+ * 2026-07-24/30/31, and 230 rows in a single `bun run` script on 2026-08-07.
  *
- *   bun test <file>   NODE_ENV="test"    -> guard fires
- *   bun run <script>  NODE_ENV unset     -> guard does NOT fire
- *   bun <file>        NODE_ENV unset     -> guard does NOT fire
+ * The adoption ruling (hasna/apps#1720, class B) answers with the SHARED
+ * resolver's fail-closed contract instead of a per-runner guard: a local path
+ * opt-in is honoured only when the environment configures no authority and no
+ * credential (so the suite's scrubbed env can never reach production), and a
+ * local path set NEXT TO a configured credential is a LOUD conflict in every
+ * runner — `bun test` or a plain `bun file.js`.
  *
- * A plain `bun run` script that set `DOMAINS_DB_PATH` therefore wrote 230 rows
- * into the production portfolio while printing success and creating no sqlite
- * file. `scripts/capture-tui-screenshot.ts` in this repo has exactly that shape
- * (it sets `DOMAINS_DIR` and calls `createDomain`), so the hazard was live here
- * and not merely hypothetical.
- *
- * WHY THIS FILE SPAWNS SUBPROCESSES. Anything `bun test` executes is inside the
- * protected context by construction, so no in-process assertion can exercise
- * the unprotected one — which is precisely why the gap survived a green suite.
+ * WHY THIS FILE SPAWNS SUBPROCESSES. `bun run` scripts are outside the suite
+ * context by construction, and a script that sets `DOMAINS_DIR` and calls
+ * `createDomain` is exactly the shape that reached production in the past.
  * The only way to test the real unprotected runner is to spawn it.
  *
  * Every child gets an explicit minimal environment rather than inheriting this
@@ -42,9 +44,6 @@ const HOSTED_FIXTURE = {
 
 type ProbeResult = {
   outcome: string;
-  nodeEnv: string;
-  vitest: string;
-  jestWorkerId: string;
 };
 
 /**
@@ -74,39 +73,27 @@ function runUnprotected(extra: Record<string, string>): ProbeResult {
   return JSON.parse(line) as ProbeResult;
 }
 
-describe("production-write guard outside a test run", () => {
-  test("CONTROL: the spawned context really is unprotected, and can report cloud", () => {
-    const probe = runUnprotected({});
-
-    // If this ever fails, the child became a "test run" and every assertion
-    // below would pass for the wrong reason.
-    expect(probe.nodeEnv).toBe("<unset>");
-    expect(probe.vitest).toBe("<unset>");
-    expect(probe.jestWorkerId).toBe("<unset>");
-
-    // And the probe is capable of reporting the http transport, so a `local`
-    // result below is a real outcome rather than an instrument that cannot say http.
-    expect(probe.outcome).toBe("http");
+describe("store resolution outside a test run (plain bun subprocess)", () => {
+  test("CONTROL: cloud env with no local path resolves http outside a test run", () => {
+    expect(runUnprotected({}).outcome).toBe("http");
   });
 
-  test("BUG PINNED: DOMAINS_DB_PATH + cloud env outside a test run must NOT resolve cloud", () => {
+  test("BUG PINNED: DOMAINS_DB_PATH + cloud env must NOT resolve cloud or local — it is a loud conflict", () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-guard-"));
     try {
       const probe = runUnprotected({ DOMAINS_DB_PATH: join(dir, "scratch.db") });
-      expect(probe.nodeEnv).toBe("<unset>");
-      expect(probe.outcome).not.toBe("http");
       expect(probe.outcome).toStartWith("THREW:");
       expect(probe.outcome).toContain("DOMAINS_DB_PATH");
+      expect(probe.outcome).toContain("Refusing");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("BUG PINNED: DOMAINS_DIR + cloud env outside a test run must NOT resolve cloud", () => {
+  test("BUG PINNED: DOMAINS_DIR + cloud env must NOT resolve cloud or local either", () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-guard-"));
     try {
       const probe = runUnprotected({ DOMAINS_DIR: dir });
-      expect(probe.outcome).not.toBe("http");
       expect(probe.outcome).toStartWith("THREW:");
       expect(probe.outcome).toContain("DOMAINS_DIR");
     } finally {
@@ -114,7 +101,7 @@ describe("production-write guard outside a test run", () => {
     }
   });
 
-  test("the refusal names a route that actually works: unsetting the API vars takes the path", () => {
+  test("a local path with NOTHING else configured is the explicit opt-in: local", () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-guard-"));
     try {
       const probe = runUnprotected({
@@ -128,35 +115,19 @@ describe("production-write guard outside a test run", () => {
     }
   });
 
-  test("ESCAPE HATCH: an explicit opt-out keeps the hosted store despite the local path", () => {
+  test("no credential and no local opt-in fails closed in the unprotected runner too", () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-guard-"));
     try {
       const probe = runUnprotected({
-        DOMAINS_DB_PATH: join(dir, "scratch.db"),
-        HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH: "1",
+        HASNA_DOMAINS_API_URL: "https://domains.example.invalid",
+        HASNA_DOMAINS_API_KEY: "",
+        HOME: dir,
       });
-      expect(probe.outcome).toBe("http");
+      expect(probe.outcome).toStartWith("THREW:");
+      expect(probe.outcome).toContain("fails closed");
+      expect(probe.outcome).toContain("HASNA_DOMAINS_API_KEY");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  test("the escape hatch does NOT fail open on an explicit refusal", () => {
-    const dir = mkdtempSync(join(tmpdir(), "domains-guard-"));
-    try {
-      for (const refusal of ["0", "false", "no", "off"]) {
-        const probe = runUnprotected({
-          DOMAINS_DB_PATH: join(dir, "scratch.db"),
-          HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH: refusal,
-        });
-        expect(probe.outcome).toStartWith("THREW:");
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("NO REGRESSION: cloud env with no local path still resolves http outside a test run", () => {
-    expect(runUnprotected({ NODE_ENV: "production" }).outcome).toBe("http");
   });
 });
