@@ -4618,19 +4618,19 @@ import {
 } from "@hasna/contracts/client/storage";
 import {
   createClientTransport,
-  CREDENTIAL_PROFILE_ENV_KEY,
-  credentialOverrideEnvKey,
-  credentialPointerEnvKey
+  CREDENTIAL_PROFILE_ENV_KEY as CREDENTIAL_PROFILE_ENV_KEY2,
+  credentialOverrideEnvKey as credentialOverrideEnvKey2,
+  credentialPointerEnvKey as credentialPointerEnvKey2
 } from "@hasna/contracts/client";
 
 // src/client-transport.ts
 import {
-  appConfigDiskValue,
-  ClientTransportConfigurationError,
+  CREDENTIAL_PROFILE_ENV_KEY,
   clientTransportEnvKeys,
   credentialDiskSources,
+  credentialOverrideEnvKey,
+  credentialPointerEnvKey,
   defaultFleetGatewayBaseUrl,
-  keychainConfigValue,
   resolveClientTransport
 } from "@hasna/contracts/client";
 
@@ -4749,19 +4749,20 @@ var KNOWLEDGE_API_URL_ENV = KNOWLEDGE_API_URL_ENV_KEYS[0];
 var KNOWLEDGE_API_KEY_ENV = KNOWLEDGE_API_KEY_ENV_KEYS[0];
 var KNOWLEDGE_DATABASE_URL_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_DEFAULT_API_URL = defaultFleetGatewayBaseUrl(KNOWLEDGE_APP_SLUG);
+var KNOWLEDGE_LOCAL_OPT_IN_ENV_KEYS = ["HASNA_KNOWLEDGE_LOCAL"];
+var KNOWLEDGE_LOCAL_OPT_IN_ENV = KNOWLEDGE_LOCAL_OPT_IN_ENV_KEYS[0];
 var RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS = [
   "HASNA_KNOWLEDGE_STORAGE_MODE",
   "HASNA_KNOWLEDGE_MODE",
   "KNOWLEDGE_STORAGE_MODE",
   "KNOWLEDGE_MODE"
 ];
-var RETIRED_KNOWLEDGE_LOCAL_ENV = "HASNA_KNOWLEDGE_LOCAL";
 
 class RetiredKnowledgeStorageSelectorError extends Error {
   envKey;
   code = "retired_knowledge_storage_selector";
   constructor(envKey) {
-    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients resolve their credential through @hasna/contracts \u2014 an explicit --api-key, ` + `${KNOWLEDGE_API_KEY_ENV}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV}_REF, the macOS Keychain ` + `item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key, ~/.hasna/${KNOWLEDGE_APP_SLUG}/config/credentials, ` + `then ${KNOWLEDGE_API_KEY_ENV} \u2014 and reach ${KNOWLEDGE_DEFAULT_API_URL} unless ${KNOWLEDGE_API_URL_ENV} ` + `(or the Keychain api-url item, or the credentials file) names another authority. ` + `With no credential and no authority anywhere, the on-box store applies. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
+    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients resolve their credential through @hasna/contracts \u2014 an explicit --api-key, ` + `${KNOWLEDGE_API_KEY_ENV}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV}_REF, the macOS Keychain ` + `item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key, ~/.hasna/${KNOWLEDGE_APP_SLUG}/config/credentials, ` + `then ${KNOWLEDGE_API_KEY_ENV} \u2014 and reach ${KNOWLEDGE_DEFAULT_API_URL} unless ${KNOWLEDGE_API_URL_ENV} ` + `(or the Keychain api-url item, or the credentials file) names another authority. ` + `With no credential and no ${KNOWLEDGE_LOCAL_OPT_IN_ENV} opt-in the client fails closed. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
     this.envKey = envKey;
     this.name = "RetiredKnowledgeStorageSelectorError";
   }
@@ -4788,43 +4789,64 @@ function credentialOptions(env, options) {
     keychain: options.keychain ?? knowledgeKeychainTierOptions(env)
   };
 }
-function configuredAuthoritySource(env, keychain) {
-  const envKey = ENV_KEYS.apiUrlKeys.find((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined);
-  if (envKey)
-    return envKey;
-  const keychainHit = keychainConfigValue(KNOWLEDGE_APP_SLUG, env, keychain);
-  if (keychainHit)
-    return keychainHit.source;
-  const diskHit = appConfigDiskValue(KNOWLEDGE_APP_SLUG, env, ENV_KEYS.apiUrlKeys);
-  return diskHit ? diskHit.path : null;
+function isKnowledgeLocalOptIn(env = process.env) {
+  return KNOWLEDGE_LOCAL_OPT_IN_ENV_KEYS.some((key) => envKeySet(env, key));
+}
+function knowledgeAuthorityEnvKeys() {
+  const keys = clientTransportEnvKeys(KNOWLEDGE_APP_SLUG);
+  return [
+    ...keys.apiUrlKeys,
+    ...keys.apiKeyKeys,
+    credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG),
+    credentialPointerEnvKey(KNOWLEDGE_APP_SLUG),
+    CREDENTIAL_PROFILE_ENV_KEY
+  ];
+}
+function envKeySet(env, key) {
+  return Object.prototype.hasOwnProperty.call(env, key) && (env[key] ?? "").trim() !== "";
+}
+function hasKnowledgeEnvAuthorityIntent(env = process.env) {
+  return knowledgeAuthorityEnvKeys().some((key) => envKeySet(env, key));
+}
+function selectsKnowledgeLocalStore(env = process.env) {
+  return !hasKnowledgeEnvAuthorityIntent(env) && isKnowledgeLocalOptIn(env);
 }
 var localModeAnnounced = false;
-var legacyOptInAnnounced = false;
-function announceRetiredLocalOptIn() {
-  if (legacyOptInAnnounced)
-    return;
-  legacyOptInAnnounced = true;
-  console.error(`knowledge: ${RETIRED_KNOWLEDGE_LOCAL_ENV} is set and IGNORED (retired). Routing follows the credential ` + `chain now: a credential from any tier selects the server API, and the on-box store applies when none ` + `resolves. Unset it; it is deleted in the next minor.`);
-}
 function announceLocalMode(env) {
   if (localModeAnnounced)
     return;
   localModeAnnounced = true;
   const candidates = credentialDiskSources(KNOWLEDGE_APP_SLUG, env);
-  console.error(`knowledge: no fleet credential resolved \u2014 using the on-box store (local mode). ` + `To use the fleet, put the key in the Keychain item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key` + `${candidates[0] ? ` or in ${candidates[0]}` : ""}, or set ${KNOWLEDGE_API_KEY_ENV}.`);
+  console.error(`knowledge: local mode \u2014 the explicit ${KNOWLEDGE_LOCAL_OPT_IN_ENV} opt-in selected the on-box store. ` + `To use the fleet instead, put the key in the Keychain item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key` + `${candidates[0] ? ` or in ${candidates[0]}` : ""}, or set ${KNOWLEDGE_API_KEY_ENV}, ` + `and unset ${KNOWLEDGE_LOCAL_OPT_IN_ENV}.`);
+}
+function knowledgeFailClosedMessage(original) {
+  return `knowledge: client credential resolution failed \u2014 ${original} ` + `There is no local fallback: the on-box store is opt-in only (${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1) ` + "and disabled by default \u2014 failing closed instead of serving local data.";
 }
 function resolveKnowledgeClientTransport(env = process.env, options = {}) {
   assertNoRetiredKnowledgeStorageSelector(env);
   const keychain = options.keychain ?? knowledgeKeychainTierOptions(env);
-  const legacyLocalOptIn = Object.prototype.hasOwnProperty.call(env, RETIRED_KNOWLEDGE_LOCAL_ENV) && env[RETIRED_KNOWLEDGE_LOCAL_ENV] !== undefined;
-  if (legacyLocalOptIn)
-    announceRetiredLocalOptIn();
+  const localOptIn = isKnowledgeLocalOptIn(env);
   const base = {
     credential_file_candidates: Object.freeze(credentialDiskSources(KNOWLEDGE_APP_SLUG, env)),
     keychain_tier_enabled: keychainTierLive(env, keychain),
-    legacy_local_opt_in_present: legacyLocalOptIn,
+    local_opt_in_present: localOptIn,
     network_guard_active: isNetworkGuardActive(env)
   };
+  if (selectsKnowledgeLocalStore(env)) {
+    announceLocalMode(env);
+    return {
+      transport: "sqlite",
+      source: "local-opt-in",
+      base_url: null,
+      api_url_present: false,
+      api_url_source: null,
+      api_key_present: false,
+      api_key_source: null,
+      api_key_tier: null,
+      warning: null,
+      ...base
+    };
+  }
   try {
     const resolution = resolveClientTransport(KNOWLEDGE_APP_SLUG, env, {
       credentials: credentialOptions(env, { ...options, keychain })
@@ -4842,23 +4864,9 @@ function resolveKnowledgeClientTransport(env = process.env, options = {}) {
       ...base
     };
   } catch (error) {
-    if (!(error instanceof ClientTransportConfigurationError))
-      throw error;
-    if (configuredAuthoritySource(env, keychain))
-      throw error;
-    announceLocalMode(env);
-    return {
-      transport: "sqlite",
-      source: "local",
-      base_url: null,
-      api_url_present: false,
-      api_url_source: null,
-      api_key_present: false,
-      api_key_source: null,
-      api_key_tier: null,
-      warning: null,
-      ...base
-    };
+    throw new Error(knowledgeFailClosedMessage(error instanceof Error ? error.message : String(error)), {
+      cause: error
+    });
   }
 }
 function keychainTierLive(env, options) {
@@ -5079,9 +5087,9 @@ function guardedTransportEnv(env) {
   const guardedEnv = { ...env };
   delete guardedEnv.HOME;
   delete guardedEnv.USERPROFILE;
-  delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY];
-  delete guardedEnv[credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG)];
-  delete guardedEnv[credentialPointerEnvKey(KNOWLEDGE_APP_SLUG)];
+  delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY2];
+  delete guardedEnv[credentialOverrideEnvKey2(KNOWLEDGE_APP_SLUG)];
+  delete guardedEnv[credentialPointerEnvKey2(KNOWLEDGE_APP_SLUG)];
   return guardedEnv;
 }
 function resolveKnowledgeHttpClient(env, options = {}) {
@@ -8746,9 +8754,10 @@ async function ingestAppWikiSourceRef(options) {
 import { existsSync as existsSync9, mkdirSync as mkdirSync3, readFileSync as readFileSync6, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "fs";
 import { dirname as dirname4, join as join6 } from "path";
 import {
-  appConfigDiskValue as appConfigDiskValue2,
+  appConfigDiskValue,
+  credentialDiskSources as credentialDiskSources2,
   HasnaHttpError,
-  keychainConfigValue as keychainConfigValue2,
+  keychainConfigValue,
   resolveCredential
 } from "@hasna/contracts/client";
 import { ownAgentClaim, ownTenantId, parseApiKey } from "@hasna/contracts/auth";
@@ -8804,11 +8813,8 @@ function normalizeKnowledgeApiOrigin(apiUrl) {
   }
   return url.toString().replace(/\/+$/, "");
 }
-function knowledgeAuthPath(env = process.env) {
-  if (env.HASNA_KNOWLEDGE_AUTH_PATH)
-    return env.HASNA_KNOWLEDGE_AUTH_PATH;
-  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? getDataHome(env);
-  return join6(root, "auth.json");
+function knowledgeCredentialsPath(env = process.env) {
+  return credentialDiskSources2(KNOWLEDGE_APP_SLUG, env)[0] ?? join6(getDataHome(env), "config", "credentials");
 }
 function resolveKnowledgeApiUrl(env = process.env) {
   return normalizeKnowledgeApiOrigin(resolveKnowledgeApiAuthority(env).url);
@@ -8817,40 +8823,33 @@ function resolveKnowledgeApiAuthority(env = process.env) {
   const envKey = KNOWLEDGE_API_URL_ENV_KEYS.find((key) => Boolean(env[key]?.trim()));
   if (envKey)
     return { url: env[envKey].trim(), source: envKey };
-  const keychain = keychainConfigValue2(KNOWLEDGE_APP_SLUG, env, knowledgeKeychainTierOptions(env));
+  const keychain = keychainConfigValue(KNOWLEDGE_APP_SLUG, env, knowledgeKeychainTierOptions(env));
   if (keychain)
     return { url: keychain.value, source: keychain.source };
-  const disk = appConfigDiskValue2(KNOWLEDGE_APP_SLUG, env, KNOWLEDGE_API_URL_ENV_KEYS);
+  const disk = appConfigDiskValue(KNOWLEDGE_APP_SLUG, env, KNOWLEDGE_API_URL_ENV_KEYS);
   if (disk && !disk.unusable && disk.value.trim())
     return { url: disk.value.trim(), source: disk.path };
   return { url: DEFAULT_KNOWLEDGE_API_URL, source: "default" };
 }
-function getKnowledgeAuth(env = process.env) {
-  try {
-    const path = knowledgeAuthPath(env);
-    if (!existsSync9(path))
-      return null;
-    const parsed = JSON.parse(readFileSync6(path, "utf8"));
-    return typeof parsed.api_key === "string" && parsed.api_key.length > 0 ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-function saveKnowledgeAuth(auth, env = process.env) {
-  const path = knowledgeAuthPath(env);
-  const stored = {
+function saveKnowledgeCredentials(auth, env = process.env) {
+  const path = knowledgeCredentialsPath(env);
+  const normalizedUrl = auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined;
+  const lines = [`${KNOWLEDGE_API_KEY_ENV}=${auth.api_key}`];
+  if (normalizedUrl)
+    lines.push(`${KNOWLEDGE_API_URL_ENV_KEYS[0]}=${normalizedUrl}`);
+  mkdirSync3(dirname4(path), { recursive: true, mode: 448 });
+  writeFileSync4(path, `${lines.join(`
+`)}
+`, { mode: 384 });
+  return {
     ...auth,
-    api_url: auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined,
+    api_url: normalizedUrl,
     created_at: auth.created_at ?? new Date().toISOString()
   };
-  mkdirSync3(dirname4(path), { recursive: true, mode: 448 });
-  writeFileSync4(path, `${JSON.stringify(stored, null, 2)}
-`, { mode: 384 });
-  return stored;
 }
-function clearKnowledgeAuth(env = process.env) {
+function clearKnowledgeCredentials(env = process.env) {
   try {
-    unlinkSync2(knowledgeAuthPath(env));
+    unlinkSync2(knowledgeCredentialsPath(env));
     return true;
   } catch {
     return false;
@@ -8868,25 +8867,22 @@ function getKnowledgeApiKey(env = process.env) {
       tier: resolved.tier
     };
   }
-  const auth = getKnowledgeAuth(env);
-  return auth?.api_key ? { apiKey: auth.api_key, source: "file", sourceRef: knowledgeAuthPath(env), tier: null } : { apiKey: null, source: "none", sourceRef: null, tier: null };
+  return { apiKey: null, source: "none", sourceRef: null, tier: null };
 }
 function knowledgeAuthStatus(env = process.env) {
-  const auth = getKnowledgeAuth(env);
   const key = getKnowledgeApiKey(env);
   const authority = resolveKnowledgeApiAuthority(env);
-  const apiUrl = authority.source === "default" && auth?.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : normalizeKnowledgeApiOrigin(authority.url);
   const configured = Boolean(key.apiKey) || key.tier === "pointer";
   return {
     authenticated: configured,
     configured,
     source: key.source,
-    api_url: gatewayApiV1Root(apiUrl) ?? apiUrl,
-    auth_path: knowledgeAuthPath(env),
-    email: key.tier === null && key.source === "file" ? auth?.email ?? null : null,
-    org_id: key.tier === null && key.source === "file" ? auth?.org_id ?? null : null,
-    org_slug: key.tier === null && key.source === "file" ? auth?.org_slug ?? null : null,
-    user_id: key.tier === null && key.source === "file" ? auth?.user_id ?? null : null,
+    api_url: gatewayApiV1Root(normalizeKnowledgeApiOrigin(authority.url)) ?? normalizeKnowledgeApiOrigin(authority.url),
+    auth_path: knowledgeCredentialsPath(env),
+    email: null,
+    org_id: null,
+    org_slug: null,
+    user_id: null,
     api_key_present: configured,
     source_ref: key.sourceRef,
     tier: key.tier
@@ -20738,18 +20734,17 @@ class KnowledgeService {
     return probeKnowledgeAuth(env);
   }
   saveAuth(input, env = process.env) {
-    const apiUrl = input.apiUrl ?? resolveKnowledgeApiUrl(env);
-    return saveKnowledgeAuth({
+    return saveKnowledgeCredentials({
       api_key: input.apiKey,
       email: input.email,
       org_id: input.orgId,
       org_slug: input.orgSlug,
       user_id: input.userId,
-      api_url: apiUrl
+      api_url: input.apiUrl
     }, env);
   }
   clearAuth(env = process.env) {
-    return clearKnowledgeAuth(env);
+    return clearKnowledgeCredentials(env);
   }
   paths() {
     const workspace = this.workspace;

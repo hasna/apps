@@ -11,6 +11,7 @@ import { delimiter, join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CURRENT_SCHEMA_VERSION, migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
 import { KNOWLEDGE_API_KEY_ENV_KEYS, KNOWLEDGE_API_URL_ENV_KEYS, RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS } from '../src/client-transport';
+import { knowledgeCredentialsPath } from '../src/auth';
 import { createKnowledgeService } from '../src/service';
 import { parseSourceRef } from '../src/source-ref';
 import { recordStorageObjects } from '../src/storage-contract';
@@ -2763,23 +2764,21 @@ describe('knowledge cli', () => {
 
   test('setup and auth commands keep client transport out of workspace config', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-cli-'));
-    const authDir = join(dir, 'auth');
-    const env = { HASNA_KNOWLEDGE_AUTH_DIR: authDir };
 
-    const setup = runCli(['setup', '--scope', 'project', '--json'], dir, env);
+    const setup = runCli(['setup', '--scope', 'project', '--json'], dir, {});
     expect(setup.exitCode).toBe(0);
     const setupOut = JSON.parse(new TextDecoder().decode(setup.stdout));
     expect(setupOut.mode).toBeUndefined();
     expect(setupOut.api_url).toBeUndefined();
     expect(setupOut.storage_type).toBe('local');
 
-    const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir, env);
+    const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir, {});
     expect(storage.exitCode).toBe(0);
     const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
     expect(storageOut.hosted).toBeUndefined();
     expect(storageOut.canonical_example.active).toBe(false);
 
-    const before = runCli(['auth', 'whoami', '--scope', 'project', '--json'], dir, env);
+    const before = runCli(['auth', 'whoami', '--scope', 'project', '--json'], dir, {});
     // Unauthenticated is a non-zero verdict (#1587): whoami is a gate, not a
     // report that merely succeeded in printing.
     expect(before.exitCode).toBe(1);
@@ -2787,16 +2786,23 @@ describe('knowledge cli', () => {
     expect(beforeOut.ok).toBe(false);
     expect(beforeOut.authenticated).toBe(false);
 
-    const login = runCli(['auth', 'login', '--api-key', 'kh_cli', '--email', 'agent@example.com', '--org', 'hasna', '--scope', 'project', '--json'], dir, env);
+    const login = runCli(['auth', 'login', '--api-key', 'kh_cli', '--scope', 'project', '--json'], dir, {});
     expect(login.exitCode).toBe(0);
     const loginOut = JSON.parse(new TextDecoder().decode(login.stdout));
     expect(loginOut.authenticated).toBe(true);
-    expect(loginOut.email).toBe('agent@example.com');
-    expect(existsSync(join(authDir, 'auth.json'))).toBe(true);
+    // The login lands in the canonical credentials file (the shared chain's
+    // DISK tier), never the retired auth.json — so `auth whoami` after a
+    // login probes through it.
+    const suiteHome = process.env.HOME as string;
+    const credentialsPath = knowledgeCredentialsPath({ HOME: suiteHome, USERPROFILE: suiteHome });
+    expect(existsSync(credentialsPath)).toBe(true);
+    expect(loginOut.auth_path).toBe(credentialsPath);
+    expect(loginOut.email).toBeNull();
 
-    const logout = runCli(['auth', 'logout', '--scope', 'project', '--json'], dir, env);
+    const logout = runCli(['auth', 'logout', '--scope', 'project', '--json'], dir, {});
     expect(logout.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(logout.stdout)).removed).toBe(true);
+    expect(existsSync(credentialsPath)).toBe(false);
   });
 
   test('setup can opt into canonical example S3 artifact storage', () => {
@@ -4079,9 +4085,13 @@ describe('Knowledge CLI transport selection', () => {
 
   function runCliWithCleanRoute(args: string[], env: Record<string, string>) {
     const inherited = { ...process.env } as Record<string, string>;
-    for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS, 'HASNA_KNOWLEDGE_LOCAL']) {
+    for (const key of [...KNOWLEDGE_API_URL_ENV_KEYS, ...KNOWLEDGE_API_KEY_ENV_KEYS, ...RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS]) {
       delete inherited[key];
     }
+    // The suite's explicit HASNA_KNOWLEDGE_LOCAL=1 opt-in (tests/preload.ts)
+    // is deliberately NOT scrubbed: subprocesses inherit it and run on the
+    // on-box store by default, exactly like the in-process suite. A test that
+    // exercises fail-closed routing blanks it in its own env overlay.
     return Bun.spawnSync(['bun', CLI, ...args], {
       env: { ...inherited, ...env },
       stdout: 'pipe',
@@ -4120,6 +4130,9 @@ describe('Knowledge CLI transport selection', () => {
     expect(combined).toContain('Keychain');
     expect(combined).toContain(join(home, '.hasna', 'knowledge', 'config', 'credentials'));
     expect(combined).toContain('HASNA_KNOWLEDGE_API_KEY');
+    // Fail closed is named: no local fallback and no opt-in hint missing.
+    expect(combined).toContain('no local fallback');
+    expect(combined).toContain('HASNA_KNOWLEDGE_LOCAL');
     // No false-green fallback notice may accompany the rejection.
     expect(combined).not.toContain('knowledge-local-fallback');
     // And nothing on-box — no workspace, no *.db — was created on the way out.
@@ -4137,7 +4150,13 @@ describe('Knowledge CLI transport selection', () => {
       `HASNA_KNOWLEDGE_API_URL=https://knowledge.invalid\nHASNA_KNOWLEDGE_API_KEY=k_fake_test_key\n`,
       { mode: 0o600 },
     );
-    const result = runCliWithCleanRoute(['transport', '--json'], { HOME: home, USERPROFILE: home });
+    const result = runCliWithCleanRoute(['transport', '--json'], {
+      HOME: home,
+      USERPROFILE: home,
+      // The suite's inherited local opt-in must be blanked: the opt-in is
+      // answered before the resolver and would otherwise mask the disk tier.
+      HASNA_KNOWLEDGE_LOCAL: '',
+    });
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(decode(result.stdout))).toMatchObject({
       ok: true,
@@ -4167,24 +4186,26 @@ describe('Knowledge CLI transport selection', () => {
     });
   });
 
-  test('nothing configured anywhere: the on-box store, exit zero, announced once on stderr', () => {
-    // Local mode is legitimate for this package (it is an OSS local knowledge
-    // base) but never silent, and never a place a hosted process lands.
-    const result = runCliWithCleanRoute(['transport', '--json'], sandboxHome());
-    expect(result.exitCode).toBe(0);
-    expect(JSON.parse(decode(result.stdout))).toMatchObject({
-      ok: true,
-      transport: 'sqlite',
-      source: 'local',
-      api_key_present: false,
-      legacy_local_opt_in_present: false,
+  test('nothing configured anywhere FAILS CLOSED: non-zero, no sqlite, no fallback event', () => {
+    // The station negative control: a hosted process with no credential
+    // anywhere must exit non-zero. The on-box store is NOT a default any
+    // surface may drop onto — it is opt-in only.
+    const result = runCliWithCleanRoute(['transport', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_LOCAL: '',
     });
-    const err = decode(result.stderr);
-    expect(err).toContain('using the on-box store (local mode)');
-    expect(err.match(/using the on-box store \(local mode\)/g)).toHaveLength(1);
+    expect(result.exitCode).not.toBe(0);
+    const combined = decode(result.stdout) + decode(result.stderr);
+    expect(combined).toContain('no API key could be resolved');
+    expect(combined).toContain('no local fallback');
+    expect(combined).toContain('HASNA_KNOWLEDGE_LOCAL=1');
+    // No local-mode announcement may accompany the rejection.
+    expect(combined).not.toContain('local mode');
   });
 
-  test('the retired HASNA_KNOWLEDGE_LOCAL opt-in is accepted, ignored, and reported', () => {
+  test('the explicit HASNA_KNOWLEDGE_LOCAL opt-in selects the on-box store: exit zero, "local" on stderr', () => {
+    // Local mode is legitimate for this package (it is an OSS local knowledge
+    // base) but ONLY by explicit opt-in, and never silent.
     const result = runCliWithCleanRoute(['transport', '--json'], {
       ...sandboxHome(),
       HASNA_KNOWLEDGE_LOCAL: '1',
@@ -4193,10 +4214,28 @@ describe('Knowledge CLI transport selection', () => {
     expect(JSON.parse(decode(result.stdout))).toMatchObject({
       ok: true,
       transport: 'sqlite',
-      source: 'local',
-      legacy_local_opt_in_present: true,
+      source: 'local-opt-in',
+      api_key_present: false,
+      local_opt_in_present: true,
     });
-    expect(decode(result.stdout) + decode(result.stderr)).toContain('HASNA_KNOWLEDGE_LOCAL');
+    const err = decode(result.stderr);
+    expect(err).toContain('local mode');
+    expect(err.match(/local mode/g)).toHaveLength(1);
+  });
+
+  test('a configured credential outranks the local opt-in and is reported', () => {
+    const result = runCliWithCleanRoute(['transport', '--json'], {
+      ...sandboxHome(),
+      HASNA_KNOWLEDGE_LOCAL: '1',
+      HASNA_KNOWLEDGE_API_KEY: 'k_fake_test_key',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({
+      ok: true,
+      transport: 'http',
+      source: 'default',
+      local_opt_in_present: true,
+    });
   });
 
   test('retired selector fails loudly and names both replacements', () => {

@@ -13,6 +13,7 @@ import {
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_DEFAULT_API_URL,
+  KNOWLEDGE_LOCAL_OPT_IN_ENV,
   assertNoRetiredKnowledgeStorageSelector,
   resolveKnowledgeClientTransport,
   type KnowledgeClientTransportReport,
@@ -603,9 +604,9 @@ function printCommandHelp(command: string): void {
   if (command === 'project-resources') { console.log('Usage: knowledge project-resources <project-id> [--kind <project|collection|item|taxonomy>]... [--limit <n>] [--cursor <cursor>] [--all] [--json]'); return; }
   if (command === 'project-resource') { console.log('Usage: knowledge project-resource <project-id> <project|collection|item|taxonomy> <resource-id> [--json]'); return; }
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--verbose] [--json]'); return; }
-  if (command === 'transport') { console.log(`Usage: knowledge transport [--json]\n  Reports whether this process uses the on-box SQLite store or the server HTTP API, and WHICH tier decided.\n  A credential from any tier of the shared @hasna/contracts chain selects HTTP: --api-key, ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}_REF, the macOS Keychain item hasna.credentials.knowledge.api-key, ~/.hasna/knowledge/config/credentials, then ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}.\n  The authority is ${KNOWLEDGE_API_URL_ENV_KEYS[0]}, the Keychain api-url item, the credentials file, else ${KNOWLEDGE_DEFAULT_API_URL}.\n  A configured authority with no resolvable credential exits non-zero; with nothing configured at all the on-box store applies and says so.\n  Reads source NAMES and presence only; it never prints credential values.`); return; }
+  if (command === 'transport') { console.log(`Usage: knowledge transport [--json]\n  Reports whether this process uses the on-box SQLite store or the server HTTP API, and WHICH tier decided.\n  A credential from any tier of the shared @hasna/contracts chain selects HTTP: --api-key, ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}_REF, the macOS Keychain item hasna.credentials.knowledge.api-key, ~/.hasna/knowledge/config/credentials, then ${KNOWLEDGE_API_KEY_ENV_KEYS[0]}.\n  The authority is ${KNOWLEDGE_API_URL_ENV_KEYS[0]}, the Keychain api-url item, the credentials file, else ${KNOWLEDGE_DEFAULT_API_URL}.\n  A configured authority with no resolvable credential exits non-zero; with no credential anywhere and no ${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1 opt-in the CLI FAILS CLOSED — the on-box store is opt-in only (it says "local" on stderr).\n  Reads source NAMES and presence only; it never prints credential values.`); return; }
   if (command === 'guarded') { console.log('Usage:\n  knowledge guarded capabilities [--json]\n  knowledge guarded execute-descriptor --ipc [--json]\n\n  execute-descriptor is an internal package-owned worker. Private requests and results use the\n  runtime-owned child-process IPC channel, never argv, stdin, environment variables, files, stdout,\n  or stderr. Direct shell invocation has no IPC channel and fails closed. Use the exported opaque-\n  descriptor helpers rather than invoking this worker directly from a shell.'); return; }
-  if (command === 'setup') { console.log('Usage: knowledge setup [--canonical-example] [--scope local|global|project] [--json]\nClient routing: any resolved credential (Keychain item hasna.credentials.knowledge.api-key, ~/.hasna/knowledge/config/credentials, or HASNA_KNOWLEDGE_API_KEY) selects the server API at HASNA_KNOWLEDGE_API_URL, else the fleet gateway. With nothing configured anywhere the on-box store applies; a configured authority without a credential fails closed.'); return; }
+  if (command === 'setup') { console.log('Usage: knowledge setup [--canonical-example] [--scope local|global|project] [--json]\nClient routing: any resolved credential (Keychain item hasna.credentials.knowledge.api-key, ~/.hasna/knowledge/config/credentials, or HASNA_KNOWLEDGE_API_KEY) selects the server API at HASNA_KNOWLEDGE_API_URL, else the fleet gateway. A configured authority without a credential fails closed; with no credential anywhere the CLI fails closed unless the explicit ${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1 opt-in (or an explicit --store) selects the on-box store.'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path|migrate-project-path|merge-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]\n       knowledge storage import-legacy [--dry-run] [--scope global] [--json]\n       migrate-project-path moves <cwd>/.hasna/knowledge into ~/.hasna/knowledge/projects/<key> (canonical); dry-run by default'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--verbose] [--json]'); return; }
@@ -677,14 +678,14 @@ function formatTransport(report: KnowledgeClientTransportReport): string {
     lines.push(`  Authority: ${report.base_url} (from ${report.api_url_source})`);
     lines.push(`  Credential: tier ${report.api_key_tier} (from ${report.api_key_source})`);
   } else {
-    lines.push('  No credential resolved in any tier — local mode.');
+    lines.push('  On-box store selected by the explicit local-mode opt-in (nothing else resolves).');
     if (report.credential_file_candidates[0]) {
       lines.push(`  Credential file looked for at: ${report.credential_file_candidates[0]}`);
     }
     lines.push(`  Keychain tier: ${report.keychain_tier_enabled ? 'consulted' : 'not consulted here'}.`);
   }
-  if (report.legacy_local_opt_in_present) {
-    lines.push('  HASNA_KNOWLEDGE_LOCAL is set and IGNORED (retired): routing follows the credential chain.');
+  if (report.local_opt_in_present) {
+    lines.push(`  ${KNOWLEDGE_LOCAL_OPT_IN_ENV} is set — the explicit on-box opt-in (a configured credential outranks it).`);
   }
   if (report.warning) lines.push(`  Note: ${report.warning}`);
   if (report.network_guard_active) {
@@ -1122,6 +1123,93 @@ async function run(argv: string[]): Promise<void> {
   const serviceScope = command === 'project-panel' || command === 'app-wiki' ? (flags.scope ?? 'project') : flags.scope;
   const service = createKnowledgeService({ scope: serviceScope });
   let standaloneProjectLinksAuthority: KnowledgeProjectLinksAuthority | undefined;
+
+  if (command === 'auth') {
+    const action = positional[1] ?? 'whoami';
+    if (action === 'whoami' || action === 'status') {
+      // whoami/status answer a LIVE question: "can this credential read the
+      // API right now?" The configured snapshot (key present) is overlaid with
+      // a one-request probe through the read-path transport, so a revoked key
+      // — present in env, rejected by every read — reports authenticated:
+      // false with the reason and the failing key's kid instead of the
+      // presence-based true it claimed before (issue #1587).
+      //
+      // A negative verdict is also a non-zero exit with `ok: false` (both,
+      // regardless of --json): the issue's first acceptance bullet, and what
+      // makes `knowledge auth whoami` usable as a station health gate — a
+      // rejected key must not pass `... --json | jq -e .ok` or `$?`.
+      const configured = service.authStatus(process.env);
+      const probe = await service.probeAuth(process.env);
+      const authenticated = probe.probed && probe.verified;
+      let message: string;
+      if (authenticated) {
+        message = `Authenticated via ${configured.source}`;
+      } else if (probe.probed && probe.reason === 'unauthorized') {
+        const kid = probe.principal ? ` (kid ${probe.principal.kid})` : '';
+        message = `API key present (${configured.source}) but the server rejected it (HTTP ${probe.status ?? '?'})`
+          + `; re-issue or rotate the key${kid}.`;
+      } else if (probe.probed && probe.reason === 'not_found') {
+        message = `API key present (${configured.source}) but the server does not expose the probe endpoint (HTTP 404).`;
+      } else if (probe.probed && probe.reason === 'server_error') {
+        message = `API key present (${configured.source}) but the server returned HTTP ${probe.status}; authentication not verified.`;
+      } else if (probe.probed && probe.reason === 'unreachable') {
+        message = `API key present (${configured.source}) but ${configured.api_url} is unreachable; authentication not verified.`;
+      } else if (configured.api_key_present) {
+        message = `API key present (${configured.source}) but no hosted API transport is configured; authentication not verified.`;
+      } else {
+        message = 'Not authenticated';
+      }
+      output({
+        // `ok` is the answer to the question asked, not "the report printed":
+        // #1587 was filed because a station script that gates on `ok` (or on
+        // the exit code) got a green light from a REVOKED key. Both now track
+        // the live verdict, in --json too.
+        ok: authenticated,
+        ...configured,
+        authenticated,
+        probe: probe.probed ? 'live' : 'none',
+        verified: probe.verified,
+        reason: probe.reason,
+        status: probe.status,
+        principal: probe.principal,
+        message,
+      }, flags.json, flags);
+      if (!authenticated) process.exitCode = 1;
+      return;
+    }
+    if (action === 'login') {
+      const apiKey = flags.apiKey
+        ?? resolveClientCredential(KNOWLEDGE_APP_SLUG, process.env, {
+          keychain: knowledgeKeychainTierOptions(process.env),
+        })?.apiKey;
+      if (!apiKey) throw new Error('Usage: knowledge auth login --api-key <key> [--email <email>]');
+      const auth = service.saveAuth({
+        apiKey,
+        email: flags.email,
+        orgSlug: flags.org,
+        orgId: flags.orgId,
+        userId: flags.userId,
+        apiUrl: flags.apiUrl,
+      }, process.env);
+      output({
+        ok: true,
+        authenticated: true,
+        email: auth.email ?? null,
+        org_slug: auth.org_slug ?? null,
+        api_url: auth.api_url ?? service.authStatus(process.env).api_url,
+        auth_path: service.authStatus(process.env).auth_path,
+        message: `Saved API credentials for ${auth.email ?? 'API key'}`,
+      }, flags.json, flags);
+      return;
+    }
+    if (action === 'logout') {
+      const removed = service.clearAuth(process.env);
+      output({ ok: true, removed, message: removed ? 'Removed API credentials' : 'No API credentials found' }, flags.json, flags);
+      return;
+    }
+    throw new Error("Invalid auth action. Use 'login', 'whoami', or 'logout'.");
+  }
+
   try {
   if (command === 'storage') {
     const storageAction = positional[1] ?? 'status';
@@ -1173,9 +1261,10 @@ async function run(argv: string[]): Promise<void> {
   }
   // Single knowledge-item Store abstraction. A credential resolved through the
   // shared @hasna/contracts chain selects the server HTTP API; the on-box
-  // store applies when nothing resolves anywhere, or under an explicit
-  // --store override. A configured authority whose credential does not
-  // resolve makes this throw and the CLI exit non-zero (hosted fails loud).
+  // store applies only under the explicit HASNA_KNOWLEDGE_LOCAL=1 opt-in or an
+  // explicit --store override. With no credential and no opt-in, resolveItemStore
+  // throws and the CLI exits non-zero (hosted fails closed, no local
+  // fallback).
   // Every item command below routes through `itemStore` — never the JSON file
   // or HTTP client directly.
   const itemStore: ItemStore = resolveItemStore({ storePath, storePathOverridden });
@@ -1501,92 +1590,6 @@ async function run(argv: string[]): Promise<void> {
     const result = service.setup({ canonicalExample: flags.canonicalExample });
     output(result, flags.json, flags);
     return;
-  }
-
-  if (command === 'auth') {
-    const action = positional[1] ?? 'whoami';
-    if (action === 'whoami' || action === 'status') {
-      // whoami/status answer a LIVE question: "can this credential read the
-      // API right now?" The configured snapshot (key present) is overlaid with
-      // a one-request probe through the read-path transport, so a revoked key
-      // — present in env, rejected by every read — reports authenticated:
-      // false with the reason and the failing key's kid instead of the
-      // presence-based true it claimed before (issue #1587).
-      //
-      // A negative verdict is also a non-zero exit with `ok: false` (both,
-      // regardless of --json): the issue's first acceptance bullet, and what
-      // makes `knowledge auth whoami` usable as a station health gate — a
-      // rejected key must not pass `... --json | jq -e .ok` or `$?`.
-      const configured = service.authStatus(process.env);
-      const probe = await service.probeAuth(process.env);
-      const authenticated = probe.probed && probe.verified;
-      let message: string;
-      if (authenticated) {
-        message = `Authenticated via ${configured.source}`;
-      } else if (probe.probed && probe.reason === 'unauthorized') {
-        const kid = probe.principal ? ` (kid ${probe.principal.kid})` : '';
-        message = `API key present (${configured.source}) but the server rejected it (HTTP ${probe.status ?? '?'})`
-          + `; re-issue or rotate the key${kid}.`;
-      } else if (probe.probed && probe.reason === 'not_found') {
-        message = `API key present (${configured.source}) but the server does not expose the probe endpoint (HTTP 404).`;
-      } else if (probe.probed && probe.reason === 'server_error') {
-        message = `API key present (${configured.source}) but the server returned HTTP ${probe.status}; authentication not verified.`;
-      } else if (probe.probed && probe.reason === 'unreachable') {
-        message = `API key present (${configured.source}) but ${configured.api_url} is unreachable; authentication not verified.`;
-      } else if (configured.api_key_present) {
-        message = `API key present (${configured.source}) but no hosted API transport is configured; authentication not verified.`;
-      } else {
-        message = 'Not authenticated';
-      }
-      output({
-        // `ok` is the answer to the question asked, not "the report printed":
-        // #1587 was filed because a station script that gates on `ok` (or on
-        // the exit code) got a green light from a REVOKED key. Both now track
-        // the live verdict, in --json too.
-        ok: authenticated,
-        ...configured,
-        authenticated,
-        probe: probe.probed ? 'live' : 'none',
-        verified: probe.verified,
-        reason: probe.reason,
-        status: probe.status,
-        principal: probe.principal,
-        message,
-      }, flags.json, flags);
-      if (!authenticated) process.exitCode = 1;
-      return;
-    }
-    if (action === 'login') {
-      const apiKey = flags.apiKey
-        ?? resolveClientCredential(KNOWLEDGE_APP_SLUG, process.env, {
-          keychain: knowledgeKeychainTierOptions(process.env),
-        })?.apiKey;
-      if (!apiKey) throw new Error('Usage: knowledge auth login --api-key <key> [--email <email>]');
-      const auth = service.saveAuth({
-        apiKey,
-        email: flags.email,
-        orgSlug: flags.org,
-        orgId: flags.orgId,
-        userId: flags.userId,
-        apiUrl: flags.apiUrl,
-      }, process.env);
-      output({
-        ok: true,
-        authenticated: true,
-        email: auth.email ?? null,
-        org_slug: auth.org_slug ?? null,
-        api_url: auth.api_url ?? service.authStatus(process.env).api_url,
-        auth_path: service.authStatus(process.env).auth_path,
-        message: `Saved API credentials for ${auth.email ?? 'API key'}`,
-      }, flags.json, flags);
-      return;
-    }
-    if (action === 'logout') {
-      const removed = service.clearAuth(process.env);
-      output({ ok: true, removed, message: removed ? 'Removed API credentials' : 'No API credentials found' }, flags.json, flags);
-      return;
-    }
-    throw new Error("Invalid auth action. Use 'login', 'whoami', or 'logout'.");
   }
 
   if (command === 'storage') {
