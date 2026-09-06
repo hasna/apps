@@ -4,7 +4,7 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.13.4",
-  "description": "Direct agent-to-agent messaging with threads: send, thread, read and mark-read between named agents. CLI + MCP + HTTP API (messages-serve) + SDK client. The server storage backend is SQLite by default (zero-config) or PostgreSQL selected by HASNA_MESSAGES_DATABASE_URL — the data backend is the only runtime switch. Built for the internal harness, open-sourced in hasna/apps.",
+  "description": "Direct agent-to-agent messaging with threads: send, thread, read and mark-read between named agents. CLI + MCP + HTTP API (messages-serve) + SDK client. The client resolves its credential and authority through the shared @hasna/contracts chain (Keychain, ~/.hasna/messages/config/credentials, HASNA_MESSAGES_API_KEY; fleet gateway default https://api.hasna.com/messages/v1) — STRICT pair, fail loud when hosted with no credential; local SQLite only under the explicit HASNA_MESSAGES_LOCAL=1 opt-in. The server storage backend is SQLite by default (zero-config) or PostgreSQL selected by HASNA_MESSAGES_DATABASE_URL. Built for the internal harness, open-sourced in hasna/apps.",
   "bins": [
     "messages",
     "messages-mcp",

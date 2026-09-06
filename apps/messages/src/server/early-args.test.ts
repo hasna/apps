@@ -4,26 +4,47 @@
  * the recent hasna/apps control-surface fixes). messages-mcp --version/--help
  * must answer before the stdio framing loop; messages-serve --version/--help
  * must answer before resolveStore()/Bun.serve binds the port. Ordering after
- * the early exits: the messages-mcp fail-closed gate (no HASNA_MESSAGES_API_URL,
- * no HASNA_MESSAGES_LOCAL opt-in -> exit non-zero naming the env) runs before
- * the stdio connect, never before --version/--help.
+ * the early exits: the messages-mcp fail-closed gate (no credential resolves,
+ * no HASNA_MESSAGES_LOCAL opt-in -> exit non-zero naming the required env)
+ * runs before the stdio connect, never before --version/--help. The spawn
+ * environment is hermetic: a fake HOME, so the machine's credential stores
+ * can never satisfy the gate.
  */
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const PKG_VERSION = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version as string;
+
+const fakeHome = mkdtempSync(join(tmpdir(), "messages-early-args-home-"));
+afterAll(() => {
+  rmSync(fakeHome, { recursive: true, force: true });
+});
 
 async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<string> {
   if (!stream) return "";
   return new Response(stream).text();
 }
 
+/** Hermetic spawn env: fake HOME, no fleet credential variables of any spelling. */
+function hermeticEnv(env: Record<string, string> = {}): Record<string, string> {
+  const out: Record<string, string> = { HOME: fakeHome };
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (key.startsWith("HASNA_MESSAGES_") || key.startsWith("MESSAGES_")) continue;
+    if (key === "HASNA_PROFILE" || key === "HASNA_HOME" || key === "HASNA_CONFIG_HOME") continue;
+    if (key === "CONVERSATIONS_AGENT_ID") continue;
+    out[key] = value;
+  }
+  return { ...out, ...env };
+}
+
 async function runEntry(entry: string, args: string[], env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }> {
   const proc = Bun.spawn([process.execPath, "run", entry, ...args], {
     cwd: ROOT,
-    env: { ...(process.env as Record<string, string>), ...env },
+    env: hermeticEnv(env),
     stdout: "pipe",
     stderr: "pipe",
     stdin: "pipe",

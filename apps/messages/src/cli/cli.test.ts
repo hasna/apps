@@ -3,8 +3,11 @@
  * Exercises send + threads end-to-end against the local SQLite store via the
  * CLI's own module, with local mode chosen EXPLICITLY (HASNA_MESSAGES_LOCAL=1
  * + HASNA_MESSAGES_SQLITE_PATH pointed at a temp file) — plus the fail-closed
- * contract: without the fleet API env AND without the local opt-in the CLI
- * exits non-zero, names HASNA_MESSAGES_API_URL, and creates no local db.
+ * contract: hosted with no credential resolves nowhere, so the CLI exits
+ * non-zero, names the required env and the local opt-in, and creates no local
+ * db. The spawn environment is hermetic: a fake HOME, no HASNA_HOME, no
+ * fleet-credential variables of any spelling, so a machine credential can
+ * never flip these tests onto the network.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
@@ -13,10 +16,13 @@ import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 
 let tmpDir: string;
+let fakeHome: string;
 let sqlitePath: string;
 
 beforeAll(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "messages-cli-test-"));
+  fakeHome = path.join(tmpDir, "fake-home");
+  fs.mkdirSync(fakeHome, { recursive: true });
   sqlitePath = path.join(tmpDir, "messages.db");
 });
 
@@ -24,10 +30,11 @@ afterAll(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-/** Hermetic spawn env: strip every inherited HASNA_MESSAGES_ or MESSAGES_
- * prefixed key (a shell or wrapper that exported the fleet env must not flip
- * these tests onto the network or past the fail-closed gate), then apply the
- * extras. */
+/** Hermetic spawn env: strip every inherited HASNA_MESSAGES_ / MESSAGES_
+ * prefixed key plus the shared credential pointers (a shell or wrapper that
+ * exported the fleet env must not flip these tests onto the network or past
+ * the fail-closed gate), point HOME at a temp dir so the disk tier can never
+ * find a machine credential, then apply the extras. */
 function cliEnv(extra: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -36,9 +43,11 @@ function cliEnv(extra: Record<string, string>): Record<string, string> {
     // The conversations identity is an accepted --agent default (#1602), so a
     // shell that exported it must not satisfy the fail-closed tests below.
     if (key === "CONVERSATIONS_AGENT_ID") continue;
+    // Shared credential pointers for other surfaces must not leak either.
+    if (key === "HASNA_PROFILE" || key === "HASNA_HOME" || key === "HASNA_CONFIG_HOME") continue;
     env[key] = value;
   }
-  return { ...env, ...extra };
+  return { ...env, HOME: fakeHome, ...extra };
 }
 
 function runCli(args: string[], extraEnv: Record<string, string> = {}): { stdout: string; stderr: string; status: number } {
@@ -120,8 +129,12 @@ describe("messages CLI", () => {
 
   test("status prints the resolved /v1 authority and carries api_url in --json (#1588)", async () => {
     // Gateway form without /v1: the printed authority must be the resolved
-    // /v1 root, never the bare base and never the origin alone.
-    const human = runCli(["status"], { HASNA_MESSAGES_API_URL: "https://api.hasna.com/messages" });
+    // /v1 root, never the bare base and never the origin alone. STRICT pair:
+    // hosted reports require BOTH halves (hasna/apps#1720).
+    const human = runCli(["status"], {
+      HASNA_MESSAGES_API_URL: "https://api.hasna.com/messages",
+      HASNA_MESSAGES_API_KEY: "fixture-key",
+    });
     expect(human.status).toBe(0);
     expect(human.stdout).toContain("API: https://api.hasna.com/messages/v1");
     expect(human.stdout).toContain("transport: http");
@@ -137,13 +150,16 @@ describe("messages CLI", () => {
       api_url: string;
       api_base: string;
       api_key_present: boolean;
+      api_key_tier: string | null;
     };
     expect(report.app).toBe("messages");
     expect(report.transport).toBe("http");
-    // Already-resolved input is reported unchanged, not doubled to /v1/v1.
+    // Already-resolved input is not doubled to /v1/v1; api_base is the
+    // authority WITHOUT the /v1 suffix, api_url is the request root.
     expect(report.api_url).toBe("https://api.hasna.com/messages/v1");
-    expect(report.api_base).toBe("https://api.hasna.com/messages/v1");
+    expect(report.api_base).toBe("https://api.hasna.com/messages");
     expect(report.api_key_present).toBe(true);
+    expect(report.api_key_tier).toBe("env");
   });
 
   test("status reports the local opt-in and fails closed when unconfigured (#1588)", async () => {
@@ -152,11 +168,41 @@ describe("messages CLI", () => {
     const localReport = JSON.parse(local.stdout) as { transport: string; api_url: string | null };
     expect(localReport.transport).toBe("local");
     expect(localReport.api_url).toBeNull();
+    // A local run says "local" on stderr — never a silent unhosted state.
+    expect(local.stderr).toContain("local");
 
     const unconfigured = runCli(["status"], { HASNA_MESSAGES_LOCAL: "" });
     expect(unconfigured.status).not.toBe(0);
     expect(unconfigured.stdout).toContain("transport: unconfigured");
     expect(unconfigured.stderr).toContain("HASNA_MESSAGES_API_URL");
+  });
+
+  test("status refuses the loose half-pair: URL without a credential is a hard error (#1720)", async () => {
+    const res = runCli(["status", "--json"], {
+      HASNA_MESSAGES_API_URL: "https://api.hasna.com/messages",
+      HASNA_MESSAGES_LOCAL: "",
+    });
+    expect(res.status).not.toBe(0);
+    const report = JSON.parse(res.stdout) as { transport: string; issues: string[] };
+    expect(report.transport).toBe("unconfigured");
+    expect(report.issues.join(" ")).toContain("HASNA_MESSAGES_API_URL");
+    expect(report.issues.join(" ")).toContain("no API key could be resolved");
+    expect(res.stderr).toContain("no API key could be resolved");
+  });
+
+  test("status reports a --url pin with no ambient credential (#1794)", async () => {
+    const res = runCli(["status", "--json", "--url", "http://localhost:8123"]);
+    expect(res.status).toBe(0);
+    const report = JSON.parse(res.stdout) as {
+      transport: string;
+      api_url: string;
+      api_key_present: boolean;
+      authority_pinned: boolean;
+    };
+    expect(report.transport).toBe("http");
+    expect(report.api_url).toBe("http://localhost:8123/v1");
+    expect(report.api_key_present).toBe(false);
+    expect(report.authority_pinned).toBe(true);
   });
 
   test("whoami --json carries the resolved api_url and transport (#1588)", async () => {
@@ -223,8 +269,8 @@ describe("messages CLI", () => {
   });
 });
 
-describe("messages CLI fails closed without the fleet API env", () => {
-  test("a verb without HASNA_MESSAGES_API_URL and without the local opt-in exits non-zero, names the required env, and creates no local database", () => {
+describe("messages CLI fails closed without a credential", () => {
+  test("hosted with no credential anywhere: non-zero exit, names the required env, creates no local database", () => {
     const noDbRoot = path.join(tmpDir, "fail-closed-no-db");
     const res = runCli(["send", "--from", "augustus", "--to", "silvanus", "--content", "must not land"], {
       HASNA_MESSAGES_LOCAL: "", // clear the default opt-in from runCli
@@ -238,11 +284,13 @@ describe("messages CLI fails closed without the fleet API env", () => {
     expect(fs.existsSync(noDbRoot)).toBe(false);
   });
 
-  test("the explicit local opt-in (HASNA_MESSAGES_LOCAL=1) still works without the API env", async () => {
+  test("the explicit local opt-in (HASNA_MESSAGES_LOCAL=1) still works without a credential", async () => {
     // Earlier tests in this file registered agents into the shared temp db;
     // the point here is that the opt-in lets verbs reach that local store.
     const res = runCli(["agents"]);
     expect(res.status).toBe(0);
     expect(res.stdout).toContain("silvanus");
+    // Every local run says "local" on stderr, once.
+    expect(res.stderr).toContain("local mode");
   });
 });
