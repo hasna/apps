@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { ApiError, DomainsClient } from "./client.js";
+import { createDomainsClientFromEnv, type CreateDomainsClientOptions } from "./index.js";
 
 type FetchCall = {
   url: URL;
@@ -140,5 +141,69 @@ describe("DomainsClient", () => {
       body: "gateway unavailable",
       message: "GET /ready failed: 503",
     }));
+  });
+});
+
+describe("createDomainsClientFromEnv (the /sdk resolver seam)", () => {
+  function fromEnv(env: Record<string, string>, overrides: CreateDomainsClientOptions = {}) {
+    return createDomainsClientFromEnv(env, overrides);
+  }
+
+  test("resolves the environment pair through the shared chain and reports sources", async () => {
+    const calls: FetchCall[] = [];
+    const client = fromEnv(
+      { HASNA_DOMAINS_API_URL: "https://domains.example", HASNA_DOMAINS_API_KEY: "env-key" },
+      { fetch: recordingFetch(calls) },
+    );
+
+    await client.getHealth();
+
+    expect(calls[0]!.url.href).toBe("https://domains.example/health");
+    expect((calls[0]!.init.headers as Record<string, string>)["x-api-key"]).toBe("env-key");
+  });
+
+  test("BUG PINNED (#1794): an explicit baseUrl with no apiKey never attaches the ambient fleet key", async () => {
+    const calls: FetchCall[] = [];
+    // The environment carries a real-looking key and a real-looking URL — the
+    // kinds of values a station wrapper injects. The caller pinned ONLY the
+    // authority; the ambient key must NOT follow.
+    const client = fromEnv(
+      { HASNA_DOMAINS_API_KEY: "ambient-key", HASNA_DOMAINS_API_URL: "https://other.example" },
+      { baseUrl: "https://pinned.example", fetch: recordingFetch(calls) },
+    );
+
+    await client.getReady();
+
+    expect(calls[0]!.url.href).toBe("https://pinned.example/ready");
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers["x-api-key"]).toBeUndefined();
+  });
+
+  test("an explicit baseUrl with an explicit apiKey pins BOTH", async () => {
+    const calls: FetchCall[] = [];
+    const client = fromEnv(
+      { HASNA_DOMAINS_API_KEY: "ambient-key" },
+      { baseUrl: "https://pinned.example", apiKey: "pinned-key", fetch: recordingFetch(calls) },
+    );
+
+    await client.getReady();
+
+    expect(calls[0]!.url.href).toBe("https://pinned.example/ready");
+    expect((calls[0]!.init.headers as Record<string, string>)["x-api-key"]).toBe("pinned-key");
+  });
+
+  test("no resolvable credential throws — the SDK never degrades to an anonymous client", () => {
+    expect(() => fromEnv({ HASNA_DOMAINS_API_URL: "https://domains.example" })).toThrow(/no API key could be resolved/);
+    expect(() => fromEnv({})).toThrow(/HASNA_DOMAINS_API_URL is not set/);
+  });
+
+  test("a key alone resolves the fleet gateway default", async () => {
+    const calls: FetchCall[] = [];
+    const client = fromEnv({ HASNA_DOMAINS_API_KEY: "env-key" }, { fetch: recordingFetch(calls) });
+
+    await client.listDomains();
+
+    expect(calls[0]!.url.origin + calls[0]!.url.pathname).toBe("https://api.hasna.com/domains/v1/domains");
+    expect((calls[0]!.init.headers as Record<string, string>)["x-api-key"]).toBe("env-key");
   });
 });

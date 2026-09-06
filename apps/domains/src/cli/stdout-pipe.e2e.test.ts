@@ -111,8 +111,15 @@ describe("domains --json over a pipe", () => {
       stderr: "pipe",
       env: cliEnv(dbPath),
     });
-    expect({ step: "boot", code: boot.exitCode, stderr: boot.stderr.toString().slice(0, 800) })
-      .toEqual({ step: "boot", code: 0, stderr: "" });
+    // The boot is an explicit local-mode run (DOMAINS_DB_PATH), so stderr
+    // carries the required one-line "LOCAL mode" notice and nothing else.
+    const bootStderr = boot.stderr.toString();
+    const noticeOnly = bootStderr
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .every((line) => line.includes("LOCAL mode"));
+    expect({ step: "boot", code: boot.exitCode, stderr: bootStderr, noticeOnly })
+      .toEqual({ step: "boot", code: 0, stderr: bootStderr, noticeOnly: true });
 
     if (rows === 0) return;
     const db = new Database(dbPath);
