@@ -4,8 +4,11 @@ import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "os";
 import { join } from "path";
+import { filesLocalModeNotice } from "../lib/cloud-storage.js";
 
 const cliPath = join(process.cwd(), "src/cli/index.tsx");
+/** The ONE line a local run prints on stderr — nothing else is allowed. */
+const LOCAL_NOTICE = `${filesLocalModeNotice()}\n`;
 let testDir: string | undefined;
 
 afterEach(() => {
@@ -24,13 +27,14 @@ describe("sources CLI", () => {
     const regularSources = JSON.parse(regularOutput) as Array<{ name: string }>;
 
     expect(regular.exitCode).toBe(0);
-    expect(regular.stderr).toBe("");
+    // An opted-in local run's stderr carries exactly the local-mode notice, and nothing else.
+    expect(regular.stderr).toBe(LOCAL_NOTICE);
     expect(Buffer.byteLength(regularOutput)).toBeGreaterThan(64 * 1024);
     expect(regularSources).toHaveLength(1201);
 
     const piped = await runCliThroughPipe(["sources", "list", "--json"], env);
     expect(piped.exitCode).toBe(0);
-    expect(piped.stderr).toBe("");
+    expect(piped.stderr).toBe(LOCAL_NOTICE);
     expect(Buffer.byteLength(piped.stdout)).toBe(Buffer.byteLength(regularOutput));
     expect(JSON.parse(piped.stdout)).toEqual(regularSources);
   });

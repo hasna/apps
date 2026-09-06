@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer } from "./index.js";
-import { resetStoreCache } from "../store/index.js";
 
 /**
  * Behavior lock for the recorded strong reason on the organization capability
@@ -24,7 +23,6 @@ const ENV_KEYS = [
   "HASNA_FILES_DB_PATH",
   "HASNA_FILES_API_URL",
   "HASNA_FILES_API_KEY",
-  "HASNA_FILES_STORAGE_MODE",
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -38,8 +36,6 @@ beforeEach(() => {
   process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
   delete process.env.HASNA_FILES_API_URL;
   delete process.env.HASNA_FILES_API_KEY;
-  delete process.env.HASNA_FILES_STORAGE_MODE;
-  resetStoreCache();
 });
 
 afterEach(async () => {
@@ -52,7 +48,6 @@ afterEach(async () => {
   }
   if (testDir) rmSync(testDir, { recursive: true, force: true });
   testDir = undefined;
-  resetStoreCache();
 });
 
 async function connectedClient(): Promise<{ client: Client; close: () => Promise<void> }> {
@@ -100,8 +95,7 @@ describe("organization MCP tools on the hosted (api) transport — recorded stro
     // src/store/store.test.ts "returns an ApiStore when API url + key are present").
     process.env.HASNA_FILES_API_URL = "https://files.example.test/v1";
     process.env.HASNA_FILES_API_KEY = "k_test";
-    resetStoreCache();
-  });
+    });
 
   for (const tool of ORGANIZATION_TOOLS) {
     test(`${tool} refuses in api mode with the recorded reason, never touching the local island`, async () => {

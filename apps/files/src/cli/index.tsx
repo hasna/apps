@@ -44,7 +44,7 @@ import type {
   SearchScope,
 } from "../types/index.js";
 import { ApiStore, store } from "../store/index.js";
-import { resolveFilesCloudStorage } from "../lib/cloud-storage.js";
+import { announceFilesLocalMode, resolveFilesCloudStorage } from "../lib/cloud-storage.js";
 
 import { createRequire } from "module";
 const _require = createRequire(import.meta.url);
@@ -2246,21 +2246,27 @@ program
   });
 
 // ─── transport gate (fail closed) ───────────────────────────────────────────
-// Every command action runs only when the client transport is configured:
-// either the hosted API pair (HASNA_FILES_API_URL + HASNA_FILES_API_KEY, with
-// the FILES_* aliases) is set, or the operator explicitly opted in to the
-// on-box SQLite store (HASNA_FILES_LOCAL_MODE=1 / FILES_LOCAL_MODE=1). Running
-// WITHOUT either fails closed before any command body executes — no silent
-// local `~/.hasna/files/files.db` session, no false-green exit 0. `--help` and
+// Every command action runs only when the client transport resolves: either
+// the @hasna/contracts chain supplies a hosted credential (the Keychain item
+// hasna.credentials.files.api-key, ~/.hasna/files/config/credentials, or
+// HASNA_FILES_API_KEY; the authority defaults to the fleet gateway
+// https://api.hasna.com/files), or the operator explicitly opted in to the
+// on-box SQLite store (HASNA_FILES_LOCAL=1 / FILES_LOCAL=1 — the retired
+// *_MODE switches are gone). Running WITHOUT either fails closed before any
+// command body executes — no silent local `~/.hasna/files/files.db` session,
+// no false-green exit 0 — and a local run prints one "LOCAL mode" line on
+// stderr so it is never mistaken for an empty hosted run. `--help` and
 // `--version` are handled by commander and never reach an action, so they keep
 // working unconfigured.
 program.hook("preAction", () => {
+  let storage;
   try {
-    resolveFilesCloudStorage();
+    storage = resolveFilesCloudStorage();
   } catch (error) {
     console.error(chalk.red(error instanceof Error ? error.message : String(error)));
     process.exit(1);
   }
+  if (!storage.active) announceFilesLocalMode();
 });
 
 await program.parseAsync().catch(async (error: unknown) => {
