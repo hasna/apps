@@ -12,20 +12,24 @@ emails_cli="${EMAILS_SMOKE_CLI:-emails}"
 command -v "$emails_cli" >/dev/null 2>&1 || fail "Emails CLI is not executable: $emails_cli"
 
 # The client must be configured for the operator-owned service, and that
-# selection is a fact about STORAGE configuration, not a deployment word. It is
-# signalled either by the canonical client-env pointer (which delivers the API
-# origin and credential from the vault) or by an explicit service origin plus a
-# credential. Either one is proof the station has been pointed at the service.
-if test -n "${EMAILS_CLIENT_ENV_SECRET:-}"; then
-  : # the client-env pointer supplies EMAILS_SELF_HOSTED_URL and a credential
-elif test -n "${EMAILS_SELF_HOSTED_URL:-}"; then
+# selection is a fact about STORAGE configuration, not a deployment word. The
+# URL and credential resolve through the shared credential resolver: either the
+# canonical names, the one-release aliases, or the resolver's other tiers
+# (Keychain / ~/.hasna/emails/config/credentials). A live session or identity
+# token is also a credential.
+if test -n "${EMAILS_SELF_HOSTED_URL:-}" || test -n "${HASNA_EMAILS_API_URL:-}"; then
   if test -z "${EMAILS_SESSION_TOKEN:-}" &&
     test -z "${EMAILS_IDP_TOKEN:-}" &&
-    test -z "${EMAILS_SELF_HOSTED_API_KEY:-}"; then
-    fail "set EMAILS_SESSION_TOKEN, EMAILS_IDP_TOKEN, or EMAILS_SELF_HOSTED_API_KEY"
+    test -z "${EMAILS_SELF_HOSTED_API_KEY:-}" &&
+    test -z "${HASNA_EMAILS_API_KEY:-}"; then
+    fail "set a credential for the configured service URL"
   fi
-else
-  fail "configure the self-hosted client: set EMAILS_CLIENT_ENV_SECRET, or EMAILS_SELF_HOSTED_URL with a credential"
+elif test -z "${EMAILS_SESSION_TOKEN:-}" && test -z "${EMAILS_IDP_TOKEN:-}" &&
+  test -z "${EMAILS_SELF_HOSTED_API_KEY:-}" && test -z "${HASNA_EMAILS_API_KEY:-}"; then
+  # Neither a URL nor any credential in the environment: the resolver may still
+  # find a Keychain item or a credentials file, but a smoke run should not depend
+  # on the operator's machine state — require explicit configuration here.
+  fail "configure the self-hosted client: set HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY (or the EMAILS_SELF_HOSTED_URL / EMAILS_SELF_HOSTED_API_KEY aliases)"
 fi
 
 # A database-path setting is evidence of an unresolved two-store configuration,

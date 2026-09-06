@@ -5,7 +5,6 @@ import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 import contract from "../hasna.contract.json" with { type: "json" };
 import { resolveClientModeSelection } from "./lib/mode.js";
-import { RETIRED_MODE_VARIABLE_KEYS } from "./lib/retired-deployment-mode.js";
 import { emailsSelfHostedOpenApi } from "./server/self-hosted/openapi.js";
 import { SELF_HOSTED_APP, SELF_HOSTED_APP_ALIASES } from "./server/self-hosted/env.js";
 
@@ -40,6 +39,11 @@ describe("published package identity", () => {
   });
 
   it("tracks a manifest accepted by the installed contracts schema", () => {
+    // Emails builds with `--packages external` (the AWS and MCP SDKs stay external),
+    // so the resolver is a RUNTIME import and must be a real dependency for the
+    // published package and the global install. The manifest pins it exactly and the
+    // kit version matches (secrets #1782 still applies to the emitted declarations,
+    // which spell the crossing types locally rather than importing the package).
     expect(pkg.dependencies["@hasna/contracts"]).toBe(contract.kitVersion);
     const result = ServiceContractManifestSchema.safeParse(contract);
     if (!result.success) throw new Error(result.error.message);
@@ -93,20 +97,14 @@ describe("the retired deployment-mode environment surface", () => {
     expect(existsSync(join(root, "src/lib/env-compat.test.ts"))).toBe(false);
   });
 
-  it("retires both EMAILS_MODE spellings together in the guard module", () => {
-    // Deployment modes were removed (hasna/apps#1566): the two variables that
-    // used to DECLARE the mode are refused loudly, exported from the one guard
-    // module allowed to spell them. This pins that the whole retired set stays
-    // together and that nothing in src/lib/mode.ts re-declares it.
-    expect([...RETIRED_MODE_VARIABLE_KEYS]).toEqual(["EMAILS_MODE", "HASNA_EMAILS_MODE"]);
-  });
-
-  it("rejects the Mailery mode spellings as removed-runtime variables", () => {
-    for (const key of ["MAILERY_MODE", "HASNA_MAILERY_MODE"]) {
-      expect(() => resolveClientModeSelection({ [key]: "self_hosted" })).toThrow(
-        `${key} belongs to the removed Mailery/cloud runtime`,
-      );
-    }
+  it("has deleted the mode-switch guard module with the mode axis", () => {
+    // Deployment modes were removed (hasna/apps#1566) and the credential
+    // resolver adoption (hasna/apps#1720) deleted the last guards that spelled
+    // the removed variables. The guard module and the env bridge are both gone:
+    // no EMAILS_MODE / HASNA_EMAILS_MODE variable selects anything, and nothing
+    // in the tree is allowed to refuse or read it.
+    expect(existsSync(join(root, "src/lib/retired-deployment-mode.ts"))).toBe(false);
+    expect(existsSync(join(root, "src/lib/retired-deployment-mode.test.ts"))).toBe(false);
   });
 });
 

@@ -335,12 +335,15 @@ describe("createWebhookServer storage gate", () => {
     expect(refusalMessage()).toBe("");
   });
 
-  it("REFUSES a client-environment pointer whose payload was never loaded", () => {
+  it("REFUSES a session-token pointer with no authority configured", () => {
+    // EMAILS_CLIENT_ENV_SECRET persists only the app's own session/identity tokens
+    // (hasna/apps#1720) — it no longer delivers a URL or an API key. A pointer alone
+    // is therefore the all-unset row, refused in the resolver's own words.
     clearStoreSettings();
     process.env[API_SETTINGS_POINTER] = "vault/item/name";
     const message = refusalMessage();
     expect(message).toContain("cannot tell where this installation's delivery events would be stored");
-    expect(message).toContain(API_SETTINGS_POINTER);
+    expect(message).toContain("refusing to start");
     expect(message).toContain(API_BASE_URL_SETTING);
   });
 

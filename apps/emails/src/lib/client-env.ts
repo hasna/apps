@@ -1,80 +1,39 @@
+// The app's OWN principal store: user session tokens (and agent identity tokens)
+// for the multi-tenancy service, persisted behind the EMAILS_CLIENT_ENV_SECRET
+// vault pointer.
+//
+// WHAT THIS IS NOT, since the credential-resolver adoption (hasna/apps#1720).
+// Until #1720 this module was the whole client-environment chain: it delivered
+// EMAILS_SELF_HOSTED_URL and the API key from the vault entry into the process
+// environment, and a second resolver selected a credential from a session, an
+// identity token or the operator key. That chain is GONE. The URL and the API
+// key now resolve through the shared @hasna/contracts client resolver
+// (src/lib/emails-credentials.ts) — the Keychain, the credentials file and the
+// canonical HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY env names — and this
+// module keeps exactly the one thing that is the product rather than the
+// plumbing: the session and identity tokens the `emails` server issues to its
+// users and agents (multi-tenancy design §5/§7, ADR-0002).
+//
+// A vault entry may still carry the legacy EMAILS_SELF_HOSTED_URL /
+// EMAILS_SELF_HOSTED_API_KEY fields (existing entries do); they are simply no
+// longer merged here. The authority and the operator key come from the resolver
+// tiers, which supersede them.
+
 import { spawnSync } from "node:child_process";
-import { assertNoRetiredModeVariables } from "./retired-deployment-mode.js";
+import { EMAILS_IDP_TOKEN_ENV, EMAILS_SESSION_TOKEN_ENV } from "./emails-credentials.js";
 
 export const EMAILS_CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
 
-/** The bearer credential a user session persists (see multi-tenancy design §7). */
-export const EMAILS_SESSION_TOKEN_ENV = "EMAILS_SESSION_TOKEN";
+/** The app's own principals, plus the one-release key alias, re-exported from the credential seam. */
+export { EMAILS_IDP_TOKEN_ENV, EMAILS_SELF_HOSTED_API_KEY_ENV, EMAILS_SESSION_TOKEN_ENV } from "./emails-credentials.js";
 
 /**
- * The caller's own identity token, minted by the `@hasna/tenants` identity
- * authority and verified by the server as a first-class principal
- * (src/server/self-hosted/auth/idp-token.ts). The same env key the legacy
- * client reads (src/db/self-hosted-store.ts), exported so the seam's
- * credential resolution and that client cannot drift apart on its name.
+ * The settings the vault entry may still carry: the app's own principals. The
+ * operator URL/key fields are NOT listed — the shared resolver owns them now.
  */
-export const EMAILS_IDP_TOKEN_ENV = "EMAILS_IDP_TOKEN";
-
-/** The operator or tenant API key used by self-hosted clients. */
-export const EMAILS_SELF_HOSTED_API_KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
-
-/**
- * Credential selection order for self-hosted clients. A live user session wins
- * over an IdP token, and an IdP token wins over the operator key; transports may
- * fall through only from a selected session token that the server explicitly
- * rejects as needing reauthentication.
- */
-export const CLIENT_ENV_CREDENTIAL_SELECTION_KEYS = Object.freeze([
+const CLIENT_ENV_PRINCIPAL_KEYS = [
   EMAILS_SESSION_TOKEN_ENV,
   EMAILS_IDP_TOKEN_ENV,
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
-] as const);
-
-export type EmailsClientCredentialSetting = (typeof CLIENT_ENV_CREDENTIAL_SELECTION_KEYS)[number];
-
-export interface EmailsClientCredentialCandidate {
-  /** The environment setting that supplied the credential; safe to log. */
-  readonly setting: EmailsClientCredentialSetting;
-  /** Secret credential value. Never log or serialize. */
-  readonly value: string;
-}
-
-export function resolveEmailsClientCredentialCandidates(
-  env: NodeJS.ProcessEnv = process.env,
-): EmailsClientCredentialCandidate[] {
-  return CLIENT_ENV_CREDENTIAL_SELECTION_KEYS
-    .map((setting) => ({ setting, value: env[setting]?.trim() ?? "" }))
-    .filter((candidate) => candidate.value !== "");
-}
-
-// Structural keys the vault entry MUST carry (endpoint). A credential is
-// required too, but a session token OR the API key satisfies it — see
-// CLIENT_ENV_CREDENTIAL_KEYS — so neither credential is individually mandatory.
-// The deployment-mode variable that used to be required here is RETIRED: an
-// entry that still carries one is refused at load (see
-// ./retired-deployment-mode.ts) rather than merged. Exported as the single
-// source of truth for the client-env vault contract, so a caller that has to
-// construct a vault entry (e.g. an emulated `secrets` store in a test) names
-// these keys from here rather than restating them.
-export const CLIENT_ENV_REQUIRED_KEYS = [
-  "EMAILS_SELF_HOSTED_URL",
-] as const;
-
-// At least one of these must be present — ANY one is a complete credential: a
-// user session token, the caller's own identity token, or the operator API key.
-// Which one WINS when several are set is not decided here; both resolvers pick
-// session first, then identity, then key (see src/store-resolution.ts and the
-// legacy client). An operator with only the API key keeps working unchanged.
-const CLIENT_ENV_CREDENTIAL_KEYS = [
-  EMAILS_SELF_HOSTED_API_KEY_ENV,
-  EMAILS_SESSION_TOKEN_ENV,
-  EMAILS_IDP_TOKEN_ENV,
-] as const;
-
-// Every key the vault entry may carry (loaded into env whenever present).
-const CLIENT_ENV_KEYS = [
-  ...CLIENT_ENV_REQUIRED_KEYS,
-  ...CLIENT_ENV_CREDENTIAL_KEYS,
 ] as const;
 
 const SECRETS_COMMAND_ENV_ALLOWLIST = [
@@ -137,14 +96,6 @@ function parseClientEnvSecret(raw: string): Record<string, string> {
   return out;
 }
 
-function hasClientEnvCredential(env: NodeJS.ProcessEnv): boolean {
-  return CLIENT_ENV_CREDENTIAL_KEYS.some((key) => Boolean(env[key]?.trim()));
-}
-
-function hasCompleteCanonicalClientEnv(env: NodeJS.ProcessEnv): boolean {
-  return CLIENT_ENV_REQUIRED_KEYS.every((key) => Boolean(env[key]?.trim())) && hasClientEnvCredential(env);
-}
-
 // The `secrets` CLI needs its OWN backend configuration to resolve a vault path.
 // In a cloud-vault setup that means HASNA_SECRETS_STORAGE_MODE / HASNA_SECRETS_API_URL
 // / HASNA_SECRETS_API_KEY; other backends use similarly-prefixed vars. Stripping
@@ -169,17 +120,18 @@ function secretsCommandEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 /**
- * Load the canonical client-env secret pointer into canonical process env.
+ * Load the app's principals (session/identity tokens) from the vault entry the
+ * EMAILS_CLIENT_ENV_SECRET pointer names into the process environment.
  *
- * The pointer is a non-secret vault path. Loaded values are never logged here;
- * callers should report only presence/shape and continue using the canonical
- * EMAILS_* names.
+ * Loaded values are never logged here; callers should report only presence/shape.
+ * The vault entry no longer has to carry a URL or an API key — those come from
+ * the shared resolver — so a session-only entry is complete on its own.
  */
 export function loadEmailsClientEnvSecret(env: NodeJS.ProcessEnv = process.env): EmailsClientEnvSecretLoad {
   const secretPath = env[EMAILS_CLIENT_ENV_SECRET_ENV]?.trim() ?? null;
   if (!secretPath) return { secretPath: null, loaded: false, ready: false };
 
-  if (hasCompleteCanonicalClientEnv(env)) {
+  if (CLIENT_ENV_PRINCIPAL_KEYS.some((key) => Boolean(env[key]?.trim()))) {
     return {
       secretPath,
       loaded: false,
@@ -192,11 +144,11 @@ export function loadEmailsClientEnvSecret(env: NodeJS.ProcessEnv = process.env):
   // captured (2026-07-30 credential-leak incident). This capture is a private
   // parent-child pipe — the value never reaches this process's stdout, argv, or
   // logs. `secrets exec` was considered and rejected: the entry must be PARSED
-  // in-process (env-map merge + write-back below), and this loader runs at lazy
-  // call sites in the server/MCP where a self re-exec is unsafe. Pre-0.2.9 CLIs
-  // accept the flag harmlessly — `show` has been a declared boolean flag in the
-  // CLI's parser since its initial commit, so it can never swallow a following
-  // positional; old `get` simply ignores it. Compatible in both directions.
+  // in-process (env-map merge below), and this loader runs at lazy call sites in
+  // the server/MCP where a self re-exec is unsafe. Pre-0.2.9 CLIs accept the flag
+  // harmlessly — `show` has been a declared boolean flag in the CLI's parser since
+  // its initial commit, so it can never swallow a following positional; old `get`
+  // simply ignores it. Compatible in both directions.
   const result = spawnSync("secrets", ["get", secretPath, "--show"], {
     encoding: "utf8",
     env: secretsCommandEnv(env),
@@ -218,28 +170,9 @@ export function loadEmailsClientEnvSecret(env: NodeJS.ProcessEnv = process.env):
   }
 
   const loaded = parseClientEnvSecret(result.stdout ?? "");
-  // A vault entry that STILL CARRIES A RETIRED DEPLOYMENT-MODE VARIABLE is refused,
-  // not silently stripped: the entry was written against an older contract, and
-  // dropping the word while keeping the settings would let an operator believe the
-  // word still selected something. The refusal names the variable and its
-  // replacement, exactly as the environment-level guard does
-  // (./retired-deployment-mode.ts).
-  assertNoRetiredModeVariables(loaded);
-  for (const key of CLIENT_ENV_KEYS) {
+  for (const key of CLIENT_ENV_PRINCIPAL_KEYS) {
     const value = loaded[key]?.trim();
     if (value) env[key] = value;
-  }
-  const missing: string[] = [];
-  for (const key of CLIENT_ENV_REQUIRED_KEYS) {
-    if (!env[key]?.trim()) missing.push(key);
-  }
-  if (!hasClientEnvCredential(env)) missing.push(CLIENT_ENV_CREDENTIAL_KEYS.join(" or "));
-  if (missing.length > 0) {
-    throw new Error(
-      `${EMAILS_CLIENT_ENV_SECRET_ENV} loaded from the secrets vault, but its entry must contain ` +
-        `${CLIENT_ENV_REQUIRED_KEYS.join(", ")} ` +
-        `and a credential (${CLIENT_ENV_CREDENTIAL_KEYS.join(" or ")}); missing ${missing.join(", ")}.`,
-    );
   }
 
   loadedClientEnvSecrets.set(env, secretPath);

@@ -105,7 +105,6 @@ export type { HttpEmailStoreOptions, MissingRoute } from "./store-http/index.js"
 export {
   API_BASE_URL_SETTING,
   API_CREDENTIAL_SETTINGS,
-  API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
   StoreConfigurationError,
   createConfiguredEmailStore,

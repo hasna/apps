@@ -180,10 +180,11 @@ export function setConfigValue(key: string, value: unknown): void {
  *
  * Deliberately EXCLUDED, and why:
  *   - the retired deployment-mode spellings `emails_mode` / `mode` /
- *     `storage_mode` / `mailery_mode` (refused by the retired-config guard in
- *     lib/retired-deployment-mode.ts at every mode resolution): store choice is
- *     an operator decision, made once out of band from storage configuration —
- *     never from a key an agent can plant.
+ *     `storage_mode` / `mailery_mode`: store choice is an operator decision,
+ *     made once out of band from storage configuration — never from a key an
+ *     agent can plant. (They no longer select anything — deployment modes were
+ *     removed with the mode axis, hasna/apps#1566/#1720 — and they stay
+ *     unwritable here on the same principle as any other unknown key.)
  *   - every credential/secret key (`cloudflare_api_token`, `cloudflare_api_key`,
  *     `resend_api_key`, the `*_webhook_secret` keys, …): an agent that can write
  *     a credential can point an integration at infrastructure it controls. Also

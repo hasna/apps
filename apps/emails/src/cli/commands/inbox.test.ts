@@ -1001,11 +1001,11 @@ describe("inbox links", () => {
 // ─── inbox attachments inventory ─────────────────────────────────────────────
 
 describe("inbox attachments", () => {
-  it("refuses a config file that still declares a mode, without touching the API", async () => {
-    // Deployment modes are removed (hasna/apps#1566): a config file that still
-    // declares `emails_mode` must fail resolution loudly — even beside a complete
-    // API configuration and a database path — rather than let the stale key pick
-    // a store. The inventory command therefore never reaches the API.
+  it("fails on a contradictory storage configuration, without touching the API", async () => {
+    // Deployment modes are removed (hasna/apps#1566/#1720): a config file that still
+    // declares `emails_mode` is now IGNORED, and a both-configured environment (an
+    // explicit API config plus a database path) is the store plan's contradiction row.
+    // The inventory command therefore fails closed and never reaches the API.
     attachmentInventoryPages = new Map([["", { items: [], next_cursor: null }]]);
     const configHome = mkdtempSync(join(tmpdir(), "emails-config-only-inventory-"));
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-config-only-poison-db-"));
@@ -1015,6 +1015,7 @@ describe("inbox attachments", () => {
     const previousSessionToken = process.env.EMAILS_SESSION_TOKEN;
     try {
       process.env.HOME = configHome;
+      // A stale config-file mode key selects nothing and is never read.
       saveConfig({ emails_mode: "self_hosted" });
       for (const key of ["MAILERY_MODE", "HASNA_MAILERY_MODE", "EMAILS_MODE", "HASNA_EMAILS_MODE"]) {
         delete process.env[key];
@@ -1027,7 +1028,7 @@ describe("inbox attachments", () => {
       resetSelfHostedConfigCache();
 
       await expect(runInboxCommand(["--json", "inbox", "attachments"])).rejects.toThrow(
-        "'emails_mode' in the Emails config file was removed",
+        "two configured places to keep its mail",
       );
       expect(attachmentInventoryRequests).toHaveLength(0);
     } finally {
