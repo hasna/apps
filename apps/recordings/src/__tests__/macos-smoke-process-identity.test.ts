@@ -332,6 +332,10 @@ exec /usr/bin/mktemp -d '${root}/work/'"\${2##*/}"
   };
 }
 
+function smokeFixtureEnvironment(root: string): Record<string, string> {
+  return { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", SSH_CONNECTION: "fixture-authenticated-ssh", RECORDINGS_TEST_SMOKE_ALLOW_NON_DARWIN: "1" };
+}
+
 async function runSmoke(fixture: ReturnType<typeof createSmokeFixture>) {
   const supervisorPath = join(fixture.root, "supervisor.sh");
   const receipt = join(fixture.root, "smoke.status");
@@ -366,7 +370,7 @@ printf '%s\n' "$status" > '${receipt}.tmp'
 IFS= read -r cleanup_request || true
 `);
   const supervisor = Bun.spawn(confinedShellCommand(fixture.root, ["/bin/bash", supervisorPath], benignShellExecutables), {
-    env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: "/usr/bin:/bin:/usr/sbin:/sbin", SSH_CONNECTION: "fixture-authenticated-ssh" },
+    env: smokeFixtureEnvironment(fixture.root),
     cwd: fixture.root,
     stdin: "pipe", stdout: "ignore", stderr: "pipe", detached: true,
   });
@@ -391,6 +395,28 @@ IFS= read -r cleanup_request || true
 }
 
 describe("macOS runtime smoke process identity", () => {
+  test("fixture environment retains the explicit non-Darwin smoke opt-in", () => {
+    const fixture = createSmokeFixture();
+    // Exercise the production guard as a pure decision, without impersonating
+    // uname or changing the actual Darwin branch used by runtime fixtures.
+    const guard = sliceBetweenUnique(readFileSync(join(repositoryRoot, "scripts", "smoke_macos_app.sh"), "utf8"),
+      'if [ "$HOST_PLATFORM" != "Darwin" ]', 'select_executable() {');
+    const command = ["/bin/bash", "-c", guard + "printf fixture-platform-accepted"];
+    const run = (platform: string, enabled: boolean) => {
+      const env: Record<string, string> = { ...smokeFixtureEnvironment(fixture.root), HOST_PLATFORM: platform };
+      if (!enabled) delete env.RECORDINGS_TEST_SMOKE_ALLOW_NON_DARWIN;
+      return Bun.spawnSync(confinedShellCommand(fixture.root, command, benignShellExecutables), { cwd: fixture.root, env });
+    };
+    const accepted = run("Linux", true);
+    expect(accepted.exitCode).toBe(0);
+    expect(accepted.stdout.toString()).toBe("fixture-platform-accepted");
+    const refused = run("Linux", false);
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr.toString()).toContain("only supported on macOS");
+    expect(run("Darwin", false).stdout.toString()).toBe("fixture-platform-accepted");
+    expect(existsSync(fixture.appPid)).toBeFalse();
+  });
+
   test("fixture tool adaptation refuses ambiguous boundaries and unsafe executables", () => {
     const fixture = createSmokeFixture();
     const tools = { OPEN_EXECUTABLE: fixture.openExecutable };
