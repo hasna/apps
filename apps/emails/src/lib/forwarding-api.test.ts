@@ -1,13 +1,15 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { processForwardingRules } from "./forwarding.js";
 import { resetSelfHostedConfigCache } from "../db/self-hosted-store.js";
 
-const original = { ...process.env };
+let original: NodeJS.ProcessEnv;
+beforeEach(() => { original = { ...process.env }; });
 let server: ReturnType<typeof Bun.serve> | undefined;
 afterEach(() => {
   server?.stop(true);
-  for (const key of Object.keys(process.env))
-    if (!(key in original)) delete process.env[key];
+  for (const key of Object.keys(process.env)) {
+    if (!Object.prototype.hasOwnProperty.call(original, key)) delete process.env[key];
+  }
   Object.assign(process.env, original);
   resetSelfHostedConfigCache();
 });
