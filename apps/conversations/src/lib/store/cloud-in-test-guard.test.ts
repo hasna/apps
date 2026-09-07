@@ -32,7 +32,10 @@
 // store holds a different dataset and the swap is silent. A fallback here would
 // reintroduce exactly that failure under a different name.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { HERMETIC_STATION } from "../../test/hermetic.js";
 import {
   ALLOW_CLOUD_IN_TESTS_ENV_KEY,
@@ -96,7 +99,22 @@ function withOnlyStoreEnv<T>(fn: () => T, only: Record<string, string> = {}): T 
   // workstation the shared chain reads the operator's REAL api-key / api-url
   // items above the env tier, and a synthetic URL beside a real api-url item
   // is a "different authorities" refusal — not the case being asserted.
-  const pinned: Record<string, string> = { HASNA_STATION: HERMETIC_STATION, ...only };
+  //
+  // The DISK tier gets the same treatment one level down: it reads
+  // `$HOME/.hasna/conversations/config/credentials` (rooted at the env's
+  // HOME/HASNA_HOME/HASNA_CONFIG_HOME), and a provisioned station's real
+  // file outranks the env pair below — the ambient cases then refuse as
+  // "different service authorities" before the guard fires, or resolve the
+  // REAL credential instead of the synthetic one. Anchoring every home-layout
+  // root at the scratch dir — no credentials file can exist there — makes the
+  // disk tier consult nothing, identically on a station and a clean runner.
+  const pinned: Record<string, string> = {
+    HASNA_STATION: HERMETIC_STATION,
+    HOME: SCRATCH_HOME,
+    HASNA_HOME: SCRATCH_HOME,
+    HASNA_CONFIG_HOME: SCRATCH_HOME,
+    ...only,
+  };
   const names = [...new Set([...STORE_SELECTING_KEYS, ...Object.keys(pinned)])];
   const saved = new Map(names.map((n) => [n, process.env[n]]));
   try {
@@ -119,6 +137,16 @@ function withAmbientCloudEnv<T>(fn: () => T, extra: Record<string, string> = {})
 afterEach(() => {
   // Belt and braces: nothing this file sets may outlive it.
   expect(process.env[ALLOW_CLOUD_IN_TESTS_ENV_KEY]).toBeUndefined();
+});
+
+/**
+ * Scratch home the disk credential tier is anchored at (see withOnlyStoreEnv).
+ * Can never contain a credentials file; removed when the suite finishes.
+ */
+const SCRATCH_HOME = mkdtempSync(join(tmpdir(), "conversations-guard-home-"));
+
+afterAll(() => {
+  rmSync(SCRATCH_HOME, { recursive: true, force: true });
 });
 
 describe("detectTestRuntime", () => {
@@ -464,6 +492,12 @@ try {
       childEnv[KEY_VAR] = FAKE_KEY;
       // Same pin as the in-process cases: the station Keychain must not answer.
       childEnv.HASNA_STATION = HERMETIC_STATION;
+      // Same pin as the in-process cases, for the DISK tier: a provisioned
+      // station's real ~/.hasna/conversations/config/credentials would refuse
+      // the PROD_URL fixture as a different authority in the production arm.
+      childEnv.HOME = SCRATCH_HOME;
+      childEnv.HASNA_HOME = SCRATCH_HOME;
+      childEnv.HASNA_CONFIG_HOME = SCRATCH_HOME;
       delete childEnv.NODE_ENV;
 
       const run = async (argv: string[]) => {
