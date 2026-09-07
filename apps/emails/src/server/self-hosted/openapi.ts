@@ -3787,9 +3787,15 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   track_clicks: {type:"boolean",description:"Observe unique message click requests using configured server tracking."},
                   tracking_url: {type:"string",format:"uri",description:"Exact tenant-approved HTTPS tracking base; requires a tracking switch."},
                   unsubscribe_url: { type: "string", format: "uri", description: "HTTP(S) unsubscribe URL emitted as List-Unsubscribe headers." },
+
                   headers: { type: "object", maxProperties: 20, additionalProperties: { type: "string", minLength: 1, maxLength: 900 }, description: "Nonreserved X-* extension headers only; printable ASCII values, no controls, authentication, transport, forwarding or tracking overrides. Total at most 8192 bytes." },
                   tags: { type: "object", maxProperties: 50, additionalProperties: { type: "string", minLength: 1, maxLength: 256, pattern: "^[A-Za-z0-9_-]+$" }, description: "Names and values contain 1–256 ASCII letters, digits, underscores or hyphens. Persisted and passed to the selected provider." },
-                  from: { type: "string" },
+
+                  from: {
+                    type: "string",
+                    description:
+                      "Sender mailbox. Either a bare address (`addr@example.com`) or the RFC 5322 display-name form (`\"Andrei Hasna\" <andrei@hasna.com>`). Authorization, the stored outbound record's from_addr, and idempotency all key on the bare addr-spec; the display name — unless overridden by the registered address record's display_name — is shown to recipients as the From sender.",
+                  },
                   to: { type: "array", items: { type: "string" } },
                   cc: { type: "array", items: { type: "string" } },
                   bcc: { type: "array", items: { type: "string" } },

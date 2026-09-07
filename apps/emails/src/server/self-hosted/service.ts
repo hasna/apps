@@ -113,7 +113,7 @@ import type { AuthStore } from "./auth/store.js";
 import type { RateLimiter } from "./auth/rate-limit.js";
 import type { AuthMailerConfig } from "./auth/mailer.js";
 import type { SelfHostedKeyStore } from "./keys.js";
-import { canonicalSender, formatSenderDisplayName } from "../../lib/email-address.js";
+import { canonicalSender, formatSenderDisplayName, senderDisplayName } from "../../lib/email-address.js";
 import { normalizeAttachmentByteLimit } from "../../lib/attachment-download.js";
 import { canonicalizeSelfHostedPathname } from "../../lib/self-hosted-paths.js";
 
@@ -1924,21 +1924,35 @@ export async function handleSelfHostedRequest(
 
       let messageId: string;
       try {
-        // The provider call is the ONLY surface that may carry the address
-        // record's display name (bug e2578a8a). Authorization, the ledger
-        // (`from_addr`), the idempotency hash and the policy gate all keep the
-        // bare canonical address; a display name is presentational and must not
-        // change what the send is attributed to.
+        // The provider call is the ONLY surface that may carry a display name
+        // (bug e2578a8a). Authorization, the ledger (`from_addr`), the
+        // idempotency hash and the policy gate all keep the bare canonical
+        // address; a display name is presentational and must not change what
+        // the send is attributed to.
         const fromRecord = await auth.store.getAddressByEmail(from);
-        // The display name is an unvalidated address-record field, so it must
-        // not be allowed to carry control characters into the provider call
-        // (the raw-MIME path writes `From:` verbatim; CR/LF would be header
+        // Two display-name sources may decorate the provider From. The address
+        // record's display_name (the configured identity name, bug e2578a8a)
+        // wins when present and safe; otherwise the display name the caller
+        // supplied INLINE in `from` — `"Andrei Hasna" <andrei@hasna.com>` —
+        // is used. `canonicalSender` strips that phrase to the bare address at
+        // parse time, so without this fallback an inline display name was
+        // silently dropped and recipients saw only the raw addr-spec
+        // (bug 0006). The display-name phrase is an unvalidated input, so it
+        // must not carry control characters into the provider call (the
+        // raw-MIME path writes `From:` verbatim; CR/LF would be header
         // injection). A hostile name falls back to the canonical address —
         // the send still succeeds, attributed to the bare sender.
-        const fromForProvider =
+        const recordName =
           fromRecord?.display_name && isSafeFromDisplayName(fromRecord.display_name)
-            ? formatSenderDisplayName(fromRecord.display_name, from)
-            : from;
+            ? fromRecord.display_name
+            : null;
+        const inlineName = senderDisplayName(rawFrom);
+        const displayName =
+          recordName ??
+          (inlineName && isSafeFromDisplayName(inlineName) ? inlineName : null);
+        const fromForProvider = displayName
+          ? formatSenderDisplayName(displayName, from)
+          : from;
         messageId = await sender.send({
           provider_id: providerId,
           unsubscribe_url: unsubscribeUrl,
