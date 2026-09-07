@@ -9,7 +9,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { KeychainCommandResult } from "@hasna/contracts/client";
-import { describeActiveStore } from "../lib/persistence-probe.js";
+import {
+  activeStoreFailClosed,
+  describeActiveStore,
+  describeActiveStoreLine,
+} from "../lib/persistence-probe.js";
 import type { RecordingsConfig } from "../types/index.js";
 import type { RecordsClientResolveOptions, RecordsKeychainTierOptions } from "../http/client.js";
 
@@ -113,12 +117,65 @@ describe("describeActiveStore — the transport report", () => {
     const home = tempHome("unresolved");
     const description = describeActiveStore(configFor(home), { HOME: home });
 
-    expect(description.transport).toBe("sqlite");
+    expect(description.transport).toBe("none");
     expect(description.mode_source).toBe("unresolved");
     expect(description.warning).toContain("REMOTE_API_CONFIG_MISSING");
     expect(description.warning).toContain("HASNA_RECORDINGS_LOCAL=1");
+    // A fail-closed refusal has no active store at all, and its report must
+    // not have opened the on-box file to count it.
+    expect(description.base_url).toBeNull();
+    expect(description.local_db_recordings).toBeNull();
     // No database file is conjured by reporting.
     expect(existsSync(join(home, ".hasna", "recordings", "recordings.db"))).toBe(false);
+  });
+
+  test("the fail-closed refusal renders a FAIL line that names the unopened file", () => {
+    const paint = { pass: (t: string) => t, warn: (t: string) => t, fail: (t: string) => t };
+    const home = tempHome("fail-line");
+
+    const absent = describeActiveStore(configFor(home), { HOME: home });
+    expect(activeStoreFailClosed(absent)).toBe(true);
+    expect(describeActiveStoreLine(absent, paint)).toContain(
+      "✗ Active store: none — fail-closed"
+    );
+    expect(describeActiveStoreLine(absent, paint)).toContain("absent");
+    expect(describeActiveStoreLine(absent, paint)).toContain("REMOTE_API_CONFIG_MISSING");
+
+    // With an existing on-box file the line says it is present but NOT opened.
+    const dbPath = join(home, ".hasna", "recordings", "recordings.db");
+    mkdirSync(join(home, ".hasna", "recordings"), { recursive: true });
+    writeFileSync(dbPath, "stale");
+    const present = describeActiveStore(configFor(home), { HOME: home });
+    expect(describeActiveStoreLine(present, paint)).toContain("is present but NOT opened");
+  });
+
+  test("the hosted resolution renders a PASS line naming the resolver sources", () => {
+    const paint = { pass: (t: string) => t, warn: (t: string) => t, fail: (t: string) => t };
+    const home = tempHome("hosted-line");
+    const description = describeActiveStore(configFor(home), {
+      HOME: home,
+      HASNA_RECORDINGS_API_URL: "https://recordings.line.example",
+      HASNA_RECORDINGS_API_KEY: FAKE_KEY,
+    });
+
+    expect(activeStoreFailClosed(description)).toBe(false);
+    const line = describeActiveStoreLine(description, paint);
+    expect(line).toContain("✓ Active store: http → https://recordings.line.example/v1");
+    expect(line).toContain("HASNA_RECORDINGS_API_KEY");
+  });
+
+  test("the local opt-in renders a PASS line naming the on-box file", () => {
+    const paint = { pass: (t: string) => t, warn: (t: string) => t, fail: (t: string) => t };
+    const home = tempHome("opt-in-line");
+    const description = describeActiveStore(configFor(home), {
+      HOME: home,
+      HASNA_RECORDINGS_LOCAL: "1",
+    });
+
+    expect(activeStoreFailClosed(description)).toBe(false);
+    const line = describeActiveStoreLine(description, paint);
+    expect(line).toContain("✓ Active store: sqlite →");
+    expect(line).toContain("local-opt-in");
   });
 
   test("never puts the key value anywhere in the report", () => {

@@ -1068,6 +1068,12 @@ describe("recordings CLI", () => {
           HOME: home,
           OPENAI_API_KEY: "test-openai-key",
           RECORDINGS_ENHANCEMENT_KEY: "test-enhancement-key",
+          // `check` now fails closed with no credential (report "none", exit
+          // 1) instead of rendering the on-box file as live, so this test
+          // pins an env-tier fixture credential and a sentinel station: the
+          // report is deterministic on any host, with no Keychain touch.
+          HASNA_STATION: "no-such-station",
+          HASNA_RECORDINGS_API_KEY: "fixture-check-env-key",
         },
         stdout: "pipe",
         stderr: "pipe",
@@ -1091,6 +1097,11 @@ describe("recordings CLI", () => {
       realtime_session_model: string;
       realtime_transcription_model: string;
       config_warnings: string[];
+      active_store: {
+        transport: string;
+        mode_source: string;
+        base_url: string | null;
+      };
     };
     expect(typeof report.recording.available).toBe("boolean");
     expect(report.openai_api_key_configured).toBe(true);
@@ -1099,6 +1110,94 @@ describe("recordings CLI", () => {
     expect(report.realtime_session_model).toBe("gpt-realtime");
     expect(report.realtime_transcription_model).toBe("gpt-realtime-whisper");
     expect(Array.isArray(report.config_warnings)).toBe(true);
+    // The env-tier fixture key resolves the hosted store (gateway default for
+    // the authority), so the report names it and stays exit 0.
+    expect(report.active_store.transport).toBe("http");
+    expect(report.active_store.mode_source).toContain("HASNA_RECORDINGS_API_KEY");
+    expect(report.active_store.base_url).toBe("https://api.hasna.com/recordings/v1");
+  });
+
+  test("check with no credential fails closed: exit 1, reports 'none', creates no local db", async () => {
+    const home = join(tmpdir(), `open-recordings-check-failclosed-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tempDirs.push(home);
+    mkdirSync(home, { recursive: true });
+
+    const proc = Bun.spawn([process.execPath, cliEntry, "check"], {
+      cwd: home,
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: home,
+        HASNA_STATION: "no-such-station",
+        HASNA_HOME: home,
+        HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
+        RECORDINGS_AUDIO_DIR: join(home, "audio"),
+        OPENAI_API_KEY: "test-openai-key",
+        HASNA_RECORDINGS_API_URL: "",
+        HASNA_RECORDINGS_API_KEY: "",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode).toBe(1);
+    // The fail-closed line must read as a FAIL, never a green sqlite store.
+    expect(stdout).toContain("✗ Active store: none — fail-closed");
+    expect(stdout).toContain("REMOTE_API_CONFIG_MISSING");
+    expect(stdout).toContain("HASNA_RECORDINGS_LOCAL=1");
+    // No database was opened (or created) by the diagnostic.
+    expect(existsSync(join(home, "recordings.db"))).toBe(false);
+  });
+
+  test("--json check with no credential reports active_store transport 'none' and exits 1", async () => {
+    const home = join(tmpdir(), `open-recordings-check-json-failclosed-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    tempDirs.push(home);
+    mkdirSync(home, { recursive: true });
+
+    const proc = Bun.spawn([process.execPath, cliEntry, "--json", "check"], {
+      cwd: home,
+      env: {
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        HOME: home,
+        HASNA_STATION: "no-such-station",
+        HASNA_HOME: home,
+        HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
+        RECORDINGS_AUDIO_DIR: join(home, "audio"),
+        OPENAI_API_KEY: "test-openai-key",
+        HASNA_RECORDINGS_API_URL: "",
+        HASNA_RECORDINGS_API_KEY: "",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode).toBe(1);
+    const report = JSON.parse(stdout) as {
+      active_store: {
+        transport: string;
+        mode_source: string;
+        base_url: string | null;
+        local_db_present: boolean;
+        local_db_recordings: number | null;
+      };
+    };
+    expect(report.active_store.transport).toBe("none");
+    expect(report.active_store.mode_source).toBe("unresolved");
+    expect(report.active_store.base_url).toBeNull();
+    expect(report.active_store.local_db_present).toBe(false);
+    expect(report.active_store.local_db_recordings).toBeNull();
+    expect(existsSync(join(home, "recordings.db"))).toBe(false);
   });
 
   test("--json transcribe emits only one JSON payload on stdout", async () => {
