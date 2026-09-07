@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import {
   type AgentEventsClient,
+  createEphemeralRegistryDb,
+  createPersistentRegistryDb,
   registerAgentTools,
 } from "./agent-registry.ts";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -16,6 +18,7 @@ import {
   type UniversalEventType,
 } from "../lib/universal-ingest.ts";
 import {
+  LocalStore,
   localStoreIfAvailable,
   resolveStore,
 } from "../store/index.ts";
@@ -1501,21 +1504,53 @@ export function buildServer(): McpServer {
   }
 
   // --- Agent Tools ---
-  // register_agent / heartbeat / set_focus / list_agents via the local,
-  // persistent SQLite-backed registry in src/mcp/agent-registry.ts (inlined
-  // from the deleted @hasna/agent-registry package, hasna/apps#1529).
-  // `send_feedback` stays local below since it persists into logs'
-  // own `feedback` table with a category enum. Lifecycle activity is
-  // mirrored into logs' own durable event store via `agentRegistryEvents`.
+  // register_agent / heartbeat / set_focus / list_agents via the registry in
+  // src/mcp/agent-registry.ts (inlined from the deleted @hasna/agent-registry
+  // package, hasna/apps#1529). The backing store FOLLOWS THE TRANSPORT
+  // (hasna/apps#1720 validation): only the explicit local opt-in — the store
+  // above resolved to the on-box LocalStore — may use the persistent
+  // `agent-registry.db` beside logs' data (opened lazily, on the first tool
+  // call); a hosted process keeps a per-process in-memory registry and its
+  // tool descriptions say so, because the hosted /v1 API has no
+  // agent-registry surface and a hosted `logs-mcp` must never create a
+  // SQLite file under the app home. `send_feedback` stays local below since
+  // it persists into logs' own `feedback` table with a category enum.
+  // Lifecycle activity is mirrored into logs' own durable event store via
+  // `agentRegistryEvents`.
+  const localMode = store instanceof LocalStore;
   registerAgentTools(server, {
     service: "logs",
     events: agentRegistryEvents,
+    db: localMode ? createPersistentRegistryDb() : createEphemeralRegistryDb(),
+    ephemeral: !localMode,
   });
 
   return server;
 }
 
+/**
+ * STARTUP GATE (owner ruling 2026-09-04, hasna/apps#1720 acceptance (c)): the
+ * MCP server resolves its store ONCE before any transport is opened. With no
+ * fleet credential resolvable and no explicit local opt-in it exits non-zero
+ * naming where the credential should live — before `initialize` is answered
+ * on stdio and before the Streamable-HTTP listener binds (the HTTP harness
+ * builds a server per session, so without this gate a misconfigured process
+ * would sit listening and refuse every session instead of failing at start).
+ * Nothing is created: no local store, no registry file. Local mode announces
+ * itself once on stderr from the resolver.
+ */
+function assertStoreConfiguredOrExit(): void {
+  try {
+    resolveStore();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
+  assertStoreConfiguredOrExit();
+
   const { isHttpMode, isStdioMode, resolveMcpHttpPort, startMcpHttpServer } =
     await import("./http.ts");
 
@@ -1542,7 +1577,9 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
   main().catch((err) => {
-    console.error(err);
+    // A refusal is a message, not a crash: the first stderr line must name
+    // the remedy (where the credential should live), never a stack frame.
+    console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   });
 }

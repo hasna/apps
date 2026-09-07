@@ -11,6 +11,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  HASNA_HOME_ENV_KEY,
+  hasExplicitLogsDataDir,
+  resolveLogsDataDir,
+} from "../lib/data-dir.ts";
 import { setEventStoreDataDir } from "../lib/event-store.ts";
 import { migrateAlertRules } from "./migrations/001_alert_rules.ts";
 import { migrateIssues } from "./migrations/002_issues.ts";
@@ -46,57 +51,68 @@ function ensurePrivateTree(path: string): void {
   }
 }
 
+/**
+ * The on-box data directory, resolved FRESH on every call (never at module
+ * load): HASNA_LOGS_DATA_DIR / LOGS_DATA_DIR, else `$HASNA_HOME/logs`, else
+ * `~/.hasna/logs` (src/lib/data-dir.ts). Resolving lazily is what keeps a
+ * hosted process — and a test that points HOME / HASNA_HOME at a temp root
+ * after importing this module — from ever touching the real app home
+ * (hasna/apps#1720 validation).
+ */
 function resolveDataDir(): string {
-  const explicit = process.env.HASNA_LOGS_DATA_DIR ?? process.env.LOGS_DATA_DIR;
-  if (explicit) return explicit;
+  const dir = resolveLogsDataDir();
+  if (hasExplicitLogsDataDir() || process.env[HASNA_HOME_ENV_KEY]?.trim()) return dir;
 
-  const home = process.env.HOME ?? "~";
-  const newDir = join(home, ".hasna", "logs");
+  // Auto-migrate the pre-`~/.hasna` layout: copy `~/.logs` to the default
+  // location once. Only the HOME-derived default migrates — an explicit
+  // data dir or a relocated HASNA_HOME root is never seeded from the home.
+  const home = process.env.HOME?.trim() || "~";
   const oldDir = join(home, ".logs");
-
-  // Auto-migrate: copy old data to new location if needed
-  if (!existsSync(newDir) && existsSync(oldDir)) {
+  if (!existsSync(dir) && existsSync(oldDir)) {
     ensurePrivateDir(join(home, ".hasna"));
-    cpSync(oldDir, newDir, { recursive: true });
-    ensurePrivateTree(newDir);
+    cpSync(oldDir, dir, { recursive: true });
+    ensurePrivateTree(dir);
   }
-
-  return newDir;
+  return dir;
 }
 
-const DATA_DIR = resolveDataDir();
-const DB_PATH =
-  process.env.HASNA_LOGS_DB_PATH ??
-  process.env.LOGS_DB_PATH ??
-  join(DATA_DIR, "logs.db");
+function resolveDbPath(): string {
+  return (
+    process.env.HASNA_LOGS_DB_PATH ??
+    process.env.LOGS_DB_PATH ??
+    join(resolveDataDir(), "logs.db")
+  );
+}
 
 let _db: Database | null = null;
 
 export function ensureLogsDataDir(): string {
-  ensurePrivateDir(DATA_DIR);
-  return DATA_DIR;
+  const dir = resolveDataDir();
+  ensurePrivateDir(dir);
+  return dir;
 }
 
 export function getLogsDataDir(): string {
-  return DATA_DIR;
+  return resolveDataDir();
 }
 
 export function getLogsDbPath(): string {
-  return DB_PATH;
+  return resolveDbPath();
 }
 
 export function ensureLogsDbFilesPrivate(): void {
-  chmodIfExists(DB_PATH, PRIVATE_FILE_MODE);
-  chmodIfExists(`${DB_PATH}-wal`, PRIVATE_FILE_MODE);
-  chmodIfExists(`${DB_PATH}-shm`, PRIVATE_FILE_MODE);
+  const dbPath = resolveDbPath();
+  chmodIfExists(dbPath, PRIVATE_FILE_MODE);
+  chmodIfExists(`${dbPath}-wal`, PRIVATE_FILE_MODE);
+  chmodIfExists(`${dbPath}-shm`, PRIVATE_FILE_MODE);
 }
 
 export function getDb(): Database {
   if (_db) return _db;
-  ensureLogsDataDir();
-  _db = new Database(DB_PATH);
+  const dataDir = ensureLogsDataDir();
+  _db = new Database(resolveDbPath());
   ensureLogsDbFilesPrivate();
-  setEventStoreDataDir(_db, DATA_DIR);
+  setEventStoreDataDir(_db, dataDir);
   configureDb(_db);
   ensureLogsDbFilesPrivate();
   runWithBusyRetry(
@@ -128,7 +144,8 @@ export function closeDb(): void {
  * WAL is checkpointed first so the copied `.db` file is a complete snapshot.
  */
 export function backupLogsDb(): string | null {
-  if (DB_PATH === ":memory:" || !existsSync(DB_PATH)) return null;
+  const dbPath = resolveDbPath();
+  if (dbPath === ":memory:" || !existsSync(dbPath)) return null;
   const db = getDb();
   try {
     db.run("PRAGMA wal_checkpoint(TRUNCATE)");
@@ -136,8 +153,8 @@ export function backupLogsDb(): string | null {
     // Best effort: a busy WAL still leaves the main file consistent to copy.
   }
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const backupPath = `${DB_PATH}.backup-${stamp}`;
-  cpSync(DB_PATH, backupPath);
+  const backupPath = `${dbPath}.backup-${stamp}`;
+  cpSync(dbPath, backupPath);
   chmodIfExists(backupPath, PRIVATE_FILE_MODE);
   return backupPath;
 }
