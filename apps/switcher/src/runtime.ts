@@ -1,14 +1,17 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, lstat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { SwitcherClient, clientFromEnv } from "./sdk";
 import { startServer } from "./server";
 import { Fault } from "./domain";
 import type { CatalogCredentialResolver } from "./catalog";
+import { resolveCredential as resolveClientCredential, clientTransportEnvKeys, appConfigDiskValue, keychainConfigValue } from "@hasna/contracts/client";
 
 export function switcherHome(env: NodeJS.ProcessEnv = process.env) {
-  return resolve(env.HASNA_SWITCHER_HOME ?? join(homedir(), ".hasna", "switcher"));
+  const override = env.HASNA_HOME?.trim();
+  const root = override && isAbsolute(override) ? override : join(env.HOME?.trim() || homedir(), ".hasna");
+  return resolve(env.HASNA_SWITCHER_HOME ?? join(root, "switcher"));
 }
 
 export async function privateDirectory(path: string) {
@@ -23,8 +26,13 @@ export async function privateDirectory(path: string) {
 /** Data access always uses HTTP, including the per-command owned local service. */
 export async function openCliRuntime(env: NodeJS.ProcessEnv = process.env, resolveCredential?: CatalogCredentialResolver) {
   const providerEnv = Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith("SWITCHER_PROVIDER_")));
-  // A partial or unavailable remote configuration is an error, never a local fallback.
-  if (Object.hasOwn(env, "HASNA_SWITCHER_API_URL") || Object.hasOwn(env, "HASNA_SWITCHER_API_KEY")) {
+  // Only complete absence of remote configuration selects the owned local API.
+  // Let Contracts detect invalid sources; no resolver error becomes local data.
+  const keys = clientTransportEnvKeys("switcher");
+  const credential = resolveClientCredential("switcher",env);
+  const configured = credential || keys.apiUrlKeys.some(name=>env[name] !== undefined)
+    || keychainConfigValue("switcher",env) || appConfigDiskValue("switcher",env,keys.apiUrlKeys);
+  if (configured) {
     return {client: clientFromEnv(env), mode: "remote" as const, providerEnv, close: async () => {}};
   }
   const home = switcherHome(env);
