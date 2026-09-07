@@ -228,7 +228,9 @@ describe("deployment gate runtime environments", () => {
       const noApi = { ...env }; delete noApi.HASNA_EMAILS_API_URL; delete noApi.HASNA_EMAILS_API_KEY;
       const missing = run(noApi);
       expect(missing.exitCode).not.toBe(0);
-      expect(missing.stderr.toString()).toContain("HASNA_EMAILS_DB_PATH");
+      expect(missing.stderr.toString()).toContain("HASNA_EMAILS_API_URL");
+      expect(missing.stderr.toString()).toContain("HASNA_EMAILS_API_KEY");
+      expect(missing.stderr.toString()).not.toContain("To use the local database instead");
       expect(readdirSync(trap)).toEqual([]);
       const operator = databaseEnv(home, "postgresql://fixture.invalid/emails");
       expect(operator.EMAILS_DATABASE_URL).toBe("postgresql://fixture.invalid/emails");
