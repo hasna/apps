@@ -242,7 +242,8 @@ test("saved credentials reach an authenticated loopback API and a revoked key fa
     writeFileSync(path, `HASNA_CONVERSATIONS_API_KEY=${key}\nHASNA_CONVERSATIONS_API_URL=${server.url.origin}\n`);
     const env = { HOME: home, HASNA_STATION: `fixture-${crypto.randomUUID()}` };
     const client = resolveConversationsCloud(env, { transport: { retry: false } });
-    expect(client.baseUrl).toBe(`${server.url.origin}/v1`);
+    expect(new URL(client.baseUrl).origin).toBe(server.url.origin);
+    expect(new URL(client.baseUrl).pathname).toBe("/v1");
     expect(await client.transport.get<{ ok: boolean }>("/health")).toEqual({ ok: true });
     writeFileSync(path, `HASNA_CONVERSATIONS_API_KEY=${crypto.randomUUID()}\nHASNA_CONVERSATIONS_API_URL=${server.url.origin}\n`);
     await expect(client.transport.get("/health")).rejects.toThrow();
