@@ -237,6 +237,53 @@ interface InboundLinksResult {
 }
 
 export function registerInboxCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
+  const ingestAction = (operation: "sync-s3" | "watch") => async (opts: Record<string, unknown>) => {
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.once("SIGINT", stop); process.once("SIGTERM", stop);
+    try {
+      const limit = Number(opts.limit ?? 100);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000) throw new Error("Sync limit must be between 1 and 10000 objects.");
+      const body: Record<string, unknown> = {};
+      for (const [option, key] of [["source", "source_id"], ["bucket", "bucket"], ["prefix", "prefix"], ["region", "region"], ["provider", "provider_id"], ["queueUrl", "queue_url"], ["profile", "profile"], ["force", "force"], ["allBuckets", "all_buckets"], ["cursor", "cursor"]] as const) if (opts[option] !== undefined) body[key] = opts[option];
+      const { createInboxIngestClient } = await import("../../lib/inbox-ingest-api.js");
+      const run = await createInboxIngestClient(operation, controller.signal);
+      let aggregate: import("../../lib/inbox-ingest-api.js").IngestBatchReport | undefined;
+      const emit = (report: import("../../lib/inbox-ingest-api.js").IngestBatchReport) => output(report, report.sources.map(source => `${source.source_id}: ${source.scanned} scanned, ${source.ingested} imported, ${source.duplicate} duplicates, ${source.error} errors${operation === "watch" ? `; ${source.acknowledged}/${source.notifications} queue notifications acknowledged` : ""}${source.next_cursor ? "; more objects remain" : ""}`).join("\n"));
+      let remaining = limit;
+      let cursor = opts.cursor as string | undefined;
+      do {
+        const report = await run({ ...body, ...(cursor ? { cursor } : {}), limit: operation === "watch" ? 10 : Math.min(10, remaining) });
+        if (operation === "watch") emit(report);
+        else if (!aggregate) aggregate = structuredClone(report);
+        else {
+          aggregate.ok &&= report.ok;
+          for (const page of report.sources) {
+            const total = aggregate.sources.find(source => source.source_id === page.source_id);
+            if (!total) { aggregate.sources.push(page); continue; }
+            const combined = { ...page };
+            for (const key of ["scanned", "ingested", "duplicate", "error", "notifications", "acknowledged"] as const) combined[key] += total[key];
+            Object.assign(total, combined);
+          }
+        }
+        if (!report.ok) { process.exitCode = 1; break; }
+        if (operation === "sync-s3") {
+          const source = report.sources[0];
+          if (!source) break;
+          remaining -= source.scanned;
+          if (!source.next_cursor || remaining <= 0) break;
+          if (source.next_cursor === cursor || source.scanned === 0) throw new Error("S3 sync cursor did not advance.");
+          cursor = source.next_cursor;
+        } else {
+          if (opts.once) break;
+          await new Promise<void>(resolve => { const done = () => { clearTimeout(timer); controller.signal.removeEventListener("abort", done); resolve(); }; const timer = setTimeout(done, 250); controller.signal.addEventListener("abort", done, { once: true }); if (controller.signal.aborted) done(); });
+        }
+      } while (!controller.signal.aborted);
+      if (aggregate) emit(aggregate);
+    } catch (error) { if (!controller.signal.aborted) handleError(error); }
+    finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
+  };
+
   const inboxCmd = program
     .command("inbox")
     .description("Sync and browse inbound emails (SES/S3, Cloudflare, Resend, SMTP)")
@@ -1053,19 +1100,18 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
   // ─── SYNC S3 ──────────────────────────────────────────────────────────────
   inboxCmd
     .command("sync-s3")
-    .description("Sync inbound emails from S3 bucket (stored by SES receipt rules). Defaults --bucket/--region to config inbound_s3_bucket/region.")
+    .description("Import inbound email through a registered server S3 binding")
     .option("-j, --json", "Print JSON output", false)
     .option("--source <id>", "Explicit S3 source id")
-    .option("--bucket <name>", "S3 bucket name (defaults to config inbound_s3_bucket)")
+    .option("--bucket <name>", "Validate the configured server S3 bucket")
     .option("--prefix <prefix>", "S3 key prefix to scan (e.g. inbound/example.com/)")
-    .option("--region <region>", "AWS region (defaults to config inbound_s3_region or us-east-1)")
-    .option("--provider <id>", "Associate emails with this provider ID")
+    .option("--region <region>", "Validate the configured server AWS region")
+    .option("--provider <id>", "Validate the configured server provider ID")
     .option("--limit <n>", "Max emails per run", "100")
     .option("--profile <profile>", "AWS profile")
     .option("--force", "Allow syncing a retired or disabled S3 source")
-    .action(() => {
-      try { serverOnly("sync-s3"); } catch (e) { handleError(e); }
-    });
+    .option("--cursor <cursor>", "Resume from a reported server S3 cursor")
+    .action(ingestAction("sync-s3"));
 
   // ─── REAL-TIME INBOUND ────────────────────────────────────────────────────
   inboxCmd
@@ -1096,17 +1142,16 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .command("watch")
     .description("Watch the SQS queue and auto-sync inbound mail in real-time (no manual sync-s3)")
     .option("-j, --json", "Print JSON output", false)
-    .option("--queue-url <url>", "SQS queue URL (defaults to config inbound_realtime_queue_url)")
-    .option("--bucket <name>", "S3 bucket (defaults to config inbound_s3_bucket)")
+    .option("--queue-url <url>", "Validate the configured server SQS queue URL")
+    .option("--bucket <name>", "Validate the configured server S3 bucket")
     .option("--prefix <prefix>", "S3 key prefix to sync")
     .option("--region <region>", "AWS region")
-    .option("--provider <id>", "Associate emails with this provider ID")
+    .option("--provider <id>", "Validate the configured server provider ID")
     .option("--profile <profile>", "AWS profile")
     .option("--once", "Poll a single time then exit (for testing)")
-    .option("--all-buckets", "When a notification arrives, sync every configured inbound S3 bucket")
-    .action(() => {
-      try { serverOnly("watch"); } catch (e) { handleError(e); }
-    });
+    .option("--all-buckets", "Poll every registered server-bound source queue")
+    .option("--source <id>", "Registered server-bound S3 source")
+    .action(ingestAction("watch"));
 
   // ─── LISTEN (SMTP) ────────────────────────────────────────────────────────
   inboxCmd

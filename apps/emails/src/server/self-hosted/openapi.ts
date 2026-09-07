@@ -3440,6 +3440,20 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         responses: { "200": { content: { "application/json": { schema: deleteReceiptSchema } } } },
       },
     },
+    "/v1/inbox/sync-s3": { post: {
+      operationId: "syncInboxS3", summary: "Run a bounded server-bound tenant ingestion batch",
+      requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: {
+        source_id: { type: "string" }, bucket: { type: "string" }, prefix: { type: "string" }, region: { type: "string" }, provider_id: { type: "string" }, queue_url: { type: "string" }, profile: { type: "string" }, cursor: { type: "string" }, force: { type: "boolean" }, all_buckets: { type: "boolean" }, limit: { type: "integer", minimum: 1, maximum: 10 }
+      } } } } },
+      responses: { "200": jsonResponse("Ingestion counts, continuation and observed queue state", { type: "object", required: ["ok", "sources"], properties: { ok: { type: "boolean" }, sources: { type: "array", items: { type: "object", additionalProperties: true } } } }), "400": errorResponse("Invalid or mismatched binding options"), "403": errorResponse("Operator authority required"), "503": errorResponse("Server ingest binding is not configured") },
+    } },
+    "/v1/inbox/watch": { post: {
+      operationId: "watchInboxQueue", summary: "Run a bounded server-bound tenant ingestion batch",
+      requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: {
+        source_id: { type: "string" }, bucket: { type: "string" }, prefix: { type: "string" }, region: { type: "string" }, provider_id: { type: "string" }, queue_url: { type: "string" }, profile: { type: "string" }, cursor: { type: "string" }, force: { type: "boolean" }, all_buckets: { type: "boolean" }, limit: { type: "integer", minimum: 1, maximum: 10 }
+      } } } } },
+      responses: { "200": jsonResponse("Ingestion counts, continuation and observed queue state", { type: "object", required: ["ok", "sources"], properties: { ok: { type: "boolean" }, sources: { type: "array", items: { type: "object", additionalProperties: true } } } }), "400": errorResponse("Invalid or mismatched binding options"), "403": errorResponse("Operator authority required"), "503": errorResponse("Server ingest binding is not configured") },
+    } },
     "/v1/providers/{id}/sync": {
       post: {
         operationId: "syncProviderDelivery", summary: "Reconcile known tenant provider message delivery observations",

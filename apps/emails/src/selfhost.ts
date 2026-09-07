@@ -1139,6 +1139,24 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Run a bounded server-bound tenant ingestion batch */
+    async syncInboxS3(body: { "source_id"?: string; "bucket"?: string; "prefix"?: string; "region"?: string; "provider_id"?: string; "queue_url"?: string; "profile"?: string; "cursor"?: string; "force"?: boolean; "all_buckets"?: boolean; "limit"?: number }, init?: RequestInit): Promise<{ "ok": boolean; "sources": Array<Record<string, unknown>> }> {
+      return this.request("POST", `/v1/inbox/sync-s3`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Run a bounded server-bound tenant ingestion batch */
+    async watchInboxQueue(body: { "source_id"?: string; "bucket"?: string; "prefix"?: string; "region"?: string; "provider_id"?: string; "queue_url"?: string; "profile"?: string; "cursor"?: string; "force"?: boolean; "all_buckets"?: boolean; "limit"?: number }, init?: RequestInit): Promise<{ "ok": boolean; "sources": Array<Record<string, unknown>> }> {
+      return this.request("POST", `/v1/inbox/watch`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Accept an invitation and create a tenant-bound session */
     async acceptInvite(body: { "token": string; "password"?: string | null; "name"?: string | null }, init?: RequestInit): Promise<{ "session_token": string; "expires_at": string; "user": User; "tenant": Tenant | null; "role": "owner" | "admin" | "member" | "viewer" }> {
       return this.request("POST", `/v1/invites/accept`, {

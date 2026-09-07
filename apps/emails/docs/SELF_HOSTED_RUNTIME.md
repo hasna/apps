@@ -349,3 +349,59 @@ Only messages carrying the selected tenant/provider provenance are queried.
 Messages sent outside this app, old rows without provenance, and inbox/Gmail/S3
 imports require their own ingestion paths; this command does not imply they were
 pulled. The existing webhook ingestion remains active independently of sync.
+
+### Tenant-bound inbox imports and queue watch
+
+`emails inbox sync-s3` and `emails inbox watch` call operator-authorized API
+operations. They use the same saved API credentials as the other CLI commands.
+`watch` polls SQS on the server and acknowledges a notification only after every
+referenced object is imported or already present. `--once` performs one poll;
+otherwise Ctrl-C stops the client polling loop. This does not install a background
+worker. API responses include imported/duplicate/error counts, queue counts when
+available, the check time and the S3 continuation cursor. Queue counts are
+approximate. A partial S3 page retains its starting cursor (or reports
+`retry_from_start`) so a retry does not skip failed objects.
+
+The service operator must register a tenant-owned `/v1/sources` row with `type`
+`s3` or `ses_s3`, `status: active` and a `mailbox_id`, then configure
+`EMAILS_INGEST_BINDINGS` on the API service. This configuration contains resource
+identifiers, not AWS secrets. Example with placeholder IDs:
+
+```json
+[
+  {
+    "tenant_id": "TENANT_UUID",
+    "source_id": "SOURCE_ID",
+    "provider_id": "OPTIONAL_REGISTERED_PROVIDER_ID",
+    "bucket": "inbound-mail-bucket",
+    "prefix": "inbound/example.com/",
+    "domain": "example.com",
+    "region": "us-east-1",
+    "queue_url": "https://sqs.us-east-1.amazonaws.com/123456789012/tenant-inbound"
+  }
+]
+```
+
+`provider_id` and `queue_url` are optional for S3 import; watching requires a
+queue. Each queue must be dedicated to its binding. Bucket prefixes must not
+overlap across bindings. The domain must already route inbound email to the
+bound tenant. For S3 notifications without envelope recipients, this operator
+configured prefix/domain mapping supplies the routing evidence; MIME headers are
+never routing authority. New messages retain the configured provider ID. Existing
+immutable source provenance is checked on retries.
+
+The server AWS credential chain needs S3 ListBucket/GetObject and, for queue
+watch, SQS ReceiveMessage/DeleteMessage/GetQueueAttributes on those bound resources.
+No client AWS credentials are accepted. `--bucket`, `--region`, `--provider` and
+`--queue-url` validate the corresponding binding; `--prefix` can narrow it.
+`--profile` reports a configuration error because profiles belong to the server.
+`--all-buckets` polls every bound queue in this tenant, at most ten per request.
+Each request shares a 25-second cloud deadline; S3 batches contain at most ten
+objects and queue batches contain at most ten notifications per source.
+
+SES receipt rules, SNS/SQS delivery permissions, dedicated queues, domain routing
+and IAM credentials must be provisioned before these operations can run.
+`setup-realtime` and a network SMTP listener still require separate infrastructure
+work; these commands do not create that infrastructure. The historical local
+`inbox source` registry is not yet the API source registry: bind the registered
+API source ID, not a machine-local configuration entry.

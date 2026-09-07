@@ -1,3 +1,4 @@
+import { executeIngestBatch, IngestApiError, type IngestApiInput, type IngestCloudFactory } from "./ingest-api.js";
 import { syncProviderDelivery, ProviderSyncError } from "./provider-sync.js";
 import { readProviderHealth } from "./provider-health.js";
 import { runForwardingBatch, normalizeForwardingOptions, normalizeForwardingRule } from "./forwarding.js";
@@ -180,6 +181,7 @@ export interface SelfHostedServiceDeps {
   verifier: ApiKeyVerifier;
   sender: SelfHostedSender;
   resolveSender?: SenderResolver;
+  ingestCloud?: IngestCloudFactory;
   migrations: readonly Migration[];
   version: string;
   // ---- multi-tenancy + auth (WI-2) ----
@@ -2529,6 +2531,20 @@ export async function handleSelfHostedRequest(
       const { runSequenceBatch } = await import("./sequence-worker.js");
       const sequenceResult = sequenceLimit === 0 ? { sequences: { attempted: 0, sent: 0, failed: 0, pending: 0, skipped: 0 }, sequence_items: [] } : await runSequenceBatch(auth.store.sequenceWorker(), send, sequenceLimit);
       return json(200, { ...result, ...sequenceResult, sequence_execution: sequenceLimit === 0 ? "not_requested" : "executed" });
+    }
+
+    const ingestOperation = path.match(/^\/v1\/inbox\/(sync-s3|watch)$/);
+    if (ingestOperation) {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "running inbound ingestion");
+      if (denied) return denied;
+      const body = await readJsonBody(req);
+      const stringFields = ["source_id", "bucket", "prefix", "region", "provider_id", "queue_url", "profile", "cursor"];
+      if (Object.keys(body).some(key => ![...stringFields, "force", "all_buckets", "limit"].includes(key)) || stringFields.some(key => body[key] !== undefined && (typeof body[key] !== "string" || !(body[key] as string).trim())) || ["force", "all_buckets"].some(key => body[key] !== undefined && typeof body[key] !== "boolean")) return json(400, { error: "Invalid ingest operation options" });
+      try { return json(200, await executeIngestBatch(deps.store, auth.store, auth.ctx.tenantId, ingestOperation[1] as "sync-s3" | "watch", body as IngestApiInput, deps.env ?? process.env, deps.ingestCloud)); }
+      catch (error) { if (error instanceof IngestApiError) return json(error.status, { error: error.message }); throw error; }
     }
 
     const providerSync = path.match(/^\/v1\/providers\/([^/]+)\/sync$/);

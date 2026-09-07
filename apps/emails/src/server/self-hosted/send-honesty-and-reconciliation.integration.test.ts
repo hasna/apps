@@ -776,3 +776,45 @@ describe.skipIf(!pgClient)("provider delivery reconciliation", () => {
 
   });
 });
+
+describe.skipIf(!pgClient)("tenant-bound inbox ingestion API", () => {
+  it("imports and deduplicates with real routing/provenance while rejecting foreign envelopes and nonoperators", async () => {
+    const deps = makeDeps({ provider: "ses", send: async () => { throw new Error("never send"); } });
+    const owner = await makeTenant("ingest-owner"); const other = await makeTenant("ingest-other");
+    await registerSender(deps, owner.token, "ingest.example", "recipient@ingest.example");
+    await registerSender(deps, other.token, "foreign-ingest.example", "recipient@foreign-ingest.example");
+    const provider = await call(deps, "POST", "/v1/providers", { token: owner.token, body: { name: "ingest", type: "ses", active: true } });
+    const source = await call(deps, "POST", "/v1/sources", { token: owner.token, body: { name: "ingest", type: "ses_s3", status: "active", mailbox_id: "inbox", settings_json: {} } });
+    expect(source.status).toBe(201);
+    const binding = { tenant_id: owner.tenantId, source_id: source.body.id, bucket: "fixture-inbound", prefix: "inbound/ingest.example/", domain: "ingest.example", region: "us-east-1", provider_id: provider.body.id, queue_url: "https://sqs.us-east-1.amazonaws.com/123456789012/ingest" };
+    deps.env = { ...deps.env, EMAILS_INGEST_BINDINGS: JSON.stringify([binding]) };
+    let fetched = 0, acknowledged = 0, cloudCalls = 0;
+    let recipients = ["recipient@ingest.example"];
+    deps.ingestCloud = () => { cloudCalls++; return {
+      list: async () => ({ keys: [binding.prefix + "one"] }),
+      fetch: async () => { fetched++; return Buffer.from("From: sender@outside.example\r\nTo: private@foreign-ingest.example\r\nSubject: Fixture\r\nMessage-ID: <ingest-fixture@example>\r\n\r\nbody\r\n"); },
+      receive: async () => [{ receipt: "fixture", body: JSON.stringify({ notificationType: "Received", mail: { messageId: "two" }, receipt: { recipients, action: { type: "S3", bucketName: binding.bucket, objectKey: binding.prefix + "two" } } }) }],
+      acknowledge: async () => { acknowledged++; }, queueState: async () => ({ visible: 0, in_flight: 0 }), close: () => {},
+    }; };
+    const limited = mintApiKey({ app: "emails", scopes: ["emails:write"], signingSecret: SIGNING_SECRET });
+    await pgClient!.execute("INSERT INTO api_key_tenants (kid,tenant_id) VALUES ($1,$2)", [limited.kid, owner.tenantId]);
+    expect((await call(deps, "POST", "/v1/inbox/sync-s3", { token: limited.token, body: {} })).status).toBe(403);
+    expect((await call(deps, "POST", "/v1/inbox/sync-s3", { token: other.token, body: { source_id: binding.source_id } })).status).toBe(503);
+    expect((await call(deps, "POST", "/v1/inbox/sync-s3", { token: owner.token, body: { bucket: "another-bucket" } })).status).toBe(400);
+    expect(cloudCalls).toBe(0);
+    const imported = await call(deps, "POST", "/v1/inbox/sync-s3", { token: owner.token, body: {} });
+    expect(imported.status).toBe(200); expect(imported.body.sources[0]).toMatchObject({ ingested: 1, complete: true, error: 0 });
+    expect((await call(deps, "POST", "/v1/inbox/sync-s3", { token: owner.token, body: {} })).body.sources[0].duplicate).toBe(1);
+    expect(fetched).toBe(2);
+    const rows = await pgClient!.many("SELECT provider_id, to_addrs FROM messages WHERE tenant_id = $1", [owner.tenantId]);
+    expect(rows).toHaveLength(1); expect(rows[0]).toMatchObject({ provider_id: provider.body.id, to_addrs: ["catchall@ingest.example"] });
+    recipients = ["recipient@ingest.example", "recipient@foreign-ingest.example"];
+    const foreign = await call(deps, "POST", "/v1/inbox/watch", { token: owner.token, body: {} });
+    expect(foreign.body.ok).toBe(false); expect(acknowledged).toBe(0); expect(fetched).toBe(2);
+    recipients = ["recipient@ingest.example"];
+    expect((await call(deps, "POST", "/v1/inbox/watch", { token: owner.token, body: {} })).body.sources[0]).toMatchObject({ ingested: 1, acknowledged: 1 });
+    expect((await call(deps, "POST", "/v1/inbox/watch", { token: owner.token, body: {} })).body.sources[0]).toMatchObject({ duplicate: 1, acknowledged: 1 });
+    expect(acknowledged).toBe(2);
+    expect(await pgClient!.many("SELECT id FROM messages WHERE tenant_id = $1", [other.tenantId])).toHaveLength(0);
+  });
+});

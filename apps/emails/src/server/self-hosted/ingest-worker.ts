@@ -60,6 +60,8 @@ export interface IngestStore {
 }
 
 export interface IngestDeps {
+  /** Trusted server binding provenance, never a notification field. */
+  providerId?: string;
   store: IngestStore;
   /** Fetch a raw RFC822 object from S3 as bytes. */
   fetchObject: (bucket: string, key: string) => Promise<Buffer>;
@@ -290,6 +292,7 @@ export async function ingestS3Object(
       }
       const input: MessageInput = {
         from_addr: parsed.from_addr || "(unknown sender)",
+        ...(deps.providerId ? { provider_id: deps.providerId } : {}),
         // MIME To/Cc headers are sender-controlled. Tenant selection and the
         // stored recipient list come only from the trusted SES envelope.
         to_addrs: group.recipients,

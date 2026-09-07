@@ -1736,9 +1736,7 @@ describe("inbox unread-count --by-address", () => {
 
 describe("server-only ingestion/diagnostic subcommands", () => {
   const cases: Array<{ label: string; args: string[]; command: string }> = [
-    { label: "sync-s3", args: ["inbox", "sync-s3", "--bucket", "mail-bucket", "--limit", "1"], command: "emails inbox sync-s3" },
     { label: "setup-realtime", args: ["inbox", "setup-realtime", "example.com"], command: "emails inbox setup-realtime" },
-    { label: "watch", args: ["inbox", "watch", "--once"], command: "emails inbox watch" },
     { label: "listen", args: ["inbox", "listen", "--port", "2526"], command: "emails inbox listen" },
   ];
 
