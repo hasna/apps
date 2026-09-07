@@ -2349,7 +2349,12 @@ export class TenantScopedStore {
       const recipients = new Set([...message.to_addrs, ...message.cc_addrs].map(canonicalAddress));
       for (const observation of read.observations) {
         const recipient = observation.recipient ? canonicalAddress(observation.recipient) : null;
-        if (recipient && !recipients.has(recipient)) throw new Error("Provider returned an unexpected recipient");
+        if (recipient && !recipients.has(recipient)) {
+          // The stored envelope currently has To/CC only. SES insights may also
+          // include BCC: do not invent ownership or discard other valid events.
+          unattributed++;
+          continue;
+        }
         const eventId = `sync:${providerId}:${messageId}:${observation.type}:${recipient ?? "all"}:${observation.occurredAt ?? "snapshot"}`;
         const eventType = read.evidence === "current_status" || ["sent", "failed"].includes(observation.type) ? "status_observed" : observation.type;
         const counterType = observation.type === "bounced" || observation.type === "complained";

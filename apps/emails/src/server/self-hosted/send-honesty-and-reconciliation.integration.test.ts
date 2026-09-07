@@ -754,9 +754,16 @@ describe.skipIf(!pgClient)("provider delivery reconciliation", () => {
     expect(actual.contacts_updated).toBe(0);
     expect(await pgClient!.get("SELECT complaint_count FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, recipient])).toMatchObject({ complaint_count: 1 });
     await expect(store.applyDeliveryObservations(second.body.id, message.id, { evidence: "current_status", observations: [{ type: "bounced", recipient }] })).rejects.toThrow("not owned");
-    await expect(store.applyDeliveryObservations(provider.body.id, message.id, { evidence: "event_history", observations: [{ type: "bounced", recipient, occurredAt: "2026-01-01T00:00:00Z" }, { type: "complained", recipient: "wrong@elsewhere.example" }] })).rejects.toThrow("unexpected recipient");
+    await expect(store.applyDeliveryObservations(provider.body.id, message.id, { evidence: "event_history", observations: [{ type: "bounced", recipient, occurredAt: "2026-01-01T00:00:00Z" }, { type: "complained", recipient, occurredAt: "invalid-timestamp" }] })).rejects.toThrow();
     expect(await pgClient!.get("SELECT bounce_count FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, recipient])).toMatchObject({ bounce_count: 0 });
     expect((await call(deps, "POST", path, { token: tenant.token, body: { provider_id: second.body.id } })).status).toBe(400);
+    const mixed = await store.applyDeliveryObservations(provider.body.id, message.id, { evidence: "event_history", observations: [
+      { type: "delivered", recipient, occurredAt: "2026-02-02T00:00:00Z" },
+      { type: "bounced", recipient: "private-bcc@sync.example", permanentBounce: true, occurredAt: "2026-02-02T00:00:00Z" },
+    ] });
+    expect(mixed).toMatchObject({ inserted: 1, unattributed: 1, contacts_updated: 0 });
+    expect(await pgClient!.get("SELECT id FROM contacts WHERE tenant_id = $1 AND email = $2", [tenant.tenantId, "private-bcc@sync.example"])).toBeNull();
+    expect(await pgClient!.get("SELECT id FROM events WHERE tenant_id = $1 AND recipient = $2", [tenant.tenantId, "private-bcc@sync.example"])).toBeNull();
     const unrelatedRecipient = "new-contact@sync.example";
     const fresh = await store.createMessage({ from_addr: "sender@sync.example", to_addrs: [unrelatedRecipient], provider_id: provider.body.id, provider_message_id: "fresh-sync", direction: "outbound", status: "sent", send_state: "sent" });
     const snapshot = await store.applyDeliveryObservations(provider.body.id, fresh.id, { evidence: "current_status", observations: [{ type: "bounced" }] });
