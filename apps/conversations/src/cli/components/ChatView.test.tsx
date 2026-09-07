@@ -35,6 +35,7 @@ describe("submitChatViewMessage", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("blocked");
+      expect(result.blocked).toBe(true);
       expect(result.error).not.toContain(blocked);
     }
     expect(readMessages({ to: "tui-recipient" })).toHaveLength(0);
