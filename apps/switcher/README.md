@@ -4,7 +4,7 @@ title: "Switcher"
 type: "package-documentation"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:50:21.698672Z"
-updated_at: "2026-09-06T15:23:09.568156+00:00"
+updated_at: "2026-09-07T06:18:32.384233+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
@@ -69,18 +69,27 @@ An interactive terminal can choose or search the catalog when `--model` is omitt
 
 When no remote API configuration is present, each CLI invocation starts an authenticated loopback API on an allocated port, stores SQLite data in `~/.hasna/switcher`, and closes its own listener on completion. Its random operator key remains in memory. Use `HASNA_SWITCHER_HOME` to choose another owner-only home, `HASNA_SWITCHER_SQLITE_PATH` for an explicit database, or `HASNA_SWITCHER_DATABASE_URL` for PostgreSQL. API and SDK data access remains HTTP.
 
-If either remote API variable is configured, both `HASNA_SWITCHER_API_URL` and `HASNA_SWITCHER_API_KEY` are required. An unreachable or misconfigured remote API fails; it never selects a local database instead. The SDK always requires an explicitly configured API.
+Remote API configuration is resolved through Contracts, including canonical credential stores and the default gateway URL. Invalid, unavailable or unauthorized remote services fail without opening local SQLite.
 
 The registry contains DeepSeek, OpenRouter, Anthropic, OpenAI, xAI, Ollama, LM Studio, Groq, Cerebras, Mistral, Together AI, Fireworks, Moonshot/Kimi, DashScope, Z.AI, MiniMax, SiliconFlow, and generic protocol entries. `switcher providers presets ID` exposes documented routes, aliases and limitations; this is not a claim that every combination has passed live tests. Remaining adapters and acceptance gates are tracked in [TODOS.md](TODOS.md).
 
+## Canonical API configuration
+
+The CLI, `clientFromEnv()` SDK helper and standalone MCP client resolve Switcher API URL/key through `@hasna/contracts/client`, following the same shared convention as Conversations. A key alone selects `https://api.hasna.com/switcher`; `HASNA_SWITCHER_API_URL` selects a self-hosted endpoint. The `SWITCHER_API_URL` and `SWITCHER_API_KEY` aliases are supported. Deliberate overrides/profile selections take precedence; otherwise the resolver reads macOS Keychain, canonical disk configuration and then environment. A live client rereads credentials before each request and refuses an authority change until rebuilt.
+
+The canonical file is `~/.hasna/switcher/config/credentials` (owner-only mode 0600), using assignments named `HASNA_SWITCHER_API_URL` and `HASNA_SWITCHER_API_KEY`. Provision actual values through your approved secret manager. macOS Keychain uses service `hasna.credentials.switcher.api-key` and optional `api-url`, with account `HASNA_STATION` or the short hostname. Provider keys remain in the provider's vault or secure store; this file authenticates the Switcher API only.
+
+`HASNA_HOME` replaces `~/.hasna`; `HASNA_CONFIG_HOME` places credentials at `<root>/switcher/credentials` and `<root>/secrets/credentials`. These shared overrides must be absolute and nonblank. `HASNA_PROFILE` selects `credentials-<profile>`; API authority stays in the common credentials file. `HASNA_SWITCHER_HOME` changes Switcher's local database, bindings and launch state only, and does not relocate shared credentials. `HOME` is respected by both paths.
+
+Configured but missing, unsafe, conflicting or inaccessible remote credentials fail before local data is opened. Only complete absence of Switcher remote configuration retains the user-authorized automatic local API. The owned local API uses a random in-memory key. Server-side authentication remains configured separately through `HASNA_SWITCHER_API_KEY` on `switcher-serve`.
+
 ## Credential bindings
 
-Bind an existing vault key once, then launch without an external wrapper. Use your vault's URL and the installed `secrets` CLI. On macOS, `--vault-account` selects the operator's `hasna.credentials.secrets.api-key` Keychain item. Without that option, inject `HASNA_SECRETS_API_KEY` for each process.
+Bind an existing vault key once, then launch without an external wrapper. New bindings use the installed `secrets` CLI and resolve its operator key and API URL through `@hasna/contracts/client`. A configured Keychain item or canonical `~/.hasna/secrets/config/credentials` supplies the operator without shell exports. The default Secrets API URL is `https://api.hasna.com/secrets`; `--vault-url` can select a custom vault but must agree with any configured Secrets authority.
 
 ```sh
 switcher credentials bind deepseek \
-  --vault-key providers/deepseek/live/api_key --vault-url https://vault.example \
-  --vault-account my-station
+  --vault-key providers/deepseek/live/api_key
 switcher credentials check deepseek
 switcher launch claude --provider deepseek --model deepseek-v4-pro
 ```
@@ -91,7 +100,7 @@ For provider keys already stored in macOS Keychain, use `--keychain-service SERV
 
 `credentials list` displays bindings; `credentials remove PRESET_OR_REFERENCE` removes only the locator. Replacement requires explicit removal. Custom credential references require `--origin URL` (repeatable); preset bindings authorize their documented origins by default. `credentials check` reports availability, length and hash, not successful provider authentication. Provider credentials needed by a remote API's catalog discovery must still be configured on that server independently.
 
-On Linux, use a vault binding without `--vault-account` and have your approved secret manager inject `HASNA_SECRETS_API_KEY` into each Switcher process. The binding records the vault URL and key locator; it stores no credential value. Alternatively, let the authenticated `secrets` CLI inject a provider credential for one command:
+Explicit `--vault-account ACCOUNT` pins one macOS Keychain account and requires `--vault-url`; it never falls back when that account is missing or locked. `--vault-operator env` preserves the per-process `HASNA_SECRETS_API_KEY` mode and also requires `--vault-url`. Existing bindings keep their original operator mode. To adopt canonical resolution for an old binding, explicitly remove and rebind its same provider key reference. A Secrets operator cannot bootstrap itself through `HASNA_SECRETS_API_KEY_REF`; use a literal operator from its canonical store or explicit override. On Linux the shared resolver reads the owner-only canonical credentials file or process environment. The binding stores only the locator and optional vault authority. Alternatively, let the authenticated `secrets` CLI inject a provider credential for one command:
 
 ```sh
 secrets exec providers/deepseek/live/api_key --as DEEPSEEK_API_KEY -- \

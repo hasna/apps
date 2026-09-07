@@ -4,10 +4,25 @@ title: "Switcher full adapter and installed CLI delivery checklist"
 type: "task-checklist"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-07T05:34:56.280279+00:00"
+updated_at: "2026-09-07T06:36:46.853455+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+# Active canonical credential fix: 0.1.4
+
+Task: `c3194755-e8e2-4467-a0c8-0c09c1f42f49`; new user directive 2026-09-07 after ordinary-shell `vault_operator_unavailable`.
+
+- [x] C01 Fetch latest GitHub main and create an isolated worktree; preserve canonical untracked files and user sessions.
+- [x] C02 Compare Contracts and Conversations; capture failing canonical credential regressions.
+- [x] C03 Use the shared API transport, fresh credentials, URL defaults/aliases and authority binding; preserve bounded redacted errors.
+- [x] C04 Add canonical Secrets operator bindings; preserve explicit env/account semantics and give useful failure diagnostics.
+- [x] C05 Cover canonical files, Keychain, roots, rotation, conflicts, locked-account recovery and ordinary CLI launch with no API-key env.
+- [x] C06 Complete package/type/generated/artifact checks and fresh-candidate Node/Bun surface checks on SQLite/PostgreSQL. Repeat against registry bytes under C08–C09.
+- [ ] C07 Independent review against the final source commit; resolve every blocking finding.
+- [ ] C08 Merge through PR after required CI; publish/install the next patch with registry byte verification.
+- [ ] C09 Live-test the exact installed command from an ordinary shell without manually injected credentials; preserve failures and report limits honestly.
+- [ ] C10 Update release evidence and close the goal/tracking task after owned-resource cleanup.
 
 # Completed model-policy delivery: 0.1.3
 
