@@ -67,7 +67,7 @@ describe("MCP self_hosted guards", () => {
     });
   });
 
-  it("refuses a provider selector the send contract has no room for, and sends nothing", async () => {
+  it("refuses a provider selector when the API cannot advertise its send contract, and sends nothing", async () => {
     // This assertion inverted when the email-ops family collapsed to one
     // implementation. It used to check a guard in the deleted arm module whose
     // refusal text told the caller which deployment word to set to reach the other
@@ -82,7 +82,7 @@ describe("MCP self_hosted guards", () => {
       provider_id: "provider-1",
     });
     expect(result.isError).toBe(true);
-    expect(resultText(result)).toContain("--provider is not supported");
+    expect(resultText(result)).toContain("/openapi.json");
     // The discriminating half: refused BEFORE dispatch, so no mail and no row.
     expect(await stub.list("messages")).toHaveLength(0);
   });

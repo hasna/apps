@@ -1,19 +1,9 @@
 import type { Command } from "commander";
-import { handleError } from "../utils.js";
+import { handleError, parseCliListPage } from "../utils.js";
 import type { MxAssessment } from "../../lib/mx-ownership.js";
 
-// Automated provisioning (SES identity/MAIL FROM, Cloudflare DNS, S3 inbound
-// receipt rules, the reconciler daemon and round-trip acceptance tests) does not
-// ship in ANY mode of this package. The local orchestrator was unreachable dead
-// code and has been removed; the self-hosted server exposes no /v1 provisioning
-// route and its container runs no reconciler. The commands stay registered so
-// scripts and `--help` get a truthful, actionable answer instead of a bare
-// "unknown command" — but the previous "it runs on the self-hosted server" text
-// was false in BOTH local and self_hosted mode and is gone.
-//
-// The supported path is manual: `emails domain adopt` registers an
-// already-verified domain and wires SES inbound, and `emails aws setup-inbound`
-// creates the S3 bucket + SES receipt rules.
+// Status reads the shared domain/address registry. The remaining orchestration
+// actions are kept explicit until their provider operations are implemented.
 function notImplementedAnywhere(command: string): never {
   throw new Error(
     `${command} is not implemented in this build: there is no local provisioning ` +
@@ -27,10 +17,10 @@ export interface ProvisionCommandDeps {
   inspectMx?: (domain: string) => Promise<MxAssessment>;
 }
 
-export function registerProvisionCommands(program: Command, _output: (data: unknown, formatted: string) => void, _deps: ProvisionCommandDeps = {}): void {
+export function registerProvisionCommands(program: Command, output: (data: unknown, formatted: string) => void, _deps: ProvisionCommandDeps = {}): void {
   const cmd = program
     .command("provision")
-    .description("Automated domain + address provisioning — NOT IMPLEMENTED in this build; use 'emails domain adopt' and 'emails aws setup-inbound'");
+    .description("Inspect provisioning status and manage domain/address provisioning");
 
   // ── status ────────────────────────────────────────────────────────────────
   cmd
@@ -39,8 +29,26 @@ export function registerProvisionCommands(program: Command, _output: (data: unkn
     .option("--limit <n>", "Maximum domains to show (default 20 compact, 50 verbose/json)")
     .option("--offset <n>", "Number of domains to skip", "0")
     .option("--verbose", "Show all address provisioning rows per domain")
-    .action(() => {
-      try { notImplementedAnywhere("emails provision status"); } catch (e) { handleError(e); }
+    .action(async (reference: string | undefined, opts: { limit?: string; offset?: string; verbose?: boolean }) => {
+      try {
+        const { listDomains } = await import("../../db/domains.js");
+        const { listDomainProvisioningByIds, listAddressProvisioningByDomains } = await import("../../db/provisioning.js");
+        const page = parseCliListPage(opts);
+        const normalized = reference?.trim().toLowerCase();
+        const matching = listDomains().filter((domain) => !normalized || domain.domain.toLowerCase() === normalized || domain.id.startsWith(normalized));
+        if (normalized && matching.length === 0) throw new Error(`Domain not found: ${reference}`);
+        if (normalized && matching.length > 1) throw new Error(`Ambiguous domain: ${reference}`);
+        const domains = matching.slice(page.offset, page.offset + page.limit);
+        const ids = domains.map((domain) => domain.id);
+        const [states, addresses] = await Promise.all([listDomainProvisioningByIds(ids), listAddressProvisioningByDomains(ids)]);
+        const result = domains.map((domain) => ({ id: domain.id, domain: domain.domain, provider_id: domain.provider_id, provisioning: states.get(domain.id), addresses: addresses.get(domain.id) ?? [] }));
+        const lines = result.flatMap((domain) => [
+          `${domain.domain}: ${domain.provisioning?.provisioning_status ?? "unknown"} (${domain.addresses.length} addresses)`,
+          ...(domain.provisioning?.last_error ? [`  ${domain.provisioning.last_error}`] : []),
+          ...(opts.verbose ? domain.addresses.map((address) => `  ${address.email}: ${address.provisioning.provisioning_status}`) : []),
+        ]);
+        output(result, lines.join("\n") || "No domains registered.");
+      } catch (e) { handleError(e); }
     });
 
   // ── address create ─────────────────────────────────────────────────────────

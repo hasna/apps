@@ -89,7 +89,7 @@ async function runEmailLogCommandExpectingExit(args: string[]): Promise<string> 
 }
 
 beforeAll(async () => {
-  stub = await startV1Stub();
+  stub = await startV1Stub({ openapi: true });
 });
 afterAll(() => stub.stop());
 beforeEach(async () => {
@@ -129,9 +129,20 @@ describe("email list / log — routes to the /v1 sent log", () => {
     expect(out).toContain("Sent mail");
   });
 
-  it("rejects local-only sent-log filters that have no /v1 surface", async () => {
+  it("rejects an unknown provider instead of dropping the sent-log filter", async () => {
     const errors = await runEmailLogCommandExpectingExit(["log", "--provider", "local-provider"]);
-    expect(errors).toContain("does not support local sent-log filter(s): --provider");
+    expect(errors).toContain("Could not resolve ID");
+  });
+
+  it("filters log and email list by the selected registered provider", async () => {
+    await stub.seed({ providers: [{ id: "alpha", name: "Alpha", type: "ses", active: true }, { id: "beta", name: "Beta", type: "ses", active: true }], messages: [
+      outbound("alpha-sent", "Alpha mail", "2026-01-01T00:00:00Z", { provider_id: "alpha" }),
+      outbound("beta-sent", "Beta mail", "2026-01-01T00:00:00Z", { provider_id: "beta" }),
+    ] });
+    for (const command of [["log"], ["email", "list"]]) {
+      const { data } = await runEmailLogCommand([...command, "--provider", "beta"]);
+      expect((data as Array<{ id: string }>).map((row) => row.id)).toEqual(["beta-sent"]);
+    }
   });
 
   it("accepts --status and --from sent-log filters together", async () => {

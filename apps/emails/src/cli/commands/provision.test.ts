@@ -36,7 +36,6 @@ describe("unimplemented provisioning commands", () => {
   // Required options are supplied so the command action runs and hits the
   // server-only guard rather than a commander missing-option error.
   const SERVER_ONLY = [
-    { name: "provision status", args: ["provision", "status"] },
     { name: "provision address", args: ["provision", "address", "agent@example.com", "--provider", "ses-provider"] },
     { name: "provision domain", args: ["provision", "domain", "example.com", "--provider", "ses-provider"] },
     { name: "provision up", args: ["provision", "up", "example.com", "--provider", "ses-provider"] },
@@ -60,11 +59,10 @@ describe("unimplemented provisioning commands", () => {
     });
   }
 
-  it("does not advertise provisioning as a working feature in --help", () => {
+  it("advertises the working status inspection in --help", () => {
     const program = new Command();
     registerProvisionCommands(program, () => {});
     const provision = program.commands.find((command) => command.name() === "provision");
-    expect(provision?.description()).toContain("NOT IMPLEMENTED");
-    expect(provision?.description()).toContain("emails domain adopt");
+    expect(provision?.description()).toContain("Inspect provisioning status");
   });
 });
