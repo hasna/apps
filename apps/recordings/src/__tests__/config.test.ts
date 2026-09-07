@@ -577,21 +577,31 @@ function withHomeAndCwd(home: string, cwd: string, callback: () => void): void {
   }
 }
 
-describe("loadSecretKey (via loadConfig)", () => {
-  test("loads API key from ~/.secrets with double quotes", () => {
-    const config = loadConfig(join(tempDir, "nonexistent.json"));
-    // The key is either loaded from ~/.secrets or empty
-    expect(typeof config.openai_api_key).toBe("string");
+describe("the retired ~/.secrets folder is never read (hasna/apps#1720 validation)", () => {
+  test("an OPENAI_API_KEY in ~/.secrets/*.env does not reach the config", () => {
+    const home = join(tempDir, "home-retired-secrets");
+    mkdirSync(join(home, ".secrets"), { recursive: true });
+    writeFileSync(
+      join(home, ".secrets", "openai.env"),
+      'export OPENAI_API_KEY="fixture-retired-secrets-value-do-not-load"\n',
+    );
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.RECORDINGS_API_KEY;
+    delete process.env.RECORDINGS_ENHANCEMENT_KEY;
+
+    withHomeAndCwd(home, home, () => {
+      const config = loadConfig(join(tempDir, "nonexistent.json"));
+      expect(config.openai_api_key).toBe("");
+      expect(config.enhancement_api_key).toBe("");
+    });
   });
 
-  test("loads secret key with single quotes format", () => {
-    // We can't easily mock ~/.secrets, but we test the regex patterns directly
-    // by testing the config loading with different env overrides
-    // The loadSecretKey function is internal, so we test its effect indirectly
-    // When no env var is set and no ~/.secrets has the key, it returns ""
+  test("the enhancement key still defaults to the env transcription key", () => {
+    setEnv("OPENAI_API_KEY", "test-openai-key");
+    delete process.env.RECORDINGS_ENHANCEMENT_KEY;
     const config = loadConfig(join(tempDir, "nonexistent.json"));
-    // At minimum, the function doesn't crash
-    expect(config).toBeDefined();
+    expect(config.openai_api_key).toBe("test-openai-key");
+    expect(config.enhancement_api_key).toBe("test-openai-key");
   });
 });
 

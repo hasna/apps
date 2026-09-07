@@ -63,11 +63,14 @@ describe("describeActiveStore", () => {
 
     const description = describeActiveStore(makeConfig(dbPath), {});
 
-    expect(description.transport).toBe("sqlite");
+    // No store is active: the client fails closed, so the report says "none"
+    // and does not open the on-box file to count it (it is reported present).
+    expect(description.transport).toBe("none");
     expect(description.mode_source).toBe("unresolved");
     expect(description.base_url).toBeNull();
     expect(description.local_db_path).toBe(dbPath);
-    expect(description.local_db_recordings).toBe(3);
+    expect(description.local_db_present).toBe(true);
+    expect(description.local_db_recordings).toBeNull();
     // The on-box file is not the live store: with no hosted env and no opt-in
     // the client fails closed, and the diagnostic says so (naming the refusal
     // code and the explicit opt-in) instead of silently treating the file as
@@ -346,7 +349,7 @@ describe("credential safety in reports", () => {
     });
 
     // Fail closed: the malformed authority is refused, not resolved around.
-    expect(description.transport).toBe("sqlite");
+    expect(description.transport).toBe("none");
     expect(description.mode_source).toBe("unresolved");
     expect(description.warning).toContain("REMOTE_API_URL_INVALID");
     expect(JSON.stringify(description)).not.toContain(FAKE_API_KEY);
@@ -403,7 +406,7 @@ describe("credential safety in reports", () => {
       HASNA_RECORDINGS_API_URL: "fixture-value-not-a-secret-abcdef123456",
     });
 
-    expect(description.transport).toBe("sqlite");
+    expect(description.transport).toBe("none");
     expect(description.warning).toContain("HASNA_RECORDINGS_API_KEY");
     expect(description.warning ?? "").not.toContain("fixture-value-not-a-secret");
   });

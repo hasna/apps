@@ -40,6 +40,7 @@ import {
 } from "../lib/capture-probe.js";
 import {
   describeActiveStore,
+  describeActiveStoreLine,
   localStoreIsBehindSchema,
   probeRecordingPersistence,
   renderPersistenceMarker,
@@ -1385,6 +1386,10 @@ program
     // who runs bare `check` first. `can_fire` is false only when EVERY trigger is a definite
     // no; anything undecidable is a warning and keeps the exit code at 0.
     const triggerFailed = trigger !== null && !trigger.can_fire;
+    // No store resolved: every read or write would exit non-zero before serving, so `check`
+    // must not exit 0 on that machine either — a green check on a station with no
+    // credential is the false green this command exists to prevent.
+    const storeUnresolved = activeStore.transport === "none";
 
     if (parentOpts.json) {
       console.log(JSON.stringify({
@@ -1422,7 +1427,7 @@ program
         // `capture_probe` is null when no probe ran. No existing key changes name or meaning.
         trigger,
       }, null, 2));
-      if (probeFailed || triggerFailed) process.exitCode = 1;
+      if (probeFailed || triggerFailed || storeUnresolved) process.exitCode = 1;
       return;
     }
 
@@ -1442,7 +1447,7 @@ program
     } else {
       console.log(
         chalk.red(
-          `✗ OpenAI API key not found. Set OPENAI_API_KEY env var or add to ~/.secrets`
+          `✗ OpenAI API key not found. Set OPENAI_API_KEY (e.g. \`secrets exec <key> --as OPENAI_API_KEY -- recordings …\`)`
         )
       );
     }
@@ -1461,12 +1466,13 @@ program
 
     // Where a transcript will actually land. Named unconditionally: the failure
     // this prevents is a human reading the wrong dataset, which no probe catches.
+    const activeStoreLine = describeActiveStoreLine(activeStore);
     console.log(
-      chalk.green("✓") +
-        ` Active store: ${activeStore.transport}` +
-        (activeStore.base_url ? ` → ${activeStore.base_url}` : ` → ${activeStore.local_db_path}`) +
+      (activeStoreLine.severity === "fail" ? chalk.red("✗") : chalk.green("✓")) +
+        ` ${activeStoreLine.text}` +
         chalk.dim(` (selected by ${activeStore.mode_source})`)
     );
+    if (activeStoreLine.severity === "fail") process.exitCode = 1;
     if (activeStore.divergent) {
       console.log(
         chalk.yellow("⚠") +
@@ -1474,7 +1480,7 @@ program
           `${activeStore.local_db_path}, which is NOT the live store.`
       );
     }
-    if (activeStore.warning) {
+    if (activeStore.warning && activeStoreLine.severity !== "fail") {
       console.log(chalk.dim(`  ${activeStore.warning}`));
     }
 

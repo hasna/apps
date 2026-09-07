@@ -1066,6 +1066,11 @@ describe("recordings CLI", () => {
         env: {
           ...process.env,
           HOME: home,
+          // Hermetic against the station Keychain: the sentinel station has no
+          // item, and the env tier supplies a fixture credential, so the store
+          // resolves the same way on a fleet Mac and on Linux CI.
+          HASNA_STATION: "no-such-station",
+          HASNA_RECORDINGS_API_KEY: "fixture-hosted-key-not-a-secret",
           OPENAI_API_KEY: "test-openai-key",
           RECORDINGS_ENHANCEMENT_KEY: "test-enhancement-key",
         },
@@ -1091,7 +1096,11 @@ describe("recordings CLI", () => {
       realtime_session_model: string;
       realtime_transcription_model: string;
       config_warnings: string[];
+      active_store: { transport: string; mode_source: string };
     };
+    expect(report.active_store.transport).toBe("http");
+    expect(report.active_store.mode_source).toContain("HASNA_RECORDINGS_API_KEY");
+    expect(stdout).not.toContain("fixture-hosted-key-not-a-secret");
     expect(typeof report.recording.available).toBe("boolean");
     expect(report.openai_api_key_configured).toBe(true);
     expect(report.enhancement_api_key_configured).toBe(true);
@@ -1100,6 +1109,48 @@ describe("recordings CLI", () => {
     expect(report.realtime_transcription_model).toBe("gpt-realtime-whisper");
     expect(Array.isArray(report.config_warnings)).toBe(true);
   });
+
+  // hasna/apps#1720 validation: with no resolvable credential `check` used to print a green
+  // `✓ Active store: sqlite → <path>` and exit 0, so a misconfigured station read green.
+  for (const json of [true, false]) {
+    test(`${json ? "--json " : ""}check with no resolvable credential exits 1 and reports no active store`, async () => {
+      const home = join(tmpdir(), `open-recordings-cli-unresolved-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      tempDirs.push(home);
+      mkdirSync(home, { recursive: true });
+      const env: Record<string, string> = {
+        ...(process.env as Record<string, string>),
+        HOME: home,
+        HASNA_HOME: join(home, ".hasna"),
+        HASNA_STATION: "no-such-station",
+        OPENAI_API_KEY: "test-openai-key",
+      };
+      for (const key of Object.keys(env)) {
+        if (/^HASNA_RECORDINGS_|^RECORDINGS_(LOCAL|API_URL|API_KEY)$|^HASNA_PROFILE$/.test(key)) delete env[key];
+      }
+
+      const proc = Bun.spawn(
+        [process.execPath, "src/cli/index.ts", ...(json ? ["--json"] : []), "check"],
+        { cwd: process.cwd(), env, stdout: "pipe", stderr: "pipe" },
+      );
+      const [stdout, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        proc.exited,
+      ]);
+
+      expect(exitCode).toBe(1);
+      if (json) {
+        const report = JSON.parse(stdout) as { active_store: { transport: string; mode_source: string } };
+        expect(report.active_store.transport).toBe("none");
+        expect(report.active_store.mode_source).toBe("unresolved");
+      } else {
+        expect(stdout).toContain("✗ Active store: none — fail-closed");
+        expect(stdout).toContain("REMOTE_API_CONFIG_MISSING");
+        expect(stdout).not.toContain("✓ Active store");
+      }
+      // A diagnostic never creates the on-box store.
+      expect(existsSync(join(home, ".hasna", "recordings", "recordings.db"))).toBe(false);
+    });
+  }
 
   test("--json transcribe emits only one JSON payload on stdout", async () => {
     const home = join(tmpdir(), `open-recordings-cli-json-${Date.now()}-${Math.random().toString(36).slice(2)}`);

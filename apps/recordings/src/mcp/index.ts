@@ -10,6 +10,7 @@ import {
   normalizePostProcessingMode,
 } from "../lib/config.js";
 import { countStoreRecordings, getStore } from "../store.js";
+import { getRecordingsTransportStatus } from "../http/client.js";
 import { transcribeAudio } from "../lib/transcriber.js";
 import { processText, needsEnhancement, resolveTranscriberModel } from "../lib/enhancer.js";
 import type { Recording, RecordingFilter } from "../types/index.js";
@@ -912,6 +913,22 @@ async function main(): Promise<void> {
   if (args.includes("--help") || args.includes("-h")) {
     printHelp();
     return;
+  }
+  // FAIL-CLOSED at startup (hasna/apps#1720 acceptance, mirrors mementos #1868): with no
+  // resolvable fleet credential and no explicit local opt-in there is no store to serve, so
+  // exit non-zero BEFORE any transport is connected — the stdio server must not answer
+  // `initialize`, and the HTTP server must not listen. Tool calls keep resolving the
+  // credential per call through `getStore()`; this gate only refuses to start blind.
+  const startupStatus = getRecordingsTransportStatus();
+  if (!startupStatus.ok) {
+    console.error(`ERROR: ${startupStatus.issues.join(" ")}`);
+    process.exit(1);
+  }
+  if (startupStatus.transport !== "http") {
+    // The local opt-in says so once, on stderr, like the CLI and the SDK do.
+    console.error(
+      "recordings-mcp: LOCAL mode — HASNA_RECORDINGS_LOCAL=1 opt-in; serving the on-box store, not the hosted fleet."
+    );
   }
   if (isStdioMode(args)) {
     const transport = new StdioServerTransport();

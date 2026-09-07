@@ -72,7 +72,12 @@ export function safeBaseUrl(baseUrl: string | null): string | null {
 }
 
 export interface ActiveStoreDescription {
-  transport: "sqlite" | "http";
+  /**
+   * `"none"` when nothing resolved: the client would fail closed, so no store
+   * is active. Rendering the unresolved state as `"sqlite"` let a station with
+   * no credential read as a working local store (hasna/apps#1720 validation).
+   */
+  transport: "sqlite" | "http" | "none";
   /**
    * What decided the transport: `"local-opt-in"`, `"unresolved"`, or an env
    * key NAME / Keychain item reference / file PATH / `"default"` as the
@@ -159,18 +164,36 @@ export function describeActiveStore(
 ): ActiveStoreDescription {
   const localDbPath = config.db_path;
   const localDbPresent = existsSync(localDbPath);
-  const localDbRecordings = localDbPresent ? readLocalRecordingCount(localDbPath) : null;
 
   const status = getRecordingsTransportStatus(env, options);
 
-  if (!status.ok || !status.selected || status.transport !== "http") {
-    // Nothing resolved (fail-closed refusal), or the deliberate local opt-in.
-    // Either way the on-box file is NOT the live store without the opt-in, so
-    // the diagnostic says so instead of silently treating the file as active.
+  if (!status.ok) {
+    // Nothing resolved: the client fails closed, so NO store is active. The
+    // on-box file is reported as present but not opened — a diagnostic that
+    // counted it here rendered the refusal as a working sqlite store.
+    const issues = status.issues.length > 0 ? status.issues.join(" ") : null;
+    return {
+      transport: "none",
+      mode_source: "unresolved",
+      base_url: null,
+      local_db_path: localDbPath,
+      local_db_present: localDbPresent,
+      local_db_recordings: null,
+      divergent: false,
+      // The issues echo operator-visible text only; redacted like every other
+      // warning in this module.
+      warning: issues ? redactKeyMaterial(issues) : null,
+    };
+  }
+
+  const localDbRecordings = localDbPresent ? readLocalRecordingCount(localDbPath) : null;
+
+  if (!status.selected || status.transport !== "http") {
+    // The deliberate local opt-in: the on-box file IS the live store.
     const issues = status.issues.length > 0 ? status.issues.join(" ") : null;
     return {
       transport: "sqlite",
-      mode_source: status.ok ? "local-opt-in" : "unresolved",
+      mode_source: "local-opt-in",
       base_url: null,
       local_db_path: localDbPath,
       local_db_present: localDbPresent,
@@ -224,6 +247,33 @@ export function describeActiveStore(
     local_db_recordings: localDbRecordings,
     divergent,
     warning: warnings.length > 0 ? warnings.join(" ") : null,
+  };
+}
+
+/**
+ * How the active-store line of `recordings check` must READ. Keyed off the
+ * description, never off the colour: the unresolved state is a FAILURE (the
+ * client would exit non-zero before serving), and it used to render as a green
+ * `✓ Active store: sqlite → <path>`, which is exactly how a misconfigured
+ * station reads green.
+ */
+export function describeActiveStoreLine(
+  description: ActiveStoreDescription,
+): { severity: "pass" | "fail"; text: string } {
+  if (description.transport === "none") {
+    return {
+      severity: "fail",
+      text:
+        "Active store: none — fail-closed" +
+        (description.warning ? ` (${description.warning})` : "") +
+        `; ${description.local_db_path} is ${description.local_db_present ? "present but NOT opened" : "absent"}`,
+    };
+  }
+  return {
+    severity: "pass",
+    text:
+      `Active store: ${description.transport}` +
+      (description.base_url ? ` → ${description.base_url}` : ` → ${description.local_db_path}`),
   };
 }
 

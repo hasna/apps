@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { KeychainCommandResult } from "@hasna/contracts/client";
-import { describeActiveStore } from "../lib/persistence-probe.js";
+import { describeActiveStore, describeActiveStoreLine } from "../lib/persistence-probe.js";
 import type { RecordingsConfig } from "../types/index.js";
 import type { RecordsClientResolveOptions, RecordsKeychainTierOptions } from "../http/client.js";
 
@@ -113,7 +113,7 @@ describe("describeActiveStore — the transport report", () => {
     const home = tempHome("unresolved");
     const description = describeActiveStore(configFor(home), { HOME: home });
 
-    expect(description.transport).toBe("sqlite");
+    expect(description.transport).toBe("none");
     expect(description.mode_source).toBe("unresolved");
     expect(description.warning).toContain("REMOTE_API_CONFIG_MISSING");
     expect(description.warning).toContain("HASNA_RECORDINGS_LOCAL=1");
@@ -129,5 +129,42 @@ describe("describeActiveStore — the transport report", () => {
       HASNA_RECORDINGS_API_KEY: FAKE_KEY,
     });
     expect(JSON.stringify(description)).not.toContain(FAKE_KEY);
+  });
+});
+
+describe("describeActiveStoreLine — how `recordings check` renders the store", () => {
+  test("the unresolved state renders as a FAILURE naming the refusal, never as a sqlite store", () => {
+    const home = tempHome("line-unresolved");
+    const line = describeActiveStoreLine(describeActiveStore(configFor(home), { HOME: home }));
+
+    expect(line.severity).toBe("fail");
+    expect(line.text).toContain("Active store: none");
+    expect(line.text).toContain("fail-closed");
+    expect(line.text).toContain("REMOTE_API_CONFIG_MISSING");
+    expect(line.text).not.toContain("Active store: sqlite");
+  });
+
+  test("a resolved hosted store renders as a pass with its base URL", () => {
+    const home = tempHome("line-http");
+    const line = describeActiveStoreLine(describeActiveStore(configFor(home), {
+      HOME: home,
+      HASNA_RECORDINGS_API_URL: "https://recordings.report.example",
+      HASNA_RECORDINGS_API_KEY: FAKE_KEY,
+    }));
+
+    expect(line.severity).toBe("pass");
+    expect(line.text).toBe("Active store: http → https://recordings.report.example/v1");
+    expect(line.text).not.toContain(FAKE_KEY);
+  });
+
+  test("the local opt-in renders as a pass on the on-box path", () => {
+    const home = tempHome("line-local");
+    const line = describeActiveStoreLine(describeActiveStore(configFor(home), {
+      HOME: home,
+      HASNA_RECORDINGS_LOCAL: "1",
+    }));
+
+    expect(line.severity).toBe("pass");
+    expect(line.text).toBe(`Active store: sqlite → ${join(home, ".hasna", "recordings", "recordings.db")}`);
   });
 });
