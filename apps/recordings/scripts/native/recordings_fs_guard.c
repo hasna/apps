@@ -397,8 +397,13 @@ static napi_value read_dir(napi_env env, napi_callback_info info) {
   if (stream == NULL) { close(iterator_fd); throw_errno(env, "open directory stream"); return NULL; }
   if (!check_napi(env, napi_create_array(env, &array), "create directory array")) { closedir(stream); return NULL; }
   uint32_t index = 0;
-  errno = 0;
-  for (struct dirent *entry = readdir(stream); entry != NULL; entry = readdir(stream)) {
+  int saved_errno = 0;
+  for (;;) {
+    /* EOF preserves errno. Successful N-API work in the preceding iteration
+     * need not preserve it, so only the immediately following read owns it. */
+    errno = 0;
+    struct dirent *entry = readdir(stream);
+    if (entry == NULL) { saved_errno = errno; break; }
     if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
     if (!valid_leaf(entry->d_name)) {
       closedir(stream);
@@ -412,7 +417,6 @@ static napi_value read_dir(napi_env env, napi_callback_info info) {
       return NULL;
     }
   }
-  int saved_errno = errno;
   closedir(stream);
   if (saved_errno != 0) { errno = saved_errno; throw_errno(env, "read directory capability"); return NULL; }
   return array;

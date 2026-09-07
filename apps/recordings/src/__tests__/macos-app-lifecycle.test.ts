@@ -389,7 +389,10 @@ case "$*" in
     cp -R "$CANDIDATE_SOURCE" "$staging_target/Hasna Recordings.app"
     ;;
   *" verify-archive "*)
-    [ "\${FAIL_ARCHIVE_VERIFY:-0}" = 1 ] && exit 1
+    if [ "\${FAIL_ARCHIVE_VERIFY:-0}" = 1 ]; then
+      printf '%s\\n' 'fixture: deliberate archive verification refusal' >&2
+      exit 1
+    fi
     [[ "$*" == *"--team-id \${REQUIRED_TEAM_ID:-EXAMPLE123}"* ]] || exit 1
     [ -z "\${REQUIRED_ARTIFACT_POLICY:-}" ] || [[ "$*" == *"--artifact-policy $REQUIRED_ARTIFACT_POLICY"* ]] || exit 1
     [ -z "\${REQUIRED_APPROVED_TARGET:-}" ] || [[ "$*" == *"--approved-target $REQUIRED_APPROVED_TARGET"* ]] || exit 1
@@ -2847,7 +2850,7 @@ describe("macOS finalized artifact installer", () => {
 
     const runRestartOrderingContract = async (restartBeforeRelease: boolean) => {
       const fixture = createInstallerFixture();
-      const { legacyApp, canonicalApp } = await prepareRunningLegacyRecovery(fixture);
+      const { journalPath, legacyApp, canonicalApp } = await prepareRunningLegacyRecovery(fixture);
       const fixtureInstaller = join(fixture.root, "scripts", "install_macos_app.sh");
       if (restartBeforeRelease) {
         const source = readFileSync(fixtureInstaller, "utf8");
@@ -2893,8 +2896,24 @@ printf '%s|%s\\n' "$marker_state" "$*" >> "$RECOVERY_OPEN_LOG"
         RECORDINGS_TEST_INSTALL_OPEN_EXECUTABLE: recoveryOpen,
         RECOVERY_OPEN_LOG: openLog,
       });
-      expect(recovered.exitCode).not.toBe(0);
-      expect(recovered.stderr).toContain("Recovering incomplete");
+      let journalPhase = "absent";
+      if (existsSync(journalPath)) {
+        try {
+          journalPhase = statSync(journalPath).size <= 64 * 1024
+            ? String((JSON.parse(readFileSync(journalPath, "utf8")) as { phase?: unknown }).phase).slice(0, 100)
+            : "oversize";
+        } catch { journalPhase = "unreadable"; }
+      }
+      const recoveryDiagnostic = JSON.stringify({ restartBeforeRelease, exitCode: recovered.exitCode,
+        journalPhase, legacyAppPresent: existsSync(legacyApp), canonicalAppPresent: existsSync(canonicalApp),
+        stderr: recovered.stderr.slice(-8_000) });
+      expect(recovered.exitCode, recoveryDiagnostic).not.toBe(0);
+      expect(recovered.stderr, recoveryDiagnostic).toContain("Recovering incomplete");
+      // Recovery must finish before the intentionally failing next install.
+      // Any earlier fail-closed recovery error must expose its own diagnostic,
+      // rather than collapsing into an unrelated missing-binary assertion.
+      expect(recovered.stderr, recoveryDiagnostic).toContain("fixture: deliberate archive verification refusal");
+      expect(journalPhase, recoveryDiagnostic).toBe("absent");
       expect(readFileSync(join(legacyApp, "Contents", "MacOS", "Recordings"), "utf8")).toBe(
         "legacy-installed",
       );
