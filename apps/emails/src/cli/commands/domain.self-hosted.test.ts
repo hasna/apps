@@ -205,25 +205,13 @@ describe("domain CLI — self-hosted (self_hosted) /v1 routing", () => {
     }
   });
 
-  it("refuses unshipped domain subcommands without claiming a server implements them", async () => {
-    // These do not ship in ANY configuration: the connect/setup orchestrations
-    // were deleted, and the lifecycle-readiness ledger is reachable only from
-    // the library export and the HTTP readiness API. `/v1` carries plain domain
-    // CRUD and no route for any of them, so the old "it runs on the self-hosted
-    // server" was false in exactly this arm, where it sounded most credible.
-    // Required options are supplied so commander reaches the action.
-    const blocked = [
-      ["domain", "connect", "ex.com", "--provider", "x"],
-      ["domains", "connect", "ex.com", "--provider", "x"],
-    ];
-    for (const args of blocked) {
-      const result = await runDomainCommandExpectingExit(args);
+  it("reports older APIs without domain connect support without a local fallback", async () => {
+    for (const noun of ["domain", "domains"]) {
+      const result = await runDomainCommandExpectingExit([noun,"connect","ex.com","--provider","x"]);
       expect(result.error).toBe("process.exit:1");
-      expect(result.stderr).toContain("is not implemented in this build");
-      expect(result.stderr).not.toContain("not available in the self-hosted client");
-      expect(result.stderr).not.toContain("runs on the self-hosted server");
+      expect(result.stderr).toContain("POST /v1/domains/connect");
+      expect(result.stderr).toContain("405");
     }
-    // None of the blocked reads/writes reached the store.
     expect((await serverDomains()).length).toBe(0);
   });
 

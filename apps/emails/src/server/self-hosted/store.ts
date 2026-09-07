@@ -1,3 +1,5 @@
+import * as domainConnectStore from "./domain-connect-store.js";
+import type { DomainConnectInput, DomainConnectClaim, DomainConnectResult } from "./domain-connect.js";
 import * as addressProvisioningStore from "./address-provisioning-store.js";
 import type { AddressProvisioningInput, AddressProvisioningRefs, ProvisioningJob, ProvisioningReceipt } from "./address-provisioning.js";
 import { SequenceWorkerStore } from "./sequence-worker.js";
@@ -2240,6 +2242,68 @@ export class TenantScopedStore {
     private readonly allowUnsafeTestTransactions = false,
     private readonly repairPolicy: AttachmentRepairPolicy = attachmentRepairPolicy(undefined),
   ) {}
+
+  resolveDomainConnect(input: DomainConnectInput) {
+    return domainConnectStore.resolveDomainConnect(
+      this.client,
+      this.tenantId,
+      input,
+    );
+  }
+  claimDomainConnect(
+    input: DomainConnectInput,
+    providerType: "ses" | "resend",
+    actor: string,
+  ) {
+    return domainConnectStore.claimDomainConnect(
+      this.client,
+      this.tenantId,
+      input,
+      providerType,
+      actor,
+    );
+  }
+  domainConnectLeaseCurrent(claim: DomainConnectClaim) {
+    return domainConnectStore.domainConnectLeaseCurrent(
+      this.client,
+      this.tenantId,
+      claim,
+    );
+  }
+  blockDomainConnect(claim: DomainConnectClaim, result: DomainConnectResult) {
+    return domainConnectStore.blockDomainConnect(
+      this.client,
+      this.tenantId,
+      claim,
+      result,
+    );
+  }
+  getDomainConnection(id: string) {
+    return domainConnectStore.getDomainConnection(
+      this.client,
+      this.tenantId,
+      id,
+    );
+  }
+  async completeDomainConnect(
+    claim: DomainConnectClaim,
+    result: DomainConnectResult,
+  ) {
+    if (!this.atomicClient)
+      throw new Error("Domain connection requires a transactional store");
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute("SELECT set_config('app.current_tenant',$1,true)", [
+        this.tenantId,
+      ]);
+      return domainConnectStore.completeDomainConnect(
+        tx,
+        new TenantScopedStore(tx, this.tenantId),
+        this.tenantId,
+        claim,
+        result,
+      );
+    });
+  }
 
   resolveAddressProvisioning(input: AddressProvisioningInput) {
     return addressProvisioningStore.resolveAddressProvisioning(

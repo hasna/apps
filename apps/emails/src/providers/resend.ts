@@ -6,11 +6,13 @@ import type { ProviderAdapter, RemoteAddress, RemoteDomain, RemoteEvent } from "
 export class ResendAdapter implements ProviderAdapter {
   private client: Resend;
   private providerId: string;
+  private readonly apiKey: string;
 
   constructor(provider: Provider) {
     if (!provider.api_key) {
       throw new ProviderConfigError("Resend provider requires an API key");
     }
+    this.apiKey = provider.api_key;
     this.client = new Resend(provider.api_key);
     this.providerId = provider.id;
   }
@@ -96,10 +98,23 @@ export class ResendAdapter implements ProviderAdapter {
     return { dkim: status, spf: status, dmarc: "pending" };
   }
 
-  async addDomain(domain: string): Promise<void> {
+  async addDomain(domain: string, signal?: AbortSignal): Promise<void> {
     // The Resend SDK returns { data, error } and does NOT throw — surface the
     // error (e.g. plan limit: "Your plan includes 1 domain. Upgrade to add more.")
     // so callers get a clear message instead of a silent no-op.
+    // The SDK omits AbortSignal from its public request type and logs raw
+    // failures in development. Server orchestration uses a bounded, quiet
+    // request here, while preserving the existing no-signal adapter API.
+    if (signal) {
+      const response = await fetch("https://api.resend.com/domains", {
+        method: "POST", signal,
+        headers: { Authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+        body: JSON.stringify({ name: domain }),
+      });
+      await response.body?.cancel();
+      if (!response.ok) throw new Error("Resend domain registration could not be confirmed");
+      return;
+    }
     const res = (await this.client.domains.create({ name: domain })) as { data?: unknown; error?: { message?: string } | null };
     if (res?.error) {
       throw new Error(`Resend could not add domain ${domain}: ${res.error.message ?? JSON.stringify(res.error)}`);

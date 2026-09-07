@@ -625,6 +625,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Read a tenant operator domain connection receipt */
+    async getDomainConnection(id: string, init?: RequestInit): Promise<{ "dry_run": boolean; "connection": { "id": string | null; "domain_id": string | null; "domain": string; "provider_id": string; "dns_provider": "manual" | "cloudflare" | "route53"; "register_provider": boolean; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "provider_registered": boolean | null; "checked_at": string; "message": string; "dns_tasks": Array<{ "type": "TXT" | "CNAME" | "MX"; "name": string; "value": string; "purpose": "DKIM" | "SPF" | "MAIL_FROM"; "status": "pending" | "verified"; "priority"?: number }> } }> {
+      return this.request("GET", `/v1/domain-connections/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List sending domains */
     async listDomains(query?: { "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "domains": Array<Domain> }> {
       return this.request("GET", `/v1/domains`, {
@@ -637,6 +646,15 @@ export class EmailsSelfHostClient {
     /** Register a sending domain (scope emails:write) */
     async createDomain(body: { "domain": string; "status"?: string; "provider"?: string | null; "verified"?: boolean; "notes"?: string | null }, init?: RequestInit): Promise<{ "domain": Domain }> {
       return this.request("POST", `/v1/domains`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Connect an already-owned domain using the server provider binding and record DNS tasks */
+    async connectDomain(body: { "domain": string; "provider_id": string; "dns_provider"?: "manual" | "cloudflare" | "route53"; "register_provider"?: boolean; "dry_run"?: boolean }, init?: RequestInit): Promise<{ "dry_run": boolean; "connection": { "id": string | null; "domain_id": string | null; "domain": string; "provider_id": string; "dns_provider": "manual" | "cloudflare" | "route53"; "register_provider": boolean; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "provider_registered": boolean | null; "checked_at": string; "message": string; "dns_tasks": Array<{ "type": "TXT" | "CNAME" | "MX"; "name": string; "value": string; "purpose": "DKIM" | "SPF" | "MAIL_FROM"; "status": "pending" | "verified"; "priority"?: number }> } }> {
+      return this.request("POST", `/v1/domains/connect`, {
         body,
         query: undefined,
         init,

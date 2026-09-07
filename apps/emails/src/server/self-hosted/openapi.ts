@@ -4713,4 +4713,116 @@ for(const run of [false,true]) emailsSelfHostedOpenApi.paths![`/v1/provision/job
   responses:{...provisioningErrors,"200":{description:"Provisioning job",content:{"application/json":{schema:provisioningJobResponse}}}},
 }};
 
+const domainConnectionSchema = {
+  type: "object",
+  required: ["dry_run", "connection"],
+  properties: {
+    dry_run: { type: "boolean" },
+    connection: {
+      type: "object",
+      required: [
+        "id",
+        "domain_id",
+        "domain",
+        "provider_id",
+        "dns_provider",
+        "register_provider",
+        "status",
+        "provider_registered",
+        "dns_tasks",
+        "checked_at",
+        "message",
+      ],
+      properties: {
+        id: { type: "string", nullable: true },
+        domain_id: { type: "string", nullable: true },
+        domain: { type: "string" },
+        provider_id: { type: "string" },
+        dns_provider: {
+          type: "string",
+          enum: ["manual", "cloudflare", "route53"],
+        },
+        register_provider: { type: "boolean" },
+        status: {
+          type: "string",
+          enum: [
+            "planned",
+            "processing",
+            "blocked",
+            "pending_verification",
+            "verified",
+          ],
+        },
+        provider_registered: { type: "boolean", nullable: true },
+        checked_at: { type: "string", format: "date-time" },
+        message: { type: "string" },
+        dns_tasks: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["type", "name", "value", "purpose", "status"],
+            properties: {
+              type: { type: "string", enum: ["TXT", "CNAME", "MX"] },
+              name: { type: "string" },
+              value: { type: "string" },
+              purpose: { type: "string", enum: ["DKIM", "SPF", "MAIL_FROM"] },
+              status: { type: "string", enum: ["pending", "verified"] },
+              priority: { type: "integer", minimum: 0, maximum: 65535 },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+const domainConnectionResponses = {
+  ...provisioningErrors,
+  "503": errorResponse("Server provider capability missing"),
+  "200": {
+    description:
+      "Connection plan, processing state or durable DNS task receipt",
+    content: { "application/json": { schema: domainConnectionSchema } },
+  },
+};
+emailsSelfHostedOpenApi.paths!["/v1/domains/connect"] = {
+  post: {
+    operationId: "connectDomain",
+    summary:
+      "Connect an already-owned domain using the server provider binding and record DNS tasks",
+    requestBody: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["domain", "provider_id"],
+            properties: {
+              domain: { type: "string" },
+              provider_id: { type: "string" },
+              dns_provider: {
+                type: "string",
+                enum: ["manual", "cloudflare", "route53"],
+              },
+              register_provider: { type: "boolean" },
+              dry_run: { type: "boolean" },
+            },
+          },
+        },
+      },
+    },
+    responses: domainConnectionResponses,
+  },
+};
+emailsSelfHostedOpenApi.paths!["/v1/domain-connections/{id}"] = {
+  get: {
+    operationId: "getDomainConnection",
+    summary: "Read a tenant operator domain connection receipt",
+    parameters: [
+      { name: "id", in: "path", required: true, schema: { type: "string" } },
+    ],
+    responses: domainConnectionResponses,
+  },
+};
+
 addRoutineErrorParity(emailsSelfHostedOpenApi);

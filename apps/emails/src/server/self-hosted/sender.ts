@@ -1,3 +1,4 @@
+import type { DomainConnectionEvidence } from "./domain-connect-provider.js";
 import type { ProviderDeliveryRead, ProviderDeliveryObservation } from "./provider-delivery.js";
 import { getAdapter } from "../../providers/index.js";
 import { resolveSesCredentials } from "../../providers/ses.js";
@@ -29,6 +30,8 @@ export interface SelfHostedSender {
   verifyDomain?(domain: string): Promise<{ verifiedForSending?: boolean; dkim: import("../../types/index.js").DnsStatus; spf: import("../../types/index.js").DnsStatus; dmarc: import("../../types/index.js").DnsStatus }>;
   checkInboundDomain?(domain: string, bucket: string, mailbox?: string): Promise<{ ready: boolean; reason: string; objectKeyPrefix?: string; topicArn?: string }>;
   checkInboundQueue?(topicArn: string, queueUrl: string): Promise<{ ready: boolean; reason: string }>;
+  registerDomain?(domain: string, signal?: AbortSignal): Promise<void>;
+  readDomainConnection?(domain: string, signal: AbortSignal): Promise<DomainConnectionEvidence>;
   readDelivery?(messageId: string, signal: AbortSignal): Promise<ProviderDeliveryRead>;
   probe?(signal: AbortSignal): Promise<{ sendingEnabled?: boolean; productionAccessEnabled?: boolean }>;
   send(input: SendEmailOptions): Promise<string>;
@@ -203,6 +206,11 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
       ? SES_CREDENTIAL_SOURCE_LABEL[resolveSesCredentials(provider).source]
       : "api_key",
     region: provider.region ?? undefined,
+    registerDomain: (domain, signal) => adapter.addDomain(domain, signal),
+    readDomainConnection: async (domain, signal) => {
+      const { readDomainConnection } = await import("./domain-connect-provider.js");
+      return readDomainConnection(provider, domain, signal);
+    },
     readDelivery: async (messageId, signal) => {
       if (raw === "ses") {
         const { SESv2Client, GetMessageInsightsCommand } = await import("@aws-sdk/client-sesv2");

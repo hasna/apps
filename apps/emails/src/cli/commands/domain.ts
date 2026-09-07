@@ -1,3 +1,4 @@
+import { connectDomain, formatDomainConnection, type ConnectDomainOptions } from "../../lib/domain-connect-api.js";
 import { selfHostedApiRequest } from "../../db/self-hosted-store.js";
 import type { Command } from "commander";
 import type { DnsRecord, DomainType, Provider } from "../../types/index.js";
@@ -45,18 +46,6 @@ interface UnshippedSurface {
 }
 
 const UNSHIPPED_DOMAIN_SURFACES: Record<string, UnshippedSurface> = {
-  "emails domain connect": {
-    missing: "the connect orchestration — register the domain, call the provider, then emit DNS "
-      + "readiness tasks — was removed and nothing replaced it",
-    instead: "Do those steps explicitly: 'emails domain add <domain> --provider <id>', then "
-      + "'emails domain dns <domain>' for the records to publish, then "
-      + "'emails domain adopt <domain> --provider <id>' once the provider has verified it.",
-  },
-
-
-
-
-
   "emails domain setup-cloudflare": {
     missing: "the Cloudflare DNS writer ships as a library but no command is wired to it, because "
       + "it would publish records using whatever provider and Cloudflare credentials the calling "
@@ -75,7 +64,6 @@ const UNSHIPPED_DOMAIN_SURFACES: Record<string, UnshippedSurface> = {
 // Plural aliases refuse for exactly the same reason as their singular twins, so
 // they share one entry instead of drifting apart.
 const UNSHIPPED_DOMAIN_ALIASES: Record<string, string> = {
-  "emails domains connect": "emails domain connect",
 };
 
 function notImplementedAnywhere(command: string): never {
@@ -513,13 +501,12 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   domainsCmd
     .command("connect <domain>")
-    .description("Connect an already-owned domain and generate DNS readiness tasks (NOT IMPLEMENTED in this build)")
+    .description("Connect an already-owned domain through the API and record DNS publication tasks")
     .requiredOption("--provider <id>", "Provider ID")
-    .option("--domain-type <type>", "Domain type: system, self_hosted, or local_only")
     .option("--dns-provider <provider>", "DNS provider label: manual, cloudflare, or route53", "manual")
     .option("--no-register-provider", "Do not call the mail provider to register the domain")
     .option("--dry-run", "Show the connection plan without calling the provider or writing to the DB")
-    .action(() => { try { notImplementedAnywhere("emails domains connect"); } catch (e) { handleError(e); } });
+    .action(async (domain: string, opts: ConnectDomainOptions) => { try { const result=await connectDomain(domain,opts); output(result,formatDomainConnection(result)); if(result.connection.status === "blocked")process.exitCode=1; } catch(error){handleError(error);} });
 
   domainsCmd
     .command("dns <domain>")
@@ -632,13 +619,12 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   domainCmd
     .command("connect <domain>")
-    .description("Connect an already-owned domain and generate DNS readiness tasks (NOT IMPLEMENTED in this build)")
+    .description("Connect an already-owned domain through the API and record DNS publication tasks")
     .requiredOption("--provider <id>", "Provider ID")
-    .option("--domain-type <type>", "Domain type: system, self_hosted, or local_only")
     .option("--dns-provider <provider>", "DNS provider label: manual, cloudflare, or route53", "manual")
     .option("--no-register-provider", "Do not call the mail provider to register the domain")
     .option("--dry-run", "Show the connection plan without calling the provider or writing to the DB")
-    .action(() => { try { notImplementedAnywhere("emails domain connect"); } catch (e) { handleError(e); } });
+    .action(async (domain: string, opts: ConnectDomainOptions) => { try { const result=await connectDomain(domain,opts); output(result,formatDomainConnection(result)); if(result.connection.status === "blocked")process.exitCode=1; } catch(error){handleError(error);} });
 
   // ── adopt: seamlessly add an already-registered & SES-verified domain ────────
   // Operator command. Domain/alias/provisioning writes route through the /v1 db

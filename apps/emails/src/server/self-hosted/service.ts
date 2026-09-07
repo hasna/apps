@@ -1,4 +1,5 @@
 import { setupBoundRealtime, type RealtimeSetupCloudFactory, type RealtimeSetupInput } from "./realtime-setup.js";
+import { normalizeDomainConnect, connectDomain, DomainConnectError } from "./domain-connect.js";
 import { executeIngestBatch, IngestApiError, type IngestApiInput, type IngestCloudFactory } from "./ingest-api.js";
 import { normalizeAddressProvisioning, planAddressProvisioning, runAddressProvisioningJob, AddressProvisioningError, type ProvisioningJob } from "./address-provisioning.js";
 import { syncProviderDelivery, ProviderSyncError } from "./provider-sync.js";
@@ -962,6 +963,54 @@ export async function handleSelfHostedRequest(
     // own credential resolution + role gates). Returns null when not an auth path.
     const authResponse = await handleAuthRoutes(deps, req, url, { socketAddress: context.socketAddress ?? null });
     if (authResponse) return authResponse;
+
+    if (
+      path === "/v1/domains/connect" ||
+      /^\/v1\/domain-connections\/[^/]+$/.test(path)
+    ) {
+      const auth = await authenticate(
+        deps,
+        req,
+        url,
+        method === "GET" ? read : write,
+      );
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "domain connection");
+      if (denied) return denied;
+      try {
+        if (path === "/v1/domains/connect") {
+          if (method !== "POST")
+            return json(405, { error: "method not allowed" });
+          const body = await readJsonBody(req),
+            input = normalizeDomainConnect(body);
+          return json(
+            200,
+            await connectDomain(
+              auth.store,
+              auth.ctx.tenantId,
+              input,
+              body.dry_run === true,
+              deps.resolveSender,
+              auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator",
+            ),
+          );
+        }
+        if (method !== "GET") return json(405, { error: "method not allowed" });
+        const result = await auth.store.getDomainConnection(
+          decodeURIComponent(path.split("/").at(-1)!),
+        );
+        return result
+          ? json(200, result)
+          : json(404, { error: "Domain connection not found" });
+      } catch (error) {
+        if (error instanceof DomainConnectError)
+          return json(error.status, {
+            error: error.message,
+            reason: error.reason,
+          });
+        throw error;
+      }
+    }
 
     // /v1/domains
     if (path === "/v1/domains") {

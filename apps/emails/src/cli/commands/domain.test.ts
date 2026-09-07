@@ -216,20 +216,14 @@ describe("domains lifecycle commands", () => {
     }
   });
 
-  it("fails loud on lifecycle mutations that do not ship, naming a real next step", async () => {
-    for (const args of [
-      ["domains", "connect", "owned.example.com", "--provider", "x"],
-    ]) {
-      const result = await runDomainCommandExpectingExit(args);
-      expect(result.error).toBe("process.exit:1");
-      expect(result.stderr).toContain("is not implemented in this build");
-      // Every refusal has to leave the operator somewhere to go, and the old
-      // one-line message left them with a server that has no such route.
-      expect(result.stderr).toMatch(/'emails [a-z]/);
-      expect(result.stderr).not.toContain("not available in the self-hosted client");
-      expect(result.stderr).not.toContain("runs on the self-hosted server");
-    }
+  it("reports an older API without connect orchestration and creates no fallback state", async () => {
+    const result = await runDomainCommandExpectingExit(["domains", "connect", "owned.example.com", "--provider", "x"]);
+    expect(result.error).toBe("process.exit:1");
+    expect(result.stderr).toContain("POST /v1/domains/connect");
+    expect(result.stderr).toContain("405");
+    expect(await stub.list("domains")).toHaveLength(0);
   });
+
 });
 
 describe("domain move-provider command", () => {

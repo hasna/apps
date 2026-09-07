@@ -7019,6 +7019,280 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "GET",
+    "operationId": "getDomainConnection",
+    "path": "/v1/domain-connections/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "dry_run",
+        "connection"
+      ],
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "connection": {
+          "type": "object",
+          "required": [
+            "id",
+            "domain_id",
+            "domain",
+            "provider_id",
+            "dns_provider",
+            "register_provider",
+            "status",
+            "provider_registered",
+            "dns_tasks",
+            "checked_at",
+            "message"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "nullable": true
+            },
+            "domain_id": {
+              "type": "string",
+              "nullable": true
+            },
+            "domain": {
+              "type": "string"
+            },
+            "provider_id": {
+              "type": "string"
+            },
+            "dns_provider": {
+              "type": "string",
+              "enum": [
+                "manual",
+                "cloudflare",
+                "route53"
+              ]
+            },
+            "register_provider": {
+              "type": "boolean"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "planned",
+                "processing",
+                "blocked",
+                "pending_verification",
+                "verified"
+              ]
+            },
+            "provider_registered": {
+              "type": "boolean",
+              "nullable": true
+            },
+            "checked_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "message": {
+              "type": "string"
+            },
+            "dns_tasks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "type",
+                  "name",
+                  "value",
+                  "purpose",
+                  "status"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "TXT",
+                      "CNAME",
+                      "MX"
+                    ]
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  },
+                  "purpose": {
+                    "type": "string",
+                    "enum": [
+                      "DKIM",
+                      "SPF",
+                      "MAIL_FROM"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "verified"
+                    ]
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainConnection",
+    "path": "/v1/domain-connections/{id}",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainConnection",
+    "path": "/v1/domain-connections/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainConnection",
+    "path": "/v1/domain-connections/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainConnection",
+    "path": "/v1/domain-connections/{id}",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainConnection",
+    "path": "/v1/domain-connections/{id}",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainConnection",
+    "path": "/v1/domain-connections/{id}",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainConnection",
+    "path": "/v1/domain-connections/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainConnection",
+    "path": "/v1/domain-connections/{id}",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
     "operationId": "listDomains",
     "path": "/v1/domains",
     "status": 200,
@@ -8423,6 +8697,280 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "method": "POST",
     "operationId": "domainVerify",
     "path": "/v1/domains/{id}/verify",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "connectDomain",
+    "path": "/v1/domains/connect",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "dry_run",
+        "connection"
+      ],
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "connection": {
+          "type": "object",
+          "required": [
+            "id",
+            "domain_id",
+            "domain",
+            "provider_id",
+            "dns_provider",
+            "register_provider",
+            "status",
+            "provider_registered",
+            "dns_tasks",
+            "checked_at",
+            "message"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "nullable": true
+            },
+            "domain_id": {
+              "type": "string",
+              "nullable": true
+            },
+            "domain": {
+              "type": "string"
+            },
+            "provider_id": {
+              "type": "string"
+            },
+            "dns_provider": {
+              "type": "string",
+              "enum": [
+                "manual",
+                "cloudflare",
+                "route53"
+              ]
+            },
+            "register_provider": {
+              "type": "boolean"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "planned",
+                "processing",
+                "blocked",
+                "pending_verification",
+                "verified"
+              ]
+            },
+            "provider_registered": {
+              "type": "boolean",
+              "nullable": true
+            },
+            "checked_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "message": {
+              "type": "string"
+            },
+            "dns_tasks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "type",
+                  "name",
+                  "value",
+                  "purpose",
+                  "status"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "TXT",
+                      "CNAME",
+                      "MX"
+                    ]
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  },
+                  "purpose": {
+                    "type": "string",
+                    "enum": [
+                      "DKIM",
+                      "SPF",
+                      "MAIL_FROM"
+                    ]
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "verified"
+                    ]
+                  },
+                  "priority": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "connectDomain",
+    "path": "/v1/domains/connect",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "connectDomain",
+    "path": "/v1/domains/connect",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "connectDomain",
+    "path": "/v1/domains/connect",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "connectDomain",
+    "path": "/v1/domains/connect",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "connectDomain",
+    "path": "/v1/domains/connect",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "connectDomain",
+    "path": "/v1/domains/connect",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "connectDomain",
+    "path": "/v1/domains/connect",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "connectDomain",
+    "path": "/v1/domains/connect",
     "status": 503,
     "schema": {
       "$ref": "#/components/schemas/ErrorResponse"

@@ -60,10 +60,8 @@ export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
   // src/lib/mx-ownership.ts, which always implemented them, and are now the
   // remedies several of the refusals below point at. Leaving them listed would
   // have suppressed a working command from every suggestion path.
-  "emails domain connect",
   "emails domain setup",
   "emails domain setup-cloudflare",
-  "emails domains connect",
   // NOT a refusal call site — `emails refresh` is not a registered command at all
   // (`error: unknown command 'refresh'`; the verb is `emails pull`, alias
   // `emails provider sync`). It belongs here rather than in a per-mode list for
