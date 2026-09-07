@@ -43,7 +43,7 @@ const REPO_ROOT = join(import.meta.dir, "../..");
  * in either direction must be reviewed deliberately rather than silently
  * changing which authority a command can reach.
  */
-const EXPECTED_LOCAL_ONLY_COMMANDS = 114;
+const EXPECTED_LOCAL_ONLY_COMMANDS = 108;
 const TASK_FIXTURE_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_TASK_FIXTURE_ID = "22222222-2222-4222-8222-222222222222";
 const tempRoots: string[] = [];
@@ -1348,7 +1348,7 @@ describe("remote CLI entrypoint authority boundary", () => {
         if (url.pathname === "/v1/agents" && request.method === "GET") return Response.json({ agents: [agent], count: 1 });
         if (url.pathname === "/v1/agents/fixture-agent/heartbeat") return Response.json({ agent });
         if (url.pathname === "/v1/agents/fixture-agent/release") return Response.json({ agent, released: true });
-        if (url.pathname === `/v1/tasks/${TASK_ID}/lock`) return Response.json({ result: { success: true, locked_by: "fixture-agent" } });
+        if (url.pathname === `/v1/tasks/${TASK_ID}/lock`) return Response.json({ result: { success: true, locked_by: "fixture-agent", locked_at: new Date().toISOString(), expires_at: new Date(Date.now() + 60000).toISOString() } });
         if (url.pathname === `/v1/tasks/${TASK_ID}/unlock`) return Response.json({ success: true });
         if (url.pathname === `/v1/tasks/${TASK_ID}/stale-lock-handoff`) {
           return Response.json({

@@ -439,6 +439,10 @@ function isMetadataInvocation(args: string[], invocation: ParsedInvocation): boo
     return isReadOnlyConfigInvocation(invocation) ||
       (invocation.commandArgs.length === 1 && HELP_FLAGS.has(invocation.commandArgs[0]!));
   }
+  // A bare machine subcommand followed by help has no option value that could
+  // be mistaken for a metadata flag; Commander exits before its action runs.
+  if (invocation.command === "machines" && invocation.commandArgs.length === 2 &&
+      !invocation.commandArgs[0]!.startsWith("-") && HELP_FLAGS.has(invocation.commandArgs[1]!)) return true;
   if (invocation.command === "storage") {
     return invocation.commandArgs.length === 1 &&
       (invocation.commandArgs[0] === "status" || HELP_FLAGS.has(invocation.commandArgs[0]!));

@@ -1,4 +1,4 @@
-import { getTodosCloudClient } from "../cloud-router.js";
+import { selectsTodosLocalStore } from "../../lib/local-opt-in.js";
 import { registerApiMachineCommands } from "./machines-api.js";
 import type { Command } from "commander";
 import type { Machine } from "../../types/index.js";
@@ -139,8 +139,8 @@ function formatBridgeImportSummary(result: LocalBridgeImportResult): string {
 }
 
 export function registerMachineCommands(program: Command) {
-  const cloud = getTodosCloudClient();
-  if (cloud) { registerApiMachineCommands(program, cloud); return; }
+  // Registration must remain store-free for unauthenticated help/diagnostics.
+  if (!selectsTodosLocalStore()) { registerApiMachineCommands(program); return; }
   const machinesCmd = program
     .command("machines")
     .description("List registered machines")

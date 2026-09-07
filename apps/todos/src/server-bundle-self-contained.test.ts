@@ -118,6 +118,8 @@ function runnerEnv(
     HOST: "127.0.0.1",
     PORT: "0",
     APP_DIR: app,
+    // Explicit standalone SQLite fixture, never an ordinary client fallback.
+    HASNA_TODOS_LOCAL: "1",
   };
 
   if (options.unreachableRegistry) {
