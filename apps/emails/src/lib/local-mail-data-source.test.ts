@@ -143,18 +143,15 @@ function attachmentFile(name: string, content: string): string {
 }
 
 describe("SqliteMailDataSource", () => {
-  it("routes the local database from the configured path alone", () => {
-    // Storage configuration alone selects the arm (hasna/apps#1566): the
-    // database path in beforeEach is enough — the deployment word is removed,
-    // so there is no explicit mode setting to consult or delete.
-    expect(resolveMailDataSource()).toBeInstanceOf(SqliteMailDataSource);
+  it("rejects a configured SQLite path in the ordinary client factory", () => {
+    expect(() => resolveMailDataSource()).toThrow("authenticated Emails API");
     resetMailDataSource();
-    expect(resolveMailDataSource()).toBeInstanceOf(SqliteMailDataSource);
+    expect(() => resolveMailDataSource({ mode: "local" })).toThrow("authenticated Emails API");
   });
 
   it("reads bodies and persists mailbox mutations in SQLite", async () => {
     const stored = seedInbound();
-    const source = resolveMailDataSource();
+    const source = new SqliteMailDataSource();
 
     expect((await source.listMailbox("inbox")).map((row) => row.id)).toEqual([stored.id]);
     const detail = await source.getMessageWithBody(stored.id);
@@ -170,7 +167,7 @@ describe("SqliteMailDataSource", () => {
 
   it("rejects inherited object keys as bulk actions", async () => {
     const stored = seedInbound();
-    const source = resolveMailDataSource();
+    const source = new SqliteMailDataSource();
 
     await expect(source.bulk({ action: "constructor", ids: [stored.id] }))
       .rejects.toThrow("unsupported local bulk action 'constructor'");
@@ -179,7 +176,7 @@ describe("SqliteMailDataSource", () => {
 
   it("finds verification codes from the local recipient index", async () => {
     const stored = seedInbound();
-    const found = await resolveMailDataSource().findLatest("ops@example.test");
+    const found = await new SqliteMailDataSource().findLatest("ops@example.test");
     expect(found).toMatchObject({ code: "123456", email: { id: stored.id } });
   });
 
@@ -196,7 +193,7 @@ describe("SqliteMailDataSource", () => {
         right.received_at.localeCompare(left.received_at)
         || right.id.localeCompare(left.id))
       .map((row) => row.id);
-    const source = resolveMailDataSource();
+    const source = new SqliteMailDataSource();
 
     const first = await source.listInsertionsSince({ limit: 1 });
     expect(first.cursor).not.toBeNull();
@@ -215,7 +212,7 @@ describe("SqliteMailDataSource", () => {
 
   it("rejects malformed or query-mismatched insertion cursors instead of restarting or cycling", async () => {
     seedInsertion("insert-cursor", "2026-07-20T10:00:00.000Z");
-    const source = resolveMailDataSource();
+    const source = new SqliteMailDataSource();
     const first = await source.listInsertionsSince({
       receivedSince: "2026-07-01T00:00:00.000Z",
       limit: 1,
@@ -235,7 +232,7 @@ describe("SqliteMailDataSource", () => {
   it("keeps a descending insertion walk monotonic when a newer row arrives between pages", async () => {
     seedInsertion("original-new", "2026-07-20T10:00:00.000Z");
     seedInsertion("original-old", "2026-07-19T10:00:00.000Z");
-    const source = resolveMailDataSource();
+    const source = new SqliteMailDataSource();
     const first = await source.listInsertionsSince({ limit: 1 });
     expect(first.cursor).not.toBeNull();
 
@@ -254,7 +251,7 @@ describe("SqliteMailDataSource", () => {
       [{ index: 0, filename: "invoice?.pdf", content_type: "application/pdf", size: 5, local_path: path }],
     );
 
-    const content = await resolveMailDataSource().getAttachmentContent(stored.id, 0);
+    const content = await new SqliteMailDataSource().getAttachmentContent(stored.id, 0);
     expect(content).toMatchObject({
       state: "available",
       index: 0,
@@ -278,7 +275,7 @@ describe("SqliteMailDataSource", () => {
         { index: 1, filename: "first.txt", content_type: "text/plain", size: 5, local_path: firstPath },
       ],
     );
-    expect(await resolveMailDataSource().getAttachmentContent(reordered.id, 0))
+    expect(await new SqliteMailDataSource().getAttachmentContent(reordered.id, 0))
       .toMatchObject({ state: "content_unavailable", index: 0 });
 
     const duplicateIndex = seedAttachmentInbound(
@@ -288,7 +285,7 @@ describe("SqliteMailDataSource", () => {
         { index: 0, filename: "first.txt", content_type: "text/plain", size: 5, local_path: secondPath },
       ],
     );
-    expect(await resolveMailDataSource().getAttachmentContent(duplicateIndex.id, 0))
+    expect(await new SqliteMailDataSource().getAttachmentContent(duplicateIndex.id, 0))
       .toMatchObject({ state: "content_unavailable", index: 0 });
   });
 
@@ -298,7 +295,7 @@ describe("SqliteMailDataSource", () => {
       [{ filename: "invoice?.pdf", content_type: "application/pdf", size: 5 }],
       [{ filename: "invoice_.pdf", content_type: "application/pdf", size: 5, local_path: legacyPath }],
     );
-    const content = await resolveMailDataSource().getAttachmentContent(unique.id, 0);
+    const content = await new SqliteMailDataSource().getAttachmentContent(unique.id, 0);
     expect(content).toMatchObject({ state: "available", filename: "invoice?.pdf", bytes: 5 });
 
     const secondPath = attachmentFile("duplicate-2.txt", "other");
@@ -312,13 +309,13 @@ describe("SqliteMailDataSource", () => {
         { filename: "duplicate.txt", content_type: "text/plain", size: 5, local_path: secondPath },
       ],
     );
-    expect(await resolveMailDataSource().getAttachmentContent(ambiguous.id, 0))
+    expect(await new SqliteMailDataSource().getAttachmentContent(ambiguous.id, 0))
       .toMatchObject({ state: "content_unavailable", index: 0 });
   });
 
   it("sends through a local sandbox provider and records the sent ledger", async () => {
     const provider = createProvider({ name: "local-sandbox", type: "sandbox" });
-    const result = await resolveMailDataSource().send({
+    const result = await new SqliteMailDataSource().send({
       providerId: provider.id,
       from: "ops@example.test",
       to: "recipient@example.test",

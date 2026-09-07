@@ -8,7 +8,7 @@
 // MailboxCounts / MessageBody / …) so callers stay independent of the backend.
 
 import { getClientMode, type ClientMode } from "./mode.js";
-import { noticeLocalEmailsMode } from "./local-notice.js";
+import { assertApiClientStorage } from "./client-storage-policy.js";
 import { getDatabase, resolvePartialIdOrThrow } from "../db/database.js";
 import { sqlEmailAddress } from "../db/email-address-sql.js";
 import { SelfHostedMailDataSource, resolveSelfHostedMailDataSource } from "./self-hosted-mail-data-source.js";
@@ -594,31 +594,16 @@ export interface ResolveMailDataSourceOptions {
 
 let memoized: { mode: MailDataSourceMode; source: MailDataSource } | null = null;
 
-/**
- * Resolve exactly one process-wide backend. Self-hosted never falls through to
- * SQLite; local never consults URL/API-key configuration.
- */
+/** Resolve the authenticated API used by ordinary CLI, TUI and MCP clients. */
 export function resolveMailDataSource(opts: ResolveMailDataSourceOptions = {}): MailDataSource {
+  assertApiClientStorage();
+  if (opts.mode === "local") throw new Error("Emails clients require the authenticated Emails API; use the explicit storage library for SQLite.");
   const override = Boolean(opts.mode || opts.selfHosted);
   const mode = opts.mode ?? getClientMode();
-  if (!override && memoized?.mode === mode) {
-    return memoized.source;
-  }
-  let source: MailDataSource;
-  if (mode === "self_hosted") {
-    const selfHosted = opts.selfHosted ?? resolveSelfHostedMailDataSource();
-    if (!selfHosted) {
-      throw new Error(
-        "Emails self-hosted mode requires the hosted API configuration resolved by the shared " +
-          "credential resolver (HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY or the legacy " +
-          "EMAILS_SELF_HOSTED_URL / EMAILS_SELF_HOSTED_API_KEY aliases). No hosted endpoint is inferred.",
-      );
-    }
-    source = selfHosted;
-  } else {
-    if (!opts.mode && !opts.selfHosted) noticeLocalEmailsMode();
-    source = new SqliteMailDataSource();
-  }
+  if (mode !== "self_hosted") throw new Error("Emails clients require the authenticated Emails API.");
+  if (!override && memoized?.mode === mode) return memoized.source;
+  const source = opts.selfHosted ?? resolveSelfHostedMailDataSource();
+  if (!source) throw new Error("Configure the authenticated Emails API URL and credential with emails auth or the shared credential file.");
   if (!override) memoized = { mode, source };
   return source;
 }
