@@ -315,7 +315,10 @@ test("owned setup cannot report success while verification is pending",async()=>
  const program=new Command().exitOverride(),results:any[]=[];registerDomainCommands(program,value=>results.push(value));await program.parseAsync(["domain","setup","example.test","--provider","provider"],{from:"user"});expect(process.exitCode).toBe(1);expect(results[0].job.status).toBe("pending_verification");
 });
 
-test("older APIs cannot turn owned setup into a successful placeholder",async()=>{
- fixture();server!.stop(true);server=Bun.serve({port:0,fetch:()=>Response.json({error:"not_found",message:"Unknown route"},{status:404})});process.env.HASNA_EMAILS_API_URL=`http://127.0.0.1:${server.port}/v1`;
- const {setupOwnedDomain}=await import("../../lib/domain-dns-api.js");await expect(setupOwnedDomain("example.test",{provider:"provider"})).rejects.toThrow("API needs an update");
+test.each([404, 405])("older API HTTP %s cannot turn owned setup into a successful placeholder", async (status) => {
+  fixture(); server!.stop(true);
+  server = Bun.serve({port:0, fetch:()=>Response.json({error:"not_found",message:"Unknown route"},{status})});
+  process.env.HASNA_EMAILS_API_URL=`http://127.0.0.1:${server.port}/v1`;
+  const {setupOwnedDomain}=await import("../../lib/domain-dns-api.js");
+  await expect(setupOwnedDomain("example.test",{provider:"provider"})).rejects.toThrow("API needs an update");
 });

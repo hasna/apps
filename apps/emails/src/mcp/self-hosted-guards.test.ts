@@ -283,8 +283,7 @@ describe("MCP self_hosted guards", () => {
   it("reports domain provisioning API incompatibility without using client cloud credentials", async () => {
     const result = await callTool("provision_domain", { domain: "example.com", provider_id: "provider-1" });
     expect(result.isError).toBe(true);
-    expect(resultText(result)).toContain("POST /v1/domains/provision");
-    expect(resultText(result)).toContain("HTTP 405");
+    expect(resultText(result)).toContain("POST /v1/domains/provision failed: 405");
   });
 
   it("tells the truth about provisioning tools that no mode implements", async () => {

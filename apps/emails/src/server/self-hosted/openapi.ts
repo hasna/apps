@@ -4951,6 +4951,7 @@ const domainDnsResponses = {
   "401": errorResponse("Authentication required"),
   "403": errorResponse("Tenant operator required"),
   "404": errorResponse("Tenant reference or job not found"),
+  "405": errorResponse("Unsupported method or older server route"),
   "409": errorResponse("DNS plan or binding conflict"),
   "502": errorResponse("DNS provider did not confirm the request"),
   "503": errorResponse("Server binding or service unavailable"),

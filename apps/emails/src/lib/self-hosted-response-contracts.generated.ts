@@ -7545,6 +7545,15 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "method": "GET",
     "operationId": "getDomainDnsJob",
     "path": "/v1/domain-dns-jobs/{id}",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainDnsJob",
+    "path": "/v1/domain-dns-jobs/{id}",
     "status": 409,
     "schema": {
       "$ref": "#/components/schemas/ErrorResponse"
@@ -9549,6 +9558,15 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "method": "POST",
     "operationId": "provisionSendingDomain",
     "path": "/v1/domains/provision",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "provisionSendingDomain",
+    "path": "/v1/domains/provision",
     "status": 409,
     "schema": {
       "$ref": "#/components/schemas/ErrorResponse"
@@ -9868,6 +9886,15 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "method": "POST",
     "operationId": "setupOwnedDomain",
     "path": "/v1/domains/setup",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
     "status": 409,
     "schema": {
       "$ref": "#/components/schemas/ErrorResponse"
@@ -10179,6 +10206,15 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "operationId": "setupDomainCloudflare",
     "path": "/v1/domains/setup-cloudflare",
     "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupDomainCloudflare",
+    "path": "/v1/domains/setup-cloudflare",
+    "status": 405,
     "schema": {
       "$ref": "#/components/schemas/ErrorResponse"
     }
