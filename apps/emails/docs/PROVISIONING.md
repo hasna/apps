@@ -5,7 +5,8 @@
 > `provision_address` use authenticated API jobs with durable receipts and retry.
 > See [Address provisioning](ADDRESS_PROVISIONING.md) for requirements and limits.
 > `provision status` reads the shared registry. Domain infrastructure setup,
-> `provision up`, daemon, domain-level retry, and roundtrip remain unimplemented.
+> `provision up`, daemon and domain-level retry remain unimplemented.
+> `provision roundtrip` runs an API-backed delivery probe; see [Roundtrip checks](ROUNDTRIP.md).
 
 ## Supported operator workflow
 

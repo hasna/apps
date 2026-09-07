@@ -120,18 +120,46 @@ export function registerProvisionCommands(program: Command, output: (data: unkno
   // ── roundtrip (acceptance test) ─────────────────────────────────────────
   cmd
     .command("roundtrip")
-    .description("Send N tokened emails around a ring of addresses and confirm 100% receipt (via SES inbound → S3 → SQLite)")
+    .description("Send tokened emails around an address ring and verify their receipts in the shared API inbox")
     .requiredOption("--domain <domain>", "Domain whose addresses to test")
-    .requiredOption("--provider <id>", "SES provider ID (sends + inbound association)")
+    .requiredOption("--provider <id>", "Server provider ID for sending and optional inbound source association")
     .option("--addresses <list>", "Comma-separated local parts", "one,two,three")
     .option("--count <n>", "Messages per directed pair", "16")
-    .option("--bucket <name>", "Inbound S3 bucket (defaults to config inbound_s3_bucket)")
-    .option("--profile <profile>", "AWS profile for S3 sync")
+    .option("--profile <profile>", "Legacy AWS profile selector; server-owned credentials require --source instead")
+    .option("--source <id>", "Also poll this server-bound S3 source during receipt checks")
+    .option("--bucket <name>", "Also sync S3, asserting this bucket matches the server source binding")
+    .option("--sync-cursor <cursor>", "Resume S3 polling from a previous incomplete roundtrip result")
+    .option("--idempotency-key <key>", "Reuse this run identity to safely resume sends after an interrupted run")
     .option("--poll-attempts <n>", "Receipt poll attempts", "12")
     .option("--poll-interval <ms>", "Receipt poll interval ms", "10000")
     .option("--throttle <ms>", "Delay between sends (SES sandbox = 1100)", "1100")
-    .action(async () => {
-      try { notImplementedAnywhere("emails provision roundtrip"); } catch (e) { handleError(e); }
+    .action(async (opts: import("../../lib/roundtrip-api.js").RoundtripOptions) => {
+      const controller = new AbortController();
+      let runId = opts.idempotencyKey;
+      const stop = () => controller.abort();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      try {
+        const { planRoundtrip, runRoundtrip, createRoundtripMail } = await import("../../lib/roundtrip-api.js");
+        const plan = planRoundtrip(opts);
+        runId = plan.runId;
+        if (opts.syncCursor && !opts.source && !opts.bucket) throw new Error("A sync cursor requires --source or --bucket.");
+        const mail = await createRoundtripMail(controller.signal);
+        const sync = opts.source || opts.bucket
+          ? await (await import("../../lib/inbox-ingest-api.js")).createInboxIngestClient("sync-s3", controller.signal)
+          : undefined;
+        const result = await runRoundtrip({ ...opts, idempotencyKey: plan.runId }, { mail, sync, signal: controller.signal });
+        output(result, [`Roundtrip ${result.run_id}: ${result.received}/${result.expected} receipts verified; ${result.confirmed_sent} sends confirmed.`,
+          ...result.errors, ...result.items.filter(item => item.error).map(item => `${item.from} → ${item.to}: ${item.error}`),
+          ...(!result.complete ? [`Resume with --idempotency-key ${result.run_id}${result.sync_cursor ? ` --sync-cursor ${result.sync_cursor}` : ""}.`] : [])].join("\n"));
+        if (!result.complete) process.exitCode = controller.signal.aborted ? 130 : 1;
+      } catch (e) {
+        if (controller.signal.aborted) {
+          output({ run_id: runId ?? null, complete: false, confirmed_sent: 0, received: 0, errors: ["Roundtrip interrupted before sending."] }, "Roundtrip interrupted before sending.");
+          process.exitCode = 130;
+        } else handleError(e);
+      }
+      finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
     });
 
   // ── daemon (reconciler loop) ─────────────────────────────────────────────

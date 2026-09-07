@@ -127,7 +127,6 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
     ],
     "emails provision domain": ["provision", "domain", "example.com", "--provider", "p1"],
     "emails provision up": ["provision", "up", "example.com", "--provider", "p1"],
-    "emails provision roundtrip": ["provision", "roundtrip", "--domain", "example.com", "--provider", "p1"],
     "emails provision daemon": ["provision", "daemon", "--provider", "p1"],
     "emails provision retry": ["provision", "retry", "example.com"],
   };

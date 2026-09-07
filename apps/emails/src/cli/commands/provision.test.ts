@@ -31,7 +31,6 @@ describe("unimplemented provisioning commands", () => {
   const SERVER_ONLY = [
     { name: "provision domain", args: ["provision", "domain", "example.com", "--provider", "ses-provider"] },
     { name: "provision up", args: ["provision", "up", "example.com", "--provider", "ses-provider"] },
-    { name: "provision roundtrip", args: ["provision", "roundtrip", "--domain", "example.com", "--provider", "ses-provider"] },
     { name: "provision daemon", args: ["provision", "daemon", "--provider", "ses-provider"] },
     { name: "provision retry", args: ["provision", "retry", "example.com"] },
   ] as const;

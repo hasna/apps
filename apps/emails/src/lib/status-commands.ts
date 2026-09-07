@@ -47,7 +47,6 @@ export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
   // src/cli/commands/provision.ts — notImplementedAnywhere()
   "emails provision domain",
   "emails provision up",
-  "emails provision roundtrip",
   "emails provision daemon",
   "emails provision retry",
   // src/cli/commands/address.ts — notImplementedAnywhere()
