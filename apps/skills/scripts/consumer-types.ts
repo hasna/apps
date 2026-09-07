@@ -69,6 +69,35 @@ const wrongVersion: 2 = admission.contractVersion;
 const wrongStatus: "succeeded" = admission.status;
 const client = new RemoteSkillsClient("fixture", "https://skills.example.com/api/v1");
 const auth = new RemoteSkillsAuthClient("https://skills.example.com/api/v1");
+const workspaceContext: import("@hasna/skills/sdk").RemoteWorkspaceContext = { userId: "observed-user", membershipId: "observed-membership" };
+const rootWorkspaceContext: import("@hasna/skills").RemoteWorkspaceContext = workspaceContext;
+client.listAccountWorkspaces();
+client.switchWorkspace(workspaceContext);
+auth.listAccountWorkspaces("reader@example.test", "000000", workspaceContext.userId);
+auth.switchWorkspace("reader@example.test", "000000", workspaceContext);
+auth.updateCurrentWorkspace("reader@example.test", "000000", { name: "Selected" }, workspaceContext);
+auth.listWorkspaceMembers("reader@example.test", "000000", { limit: 1 }, workspaceContext);
+auth.createApiKey("reader@example.test", "000000", "selected", ["skills:read"], workspaceContext);
+declare const selectedSession: Awaited<ReturnType<typeof auth.switchWorkspace>>;
+const sessionContract: import("@hasna/skills/sdk").RemoteWorkspaceSession = selectedSession;
+const rootSessionContract: import("@hasna/skills").RemoteWorkspaceSession = sessionContract;
+const selectedMembership: string = selectedSession.user.membershipId;
+const selectedRole: "owner" | "admin" | "member" | "viewer" = selectedSession.user.role;
+declare const discoveredWorkspaces: Awaited<ReturnType<typeof auth.listAccountWorkspaces>>;
+const discoveredUser: string = discoveredWorkspaces.userId;
+const currentWorkspace: boolean = discoveredWorkspaces.workspaces[0]!.current;
+// @ts-expect-error Workspace selection binds the expected user too.
+client.switchWorkspace({ membershipId: "observed-membership" });
+// @ts-expect-error Slugs cannot select a membership incarnation.
+auth.switchWorkspace("reader@example.test", "000000", { userId: "observed-user", slug: "workspace" });
+// @ts-expect-error Captured context is immutable.
+workspaceContext.membershipId = "changed";
+// @ts-expect-error Session roles retain concrete inference, not any.
+const inventedSelectionRole: "superuser" = selectedSession.user.role;
+// @ts-expect-error Safe discovery never exposes session credentials.
+const listedToken: string = discoveredWorkspaces.token;
+// @ts-expect-error A boolean current flag cannot lose inference to any.
+const wrongCurrentFlag: string = discoveredWorkspaces.workspaces[0]!.current;
 declare const profile: Awaited<ReturnType<typeof client.updateProfile>>;
 const displayName: string | null = profile.user.displayName;
 const customerRole: "owner" | "admin" | "member" | "viewer" = profile.user.role;

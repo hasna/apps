@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { getApiUrl } from "../../lib/auth-store.js";
+import { prepareProfileWorkspace } from "../../lib/workspace-profile.js";
 import { RemoteSkillsAuthClient } from "../../lib/remote-auth.js";
 import { RemoteWorkspaceMemberError } from "../../lib/remote-client.js";
 import { WorkspaceMemberInputError, workspaceMemberRoleInput, workspaceMemberRemovalInput } from "../../lib/remote-workspace.js";
@@ -21,19 +21,22 @@ export function registerWorkspaceMemberMutationCommands(workspace: Command) {
         const captured = action === "role"
           ? { kind: "role" as const, ...workspaceMemberRoleInput(membershipId, { role: options.role as RemoteCustomerRole, expectedRole: options.expectedRole as RemoteCustomerRole }) }
           : { kind: "remove" as const, ...workspaceMemberRemovalInput(membershipId, { expectedRole: options.expectedRole as RemoteCustomerRole }) };
-        const client = new RemoteSkillsAuthClient(getApiUrl("Manage workspace member"));
+        const pending = prepareProfileWorkspace("Manage workspace member");
+        const client = new RemoteSkillsAuthClient(pending.origin);
         if (!options.codeStdin && (options.json || !process.stdin.isTTY || !process.stderr.isTTY))
           throw new NameInputError("Use --code-stdin with a fresh verification code for JSON or noninteractive member actions.");
         let code: string | null;
         if (options.codeStdin) code = await readCode();
         else { await client.requestCode(options.email); code = await promptCode(); }
         if (code === null) return;
+        const target = await pending.resolve();
+        target.unchanged();
         if (captured.kind === "role") {
-          const result = await client.setWorkspaceMemberRole(options.email, code, captured.membershipId, captured.body);
+          const result = await client.setWorkspaceMemberRole(options.email, code, captured.membershipId, captured.body, target.context);
           if (options.json) console.log(JSON.stringify(result));
           else console.log(result.changed ? `Member role changed to ${result.member.role}.` : `Member already has role ${result.member.role}.`);
         } else {
-          const result = await client.removeWorkspaceMember(options.email, code, captured.membershipId, captured.body);
+          const result = await client.removeWorkspaceMember(options.email, code, captured.membershipId, captured.body, target.context);
           if (options.json) console.log(JSON.stringify(result));
           else console.log(result.alreadyRemoved ? "This membership was already removed." : "Membership removed.");
         }

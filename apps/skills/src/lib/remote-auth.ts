@@ -1,3 +1,6 @@
+import { workspaceContext, workspaceExpectedUserId, parseWorkspaceLogin,
+  type RemoteWorkspaceContext, type RemoteWorkspaceSession, type RemoteAccountWorkspaceDiscovery } from "./remote-workspace-selection.js";
+import { readBoundedResponse } from "./remote-files.js";
 import { workspaceMembersQuery, type RemoteWorkspaceMembersOptions } from "./remote-workspace.js";
 import { workspaceMemberRoleInput, workspaceMemberRemovalInput, type SetRemoteWorkspaceMemberRole, type RemoveRemoteWorkspaceMember } from "./remote-workspace.js";
 import { RemoteSkillsClient } from "./remote-client.js";
@@ -100,39 +103,77 @@ export class RemoteSkillsAuthClient {
   verifyCode(email: string, code: string) { return this.request("/api/auth/verify", { method: "POST", body: JSON.stringify({ email, code }) }); }
   startDevice() { return this.request("/api/auth/device/start", { method: "POST", body: JSON.stringify({ client: "skills-sdk" }) }); }
   pollDevice(deviceCode: string) { return this.request("/api/auth/device/token", { method: "POST", body: JSON.stringify({ deviceCode }) }); }
-  private async sessionClient(email: string, code: string): Promise<RemoteSkillsClient> {
+  private async sessionClient(email: string, code: string, context?: RemoteWorkspaceContext): Promise<RemoteSkillsClient> {
+    if (context !== undefined) {
+      const target = workspaceContext(context), apiOrigin = this.apiOrigin;
+      const session = await this.switchWorkspace(email, code, target);
+      return new RemoteSkillsClient(session.token, apiOrigin);
+    }
     const apiOrigin = this.apiOrigin;
     if (!email.includes("@") || !/^\d{6}$/.test(code)) throw new Error("Fresh email and six-digit verification code are required to manage this account");
     const login = await this.verifyCode(email, code);
     if (!login || typeof login.token !== "string" || !login.token) throw new Error("The server did not return an authorized account session");
     return new RemoteSkillsClient(login.token, apiOrigin);
   }
-  async createApiKey(email: string, code: string, name: string, scopes?: string[]) {
-    return (await this.sessionClient(email, code)).createApiKey(name, scopes);
+  /** Discover memberships with fresh sign-in. No key or session is saved. */
+  async listAccountWorkspaces(email: string, code: string, expectedUserId?: string): Promise<RemoteAccountWorkspaceDiscovery> {
+    const login = await this.workspaceLogin(email, code, expectedUserId);
+    const result = await new RemoteSkillsClient(login.token, login.apiOrigin).listAccountWorkspaces(login.userId);
+    return { userId: login.userId, ...result };
   }
-  async listApiKeys(email: string, code: string) { return (await this.sessionClient(email, code)).listApiKeys(); }
-  async revokeApiKey(email: string, code: string, keyId: string) { return (await this.sessionClient(email, code)).revokeApiKey(keyId); }
+  /** Contains a secret session token. Selection never creates or stores an API key. */
+  async switchWorkspace(email: string, code: string, context: RemoteWorkspaceContext): Promise<RemoteWorkspaceSession> {
+    const target = workspaceContext(context);
+    const login = await this.workspaceLogin(email, code, target.userId);
+    return new RemoteSkillsClient(login.token, login.apiOrigin).switchWorkspace(target);
+  }
+  private async workspaceLogin(email: string, code: string, expectedUserId?: string) {
+    const expected = expectedUserId === undefined ? undefined : workspaceExpectedUserId(expectedUserId);
+    const apiOrigin = this.apiOrigin;
+    if (typeof email !== "string" || !email.includes("@") || typeof code !== "string" || !/^\d{6}$/.test(code))
+      throw new Error("Fresh email and six-digit verification code are required to manage this account");
+    let response: Response;
+    try {
+      response = await fetch(`${apiOrigin}/api/auth/verify`, { method: "POST", redirect: "error", credentials: "omit",
+        signal: AbortSignal.timeout(15_000), headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, code }) });
+    } catch { throw new HostedApiError("Unable to verify the Skills account."); }
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      throw new HostedApiError("Unable to verify the Skills account.", { status: response.status });
+    }
+    let value: unknown;
+    try { value = JSON.parse(new TextDecoder().decode(await readBoundedResponse(response, 64 * 1024))); }
+    catch { throw new HostedApiError("The server returned an invalid account verification result."); }
+    return { ...parseWorkspaceLogin(value, expected), apiOrigin };
+  }
+  async createApiKey(email: string, code: string, name: string, scopes?: string[], context?: RemoteWorkspaceContext) {
+    const capturedScopes = scopes === undefined ? undefined : [...scopes];
+    return (await this.sessionClient(email, code, context)).createApiKey(name, capturedScopes);
+  }
+  async listApiKeys(email: string, code: string, context?: RemoteWorkspaceContext) { return (await this.sessionClient(email, code, context)).listApiKeys(); }
+  async revokeApiKey(email: string, code: string, keyId: string, context?: RemoteWorkspaceContext) { return (await this.sessionClient(email, code, context)).revokeApiKey(keyId); }
   /** Reauthentication is ephemeral: it never replaces a saved key or profile. */
-  async updateProfile(email: string, code: string, input: UpdateRemoteProfile) {
-    customerNamePatch(input, "displayName");
-    return (await this.sessionClient(email, code)).updateProfile(input);
+  async updateProfile(email: string, code: string, input: UpdateRemoteProfile, context?: RemoteWorkspaceContext) {
+    const body = customerNamePatch(input, "displayName");
+    return (await this.sessionClient(email, code, context)).updateProfile({ displayName: body.displayName! });
   }
-  async updateCurrentWorkspace(email: string, code: string, input: UpdateRemoteWorkspace) {
-    customerNamePatch(input, "name");
-    return (await this.sessionClient(email, code)).updateCurrentWorkspace(input);
+  async updateCurrentWorkspace(email: string, code: string, input: UpdateRemoteWorkspace, context?: RemoteWorkspaceContext) {
+    const body = customerNamePatch(input, "name");
+    return (await this.sessionClient(email, code, context)).updateCurrentWorkspace({ name: body.name! });
   }
-  /** Fresh owner/admin session; no saved credential or profile is replaced. */
-  async listWorkspaceMembers(email: string, code: string, options: RemoteWorkspaceMembersOptions = {}) {
+  /** Fresh owner/admin session; explicit context survives default-workspace OTP selection. */
+  async listWorkspaceMembers(email: string, code: string, options: RemoteWorkspaceMembersOptions = {}, context?: RemoteWorkspaceContext) {
     workspaceMembersQuery(options);
-    return (await this.sessionClient(email, code)).listWorkspaceMembers(options);
+    const captured = { ...options };
+    return (await this.sessionClient(email, code, context)).listWorkspaceMembers(captured);
   }
-  async setWorkspaceMemberRole(email: string, code: string, membershipId: string, input: SetRemoteWorkspaceMemberRole) {
+  async setWorkspaceMemberRole(email: string, code: string, membershipId: string, input: SetRemoteWorkspaceMemberRole, context?: RemoteWorkspaceContext) {
     const captured = workspaceMemberRoleInput(membershipId, input);
-    return (await this.sessionClient(email, code)).setWorkspaceMemberRole(captured.membershipId, captured.body);
+    return (await this.sessionClient(email, code, context)).setWorkspaceMemberRole(captured.membershipId, captured.body);
   }
-  async removeWorkspaceMember(email: string, code: string, membershipId: string, input: RemoveRemoteWorkspaceMember) {
+  async removeWorkspaceMember(email: string, code: string, membershipId: string, input: RemoveRemoteWorkspaceMember, context?: RemoteWorkspaceContext) {
     const captured = workspaceMemberRemovalInput(membershipId, input);
-    return (await this.sessionClient(email, code)).removeWorkspaceMember(captured.membershipId, captured.body);
+    return (await this.sessionClient(email, code, context)).removeWorkspaceMember(captured.membershipId, captured.body);
   }
   /** Common auth transport used by CLI login, preserving the selected instance through awaits. */
   request(path: string, options?: RequestInit) {
