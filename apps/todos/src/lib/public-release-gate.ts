@@ -185,11 +185,14 @@ const LEGACY_STORAGE_MODE_RATCHET_TAIL = new RegExp(
   "g",
 );
 
-// The admitted-local redaction blanks the unprefixed alias by assignment. The
-// occurrence is the exact assignment shape emitted by stage-a; a read of the
-// same variable is not followed by an assignment to an empty string and still
-// fails.
-const LEGACY_TODOS_API_URL_SCRUB = new RegExp(`env\\.${escapeRegExp(LEGACY_TODOS_API_URL)} = ""`, "g");
+// The admitted-local redaction DELETES the unprefixed alias — stage-a's documented
+// law (src/cli/stage-a.ts): the resolver refuses a declared-but-blank authority
+// loudly instead of reading it as absent, so blanking would hand a child process
+// an environment that says "declared, empty" rather than "not configured". The
+// occurrence is the exact delete statement emitted by stage-a (release-review P1,
+// 0d22a7aa2: the gate used to strip only the retired blanking assignment shape);
+// a read of the same variable is not preceded by `delete ` and still fails.
+const LEGACY_TODOS_API_URL_DELETE = new RegExp(`delete env\\.${escapeRegExp(LEGACY_TODOS_API_URL)};`, "g");
 
 // The retirement note in the cutover runbook quotes the backticked bare alias
 // inside a sentence naming the retired pair; the occurrence is the backticked
@@ -251,20 +254,22 @@ const TEXT_BOUNDARY_EXEMPTIONS: { module: string; pattern: RegExp; occurrence: R
   // PR #171 removed the storage-mode env selection axis. Two surfaces must still name
   // the retired keys: the test-isolation scrub list (which deletes them from test
   // environments) and the cutover runbook (which documents the retirement). The
-  // admitted-local redaction blanks the unprefixed API-url alias. Those names are
-  // deprecation vocabulary, not live reads — every one of the exemptions below strips
-  // only the exact emitted array-tail or assignment shape, so any OTHER spelling (a
-  // bracket-indexed read, a bare token in a different context, a new env var) survives
-  // the strip and still fails the boundary.
+  // admitted-local redaction DELETES the unprefixed API-url alias (stage-a's law:
+  // delete, never blank — the resolver refuses declared-but-blank loudly). Those
+  // names are deprecation vocabulary, not live reads — every one of the exemptions
+  // below strips only the exact emitted array-tail or delete-statement shape, so any
+  // OTHER spelling (a bracket-indexed read, a blanking assignment, a bare token in a
+  // different context, a new env var) survives the strip and still fails the boundary.
   {
     module: "dist/cli/index",
     pattern: /\bTODOS_API_URL\b/,
-    occurrence: LEGACY_TODOS_API_URL_SCRUB,
+    occurrence: LEGACY_TODOS_API_URL_DELETE,
     reason:
-      "the admitted-local redaction must NAME the unprefixed alias in order to blank it " +
+      "the admitted-local redaction must NAME the unprefixed alias in order to delete it " +
       "(src/cli/stage-a.ts); it neutralizes hosted routing, it does not reach it. Scoped to " +
-      "the exact emitted assignment shape: a read of the same variable is not followed by an " +
-      "empty-string assignment and would still fail.",
+      "the exact emitted delete statement (the retired blanking assignment is NOT exempt — " +
+      "release-review P1, 0d22a7aa2): a read of the same variable, or any other spelling, " +
+      "is not this statement and would still fail.",
   },
   {
     module: "dist/testing",
