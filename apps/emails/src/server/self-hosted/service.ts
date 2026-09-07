@@ -1,3 +1,4 @@
+import { WorkerError, workerFence, workerId } from "./worker-supervisor.js";
 import { runtimeLogQuery, withRuntimeLog } from "./runtime-log.js";
 import { writeManagedProvider, type ManagedCredentialValidator } from "./managed-provider-write.js";
 import { runProviderSecretOperation } from "./provider-secret-operations.js";
@@ -891,6 +892,25 @@ export interface SelfHostedRequestContext {
   /** Socket peer address, e.g. `server.requestIP(req)?.address`. Anchors the
    * per-IP auth rate limits, which must never key on a client-supplied header. */
   socketAddress?: string | null;
+}
+
+async function executeScheduledRequest(deps: SelfHostedServiceDeps, req: Request, context: SelfHostedRequestContext, store: TenantScopedStore, limit: number, sequenceLimit: number): Promise<Response> {
+  const { runScheduledBatch } = await import("./scheduler.js");
+  const send = async (payload: Record<string, unknown>) => {
+    const sendUrl = new URL("/v1/messages/send", req.url);
+    const headers = new Headers(req.headers);
+    headers.set("Content-Type", "application/json");
+    headers.delete("Content-Length");
+    const response = await handleSelfHostedRequest(deps, new Request(sendUrl, { method: "POST", headers, body: JSON.stringify(payload) }), context);
+    if (!response) throw new Error("Send handler was not available");
+    return response;
+  };
+  return await withRuntimeLog(store, "scheduler", "scheduled_run", async () => {
+    const result = await runScheduledBatch(store, send, limit);
+    const { runSequenceBatch } = await import("./sequence-worker.js");
+    const sequenceResult = sequenceLimit === 0 ? { sequences: { attempted: 0, sent: 0, failed: 0, pending: 0, skipped: 0 }, sequence_items: [] } : await runSequenceBatch(store.sequenceWorker(), send, sequenceLimit);
+    return json(200, { ...result, ...sequenceResult, sequence_execution: sequenceLimit === 0 ? "not_requested" : "executed" });
+  });
 }
 
 export async function handleSelfHostedRequest(
@@ -2717,6 +2737,43 @@ export async function handleSelfHostedRequest(
       }
     }
 
+    const workerControl = path.match(/^\/v1\/workers\/([^/]+)\/control$/);
+    if (path === "/v1/workers" || workerControl) {
+      if (method !== (workerControl ? "POST" : "GET")) return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, workerControl ? write : read);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "supervising workers"); if (denied) return denied;
+      try {
+        const backend = auth.store.workerSupervisor();
+        if (!workerControl) { const items = await backend.list(); return json(200, { items: items.slice(0,500), complete: items.length <= 500 }); }
+        const id=workerId(decodeURIComponent(workerControl[1]!)), body=await readJsonBody(req,8192), action=body.action;
+        const fields: Record<string,string[]> = {register:["owner_token","component","interval_ms"],heartbeat:["owner_token","generation"],started:["owner_token","generation"],restart:["request_id"],"restart-status":["request_id"],drain:["owner_token","generation"],"stop-request":["owner_token","generation"],stop:["owner_token","generation"],tick:["owner_token","generation","request_id"],operation:["owner_token","generation","request_id"]};
+        if(typeof action!=="string"||!Object.hasOwn(fields,action)||Object.keys(body).some(key=>key!=="action"&&!fields[action]!.includes(key)))throw new WorkerError("Invalid worker control action or fields",400);
+        if(action==="register")return json(200,{worker:await backend.register(id,body)});
+        if(action==="restart"||action==="restart-status"){const key=workerId(body.request_id);const restart=action==="restart"?await backend.restart(id,key):await backend.restartStatus(id,key);return json(restart.status==="complete"?200:202,{restart});}
+        const fence=workerFence(id,body);
+        if(action==="heartbeat")return json(200,{worker:await backend.heartbeat(fence)});
+        if(action==="started")return json(200,{worker:await backend.started(fence)});
+        if(action==="drain"||action==="stop")return json(200,{worker:await backend.drain(fence,action==="stop")});
+        if(action==="stop-request")return json(200,{worker:await backend.stopRequest(fence)});
+        const operationId=workerId(body.request_id);
+        if(action==="operation"){const operation=await backend.operation(fence,operationId);return json(operation.status==="complete"?200:202,{operation});}
+        const begun=await backend.beginOperation(fence,operationId);
+        if(!begun.claimed)return json(begun.operation.status==="complete"?200:202,{operation:begun.operation});
+        let result: Record<string,unknown>;
+        try {
+          const response=await executeScheduledRequest(deps,req,context,auth.store.withWorkerFence(fence),1,1);
+          const value=await response.json() as Record<string,unknown>;
+          const counts=(input:unknown)=>{const record=input&&typeof input==='object'?input as Record<string,unknown>:{};return Object.fromEntries(["attempted","sent","failed","pending","skipped"].map(key=>[key,Number.isSafeInteger(record[key])?record[key]:0]));};
+          result={outcome:"returned",http_status:response.status,scheduled:counts(value.scheduled),sequences:counts(value.sequences)};
+        } catch { result={outcome:"threw"}; }
+        return json(200,{operation:await backend.finishOperation(fence,operationId,result)});
+      } catch(error) {
+        if(error instanceof WorkerError)return json(error.status,{error:error.message});
+        return json(503,{error:"Worker control could not be confirmed; retain the worker/request identity and inspect its status."});
+      }
+    }
+
     if (path === "/v1/runtime/logs") {
       if (method !== "GET") return json(405, { error: "method not allowed" });
       const auth = await authenticate(deps, req, url, read);
@@ -2744,22 +2801,7 @@ export async function handleSelfHostedRequest(
       const sequenceLimit = body.sequence_limit === undefined ? 10 : body.sequence_limit;
       if (typeof sequenceLimit !== "number" || !Number.isSafeInteger(sequenceLimit) || sequenceLimit < 0 || sequenceLimit > 100) return json(400, { error: "sequence_limit must be an integer from 0 to 100" });
       if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) return json(400, { error: "limit must be an integer from 1 to 100" });
-      const { runScheduledBatch } = await import("./scheduler.js");
-      const send = async (payload: Record<string, unknown>) => {
-        const sendUrl = new URL("/v1/messages/send", req.url);
-        const headers = new Headers(req.headers);
-        headers.set("Content-Type", "application/json");
-        headers.delete("Content-Length");
-        const response = await handleSelfHostedRequest(deps, new Request(sendUrl, { method: "POST", headers, body: JSON.stringify(payload) }), context);
-        if (!response) throw new Error("Send handler was not available");
-        return response;
-      };
-      return await withRuntimeLog(auth.store, "scheduler", "scheduled_run", async () => {
-        const result = await runScheduledBatch(auth.store, send, limit);
-        const { runSequenceBatch } = await import("./sequence-worker.js");
-        const sequenceResult = sequenceLimit === 0 ? { sequences: { attempted: 0, sent: 0, failed: 0, pending: 0, skipped: 0 }, sequence_items: [] } : await runSequenceBatch(auth.store.sequenceWorker(), send, sequenceLimit);
-        return json(200, { ...result, ...sequenceResult, sequence_execution: sequenceLimit === 0 ? "not_requested" : "executed" });
-      });
+      return await executeScheduledRequest(deps, req, context, auth.store, limit, sequenceLimit);
     }
 
     if (path === "/v1/inbox/smtp") {

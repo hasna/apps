@@ -3111,6 +3111,35 @@ $$;
 CREATE TRIGGER runtime_logs_append_only BEFORE UPDATE OR DELETE ON runtime_logs FOR EACH ROW EXECUTE FUNCTION reject_runtime_log_mutation();
 `);
 
+const WORKER_SUPERVISOR = defineMigration("0038_worker_supervisor", `
+CREATE TABLE runtime_workers (
+ tenant_id UUID NOT NULL REFERENCES tenants(id), id UUID NOT NULL, component TEXT NOT NULL CHECK(component='scheduler'),
+ generation INTEGER NOT NULL DEFAULT 1 CHECK(generation>0), owner_hash TEXT NOT NULL CHECK(owner_hash ~ '^[0-9a-f]{64}$'),
+ state TEXT NOT NULL DEFAULT 'starting' CHECK(state IN ('starting','running','draining','stopped')),
+ desired TEXT NOT NULL DEFAULT 'running' CHECK(desired IN ('running','restart','stopped')),
+ interval_ms INTEGER NOT NULL CHECK(interval_ms BETWEEN 1000 AND 3600000), restart_id UUID,
+ lease_until TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()+interval '30 seconds', heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ PRIMARY KEY(tenant_id,id)
+);
+CREATE TABLE worker_restart_requests (
+ tenant_id UUID NOT NULL, id UUID NOT NULL, worker_id UUID NOT NULL, old_generation INTEGER NOT NULL, new_generation INTEGER,
+ status TEXT NOT NULL CHECK(status IN ('draining','starting','complete')), CHECK((status='complete')=(new_generation IS NOT NULL)), CHECK(new_generation IS NULL OR new_generation=old_generation+1), created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), completed_at TIMESTAMPTZ,
+ PRIMARY KEY(tenant_id,id), FOREIGN KEY(tenant_id,worker_id) REFERENCES runtime_workers(tenant_id,id)
+);
+CREATE TABLE worker_operations (
+ tenant_id UUID NOT NULL, id UUID NOT NULL, worker_id UUID NOT NULL, generation INTEGER NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('running','complete')), result JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(), completed_at TIMESTAMPTZ,
+ PRIMARY KEY(tenant_id,worker_id,id), FOREIGN KEY(tenant_id,worker_id) REFERENCES runtime_workers(tenant_id,id)
+);
+CREATE UNIQUE INDEX worker_single_inflight ON worker_operations(tenant_id,worker_id) WHERE status='running';
+ALTER TABLE runtime_workers ENABLE ROW LEVEL SECURITY; ALTER TABLE runtime_workers FORCE ROW LEVEL SECURITY;
+CREATE POLICY runtime_workers_tenant ON runtime_workers USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid) WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+ALTER TABLE worker_restart_requests ENABLE ROW LEVEL SECURITY; ALTER TABLE worker_restart_requests FORCE ROW LEVEL SECURITY;
+CREATE POLICY worker_restarts_tenant ON worker_restart_requests USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid) WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+ALTER TABLE worker_operations ENABLE ROW LEVEL SECURITY; ALTER TABLE worker_operations FORCE ROW LEVEL SECURITY;
+CREATE POLICY worker_operations_tenant ON worker_operations USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid) WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+`);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3156,5 +3185,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MESSAGE_TRACKING,
     MANAGED_PROVIDER_CREDENTIALS,
     RUNTIME_LOGS,
+    WORKER_SUPERVISOR,
   ];
 }

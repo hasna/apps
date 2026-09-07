@@ -29,6 +29,7 @@ export const LIVE_POSTGRES_SUITES = Object.freeze([
   "smtp-import.integration.test.ts",
   "store-conformance.integration.test.ts",
   "webhooks.integration.test.ts",
+  "worker-supervisor.integration.test.ts",
 ]);
 
 // These optional checks have private/external prerequisites: a production-schema
@@ -40,7 +41,7 @@ export const OPTIONAL_SKIPS = Object.freeze({
   "idp.integration.test.ts": "live @hasna/tenants JWKS endpoint > serves a JWKS the authenticator accepts, and refuses our locally-signed token (typed unknown_kid)",
 });
 
-// Executed-case floors from the registration census (232 cases, including the
+// Executed-case floors from the registration census (239 cases, including the
 // two named optional checks). The multi-tenancy floor is the suite's own 34
 // tenancy and outbound-enforcement cases as merged onto origin/main; the
 // counts here are re-derived from the actual suites whenever main moves them.
@@ -65,6 +66,7 @@ export const MINIMUM_PASS_COUNTS = Object.freeze({
   "smtp-import.integration.test.ts": 3,
   "store-conformance.integration.test.ts": 8,
   "webhooks.integration.test.ts": 23,
+  "worker-supervisor.integration.test.ts": 7,
 });
 
 export function validateTestDatabaseUrl(value) {

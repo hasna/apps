@@ -35,7 +35,7 @@ errors are written to stderr.
 | `forwarding` | `add`, `list`, `enable`, `disable`, `remove`, `run`, `explain` |
 | `aws` | `setup-inbound`, `status` |
 | `agent` | `context` |
-| `daemon` | `status`, `restart` |
+| `daemon` | `start`, `status`, `restart` |
 | `logs` | `tail` |
 | `db` | `migrate`, `status` for the self-hosted Postgres schema. |
 | `self-hosted` | `key create/list/rotate/revoke` for operator application keys. |

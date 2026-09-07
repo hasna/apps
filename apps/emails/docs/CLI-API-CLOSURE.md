@@ -29,7 +29,7 @@ This is a source implementation matrix, not a claim that the public service or n
 | `provider secrets status` | Operator API reports actual tenant provider bindings and credential sources; ordinary clients no longer open a local keyring database | Deploy status route; reference-backed credentials remain externally managed |
 | `provider secrets install/rewrap/rotate-root/revoke-root`, provider add/update | Authenticated tenant credential lifecycle, KMS envelope encryption and atomic provider writes | Deploy migration 0036, routes and KMS configuration; server resolves provider secrets |
 | `logs tail` | Persisted tenant API operation events, with operator authorization and fixed fields | Deploy migration 0037 and routes; historical activity and container stdout are not reconstructed |
-| `daemon restart` | Actual supervisor implementation remains | Confirmed worker ownership, drain and replacement generation |
+| `daemon start/status/restart` | Foreground scheduler/sequence workers with durable ownership, fenced claims, drain and confirmed restart generations | Deploy migration 0038 and worker routes; expired or uncertain owners require reconciliation |
 | `self-hosted key/idp-principal`, `db`, `serve` | Canonical `server key/idp-principal/db` operator namespace; `self-hosted` and root `db` compatibility aliases | Server database/signing credentials remain required for bootstrap actions; ordinary account API keys use `keys` |
 
 ## Scheduled execution boundaries

@@ -1,3 +1,4 @@
+import { WorkerSupervisorStore, WORKER_CLAIM_CTE, type WorkerFence } from "./worker-supervisor.js";
 import type { RuntimeLogEntry, RuntimeComponent } from "./runtime-log.js";
 import { DomainDnsJobs } from "./domain-dns-store.js";
 import * as domainConnectStore from "./domain-connect-store.js";
@@ -2253,7 +2254,16 @@ export class TenantScopedStore {
     private readonly atomicClient?: PoolQueryClient,
     private readonly allowUnsafeTestTransactions = false,
     private readonly repairPolicy: AttachmentRepairPolicy = attachmentRepairPolicy(undefined),
+    private readonly workerFence?: WorkerFence,
   ) {}
+
+  workerSupervisor(): WorkerSupervisorStore {
+    if (!this.atomicClient) throw new Error("Worker supervision requires a transactional store");
+    return new WorkerSupervisorStore(this.atomicClient, this.tenantId);
+  }
+  withWorkerFence(fence: WorkerFence): TenantScopedStore {
+    return new TenantScopedStore(this.client, this.tenantId, this.atomicClient, this.allowUnsafeTestTransactions, this.repairPolicy, fence);
+  }
 
   async appendRuntimeLog(entry: Omit<RuntimeLogEntry, "id" | "created_at">): Promise<void> {
     await this.client.execute("INSERT INTO runtime_logs(id,tenant_id,request_id,component,operation,event,http_status) VALUES($1,$2,$3,$4,$5,$6,$7)", [crypto.randomUUID(), this.tenantId, entry.request_id, entry.component, entry.operation, entry.event, entry.http_status]);
@@ -5581,16 +5591,17 @@ export class TenantScopedStore {
   async claimDueScheduled(limit: number): Promise<Record<string, unknown>[]> {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new RangeError("Scheduler limit must be 1–100");
     return this.client.many<Record<string, unknown>>(
-      `WITH due AS (
+      `${this.workerFence ? WORKER_CLAIM_CTE : "WITH"} due AS (
          SELECT id FROM scheduled_emails
          WHERE tenant_id = $1 AND scheduled_at <= now()
+           ${this.workerFence ? "AND EXISTS(SELECT 1 FROM worker_guard)" : ""}
            AND (status = 'pending' OR (status = 'processing' AND updated_at < now() - interval '5 minutes'))
          ORDER BY scheduled_at, id FOR UPDATE SKIP LOCKED LIMIT $2
        )
        UPDATE scheduled_emails s SET status = 'processing', error = NULL,
          updated_at = date_trunc('milliseconds', clock_timestamp())
        FROM due WHERE s.id = due.id AND s.tenant_id = $1 RETURNING s.*`,
-      [this.tenantId, limit],
+      [this.tenantId, limit, ...(this.workerFence ? [this.workerFence.id,this.workerFence.generation,this.workerFence.ownerHash] : [])],
     );
   }
 
@@ -5603,7 +5614,7 @@ export class TenantScopedStore {
     return row !== null;
   }
 
-  sequenceWorker(): SequenceWorkerStore { return new SequenceWorkerStore(this.client, this.tenantId); }
+  sequenceWorker(): SequenceWorkerStore { return new SequenceWorkerStore(this.client, this.tenantId, this.workerFence); }
 
   async getScheduledTemplate(name: string): Promise<Record<string, unknown> | null> {
     return this.client.get<Record<string, unknown>>(

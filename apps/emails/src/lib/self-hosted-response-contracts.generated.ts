@@ -45537,6 +45537,481 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "items",
+        "complete"
+      ],
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "component",
+              "generation",
+              "state",
+              "desired",
+              "lease_until",
+              "heartbeat_at",
+              "lease_fresh",
+              "restart_id",
+              "interval_ms"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "component": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "desired": {
+                "type": "string"
+              },
+              "lease_until": {
+                "type": "string"
+              },
+              "heartbeat_at": {
+                "type": "string"
+              },
+              "generation": {
+                "type": "integer"
+              },
+              "interval_ms": {
+                "type": "integer"
+              },
+              "lease_fresh": {
+                "type": "boolean"
+              },
+              "restart_id": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          }
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 400,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 401,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 403,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 422,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 429,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 500,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listWorkers",
+    "path": "/v1/workers",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "worker": {
+          "type": "object",
+          "required": [
+            "id",
+            "component",
+            "generation",
+            "state",
+            "desired",
+            "lease_until",
+            "heartbeat_at",
+            "lease_fresh",
+            "restart_id",
+            "interval_ms"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "component": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "desired": {
+              "type": "string"
+            },
+            "lease_until": {
+              "type": "string"
+            },
+            "heartbeat_at": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "interval_ms": {
+              "type": "integer"
+            },
+            "lease_fresh": {
+              "type": "boolean"
+            },
+            "restart_id": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        },
+        "operation": {
+          "type": "object",
+          "required": [
+            "id",
+            "status",
+            "result",
+            "generation"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "result": {
+              "type": "object",
+              "additionalProperties": true,
+              "nullable": true
+            }
+          }
+        },
+        "restart": {
+          "type": "object",
+          "required": [
+            "id",
+            "worker_id",
+            "status",
+            "old_generation",
+            "new_generation"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "worker_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "old_generation": {
+              "type": "integer"
+            },
+            "new_generation": {
+              "type": "integer",
+              "nullable": true
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 202,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "worker": {
+          "type": "object",
+          "required": [
+            "id",
+            "component",
+            "generation",
+            "state",
+            "desired",
+            "lease_until",
+            "heartbeat_at",
+            "lease_fresh",
+            "restart_id",
+            "interval_ms"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "component": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "desired": {
+              "type": "string"
+            },
+            "lease_until": {
+              "type": "string"
+            },
+            "heartbeat_at": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "interval_ms": {
+              "type": "integer"
+            },
+            "lease_fresh": {
+              "type": "boolean"
+            },
+            "restart_id": {
+              "type": "string",
+              "nullable": true
+            }
+          }
+        },
+        "operation": {
+          "type": "object",
+          "required": [
+            "id",
+            "status",
+            "result",
+            "generation"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "generation": {
+              "type": "integer"
+            },
+            "result": {
+              "type": "object",
+              "additionalProperties": true,
+              "nullable": true
+            }
+          }
+        },
+        "restart": {
+          "type": "object",
+          "required": [
+            "id",
+            "worker_id",
+            "status",
+            "old_generation",
+            "new_generation"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "worker_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "old_generation": {
+              "type": "integer"
+            },
+            "new_generation": {
+              "type": "integer",
+              "nullable": true
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 400,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 401,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 403,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 422,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 429,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 500,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "controlWorker",
+    "path": "/v1/workers/{id}/control",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
     "operationId": "getVersion",
     "path": "/version",
     "status": 200,

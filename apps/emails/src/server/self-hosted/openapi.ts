@@ -5141,3 +5141,396 @@ emailsSelfHostedOpenApi.paths!["/v1/runtime/logs"] = {
   }
 };
 for (const code of ["400", "401", "403", "404", "405", "503"]) (emailsSelfHostedOpenApi.paths!["/v1/runtime/logs"]!.get as { responses: Record<string, unknown> }).responses[code] = errorResponse("Runtime log request failed");
+
+emailsSelfHostedOpenApi.paths!["/v1/workers"] = {
+  "get": {
+    "operationId": "listWorkers",
+    "summary": "List real tenant worker generations and lease freshness (operator only)",
+    "security": [
+      {
+        "apiKeyAuth": []
+      },
+      {
+        "bearerAuth": []
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "Worker registry, not an inferred process count",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "items",
+                "complete"
+              ],
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "component",
+                      "generation",
+                      "state",
+                      "desired",
+                      "lease_until",
+                      "heartbeat_at",
+                      "lease_fresh",
+                      "restart_id",
+                      "interval_ms"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "component": {
+                        "type": "string"
+                      },
+                      "state": {
+                        "type": "string"
+                      },
+                      "desired": {
+                        "type": "string"
+                      },
+                      "lease_until": {
+                        "type": "string"
+                      },
+                      "heartbeat_at": {
+                        "type": "string"
+                      },
+                      "generation": {
+                        "type": "integer"
+                      },
+                      "interval_ms": {
+                        "type": "integer"
+                      },
+                      "lease_fresh": {
+                        "type": "boolean"
+                      },
+                      "restart_id": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  }
+                },
+                "complete": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+};
+emailsSelfHostedOpenApi.paths!["/v1/workers/{id}/control"] = {
+  "post": {
+    "operationId": "controlWorker",
+    "summary": "Control a tenant foreground worker through cooperative ownership and durable operation receipts",
+    "security": [
+      {
+        "apiKeyAuth": []
+      },
+      {
+        "bearerAuth": []
+      }
+    ],
+    "parameters": [
+      {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    ],
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "register",
+                  "heartbeat",
+                  "started",
+                  "restart",
+                  "restart-status",
+                  "drain",
+                  "stop-request",
+                  "stop",
+                  "tick",
+                  "operation"
+                ]
+              },
+              "owner_token": {
+                "type": "string"
+              },
+              "generation": {
+                "type": "integer"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "component": {
+                "type": "string",
+                "enum": [
+                  "scheduler"
+                ]
+              },
+              "interval_ms": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 3600000
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Worker control receipt",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "worker": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "component",
+                    "generation",
+                    "state",
+                    "desired",
+                    "lease_until",
+                    "heartbeat_at",
+                    "lease_fresh",
+                    "restart_id",
+                    "interval_ms"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "component": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "desired": {
+                      "type": "string"
+                    },
+                    "lease_until": {
+                      "type": "string"
+                    },
+                    "heartbeat_at": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer"
+                    },
+                    "interval_ms": {
+                      "type": "integer"
+                    },
+                    "lease_fresh": {
+                      "type": "boolean"
+                    },
+                    "restart_id": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                },
+                "operation": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "status",
+                    "result",
+                    "generation"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer"
+                    },
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "nullable": true
+                    }
+                  }
+                },
+                "restart": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "worker_id",
+                    "status",
+                    "old_generation",
+                    "new_generation"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "worker_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "old_generation": {
+                      "type": "integer"
+                    },
+                    "new_generation": {
+                      "type": "integer",
+                      "nullable": true
+                    }
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "202": {
+        "description": "Worker control receipt",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "worker": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "component",
+                    "generation",
+                    "state",
+                    "desired",
+                    "lease_until",
+                    "heartbeat_at",
+                    "lease_fresh",
+                    "restart_id",
+                    "interval_ms"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "component": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "desired": {
+                      "type": "string"
+                    },
+                    "lease_until": {
+                      "type": "string"
+                    },
+                    "heartbeat_at": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer"
+                    },
+                    "interval_ms": {
+                      "type": "integer"
+                    },
+                    "lease_fresh": {
+                      "type": "boolean"
+                    },
+                    "restart_id": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                },
+                "operation": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "status",
+                    "result",
+                    "generation"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "generation": {
+                      "type": "integer"
+                    },
+                    "result": {
+                      "type": "object",
+                      "additionalProperties": true,
+                      "nullable": true
+                    }
+                  }
+                },
+                "restart": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "worker_id",
+                    "status",
+                    "old_generation",
+                    "new_generation"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "worker_id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "old_generation": {
+                      "type": "integer"
+                    },
+                    "new_generation": {
+                      "type": "integer",
+                      "nullable": true
+                    }
+                  }
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      }
+    }
+  }
+};
+for (const path of ["/v1/workers", "/v1/workers/{id}/control"]) { const item = emailsSelfHostedOpenApi.paths![path]!; const operation = (item.get ?? item.post) as { responses: Record<string,unknown> }; for (const code of ["400","401","403","404","405","409","422","429","500","503"]) operation.responses[code]=errorResponse("Worker control failed"); }

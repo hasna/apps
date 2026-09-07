@@ -2679,6 +2679,24 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** List real tenant worker generations and lease freshness (operator only) */
+    async listWorkers(init?: RequestInit): Promise<{ "items": Array<{ "id": string; "component": string; "state": string; "desired": string; "lease_until": string; "heartbeat_at": string; "generation": number; "interval_ms": number; "lease_fresh": boolean; "restart_id": string | null }>; "complete": boolean }> {
+      return this.request("GET", `/v1/workers`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Control a tenant foreground worker through cooperative ownership and durable operation receipts */
+    async controlWorker(id: string, body: { "action": "register" | "heartbeat" | "started" | "restart" | "restart-status" | "drain" | "stop-request" | "stop" | "tick" | "operation"; "owner_token"?: string; "generation"?: number; "request_id"?: string; "component"?: "scheduler"; "interval_ms"?: number }, init?: RequestInit): Promise<{ "worker"?: { "id": string; "component": string; "state": string; "desired": string; "lease_until": string; "heartbeat_at": string; "generation": number; "interval_ms": number; "lease_fresh": boolean; "restart_id": string | null }; "operation"?: { "id": string; "status": string; "generation": number; "result": Record<string, unknown> | null }; "restart"?: { "id": string; "worker_id": string; "status": string; "old_generation": number; "new_generation": number | null } }> {
+      return this.request("POST", `/v1/workers/${encodeURIComponent(String(id))}/control`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Service version and mode */
     async getVersion(init?: RequestInit): Promise<{ "status": "ok"; "version": string; "mode": "self_hosted"; "name": "emails" }> {
       return this.request("GET", `/version`, {

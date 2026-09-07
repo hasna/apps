@@ -1,31 +1,32 @@
-# Cooperative worker supervisor: next implementation
+# Foreground worker supervisor
 
-`daemon restart` is not complete until a real worker owner stops its old loop, drains in-flight work and starts a new generation. The runtime log endpoint is useful evidence but is not a supervisor, heartbeat or restart receipt. This document specifies the next implementation; none of these controls is currently shipped.
+`emails daemon start` owns an actual foreground scheduler and sequence loop. It uses saved API credentials and requires tenant operator authority. It does not restart the API service, change ECS, launch a hidden process, or use local SQLite/PID state.
 
-Prefer a foreground `emails daemon start` supervisor process that uses ordinary authenticated API worker operations. It may run on the operator's machine or a separately provisioned worker host. It does not restart the API service or mutate ECS. Starting a new worker is explicit; restarting only addresses an existing registered worker.
+```sh
+emails daemon start --worker <uuid> --interval 60
+emails daemon status
+emails daemon restart --worker <uuid> --idempotency-key <uuid> --timeout 60
+emails daemon start --once
+```
 
-## Durable records and ownership
+A batch claims at most one scheduled message and one sequence enrollment. Existing job leases, suppression checks and stable send identities remain authoritative. Other components, including inbox watch and provisioning, retain their explicit commands; this supervisor does not own those loops yet.
 
-Add tenant-scoped worker registrations, ownership leases and restart requests in PostgreSQL. A worker registration has an opaque UUID, fixed supported component, validated configuration references (source/provider IDs, never secrets), generation, owner lease, heartbeat deadline, desired state and observed state. The owner token is a credential and must not be exposed in status/logs. The server stores a hash; operations authenticate the current owner independently of human operator permissions.
+## Ownership and restart evidence
 
-Registration and lifecycle writes require tenant operator authority. A data-only writer cannot register a privileged worker or supply an execution identity. The supervisor calls existing API operations using the operator credentials already resolved for that process; it cannot execute arbitrary commands or request cross-tenant sources. Each restart request has a caller-provided reusable UUID and immutable worker target/configuration hash. Replays return the same durable request state.
+Migration `0038_worker_supervisor` stores tenant-scoped worker registrations, restart requests and operation receipts in PostgreSQL with forced row-level security. All control requests require an operator, including status. Registration creates a random memory-only owner token; only its SHA-256 hash is persisted. Status and receipts never expose the token or hash.
 
-## Restart transition
+The owner renews a 30-second lease independently while an API operation is running. Before every dispatch it obtains fresh ownership evidence. Transient heartbeat failures retry within the existing lease; an expired lease or rejected owner cannot dispatch. SQL guards lock and validate the current worker generation inside both scheduled-message and sequence-enrollment claims. Restart changes the desired state under the same row lock, preventing new claims from the old generation.
 
-1. An operator requests restart for an existing worker UUID. The server commits `requested` and the expected old generation atomically; concurrent requests coalesce or conflict explicitly.
-2. The owner polls control with its lease token. It observes `draining`, stops accepting new work, and waits for current API operations to return durable receipts. Abort alone is not proof that an API operation stopped: some server work can continue after transport cancellation.
-3. The old owner acknowledges the drained generation only after every tracked in-flight request is settled or reconciled through its durable job identity. Unknown send outcomes leave the restart pending; never clear existing job leases to manufacture progress.
-4. The supervisor terminates the old loop and atomically acquires a new generation/lease using a compare-and-swap transition. It initializes the replacement loop and reports a fresh heartbeat. Only then may the durable restart receipt become `complete`, including old and new generations.
-5. Lost ownership or expired heartbeats stop new work immediately. An expired lease is `unreachable`, not `stopped` or `restarted`. A new owner must fence or reconcile old in-flight execution before takeover. Worker requests should carry a generation token which the API verifies before each new batch claim. Existing per-job leases and send idempotency remain in force.
+A restart request has a reusable UUID. The owner stops dispatching, waits for its durable server operation receipt, and asks the server to drain. A running operation prevents this transition. The server then advances the generation to `starting`; only the replacement loop's authenticated start acknowledgement completes the restart receipt. Repeated requests return the same old/new generation evidence. An omitted worker selector is accepted only for one complete registry entry.
 
-Graceful process shutdown follows the same draining protocol. SIGINT/SIGTERM stops scheduling new operations, reconciles in-flight work, marks the owner stopped if confirmed, and releases the ownership lease. A forced termination leaves an expired/unknown owner and pending receipt for later reconciliation.
+HTTP cancellation is not evidence of completion. A timed-out tick is reconciled by its original operation UUID, without substituting another request. The owner continues heartbeating while it waits. If the operation remains unknown, the process reports its IDs and exits unsuccessfully without marking it drained. Completed server execution can drain even when a job has an uncertain delivery receipt: the existing job lease and send identity are preserved. Operation completion and batch success are separate; iteration output includes sanitized counters, and `--once` exits unsuccessfully after safe shutdown when execution failed or work remains pending.
 
-## CLI and evidence
+SIGINT/SIGTERM requests the same bounded drain and marks the generation stopped only after server confirmation. A cleanly stopped registration can be reused with a new owner and generation. An expired `starting` generation with no running operations can be claimed by a replacement token without skipping its generation or losing its pending restart request. An expired `running` owner remains visibly unreachable: automatic takeover is deliberately unavailable until its possible execution is reconciled. Starting a separate worker does not clear that owner's operation records or job leases.
 
-`daemon status` reports real observed generation, lease freshness, desired/observed state and pending restart IDs. `daemon restart --worker <id> --idempotency-key <uuid>` polls a bounded deadline and exits successfully only for a completed receipt. Pending, expired or uncertain requests retain their request ID and exit unsuccessfully. An omitted worker selector is allowed only when exactly one tenant worker is eligible; it must never choose arbitrarily.
+## Logs and limits
 
-Log fixed lifecycle events through the append-only runtime sink: registration, drain requested, generation stopped, generation started and lease lost. Add their operation/event enums in a separately reviewed migration. Log neither owner tokens nor credential material.
+Scheduler and sequence operations use the existing append-only runtime log sink. Worker ownership, desired state, generation and restart outcomes come from the dedicated control records; they are not inferred from logs. No new lifecycle log enum is introduced. Receipts contain fixed counters and execution classification, never mail bodies, provider errors or credentials.
 
-Tests must cover concurrent owners, stale generation tokens, repeated restart IDs, SIGINT/drain, transport cancellation with continuing server work, lost heartbeat, startup failure, ambiguous targets, and inability of read/write principals to acquire operator execution authority. Integration uses synthetic jobs and disposable PostgreSQL; it must not launch production workers or send email.
+The API routes are `GET /v1/workers` and `POST /v1/workers/{id}/control`. Old APIs return an explicit compatibility failure. Read-only and data-writer principals cannot acquire worker execution authority. Registry lists are bounded at 500 entries with a completeness flag.
 
-The provisioning orchestration follow-up exposes `POST /v1/provision/tick`, which performs one durable step. Integrate that operation as a bounded worker iteration alongside scheduler and inbox watch. The supervisor owns those loops; it must not create a competing provisioning executor.
+Synthetic tests cover concurrent restart replay, tenant and owner isolation, stale SQL claim fences, pending operations, heartbeat retries, safe failure reporting, stopped/starting recovery, and two actual CLI processes completing a generation change. They use disposable PostgreSQL and never send real email.
