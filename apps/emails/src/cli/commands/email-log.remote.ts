@@ -671,6 +671,7 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
 
         const { exportEmailsCsv, exportEmailsJson, exportEventsCsv, exportEventsJson, EXPORT_DEFAULT_LIMIT } =
           await import("../../lib/export.js");
+        if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("Provider ID must not be empty.");
         const providerId = opts.provider ? resolveId("providers", opts.provider) : undefined;
         const fmt = opts.format ?? "json";
         const hasPage = opts.limit !== undefined || opts.offset !== undefined;

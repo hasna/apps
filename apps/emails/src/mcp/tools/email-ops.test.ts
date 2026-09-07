@@ -56,7 +56,7 @@ let stub: V1Stub;
 const providerId = "00000000-0000-4000-8000-000000000071";
 beforeAll(async () => {
   stub = await startV1Stub({ openapi: true, apiKey: crypto.randomUUID(), seed: {
-    providers: [{ id: providerId, name: "email-ops-fixture", type: "ses", active: true }],
+    providers: [{ id: providerId, name: "email-ops-fixture", type: "ses", active: true }, { id: "00000000-0000-4000-8000-000000000099", name: "other-provider", type: "ses", active: true }],
   } });
 });
 beforeEach(async () => { await stub.reset(); stub.applyEnv(); });
@@ -280,11 +280,11 @@ describe("collapsed email-ops tool family", () => {
     });
     const emailId = (JSON.parse(text(sent)) as { email_id: string }).email_id;
 
-    // The legacy ledger facade still refuses provider filtering; pin that
-    // honest refusal until its projection is migrated to the API message model.
     const filtered = await call("list_emails", { provider_id: providerId, limit: 10 });
-    expect(filtered.isError).toBe(true);
-    expect(text(filtered)).toContain("provider_id");
+    expect(filtered.isError).not.toBe(true);
+    expect(JSON.parse(text(filtered))).toEqual([expect.objectContaining({ id: emailId, provider_id: providerId })]);
+    const otherProvider = await call("list_emails", { provider_id: "00000000-0000-4000-8000-000000000099", limit: 10 });
+    expect(JSON.parse(text(otherProvider))).toEqual([]);
     const all = JSON.parse(text(await call("list_emails", { limit: 10 }))) as unknown[];
     expect(all).toHaveLength(1);
     // The status filter is still served, in this module, over the enumerated stream.
@@ -298,6 +298,14 @@ describe("collapsed email-ops tool family", () => {
 
     expect(text(await call("get_email", { email_id: emailId }))).toContain("readback subject");
     expect(text(await call("get_email_content", { email_id: emailId }))).toContain("readback body");
+    const otherSent = await call("send_email", {
+      from: "ops@example.com", to: ["user@example.com"], subject: "other provider message",
+      text: "other body", provider_id: "00000000-0000-4000-8000-000000000099",
+    });
+    expect(otherSent.isError).not.toBe(true);
+    const scopedAgain = await call("list_emails", { provider_id: providerId, limit: 10 });
+    expect(JSON.parse(text(scopedAgain))).toEqual([expect.objectContaining({ id: emailId, provider_id: providerId })]);
+    expect(JSON.parse(text(await call("list_emails", { limit: 10 })))).toHaveLength(2);
   });
 
   it("answers an unknown id with a not-found refusal, never with an empty result", async () => {

@@ -142,34 +142,11 @@
 // 12. `deleteEmail` ANSWERS A BOOLEAN AND BOTH ARMS AGREED that a delete of a row that is
 //     not there is `false` rather than an error. Preserved.
 //
-// ─── FOUR FIELDS THE SEAM DOES NOT PUBLISH, AND WHY THEY ARE `null` RATHER THAN EMPTY ──
-//
-// `MessageRecord` and `MessageListRecord` carry NO `provider_id`, NO `bcc_addrs`, NO
-// `reply_to` and NO `tags`. This is UNIFORM: it is not one store that cannot answer, it is
-// the seam that does not model a provider-scoped sent ledger, and the SQLite store's own
-// unified projection does not select those columns even though the table beneath it has
-// them (src/store-sqlite/messages-sql.ts).
-//
-// The deleted HTTP arm filled them with `"self_hosted"`, `[]`, `null` and `{}` — four
-// comfortable values indistinguishable from four real ones. `Email` is widened instead, so
-// `null` means "this store does not publish it" and an empty array keeps meaning "there
-// were no bcc recipients". `reply_to` was ALREADY `string | null` and is the one field
-// where the two meanings still collide; separating them needs a second field on a published
-// type, which is a larger change than this collapse, and it is named here rather than left
-// to be discovered.
-//
-// THE `provider_id` FILTER THEREFORE CANNOT BE APPLIED, and `listEmails` REFUSES it rather
-// than ignoring it. Ignoring a filter returns rows the caller did not ask for; answering
-// `[]` invents an empty ledger. `emails log list --provider`, `emails sync`,
-// `GET /api/emails?provider_id=` and `emails export emails --provider` all reach it, and
-// all of them now get an error that says exactly what is missing.
-//
-// A SEAM WIDENING, DESCRIBED AND NOT MADE. Adding `provider_id` to `MessageRecord`,
-// `MessageListRecord`, `MessageInput` and `ListMessagesOptions` — the column exists on both
-// physical tables and in the service's own schema — restores the filter, the field, and
-// half the write. A SECOND widening would restore the rest of the write: `bcc_addrs`,
-// `reply_to` and `tags` on `MessageInput` and `MessageRecord`. Neither is made here: two
-// audits are waiting on `src/store/` and this change leaves it byte-identical.
+// Provider provenance is optional on older projections. Current stores expose provider_id
+// and filter it at the repository boundary; the HTTP repository checks advertised support
+// before requesting scoped data and rejects rows outside the requested provider.
+// Missing BCC, reply-to and tags remain null rather than fabricated empty values.
+// The historical sent-ledger write stays separate from these read capabilities.
 //
 // ─── `attachment_count` MEANS SOMETHING ELSE NOW, AND THAT IS THE STORE'S DECISION ─────
 //
@@ -393,6 +370,7 @@ function toEmail(
     | "cc_addrs"
     | "subject"
     | "status"
+    | "provider_id"
     | "provider_message_id"
     | "received_at"
     | "created_at"
@@ -403,9 +381,9 @@ function toEmail(
   const createdAt = requiredTimestamp(row.created_at, row.id, "created_at");
   return {
     id: row.id,
-    // The four fields the seam does not publish. `null` is "this store does not record it",
+    // Fields absent from older projections remain null. `null` is "this store does not record it",
     // never "there is none of it" — see the shape note in the module header.
-    provider_id: null,
+    provider_id: row.provider_id ?? null,
     provider_message_id: row.provider_message_id,
     from_address: row.from_addr,
     to_addresses: [...row.to_addrs],
@@ -496,7 +474,7 @@ function datedFor(row: MessageListRecord, what: string): string {
 /**
  * Every outbound row, in ONE walk, with the caller's predicate applied to the RAW record.
  *
- * `direction` is the only filter pushed down (divergences 10 and 11 say why the others are
+ * `direction` and optional provider identity are pushed down (divergences 10 and 11 say why content filters are
  * not), and the direction of each row is re-checked here as well: the push-down is the
  * store's predicate and this is the same question asked of the row that came back, so a
  * store that widens it cannot leak a received message into the sent ledger.
@@ -504,16 +482,17 @@ function datedFor(row: MessageListRecord, what: string): string {
 async function enumerateOutbound(
   store: EmailStore,
   keep: (row: MessageListRecord) => boolean,
+  providerId?: string,
 ): Promise<StoreCursorEnumeration<MessageListRecord>> {
   const enumeration = await enumerateStorePages<MessageListRecord>(
-    (opts) => store.messages.listMessages({ direction: "outbound", ...opts }),
+    (opts) => store.messages.listMessages({ direction: "outbound", ...(providerId ? { provider_id: providerId } : {}), ...opts }),
     { idOf: (row) => row.id, pageBudget: MAX_LEDGER_PAGES },
   );
   return { ...enumeration, rows: enumeration.rows.filter((row) => isOutbound(row.direction) && keep(row)) };
 }
 
 /**
- * Every sent-ledger filter except the provider, applied to the RAW record.
+ * Sent-ledger content filters, applied to the raw record after provider scoping.
  *
  * `status` is compared as TEXT rather than through `emailStatusOf`, deliberately: a row whose
  * status this family cannot present is still a row that does or does not carry the value the
@@ -556,29 +535,6 @@ function matchesFilter(row: MessageListRecord, filter: EmailFilter, what: string
     if (filter.until && dated > filter.until) return false;
   }
   return true;
-}
-
-/**
- * The filter this family cannot apply, refused by name.
- *
- * See the shape note in the module header: no message projection on the seam carries a
- * provider, so `provider_id` can be neither pushed down nor re-checked. Ignoring it returns
- * rows the caller did not ask for; answering `[]` invents an empty ledger.
- *
- * ONLY A NON-BLANK PROVIDER REFUSES. Every caller in this repo passes
- * `opts.provider ? resolveId(...) : undefined`, so `undefined` is the overwhelmingly common
- * case and it must reach the ledger untouched — an unconditional throw here would take the
- * whole sent-ledger list path down rather than one filter, which is exactly what happened
- * once during this collapse and is why the empty-and-undefined cases are pinned.
- */
-function assertProviderFilterAvailable(providerId: string | undefined, what: string): void {
-  if (providerId === undefined || providerId.trim() === "") return;
-  throw new Error(
-    `Refusing to ${what} filtered by provider: this installation's store does not record which `
-      + "provider sent a message (no message projection on the store seam carries provider_id), so the "
-      + "filter can be neither applied nor checked, and answering with every provider's mail or with "
-      + "nothing would both be wrong. Drop the provider filter to read the whole sent ledger.",
-  );
 }
 
 // ─── The family ─────────────────────────────────────────────────────────────
@@ -679,8 +635,9 @@ export async function resolveEmailId(id: string, store?: LedgerStore): Promise<s
 /** The sent ledger, filtered, ordered newest-first and windowed — or a refusal. */
 export async function listEmails(filter: EmailFilter = {}, store?: LedgerStore): Promise<Email[]> {
   const what = "list the sent ledger";
-  assertProviderFilterAvailable(filter.provider_id, what);
-  const enumeration = await enumerateOutbound(storeFor(store), (row) => matchesFilter(row, filter, what));
+  const providerId = filter.provider_id?.trim();
+  const enumeration = await enumerateOutbound(storeFor(store), (row) =>
+    (!providerId || row.provider_id === providerId) && matchesFilter(row, filter, what), providerId);
   assertWholeStream(what, enumeration);
   const rows = enumeration.rows.sort(byNewestFirstRaw);
   return windowed(rows, safeOptionalLimit(filter.limit), safeOffset(filter.offset)).map(listRecordToEmail);
