@@ -278,6 +278,7 @@ async function selfHostedSentList(
   output: (data: unknown, formatted: string) => void,
   _command: string,
 ): Promise<void> {
+  if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("Provider ID must not be empty.");
   const source = opts.provider ? { providerId: resolveId("providers", opts.provider) } : undefined;
   if (opts.status && !["sent", "delivered", "bounced", "complained", "failed", "queued", "blocked", "uncertain"].includes(opts.status)) {
     throw new Error(`Invalid email status: ${opts.status}`);

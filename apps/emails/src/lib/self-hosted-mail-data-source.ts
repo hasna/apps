@@ -979,6 +979,7 @@ function unsupportedScopeSelectors(source: MailboxSource): string[] {
  */
 function selfHostedScopeOf(source?: MailboxSource): SelfHostedScope | undefined {
   if (!source) return undefined;
+  if (source.providerId !== undefined && (typeof source.providerId !== "string" || !source.providerId.trim())) throw new Error("Provider ID must not be empty.");
   const providerId = source.providerId?.trim() || undefined;
   const address = source.address?.trim().toLowerCase() || undefined;
   const domain = source.domain?.trim().toLowerCase() || undefined;
@@ -2333,6 +2334,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
   }
 
   async clear(filter?: MailClearFilter): Promise<MailClearResult> {
+    if (filter?.providerId !== undefined && (typeof filter.providerId !== "string" || !filter.providerId.trim())) throw new Error("Provider ID must not be empty; no messages were changed.");
     if (filter?.providerId && filter.source?.providerId && filter.providerId !== filter.source.providerId) {
       throw new Error("Conflicting provider filters; no messages were changed.");
     }

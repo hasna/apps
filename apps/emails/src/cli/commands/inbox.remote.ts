@@ -173,6 +173,7 @@ function normalizeCliMailbox(value: string | undefined): Mailbox {
 }
 
 function mailboxSourceFromOptions(opts: { source?: string; provider?: string; address?: string; domain?: string }): MailboxSource | undefined {
+  if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("Provider ID must not be empty.");
   const sourceId = opts.source?.trim();
   const providerId = opts.provider?.trim();
   const address = opts.address?.trim().toLowerCase();

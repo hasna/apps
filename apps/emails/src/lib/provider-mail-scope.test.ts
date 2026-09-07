@@ -36,3 +36,14 @@ it("does not read or delete messages when an older API cannot honor provider sel
   await expect(ds.clear({ providerId: "beta" })).rejects.toThrow("API needs an update");
   expect(paths.some((p) => p === "/v1/messages")).toBe(false);
 });
+
+it("rejects blank provider selectors before reading or changing mail", async () => {
+  const paths: string[] = [];
+  const ds = new SelfHostedMailDataSource({ baseUrl: "http://127.0.0.1:1/v1", apiKey: "fixture", fetchImpl: async (input) => { paths.push(String(input)); throw new Error("Unexpected request"); } });
+  for (const providerId of ["", "   "]) {
+    await expect(ds.clear({ providerId })).rejects.toThrow("Provider ID must not be empty");
+    await expect(ds.clear({ source: { providerId } })).rejects.toThrow("Provider ID must not be empty");
+    await expect(ds.listMailbox("inbox", { source: { providerId } })).rejects.toThrow("Provider ID must not be empty");
+  }
+  expect(paths).toEqual([]);
+});
