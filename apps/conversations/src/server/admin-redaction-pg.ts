@@ -47,15 +47,23 @@ export interface RedactMessagesRequestBody {
 }
 
 export function normalizeRedactMessagesBody(body: RedactMessagesRequestBody): RedactMessagesOptions {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error("Redaction request must be a JSON object.");
+  }
+  for (const field of ["apply", "backup_confirmed", "dry_run_confirmed", "purge_attachments"] as const) {
+    if (body[field] !== undefined && typeof body[field] !== "boolean") {
+      throw new Error(`${field} must be a JSON boolean.`);
+    }
+  }
   return {
     ids: Array.isArray(body.ids) ? body.ids.filter((value) => typeof value === "number" && Number.isInteger(value) && value > 0) : [],
     actor: typeof body.actor === "string" ? body.actor : "",
     reason: typeof body.reason === "string" ? body.reason : "credential-shaped message remediation",
-    apply: Boolean(body.apply),
+    apply: body.apply === true,
     authority: typeof body.authority === "string" ? body.authority : undefined,
-    backupConfirmed: Boolean(body.backup_confirmed),
-    dryRunConfirmed: Boolean(body.dry_run_confirmed),
-    purgeAttachments: body.purge_attachments === undefined ? true : Boolean(body.purge_attachments),
+    backupConfirmed: body.backup_confirmed === true,
+    dryRunConfirmed: body.dry_run_confirmed === true,
+    purgeAttachments: body.purge_attachments !== false,
     replacementContent: typeof body.replacement_content === "string" ? body.replacement_content : undefined,
     now: typeof body.now === "string" ? body.now : undefined,
   };

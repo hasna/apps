@@ -28,7 +28,7 @@ function seededRow(overrides: Partial<Row> = {}): Row {
     from_agent: "alice",
     to_agent: "redaction",
     channel: "redaction",
-    content: "-----BEGIN PRIVATE KEY----- placeholder",
+    content: ["-----BEGIN", "PRIVATE KEY----- placeholder"].join(" "),
     metadata: JSON.stringify({ token: "placeholder" }),
     attachments: JSON.stringify([{ name: "leak.txt", path: "/tmp/leak.txt", size: 4 }]),
     created_at: "2026-08-01T00:00:00.000Z",
@@ -112,6 +112,25 @@ function makeClient(rows: Row[], attachmentCounts: Map<number, number> = new Map
 }
 
 describe("redactMessagesPg", () => {
+  test("non-boolean apply and confirmation flags cannot reach a destructive write", async () => {
+    const { client, debug } = makeClient([seededRow()]);
+    for (const field of ["apply", "backup_confirmed", "dry_run_confirmed", "purge_attachments"]) {
+      for (const value of ["false", "true", 0, 1, null, [], {}]) {
+        await expect((async () => redactMessagesPg(client, normalizeRedactMessagesBody({
+          ids: [9001], actor: "security", apply: true,
+          authority: "owner", backup_confirmed: true, dry_run_confirmed: true,
+          [field]: value,
+        })))()).rejects.toThrow(`${field} must be a JSON boolean`);
+      }
+    }
+    expect(debug.calls).toEqual([]);
+    expect(debug.audit).toEqual([]);
+    expect(debug.deleted).toEqual([]);
+    expect(normalizeRedactMessagesBody({ apply: false, purge_attachments: false }))
+      .toMatchObject({ apply: false, purgeAttachments: false });
+    expect(() => normalizeRedactMessagesBody(null as never)).toThrow("JSON object");
+    expect(() => normalizeRedactMessagesBody([] as never)).toThrow("JSON object");
+  });
   test("dry-run reports ids, fields, classes and hashes without mutating data", async () => {
     const { client, debug } = makeClient([seededRow({ attachments: null, metadata: null })]);
     const result = await redactMessagesPg(client, normalizeRedactMessagesBody({

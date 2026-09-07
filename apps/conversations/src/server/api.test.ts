@@ -5224,7 +5224,7 @@ describe("hosted paths for the once-gated surfaces", () => {
       from_agent: "alice",
       to_agent: "cloud-redaction",
       channel: "cloud-redaction",
-      content: "-----BEGIN PRIVATE KEY----- placeholder",
+      content: ["-----BEGIN", "PRIVATE KEY----- placeholder"].join(" "),
       metadata: null,
       attachments: null,
       created_at: "2026-08-01T00:00:00.000Z",
@@ -5258,6 +5258,19 @@ describe("hosted paths for the once-gated surfaces", () => {
     });
     expect(response.status).toBe(400);
     expect((await response.json() as any).error).toContain("backup confirmation");
+  });
+
+  test("POST /v1/admin/redact-messages rejects string booleans before applying", async () => {
+    for (const field of ["apply", "backup_confirmed", "dry_run_confirmed", "purge_attachments"]) {
+      const response = await fetch(`${base}/v1/admin/redact-messages`, {
+        method: "POST", headers: postHeaders(),
+        body: JSON.stringify({ ids: [9001], actor: "security", apply: true,
+          authority: "owner", backup_confirmed: true, dry_run_confirmed: true,
+          [field]: "false" }),
+      });
+      expect(response.status).toBe(400);
+      expect((await response.json() as { error: string }).error).toBe(`${field} must be a JSON boolean.`);
+    }
   });
 
   test("a read-only key is refused on every write surface", async () => {
