@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -24,6 +24,46 @@ function receipts(): GroupReport[] {
   ];
 }
 describe("release suite orchestration", () => {
+  test("the all-tests plan retains quarantined files through the actual discovery CLI", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "recordings-gate-inventory-")));
+    try {
+      for (const path of ["src/__tests__", "scripts", ".github", "templates"]) mkdirSync(join(root, path), { recursive: true });
+      const quarantined = "src/__tests__/quarantined.test.ts";
+      for (const file of [...files, quarantined]) writeFileSync(join(root, file), "// fictional registration; plan mode must not execute this file\n");
+      writeFileSync(join(root, ".github/linux-quarantine.txt"), `# reason: fictional quarantine exercises inventory selection\n${quarantined}\n`);
+      symlinkSync(join(import.meta.dir, "../../scripts/ci-linux-suite.ts"), join(root, "scripts/ci-linux-suite.ts"));
+      const env = { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+      const run = (command: string[]) => spawnSync(command[0]!, command.slice(1), { cwd: root, env, encoding: "utf8", timeout: 15000 });
+      for (const args of [["-c", `init.templateDir=${join(root, "templates")}`, "init", "--quiet"], ["add", "."]]) {
+        const result = run(["/usr/bin/git", ...args]); expect(result.status, result.stderr).toBe(0);
+      }
+      const gate = join(import.meta.dir, "../../scripts/release-suite-gate.ts");
+      const plan = (args: string[]) => {
+        const result = run([process.execPath, gate, ...args, "--plan"]);
+        expect(result.status, result.stderr).toBe(0);
+        return JSON.parse(result.stdout) as ReturnType<typeof planReleaseSuite>;
+      };
+      const complete = plan(["--all"]), gated = plan([]);
+      expect([...new Set(complete.flatMap(g => g.files))].sort()).toEqual([...files, quarantined].sort());
+      expect([...new Set(gated.flatMap(g => g.files))].sort()).toEqual([...files].sort());
+      expect(complete.find(g => g.id === "recorder")?.runner).toBe("recorder");
+      expect(complete.find(g => g.id === "ordinary")?.files).toContain(quarantined);
+      expect(run([process.execPath, gate, "--all", "--gated", "--plan"]).status).not.toBe(0);
+      expect(run([process.execPath, gate, "--plan", "--test-name-pattern", "recorder"]).status).not.toBe(0);
+      const direct = run([process.execPath, "scripts/ci-linux-suite.ts", "--all"]);
+      expect(direct.status, direct.stderr).toBe(0);
+      expect(direct.stdout.trim().split("\n")).toEqual([...files, quarantined].sort());
+      writeFileSync(join(root, ".github/linux-quarantine.txt"), [...files, quarantined].map(file => `# reason: fictional full quarantine\n${file}\n`).join(""));
+      expect([...new Set(plan(["--all"]).flatMap(g => g.files))].sort()).toEqual([...files, quarantined].sort());
+      expect(run([process.execPath, gate, "--plan"]).status).not.toBe(0);
+      writeFileSync(join(root, ".github/linux-quarantine.txt"), `${quarantined}\n`);
+      for (const args of [[], ["--all"]]) {
+        const invalid = run([process.execPath, gate, ...args, "--plan"]);
+        expect(invalid.status).not.toBe(0);
+        expect(invalid.stderr).toContain("needs a reason");
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }, 30000);
   test("partitions publication from child-confined lifecycle and retains newly discovered files", () => {
     const plan = planReleaseSuite(files, "darwin");
     expect(plan.map(g => g.id)).toEqual(["recorder", "publication", "lifecycle", "ordinary"]);
@@ -80,6 +120,7 @@ describe("release suite orchestration", () => {
       expect(env.HASNA_RECORDINGS_API_URL).toBeUndefined();
       expect(env.NODE_OPTIONS).toBeUndefined();
       expect(env.CI).toBe("true");
+      expect(env.RECORDINGS_TEST_TIMEOUT_MS).toBe("120000");
       const child = spawnSync("/bin/sh", ["-c", "bun --version"], { env, encoding: "utf8", timeout: 15000 });
       expect(child.status).toBe(0);
       expect(child.stdout.trim()).toBe(Bun.version);

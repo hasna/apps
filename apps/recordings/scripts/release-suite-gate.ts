@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/** Run every manifest-gated test once, using each Darwin fixture's required boundary.
+/** Run every selected manifest test once, using each Darwin fixture's required boundary.
  * There are no allowed failures. Missing/empty reports, crashes (including exit-zero
  * early exits), unexpected files and overlapping or incomplete selections fail closed.
  */
@@ -176,26 +176,34 @@ export function groupEnvironment(root: string, inherited: NodeJS.ProcessEnv = pr
   };
 }
 
+export function groupCommand(group: SuiteGroup, junitPath: string): string[] {
+  return group.runner === "publication"
+    ? ["/usr/bin/python3", "-I", "-B", "src/__tests__/helpers/run-publication-fixtures.py", "--bun", process.execPath, "--report-outfile", junitPath]
+    : group.runner === "recorder"
+    ? [process.execPath, "scripts/test-recorder-fixtures.ts", "--junit-output", junitPath]
+    : [process.execPath, "test", "--no-orphans", "--timeout", "120000", ...group.files.map(f => `./${f}`), ...(group.pattern ? ["--test-name-pattern", group.pattern] : []), "--reporter=junit", "--reporter-outfile", junitPath];
+}
+
 export function releaseMain(): number {
+  const args = process.argv.slice(2);
+  if (new Set(args).size !== args.length || args.some(arg => arg !== "--all" && arg !== "--plan")) fail("usage: release-suite-gate.ts [--all] [--plan]; arbitrary test filters would invalidate coverage");
   const enumeration = (mode: string) => {
     const child = spawnSync(process.execPath, ["scripts/ci-linux-suite.ts", mode], { encoding: "utf8", timeout: 60000 });
     if (child.status !== 0 || child.signal || child.error) fail(`partition ${mode} failed: ${child.stderr || child.stdout}`);
     return child.stdout;
   };
-  enumeration("--check");
-  const groups = planReleaseSuite(enumeration("--gated").trim().split("\n").filter(Boolean), process.platform);
-  if (process.argv.includes("--plan")) { console.log(JSON.stringify(groups, null, 2)); return 0; }
+  // --all validates discovery and quarantine metadata itself, while still running
+  // when the gated subset is empty. The default gate must retain its empty-set refusal.
+  if (!args.includes("--all")) enumeration("--check");
+  const groups = planReleaseSuite(enumeration(args.includes("--all") ? "--all" : "--gated").trim().split("\n").filter(Boolean), process.platform);
+  if (args.includes("--plan")) { console.log(JSON.stringify(groups, null, 2)); return 0; }
   const logDir = realpathSync(mkdtempSync(join(tmpdir(), "recordings-release-gate-")));
   console.log(`release-suite-gate: reports and logs: ${logDir}`);
   const reports: GroupReport[] = [];
   for (const group of groups) {
     console.log(`release-suite-gate: running ${group.id} (${group.files.length} files)`);
     const junitPath = join(logDir, `${group.id}.xml`);
-    const command = group.runner === "publication"
-      ? ["/usr/bin/python3", "-I", "-B", "src/__tests__/helpers/run-publication-fixtures.py", "--bun", process.execPath, "--report-outfile", junitPath]
-      : group.runner === "recorder"
-      ? [process.execPath, "scripts/test-recorder-fixtures.ts", "--junit-output", junitPath]
-      : [process.execPath, "test", "--no-orphans", "--timeout", "120000", ...group.files.map(f => `./${f}`), ...(group.pattern ? ["--test-name-pattern", group.pattern] : []), "--reporter=junit", "--reporter-outfile", junitPath];
+    const command = groupCommand(group, junitPath);
     const environmentRoot = mkdtempSync(join(logDir, `${group.id}-environment-`));
     const child = spawnSync(command[0]!, command.slice(1), { encoding: "utf8", env: groupEnvironment(environmentRoot), maxBuffer: 128 * 1024 * 1024, timeout: group.runner === "publication" ? 360000 : group.runner === "recorder" ? 60000 : 30 * 60 * 1000 });
     const output = (child.stdout ?? "") + (child.stderr ?? "");
