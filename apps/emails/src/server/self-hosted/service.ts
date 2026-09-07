@@ -1145,7 +1145,7 @@ export async function handleSelfHostedRequest(
       if (denied) return denied;
       try {
         const body = method === "POST" ? await readJsonBody(req) : {};
-        return json(200, await provisionUpApi(path, method, body, { deps, store: auth.store, tenant: auth.ctx.tenantId,
+        const execute = async () => json(200, await provisionUpApi(path, method, body, { deps, store: auth.store, tenant: auth.ctx.tenantId,
           actor: auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator",
           request: async (internalPath, payload, boundSender, signal) => {
             const allowed = internalPath === "/v1/messages/send" || internalPath === "/v1/inbox/sync-s3" || /^\/v1\/messages(?:\?|\/)/.test(internalPath);
@@ -1157,6 +1157,9 @@ export async function handleSelfHostedRequest(
             return response;
           }
         }));
+        return method === "POST" && (path === "/v1/provision/tick" || path.endsWith("/run"))
+          ? await withRuntimeLog(auth.store, "daemon", "provision_job", execute)
+          : await execute();
       } catch (error) {
         if (error instanceof ProvisionUpError || error instanceof DomainDnsError || error instanceof DomainConnectError) return json(error.status, { error: error.message });
         return json(503, { error: "Provisioning did not confirm completion. Inspect the durable run before retrying." });

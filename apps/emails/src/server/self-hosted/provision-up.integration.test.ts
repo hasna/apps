@@ -1,3 +1,7 @@
+import { randomBytes } from "node:crypto";
+import { ManagedProviderSecrets } from "./managed-provider-secrets.js";
+import { buildManagedSenderResolver } from "./managed-provider-sender.js";
+import { sealProviderBytes, openProviderBytes, type ProviderRootKms, type SealedBytes } from "./managed-provider-crypto.js";
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import {
@@ -59,7 +63,7 @@ beforeEach(async () => {
   base = new EmailsSelfHostedStore(client);
   store = base.forTenant(tenant);
   await client.execute(
-    "TRUNCATE self_hosted_providers,domains,addresses,owners,provisioning_jobs,provisioning_events,address_ownership_events,messages CASCADE; DELETE FROM inbound_domain_routes; UPDATE tenants SET status='active'",
+    "TRUNCATE self_hosted_providers,domains,addresses,owners,provisioning_jobs,provisioning_events,address_ownership_events,messages,runtime_logs CASCADE; DELETE FROM inbound_domain_routes; UPDATE tenants SET status='active'",
   );
   const provider = await store.createResource(
     resourceSpecForPath("providers")!,
@@ -579,3 +583,67 @@ pgtest(
     ).toEqual({ n: 0 });
   },
 );
+
+async function managedFixture() {
+  const master = randomBytes(32);
+  const kms: ProviderRootKms = {
+    generate: async context => {
+      const plaintext = randomBytes(32);
+      return { plaintext, ciphertext: Buffer.from(JSON.stringify(sealProviderBytes(plaintext, master, JSON.stringify(context)))) };
+    },
+    decrypt: async (ciphertext, context) => openProviderBytes(JSON.parse(ciphertext.toString()) as SealedBytes, master, JSON.stringify(context)),
+  };
+  // A fresh test root must not try to decrypt another test's root with a different fixture key.
+  await client.execute("TRUNCATE provider_secret_roots CASCADE");
+  const secrets = new ManagedProviderSecrets(client, tenant, kms);
+  await secrets.install(input.provider_id, { type: "ses", access_key: "synthetic-up-access", secret_key: "synthetic-up-secret" }, null, "fixture");
+  deps.resolveSender = buildManagedSenderResolver(() => null, id => new ManagedProviderSecrets(client, id, kms), () => sender);
+  return secrets;
+}
+pgtest("managed credentials remain stable across fresh async resolvers and provisioning logs real execution", async () => {
+  await managedFixture();
+  const job = await start();
+  expect(await store.tailRuntimeLogs("daemon", 10)).toEqual([]);
+  const ready = await drive(job.id);
+  expect(ready.status).toBe("ready");
+  expect(ready.receipt.complete).toBe(true);
+  const logs = await store.tailRuntimeLogs("daemon", 30);
+  expect(logs.some(row => row.operation === "provision_job" && row.event === "returned")).toBe(true);
+  const before = logs.length;
+  await api(`/v1/provision/runs/${job.id}`);
+  expect((await store.tailRuntimeLogs("daemon", 30)).length).toBe(before);
+});
+pgtest("actual managed envelope rotation during queue evidence prevents address completion", async () => {
+  const secrets = await managedFixture();
+  const job = await start();
+  await drive(job.id, 1);
+  sender.checkInboundQueue = async () => {
+    await secrets.install(input.provider_id, { type: "ses", access_key: "synthetic-up-rotated", secret_key: "synthetic-up-rotated-secret" }, 1, "fixture");
+    return { ready: true, reason: "old envelope evidence" };
+  };
+  expect((await drive(job.id, 1)).status).toBe("blocked");
+  expect(await client.one("SELECT count(*)::int AS n FROM addresses")).toEqual({n: 0});
+  expect(await client.one("SELECT count(*)::int AS n FROM provisioning_jobs WHERE kind='address' AND status='ready'")).toEqual({n: 0});
+});
+pgtest("actual managed rotation after async validation is rejected by the locked parent checkpoint", async () => {
+  const secrets = await managedFixture();
+  const job = await start();
+  await drive(job.id, 3);
+  const original = base.forTenant.bind(base);
+  base.forTenant = ((tenantId: string) => {
+    const scoped = original(tenantId), factory = scoped.provisionUpJobs.bind(scoped);
+    scoped.provisionUpJobs = () => {
+      const jobs = factory(), save = jobs.save.bind(jobs);
+      jobs.save = async (...args: Parameters<typeof save>) => {
+        if (args[2] === "ready") await secrets.install(input.provider_id, { type: "ses", access_key: "synthetic-up-next", secret_key: "synthetic-up-next-secret" }, 1, "fixture");
+        return save(...args);
+      };
+      return jobs;
+    };
+    return scoped;
+  }) as typeof base.forTenant;
+  const blocked = await drive(job.id, 1);
+  expect(blocked.status).toBe("blocked");
+  expect(blocked.receipt.complete).toBe(false);
+  expect(await client.one("SELECT count(*)::int AS n FROM provisioning_jobs WHERE kind='provision_up' AND status='ready'")).toEqual({n: 0});
+});
