@@ -37,6 +37,12 @@ const ENV_KEYS_TO_CLEAR: readonly string[] = Array.from(
     "MEMENTOS_DB_SCOPE",
     "HASNA_DATA_HOME",
     "HASNA_CONFIG_HOME",
+    // The DISK tier roots at $HOME (.hasna/mementos/config/credentials) when
+    // HASNA_HOME is unset — the ordinary station shape. A provisioned
+    // station's real credential file outranks these cases' env fixtures
+    // (green on CI, red on the station), so both roots are scrubbed here.
+    "HOME",
+    "HASNA_HOME",
   ]),
 );
 
