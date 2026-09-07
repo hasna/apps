@@ -2,11 +2,13 @@
 /**
  * Generate the typed SDK client from the serve OpenAPI document.
  *
- * Source of truth: src/serve/openapi.ts. Output: sdk/src/generated.ts.
+ * Source of truth: src/serve/openapi.ts. Output: src/sdk/generated.ts — the
+ * `./sdk` export subpath of @hasna/attachments is the only SDK surface (one
+ * package per app; no split -sdk package).
  * Run: bun run sdk:generate
  */
 
-import { mkdirSync, writeFileSync } from "fs";
+import { writeFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { generateSdkFromOpenApi } from "@hasna/contracts/sdk";
@@ -23,7 +25,7 @@ const { code, operations, warnings } = generateSdkFromOpenApi(spec, {
 });
 
 const header = `// @generated from src/serve/openapi.ts by scripts/generate-sdk.ts — DO NOT EDIT.\n// Regenerate: bun run sdk:generate\n\n`;
-const out = join(repoRoot, "sdk", "src", "generated.ts");
+const out = join(repoRoot, "src", "sdk", "generated.ts");
 // The published Contracts generator predates the canonical HTTPS boundary.
 // Fail closed if its template changes; do not invent a Contracts release.
 let hardened = code;
@@ -51,11 +53,8 @@ export function validateSdkConfig(url: string, key: string): void {
 }
 `;
 writeFileSync(out, header + hardened + validation);
-const publicSdk = join(repoRoot, "src", "sdk");
-mkdirSync(publicSdk, { recursive: true });
-writeFileSync(join(publicSdk, "generated.ts"), header + hardened + validation);
 
-console.log(`Generated ${operations.length} operations -> sdk/src/generated.ts`);
+console.log(`Generated ${operations.length} operations -> src/sdk/generated.ts`);
 for (const op of operations) console.log(`  ${op.method.toUpperCase().padEnd(6)} ${op.path} -> ${op.functionName}`);
 if (warnings.length) {
   console.log("Warnings:");
