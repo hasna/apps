@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -17,7 +18,17 @@ import tempfile
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bun", required=True, type=Path)
+    parser.add_argument("--report-outfile", type=Path,
+        help="export the fixture JUnit receipt to a new file in an owned canonical 0700 directory")
     args = parser.parse_args()
+    report_destination = args.report_outfile
+    if report_destination is not None:
+        directory = report_destination.parent
+        info = directory.lstat()
+        if (not report_destination.is_absolute() or directory.resolve(strict=True) != directory
+                or not directory.is_dir() or directory.is_symlink() or info.st_uid != os.getuid()
+                or info.st_mode & 0o777 != 0o700 or report_destination.exists() or report_destination.is_symlink()):
+            parser.error("report destination must be a new file in an owned canonical 0700 directory")
     if sys.platform != "darwin":
         parser.error("this confinement runner requires macOS sandbox-exec")
     bun = args.bun.resolve(strict=True)
@@ -69,17 +80,34 @@ def main() -> int:
         if control.returncode:
             return control.returncode
         print("OS controls passed: fixture write/self signal allowed; outside write, host tool and outside signal denied.", flush=True)
-        command = prefix + ["test", "--timeout", "120000", "src/__tests__/macos-app-lifecycle.test.ts",
+        command = prefix + ["test", "--no-orphans", "--timeout", "120000", "src/__tests__/macos-app-lifecycle.test.ts",
             "src/__tests__/release-output-publication-contract.test.ts", "--test-name-pattern",
-            "macOS finalized artifact installer|release output publication contract"]
+            r"^(?:macOS finalized artifact installer|release output publication contract)(?:\s|$)",
+            "--reporter=junit", "--reporter-outfile", str(root / "publication.xml")]
         child = subprocess.Popen(command, cwd=package, env=env, start_new_session=True)
         try:
-            return child.wait(timeout=300)
+            status = child.wait(timeout=300)
         except subprocess.TimeoutExpired:
             # Only this newly created fixture process group belongs to this runner.
             os.killpg(child.pid, signal.SIGKILL)
             child.wait()
-            return 124
+            status = 124
+        if report_destination is not None and (root / "publication.xml").is_file():
+            # The confined process can only write its owned fixture directory.
+            # Only the outside supervisor exports the fixed report, never a caller
+            # path passed through the sandbox or a pre-existing destination.
+            source_fd = os.open(root / "publication.xml", os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(source_fd, "rb") as source:
+                info = os.fstat(source.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_size > 32 * 1024 * 1024:
+                    raise ValueError("fixture JUnit report must be a bounded regular file")
+                receipt = source.read(32 * 1024 * 1024 + 1)
+                if len(receipt) > 32 * 1024 * 1024:
+                    raise ValueError("fixture JUnit report exceeds the bounded report size")
+            fd = os.open(report_destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "wb") as output:
+                output.write(receipt)
+        return status
 
 
 if __name__ == "__main__":
