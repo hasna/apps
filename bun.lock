@@ -550,7 +550,7 @@
     },
     "apps/knowledge": {
       "name": "@hasna/knowledge",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "bin": {
         "knowledge": "bin/knowledge.js",
         "knowledge-mcp": "bin/knowledge-mcp.js",
@@ -673,7 +673,7 @@
     },
     "apps/messages": {
       "name": "@hasna/messages",
-      "version": "0.2.2",
+      "version": "0.3.0",
       "bin": {
         "messages": "bin/index.js",
         "messages-mcp": "bin/mcp.js",
@@ -775,7 +775,7 @@
     },
     "apps/projects": {
       "name": "@hasna/projects",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "bin": {
         "projects": "dist/cli/index.js",
         "projects-mcp": "dist/mcp/index.js",
@@ -838,7 +838,7 @@
     },
     "apps/recordings": {
       "name": "@hasna/recordings",
-      "version": "0.3.13",
+      "version": "0.4.0",
       "bin": {
         "recordings": "dist/cli/index.js",
         "recordings-mcp": "dist/mcp/index.js",
@@ -921,7 +921,7 @@
     },
     "apps/secrets": {
       "name": "@hasna/secrets",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "bin": {
         "secrets": "dist/index.js",
         "secrets-mcp": "dist/mcp-server.js",

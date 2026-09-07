@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.2
+
+### Patch Changes
+
+- 79dddf0: Resolver validation fixes (hasna/apps#1720): the published `./sdk` reaches the hosted vault again — `SecretsClient` binds the shared @hasna/contracts transport to the canonical `<origin>/v1` base and sends its data routes relative to it (every method previously went to `<origin>/v1/v1/...` and 404ed), while the public `health()` / `ready()` / `version()` probes are fetched at the origin path with no credential (where the serve and the gateway answer them); `createSecretsClientFromEnv` with an explicit `baseUrl` now requires an explicit `apiKey` and throws before consulting any resolver tier — the ambient fleet credential (Keychain, `~/.hasna/secrets/config/credentials`, `HASNA_SECRETS_API_KEY`) is never attached to a caller-supplied authority (#1794); `secrets status` fails closed with the same single actionable line as every other verb instead of an uncaught-throw stack dump, and reports `transport.api_url_source` / `api_key_source` / `api_key_tier` (names only, never values) for a hosted run; the dead `config`/`state`/`cache` path kinds (the `~/.config/hasna` shape) are removed from the data-dir resolver and `postinstall.js`; the CLI and MCP surfaces are declared `authMode: "api-key"` in `hasna.contract.json`; the extension host tests pin their shelled CLI to the suite's temp vault and key dir so no test process touches the operator's `~/.hasna/secrets` vault.
+
 ## 0.4.1
 
 ### Patch Changes
@@ -175,6 +181,7 @@
 ### Patch Changes
 
 - 8de5bb5: Release-line reconciliation: main is bumped to the registry-latest 0.3.0 (published by the release lane 2026-08-14 ahead of main). No functional changes — this patch establishes main/registry parity and clears the KNOWN_NPM_DRIFT and changelog-mismatch records (reconcile task 3ab02291).
+
 ## 0.3.0 — 2026-08-14
 
 - Release-line reconciliation: main is bumped to the registry-latest 0.3.0 (published by the release lane 2026-08-14T14:23:49Z ahead of main; the release commit did not land on main). No functional changes to the tree; this entry records the version parity and clears the KNOWN_NPM_DRIFT and changelog-mismatch records (reconcile task 3ab02291).
