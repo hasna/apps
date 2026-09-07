@@ -30,6 +30,12 @@ receipts. Provisioning does not create DNS, receipt rules, queues, buckets, or
 provider identities. The checked topology is SES S3 receipt action → SNS → SQS;
 bare S3 event notifications are not sufficient for this workflow.
 
+All published MX endpoints must target the selected SES region; mixed or backup
+SES MX records do not prove this mailbox reaches Emails. Receipt rules are
+evaluated for the exact mailbox, in order, including address labels and earlier
+mailbox-specific stop/bounce actions. An earlier synchronous Lambda is blocked
+because its runtime routing decision cannot be established by these checks.
+
 After those checks pass, one PostgreSQL transaction rechecks tenant bindings and
 current provider/address/owner state, reserves the inbound domain route, creates
 or reconciles the address, records ownership and a provisioning audit event, and

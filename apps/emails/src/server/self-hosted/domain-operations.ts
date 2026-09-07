@@ -13,7 +13,7 @@ export async function runDomainOperation(
   tenantId: string,
   ref: string,
   operation: DomainOperation,
-  options: { providerId?: string; resolveSender?: SenderResolver; env?: NodeJS.ProcessEnv; mx?: typeof resolveMx; dryRun?: boolean } = {},
+  options: { providerId?: string; resolveSender?: SenderResolver; env?: NodeJS.ProcessEnv; mx?: typeof resolveMx; dryRun?: boolean; inboundAddress?: string } = {},
 ) {
   const domain = await store.getDomain(ref) ?? await store.getDomainByName(ref);
   if (!domain) throw new DomainOperationError("Domain not found in this tenant.", 404);
@@ -41,10 +41,10 @@ export async function runDomainOperation(
     if (!sender.checkInboundDomain || !sender.region) throw new DomainOperationError("This provider binding cannot verify an SES inbound receipt route.", 503);
     const mx = await (options.mx ?? resolveMx)(domain.domain);
     const expected = `inbound-smtp.${sender.region}.amazonaws.com`;
-    if (!mx.some((entry) => entry.exchange.toLowerCase().replace(/\.$/, "") === expected)) {
+    if (mx.length === 0 || !mx.every((entry) => entry.exchange.toLowerCase().replace(/\.$/, "") === expected)) {
       throw new DomainOperationError(`The published MX does not route this domain to ${expected}. Configure routing explicitly; this command does not change DNS.`);
     }
-    inbound = await sender.checkInboundDomain(domain.domain, bucket);
+    inbound = await sender.checkInboundDomain(domain.domain, bucket, options.inboundAddress);
     if (!inbound.ready) throw new DomainOperationError(inbound.reason);
   }
   // Provisioning planners reuse current provider/DNS evidence without promoting

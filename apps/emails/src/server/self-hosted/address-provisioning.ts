@@ -224,7 +224,12 @@ async function checkReadiness(
     tenantId,
     refs.domain.id,
     "enable-inbound",
-    { ...deps, providerId: refs.provider_id, dryRun: true },
+    {
+      ...deps,
+      providerId: refs.provider_id,
+      dryRun: true,
+      inboundAddress: input.email,
+    },
   );
   const topic = "inbound" in evidence ? evidence.inbound?.topicArn : undefined;
   if (!topic)

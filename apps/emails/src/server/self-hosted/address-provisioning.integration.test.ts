@@ -15,6 +15,7 @@ import {
   type ProvisioningReceipt,
 } from "./address-provisioning.js";
 import type { SelfHostedSender } from "./sender.js";
+import { evaluateInboundReceiptRoute } from "./inbound-receipt-route.js";
 const url = process.env.EMAILS_TEST_POSTGRES_URL;
 const tenantA = "00000000-0000-0000-0000-000000000001",
   tenantB = "00000000-0000-0000-0000-000000000002";
@@ -184,7 +185,15 @@ pgtest(
 pgtest(
   "unverified providers, wrong MX, missing queue wiring and unsupported strategies never create ready addresses",
   async () => {
-    for (const failure of ["provider", "mx", "queue", "strategy", "bucket"]) {
+    for (const failure of [
+      "provider",
+      "mx",
+      "mixed-mx",
+      "mailbox-stop",
+      "queue",
+      "strategy",
+      "bucket",
+    ]) {
       const saved = { ...sender };
       const deps = { ...options };
       let params = { ...input };
@@ -199,6 +208,38 @@ pgtest(
         deps.mx = async () => [
           { exchange: "other.example.test", priority: 10 },
         ];
+      if (failure === "mixed-mx")
+        deps.mx = async () => [
+          { exchange: "aspmx.l.google.com", priority: 1 },
+          { exchange: "inbound-smtp.us-east-1.amazonaws.com", priority: 20 },
+        ];
+      if (failure === "mailbox-stop")
+        sender.checkInboundDomain = async (domain, bucket, mailbox) => {
+          expect(mailbox).toBe(input.email);
+          return evaluateInboundReceiptRoute(
+            [
+              {
+                Name: "shadow",
+                Enabled: true,
+                Recipients: [input.email],
+                Actions: [{ StopAction: { Scope: "RuleSet" } }],
+              },
+              {
+                Name: "delivery",
+                Enabled: true,
+                Recipients: [domain],
+                Actions: [
+                  {
+                    S3Action: { BucketName: bucket, TopicArn: "fixture-topic" },
+                  },
+                ],
+              },
+            ],
+            domain,
+            bucket,
+            mailbox,
+          );
+        };
       if (failure === "queue")
         sender.checkInboundQueue = async () => ({
           ready: false,

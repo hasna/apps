@@ -47,6 +47,17 @@ it("does not upgrade another tenant's unknown domain or an unbound provider", as
   await expect(runDomainOperation(f.store, "tenant", "example.test", "verify")).rejects.toThrow("EMAILS_SENDER_BINDINGS");
   expect(f.patches).toEqual([]);
 });
+it("rejects mixed MX even when SES is present as backup or equal-priority routing", async () => {
+  const f = fixture();
+  for (const priority of [1, 10, 20]) {
+    await expect(runDomainOperation(f.store, "tenant", "example.test", "enable-inbound", {
+      ...f.options,
+      env: { EMAILS_INGEST_S3_BUCKET: "fixture", EMAILS_INGEST_QUEUE_URL: "fixture" },
+      mx: async () => [{ exchange: "aspmx.l.google.com", priority }, { exchange: "inbound-smtp.us-east-1.amazonaws.com", priority: 10 }],
+    })).rejects.toThrow("published MX");
+  }
+  expect(f.patches).toEqual([]);
+});
 it("uses authoritative sending readiness without inventing SPF or DMARC results", async () => {
   const f = fixture();
   f.sender.verifyDomain = async () => ({ verifiedForSending: true, dkim: "verified", spf: "pending", dmarc: "pending" });
