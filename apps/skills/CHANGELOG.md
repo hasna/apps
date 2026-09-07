@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.5.0
+
+### Minor Changes
+
+- 1d87533: Add customer profile and current-workspace name updates through the remote SDK,
+  fresh-session authentication client, CLI and MCP. Terminal updates support a
+  masked fresh-code prompt or bounded stdin automation, retain saved credentials,
+  and return clear failures when the selected server does not support the routes.
+- 1f8c3e2: Keep global identities representable in the admin user list when their default workspace has no active membership: the required list-row role may now be null. Consumers must handle this explicit absence of authority. Active organization rosters and role-assignment inputs/responses retain their nonnullable roles; no mutation or impersonation authority is added.
+- 756c2fa: Add SDK, fresh-verification CLI and MCP adapters for current-workspace member role changes and removal on compatible servers. Require the exact membership incarnation and observed role, validate safe results, preserve known refusal codes, and leave saved credentials unchanged without automatic refresh or retry.
+- fdf9ced: Add a typed, read-only current-workspace roster client, `workspace members` command, and `list_workspace_members` MCP tool. Paginated results preserve exact server timestamps and opaque cursors. CLI and MCP use fresh owner/admin verification without replacing saved credentials or profiles; invitation, membership mutation and workspace switching are not enabled.
+
+### Patch Changes
+
+- df38d01: Fail closed when no credential and no API URL resolve; the on-machine run is
+  opt-in only (owner directive 2026-09-04, hasna/apps#1720; class-patch order
+  2026-09-06). skills 0.4.0 adopted the shared `@hasna/contracts` resolver but
+  kept the wrong local-mode semantics: an install with neither a credential nor a
+  URL silently served the bundled corpus ("local mode" as the absence of
+  configuration). The class patch closes that.
+
+  - **Local mode only by explicit opt-in.** `HASNA_SKILLS_LOCAL=1` (alias
+    `SKILLS_LOCAL=1`) selects the on-machine run when the environment configures
+    no authority; it is answered before the resolver runs, so opting in never
+    reads the Keychain or the credentials file. A configured environment always
+    outranks it. The opted-in run prints `skills: local mode …` on stderr once.
+  - **Fail closed.** Hosted with no credential now exits non-zero — a URL
+    configured with no key was already a loud failure; nothing configured without
+    the opt-in is one now too: `MISSING_API_CREDENTIAL`, no SQLite opened, no
+    `*-local-fallback` event, one line naming the opt-in.
+  - **Published declarations stay self-contained (#1782).**
+    `@hasna/contracts` is a build-time devDependency (`bun build --target bun`
+    inlines it); the crossing client types are spelled locally in
+    `src/lib/client-types.ts`, with mutual-assignability tests, so the published
+    `.d.ts` files import no `@hasna/contracts`.
+  - `@hasna/contracts` stays pinned to exact `1.0.2`.
+
+  The fix depends on nothing being deleted: a stale `~/.hasna/skills/config/credentials`
+  holding only newlines parses as "no disk credential" (no throw) and lands on the
+  same fail-closed refusal; station01/02 write the real credential file and are
+  served hosted as before.
+
+- c2a2c26: Resolver validation fixes (hasna/apps#1720): `skills-mcp` fails closed at startup — with no credential, no authority and no `HASNA_SKILLS_LOCAL=1` opt-in it exits 1 with the ladder's one line before `initialize` is answered or a port is bound; every MCP data tool (`list_skills`, `search_skills`, `get_skill_info`, `get_skill_docs`, `list_categories`, `list_tags`, `get_requirements`) and every CLI read verb (`info`, `show`, `docs`, `requires`, the bare non-TTY listing) runs the same per-call gate as `skills list` and refuses (`AUTH_REQUIRED` / exit 1) instead of serving the bundled catalog and `~/.hasna/skills/installed`, with the listing tools sharing one folder-UNION-cloud registry with the CLI; `loadRemoteRegistry()` / `loadRemoteSkill()` never attach the ambient fleet credential to a caller-supplied `apiUrl` that is not the resolved origin (#1794 — `INSTANCE_CREDENTIAL_MISMATCH` unless an explicit `authToken`, or `authToken: null`, is passed); the nothing-configured refusal names the Keychain item, the credentials file and `HASNA_SKILLS_API_KEY`; `setup-info` exits 1 when the credential state is misconfigured and the MCP `whoami` tool reports the same credential sources (never values); a run refused by the credential ladder no longer writes a `.skills/runs` record; `skills-migrate --version` / `--help` answer before configuration is resolved; the retired `~/.config/hasna` path shape no longer ships in the client bundle.
+- 7e46fbb: Refuse skill uploads when the revision preflight fails or returns an unusable row.
+  An explicit missing-skill or catalogue-only absence response permits an initial
+  publish; updates and the single forced version retry retain the exact verified
+  revision precondition.
+
+  Catalogue-only responses explicitly identify the absence of an organization publication, preserving initial catalogue overrides while concurrent publications remain protected by server revision checks.
+
+- 34fdadd: Preserve explicit `__proto__` JSON keys during canonical serialization, including
+  nested objects and arrays. Run input and request digests now distinguish these
+  inputs from inputs without that data, while equivalent key orderings still
+  deduplicate. Existing persisted admissions and idempotency-key lookups are unchanged.
+- Use the released @hasna/events 0.1.18 dependency for verified channel-test exit codes and embedded webhook policy.
+- e8fe12c: Return a failing exit status from `skills test --json` when any selected skill is not ready, matching human output. Preserve readiness report fields and successful empty or fully ready results.
+- e34cfaf: Keep schedule run JSON parseable when local skills write output. Stream child stdout and stderr to stderr in JSON mode, preserving human output, actual execution exits and schedule history. Add an optional stderr streaming mode to runSkill without changing existing inherit or pipe callers.
+- e585727: Return a nonzero exit status when any scheduled item fails, in both human and JSON output. Preserve every per-item result, identify actual local executor attempts with `attempted`, and count only those attempts in `ran`. Refusals before execution leave the occurrence due and its history unchanged; actual local attempts retain success/error bookkeeping. Hosted scheduling remains unsupported, and dry runs or batches with nothing due remain successful.
+
+  Report a history-write failure separately from the execution outcome without retrying the write or abandoning later due items. Preserve execution errors and warn callers to inspect the skill's effects before retrying an attempt whose history could not be saved.
+
+- 4dfb173: Honor selected corpus, agents, and skill names in home adoption and pruning. Reject invalid selections before applying changes, and preserve directories whose marker belongs to another tool.
+- 0353dce: Verify that the Skills command selected on PATH belongs to the same Bun installer's global bin directory before reporting self-update success. Refuse discovery failures, shadowed commands and invalid version results while preserving successful updates and installer failures. Explain that installation may already have completed without automatically retrying it or changing PATH.
+- 75c3790: Keep the first terminal SQLite SDK credit-reservation reconciliation when separate processes race. Later attempts return the stored status, actual cost and reconciliation timestamp unchanged, matching the existing PostgreSQL adapter contract.
+- e43a4d1: Honor source, agent and skill-name selectors in `sync --check` and its `render`
+  alias. Refuse unknown selections instead of reporting a misleading clean census,
+  while preserving read-only checks and nonzero drift status in human and JSON output.
+- 29c7ab0: Validate remote version history and individual version responses before returning them. Malformed responses now fail consistently in the SDK and both CLI output formats, while valid empty history, known domain absence, optional fields, and additive server data remain supported.
+- 8292ab3: Preserve directories with foreign or malformed ownership markers during ordinary sync and both library agent-removal helpers. Require the exact Skills owner before updating or removing a managed directory, while retaining explicit force adoption for directories containing SKILL.md.
+
+  Apply the same ownership requirement to remote tombstone deletion and registry reconciliation baselines, preserving explicit conflict overrides.
+
 ## 0.4.2
 
 ### Patch Changes

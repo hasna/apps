@@ -136,9 +136,13 @@ shared `@hasna/contracts` resolver, fresh on every request:
 | `HASNA_HOME` / `HASNA_CONFIG_HOME` | Relocate `~/.hasna/emails/config/credentials`. |
 | `HASNA_STATION` | Keychain account (falls back to `hostname -s`, then `$USER`). |
 
-Credential tiers: `--api-key` / `--profile` argument → `HASNA_EMAILS_API_KEY_REF`
-pointers → the macOS Keychain items for this app (`api-key` / `api-url`) → the
-`~/.hasna/emails/config/credentials` file (0600) → `HASNA_EMAILS_API_KEY`.
+Credential tiers: the deliberate `HASNA_EMAILS_API_KEY_OVERRIDE` / `HASNA_PROFILE`
+selections (a blank override or an absent profile refuses; a
+`HASNA_EMAILS_API_KEY_REF` vault pointer is refused by name, because this client
+cannot complete it per request) → the macOS Keychain items for this app
+(`api-key` / `api-url`) → the `~/.hasna/emails/config/credentials` file (0600,
+`credentials-<profile>` under `HASNA_PROFILE`) → `HASNA_EMAILS_API_KEY`. There are
+no `--api-key` / `--profile` resolver flags on the `emails` CLI.
 Authority: `HASNA_EMAILS_API_URL` → Keychain `api-url` → credentials file → the
 shared default gateway once a credential resolves. Nothing configured fails
 closed; hosted runs with no credential never fall back to local data.

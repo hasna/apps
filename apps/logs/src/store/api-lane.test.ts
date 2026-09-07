@@ -13,10 +13,7 @@
  * proves the capability works end-to-end on the hosted path — not merely that
  * a helper exists.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { describe, expect, test } from "bun:test";
 import { createHasnaStorageClient } from "@hasna/contracts/client/storage";
 import { createClientTransport } from "@hasna/contracts/client";
 import { buildCloudApp } from "../server/cloud/app.ts";
@@ -27,12 +24,6 @@ import {
 } from "../server/cloud/test-helpers.ts";
 import { ApiStore } from "./api.ts";
 import type { LogEntry } from "../types/index.ts";
-
-const ORIGINAL_ENV = new Map<string, string | undefined>([
-  ["HASNA_LOGS_API_URL", process.env.HASNA_LOGS_API_URL],
-  ["HASNA_LOGS_API_KEY", process.env.HASNA_LOGS_API_KEY],
-  ["HOME", process.env.HOME],
-]);
 
 function buildApiStore(): {
   api: ApiStore;
@@ -72,9 +63,15 @@ function buildApiStore(): {
     signingSecret: SIGNING_SECRET,
     keyStatus: async (): Promise<"active"> => "active",
   });
-  process.env.HASNA_LOGS_API_URL = "http://127.0.0.1:1/v1";
-  process.env.HASNA_LOGS_API_KEY = tokenWith(["logs:read", "logs:write"]);
-  const transport = createClientTransport("logs", process.env, {
+  // A CALLER-BUILT env dictionary is the hermetic seam of the @hasna/contracts
+  // resolver: the ambient Keychain tier runs only for the live `process.env`
+  // (hasna/apps#1788), so a populated station Keychain can neither supply a
+  // key nor refuse this test authority. Never hand the live process.env here.
+  const env = {
+    HASNA_LOGS_API_URL: "http://127.0.0.1:1/v1",
+    HASNA_LOGS_API_KEY: tokenWith(["logs:read", "logs:write"]),
+  };
+  const transport = createClientTransport("logs", env, {
     fetchImpl: async (input, init) =>
       app.fetch(new Request(String(input), init)),
   });
@@ -441,19 +438,4 @@ describe("ApiStore scan port (hosted scan-run surface)", () => {
     expect(runs[0]?.logs_collected).toBe(0);
     expect(runs[0]?.errors_found).toBe(0);
   });
-});
-
-beforeAll(() => {
-  process.env.HASNA_LOGS_API_URL = "http://127.0.0.1:1/v1";
-  process.env.HASNA_LOGS_API_KEY = tokenWith(["logs:read", "logs:write"]);
-  // Point the client's disk tier ($HOME credential tier) at a temp dir so
-  // the machine's real cloud config cannot disagree with the test key.
-  process.env.HOME = mkdtempSync(join(tmpdir(), "logs-api-lane-home-"));
-});
-
-afterAll(() => {
-  for (const [key, value] of ORIGINAL_ENV) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
 });

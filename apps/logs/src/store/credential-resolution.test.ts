@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { KeychainCommandResult } from "@hasna/contracts/client";
 import {
+  assertHostedCredentialResolvable,
   LOGS_APP_SLUG,
   resolveLogsTransport,
   resolveStore,
@@ -266,6 +267,47 @@ describe("fail-closed through the store, on the tiers", () => {
       HASNA_LOGS_API_KEY: ENV_KEY,
     });
     expect(store).not.toBeInstanceOf(LocalStore);
+    expect(sqliteFilesUnder(home)).toEqual([]);
+  });
+});
+
+describe("assertHostedCredentialResolvable — the startup proof that a key can be produced", () => {
+  // The MCP gate's second step (hasna/apps#1720 validation, round 2): after
+  // resolveStore selected the transport, prove the credential can actually be
+  // PRODUCED once, without holding it. A caller-built env keeps every tier
+  // hermetic: no Keychain, the disk tier anchored on a temp HOME.
+  test("a literal tier resolves without holding or logging the key", async () => {
+    const home = tempHome("assert-literal");
+    await expect(
+      assertHostedCredentialResolvable({ HOME: home, HASNA_LOGS_API_KEY: ENV_KEY }),
+    ).resolves.toBeUndefined();
+    expect(sqliteFilesUnder(home)).toEqual([]);
+  });
+
+  test("no credential from any tier is not a refusal here — resolveStore already decided", async () => {
+    const home = tempHome("assert-none");
+    await expect(
+      assertHostedCredentialResolvable({ HOME: home, HASNA_LOGS_LOCAL: "1" }),
+    ).resolves.toBeUndefined();
+    expect(sqliteFilesUnder(home)).toEqual([]);
+  });
+
+  test("a vault pointer this process cannot complete is TERMINAL, naming the pointer", async () => {
+    const home = tempHome("assert-pointer");
+    await expect(
+      assertHostedCredentialResolvable({
+        HOME: home,
+        HASNA_LOGS_API_KEY_REF: "no/such/vault/item",
+      }),
+    ).rejects.toThrow(/HASNA_LOGS_API_KEY_REF[^]*no\/such\/vault\/item[^]*TERMINAL/);
+    expect(sqliteFilesUnder(home)).toEqual([]);
+  });
+
+  test("a profile with no key is refused with the remedy, never resolved around", async () => {
+    const home = tempHome("assert-profile");
+    await expect(
+      assertHostedCredentialResolvable({ HOME: home, HASNA_PROFILE: "no-such-profile" }),
+    ).rejects.toThrow(/Profile 'no-such-profile'[^]*unset HASNA_PROFILE/);
     expect(sqliteFilesUnder(home)).toEqual([]);
   });
 });

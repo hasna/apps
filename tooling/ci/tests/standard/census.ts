@@ -350,7 +350,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "releases", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -432,7 +431,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "logs",
-    cause: "surface_matrix: missing supported sdk surface (no ./sdk export; SDK deferred truthfully); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required. Manifest schema-valid at kit 0.11.1.",
+    cause: "storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required. Manifest schema-valid at kit 0.11.1. (The surface_matrix sdk cause no longer fires: the #1720 validation fix ships ./sdk and declares the logs-sdk surface supported.)",
     task: "todos d166125e (contracts task — logs)",
   },
   {
