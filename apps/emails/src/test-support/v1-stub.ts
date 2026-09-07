@@ -124,14 +124,17 @@ export interface V1StubOptions {
    *
    * So a suite that needs the contract asks for it, and the ask is visible in the diff.
    *
-   * Turning this on does NOT make the fixture faithful for filtered reads: the generic
+   * Turning this on alone does NOT make the fixture faithful for filtered reads: the generic
    * list handler still IGNORES equality filters and merely records the query string, so it
    * serves the UNFILTERED list for a filter it now declares it accepts. A client that
    * trusted the filter would be wrong here and right in production, which is worse than no
    * evidence at all — use `src/test-support/v1-store-api.ts` for filtered or paged
-   * store-seam tests.
+   * store-seam tests. The separate resourceFilters option applies registry-declared
+   * generic equality filters for subprocess CLI selector tests.
    */
   openapi?: boolean;
+  /** Apply declared generic equality filters before paging; default keeps fault-injection behavior. */
+  resourceFilters?: boolean;
   /** Opt-in managed-provider transport fixture. Stores metadata/field names only, never credential values. */
   managedProviders?: boolean;
 }
@@ -339,6 +342,7 @@ let providerSendCalls = 0;
 // (SELF_HOSTED_RESOURCES + resourceListOrderBy) so the stub orders lists the way the
 // real route does. Shape: { resource: [{ column, desc }, ...] }.
 const listOrder = safeParse(process.env.V1_STUB_LIST_ORDER);
+const resourceFilters = safeParse(process.env.V1_STUB_RESOURCE_FILTERS);
 // The service's published contract for the generic resource routes, injected from the
 // server's own generated OpenAPI document (see the /v1/openapi.json route below).
 const openApiContract = safeParse(process.env.V1_STUB_OPENAPI);
@@ -1064,7 +1068,7 @@ const server = Bun.serve({
     // serve the UNFILTERED list for a filter it now declares it accepts. A client that
     // trusted the filter is still wrong here and right in production, which is worse than
     // useless as evidence: use src/test-support/v1-store-api.ts for filtered or paged
-    // store-seam tests.
+    // store-seam tests. resourceFilters separately opts into generic equality filtering.
     // Absent unless the suite asked for it (V1StubOptions.openapi) — see that field's note.
     // Without it this path answers the same 404 it always did, which is what keeps an
     // existing suite's negative control a control.
@@ -1501,7 +1505,14 @@ const server = Bun.serve({
       const offset = rawOffset === null || Number.isNaN(Number(rawOffset)) || Number(rawOffset) < 0
         ? 0
         : Math.floor(Number(rawOffset));
-      const ordered = rotateForList(resource, sortForList(resource, rows));
+      const declaredFilters = resourceFilters[resource] || [];
+      const filtered = rows.filter(function (row) {
+        return declaredFilters.every(function (column) {
+          const value = url.searchParams.get(column);
+          return value === null || String(row[column]) === value;
+        });
+      });
+      const ordered = rotateForList(resource, sortForList(resource, filtered));
       let windowed = offset > 0 ? ordered.slice(offset) : ordered;
       const parsedLimit = rawLimit === null ? Number.NaN : Number(rawLimit);
       const limit = !parsedLimit || Number.isNaN(parsedLimit)
@@ -1646,6 +1657,7 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
       V1_STUB_RESOURCE_SPECS: JSON.stringify(V1_STUB_RESOURCE_SPECS),
       V1_STUB_RESOURCE_DEFAULTS: JSON.stringify(V1_STUB_RESOURCE_DEFAULTS),
       V1_STUB_LIST_ORDER: JSON.stringify(declaredListOrder()),
+      V1_STUB_RESOURCE_FILTERS: JSON.stringify(options.resourceFilters ? Object.fromEntries(SELF_HOSTED_RESOURCES.map(spec => [spec.path, spec.filters ?? []])) : {}),
       V1_STUB_OPENAPI: options.openapi === true ? JSON.stringify(publishedResourceContract()) : "",
     },
     stdout: "pipe",
