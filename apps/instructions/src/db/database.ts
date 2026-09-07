@@ -2,7 +2,6 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { hasInstructionsEnvAuthorityIntent } from "../lib/local-opt-in.js";
 import { getRawStoreRoot } from "../lib/raw-store-root.js";
 
 function getDbPath(): string {
@@ -116,19 +115,6 @@ let _db: Database | null = null;
 
 export function getDatabase(path?: string): Database {
   if (_db) return _db;
-  // In HTTP API transport mode the client must never read/write the local
-  // SQLite database. Any code path that still reaches for the local DB while
-  // the environment configures a hosted authority or credential is a bug that
-  // would cause silent local drift — fail loudly instead. Pass an explicit
-  // path (e.g. tests) to bypass this guard. The check reads the ENVIRONMENT
-  // alone (never the Keychain or credential files, which would break the
-  // hermetic opt-in short-circuit).
-  if (!path && hasInstructionsEnvAuthorityIntent(process.env)) {
-    throw new Error(
-      "instructions is using the hosted API transport (a HASNA_INSTRUCTIONS_* credential is configured): this command is not wired to the API yet. " +
-        "Point this run at the local store (HASNA_INSTRUCTIONS_LOCAL=1 with no hosted credential) to use it against the local SQLite store.",
-    );
-  }
   const dbPath = path || getDbPath();
   const db = new Database(dbPath);
   db.run("PRAGMA journal_mode = WAL");
@@ -150,8 +136,8 @@ export function resetDatabase(): void {
  * Destroy the on-disk local database: close the handle and delete the db file
  * plus its WAL/SHM sidecars. Used by `init --force`. Resolves the path from the
  * db module (honoring HASNA_INSTRUCTIONS_DB_PATH); a no-op for the
- * in-memory (`:memory:`) database. Local-only — the CloudConfigStore never calls
- * this (destroying the shared cloud store from a client is forbidden).
+ * in-memory (`:memory:`) database. Only the on-box SQLite store calls this —
+ * destroying the shared cloud store from a client is forbidden.
  */
 export function resetLocalDatabase(): void {
   resetDatabase();

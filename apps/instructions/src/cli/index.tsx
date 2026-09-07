@@ -2075,8 +2075,8 @@ mcpCmd.command("install")
           await proc.exited;
           console.log(chalk.green("✓") + " Installed into Claude Code");
         } else if (target === "codex") {
-          const { appendFileSync, existsSync: ex } = await import("node:fs");
-          const { join: j } = await import("node:path");
+          const { appendFileSync, existsSync: ex, mkdirSync: md } = await import("node:fs");
+          const { dirname: dn, join: j } = await import("node:path");
           const configPath = j(homedir(), ".codex", "config.toml");
           const block = `\n[mcp_servers.configs]\ncommand = "${mcpBinary}"\nargs = []\n`;
           if (ex(configPath)) {
@@ -2086,6 +2086,9 @@ mcpCmd.command("install")
               continue;
             }
           }
+          // A fresh machine has no ~/.codex yet; install must create it the
+          // same way the Antigravity installer creates ~/.gemini/config.
+          md(dn(configPath), { recursive: true });
           appendFileSync(configPath, block);
           console.log(chalk.green("✓") + " Installed into Codex");
         } else if (target === "antigravity") {
@@ -2117,12 +2120,71 @@ mcpCmd.command("uninstall")
   .alias("remove")
   .description("Remove configs MCP server from agents")
   .option("--claude", "remove from Claude Code")
+  .option("--codex", "remove from Codex")
+  .option("--antigravity", "remove from Google Antigravity")
   .option("--all", "remove from all agents")
   .action(async (opts) => {
-    if (opts.claude || opts.all) {
-      const proc = Bun.spawn(["claude", "mcp", "remove", "configs"], { stdout: "inherit", stderr: "inherit" });
-      await proc.exited;
-      console.log(chalk.green("✓") + " Removed from Claude Code");
+    const targets = opts.all ? ["claude", "codex", "antigravity"] : [
+      ...(opts.claude ? ["claude"] : []),
+      ...(opts.codex ? ["codex"] : []),
+      ...(opts.antigravity ? ["antigravity"] : []),
+    ];
+    if (targets.length === 0) {
+      console.log(chalk.dim("Specify --claude, --codex, --antigravity, or --all"));
+      return;
+    }
+    for (const target of targets) {
+      try {
+        if (target === "claude") {
+          const proc = Bun.spawn(["claude", "mcp", "remove", "configs"], { stdout: "inherit", stderr: "inherit" });
+          await proc.exited;
+          console.log(chalk.green("✓") + " Removed from Claude Code");
+        } else if (target === "codex") {
+          const { existsSync: ex, writeFileSync: wf } = await import("node:fs");
+          const { join: j } = await import("node:path");
+          const configPath = j(homedir(), ".codex", "config.toml");
+          if (!ex(configPath)) {
+            console.log(chalk.dim("= Not installed in Codex (no config.toml)"));
+            continue;
+          }
+          const content = readFileSync(configPath, "utf-8");
+          const marker = "[mcp_servers.configs]";
+          if (!content.includes(marker)) {
+            console.log(chalk.dim("= Not installed in Codex"));
+            continue;
+          }
+          // Strip the [mcp_servers.configs] entry: drop its TOML block (header
+          // through the next top-level header or EOF), then clean up the blank
+          // line the block left behind.
+          const header = content.indexOf(marker);
+          const nextHeader = /(?:^|\n)\[/.exec(content.slice(header + marker.length));
+          const blockEnd = nextHeader ? header + marker.length + nextHeader.index + 1 : content.length;
+          let remaining = content.slice(0, header) + content.slice(blockEnd);
+          remaining = remaining.replace(/\n{3,}/g, "\n\n").trimEnd();
+          wf(configPath, remaining.endsWith("\n") ? remaining : `${remaining}\n`, "utf-8");
+          console.log(chalk.green("✓") + " Removed from Codex");
+        } else if (target === "antigravity") {
+          const { existsSync: ex, readFileSync: rf, writeFileSync: wf } = await import("node:fs");
+          const configPath = join(homedir(), ".gemini", "config", "mcp_config.json");
+          if (!ex(configPath)) {
+            console.log(chalk.dim("= Not installed in Antigravity (no mcp_config.json)"));
+            continue;
+          }
+          let settings: Record<string, unknown> = {};
+          try { settings = JSON.parse(rf(configPath, "utf-8") || "{}"); } catch { /* leave as-is */ }
+          const mcpServers = (settings["mcpServers"] ?? {}) as Record<string, unknown>;
+          if (!(mcpServers["configs"] !== undefined)) {
+            console.log(chalk.dim("= Not installed in Antigravity"));
+            continue;
+          }
+          delete mcpServers["configs"];
+          settings["mcpServers"] = mcpServers;
+          wf(configPath, JSON.stringify(settings, null, 2) + "\n", "utf-8");
+          console.log(chalk.green("✓") + " Removed from Antigravity");
+        }
+      } catch (e) {
+        console.error(chalk.red(`✗ Failed to remove from ${target}: ${formatCliError(e)}`));
+      }
     }
   });
 
@@ -2135,9 +2197,15 @@ program
     const store = resolveConfigStore();
     if (opts.force) {
       // Routes through the Store: LocalConfigStore wipes the on-disk SQLite db;
-      // CloudConfigStore refuses (you can't force-wipe the shared cloud store).
-      await store.reset();
-      console.log(chalk.dim("Reset local store."));
+      // CloudConfigStore refuses (you can't force-wipe the shared cloud store),
+      // and the refusal is a warning here so the rest of initialization still
+      // runs against the hosted store.
+      try {
+        await store.reset();
+        console.log(chalk.dim("Reset local store."));
+      } catch (e) {
+        console.warn(chalk.yellow(`init --force: ${e instanceof Error ? e.message : String(e)}`));
+      }
     }
     console.log(chalk.bold("@hasna/instructions — initializing\n"));
 
