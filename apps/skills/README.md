@@ -221,6 +221,12 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills self-update` | | Update this package to the latest version |
 | `skills completion <shell>` | | Generate shell completions (bash, zsh, fish) |
 
+`self-update` reports success only after the installer succeeds and the available
+`skills --version` command exits successfully with one semantic version. If that
+verification fails, it exits nonzero and explains that installation may already
+have completed; it does not automatically reinstall. This check does not prove
+that the command found on your PATH belongs to the installation just performed.
+
 ### Local environment assignments
 
 `skills env-check --set 'KEY=value'` writes one literal value to the current

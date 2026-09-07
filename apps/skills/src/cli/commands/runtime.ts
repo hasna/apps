@@ -9,6 +9,7 @@ import { createInterface } from "readline";
 import type { Command } from "commander";
 import { getSkill, findSimilarSkills } from "../../lib/registry.js";
 import { runSkill } from "../../lib/skillinfo.js";
+import { SEMVER_PATTERN } from "../../lib/skill-contract.js";
 import {
   ARTICLE_GENERATION_SLUG,
   validateBlogArticleRunOptions,
@@ -178,8 +179,16 @@ export function registerRuntime(parent: Command) {
         proc.exited,
       ]);
       if (exitCode === 0) {
-        const vProc = Bun.spawn(["skills", "--version"], { stdout: "pipe" });
-        const version = (await new Response(vProc.stdout).text()).trim();
+        let version: string;
+        try {
+          version = await readUpdatedVersion();
+        } catch {
+          const error = "The available Skills version could not be verified. Installation may have completed; inspect your Skills command before retrying.";
+          if (options.json) console.log(JSON.stringify({ updated: false, stage: "verification", error, stdout, stderr }));
+          else console.error(chalk.red(`\n\u2717 ${error}`));
+          process.exitCode = 1;
+          return;
+        }
         if (options.json) console.log(JSON.stringify({ updated: true, version, stdout, stderr }));
         else {
           console.log(chalk.green("\n\u2713 Updated to latest version"));
@@ -191,6 +200,21 @@ export function registerRuntime(parent: Command) {
         process.exitCode = 1;
       }
     });
+}
+
+/** Verify the command available after installation; this is not PATH ownership proof. */
+async function readUpdatedVersion(): Promise<string> {
+  const proc = Bun.spawn(["skills", "--version"], { stdout: "pipe" });
+  try {
+    const [output, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    const version = output.trim();
+    if (exitCode !== 0 || !new RegExp(SEMVER_PATTERN).test(version)) throw new Error("Update version verification failed");
+    return version;
+  } finally {
+    // A failed stdout read must not leave this owned verification child running.
+    if (proc.exitCode === null) proc.kill("SIGKILL");
+    await proc.exited;
+  }
 }
 
 interface SetupCommandOptions {
