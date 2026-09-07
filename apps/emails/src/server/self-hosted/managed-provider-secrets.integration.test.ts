@@ -1,3 +1,8 @@
+import {mintApiKey,verifyApiKey} from "@hasna/contracts/auth";
+import {handleSelfHostedRequest,type SelfHostedServiceDeps} from "./service.js";
+import {EmailsSelfHostedStore} from "./store.js";
+import {testAuthDeps} from "./auth/test-support.js";
+import {EmailsSelfHostClient} from "../../selfhost.js";
 import {beforeAll,afterAll,expect,test} from "bun:test";
 import {randomBytes} from "node:crypto";
 import {createPgPool,createQueryClient,MigrationLedger,type PoolQueryClient} from "../../storage-kit/index.js";
@@ -18,6 +23,9 @@ run("tenant/provider/revision-bound envelopes keep provider plaintext out of Pos
  const captured:NodeJS.ProcessEnv[]=[];const resolve=buildManagedSenderResolver(()=>null,tenant=>new ManagedProviderSecrets(db,tenant,kms),config=>{captured.push(config);return{provider:"resend",send:async()=>"fixture-only"};});
  expect((await resolve(DEFAULT_TENANT_ID,"managed-first"))?.credentialSource).toBe("managed_envelope");expect(captured[0]?.RESEND_API_KEY).toBe(credentials.api_key);expect(await resolve(other,"managed-first")).toBeNull();
  failDecrypt=true;try{await expect(resolve(DEFAULT_TENANT_ID,"managed-first")).rejects.toThrow("Managed provider credentials could not be loaded");}finally{failDecrypt=false;}
+ const signingSecret=crypto.randomUUID();const deps={client:db,store:new EmailsSelfHostedStore(db),verifier:verifyApiKey({app:"emails",signingSecret,keyStatus:async()=>"active"}),version:"fixture",migrations:[],...testAuthDeps(db,signingSecret),managedProviderSecrets:(tenant:string)=>new ManagedProviderSecrets(db,tenant,kms)} as SelfHostedServiceDeps;
+ const sdk=new EmailsSelfHostClient({baseUrl:"https://fixture",bearerToken:mintApiKey({app:"emails",scopes:["emails:*"],signingSecret}).token,fetch:async(input,init)=>(await handleSelfHostedRequest(deps,new Request(input,init)))!});
+ const apiInstalled=await sdk.installProviderCredentials("managed-first",{credentials,expected_revision:1});expect(apiInstalled).toMatchObject({status:"complete",checked:false,revision:2});expect((await own.read("managed-first"))?.revision).toBe(2);await expect(sdk.installProviderCredentials("managed-first",{credentials,expected_revision:1})).rejects.toMatchObject({status:409});
  const dump=await db.one("SELECT row_to_json(e)::text AS value FROM provider_credential_envelopes e WHERE provider_id='managed-first'");expect(JSON.stringify(dump)).not.toContain(credentials.api_key);
  await db.execute("UPDATE tenants SET status='suspended' WHERE id=$1",[other]);try{await expect(foreign.metadata()).rejects.toThrow("not active");}finally{await db.execute("UPDATE tenants SET status='active' WHERE id=$1",[other]);}
  expect(await foreign.read("managed-first")).toBeNull();await expect(foreign.install("managed-first",credentials,null,"fixture")).rejects.toThrow("registered");await expect(own.install("managed-first",credentials,null,"fixture")).rejects.toThrow("revision changed");

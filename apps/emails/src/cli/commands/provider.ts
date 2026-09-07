@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
 import { assertProviderCredentialsStorable, createProvider, listProviderSummaries, deleteProvider, getProvider, getProviderWithCredentials, resolveProviderId, updateProvider } from "../../db/providers.js";
-import {fetchProviderSecretStatus,requireProviderSecretOperation,providerSecretApi} from "../../lib/provider-secret-api.js";
+import {fetchProviderSecretStatus,requireProviderSecretOperation,beginProviderSecretJob,readProviderSecretJob,installApiProviderCredentials} from "../../lib/provider-secret-api.js";
 import { getAdapter } from "../../providers/index.js";
 import { log } from "../../lib/logger.js";
 import { getClientMode } from "../../lib/mode.js";
@@ -95,6 +95,11 @@ export function registerProviderCommands(program: Command, output: (data: unknow
   const providerCmd = program.command("provider").description("Manage email providers");
 
   const secretsCmd = providerCmd.command("secrets").description("Inspect and manage server provider credentials");
+  const reportSecretJob=(result:Awaited<ReturnType<typeof readProviderSecretJob>>)=>{
+    const receipt={...result,...(result.status==="pending"?{resume_command:`emails provider secrets job ${result.id} --advance`}:{})};
+    output(receipt,JSON.stringify(receipt));
+    if(result.status!=="complete")process.exitCode=1;
+  };
 
   secretsCmd.command("status").description("Show server credential sources and tenant root metadata (never values)")
     .action(async()=>{try{
@@ -103,19 +108,40 @@ export function registerProviderCommands(program: Command, output: (data: unknow
     }catch(error){handleError(error);}});
   for(const operation of ["rewrap","rotate-root"] as const){
     secretsCmd.command(operation).description(operation==="rewrap"?"Rewrap managed server provider data keys":"Rotate the managed tenant provider root")
-      .action(async()=>{try{
+      .requiredOption("--idempotency-key <uuid>","Reusable operation UUID; reuse after uncertain retries")
+      .action(async(opts:{idempotencyKey:string})=>{try{
         const status=await fetchProviderSecretStatus();requireProviderSecretOperation(status,operation);
-        const result=await providerSecretApi(operation,{idempotency_key:crypto.randomUUID()});
-        output(result,JSON.stringify(result));
+        let result=await beginProviderSecretJob(operation,opts.idempotencyKey);
+        if(result.status==="pending")result=await readProviderSecretJob(result.id,true);
+        reportSecretJob(result);
       }catch(error){handleError(error);}});
   }
   secretsCmd.command("revoke-root <keyId>").description("Revoke an inactive, unreferenced managed tenant root")
     .option("--yes","Skip confirmation prompt")
-    .action(async(keyId:string,opts:{yes?:boolean})=>{try{
+    .requiredOption("--idempotency-key <uuid>","Reusable operation UUID; reuse after uncertain retries")
+    .action(async(keyId:string,opts:{yes?:boolean;idempotencyKey:string})=>{try{
       const status=await fetchProviderSecretStatus();requireProviderSecretOperation(status,"revoke-root");
       await confirmDestructiveAction(`Revoke provider root key ${keyId}?`,opts.yes);
-      const result=await providerSecretApi("revoke-root",{key_id:keyId,idempotency_key:crypto.randomUUID()});
-      output(result,JSON.stringify(result));
+      const result=await beginProviderSecretJob("revoke-root",opts.idempotencyKey,keyId);
+      reportSecretJob(result);
+    }catch(error){handleError(error);}});
+
+  secretsCmd.command("job <id>").description("Inspect or resume a durable provider credential job")
+    .option("--advance","Rewrap the next bounded batch")
+    .action(async(id:string,opts:{advance?:boolean})=>{try{
+      const result=await readProviderSecretJob(id,opts.advance);reportSecretJob(result);
+    }catch(error){handleError(error);}});
+  secretsCmd.command("install <providerId>").description("Store encrypted server credentials for a registered provider")
+    .requiredOption("--credentials-file <path>","JSON credentials file; values are never printed")
+    .requiredOption("--expected-revision <revision>","Current revision from status, or none for initial installation")
+    .action(async(providerId:string,opts:{credentialsFile:string;expectedRevision:string})=>{try{
+      const status=await fetchProviderSecretStatus();requireProviderSecretOperation(status,"rewrap");
+      const revision=opts.expectedRevision==="none"?null:Number(opts.expectedRevision);
+      if(revision!==null&&(!/^[1-9][0-9]*$/.test(opts.expectedRevision)||!Number.isSafeInteger(revision)))throw Error("Expected revision must be a positive integer or none.");
+      const {readFile,stat}=await import("node:fs/promises");
+      if((await stat(opts.credentialsFile)).size>65536)throw Error("Credentials file exceeds 64 KiB.");
+      let credentials:unknown;try{credentials=JSON.parse(await readFile(opts.credentialsFile,"utf8"));}catch{throw Error("Credentials file must contain valid JSON.");}
+      const result=await installApiProviderCredentials(providerId,credentials,revision);output(result,JSON.stringify(result));
     }catch(error){handleError(error);}});
 
   providerCmd

@@ -1664,8 +1664,53 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Read a durable tenant credential job */
+    async getProviderSecretJob(id: string, init?: RequestInit): Promise<{ "id": string; "operation": "rewrap" | "rotate-root" | "revoke-root"; "status": "pending" | "complete"; "root_id": string; "processed": number; "remaining": number }> {
+      return this.request("GET", `/v1/providers/secrets/jobs/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Advance at most twenty provider data keys atomically */
+    async advanceProviderSecretJob(id: string, body: { "limit"?: number }, init?: RequestInit): Promise<{ "id": string; "operation": "rewrap" | "rotate-root" | "revoke-root"; "status": "pending" | "complete"; "root_id": string; "processed": number; "remaining": number }> {
+      return this.request("POST", `/v1/providers/secrets/jobs/${encodeURIComponent(String(id))}/advance`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Begin an idempotent tenant credential root operation */
+    async revokeProviderSecretRoot(body: { "idempotency_key": string; "key_id": string }, init?: RequestInit): Promise<{ "id": string; "operation": "rewrap" | "rotate-root" | "revoke-root"; "status": "pending" | "complete"; "root_id": string; "processed": number; "remaining": number }> {
+      return this.request("POST", `/v1/providers/secrets/revoke-root`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Begin an idempotent tenant credential root operation */
+    async rewrapProviderSecrets(body: { "idempotency_key": string }, init?: RequestInit): Promise<{ "id": string; "operation": "rewrap" | "rotate-root" | "revoke-root"; "status": "pending" | "complete"; "root_id": string; "processed": number; "remaining": number }> {
+      return this.request("POST", `/v1/providers/secrets/rewrap`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Begin an idempotent tenant credential root operation */
+    async rotateProviderSecretRoot(body: { "idempotency_key": string }, init?: RequestInit): Promise<{ "id": string; "operation": "rewrap" | "rotate-root" | "revoke-root"; "status": "pending" | "complete"; "root_id": string; "processed": number; "remaining": number }> {
+      return this.request("POST", `/v1/providers/secrets/rotate-root`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Inspect server credential bindings without reading values */
-    async getProviderSecretStatus(init?: RequestInit): Promise<{ "source": string; "complete": true; "checked": false; "activeKeyId": string | null; "availableKeyIds": Array<string>; "referencedKeyIds": Array<string>; "managed_envelopes": number; "lifecycle_requirement": string; "capabilities": { "status": boolean; "rewrap": boolean; "rotate_root": boolean; "revoke_root": boolean }; "default_sender": { "type"?: string; "credential_source"?: string; "externally_managed"?: boolean } | null; "providers": Array<{ "provider_id": string; "name": string; "type": string; "active": boolean; "configured": boolean; "credential_source": string; "externally_managed": boolean }> }> {
+    async getProviderSecretStatus(init?: RequestInit): Promise<{ "source": string; "complete": true; "checked": false; "activeKeyId": string | null; "availableKeyIds": Array<string>; "referencedKeyIds": Array<string>; "managed_envelopes": number; "lifecycle_requirement": string; "capabilities": { "status": boolean; "rewrap": boolean; "rotate_root": boolean; "revoke_root": boolean }; "default_sender": { "type"?: string; "credential_source"?: string; "externally_managed"?: boolean } | null; "providers": Array<{ "provider_id": string; "name": string; "type": string; "active": boolean; "configured": boolean; "credential_source": string; "externally_managed": boolean; "revision"?: number }> }> {
       return this.request("GET", `/v1/providers/secrets/status`, {
         body: undefined,
         query: undefined,
@@ -1703,6 +1748,15 @@ export class EmailsSelfHostClient {
     /** Update a tenant-scoped providers row */
     async updateResourceProviders(id: string, body: { "name"?: string | null; "type"?: string | null; "region"?: string | null; "active"?: boolean }, init?: RequestInit): Promise<{ "name": string | null; "type": string | null; "region": string | null; "active": boolean; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("PATCH", `/v1/providers/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Install encrypted tenant provider credentials with a revision fence */
+    async installProviderCredentials(id: string, body: { "expected_revision": number | null; "credentials": { "type": "ses" | "resend"; "api_key"?: string; "access_key"?: string; "secret_key"?: string } }, init?: RequestInit): Promise<{ "provider_id": string; "revision": number; "root_id": string; "status": "complete"; "checked": false }> {
+      return this.request("PUT", `/v1/providers/${encodeURIComponent(String(id))}/credentials`, {
         body,
         query: undefined,
         init,

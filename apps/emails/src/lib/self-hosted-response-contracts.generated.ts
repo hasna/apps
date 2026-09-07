@@ -25973,6 +25973,190 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "PUT",
+    "operationId": "installProviderCredentials",
+    "path": "/v1/providers/{id}/credentials",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "provider_id",
+        "revision",
+        "root_id",
+        "status",
+        "checked"
+      ],
+      "properties": {
+        "provider_id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "complete"
+          ]
+        },
+        "checked": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        }
+      }
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "installProviderCredentials",
+    "path": "/v1/providers/{id}/credentials",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "installProviderCredentials",
+    "path": "/v1/providers/{id}/credentials",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "installProviderCredentials",
+    "path": "/v1/providers/{id}/credentials",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "installProviderCredentials",
+    "path": "/v1/providers/{id}/credentials",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "installProviderCredentials",
+    "path": "/v1/providers/{id}/credentials",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "installProviderCredentials",
+    "path": "/v1/providers/{id}/credentials",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "installProviderCredentials",
+    "path": "/v1/providers/{id}/credentials",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "installProviderCredentials",
+    "path": "/v1/providers/{id}/credentials",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
     "method": "GET",
     "operationId": "getProviderHealth",
     "path": "/v1/providers/{id}/health",
@@ -26247,6 +26431,1221 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "GET",
+    "operationId": "getProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "operation",
+        "status",
+        "root_id",
+        "processed",
+        "remaining"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "rewrap",
+            "rotate-root",
+            "revoke-root"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}",
+    "status": 202,
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "operation",
+        "status",
+        "root_id",
+        "processed",
+        "remaining"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "rewrap",
+            "rotate-root",
+            "revoke-root"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "advanceProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}/advance",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "operation",
+        "status",
+        "root_id",
+        "processed",
+        "remaining"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "rewrap",
+            "rotate-root",
+            "revoke-root"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "advanceProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}/advance",
+    "status": 202,
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "operation",
+        "status",
+        "root_id",
+        "processed",
+        "remaining"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "rewrap",
+            "rotate-root",
+            "revoke-root"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "advanceProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}/advance",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "advanceProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}/advance",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "advanceProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}/advance",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "advanceProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}/advance",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "advanceProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}/advance",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "advanceProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}/advance",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "advanceProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}/advance",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "advanceProviderSecretJob",
+    "path": "/v1/providers/secrets/jobs/{id}/advance",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "revokeProviderSecretRoot",
+    "path": "/v1/providers/secrets/revoke-root",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "operation",
+        "status",
+        "root_id",
+        "processed",
+        "remaining"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "rewrap",
+            "rotate-root",
+            "revoke-root"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "revokeProviderSecretRoot",
+    "path": "/v1/providers/secrets/revoke-root",
+    "status": 202,
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "operation",
+        "status",
+        "root_id",
+        "processed",
+        "remaining"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "rewrap",
+            "rotate-root",
+            "revoke-root"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "revokeProviderSecretRoot",
+    "path": "/v1/providers/secrets/revoke-root",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "revokeProviderSecretRoot",
+    "path": "/v1/providers/secrets/revoke-root",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "revokeProviderSecretRoot",
+    "path": "/v1/providers/secrets/revoke-root",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "revokeProviderSecretRoot",
+    "path": "/v1/providers/secrets/revoke-root",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "revokeProviderSecretRoot",
+    "path": "/v1/providers/secrets/revoke-root",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "revokeProviderSecretRoot",
+    "path": "/v1/providers/secrets/revoke-root",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "revokeProviderSecretRoot",
+    "path": "/v1/providers/secrets/revoke-root",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "revokeProviderSecretRoot",
+    "path": "/v1/providers/secrets/revoke-root",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rewrapProviderSecrets",
+    "path": "/v1/providers/secrets/rewrap",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "operation",
+        "status",
+        "root_id",
+        "processed",
+        "remaining"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "rewrap",
+            "rotate-root",
+            "revoke-root"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rewrapProviderSecrets",
+    "path": "/v1/providers/secrets/rewrap",
+    "status": 202,
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "operation",
+        "status",
+        "root_id",
+        "processed",
+        "remaining"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "rewrap",
+            "rotate-root",
+            "revoke-root"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rewrapProviderSecrets",
+    "path": "/v1/providers/secrets/rewrap",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rewrapProviderSecrets",
+    "path": "/v1/providers/secrets/rewrap",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rewrapProviderSecrets",
+    "path": "/v1/providers/secrets/rewrap",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rewrapProviderSecrets",
+    "path": "/v1/providers/secrets/rewrap",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rewrapProviderSecrets",
+    "path": "/v1/providers/secrets/rewrap",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rewrapProviderSecrets",
+    "path": "/v1/providers/secrets/rewrap",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rewrapProviderSecrets",
+    "path": "/v1/providers/secrets/rewrap",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rewrapProviderSecrets",
+    "path": "/v1/providers/secrets/rewrap",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rotateProviderSecretRoot",
+    "path": "/v1/providers/secrets/rotate-root",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "operation",
+        "status",
+        "root_id",
+        "processed",
+        "remaining"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "rewrap",
+            "rotate-root",
+            "revoke-root"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rotateProviderSecretRoot",
+    "path": "/v1/providers/secrets/rotate-root",
+    "status": 202,
+    "schema": {
+      "type": "object",
+      "required": [
+        "id",
+        "operation",
+        "status",
+        "root_id",
+        "processed",
+        "remaining"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "rewrap",
+            "rotate-root",
+            "revoke-root"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "complete"
+          ]
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "processed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rotateProviderSecretRoot",
+    "path": "/v1/providers/secrets/rotate-root",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rotateProviderSecretRoot",
+    "path": "/v1/providers/secrets/rotate-root",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rotateProviderSecretRoot",
+    "path": "/v1/providers/secrets/rotate-root",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rotateProviderSecretRoot",
+    "path": "/v1/providers/secrets/rotate-root",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rotateProviderSecretRoot",
+    "path": "/v1/providers/secrets/rotate-root",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rotateProviderSecretRoot",
+    "path": "/v1/providers/secrets/rotate-root",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rotateProviderSecretRoot",
+    "path": "/v1/providers/secrets/rotate-root",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "rotateProviderSecretRoot",
+    "path": "/v1/providers/secrets/rotate-root",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
     "operationId": "getProviderSecretStatus",
     "path": "/v1/providers/secrets/status",
     "status": 200,
@@ -26376,6 +27775,10 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
               },
               "externally_managed": {
                 "type": "boolean"
+              },
+              "revision": {
+                "type": "integer",
+                "minimum": 1
               }
             }
           }

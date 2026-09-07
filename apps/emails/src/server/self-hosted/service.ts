@@ -1,3 +1,5 @@
+import { runProviderSecretOperation } from "./provider-secret-operations.js";
+import { ManagedProviderSecretError } from "./managed-provider-secrets.js";
 import { ManagedSenderUnavailableError } from "./managed-provider-sender.js";
 import type {ManagedProviderSecrets} from "./managed-provider-secrets.js";
 import {readProviderSecretStatus} from "./provider-secret-status.js";
@@ -2783,6 +2785,30 @@ export async function handleSelfHostedRequest(
       } catch (error) {
         if (error instanceof ProviderSyncError) return json(error.status, { error: error.message });
         throw error;
+      }
+    }
+
+    const secretLifecycle = path.match(/^\/v1\/providers\/secrets\/(rewrap|rotate-root|revoke-root)$/);
+    const secretJob = path.match(/^\/v1\/providers\/secrets\/jobs\/([^/]+)(\/advance)?$/);
+    const credentialInstall = path.match(/^\/v1\/providers\/([^/]+)\/credentials$/);
+    if (secretLifecycle || secretJob || credentialInstall) {
+      const isRead = !!secretJob && !secretJob[2];
+      const expectedMethod = isRead ? "GET" : credentialInstall ? "PUT" : "POST";
+      if (method !== expectedMethod) return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, isRead ? read : write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "managing tenant provider credentials");
+      if (denied) return denied;
+      const backend = deps.managedProviderSecrets?.(auth.ctx.tenantId);
+      if (!backend) return json(503, { error: "Managed provider credentials require deployment KMS configuration.", reason: "provider_credential_backend_unconfigured" });
+      const operation = credentialInstall ? "install" : secretJob ? (isRead ? "job" : "advance") : secretLifecycle![1] as "rewrap" | "rotate-root" | "revoke-root";
+      const id = credentialInstall?.[1] ?? secretJob?.[1];
+      try {
+        const receipt = await runProviderSecretOperation(backend, operation, isRead ? {} : await readJsonBody(req), auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator", id ? decodeURIComponent(id) : undefined);
+        return json("status" in receipt && receipt.status === "pending" ? 202 : 200, receipt);
+      } catch (error) {
+        if (error instanceof ManagedProviderSecretError) return json(error.status, { error: error.message });
+        return json(503, { error: "Provider credential operation could not be confirmed. Retry with the same idempotency key or inspect the job and credential status.", reason: "provider_credential_operation_unavailable" });
       }
     }
 

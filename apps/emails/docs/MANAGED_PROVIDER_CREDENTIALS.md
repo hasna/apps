@@ -2,8 +2,8 @@
 
 This follow-up introduces PostgreSQL tenant roots, encrypted provider envelopes
 and resumable key lifecycle jobs (migration `0036_managed_provider_credentials`).
-API credential installation and lifecycle mutation routes must be completed
-before management capabilities are enabled. Sender resolution consumes existing
+Operator API credential installation and lifecycle mutation routes are enabled
+when the deployment KMS backend is configured. Sender resolution consumes existing
 managed envelopes asynchronously at each operation boundary, including sends,
 health probes, delivery sync and domain operations. An unreadable managed
 envelope fails closed without substituting an external identity. SES uses the
@@ -59,3 +59,32 @@ Validation uses an isolated synthetic KMS implementation and disposable
 PostgreSQL, including unprivileged row-level security, concurrent rotation/update,
 retry identity, ciphertext preservation and failure rollback. No live KMS key or
 provider credential was mutated during development.
+
+## Operator workflow
+
+Register the provider metadata first (including the SES region), then install its
+credentials using `emails provider secrets install <provider-id>
+--credentials-file <path> --expected-revision none`. The JSON file contains either
+`type: resend` plus `api_key`, or `type: ses` plus `access_key` and `secret_key`.
+Keep that input file protected; the command does not delete it. The response
+confirms encrypted storage, not upstream credential validity (`checked: false`).
+Use the server provider live health probe to check validity without a mail send.
+For replacement, supply the current revision reported by secret status. If an
+installation response is lost, inspect that revision before retrying; a stale
+revision cannot overwrite a newer credential update.
+
+`provider secrets rotate-root`, `rewrap`, and `revoke-root <key-id>` require an
+explicit `--idempotency-key <uuid>`. Reuse it after an uncertain response. Rotation
+and rewrap return a durable job and the CLI advances one batch. If work remains,
+it prints the job ID and exits unsuccessfully: run `provider secrets job <id>
+--advance` until complete. `provider secrets job <id>` inspects without changing
+anything. Revocation preserves the existing confirmation prompt (`--yes` skips
+it). A deployment KMS key cannot be selected or revoked by these tenant commands.
+
+The direct API uses operator-authorized `PUT /v1/providers/{id}/credentials`,
+`POST /v1/providers/secrets/{rewrap,rotate-root,revoke-root}`, and
+`GET /v1/providers/secrets/jobs/{id}` / `POST .../{id}/advance`. All results are
+secret-free. Externally managed credentials are never silently imported or
+rotated. The original provider add/update credential flags still require a
+separate integration with this install workflow; do not report those flags as
+closed by the root lifecycle implementation.
