@@ -1664,6 +1664,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Inspect server credential bindings without reading values */
+    async getProviderSecretStatus(init?: RequestInit): Promise<{ "source": string; "complete": true; "checked": false; "activeKeyId": string | null; "availableKeyIds": Array<string>; "referencedKeyIds": Array<string>; "managed_envelopes": number; "lifecycle_requirement": string; "capabilities": { "status": boolean; "rewrap": boolean; "rotate_root": boolean; "revoke_root": boolean }; "default_sender": { "type"?: string; "credential_source"?: string; "externally_managed"?: boolean } | null; "providers": Array<{ "provider_id": string; "name": string; "type": string; "active": boolean; "configured": boolean; "credential_source": string; "externally_managed": boolean }> }> {
+      return this.request("GET", `/v1/providers/secrets/status`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Get a tenant-scoped providers row */
     async getResourceProviders(id: string, init?: RequestInit): Promise<{ "name": string | null; "type": string | null; "region": string | null; "active": boolean; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("GET", `/v1/providers/${encodeURIComponent(String(id))}`, {

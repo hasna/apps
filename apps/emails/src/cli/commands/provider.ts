@@ -1,13 +1,7 @@
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
 import { assertProviderCredentialsStorable, createProvider, listProviderSummaries, deleteProvider, getProvider, getProviderWithCredentials, resolveProviderId, updateProvider } from "../../db/providers.js";
-import { getDatabase } from "../../db/database.js";
-import {
-  providerSecretsKeyStatus,
-  rewrapProviderSecrets,
-  revokeProviderSecretsRootKey,
-  rotateProviderSecretsRootKey,
-} from "../../db/provider-secrets.js";
+import {fetchProviderSecretStatus,requireProviderSecretOperation,providerSecretApi} from "../../lib/provider-secret-api.js";
 import { getAdapter } from "../../providers/index.js";
 import { log } from "../../lib/logger.js";
 import { getClientMode } from "../../lib/mode.js";
@@ -100,53 +94,29 @@ function credentialValidationError(error: unknown): Error {
 export function registerProviderCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
   const providerCmd = program.command("provider").description("Manage email providers");
 
-  const secretsCmd = providerCmd.command("secrets").description("Manage the local provider credential keyring");
+  const secretsCmd = providerCmd.command("secrets").description("Inspect and manage server provider credentials");
 
-  secretsCmd
-    .command("status")
-    .description("Show root-key IDs and envelope bindings (never secret values)")
-    .action(() => {
-      try {
-        const status = providerSecretsKeyStatus(getDatabase());
-        output(status, [
-          `Provider secret keyring: ${status.source}`,
-          `Active root key: ${status.activeKeyId ?? "not initialized"}`,
-          `Referenced root keys: ${status.referencedKeyIds.join(", ") || "none"}`,
-        ].join("\n"));
-      } catch (e) { handleError(e); }
-    });
-
-  secretsCmd
-    .command("rewrap")
-    .description("Rewrap all provider data keys with the active root key")
-    .action(() => {
-      try {
-        const count = rewrapProviderSecrets(getDatabase());
-        output({ rewrapped: count }, chalk.green(`✓ Rewrapped ${count} provider secret envelope(s).`));
-      } catch (e) { handleError(e); }
-    });
-
-  secretsCmd
-    .command("rotate-root")
-    .description("Stage a new root key and rewrap all provider data keys")
-    .action(() => {
-      try {
-        const result = rotateProviderSecretsRootKey(getDatabase());
-        output(result, chalk.green(`✓ Root key rotated to ${result.activeKeyId}; ${result.rewrapped} envelope(s) rewrapped.`));
-      } catch (e) { handleError(e); }
-    });
-
-  secretsCmd
-    .command("revoke-root <keyId>")
-    .description("Remove an unreferenced, inactive provider root key")
-    .option("--yes", "Skip confirmation prompt")
-    .action(async (keyId: string, opts: { yes?: boolean }) => {
-      try {
-        await confirmDestructiveAction(`Revoke provider root key ${keyId}?`, opts.yes);
-        revokeProviderSecretsRootKey(keyId, getDatabase());
-        output({ revoked: keyId }, chalk.green(`✓ Revoked provider root key ${keyId}.`));
-      } catch (e) { handleError(e); }
-    });
+  secretsCmd.command("status").description("Show server credential sources and tenant root metadata (never values)")
+    .action(async()=>{try{
+      const status=await fetchProviderSecretStatus();
+      output(status,[`Provider credentials: ${status.source}`,`Registered providers: ${status.providers.length}`,`Managed envelopes: ${status.managed_envelopes}`,`Active tenant root: ${status.activeKeyId??"none"}`,status.lifecycle_requirement].join("\n"));
+    }catch(error){handleError(error);}});
+  for(const operation of ["rewrap","rotate-root"] as const){
+    secretsCmd.command(operation).description(operation==="rewrap"?"Rewrap managed server provider data keys":"Rotate the managed tenant provider root")
+      .action(async()=>{try{
+        const status=await fetchProviderSecretStatus();requireProviderSecretOperation(status,operation);
+        const result=await providerSecretApi(operation,{idempotency_key:crypto.randomUUID()});
+        output(result,JSON.stringify(result));
+      }catch(error){handleError(error);}});
+  }
+  secretsCmd.command("revoke-root <keyId>").description("Revoke an inactive, unreferenced managed tenant root")
+    .option("--yes","Skip confirmation prompt")
+    .action(async(keyId:string,opts:{yes?:boolean})=>{try{
+      const status=await fetchProviderSecretStatus();requireProviderSecretOperation(status,"revoke-root");
+      await confirmDestructiveAction(`Revoke provider root key ${keyId}?`,opts.yes);
+      const result=await providerSecretApi("revoke-root",{key_id:keyId,idempotency_key:crypto.randomUUID()});
+      output(result,JSON.stringify(result));
+    }catch(error){handleError(error);}});
 
   providerCmd
     .command("add")

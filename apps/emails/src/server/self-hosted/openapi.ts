@@ -4848,4 +4848,12 @@ emailsSelfHostedOpenApi.paths!["/v1/tracking/{token}"] = {
     parameters: [{name:"token",in:"path",required:true,schema:{type:"string"}}],
     responses: {"200":{description:"Transparent GIF for a valid open capability",content:{"image/gif":{schema:{type:"string",format:"binary"}}}},"302":{description:"Redirect to the stored click destination",headers:{Location:{description:"Stored HTTP(S) destination",schema:{type:"string",format:"uri"}}}},"404":{description:"Invalid or expired capability"},"503":{description:"Tracking persistence unavailable"}} },
 };
+emailsSelfHostedOpenApi.paths!["/v1/providers/secrets/status"]={get:{operationId:"getProviderSecretStatus",summary:"Inspect server credential bindings without reading values",security:[{apiKeyAuth:[]},{bearerAuth:[]}],responses:{
+  "200":{description:"Complete tenant registry and binding metadata; no live credential probe",content:{"application/json":{schema:{type:"object",required:["source","complete","checked","activeKeyId","availableKeyIds","referencedKeyIds","managed_envelopes","capabilities","lifecycle_requirement","default_sender","providers"],properties:{
+    source:{type:"string"},complete:{type:"boolean",enum:[true]},checked:{type:"boolean",enum:[false]},activeKeyId:{type:"string",nullable:true},availableKeyIds:{type:"array",items:{type:"string"}},referencedKeyIds:{type:"array",items:{type:"string"}},managed_envelopes:{type:"integer",minimum:0},lifecycle_requirement:{type:"string"},
+    capabilities:{type:"object",required:["status","rewrap","rotate_root","revoke_root"],properties:{status:{type:"boolean"},rewrap:{type:"boolean"},rotate_root:{type:"boolean"},revoke_root:{type:"boolean"}}},
+    default_sender:{type:"object",nullable:true,properties:{type:{type:"string"},credential_source:{type:"string"},externally_managed:{type:"boolean"}}},
+    providers:{type:"array",items:{type:"object",required:["provider_id","name","type","active","configured","credential_source","externally_managed"],properties:{provider_id:{type:"string"},name:{type:"string"},type:{type:"string"},active:{type:"boolean"},configured:{type:"boolean"},credential_source:{type:"string"},externally_managed:{type:"boolean"}}}}
+  }}}}},"405":errorResponse("Only GET is supported for provider credential status.")
+}}};
 addRoutineErrorParity(emailsSelfHostedOpenApi);

@@ -1,3 +1,4 @@
+import {readProviderSecretStatus} from "./provider-secret-status.js";
 import { importSmtpMessage, smtpImportCapability, SmtpImportError, SMTP_IMPORT_JSON_BYTES } from "./smtp-import.js";
 import { setupBoundRealtime, type RealtimeSetupCloudFactory, type RealtimeSetupInput } from "./realtime-setup.js";
 import { normalizeDomainConnect, connectDomain, DomainConnectError } from "./domain-connect.js";
@@ -2759,6 +2760,13 @@ export async function handleSelfHostedRequest(
         if (error instanceof ProviderSyncError) return json(error.status, { error: error.message });
         throw error;
       }
+    }
+
+    if(path==="/v1/providers/secrets/status"){
+      if(method!=="GET") return json(405,{error:"method not allowed"});
+      const auth=await authenticate(deps,req,url,read);if(!auth.ok)return auth.response;
+      const denied=requireTenantOperator(auth,"reading provider credential status");if(denied)return denied;
+      return json(200,await readProviderSecretStatus(auth.store,auth.ctx.tenantId,deps.resolveSender,deps.sender));
     }
 
     const providerHealth = path.match(/^\/v1\/providers\/([^/]+)\/health$/);

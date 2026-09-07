@@ -26246,6 +26246,222 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "GET",
+    "operationId": "getProviderSecretStatus",
+    "path": "/v1/providers/secrets/status",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "source",
+        "complete",
+        "checked",
+        "activeKeyId",
+        "availableKeyIds",
+        "referencedKeyIds",
+        "managed_envelopes",
+        "capabilities",
+        "lifecycle_requirement",
+        "default_sender",
+        "providers"
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "complete": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "checked": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "activeKeyId": {
+          "type": "string",
+          "nullable": true
+        },
+        "availableKeyIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "referencedKeyIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "managed_envelopes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lifecycle_requirement": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "object",
+          "required": [
+            "status",
+            "rewrap",
+            "rotate_root",
+            "revoke_root"
+          ],
+          "properties": {
+            "status": {
+              "type": "boolean"
+            },
+            "rewrap": {
+              "type": "boolean"
+            },
+            "rotate_root": {
+              "type": "boolean"
+            },
+            "revoke_root": {
+              "type": "boolean"
+            }
+          }
+        },
+        "default_sender": {
+          "type": "object",
+          "nullable": true,
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "credential_source": {
+              "type": "string"
+            },
+            "externally_managed": {
+              "type": "boolean"
+            }
+          }
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "provider_id",
+              "name",
+              "type",
+              "active",
+              "configured",
+              "credential_source",
+              "externally_managed"
+            ],
+            "properties": {
+              "provider_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "configured": {
+                "type": "boolean"
+              },
+              "credential_source": {
+                "type": "string"
+              },
+              "externally_managed": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretStatus",
+    "path": "/v1/providers/secrets/status",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretStatus",
+    "path": "/v1/providers/secrets/status",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretStatus",
+    "path": "/v1/providers/secrets/status",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderSecretStatus",
+    "path": "/v1/providers/secrets/status",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
     "method": "POST",
     "operationId": "provisionAddress",
     "path": "/v1/provision/address",
