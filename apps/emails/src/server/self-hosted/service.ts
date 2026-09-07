@@ -979,7 +979,7 @@ export async function handleSelfHostedRequest(
     const authResponse = await handleAuthRoutes(deps, req, url, { socketAddress: context.socketAddress ?? null });
     if (authResponse) return authResponse;
 
-    if (path === "/v1/domains/setup-cloudflare" || path === "/v1/domains/provision" || /^\/v1\/domain-dns-jobs\/[^/]+$/.test(path)) {
+    if (path === "/v1/domains/setup" || path === "/v1/domains/setup-cloudflare" || path === "/v1/domains/provision" || /^\/v1\/domain-dns-jobs\/[^/]+$/.test(path)) {
       const inspect = path.startsWith("/v1/domain-dns-jobs/");
       if (method !== (inspect ? "GET" : "POST")) return json(405, { error: "method not allowed" });
       const auth = await authenticate(deps, req, url, inspect ? read : write);
@@ -991,7 +991,7 @@ export async function handleSelfHostedRequest(
           const result = await auth.store.domainDnsJobs().read(decodeURIComponent(path.split("/").at(-1)!));
           return result ? json(200, result) : json(404, { error: "Domain DNS job not found" });
         }
-        const body = await readJsonBody(req), input = normalizeDomainDns(body, path.endsWith("/provision") ? "provision_domain" : "setup_cloudflare");
+        const body = await readJsonBody(req), input = normalizeDomainDns(body, path === "/v1/domains/setup" ? "setup_owned" : path.endsWith("/provision") ? "provision_domain" : "setup_cloudflare");
         return json(200, await publishDomainDns(auth.store, auth.ctx.tenantId, input, body.dry_run === true, deps.resolveSender, deps.env ?? process.env, auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator", deps.domainDns?.client));
       } catch (error) {
         if (error instanceof DomainDnsError || error instanceof DomainConnectError) return json(error.status, { error: error.message });

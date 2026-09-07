@@ -11,7 +11,7 @@ describe("command suggestion availability", () => {
       "emails inbox setup-realtime example.com --source source", "emails inbox sync-s3 --source source", "emails inbox watch --all-buckets",
       "emails inbox clear --provider p1 --limit 10", "emails inbox unread-count --by-address",
       "emails schedule run", "emails scheduler", "emails provision status",
-      "emails domain status example.com", "emails domain verify example.com",
+      "emails domain setup example.com --provider provider", "emails domain setup example.com --provider provider --skip-buy", "emails domain status example.com", "emails domain verify example.com",
       "emails domains verify example.com", "emails domains enable-inbound example.com",
       "emails domains enable-outbound example.com", "emails domains disable-outbound example.com",
       "emails doctor --json", "emails export emails --format json", "emails export events --format json",

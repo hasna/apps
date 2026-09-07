@@ -92,7 +92,6 @@ describe("refusal registry covers every CLI refusal call site", () => {
     expect(refusals.length).toBeGreaterThan(0);
     expect(refusals.filter((r) => r.shared).length).toBeGreaterThan(0);
     expect(refusals.filter((r) => !r.shared)).toEqual([]); // All namespaced API-only refusals are restored.
-    expect(new Set(refusals.map((r) => r.file))).toContain("domain.ts");
     expect(new Set(refusals.map((r) => r.file))).toContain("provision.ts");
   });
 

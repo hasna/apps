@@ -45,7 +45,7 @@ export function sameDomainDnsSender(
 }
 
 export interface DomainDnsInput extends DomainConnectInput {
-  operation: "setup_cloudflare" | "provision_domain";
+  operation: "setup_cloudflare" | "provision_domain" | "setup_owned";
   add_mx: boolean;
   force_mx_switch: boolean;
   mail_from?: string;
@@ -109,6 +109,8 @@ export function normalizeDomainDns(
     )
   )
     throw new DomainDnsError("Unknown domain DNS option.", 400);
+  if(operation==="setup_owned"&&Object.keys(body).some(key=>!["domain","provider_id","dry_run","add_mx","force_mx_switch","mx_server"].includes(key)))
+    throw new DomainDnsError("Owned-domain setup accepts mail and DNS options only; domain purchasing and registrant data belong in the Domains registrar workflow.",400);
   const base = normalizeDomainConnect({
     domain: body.domain,
     provider_id: body.provider_id,
@@ -199,7 +201,7 @@ export async function publishDomainDns(
   ) => BoundDnsClient = createBoundDnsClient,
 ): Promise<DomainDnsResult> {
   const refs = await store.resolveDomainConnect(connectInput(requested));
-  const input = { ...requested, provider_id: refs.input.provider_id };
+  const input = { ...requested, provider_id: refs.input.provider_id, ...(requested.operation === "setup_owned" ? {register_provider:refs.provider_type === "ses"} : {}) };
   const binding = resolveDnsBinding(
     env,
     tenant,
@@ -358,7 +360,7 @@ export async function publishDomainDns(
       before.connection.status === "processing"
     )
       throw new DomainDnsError(
-        "Provider connection is incomplete; inspect its connection receipt before DNS publication.",
+        input.operation === "setup_owned" && refs.provider_type === "resend" ? "Owned-domain setup requires an existing domain identity in the bound Resend account. No Resend registration was attempted; configure that identity before publishing DNS." : "Provider connection is incomplete; inspect its connection receipt before DNS publication.",
       );
     let tasks = before.connection.dns_tasks;
     if (input.mail_from) {

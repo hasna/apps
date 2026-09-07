@@ -9616,6 +9616,325 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "dry_run",
+        "job"
+      ],
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "job": {
+          "type": "object",
+          "required": [
+            "id",
+            "domain",
+            "provider_id",
+            "zone_id",
+            "status",
+            "phase",
+            "dns_published",
+            "verified_for_sending",
+            "requires_reconciliation",
+            "plan",
+            "message"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "nullable": true
+            },
+            "domain": {
+              "type": "string"
+            },
+            "provider_id": {
+              "type": "string"
+            },
+            "zone_id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "planned",
+                "processing",
+                "blocked",
+                "pending_verification",
+                "verified"
+              ]
+            },
+            "phase": {
+              "type": "string"
+            },
+            "dns_published": {
+              "type": "boolean"
+            },
+            "verified_for_sending": {
+              "type": "boolean"
+            },
+            "requires_reconciliation": {
+              "type": "boolean"
+            },
+            "message": {
+              "type": "string"
+            },
+            "plan": {
+              "type": "object",
+              "nullable": true,
+              "required": [
+                "creates",
+                "deletes",
+                "existing"
+              ],
+              "properties": {
+                "creates": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "name",
+                      "content"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "string"
+                      },
+                      "priority": {
+                        "type": "integer"
+                      },
+                      "proxied": {
+                        "type": "boolean"
+                      },
+                      "ttl": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                },
+                "deletes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "existing": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "type",
+                      "name",
+                      "content"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "string"
+                      },
+                      "priority": {
+                        "type": "integer"
+                      },
+                      "proxied": {
+                        "type": "boolean"
+                      },
+                      "ttl": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
+    "status": 502,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupOwnedDomain",
+    "path": "/v1/domains/setup",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
     "operationId": "setupDomainCloudflare",
     "path": "/v1/domains/setup-cloudflare",
     "status": 200,

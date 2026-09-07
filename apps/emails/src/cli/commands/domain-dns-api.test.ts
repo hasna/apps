@@ -31,7 +31,7 @@ afterEach(() => {
       delete process.env[key];
   Object.assign(process.env, original);
   resetSelfHostedConfigCache();
-  process.exitCode = originalExitCode;
+  process.exitCode = originalExitCode ?? 0;
 });
 function fixture() {
   const secret = crypto.randomUUID(),
@@ -180,6 +180,7 @@ test("ordinary writers cannot publish DNS or inspect operator receipts; foreign 
     signingSecret: f.secret,
   }).token;
   for (const path of [
+    "/v1/domains/setup",
     "/v1/domains/setup-cloudflare",
     "/v1/domains/provision",
   ]) {
@@ -285,4 +286,36 @@ test("MCP does not turn an HTTP 200 blocked DNS receipt into success", async () 
   expect(result.isError).toBe(true);
   const payload = JSON.parse(result.content[0]!.text);
   expect(JSON.parse(payload.error.message).job.status).toBe("blocked");
+});
+
+test("owned domain setup works without purchase flags or PII, and skip-buy remains compatible",async()=>{
+ const f=fixture(),results:any[]=[];
+ for(const compatibility of [[],["--skip-buy"]]){
+  const program=new Command().exitOverride();registerDomainCommands(program,value=>results.push(value));
+  await program.parseAsync(["domain","setup","example.test","--provider","provider","--dry-run",...compatibility],{from:"user"});
+  const command=program.commands.find(item=>item.name()==="domain")!.commands.find(item=>item.name()==="setup")!;
+  expect(command.helpInformation()).toContain("already-owned");expect(command.helpInformation()).not.toContain("--email");expect(command.helpInformation()).not.toContain("--years");
+ }
+ expect(results).toHaveLength(2);expect(results[0]).toMatchObject({dry_run:true,job:{status:"planned",dns_published:false}});expect(f.calls()).toBe(0);expect(f.resolved).toHaveLength(2);
+});
+test("retired setup purchase inputs fail before any API work and never echo registrant values",async()=>{
+ const f=fixture(),exit=process.exit,error=console.error;let messages:string[]=[];
+ process.exit=(()=>{throw Error("captured exit");}) as typeof process.exit;console.error=(...parts:unknown[])=>{messages.push(parts.join(" "));};
+ try{
+  for(const flags of [["--email","private-fixture@example.test"],["--years","2"],["--phone","private-fixture-phone"],["--buy"]]){
+   const program=new Command().exitOverride();registerDomainCommands(program,()=>{});
+   await expect(program.parseAsync(["domain","setup","example.test","--provider","provider",...flags],{from:"user"})).rejects.toThrow("captured exit");
+  }
+ }finally{process.exit=exit;console.error=error;}
+ expect(messages.join(" ")).toContain("domains route53 buy --help");expect(messages.join(" ")).not.toContain("private-fixture");expect(f.resolved).toHaveLength(0);expect(f.calls()).toBe(0);
+});
+test("owned setup cannot report success while verification is pending",async()=>{
+ fixture();server!.stop(true);server=Bun.serve({port:0,fetch:()=>Response.json({dry_run:false,job:{id:"fixture-job",domain:"example.test",provider_id:"provider",zone_id:"zone",status:"pending_verification",phase:"dns_published",dns_published:true,verified_for_sending:false,requires_reconciliation:false,plan:null,message:"Pending provider verification"}})});
+ process.env.HASNA_EMAILS_API_URL=`http://127.0.0.1:${server.port}/v1`;
+ const program=new Command().exitOverride(),results:any[]=[];registerDomainCommands(program,value=>results.push(value));await program.parseAsync(["domain","setup","example.test","--provider","provider"],{from:"user"});expect(process.exitCode).toBe(1);expect(results[0].job.status).toBe("pending_verification");
+});
+
+test("older APIs cannot turn owned setup into a successful placeholder",async()=>{
+ fixture();server!.stop(true);server=Bun.serve({port:0,fetch:()=>Response.json({error:"not_found",message:"Unknown route"},{status:404})});process.env.HASNA_EMAILS_API_URL=`http://127.0.0.1:${server.port}/v1`;
+ const {setupOwnedDomain}=await import("../../lib/domain-dns-api.js");await expect(setupOwnedDomain("example.test",{provider:"provider"})).rejects.toThrow("API needs an update");
 });

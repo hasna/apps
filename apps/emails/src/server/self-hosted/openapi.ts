@@ -4956,6 +4956,7 @@ const domainDnsResponses = {
   "503": errorResponse("Server binding or service unavailable"),
 };
 for (const [path, operationId] of [
+  ["/v1/domains/setup", "setupOwnedDomain"],
   ["/v1/domains/setup-cloudflare", "setupDomainCloudflare"],
   ["/v1/domains/provision", "provisionSendingDomain"],
 ])
@@ -4977,12 +4978,11 @@ for (const [path, operationId] of [
                 domain: { type: "string" },
                 provider_id: { type: "string" },
                 dry_run: { type: "boolean" },
-                register_provider: { type: "boolean" },
+                ...(path === "/v1/domains/setup" ? {} : {register_provider: { type: "boolean" }}),
                 add_mx: { type: "boolean" },
                 force_mx_switch: { type: "boolean" },
-                mail_from: { type: "string" },
+                ...(path === "/v1/domains/setup" ? {} : {mail_from: { type: "string" }, send: { type: "string", enum: ["ses"] }}),
                 mx_server: { type: "string" },
-                send: { type: "string", enum: ["ses"] },
               },
             },
           },

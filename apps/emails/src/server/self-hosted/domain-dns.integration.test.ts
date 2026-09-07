@@ -392,3 +392,16 @@ pgtest(
     }
   },
 );
+
+pgtest("owned SES setup shares durable job identity, preserves root MX and needs no registrant data",async()=>{
+ input=normalizeDomainDns({domain:input.domain,provider_id:input.provider_id},"setup_owned");
+ records=[{id:"mailbox-mx",type:"MX",name:input.domain,content:"mailbox.example.test",priority:5,ttl:300}];
+ const initial=await run();expect(initial.job.dns_published).toBe(true);expect(initial.job.verified_for_sending).toBe(false);expect(calls.registrations).toBe(1);expect(calls.mailFrom).toBe(0);expect(records.some(record=>record.id==="mailbox-mx")).toBe(true);
+ verified=true;const resumed=await run();expect(resumed.job.id).toBe(initial.job.id);expect(resumed.job.status).toBe("verified");expect(calls.registrations).toBe(1);expect(records.some(record=>record.id==="mailbox-mx")).toBe(true);
+});
+pgtest("owned Resend setup requires an account-visible identity and never submits registration",async()=>{
+ input=normalizeDomainDns({domain:input.domain,provider_id:input.provider_id},"setup_owned");
+ await client.execute("UPDATE self_hosted_providers SET type='resend' WHERE id=$1",[input.provider_id]);sender={...sender,provider:"resend",registerDomain:async()=>{calls.registrations++;throw Error("Resend registration must not occur");}};
+ const missing=await run();expect(missing.job.status).toBe("blocked");expect(missing.job.message).toContain("existing domain identity");expect(calls.registrations).toBe(0);expect(calls.batches).toBe(0);
+ registered=true;verified=true;const existing=await run();expect(existing.job.status).toBe("verified");expect(existing.job.dns_published).toBe(true);expect(calls.registrations).toBe(0);
+});

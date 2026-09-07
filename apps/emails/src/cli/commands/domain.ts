@@ -1,6 +1,6 @@
 import { connectDomain, formatDomainConnection, type ConnectDomainOptions } from "../../lib/domain-connect-api.js";
 import { selfHostedApiRequest } from "../../db/self-hosted-store.js";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import type { DnsRecord, DomainType, Provider } from "../../types/index.js";
 import chalk from "../../lib/chalk-lite.js";
 import { createDomain, listDomains, listUsableDomains, deleteDomain, findDomainsByName, getDomain, getDomainByName, moveDomainProvider, updateDnsStatus, updateDomainReadiness } from "../../db/domains.js";
@@ -15,57 +15,6 @@ import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutp
 import { normalizeRoute53RegistrationContact } from "../../lib/route53-contact.js";
 import { resolveClientMode } from "../../lib/mode.js";
 import { now } from "../../db/runtime.js";
-
-// Every domain command below used to throw one sentence — "… is not available
-// in the self-hosted client; it runs on the self-hosted server" — from a single
-// `serverOnly()` helper, and the sentence was false in both halves:
-//
-//   * It fired UNCONDITIONALLY. `emails domain check example.com` printed it in
-//     LOCAL mode, naming a client the operator was not running.
-//   * There is no self-hosted server route behind any of them. `openapi.ts`
-//     defines plain CRUD for `/v1/domains` and `/v1/addresses` and nothing else
-//     for this surface: no verify route, no DNS route, no readiness route, no
-//     provisioning orchestrator. Pointing at a server was pointing at nothing.
-//
-// So a refusal here now says what is MISSING and what to run instead, and never
-// names a deployment mode. `emails provision *` was fixed to this shape first;
-// this table is the same contract for the domain surface, and it is a table
-// rather than one string because the commands are in different situations and a
-// single sentence could only be true of one of them.
-//
-// The four read-only DNS commands (`domain check`, `domains check`, `domain
-// dns`, `domains dns`) are no longer in the table at all: their implementations
-// (src/lib/dns.ts, src/lib/dns-check.ts, src/lib/mx-ownership.ts) are pure,
-// tested, mode-free library code that was simply never wired to a command, so
-// they are wired below instead of being explained away.
-interface UnshippedSurface {
-  /** What does not exist, stated without blaming a configuration. */
-  missing: string;
-  /** A command (or commands) that DO run and get the operator closer. */
-  instead: string;
-}
-
-const UNSHIPPED_DOMAIN_SURFACES: Record<string, UnshippedSurface> = {
-  "emails domain setup": {
-    missing: "the buy -> zone -> provider -> DNS orchestration does not ship",
-    instead: "Run the steps that do: 'emails domain available <domain>', 'emails domain buy "
-      + "<domain> ...', then 'emails domain adopt <domain> --provider <id>' once the provider "
-      + "has verified it.",
-  },
-};
-
-// Plural aliases refuse for exactly the same reason as their singular twins, so
-// they share one entry instead of drifting apart.
-const UNSHIPPED_DOMAIN_ALIASES: Record<string, string> = {
-};
-
-function notImplementedAnywhere(command: string): never {
-  const entry = UNSHIPPED_DOMAIN_SURFACES[UNSHIPPED_DOMAIN_ALIASES[command] ?? command];
-  // Unreachable while the table covers every call site; a bare, honest sentence
-  // beats a `undefined` splice if a command is ever added without an entry.
-  if (!entry) throw new Error(`${command} is not implemented in this build.`);
-  throw new Error(`${command} is not implemented in this build: ${entry.missing}. ${entry.instead}`);
-}
 
 /**
  * The DNS records `domain` is expected to publish.
@@ -1225,21 +1174,24 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
       } catch (e) { handleError(e); }
     });
 
-  domainCmd
-    .command("setup <domain>")
-    .description("Full setup: buy + Route 53 zone + register with SES + configure DNS (NOT IMPLEMENTED in this build)")
-    .requiredOption("--provider <id>", "SES or Resend provider ID")
-    .requiredOption("--email <email>", "Registrant email")
-    .requiredOption("--first-name <name>", "First name")
-    .requiredOption("--last-name <name>", "Last name")
-    .requiredOption("--phone <phone>", "Phone (e.g. +1.5551234567)")
-    .requiredOption("--address <addr>", "Street address")
-    .requiredOption("--city <city>", "City")
-    .option("--state <state>", "State/province; optional and omitted for countries where Route 53 rejects it")
-    .requiredOption("--country <code>", "Country code (e.g. US, RO)")
-    .requiredOption("--zip <zip>", "ZIP code")
-    .option("--org <name>", "Organization name")
-    .option("--years <n>", "Registration years", "1")
-    .option("--skip-buy", "Skip domain purchase (domain already registered)")
-    .action(() => { try { notImplementedAnywhere("emails domain setup"); } catch (e) { handleError(e); } });
+  const ownedSetup=domainCmd.command("setup <domain>")
+    .description("Configure an already-owned domain through server-bound mail and Cloudflare DNS providers")
+    .requiredOption("--provider <id>","Server provider ID: SES, or Resend with an existing domain identity")
+    .option("--skip-buy","Compatibility spelling; setup always uses an already-owned domain")
+    .option("--mx","Publish the explicitly bound SES inbound MX")
+    .option("--force-mx-switch","Allow replacement of existing root MX with the bound target")
+    .option("--dry-run","Check server bindings without provider calls or changes")
+    .option("--wait","Wait for provider sending verification")
+    .option("--timeout <seconds>","Verification wait limit, 1–900 seconds","600");
+  const obsolete=["email","first-name","last-name","phone","address","city","state","country","zip","org","years"];
+  for(const name of obsolete)ownedSetup.addOption(new Option(`--${name} <value>`,"Retired purchase option").hideHelp());
+  ownedSetup.addOption(new Option("--buy","Retired purchase option").hideHelp());
+  ownedSetup.action(async(domain:string,opts:Record<string,unknown>)=>{try{
+    if(opts.buy!==undefined||obsolete.some(name=>opts[name.replace(/-([a-z])/g,(_match,c:string)=>c.toUpperCase())]!==undefined))
+      throw Error("emails domain setup configures an already-owned domain and does not purchase domains or accept registrant data. Review domains route53 buy --help for the separate registrar workflow; no work was performed.");
+    const {setupOwnedDomain,formatDomainDns}=await import("../../lib/domain-dns-api.js");
+    const result=await setupOwnedDomain(domain,opts as unknown as import("../../lib/domain-dns-api.js").DomainDnsOptions);
+    output(result,formatDomainDns(result));
+    if(!(result.dry_run&&result.job.status==="planned")&&!(result.job.status==="verified"&&result.job.dns_published&&result.job.verified_for_sending))process.exitCode=1;
+  }catch(error){handleError(error);}});
 }

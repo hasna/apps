@@ -67,7 +67,7 @@ async function request<T>(
 async function publish(
   domain: string,
   options: DomainDnsOptions,
-  provision: boolean,
+  provision: boolean | "owned",
 ): Promise<DomainDnsReceipt> {
   const seconds = Number(options.timeout ?? "600");
   if (
@@ -87,7 +87,7 @@ async function publish(
     dry_run: options.dryRun ?? false,
     add_mx: options.addMx ?? options.mx ?? false,
     force_mx_switch: options.forceMxSwitch ?? false,
-    ...(provision
+    ...(provision === true
       ? {
           register_provider: true,
           send: "ses" as const,
@@ -95,26 +95,46 @@ async function publish(
             ? { mail_from: options.mailFrom }
             : {}),
         }
-      : { register_provider: options.registerSes ?? false }),
+      : provision === "owned"
+        ? {}
+        : { register_provider: options.registerSes ?? false }),
     ...(options.mxServer !== undefined ? { mx_server: options.mxServer } : {}),
   };
   let result: DomainDnsReceipt;
   while (true) {
-    result = await request(
-      (client) =>
-        provision
-          ? client.provisionSendingDomain(body, {
-              signal: AbortSignal.timeout(
-                Math.max(1, Math.min(95000, deadline - Date.now())),
-              ),
-            })
-          : client.setupDomainCloudflare(body, {
-              signal: AbortSignal.timeout(
-                Math.max(1, Math.min(95000, deadline - Date.now())),
-              ),
-            }),
-      selected,
-    );
+    try {
+      result = await request(
+        (client) =>
+          provision === "owned"
+            ? client.setupOwnedDomain(body, {
+                signal: AbortSignal.timeout(
+                  Math.max(1, Math.min(95000, deadline - Date.now())),
+                ),
+              })
+            : provision === true
+              ? client.provisionSendingDomain(body, {
+                  signal: AbortSignal.timeout(
+                    Math.max(1, Math.min(95000, deadline - Date.now())),
+                  ),
+                })
+              : client.setupDomainCloudflare(body, {
+                  signal: AbortSignal.timeout(
+                    Math.max(1, Math.min(95000, deadline - Date.now())),
+                  ),
+                }),
+        selected,
+      );
+    } catch (error) {
+      if (
+        provision === "owned" &&
+        error instanceof ApiError &&
+        [404, 405].includes(error.status)
+      )
+        throw new Error(
+          "The Emails API needs an update to support owned-domain setup; no setup completion was confirmed.",
+        );
+      throw error;
+    }
     if (
       !options.wait ||
       options.dryRun ||
@@ -128,6 +148,8 @@ async function publish(
     if (Date.now() >= deadline) return result;
   }
 }
+export const setupOwnedDomain = (domain: string, options: DomainDnsOptions) =>
+  publish(domain, options, "owned");
 export const setupDomainCloudflare = (
   domain: string,
   options: DomainDnsOptions,
