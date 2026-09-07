@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertClientStoreConfigured, DB_PATH_ENV_KEYS } from "../db/api-mode.js";
@@ -26,6 +26,14 @@ import { STORE_SELECTOR_ENV_KEYS } from "../test-support/store-isolation.js";
 //      fallthrough both call; and
 //   2. end-to-end: a real CLI subprocess with a scrubbed environment exits
 //      non-zero, names the required env, and creates no local database.
+//
+// HERMETIC SEAM: the @hasna/contracts disk tier (`~/.hasna/<app>/config/credentials`)
+// reads the home from the env object handed to the resolver (never
+// `os.homedir()`), so on a linux station that keeps the ruled disk file the
+// REAL credential would resolve — in-process for the ambient gate, in a
+// subprocess for `HOME` inherited into the child env. Every harness below
+// therefore redirects HOME (and scrubs HASNA_HOME) to a throwaway fixture, so
+// no fixture can read the machine credential or reach the shared store.
 // ============================================================================
 
 const ENV_KEYS_TO_CLEAR: readonly string[] = Array.from(
@@ -36,11 +44,13 @@ const ENV_KEYS_TO_CLEAR: readonly string[] = Array.from(
     "MEMENTOS_DB_SCOPE",
     "HASNA_DATA_HOME",
     "HASNA_CONFIG_HOME",
+    "HASNA_HOME",
   ]),
 );
 
 describe("assertClientStoreConfigured — fail-closed store gate", () => {
   let saved: Record<string, string | undefined> = {};
+  let gateHome: string | undefined;
 
   beforeEach(() => {
     saved = {};
@@ -48,12 +58,28 @@ describe("assertClientStoreConfigured — fail-closed store gate", () => {
       saved[key] = process.env[key];
       delete process.env[key];
     }
+    // The ambient gate runs against the LIVE process.env, so the resolver
+    // would anchor its disk tier at the real `$HOME/.hasna` unless HOME is
+    // redirected to a throwaway fixture first.
+    gateHome = mkdtempSync(join(tmpdir(), "mementos-gate-home-"));
+    saved["HOME"] = process.env.HOME;
+    process.env.HOME = gateHome;
   });
 
   afterEach(() => {
     for (const key of ENV_KEYS_TO_CLEAR) {
       if (saved[key] === undefined) delete process.env[key];
       else process.env[key] = saved[key];
+    }
+    if (saved.HOME === undefined) delete process.env.HOME;
+    else process.env.HOME = saved.HOME;
+    if (gateHome) {
+      try {
+        rmSync(gateHome, { recursive: true, force: true });
+      } catch {
+        // best effort — a leaked fixture dir must not fail the suite
+      }
+      gateHome = undefined;
     }
   });
 
@@ -150,9 +176,14 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 
 function scrubbedCliEnv(extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-  for (const key of [...STORE_SELECTOR_ENV_KEYS, ...DB_PATH_ENV_KEYS, ...MEMENTOS_LOCAL_OPT_IN_ENV_KEYS, "NODE_ENV", "MEMENTOS_DB_SCOPE"]) {
+  for (const key of [...STORE_SELECTOR_ENV_KEYS, ...DB_PATH_ENV_KEYS, ...MEMENTOS_LOCAL_OPT_IN_ENV_KEYS, "NODE_ENV", "MEMENTOS_DB_SCOPE", "HASNA_HOME"]) {
     delete env[key];
   }
+  // The child inherits the machine HOME unless redirected: the resolver's
+  // disk tier would then read the REAL `~/.hasna/mementos/config/credentials`
+  // and the child would run hosted against the shared store instead of
+  // failing closed. A throwaway HOME keeps every subprocess hermetic.
+  if (extra.HOME === undefined) env.HOME = mkdtempSync(join(tmpdir(), "mementos-failclosed-home-"));
   return { ...env, ...extra };
 }
 

@@ -1,0 +1,5 @@
+---
+"@hasna/mementos": patch
+---
+
+Hermetic credential-resolution and fail-closed store-gate suites now redirect `HOME` (and scrub `HASNA_HOME`) instead of inheriting the machine home. `@hasna/contracts` resolves the disk tier (`~/.hasna/<app>/config/credentials`) from the home carried by the env object handed to the resolver, so on every linux station that keeps the ruled disk file a test env built from `process.env` consulted the REAL credential file — 10 suite reds (env-tier / legacy-alias / gateway-completion / URL-alone-refusal / transport-report resolution cases and the five fail-closed store-gate cases), plus a flaky subprocess control that could silently read the shared hosted store with the machine key. Fixtures now pin a throwaway `HOME`; the disk-tier fixtures keep their explicit fixture home.

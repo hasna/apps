@@ -14,10 +14,11 @@
 //   4. disk               — `~/.hasna/mementos/config/credentials` (0600)
 //   5. `HASNA_MEMENTOS_API_KEY`
 //
-// These tests are hermetic: HOME / HASNA_CONFIG_HOME point at throwaway
-// fixture directories (never the machine home — a fixture write there would
-// destroy the operator's real credential file), and the Keychain tier is
-// exercised through an INJECTED `security` runner, so no login keychain is
+// These tests are hermetic: HOME is redirected to throwaway fixture
+// directories (never the machine home — the disk tier would otherwise read
+// the operator's real `~/.hasna/mementos/config/credentials`), and the
+// Keychain tier is exercised through an INJECTED `security` runner, so no
+// login keychain is
 // ever opened and no real credential is read.
 // ============================================================================
 
@@ -93,6 +94,13 @@ afterEach(() => {
 function hermeticEnv(extra: Env = {}): Env {
   const env: Env = { ...process.env };
   for (const key of CLEAN_KEYS) delete env[key];
+  // The @hasna/contracts disk tier reads the home from the SAME env object
+  // handed to the resolver (`homeDir(env)` — never `os.homedir()`), so an env
+  // that inherits the machine HOME consults the REAL `~/.hasna/mementos/config/credentials`
+  // on every linux station that keeps the ruled disk file. Redirect HOME to a
+  // throwaway fixture unless the test pins one itself (the disk-tier fixtures
+  // do); HASNA_HOME / HASNA_CONFIG_HOME are already removed above.
+  if (extra.HOME === undefined) env.HOME = tempHome();
   for (const [key, value] of Object.entries(extra)) {
     if (value === undefined) delete env[key];
     else env[key] = value;
