@@ -331,7 +331,7 @@ registerTool("add_google_drive_source", "Add a Google Drive source that syncs in
   delete_behavior: z.enum(["ignore", "mark_deleted"]).optional().default("ignore"),
 }, async (params) => {
   announceFilesLocalMode();
-    if (params.destination_source_id) {
+  if (params.destination_source_id) {
     const destination = await store().getSource(params.destination_source_id);
     if (!destination || (destination.type !== "s3" && destination.type !== "local")) {
       return { content: [{ type: "text" as const, text: "Destination source must be an S3 or local source" }], isError: true };
@@ -362,7 +362,7 @@ registerTool("list_google_drive_items", "List Google Drive items visible to a Go
   source_id: z.string().describe("Google Drive source ID"),
 }, async ({ source_id }) => {
   announceFilesLocalMode();
-    const source = await store().getSource(source_id);
+  const source = await store().getSource(source_id);
   if (!source || source.type !== "google_drive") {
     return { content: [{ type: "text" as const, text: "Source must be a Google Drive source" }], isError: true };
   }
@@ -374,7 +374,7 @@ registerTool("preflight_google_drive_sync", "Check Google Drive auth, destinatio
   source_id: z.string().describe("Google Drive source ID"),
 }, async ({ source_id }) => {
   announceFilesLocalMode();
-    const source = await store().getSource(source_id);
+  const source = await store().getSource(source_id);
   if (!source || source.type !== "google_drive") {
     return { content: [{ type: "text" as const, text: "Source must be a Google Drive source" }], isError: true };
   }
@@ -387,7 +387,7 @@ registerTool("sync_google_drive", "Sync one Google Drive source, or all enabled 
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ source_id, agent_id }) => {
   announceFilesLocalMode();
-    const sources = source_id
+  const sources = source_id
     ? [await store().getSource(source_id)].filter(Boolean)
     : (await store().listSources()).filter((source) => source.enabled && source.type === "google_drive");
   const results = [];
@@ -414,7 +414,7 @@ registerTool("index_source", "Re-index a source (or all sources on this machine)
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ source_id, agent_id }) => {
   announceFilesLocalMode();
-    const machine = await store().currentMachine();
+  const machine = await store().currentMachine();
   const toIndex = source_id
     ? [await store().getSource(source_id)].filter(Boolean)
     : (await store().listSources(machine.id)).filter((s) => s.enabled);
@@ -1059,7 +1059,7 @@ registerTool("resolve_knowledge_source", "Resolve an open-files:// source ref wi
   session_id: z.string().optional(),
 }, async (params) => {
   announceFilesLocalMode();
-    try {
+  try {
     const result = await resolveKnowledgeSourceRef(params.source_ref, {
       mode: params.mode as KnowledgeSourceResolveMode,
       purpose: params.purpose,
@@ -1092,7 +1092,7 @@ registerTool("doctor_knowledge_sources", "Diagnose open-files source refs for kn
   segment_chars: z.number().optional().default(4000),
 }, async (params) => {
   announceFilesLocalMode();
-    try {
+  try {
     const result = await doctorKnowledgeSources({
       source_refs: params.source_refs,
       source_id: params.source_id,
@@ -1120,7 +1120,7 @@ registerTool("resolve_extracted_text", "Resolve extracted text for an open-files
   segment_chars: z.number().optional().default(4000),
 }, async ({ source_ref, purpose, max_bytes, segment_chars }) => {
   announceFilesLocalMode();
-    try {
+  try {
     parseOpenFilesSourceRef(source_ref);
     const result = await resolveKnowledgeSourceRef(source_ref, {
       mode: "extracted_text",
@@ -1148,7 +1148,7 @@ registerTool("poll_knowledge_outbox", "Poll open-files source change outbox even
   limit: z.number().optional().default(100),
 }, async (params) => {
   announceFilesLocalMode();
-    try {
+  try {
     const result = pollKnowledgeSourceOutbox({
       consumer_id: params.consumer_id,
       after_cursor: params.after_cursor,
@@ -1168,7 +1168,7 @@ registerTool("ack_knowledge_outbox", "Acknowledge open-files source change outbo
   cursor: z.number(),
 }, async ({ consumer_id, cursor }) => {
   announceFilesLocalMode();
-    try {
+  try {
     const checkpoint = acknowledgeKnowledgeSourceOutbox(consumer_id, cursor);
     return { content: [{ type: "text", text: JSON.stringify(checkpoint, null, 2) }] };
   } catch (error) {
@@ -1306,7 +1306,7 @@ registerTool("copy_file", "Copy a file to another source (local→S3, S3→local
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ file_id, dest_source_id, dest_path, agent_id }) => {
   announceFilesLocalMode();
-    const file = await store().getFile(file_id);
+  const file = await store().getFile(file_id);
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
   const srcSource = await store().getSource(file.source_id);
   const dstSource = await store().getSource(dest_source_id);
@@ -1463,7 +1463,7 @@ registerTool("import_from_url", "Import a file from any URL (iCloud, Google Driv
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ url: fileUrl, dest_source_id, dest_path, tags: importTags, agent_id }) => {
   announceFilesLocalMode();
-    const source = await store().getSource(dest_source_id);
+  const source = await store().getSource(dest_source_id);
   if (!source) return { content: [{ type: "text" as const, text: `Source not found: ${dest_source_id}` }], isError: true };
 
   try {
@@ -1531,7 +1531,7 @@ registerTool("import_from_local", "Import a file from any local path into a mana
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ path: srcPath, dest_source_id, dest_path, tags: importTags, copy, agent_id }) => {
   announceFilesLocalMode();
-    const source = await store().getSource(dest_source_id);
+  const source = await store().getSource(dest_source_id);
   if (!source) return { content: [{ type: "text" as const, text: `Source not found: ${dest_source_id}` }], isError: true };
   if (!existsSync(srcPath)) return { content: [{ type: "text" as const, text: `File not found: ${srcPath}` }], isError: true };
 
@@ -1579,7 +1579,7 @@ registerTool("bulk_import", "Import multiple files at once from URLs or local pa
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ items, dest_source_id, agent_id }) => {
   announceFilesLocalMode();
-    let imported = 0;
+  let imported = 0;
   let failed = 0;
   const errors: string[] = [];
 
@@ -1786,7 +1786,7 @@ registerTool("watch_source", "Start watching a local source for file changes (re
   source_id: z.string().describe("Source ID (must be a local source)"),
 }, async ({ source_id }) => {
   announceFilesLocalMode();
-    const source = await store().getSource(source_id);
+  const source = await store().getSource(source_id);
   if (!source) return { content: [{ type: "text" as const, text: `Source not found: ${source_id}` }], isError: true };
   if (source.type !== "local") return { content: [{ type: "text" as const, text: "watch_source only works with local sources" }], isError: true };
   const { watchSource } = await import("../lib/watcher.js");

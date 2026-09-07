@@ -16,8 +16,10 @@
  *
  * On-box *ingestion* capabilities (filesystem/S3/Google Drive indexing,
  * extraction, local file watching, evidence upload) are physical, machine-local
- * side effects — they only run under {@link LocalStore} and are refused in api
- * mode by the caller. Their DB effects, however, still flow through this seam.
+ * side effects — they run as explicit machine operations in BOTH transports
+ * (announcing the on-box store with the LOCAL-mode line under a hosted
+ * credential), never as a silent fallback. Their DB effects flow through this
+ * seam.
  */
 import type {
   ActionType,
