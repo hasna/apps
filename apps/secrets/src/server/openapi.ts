@@ -1,3 +1,4 @@
+import { vaultMigrationOpenApi } from "../migration/openapi.js";
 /**
  * OpenAPI 3 document for the secrets serve API. Single source of truth for the
  * `/openapi.json` route and the reference shape of the typed SDK client
@@ -178,6 +179,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     },
     security: [{ apiKey: [] }],
     paths: {
+      "/v1/migrations/vault": vaultMigrationOpenApi,
       "/health": { get: { operationId: "health", summary: "Liveness probe", security: [], responses: r("#/components/schemas/Status") } },
       "/ready": { get: { operationId: "ready", summary: "Readiness probe", security: [], responses: r("#/components/schemas/ReadyStatus") } },
       "/version": { get: { operationId: "version", summary: "Version info", security: [], responses: r("#/components/schemas/Status") } },

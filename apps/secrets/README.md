@@ -956,3 +956,5 @@ Migrations live in [`migrations/`](migrations) (canonical checksummed set in
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)
+
+Migration protocol: [lossless vault migration](docs/lossless-vault-migration.md). This is separate from generic export/import and never deletes the source vault.

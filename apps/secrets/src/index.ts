@@ -32,6 +32,8 @@ Options:
   -h, --help              show this help and exit
 
 Commands:
+  migrate-vault --source <absolute-db-path> --key-file <existing-key-path> --source-id <uuid> --migration-id <uuid> --tenant <uuid>
+                              lossless authenticated transfer; metadata receipt only; never deletes source
   docs                        show a practical usage guide
   set <key> [<value>] [--stdin] [--type <type>] [--label <label>] [--ttl <ttl>] [--reason <text>] [--rotation]
   get <key> [--show|--plaintext|--check]   redacted by default; --check prints length+sha256
@@ -550,6 +552,17 @@ const helpScanEnd = rest.indexOf("--") === -1 ? rest.length : rest.indexOf("--")
 const helpScanArgs = rest.slice(0, helpScanEnd);
 if (helpScanArgs.includes("--help") || helpScanArgs.includes("-h")) {
   usage();
+  process.exit(0);
+}
+
+if (command === "migrate-vault") {
+  try {
+    const { migrateVault } = await import("./migration/client.js");
+    console.log(JSON.stringify(await migrateVault(rest)));
+  } catch {
+    console.error("Vault migration was not verified. Keep the source and reuse the same migration/source IDs after resolving capability, schema, key or conflict requirements. No source deletion was performed.");
+    process.exit(1);
+  }
   process.exit(0);
 }
 

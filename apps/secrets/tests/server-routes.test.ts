@@ -17,6 +17,7 @@ function client(overrides: Record<string, unknown> = {}) {
   return {
     async get(sql: string) {
       if (sql.includes("SELECT tenant_id FROM api_keys")) return { tenant_id: TEST_TENANT };
+      if (sql.includes("FROM pg_roles")) return {rolsuper:false,rolbypassrls:false,ownership_write:false,rls_tables:8};
       return { ok: 1 };
     },
     async many() { return []; },
@@ -240,7 +241,7 @@ describe("cloud server route matrix", () => {
     const unready = makeHandler(completeStore(), client({ async get() { throw "schema unavailable"; } }));
     res = await unready.handle(request("/ready"));
     expect(res.status).toBe(503);
-    expect(await body(res)).toMatchObject({ status: "not_ready", pendingMigrations: [] });
+    expect(await body(res)).toMatchObject({ status: "not_ready", reason: "tenant_security_not_ready" });
 
     const throwsError = completeStore();
     throwsError.listSecretMetadata = async () => { throw new Error("store failed"); };

@@ -391,7 +391,7 @@ export class CloudSecretsStore {
     const cutoff = new Date(Date.now() - SUPERSEDED_VERSION_AGE_DAYS * 86_400_000).toISOString();
     const result = await this.db.query(
       `DELETE FROM secret_versions
-       WHERE version < (SELECT MAX(v2.version) FROM secret_versions v2 WHERE v2.key = secret_versions.key)
+       WHERE NOT EXISTS (SELECT 1 FROM vault_migration_keys vmk WHERE vmk.key = secret_versions.key) AND version < (SELECT MAX(v2.version) FROM secret_versions v2 WHERE v2.key = secret_versions.key)
          AND (
            version NOT IN (
              SELECT v3.version FROM secret_versions v3
@@ -470,7 +470,7 @@ export class CloudSecretsStore {
     const cutoff = new Date(Date.now() - SUPERSEDED_VERSION_AGE_DAYS * 86_400_000).toISOString();
     await db.execute(
       `DELETE FROM secret_versions
-       WHERE key = $1 AND version < (SELECT MAX(v2.version) FROM secret_versions v2 WHERE v2.key = secret_versions.key)
+       WHERE key = $1 AND NOT EXISTS (SELECT 1 FROM vault_migration_keys vmk WHERE vmk.key = secret_versions.key) AND version < (SELECT MAX(v2.version) FROM secret_versions v2 WHERE v2.key = secret_versions.key)
          AND (
            version NOT IN (
              SELECT v3.version FROM secret_versions v3
