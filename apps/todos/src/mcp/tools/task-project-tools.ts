@@ -31,7 +31,9 @@ import {
   cloudGetTask,
   cloudResolveProjectRef,
   cloudResolveTaskListRef,
+  cloudResolveTaskRef, cloudLockTask, cloudUnlockTask, cloudAddDependency, cloudRemoveDependency,
 } from "../../cli/cloud-router.js";
+import { cloudTaskLockStatus, cloudPrioritizeTask, cloudTaskGraph } from "../task-coordination-api.js";
 import {
   addComment, listComments, updateComment, deleteComment,
 } from "../../db/comments.js";
@@ -1126,13 +1128,18 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("lock_task")) {
     server.tool(
       "lock_task",
-      "Acquire or renew a local task lock lease for an agent.",
+      "Acquire or renew a shared task lock lease for an agent.",
       {
         task_id: z.string().describe("Task ID"),
         agent_id: z.string().describe("Agent ID or name acquiring the lock"),
       },
       async ({ task_id, agent_id }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const result = await cloudLockTask(cloud, await cloudResolveTaskRef(cloud, task_id), agent_id);
+            return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], isError: !result.success };
+          }
           const resolvedId = resolveId(task_id);
           const result = lockTask(resolvedId, agent_id);
           return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: !result.success };
@@ -1146,13 +1153,18 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("unlock_task")) {
     server.tool(
       "unlock_task",
-      "Release a local task lock. The agent must own the active lock unless omitted for force release.",
+      "Release a task lock. Omit agent_id for force release, which requires server todos:* scope.",
       {
         task_id: z.string().describe("Task ID"),
         agent_id: z.string().optional().describe("Agent ID or name releasing the lock"),
       },
       async ({ task_id, agent_id }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const success = await cloudUnlockTask(cloud, await cloudResolveTaskRef(cloud, task_id), agent_id, agent_id === undefined);
+            return { content: [{ type: "text", text: JSON.stringify({ success }) }], isError: !success };
+          }
           const resolvedId = resolveId(task_id);
           const success = unlockTask(resolvedId, agent_id);
           return { content: [{ type: "text" as const, text: JSON.stringify({ success }, null, 2) }] };
@@ -1166,12 +1178,14 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
   if (shouldRegisterTool("check_task_lock")) {
     server.tool(
       "check_task_lock",
-      "Check local task lock lease status.",
+      "Check task lock lease status from the shared authority.",
       {
         task_id: z.string().describe("Task ID"),
       },
       async ({ task_id }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) return { content: [{ type: "text", text: JSON.stringify(await cloudTaskLockStatus(cloud, await cloudResolveTaskRef(cloud, task_id)), null, 2) }] };
           const resolvedId = resolveId(task_id);
           const status = getTaskLockStatus(resolvedId);
           return { content: [{ type: "text" as const, text: JSON.stringify(status, null, 2) }] };
@@ -1359,6 +1373,8 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, priority, version }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) return { content: [{ type: "text", text: formatTask(await cloudPrioritizeTask(cloud, await cloudResolveTaskRef(cloud, task_id), priority, version)) }] };
           const resolvedId = resolveId(task_id);
           const task = version === undefined
             ? setTaskPriority(resolvedId, priority)
@@ -1383,6 +1399,13 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, depends_on }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const id = await cloudResolveTaskRef(cloud, task_id);
+            const dep = await cloudResolveTaskRef(cloud, depends_on);
+            await cloudAddDependency(cloud, id, dep);
+            return { content: [{ type: "text", text: `${id.slice(0,8)} now depends on ${dep.slice(0,8)}` }] };
+          }
           const resolvedId = resolveId(task_id);
           const resolvedDep = resolveId(depends_on);
           addDependency(resolvedId, resolvedDep);
@@ -1404,6 +1427,11 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, depends_on }) => {
         try {
+          const cloud = getTodosCloudClient();
+          if (cloud) {
+            const removed = await cloudRemoveDependency(cloud, await cloudResolveTaskRef(cloud, task_id), await cloudResolveTaskRef(cloud, depends_on));
+            return { content: [{ type: "text", text: removed ? "Dependency removed." : "Dependency was not present; nothing removed." }] };
+          }
           removeDependency(resolveId(task_id), resolveId(depends_on));
           return { content: [{ type: "text" as const, text: "Dependency removed." }] };
         } catch (e) {
@@ -1423,13 +1451,14 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       },
       async ({ task_id, direction }) => {
         try {
-          const resolvedId = resolveId(task_id);
+          const cloud = getTodosCloudClient();
+          const resolvedId = cloud ? await cloudResolveTaskRef(cloud, task_id) : resolveId(task_id);
           const graphDirection = direction === "upstream"
             ? "up"
             : direction === "downstream"
               ? "down"
               : "both";
-          const graph = getTaskGraph(resolvedId, graphDirection);
+          const graph = cloud ? await cloudTaskGraph(cloud, resolvedId, graphDirection) : getTaskGraph(resolvedId, graphDirection);
           if (graph.depends_on.length === 0 && graph.blocks.length === 0) {
             return { content: [{ type: "text" as const, text: "No dependencies." }] };
           }

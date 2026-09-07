@@ -15,8 +15,8 @@ let _db: Database | null = null;
  * Env overrides (HASNA_DOMAINS_DB_PATH wins over the legacy DOMAINS_DB_PATH
  * alias) and the exact-app overrides (HASNA_DOMAINS_HOME / HASNA_DOMAINS_DIR
  * win over DOMAINS_HOME / DOMAINS_DIR) are honored unchanged and win over the
- * default. Setting any of them IS the explicit local-store opt-in
- * (`src/lib/local-opt-in.ts`).
+ * default. This low-level module is used only by explicit migration/unit
+ * fixtures; normal clients reject these settings.
  */
 export function getDbPath(env: NodeJS.ProcessEnv = process.env): string {
   if (env["HASNA_DOMAINS_DB_PATH"]) return env["HASNA_DOMAINS_DB_PATH"];

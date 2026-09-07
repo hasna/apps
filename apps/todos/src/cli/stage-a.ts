@@ -81,7 +81,7 @@ export function applyTodosCliAuthorityEnvironment(
   if (authority.route !== "local" || authority.selected_by !== "local-only-command") return;
   delete env.HASNA_TODOS_API_URL;
   delete env.HASNA_TODOS_API_KEY;
-  env.TODOS_API_URL = "";
+  delete env.TODOS_API_URL;
   delete env.TODOS_API_KEY;
   delete env.HASNA_TODOS_API_KEY_OVERRIDE;
   delete env.HASNA_TODOS_API_KEY_REF;
@@ -193,6 +193,8 @@ const DIAGNOSTIC_COMMANDS = new Set([
   ...Object.keys(BUNDLED_STATIC_COMMANDS),
 ]);
 const REMOTE_COMMANDS = new Set([
+  "mine", "blocked", "overdue", "today", "yesterday",
+  "machines",
   // `delegate` MUST be here as well as in the canonical list above. Membership
   // of the canonical list alone leaves a verb defaulted to `local-only`, which
   // on the /v1 route is refused outright — the state `dispatch` is in today.
@@ -437,6 +439,10 @@ function isMetadataInvocation(args: string[], invocation: ParsedInvocation): boo
     return isReadOnlyConfigInvocation(invocation) ||
       (invocation.commandArgs.length === 1 && HELP_FLAGS.has(invocation.commandArgs[0]!));
   }
+  // A bare machine subcommand followed by help has no option value that could
+  // be mistaken for a metadata flag; Commander exits before its action runs.
+  if (invocation.command === "machines" && invocation.commandArgs.length === 2 &&
+      !invocation.commandArgs[0]!.startsWith("-") && HELP_FLAGS.has(invocation.commandArgs[1]!)) return true;
   if (invocation.command === "storage") {
     return invocation.commandArgs.length === 1 &&
       (invocation.commandArgs[0] === "status" || HELP_FLAGS.has(invocation.commandArgs[0]!));

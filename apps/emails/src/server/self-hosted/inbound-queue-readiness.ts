@@ -61,6 +61,7 @@ export async function checkInboundQueue(
   provider: Provider,
   topicArn: string,
   queueUrl: string,
+  signal?: AbortSignal,
 ): Promise<{ ready: boolean; reason: string }> {
   const [
     { SQSClient, GetQueueAttributesCommand },
@@ -86,6 +87,7 @@ export async function checkInboundQueue(
         QueueUrl: queueUrl,
         AttributeNames: ["QueueArn", "Policy"],
       }),
+      ...(signal ? [{ abortSignal: signal }] : []),
     );
     const queueArn = queue.Attributes?.QueueArn;
     if (
@@ -104,6 +106,7 @@ export async function checkInboundQueue(
           TopicArn: topicArn,
           NextToken: token,
         }),
+        ...(signal ? [{ abortSignal: signal }] : []),
       );
       for (const subscription of result.Subscriptions ?? []) {
         if (
@@ -116,6 +119,7 @@ export async function checkInboundQueue(
           new GetSubscriptionAttributesCommand({
             SubscriptionArn: subscription.SubscriptionArn,
           }),
+          ...(signal ? [{ abortSignal: signal }] : []),
         );
         const filters = JSON.parse(attributes.Attributes?.FilterPolicy ?? "{}");
         if (

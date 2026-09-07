@@ -431,13 +431,8 @@ describe("emails serve REST parity smoke", () => {
     const addresses = await json<Array<{ id: string; email: string }>>(`/api/addresses?provider_id=${provider.id}`);
     expect(addresses[0]).toMatchObject({ id: address.id, email: "ops@example.com" });
 
-    // THE PROVIDER FILTER IS REFUSED, NOT IGNORED, and both halves are asserted because an
-    // unconditional guard here would take the whole route down rather than one filter. No
-    // message projection on the store seam carries a provider, so `/api/emails?provider_id=`
-    // cannot be served with either every provider's mail or none of it.
-    const refusedByProvider = await call(`/api/emails?provider_id=${provider.id}`);
-    expect(refusedByProvider.status).toBe(500);
-    expect(await refusedByProvider.text()).toContain("provider");
+    const filteredByProvider = await json<Array<{ id: string; provider_id: string }>>(`/api/emails?provider_id=${provider.id}`);
+    expect(filteredByProvider).toEqual([expect.objectContaining({ id: email.id, provider_id: provider.id })]);
 
     const emails = await json<Array<{ id: string; subject: string }>>(`/api/emails`);
     expect(emails[0]).toMatchObject({ id: email.id, subject: "REST smoke" });
@@ -489,16 +484,11 @@ describe("emails serve REST parity smoke", () => {
     expect(await json<Array<{ subject: string }>>(`/api/sandbox?provider_id=${provider.id}`))
       .toContainEqual(expect.objectContaining({ subject: "Sandbox smoke" }));
 
-    // Unfiltered, for the same reason `/api/emails?provider_id=` is refused above: the export
-    // reads the sent ledger through the store seam and no message projection there carries a
-    // provider. The refusal is asserted at that call site; what this one still proves is that
-    // the export route serves the row at all.
     const exportedEmails = await json<Array<{ id: string }>>(`/api/export/emails?format=json`);
     expect(exportedEmails.map((item) => item.id)).toContain(email.id);
 
-    const refusedExport = await call(`/api/export/emails?format=json&provider_id=${provider.id}`);
-    expect(refusedExport.status).toBe(500);
-    expect(await refusedExport.text()).toContain("provider");
+    const filteredExport = await json<Array<{ id: string }>>(`/api/export/emails?format=json&provider_id=${provider.id}`);
+    expect(filteredExport.map((item) => item.id)).toEqual([email.id]);
   });
 
   it("rejects unresolved or ambiguous REST provider filters instead of returning empty pages", async () => {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { handleEarlyArgs, mcpStartupDiagnosis, mcpUsage } from "./index.js";
+import { handleEarlyArgs, mcpUsage } from "./index.js";
 
 /**
  * Regression tests for the binds-before-version class (hasna/apps#1720
@@ -126,31 +126,7 @@ describe("contacts-mcp early arguments", () => {
     expect(result.stderr).not.toContain("HTTP listening");
     expect(result.stderr.split("\n")[0]).toContain("CONTACTS_API_NOT_CONFIGURED");
   });
-
-  describe("mcpStartupDiagnosis", () => {
-    test("returns null when a credential resolves", () => {
-      const home = mkdtempSync(join(tmpdir(), "contacts-mcp-diagnosis-"));
-      tempHomes.push(home);
-      expect(mcpStartupDiagnosis({ HOME: home, HASNA_CONTACTS_API_KEY: "test-key" })).toBeNull();
-    });
-
-    test("returns a value-free diagnosis naming the credential sources when unconfigured", () => {
-      const home = mkdtempSync(join(tmpdir(), "contacts-mcp-diagnosis-"));
-      tempHomes.push(home);
-      const diagnosis = mcpStartupDiagnosis({ HOME: home });
-      expect(diagnosis).not.toBeNull();
-      expect(diagnosis!).toContain("CONTACTS_API_NOT_CONFIGURED");
-      expect(diagnosis!).toContain("HASNA_CONTACTS_API_KEY");
-      expect(diagnosis!).toContain(join(home, ".hasna", "contacts", "config", "credentials"));
-      expect(diagnosis!).not.toContain("=");
-    });
-
-    test("passes hard refusals through as the diagnosis", () => {
-      const home = mkdtempSync(join(tmpdir(), "contacts-mcp-diagnosis-"));
-      tempHomes.push(home);
-      const diagnosis = mcpStartupDiagnosis({ HOME: home, HASNA_CONTACTS_STORAGE_MODE: "cloud" });
-      expect(diagnosis).not.toBeNull();
-      expect(diagnosis!).toContain("RETIRED_CONTACTS_CLIENT_SELECTOR");
-    });
-  });
+  // The in-process gate itself (every tier, the deliberate refusals, the
+  // pointer dereference) is covered by startup-gate.test.ts on a caller-built
+  // env; the spawned fail-closed contract by fail-closed-startup.test.ts.
 });

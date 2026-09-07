@@ -1,3 +1,4 @@
+import { MachineRegistryError, validateMachines } from "../storage/machine-registry.js";
 /**
  * Versioned `/v1` HTTP API for `todos-serve` (A1 pure-remote).
  *
@@ -19,6 +20,7 @@ import {
   getCloudTaskManifestAuthority,
   getCloudTaskSubtreeTransferAuthority,
   getCloudVerifier,
+  getCloudTenantId,
 } from "./cloud.js";
 import { handlePrGroupHttpRequest } from "./pr-groups.js";
 import { handleTodosProjectRegistrationHttpRequest } from "../project-registration/index.js";
@@ -50,6 +52,7 @@ export interface V1RequestDependencies {
   getVerifier?: typeof getCloudVerifier;
   ensureSchema?: typeof ensureCloudSchema;
   getStorageAdapter?: typeof getCloudStorageAdapter;
+  getMachineRegistryTenantId?: typeof getCloudTenantId;
   getPrGroupLedger?: typeof getCloudPrGroupLedger;
   getProjectRegistrationAuthority?: typeof getCloudProjectRegistrationAuthority;
   getTaskManifestAuthority?: typeof getCloudTaskManifestAuthority;
@@ -509,6 +512,7 @@ export function normalizeImportSnapshot(raw: unknown): TodosStorageSnapshot {
     tasks: arr(body["tasks"]),
     projects: arr(body["projects"]),
     projectMachinePaths: arr(body["projectMachinePaths"]),
+    machines: body["machines"] === undefined ? [] : validateMachines(body["machines"]),
     plans: arr(body["plans"]),
     agents: arr(body["agents"]),
     taskLists: arr(body["taskLists"]),
@@ -522,6 +526,7 @@ export function normalizeImportSnapshot(raw: unknown): TodosStorageSnapshot {
 /** Total number of records (across every object type) carried by a snapshot. */
 export function countSnapshotRecords(s: TodosStorageSnapshot): number {
   return (
+    (s.machines?.length ?? 0) +
     s.tasks.length +
     s.projects.length +
     (s.projectMachinePaths?.length ?? 0) +
@@ -681,8 +686,36 @@ export async function handleV1Request(
   const id = segments[2];
   const action = segments[3];
   const subId = segments[4];
+  // This deployment has one configured corpus. A tenant-bearing key must match
+  // it; an untenanted legacy key is only valid for the default corpus.
+  const registryTenant = (dependencies.getMachineRegistryTenantId ?? getCloudTenantId)();
+  const machineAuthority = () => ({ tenant_id: registryTenant, kid: principal.kid });
+  const machineAuthorityMatches = (expected: unknown) => {
+    if (!expected || typeof expected !== "object" || Array.isArray(expected)) return false;
+    const target = expected as Record<string, unknown>;
+    const current = machineAuthority();
+    return typeof current.kid === "string" && current.kid.length > 0 && target.kid === current.kid && target.tenant_id === current.tenant_id;
+  };
+  const machineTenantAllowed = () => {
+    const tenant = registryTenant;
+    return principal.tid === tenant || (principal.tid == null && tenant === "default");
+  };
+
 
   try {
+    if (resource === "machines") {
+      if (!machineTenantAllowed()) return error(403, "Machine registry key does not belong to this deployment tenant");
+      if (!store.machines) return error(501, "Upgrade the Todos API: machine registry is unavailable");
+      if (!id && method === "GET") return json({ schema_version: 2, authority: machineAuthority(), machines: await store.machines.list() });
+      if (!id && method === "POST") {
+        const body = await readJson<import("../storage/machine-registry.js").MachineRegistryInput & { expected_authority?: unknown }>(req);
+        if (!body) return error(400, "A machine operation is required");
+        if (!machineAuthorityMatches(body.expected_authority)) return error(409, "Machine authority changed or was not confirmed; reread capability before retrying");
+        const { expected_authority: _expected, ...operation } = body;
+        return json({ ...await store.machines.execute(operation), authority: machineAuthority() });
+      }
+      return error(405, "Use GET or POST /v1/machines");
+    }
     // ── /v1/tasks ──
     if (resource === "tasks") {
       // ── POST /v1/tasks/exists — bulk existence check for parity verification ──
@@ -1834,6 +1867,9 @@ export async function handleV1Request(
       const raw = await readJson<unknown>(req);
       if (raw === null) return error(400, "invalid JSON body");
       const snapshot = normalizeImportSnapshot(raw);
+      if (snapshot.machines?.length && !machineTenantAllowed()) return error(403, "Machine snapshot key does not belong to this deployment tenant");
+      if (snapshot.machines?.length && !machineAuthorityMatches((raw as Record<string, unknown>).expected_machine_authority)) return error(409, "Machine migration authority changed or was not confirmed; no records imported");
+      if (snapshot.machines?.length && !store.machines) return error(501, "Upgrade the Todos API backend to support machine snapshots");
       const received = countSnapshotRecords(snapshot);
       const completionImports = validatePlanCompletionImports(raw);
       if (completionImports.present) {
@@ -1894,11 +1930,12 @@ export async function handleV1Request(
           audit_history_id: failure.auditHistoryId,
         });
       }
-      return json({ result, received });
+      return json({ result, received, ...(snapshot.machines?.length ? { machine_authority: machineAuthority() } : {}) });
     }
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);
   } catch (e) {
+    if (e instanceof MachineRegistryError) return error(e.status, e.message);
     if (e instanceof PlanProjectLinkError) {
       const status = e.code === "PLAN_PROJECT_LINK_PLAN_NOT_FOUND"
         || e.code === "PLAN_PROJECT_LINK_PROJECT_NOT_FOUND"

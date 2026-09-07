@@ -1010,7 +1010,7 @@ describe("cloud CLI task-list filtering", () => {
           tasks.set(id, task);
           return Response.json({ task }, { status: 201 });
         }
-        if (url.pathname === "/v1/tasks/task-4/dependencies" && request.method === "POST") return Response.json({ dependency: body }, { status: 201 });
+        if (url.pathname === "/v1/tasks/task-4/dependencies" && request.method === "POST") return Response.json({ dependency: { task_id: "task-4", ...body } }, { status: 201 });
         const readback = taskReadback(url, request.method, tasks);
         if (readback) return readback;
         return Response.json({ error: "not found" }, { status: 404 });

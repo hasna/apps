@@ -102,7 +102,7 @@ class RegistryDb implements SqlLike {
   private db: Database;
 
   constructor(path: string) {
-    if (dirname(path) && !existsSync(dirname(path))) {
+    if (path !== EPHEMERAL_REGISTRY_PATH && dirname(path) && !existsSync(dirname(path))) {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     }
     this.db = new Database(path);
@@ -139,6 +139,55 @@ function getDefaultStore(): SqlLike {
   return defaultDb;
 }
 
+/**
+ * A registry that opens its backing store on the FIRST query, never at
+ * registration. Building an MCP server (`registerAgentTools`) must be free of
+ * disk side effects: the file — or the in-memory store — appears when the
+ * first agent tool actually runs.
+ */
+function lazySql(open: () => SqlLike): SqlLike {
+  let store: SqlLike | null = null;
+  const live = (): SqlLike => (store ??= open());
+  return {
+    get: (sql, ...params) => live().get(sql, ...params),
+    all: (sql, ...params) => live().all(sql, ...params),
+    run: (sql, ...params) => live().run(sql, ...params),
+    exec: (sql) => live().exec(sql),
+  };
+}
+
+/**
+ * The PERSISTENT registry: `agent-registry.db` beside logs' local data
+ * (`HASNA_AGENT_REGISTRY_DB_PATH` overrides), shared by every MCP process on
+ * the box. Opened lazily on the first agent tool call. Only the explicit
+ * local opt-in (HASNA_LOGS_LOCAL=1) may select it — a hosted process never
+ * creates a SQLite file under the app home (hasna/apps#1720 acceptance).
+ */
+export function createPersistentRegistryDb(): SqlLike {
+  return lazySql(getDefaultStore);
+}
+
+const EPHEMERAL_REGISTRY_PATH = ":memory:";
+let ephemeralDb: RegistryDb | null = null;
+
+/**
+ * The EPHEMERAL registry for the hosted transport: bun:sqlite `:memory:`,
+ * one per process (so every session of a shared Streamable-HTTP server sees
+ * the same roster), no file on disk, gone with the process. The hosted `/v1`
+ * API has no agent-registry surface, so a hosted `logs-mcp` keeps the
+ * lifecycle tools working in-process instead of silently opening a local
+ * SQLite beside data it does not own. Opened lazily on the first tool call.
+ */
+export function createEphemeralRegistryDb(): SqlLike {
+  return lazySql(() => {
+    if (!ephemeralDb) {
+      ephemeralDb = new RegistryDb(EPHEMERAL_REGISTRY_PATH);
+      ensureAgentsTable(ephemeralDb);
+    }
+    return ephemeralDb;
+  });
+}
+
 export function resetDefaultStoreForTests(): void {
   try {
     defaultDb?.close();
@@ -146,6 +195,12 @@ export function resetDefaultStoreForTests(): void {
     // Best-effort close only.
   }
   defaultDb = null;
+  try {
+    ephemeralDb?.close();
+  } catch {
+    // Best-effort close only.
+  }
+  ephemeralDb = null;
 }
 
 const AGENTS_TABLE_SQL = `
@@ -482,11 +537,22 @@ interface AgentFocus {
 export interface RegisterAgentToolsOptions {
   service?: string;
   events?: AgentEventsClient;
+  /**
+   * The registry store. Omitted, the persistent on-box file is used — opened
+   * lazily on the first tool call, never at registration. Hosted callers pass
+   * {@link createEphemeralRegistryDb} so no SQLite file is ever created.
+   */
   db?: SqlLike;
+  /** True when `db` is per-process and in-memory: the tool descriptions say so. */
+  ephemeral?: boolean;
   agentFocus?: AgentFocus;
   includeExtendedTools?: boolean;
   toolFilter?: (name: string) => boolean;
 }
+
+/** Appended to every lifecycle tool description when the registry is ephemeral. */
+export const EPHEMERAL_REGISTRY_NOTICE =
+  "This hosted logs-mcp keeps the agent registry in memory, per process: entries do not survive the MCP process and are not shared with other processes.";
 
 /**
  * Register the fleet-standard agent-lifecycle tools on an MCP server.
@@ -500,7 +566,9 @@ export function registerAgentTools(
   },
   opts: RegisterAgentToolsOptions = {},
 ): void {
-  const db = opts.db ?? getDefaultStore();
+  // Registration is side-effect free: the default persistent file opens on
+  // the first tool CALL, never while the server is being built.
+  const db = opts.db ?? createPersistentRegistryDb();
   const events = opts.events;
   const focus = opts.agentFocus;
   const includeExtended = opts.includeExtendedTools ?? false;
@@ -512,7 +580,8 @@ export function registerAgentTools(
     handler: (args: any) => Promise<unknown> | unknown,
   ) => {
     if (!allow(name)) return;
-    server.tool(name, description, schema, handler);
+    const text = opts.ephemeral ? `${description} ${EPHEMERAL_REGISTRY_NOTICE}` : description;
+    server.tool(name, text, schema, handler);
   };
 
   tool(

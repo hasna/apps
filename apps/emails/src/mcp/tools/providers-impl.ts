@@ -1,7 +1,7 @@
 import { createProvider, deleteProvider, getProvider, listProviderSummaries, updateProvider } from "../../db/providers.js";
 import { redactSecrets } from "../../lib/redaction.js";
-import { getAdapter } from "../../providers/index.js";
-import type { CreateProviderInput, ProviderType } from "../../types/index.js";
+import { fetchProviderSecretStatus, writeApiManagedProvider } from "../../lib/provider-secret-api.js";
+import type { ProviderType } from "../../types/index.js";
 import { resolveId } from "../helpers.js";
 
 type ToolResult = {
@@ -37,25 +37,23 @@ function publicProvider(provider: Record<string, unknown>): Record<string, unkno
   return out;
 }
 
-function optionalString(input: Record<string, unknown>, key: keyof CreateProviderInput): string | undefined {
-  const value = input[key];
-  return typeof value === "string" ? value : undefined;
-}
-
-function createProviderInput(input: Record<string, unknown>): CreateProviderInput {
-  const name = input["name"];
-  const type = input["type"];
-  if (typeof name !== "string" || typeof type !== "string") {
-    throw new Error("Provider name and type are required");
+const credentialFields = ["api_key", "access_key", "secret_key"] as const;
+function credentialsFrom(input: Record<string, unknown>) {
+  const credentials: { api_key?: string; access_key?: string; secret_key?: string } = {};
+  for (const field of credentialFields) {
+    if (input[field] === undefined) continue;
+    if (typeof input[field] !== "string" || !input[field]) throw new Error(`Provider ${field} must be a nonempty string.`);
+    credentials[field] = input[field];
   }
-  return {
-    name,
-    type: type as ProviderType,
-    api_key: optionalString(input, "api_key"),
-    region: optionalString(input, "region"),
-    access_key: optionalString(input, "access_key"),
-    secret_key: optionalString(input, "secret_key"),
-  };
+  return credentials;
+}
+function safeError(error: unknown, input: Record<string, unknown>): string {
+  let message = formatError(error);
+  for (const field of credentialFields) {
+    const value = input[field];
+    if (typeof value === "string" && value) message = message.replaceAll(value, "[REDACTED]");
+  }
+  return message;
 }
 
 export async function runProviderTool(name: ProviderToolName, input: Record<string, unknown>): Promise<ToolResult> {
@@ -74,28 +72,35 @@ export async function runProviderTool(name: ProviderToolName, input: Record<stri
         });
       }
       case "add_provider": {
-        const providerInput = createProviderInput(input);
-        const provider = createProvider(providerInput);
-
-        if (!input["skip_validation"] && provider.type !== "sandbox") {
+        const { name: providerName, type, region } = input;
+        if (typeof providerName !== "string" || !providerName.trim() || !["ses", "resend", "sandbox"].includes(String(type))) throw new Error("Provider name and supported type are required.");
+        const credentials = credentialsFrom(input);
+        if (Object.keys(credentials).length) {
+          if (type === "sandbox") throw new Error("Sandbox providers do not accept delivery credentials.");
+          const id = input.id === undefined ? crypto.randomUUID() : String(input.id);
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new Error("Supply a reusable UUID provider id for managed creation.");
           try {
-            const adapter = getAdapter(provider);
-            await adapter.listDomains();
-          } catch (validationErr) {
-            deleteProvider(provider.id);
-            return text(
-              `Error: Provider credentials are invalid: ${validationErr instanceof Error ? validationErr.message : String(validationErr)}. Provider was not saved.`,
-              true,
-            );
+            const receipt = await writeApiManagedProvider(id, { create: true, name: providerName, type: type as "ses" | "resend", region: typeof region === "string" ? region : null, credentials, expected_revision: null, skip_validation: input.skip_validation === true });
+            return json(receipt);
+          } catch (error) {
+            throw new Error(`${safeError(error, input)} Provider ID: ${id}. Inspect this ID before retrying; reuse the same id to avoid duplicate registration.`);
           }
         }
-
-        return json(publicProvider(provider as unknown as Record<string, unknown>));
+        if (input.id !== undefined) throw new Error("An explicit id is supported for managed credential creation only.");
+        const provider = createProvider({ name: providerName, type: type as ProviderType, ...(typeof region === "string" ? { region } : {}) });
+        return json({ ...publicProvider(provider as unknown as Record<string, unknown>), checked: false, credential_source: "registry_only" });
       }
       case "update_provider": {
-        const resolvedId = resolveId("providers", String(input["id"]));
-        const { id: _, ...updates } = input;
-        return json(publicProvider(updateProvider(resolvedId, updates) as unknown as Record<string, unknown>));
+        if (typeof input.id !== "string" || !input.id.trim()) throw new Error("Provider ID must not be empty.");
+        const resolvedId = resolveId("providers", input.id);
+        const credentials = credentialsFrom(input);
+        const status = (Object.keys(credentials).length || input.region !== undefined) ? await fetchProviderSecretStatus() : undefined;
+        const managed = status?.providers.find(provider => provider.provider_id === resolvedId);
+        if (Object.keys(credentials).length || managed?.credential_source === "managed_envelope") {
+          if (managed?.credential_source === "managed_envelope" && (!Number.isSafeInteger(managed.revision) || managed.revision! < 1)) throw new Error("The API did not report the managed credential revision; inspect provider status before updating.");
+          return json(await writeApiManagedProvider(resolvedId, { credentials, expected_revision: managed?.revision ?? null, ...(typeof input.name === "string" ? { name: input.name } : {}), ...(typeof input.region === "string" ? { region: input.region } : {}), skip_validation: input.skip_validation === true }));
+        }
+        return json({ ...publicProvider(updateProvider(resolvedId, { ...(typeof input.name === "string" ? { name: input.name } : {}), ...(typeof input.region === "string" ? { region: input.region } : {}) }) as unknown as Record<string, unknown>), checked: false });
       }
       case "remove_provider": {
         const providerRef = String(input["provider_id"]);
@@ -107,6 +112,6 @@ export async function runProviderTool(name: ProviderToolName, input: Record<stri
       }
     }
   } catch (error) {
-    return text(`Error: ${formatError(error)}`, true);
+    return text(`Error: ${safeError(error, input)}`, true);
   }
 }
