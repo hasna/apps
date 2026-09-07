@@ -119,8 +119,6 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
   // against "required option not specified" instead of the refusal. The table is
   // asserted to COVER the scan, so adding a refusal without a probe fails here.
   const PROBES: Record<string, string[]> = {
-    "emails domain connect": ["domain", "connect", "example.com", "--provider", "p1"],
-    "emails domains connect": ["domains", "connect", "example.com", "--provider", "p1"],
     "emails domain setup-cloudflare": ["domain", "setup-cloudflare", "example.com", "--provider", "p1"],
     "emails domain setup": [
       "domain", "setup", "example.com", "--provider", "p1", "--email", "ops@example.com",

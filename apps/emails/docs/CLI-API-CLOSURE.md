@@ -25,7 +25,8 @@ This is a source implementation matrix, not a claim that the public service or n
 | `domain/domains verify/status/enable-*/disable-outbound` | Verification, status and inbound/outbound lifecycle operations implemented; pending-to-inbound and outbound-disable preserve routing | Deploy lifecycle routes and provider bindings |
 | `domain setup*` | Infrastructure orchestration remains | Bound DNS and registrar operations with durable receipts |
 | `send --track-opens/--track-clicks/--tracking-url` | API-backed opaque expiring tracking capabilities, stable retry content and scheduled option preservation; observations do not alter delivery status or contacts | Deploy migration 0035, configure the server keyring and tenant-approved HTTPS bases; scanner activity is not proof a person opened or clicked |
-| `provider secrets *`, `daemon restart`, server logs | Operator service actions remain | Privileged operations and actual supervisor/log access |
+| `provider secrets status` | Operator API reports actual tenant provider bindings and credential sources; ordinary clients no longer open a local keyring database | Deploy status route; reference-backed credentials remain externally managed |
+| `provider secrets rewrap/rotate-root/revoke-root`, `daemon restart`, server logs | Operator service actions remain | Real tenant credential lifecycle backend and actual supervisor/log access |
 | `self-hosted key/idp-principal`, `db`, `serve` | Canonical `server key/idp-principal/db` operator namespace; `self-hosted` and root `db` compatibility aliases | Server database/signing credentials remain required for bootstrap actions; ordinary account API keys use `keys` |
 
 ## Scheduled execution boundaries
