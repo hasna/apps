@@ -69,6 +69,72 @@ async function runServe(args: string[]): Promise<RunResult> {
   return { stdout, stderr, exitCode: proc.exitCode, timedOut };
 }
 
+/**
+ * skills-migrate has no port to bind, but the same class applied: --version and
+ * --help fell through to resolveServerConfig() and the "database URL is
+ * required" throw, exiting 1 with a stack trace (#1720 validation, round 1).
+ * The negative side keeps the deploy gate honest: with nothing configured, a
+ * plain run must STILL refuse, with the reason on stderr and no migration.
+ */
+async function runMigrate(args: string[]): Promise<RunResult> {
+  const proc = Bun.spawn([process.execPath, "run", "src/server/migrate.ts", ...args], {
+    cwd: SKILLS_ROOT,
+    env: {
+      ...process.env,
+      HASNA_SKILLS_DATABASE_URL: "",
+      DATABASE_URL: "",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+    stdin: "pipe",
+  });
+  proc.stdin?.end();
+  const stdoutPromise = readStream(proc.stdout);
+  const stderrPromise = readStream(proc.stderr);
+  const timedOut = await Promise.race([
+    proc.exited.then(() => false),
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => {
+        proc.kill();
+        resolve(true);
+      }, 8_000);
+    }),
+  ]);
+  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
+  return { stdout, stderr, exitCode: proc.exitCode, timedOut };
+}
+
+describe("skills-migrate answers --version/--help before resolving configuration", () => {
+  for (const flag of ["--version", "-V"]) {
+    test(`${flag} prints the package version and exits 0 with nothing configured`, async () => {
+      const result = await runMigrate([flag]);
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe(pkg.version);
+      expect(result.stderr).not.toContain("required for migrations");
+    });
+  }
+
+  for (const flag of ["--help", "-h"]) {
+    test(`${flag} prints usage and exits 0 with nothing configured`, async () => {
+      const result = await runMigrate([flag]);
+      expect(result.timedOut).toBe(false);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Usage: skills-migrate");
+      expect(result.stdout).toContain("HASNA_SKILLS_DATABASE_URL");
+      expect(result.stderr).not.toContain("required for migrations");
+    });
+  }
+
+  test("a plain run with nothing configured still refuses (negative probe)", async () => {
+    const result = await runMigrate([]);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout.trim()).toBe("");
+    expect(result.stderr).toContain("required for migrations");
+  });
+});
+
 describe("skills-server answers --version/--help before any bind (row 7e5f8f3d)", () => {
   test("--version prints the package version and exits without binding", async () => {
     const result = await runServe(["--version"]);

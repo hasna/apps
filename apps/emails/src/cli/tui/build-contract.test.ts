@@ -23,11 +23,11 @@ describe("emails ui build contract", () => {
     expect(cliBuild).toContain("--splitting");
     expect(cliBuild).not.toContain("--packages bundle");
     expect(tuiRuntimeBuild).toContain("scripts/build-tui-runtime.ts");
-    expect(pkg.dependencies["@opentui/core"]).toBe("0.4.1");
+    expect(pkg.dependencies["@opentui/core"]).toBe("0.5.10");
     expect(pkg.devDependencies["@opentui/core"]).toBeUndefined();
-    expect(pkg.devDependencies["@opentui/keymap"]).toBe("0.4.1");
+    expect(pkg.devDependencies["@opentui/keymap"]).toBe("0.5.10");
     expect(pkg.dependencies["@opentui/keymap"]).toBeUndefined();
-    expect(pkg.devDependencies["@opentui/solid"]).toBe("0.4.1");
+    expect(pkg.devDependencies["@opentui/solid"]).toBe("0.5.10");
     expect(pkg.dependencies["@opentui/solid"]).toBeUndefined();
     expect(pkg.devDependencies["solid-js"]).toBe("1.9.13");
     expect(pkg.dependencies["solid-js"]).toBeUndefined();

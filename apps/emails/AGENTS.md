@@ -181,8 +181,7 @@ emails://recent-errors     → latest provisioning/source errors
 ```
 
 ### Existing mailbox provider + SES sending
-> `emails provision *` is NOT implemented in this build (see `docs/PROVISIONING.md`).
-> Provisioning is manual.
+> `emails address provision` and `emails provision address` use authenticated API jobs for addresses on configured SES inbound domains. `emails provision status` reads shared registry state; `emails provision job` inspects and retries durable jobs. See `docs/ADDRESS_PROVISIONING.md` for server bindings and readiness checks. Domain/up/daemon/roundtrip orchestration remains unimplemented.
 ```
 1. Run `emails domain check example.com` to detect current root MX ownership.
 2. Use `emails domain adopt example.com --provider <ses-id>` for an already-registered, SES-verified domain.

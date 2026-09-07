@@ -8,7 +8,7 @@ import { Button, Row } from "../ui/primitives.js";
 import { addPrioritySenderRule, listPrioritySenderRules, removePrioritySenderRule } from "../../tui/data.js";
 import { normalizePriorityRuleInput, type PrioritySenderRule, type PrioritySenderRuleKind } from "../../../lib/priority-senders.js";
 
-const SECTIONS = ["General", "Appearance", "Reading", "Priority Inbox", "Shortcuts"] as const;
+const SECTIONS = ["General", "Appearance", "Reading", "Attachments", "Priority Inbox", "Shortcuts"] as const;
 type SettingsSection = typeof SECTIONS[number];
 type SettingRow = { title: string; detail: string; value: string; change: () => void };
 const SHORTCUTS = [
@@ -48,6 +48,9 @@ export function SettingsDialog(props: { close: () => void }) {
       case "Reading": return [
         { title: "Expand code blocks", detail: "Show code by default when opening mail.", value: toggle(view.expandCode), change: () => emails.actions.setViewPreference("expandCode", !view.expandCode) },
         { title: "Expand quoted messages", detail: "Show earlier replies by default.", value: toggle(view.expandQuotes), change: () => emails.actions.setViewPreference("expandQuotes", !view.expandQuotes) },
+      ];
+      case "Attachments": return [
+        { title: "When selecting an attachment", detail: "Choose the default action. Both actions are available in the attachment picker.", value: view.attachmentAction === "download" ? "Download ▾" : "Copy link ▾", change: () => emails.actions.setViewPreference("attachmentAction", view.attachmentAction === "download" ? "copy-link" : "download") },
       ];
       default: return [];
     }
@@ -130,6 +133,7 @@ export function SettingsDialog(props: { close: () => void }) {
           <Show when={section() === "Reading"}>
             <text fg={theme.textMuted} wrapMode="word" marginTop={1}>Click any section header to expand or collapse it while reading.</text>
           </Show>
+          <Show when={section() === "Attachments"}><text fg={theme.textMuted} wrapMode="word" marginTop={1}>Downloads are saved in your Downloads folder. Existing files are kept. Hosted attachment links require authenticated API access.</text></Show>
           <Show when={section() === "Priority Inbox"}><PriorityRulesSettings /></Show>
           <Show when={section() === "Shortcuts"}>
             <For each={SHORTCUTS}>
@@ -144,7 +148,7 @@ export function SettingsDialog(props: { close: () => void }) {
         </scrollbox>
       </box>
       <text fg={theme.textMuted} flexShrink={0} marginTop={1} wrapMode="word">
-        {section() === "Priority Inbox" ? "Priority rules are saved to your account." : section() === "Shortcuts" ? "Single-letter shortcuts are off while typing." : "View preferences apply until you close Emails."}
+        {section() === "Priority Inbox" ? "Priority rules are saved to your account." : section() === "Attachments" ? "Attachment preferences are saved on this computer." : section() === "Shortcuts" ? "Single-letter shortcuts are off while typing." : "View preferences apply until you close Emails."}
       </text>
       <text fg={theme.textMuted} flexShrink={0} wrapMode="word">{section() === "Priority Inbox" ? "Enter Add · Ctrl+←/→ Sections · Esc Close" : "Ctrl+←/→ Sections · Tab Controls · Esc Close"}</text>
     </box>
@@ -201,6 +205,8 @@ function PriorityRulesSettings() {
       </box>
       <input
         focused flexShrink={0} backgroundColor={theme.backgroundPanel} textColor={theme.text}
+        focusedBackgroundColor={theme.backgroundElement} focusedTextColor={theme.text}
+        placeholderColor={theme.textMuted} cursorColor={theme.text}
         value={value()}
         placeholder={kind() === "address" ? "person@example.com" : "example.com"}
         onInput={(next) => setValue(next)}

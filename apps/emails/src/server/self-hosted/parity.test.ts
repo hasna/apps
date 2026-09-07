@@ -171,7 +171,11 @@ describe("self-hosted parity: new migrations", () => {
   test("0026 appends gmail-replay provenance after 0025", () => {
     const list = emailsSelfHostedMigrations();
     const ids = list.map((migration) => migration.id);
-    expect(ids.at(-1)).toBe("0026_legacy_gmail_replay_provenance");
+    expect(ids).toContain("0027_message_provider_provenance");
+    expect(ids.indexOf("0028_scheduled_enqueue_identity")).toBeGreaterThan(ids.indexOf("0027_message_provider_provenance"));
+    expect(ids.indexOf("0029_sequence_execution_lease")).toBeGreaterThan(ids.indexOf("0028_scheduled_enqueue_identity"));
+    expect(ids.indexOf("0031_provider_status_observations")).toBeGreaterThan(ids.indexOf("0029_sequence_execution_lease"));
+    expect(ids.indexOf("0027_message_provider_provenance")).toBeGreaterThan(ids.indexOf("0026_legacy_gmail_replay_provenance"));
     expect(ids.indexOf("0026_legacy_gmail_replay_provenance")).toBeGreaterThan(
       ids.indexOf("0025_address_provider_binding"),
     );

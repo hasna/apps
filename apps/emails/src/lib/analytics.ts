@@ -1,82 +1,6 @@
-// Email analytics — ONE implementation, over the store seam.
-//
-// This family used to be three files: a facade that picked an implementation from the
-// process-wide deployment read, a local arm that computed four SQL aggregates against
-// SQLite, and a second arm that threw for `getAnalytics` and carried a BYTE-FOR-BYTE
-// COPY of the 70-line report formatter. The two arms did not disagree about what
-// "analytics for this period" MEANS; they disagreed about who was running. That is the
-// switch the mode-removal program deletes, so the arms are gone and this is the only
-// implementation.
-//
-// WHERE THE FACTS COME FROM. Every stored fact is read through `EmailStore`
-// (src/store/), resolved from storage configuration by `createConfiguredEmailStore()`
-// (src/store-resolution.ts). There is deliberately NO second resolution path: a report
-// that read send volume from one source and delivery events from another would describe
-// two installations in one dashboard.
-//
-// ── THE CENTRAL PROBLEM: THE SEAM HAS NO AGGREGATE ───────────────────────────
-//
-// The old local arm was four `COUNT(*) … GROUP BY` statements. The seam publishes list
-// operations and not one aggregate — no count, no group-by, no server-supplied total —
-// and both implementations clamp a list page to 500 rows (`MAX_PAGE` in
-// src/store-sqlite/resources.ts and src/store-http/registry.ts, and the service clamps
-// again). So every number in this report is now produced by a CLIENT-SIDE BOUNDED
-// ENUMERATION, and that changes what the numbers are allowed to claim:
-//
-//   * A count from a read that reached the end of the rows is a TOTAL.
-//   * A count from a read that ran out of budget, or that saw the window move under it,
-//     is a LOWER BOUND and is rendered `≥N` — the convention `emails status` and
-//     `daemon status` already use.
-//   * A count from a read that was REFUSED or that FAULTED is ABSENT. Not zero, not an
-//     empty array. The four aggregate fields are therefore nullable, because this repo
-//     has already shipped the other thing: a list helper that windowed locally after
-//     asking for a fixed row count returned 0 rows with exit 0 for `--offset 500`,
-//     indistinguishable from "nothing is there".
-//   * A RATE is published only when BOTH reads behind it are exact. Two lower bounds
-//     divided by each other are not a bound in either direction, so a delivery rate over
-//     truncated reads is not a smaller truth — it is a fabricated one.
-//
-// ── THREE THINGS THE SEAM CANNOT SERVE ───────────────────────────────────────
-// Reported here rather than fixed by widening `src/store/`, which is a shared contract
-// two audits are waiting on:
-//
-//   1. PROVIDER SCOPE ON MESSAGES, and it is the reason a provider filter is now
-//      rejected outright. `MessageListRecord` carries no provider column and
-//      `ListMessagesOptions` has no provider filter, so three of this report's four
-//      sections cannot be scoped to a provider at all. The delivery-event side CAN be
-//      (the events resource declares a provider filter), and that asymmetry is exactly
-//      the trap: a report titled "provider X" whose volume, recipients and hours covered
-//      EVERY provider would be a plausible wrong answer, which is worse than no answer.
-//      So a provider-scoped request throws and names the missing field. Serving it needs
-//      a provider column on the message list record plus a provider filter on the list
-//      options.
-//   2. A TIME WINDOW ON DELIVERY EVENTS. The events resource declares equality filters
-//      only (by message, by provider, by type, by recipient) — no range. So the period
-//      window is applied HERE, after reading, which means a long-lived installation can
-//      exhaust the page budget on events outside the window and report lower bounds for
-//      a period that would have fitted comfortably. Serving it needs an occurred-at
-//      range filter on that resource.
-//   3. AN EXACT SEND TIMESTAMP. The seam's message record has no dedicated send column.
-//      What it has is `received_at`, which for the legacy outbound ledger IS the send
-//      instant (src/store-sqlite/messages-sql.ts maps the send column onto it) and for
-//      unified-table rows is the arrival instant, with `created_at` behind it. The bucket
-//      key below is `received_at ?? created_at`, which is the SAME expression the store's
-//      own ordering key is built from for both arms, so the client-side buckets and the
-//      server-side window agree instead of drifting by a row.
-//
-// TWO KINDS OF FAILURE, KEPT APART. A request this seam cannot express THROWS: it is
-// wrong input and the caller must see it, not receive a dashboard. A read the store
-// refused, faulted on, or could not finish is reported IN the payload, because it is a
-// live data condition a caller may want to render. Collapsing either into the other is
-// how a refusal becomes a zero.
-//
-// ONE ANSWER GETS BIGGER, and it is a fix rather than a side effect. The replaced local
-// arm read `FROM emails` — SQLite's LEGACY provider-scoped sent ledger — and nothing else.
-// The seam's outbound direction is the UNIFIED message stream, which also holds the
-// outbound rows of the newer table (src/store-sqlite/messages-sql.ts records that reading
-// only one of the two under-reports the Sent folder). So an installation whose sends went
-// to the newer table had them missing from every section of this report and now has them.
-// A count that goes UP on the same data is the direction worth stating out loud.
+// Email analytics over the configured store. Message/provider provenance and filters
+// are shared by API and database stores. Counts come from bounded enumerations;
+// incomplete reads remain lower bounds and rates require complete denominators.
 
 import { ansi } from "./ansi.js";
 import type { EmailStore } from "../store/email-store.js";
@@ -302,7 +226,7 @@ interface MessageScan {
  * disproves the capability's claim for this store, and that is worth reporting rather
  * than de-duplicating in silence.
  */
-async function scanOutbound(store: EmailStore, since: string): Promise<MessageScan> {
+async function scanOutbound(store: EmailStore, since: string, providerId?: string): Promise<MessageScan> {
   const messages: MessageListRecord[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
@@ -315,6 +239,7 @@ async function scanOutbound(store: EmailStore, since: string): Promise<MessageSc
     try {
       outcome = await store.messages.listMessages({
         direction: "outbound",
+        provider_id: providerId,
         since,
         limit: STORE_LIST_PAGE_MAX,
         ...(cursor === undefined ? {} : { cursor }),
@@ -402,7 +327,7 @@ interface EventScan {
  * and has no range filter to push. That is the second reason this read can run out of
  * budget on an installation whose window would have fitted.
  */
-async function scanTrendEvents(store: EmailStore, since: string): Promise<EventScan> {
+async function scanTrendEvents(store: EmailStore, since: string, providerId?: string): Promise<EventScan> {
   const byDate = new Map<string, Record<TrendEventType, number>>();
   let pages = 0;
   let rows = 0;
@@ -410,7 +335,7 @@ async function scanTrendEvents(store: EmailStore, since: string): Promise<EventS
 
   for (const type of TREND_EVENT_TYPES) {
     const enumeration = await enumerateStoreRows<ResourceRow>(
-      (opts) => store.events.list({ ...opts, filters: { type } }),
+      (opts) => store.events.list({ ...opts, filters: { type, ...(providerId ? { provider_id: providerId } : {}) } }),
       { idOf: (row) => textField(row, "id") },
     );
     pages += enumeration.pages;
@@ -445,6 +370,7 @@ async function scanTrendEvents(store: EmailStore, since: string): Promise<EventS
       // The stub does not filter, so a row of the wrong type can arrive here. Counting it
       // under `type` would move a bounce into the delivered column.
       if (textField(row, "type") !== type) continue;
+      if (providerId && textField(row, "provider_id") !== providerId) continue;
       const occurred = textField(row, "occurred_at");
       if (occurred === null) continue;
       const date = dateBucket(occurred);
@@ -477,32 +403,20 @@ async function scanTrendEvents(store: EmailStore, since: string): Promise<EventS
 /**
  * Analytics for a period, read through the configured store.
  *
- * THROWS when a provider filter is supplied. The seam cannot scope messages to a
- * provider, so three of this report's four sections would silently cover every provider;
- * see the header. A caller that wants the unscoped report must ask for it.
+ * A provider filter scopes both message volume and delivery events.
  */
 export async function getAnalytics(
   providerId?: string,
   period = "30d",
   options?: AnalyticsOptions,
 ): Promise<AnalyticsData> {
-  if (providerId !== undefined && providerId !== null && String(providerId).trim() !== "") {
-    throw new Error(
-      "provider-scoped analytics cannot be produced from the store seam: the message list record " +
-        "carries no provider column and the message list options have no provider filter, so daily " +
-        "volume, top recipients and busiest hours would cover every provider while only the delivery " +
-        "trend was scoped — a report that looks provider-specific and is not. Re-run without a " +
-        "provider filter, or add a provider column and filter to the message list contract.",
-    );
-  }
-
   const store = options?.store ?? (await createConfiguredEmailStore());
   const days = parsePeriodDays(period);
   const since = new Date(Date.now() - days * 86400000).toISOString();
 
-  const outbound = await scanOutbound(store, since);
+  const outbound = await scanOutbound(store, since, providerId?.trim() || undefined);
   const events: EventScan = outbound.read.answered
-    ? await scanTrendEvents(store, since)
+    ? await scanTrendEvents(store, since, providerId?.trim() || undefined)
     : // The trend is per-day-of-send, so with no send volume there is nothing to attach
       // delivery counts to. Reading the events anyway would spend the budget on numbers
       // that cannot be published.

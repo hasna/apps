@@ -312,7 +312,7 @@ describe("tui data — compose / reply", () => {
 });
 
 describe("tui data — addresses / senders / domains", () => {
-  it("lists All mailboxes plus configured active addresses", async () => {
+  it("lists All mailboxes plus every configured address, including suspended mailboxes", async () => {
     await stub.seed({
       addresses: [
         { id: "addr-1", email: "ops@primary.test", display_name: "Ops", provider_id: "prov-1", status: "active", verified: true, created_at: "2026-01-01T00:00:00.000Z", updated_at: "2026-01-01T00:00:00.000Z" },
@@ -324,8 +324,38 @@ describe("tui data — addresses / senders / domains", () => {
     const choices = listInboxAddresses();
     expect(choices[0]).toMatchObject({ id: "all", label: "All mailboxes" });
     expect(choices.some((c) => c.address === "ops@primary.test" && c.configured && c.receiveStatus === "ready")).toBe(true);
-    expect(choices.some((c) => c.address === "paused@primary.test")).toBe(false);
+    expect(choices.find((c) => c.address === "paused@primary.test")).toMatchObject({ configured: true, receiveStatus: "suspended" });
     expect(addressChoiceByAddress("ops@primary.test").configured).toBe(true);
+    expect(defaultFromAddress({ source: { address: "paused@primary.test" } })).toBe("ops@primary.test");
+  });
+
+  it("shows a mailbox once across provider registrations and prefers its ready binding", async () => {
+    await stub.seed({ addresses: [
+      { id: "first", email: "shared@example.test", provider_id: "one", status: "suspended", verified: false },
+      { id: "second", email: "shared@example.test", provider_id: "two", status: "active", verified: true },
+      { id: "third", email: "other@example.test", provider_id: "one", status: "active", verified: false },
+    ] });
+    const choices = listInboxAddresses();
+    expect(choices).toHaveLength(3);
+    expect(choices.filter(choice => choice.address === "shared@example.test")).toEqual([
+      expect.objectContaining({ id: "a:shared@example.test", receiveStatus: "ready", providerId: "two" }),
+    ]);
+    expect(listInboxAddresses({ search: "shared" })).toHaveLength(1);
+    expect(listInboxAddresses({ limit: 2 })).toHaveLength(3);
+  });
+
+  it("loads and searches the complete API registry beyond mailbox and server page limits", async () => {
+    const addresses = Array.from({ length: 1105 }, (_, index) => ({
+      id: `address-${String(index).padStart(4, "0")}`,
+      email: `mailbox${index}@example.test`, provider_id: "provider", status: "active",
+      verified: index === 1104, created_at: "2026-01-01T00:00:00.000Z",
+    }));
+    await stub.seed({ addresses, domains: [{ id: "domain", domain: "example.test" }] });
+    expect(listInboxAddresses()).toHaveLength(1106);
+    expect(listInboxAddresses({ search: "mailbox1104", limit: 20 })).toHaveLength(1);
+    expect(addressChoiceByAddress("mailbox1104@example.test")).toMatchObject({ configured: true });
+    expect(defaultFromAddress()).toBe("mailbox1104@example.test");
+    expect((await listDomainSummaries())[0]?.addresses).toBe(1105);
   });
 
   it("resolves the default From and sender provider from /v1 addresses", async () => {

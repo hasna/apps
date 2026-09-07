@@ -157,8 +157,9 @@ describe("POST /v1/messages/record", () => {
     expect(insert, "no message insert was emitted").toBeDefined();
     expect(insert).not.toContain("ON CONFLICT");
     const bound = recorder.params[recorder.statements.indexOf(insert as string)] as unknown[];
-    expect(bound.length).toBe(24);
-    expect(bound[23]).toBe("00000000-0000-0000-0000-000000000001");
+    expect(bound.length).toBe(25);
+    expect(bound[24]).toBe("00000000-0000-0000-0000-000000000001");
+    expect(bound[23], "unknown provider provenance").toBeNull();
     // The ledger columns are recorded as ABSENT, not as invented values.
     expect(bound[19], "idempotency_key").toBeNull();
     expect(bound[20], "send_payload_hash").toBeNull();

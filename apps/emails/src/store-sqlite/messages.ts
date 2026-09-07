@@ -121,6 +121,7 @@ interface MessageQuery {
 function messageFilters(opts: ListMessagesOptions | undefined): MessageQuery {
   const conditions: string[] = [];
   const params: SQLQueryBindings[] = [];
+  if (opts?.provider_id) { conditions.push("m.provider_id = ?"); params.push(opts.provider_id); }
   if (opts?.direction) conditions.push(DIRECTION_PREDICATES[opts.direction]);
   // A folder the record type does not name would otherwise be a TypeError rather
   // than an answer; a JS caller reaches this even though TypeScript cannot.
@@ -206,6 +207,7 @@ function insertValues(input: MessageInput, timestamp: string): Record<string, SQ
     text_body: input.body_text ?? null,
     html_body: input.body_html ?? null,
     status: input.status ?? null,
+    provider_id: input.provider_id ?? null,
     provider_message_id: input.provider_message_id ?? null,
     message_id: input.message_id ?? null,
     label_ids_json: JSON.stringify(labels.filter((label) => !isFolderLabel(label))),
@@ -249,6 +251,7 @@ function updateValues(input: MessageInput, timestamp: string): Record<string, SQ
   if (input.body_text !== undefined) put("text_body", input.body_text);
   if (input.body_html !== undefined) put("html_body", input.body_html);
   if (input.status !== undefined) put("status", input.status);
+  if (input.provider_id !== undefined) put("provider_id", input.provider_id);
   if (input.provider_message_id !== undefined) put("provider_message_id", input.provider_message_id);
   if (input.message_id !== undefined) put("message_id", input.message_id);
   if (input.headers !== undefined || input.in_reply_to !== undefined) put("headers_json", headersFor(input));

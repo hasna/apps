@@ -4288,10 +4288,7 @@ import { join as join2, resolve } from "path";
 import { homedir as pathsResolverHomedir } from "os";
 import { join as pathsResolverJoin } from "path";
 var PATHS_RESOLVER_KIND_ENV = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME"
+  data: "HASNA_DATA_HOME"
 };
 var PATHS_RESOLVER_APP_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 function pathsResolverAssertApp(app) {
@@ -4316,26 +4313,9 @@ function pathsResolverBaseDir(kind, options) {
   const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
+    return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
   }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
+  return pathsResolverJoin(home, ".local", "share", "hasna");
 }
 function pathsResolverResolve(kind, options) {
   pathsResolverAssertApp(options.app);
@@ -20783,11 +20763,13 @@ class KnowledgeService {
     return this.ensureWorkspace().jsonStorePath;
   }
   itemStore() {
-    const workspace = this.ensureWorkspace();
-    return resolveItemStore({
-      storePath: workspace.jsonStorePath,
+    const store = resolveItemStore({
+      storePath: this.workspace.jsonStorePath,
       storePathOverridden: false
     });
+    if (store.kind === "local")
+      this.ensureWorkspace();
+    return store;
   }
   projectLinksAuthority() {
     if (this.options.projectLinksAuthority)

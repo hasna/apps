@@ -82,7 +82,7 @@ function declaredListOrder(): Record<string, Array<{ column: string; desc: boole
  * 25 KB and are the entire surface the store consults. Anything else the store ever starts
  * reading will be ABSENT rather than wrong, which faults loudly in that store by design.
  */
-function publishedResourceContract(): { paths: Record<string, unknown> } {
+function publishedResourceContract() {
   const published = emailsSelfHostedOpenApi.paths as Record<string, Record<string, unknown>>;
   const paths: Record<string, unknown> = {};
   for (const spec of SELF_HOSTED_RESOURCES) {
@@ -96,7 +96,9 @@ function publishedResourceContract(): { paths: Record<string, unknown> } {
       post: { requestBody: post?.requestBody ?? null },
     };
   }
-  return { paths };
+  paths["/v1/messages"] = { get: { parameters: (published["/v1/messages"]?.get as { parameters?: unknown })?.parameters ?? [] } };
+  return { openapi: emailsSelfHostedOpenApi.openapi, info: emailsSelfHostedOpenApi.info,
+    security: emailsSelfHostedOpenApi.security, components: {}, paths };
 }
 
 /** Seed data keyed by /v1 resource name (e.g. `{ domains: [...], messages: [...] }`). */
@@ -192,7 +194,7 @@ export interface V1Stub {
   stop(): Promise<void>;
 }
 
-const DEFAULT_API_KEY = "hasna-emails-stub-auth-fixture";
+const DEFAULT_API_KEY = crypto.randomUUID();
 const NOW_DEFAULT = "__v1_stub_now__";
 
 const V1_STUB_RESOURCE_SPECS = Object.fromEntries(
@@ -727,6 +729,8 @@ function listMessages(params) {
     return String(b.received_at || b.created_at || "").localeCompare(String(a.received_at || a.created_at || ""))
       || String(b.id || "").localeCompare(String(a.id || ""));
   });
+  const providerId = params.get("provider_id");
+  if (providerId) ordered = ordered.filter(function (r) { return r.provider_id === providerId; });
   const direction = params.get("direction");
   if (direction) ordered = ordered.filter(function (r) { return String(r.direction || "").toLowerCase() === direction; });
   const to = params.get("to");

@@ -456,7 +456,7 @@ describe("self-hosted webhook mount", () => {
     const documented = Object.keys(emailsSelfHostedOpenApi.paths as Record<string, unknown>)
       .filter((path) => path.startsWith("/v1/webhooks/"))
       .sort();
-    expect(documented).toEqual([SES_INBOUND_V1_WEBHOOK_PATH, RESEND_INBOUND_V1_WEBHOOK_PATH].sort());
+    expect(documented).toEqual([SES_INBOUND_V1_WEBHOOK_PATH, RESEND_INBOUND_V1_WEBHOOK_PATH, "/v1/webhooks/relay", "/v1/webhooks/relay/ses", "/v1/webhooks/relay/resend"].sort());
     for (const path of documented) {
       const { deps } = harness({ verifySns: alwaysVerified, resendSecret: RESEND_SECRET });
       // Claimed by the service (not a 404 fall-through) with an empty POST body.

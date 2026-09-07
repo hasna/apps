@@ -6,6 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { registerContactsTools } from "./register-tools.js";
 import { registerContactsStorageTools } from "./storage-tools.js";
 import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import { ContactsClientConfigurationError, resolveContactsClientTransport, type Env } from "../cloud/http-storage.js";
 
 function getServerVersion(): string {
   try {
@@ -48,6 +49,33 @@ options:
 `;
 }
 
+/**
+ * The fail-closed startup gate (hasna/apps#1720): the contacts MCP server
+ * refuses to RUN unauthenticated, so it resolves its API key and authority
+ * through the one @hasna/contracts client chain BEFORE the stdio transport is
+ * connected or the HTTP port is bound. Returns `null` when the server may
+ * start (a credential resolved for the authority), otherwise a value-free
+ * first-line diagnosis naming where the credential should live — the Keychain
+ * item, the credentials-file path, then `HASNA_CONTACTS_API_KEY` — never a
+ * value. `--help` / `--version` answer ahead of this gate, and once the
+ * server is up every tool still re-resolves the credential per request.
+ */
+export function mcpStartupDiagnosis(env: Env = process.env): string | null {
+  try {
+    const resolution = resolveContactsClientTransport("contacts", env);
+    if (resolution.configured) return null;
+    return (
+      `CONTACTS_API_NOT_CONFIGURED: ${resolution.issue ?? "No contacts credential resolved."} ` +
+      "The contacts MCP server fails closed and never runs unauthenticated; no SQLite or local store is ever opened."
+    );
+  } catch (error) {
+    // Hard refusals — a retired client selector, conflicting or blank aliases,
+    // an unsafe credentials file — are themselves the diagnosis.
+    if (error instanceof ContactsClientConfigurationError) return error.message;
+    throw error;
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const early = handleEarlyArgs(args);
@@ -58,6 +86,12 @@ async function main() {
   if (early === "version") {
     console.log(getServerVersion());
     return;
+  }
+
+  const diagnosis = mcpStartupDiagnosis();
+  if (diagnosis) {
+    console.error(diagnosis);
+    process.exit(1);
   }
 
   if (isHttpMode(args)) {

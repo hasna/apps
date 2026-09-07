@@ -115,9 +115,8 @@ describe("daemon status reads the provisioning queue over /v1", () => {
   });
 
   it("reports the realtime queue as unavailable rather than as 'not configured'", async () => {
-    // `/v1` publishes no realtime queue state. Printing "not configured" would be
-    // a fabricated negative claim, which is the defect the status facts already
-    // guard against — the daemon view has to carry the same gap through.
+    // This status read does not poll the queue; unavailable is not evidence
+    // that the server binding is absent or a separate watcher is stopped.
     const { data, output } = await runDaemon(["daemon", "status"]);
     const status = data as { realtime: { queue_configured: boolean | null } };
 
@@ -126,12 +125,14 @@ describe("daemon status reads the provisioning queue over /v1", () => {
     expect(output).not.toContain("not configured");
   });
 
-  it("proposes no start command that would itself refuse", async () => {
-    const { data } = await runDaemon(["daemon", "status"]);
-    const status = data as { start_commands: Record<string, string> };
-    // `emails inbox watch` refuses in this mode; naming it here would be a
-    // remedy that throws.
-    expect(Object.values(status.start_commands)).toEqual([]);
+  it("offers the foreground API watcher with explicit binding and operator requirements", async () => {
+    const { data, output } = await runDaemon(["daemon", "status"]);
+    const status = data as { start_commands: Record<string, string>; start_requirements: string };
+    expect(status.start_commands.inbound).toBe("emails inbox watch --source <source-id>");
+    expect(status.start_requirements).toContain("operator credential");
+    expect(status.start_requirements).toContain("server ingest binding");
+    expect(output).toContain("does not establish a separate worker heartbeat");
+    expect(output).not.toContain("self-hosted server");
   });
 });
 

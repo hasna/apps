@@ -1,13 +1,7 @@
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
-import { assertProviderCredentialsStorable, createProvider, listProviders, listProviderSummaries, deleteProvider, getProvider, getProviderWithCredentials, resolveProviderId, updateProvider } from "../../db/providers.js";
-import { getDatabase } from "../../db/database.js";
-import {
-  providerSecretsKeyStatus,
-  rewrapProviderSecrets,
-  revokeProviderSecretsRootKey,
-  rotateProviderSecretsRootKey,
-} from "../../db/provider-secrets.js";
+import { assertProviderCredentialsStorable, createProvider, listProviderSummaries, deleteProvider, getProvider, getProviderWithCredentials, resolveProviderId, updateProvider } from "../../db/providers.js";
+import {fetchProviderSecretStatus,requireProviderSecretOperation,providerSecretApi} from "../../lib/provider-secret-api.js";
 import { getAdapter } from "../../providers/index.js";
 import { log } from "../../lib/logger.js";
 import { getClientMode } from "../../lib/mode.js";
@@ -100,53 +94,29 @@ function credentialValidationError(error: unknown): Error {
 export function registerProviderCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
   const providerCmd = program.command("provider").description("Manage email providers");
 
-  const secretsCmd = providerCmd.command("secrets").description("Manage the local provider credential keyring");
+  const secretsCmd = providerCmd.command("secrets").description("Inspect and manage server provider credentials");
 
-  secretsCmd
-    .command("status")
-    .description("Show root-key IDs and envelope bindings (never secret values)")
-    .action(() => {
-      try {
-        const status = providerSecretsKeyStatus(getDatabase());
-        output(status, [
-          `Provider secret keyring: ${status.source}`,
-          `Active root key: ${status.activeKeyId ?? "not initialized"}`,
-          `Referenced root keys: ${status.referencedKeyIds.join(", ") || "none"}`,
-        ].join("\n"));
-      } catch (e) { handleError(e); }
-    });
-
-  secretsCmd
-    .command("rewrap")
-    .description("Rewrap all provider data keys with the active root key")
-    .action(() => {
-      try {
-        const count = rewrapProviderSecrets(getDatabase());
-        output({ rewrapped: count }, chalk.green(`✓ Rewrapped ${count} provider secret envelope(s).`));
-      } catch (e) { handleError(e); }
-    });
-
-  secretsCmd
-    .command("rotate-root")
-    .description("Stage a new root key and rewrap all provider data keys")
-    .action(() => {
-      try {
-        const result = rotateProviderSecretsRootKey(getDatabase());
-        output(result, chalk.green(`✓ Root key rotated to ${result.activeKeyId}; ${result.rewrapped} envelope(s) rewrapped.`));
-      } catch (e) { handleError(e); }
-    });
-
-  secretsCmd
-    .command("revoke-root <keyId>")
-    .description("Remove an unreferenced, inactive provider root key")
-    .option("--yes", "Skip confirmation prompt")
-    .action(async (keyId: string, opts: { yes?: boolean }) => {
-      try {
-        await confirmDestructiveAction(`Revoke provider root key ${keyId}?`, opts.yes);
-        revokeProviderSecretsRootKey(keyId, getDatabase());
-        output({ revoked: keyId }, chalk.green(`✓ Revoked provider root key ${keyId}.`));
-      } catch (e) { handleError(e); }
-    });
+  secretsCmd.command("status").description("Show server credential sources and tenant root metadata (never values)")
+    .action(async()=>{try{
+      const status=await fetchProviderSecretStatus();
+      output(status,[`Provider credentials: ${status.source}`,`Registered providers: ${status.providers.length}`,`Managed envelopes: ${status.managed_envelopes}`,`Active tenant root: ${status.activeKeyId??"none"}`,status.lifecycle_requirement].join("\n"));
+    }catch(error){handleError(error);}});
+  for(const operation of ["rewrap","rotate-root"] as const){
+    secretsCmd.command(operation).description(operation==="rewrap"?"Rewrap managed server provider data keys":"Rotate the managed tenant provider root")
+      .action(async()=>{try{
+        const status=await fetchProviderSecretStatus();requireProviderSecretOperation(status,operation);
+        const result=await providerSecretApi(operation,{idempotency_key:crypto.randomUUID()});
+        output(result,JSON.stringify(result));
+      }catch(error){handleError(error);}});
+  }
+  secretsCmd.command("revoke-root <keyId>").description("Revoke an inactive, unreferenced managed tenant root")
+    .option("--yes","Skip confirmation prompt")
+    .action(async(keyId:string,opts:{yes?:boolean})=>{try{
+      const status=await fetchProviderSecretStatus();requireProviderSecretOperation(status,"revoke-root");
+      await confirmDestructiveAction(`Revoke provider root key ${keyId}?`,opts.yes);
+      const result=await providerSecretApi("revoke-root",{key_id:keyId,idempotency_key:crypto.randomUUID()});
+      output(result,JSON.stringify(result));
+    }catch(error){handleError(error);}});
 
   providerCmd
     .command("add")
@@ -332,79 +302,13 @@ export function registerProviderCommands(program: Command, output: (data: unknow
       }
     });
 
-  providerCmd
-    .command("status")
-    .description("Health check active supported providers")
-    .action(async () => {
-      try {
-        const { checkAllProviders, formatProviderHealth } = await import("../../lib/health.js");
-        const results = await checkAllProviders();
-        if (results.length === 0) {
-          output([], chalk.dim("No active supported providers. Add one with 'emails provider add'"));
-          return;
-        }
-        const lines: string[] = [chalk.bold("\nProvider Health:\n")];
-        for (const h of results) {
-          lines.push(formatProviderHealth(h));
-          lines.push("");
-        }
-        output(results, lines.join("\n"));
-      } catch (e) {
-        handleError(e);
-      }
-    });
-
-  providerCmd
-    .command("check")
-    .description("Verify supported providers are healthy")
-    .action(async () => {
-      try {
-        const providers = listProviders();
-        if (providers.length === 0) {
-          console.log(chalk.dim("No providers configured."));
-          console.log(chalk.bold("\nQuick setup:"));
-          console.log(chalk.dim("  SES:    emails provider add --type ses --name \"My SES\" --region us-east-1 --access-key ... --secret-key ..."));
-          console.log(chalk.dim("  Resend: emails provider add --type resend --name \"My Resend\" --api-key re_..."));
-          console.log(chalk.dim("  Sandbox: emails provider add --type sandbox --name \"Local Sandbox\""));
-          return;
-        }
-
-        console.log(chalk.bold(`\nChecking ${providers.length} provider(s)...\n`));
-        for (const p of providers) {
-          const executable = getProviderWithCredentials(p.id) ?? p;
-          const icon = p.active ? "" : chalk.dim("[inactive] ");
-          process.stdout.write(`  ${icon}${chalk.cyan(p.name)} (${p.type}) ... `);
-          if (p.type === "ses") {
-            if (!executable.access_key || !executable.secret_key) {
-              console.log(chalk.yellow("⚠ missing credentials"));
-            } else {
-              try {
-                const adapter = getAdapter(executable);
-                await adapter.listDomains();
-                console.log(chalk.green("✓ connected"));
-              } catch (e) {
-                console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`));
-              }
-            }
-          } else if (p.type === "resend") {
-            if (!executable.api_key) {
-              console.log(chalk.yellow("⚠ missing API key"));
-            } else {
-              try {
-                const adapter = getAdapter(executable);
-                await adapter.listDomains();
-                console.log(chalk.green("✓ connected"));
-              } catch (e) {
-                console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`));
-              }
-            }
-          } else {
-            console.log(chalk.dim("sandbox (no auth needed)"));
-          }
-        }
-        console.log();
-      } catch (e) {
-        handleError(e);
-      }
-    });
+  const healthAction = async () => {
+    try {
+      const { listServerProviderHealth, formatServerProviderHealth } = await import("../../lib/provider-server-health.js");
+      const results = await listServerProviderHealth(true);
+      output(results, results.length ? results.map(formatServerProviderHealth).join("\n\n") : "No providers configured.");
+    } catch (error) { handleError(error); }
+  };
+  providerCmd.command("status").description("Probe server provider credentials and sending readiness").action(healthAction);
+  providerCmd.command("check").description("Probe server provider credentials and sending readiness").action(healthAction);
 }

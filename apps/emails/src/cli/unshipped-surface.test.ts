@@ -61,20 +61,10 @@ afterAll(() => {
 });
 
 describe("unshipped CLI surfaces tell the truth (live)", () => {
-  it("emails provision never claims a self-hosted server implements it", () => {
+  it("provision status reads the registry without requiring an orchestrator", () => {
     const result = runCli(["--json", "provision", "status"]);
-    expect(result.exitCode).toBe(1);
-    const payload = JSON.parse(result.stderr) as CliError;
-
-    expect(payload.error.message).toContain("emails provision status is not implemented in this build");
-    expect(payload.error.message).toContain("emails domain adopt");
-    expect(payload.error.message).toContain("emails aws setup-inbound");
-    // The two false claims that shipped before.
-    expect(payload.error.message).not.toContain("not available in the self-hosted client");
-    expect(payload.error.message).not.toContain("runs on the self-hosted server");
-    // Machine-readable guidance must not loop back into the unimplemented surface.
-    expect(payload.error.fix_commands.length).toBeGreaterThan(0);
-    for (const command of payload.error.fix_commands) expect(command).not.toContain("emails provision");
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([]);
   });
 
   it("emails daemon status advertises only commands that exist", () => {
@@ -129,23 +119,12 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
   // against "required option not specified" instead of the refusal. The table is
   // asserted to COVER the scan, so adding a refusal without a probe fails here.
   const PROBES: Record<string, string[]> = {
-    "emails domain connect": ["domain", "connect", "example.com", "--provider", "p1"],
-    "emails domains connect": ["domains", "connect", "example.com", "--provider", "p1"],
-    "emails domain verify": ["domain", "verify", "example.com"],
-    "emails domains verify": ["domains", "verify", "example.com"],
-    "emails domain status": ["domain", "status"],
-    "emails domains enable-inbound": ["domains", "enable-inbound", "example.com"],
-    "emails domains enable-outbound": ["domains", "enable-outbound", "example.com"],
-    "emails domains disable-outbound": ["domains", "disable-outbound", "example.com"],
     "emails domain setup-cloudflare": ["domain", "setup-cloudflare", "example.com", "--provider", "p1"],
     "emails domain setup": [
       "domain", "setup", "example.com", "--provider", "p1", "--email", "ops@example.com",
       "--first-name", "A", "--last-name", "B", "--phone", "+1.5551234567",
       "--address", "1 Main St", "--city", "Town", "--country", "US", "--zip", "12345",
     ],
-    "emails address provision": ["address", "provision", "ops@example.com", "--provider", "p1"],
-    "emails provision status": ["provision", "status"],
-    "emails provision address": ["provision", "address", "ops@example.com", "--provider", "p1"],
     "emails provision domain": ["provision", "domain", "example.com", "--provider", "p1"],
     "emails provision up": ["provision", "up", "example.com", "--provider", "p1"],
     "emails provision roundtrip": ["provision", "roundtrip", "--domain", "example.com", "--provider", "p1"],
@@ -201,13 +180,8 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
   const sharedRefusals = scanCliRefusals().filter((refusal) => refusal.shared);
 
   it("has a probe for every unconditional refusal the CLI ships", () => {
-    // Positive control first: an empty or mis-parsed scan would make every
-    // assertion below pass over nothing.
-    expect(sharedRefusals.length).toBeGreaterThan(10);
-    const files = new Set(sharedRefusals.map((refusal) => refusal.file));
-    expect(files).toContain("domain.ts");
-    expect(files).toContain("address.ts");
-    expect(files).toContain("provision.ts");
+    // Scanner positive controls live in status-commands-coverage.test.ts.
+    // This real set may shrink to empty as implementations replace refusals.
 
     const unprobed = sharedRefusals
       .map((refusal) => refusal.command)

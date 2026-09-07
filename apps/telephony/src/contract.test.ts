@@ -33,7 +33,9 @@
  * *_MODE / *_STORAGE_MODE variable is inert (1.0.2 kit).
  */
 import { describe, expect, it } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { isBuiltin } from "node:module";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   KIT_VERSION,
@@ -98,6 +100,74 @@ describe("hasna.contract.json", () => {
 
   it("declares the bins package.json actually exposes", () => {
     expect(manifest.bins.slice().sort()).toEqual(Object.keys(pkg.bin).sort());
+  });
+});
+
+/**
+ * The importable surface lives at the `./sdk` export subpath (package-surfaces
+ * rule: one package, four surfaces — CLI, MCP bin, `-serve`, `./sdk`). The
+ * manifest's sdk surface, package.json `exports`, the build script and the
+ * source entry have to agree, or the published subpath resolves to nothing.
+ */
+describe("the ./sdk export subpath", () => {
+  const sdkSurface = manifest.serviceSurfaces.find((s: { kind: string }) => s.kind === "sdk");
+
+  it("is what the manifest's sdk surface declares", () => {
+    expect(sdkSurface?.exportSubpath).toBe("./sdk");
+  });
+
+  it("is bound in package.json exports to a built entry beside the kept root export", () => {
+    const entry = pkg.exports?.[sdkSurface.exportSubpath];
+    expect(entry).toEqual({ types: "./dist/sdk.d.ts", import: "./dist/sdk.js" });
+    // The root export stays for compatibility: existing `@hasna/telephony` imports keep working.
+    expect(pkg.exports?.["."]).toEqual({ types: "./dist/index.d.ts", import: "./dist/index.js" });
+    expect(existsSync(join(repoRoot, "src", "sdk.ts"))).toBe(true);
+    // The build bundles src/sdk.ts into dist/ (dist/sdk.js; tsc emits dist/sdk.d.ts).
+    expect(scripts.build).toMatch(/bun build [^&]*\bsrc\/sdk\.ts\b[^&]*--outdir dist\b/);
+  });
+
+  it("bundles to a module whose only imports are node builtins and declared dependencies", () => {
+    // What a consumer of `@hasna/telephony/sdk` installs must be enough to
+    // load it: every specifier the bundle leaves external is either a node
+    // builtin or a declared (optional) dependency. The bundle is produced by
+    // the same `bun build` invocation the build script uses (the in-process
+    // Bun.build API resolves `.js` specifiers differently under the test
+    // runner), so the check grades the bundle the build actually ships.
+    const externals = ["twilio", "pg", "@hasna/contracts", "@aws-sdk/client-s3"];
+    const outDir = mkdtempSync(join(tmpdir(), "telephony-sdk-bundle-"));
+    let code: string;
+    try {
+      const build = Bun.spawnSync(
+        [
+          process.execPath,
+          "build",
+          join(repoRoot, "src", "sdk.ts"),
+          "--outdir",
+          outDir,
+          "--target",
+          "bun",
+          ...externals.flatMap((name) => ["--external", name]),
+        ],
+        { cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
+      );
+      expect(build.stderr.toString()).not.toContain("error:");
+      expect(build.exitCode).toBe(0);
+      code = readFileSync(join(outDir, "sdk.js"), "utf8");
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+    const specifiers = new Set<string>();
+    for (const match of code.matchAll(/(?:^|[\s;])(?:import|export)\b[^"'`;]*?\bfrom\s*["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)|\brequire\s*\(\s*["']([^"']+)["']\s*\)/g)) {
+      specifiers.add(match[1] ?? match[2] ?? match[3] ?? "");
+    }
+    const declared = new Set([...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.optionalDependencies ?? {})]);
+    const offending = [...specifiers].filter((spec) => {
+      if (!spec || spec.startsWith("node:") || spec.startsWith("bun:") || isBuiltin(spec)) return false;
+      const root = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0]!;
+      return !declared.has(root);
+    });
+    expect(offending).toEqual([]);
+    for (const external of externals) expect(declared.has(external)).toBe(true);
   });
 });
 

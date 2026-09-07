@@ -4,16 +4,17 @@
 // The @hasna/contracts client resolver answers "which key, from where, against
 // which authority" and THROWS when it cannot build an authenticated client.
 // That throw is the right outcome almost always — a half-configured station
-// must fail loud rather than quietly read local data. There are exactly two
-// callers that need to tell the loud case apart from a station that configures
-// nothing at all:
+// must fail loud rather than quietly read local data. `resolveProjectStore()`
+// never asks this question: since the fail-closed ruling (hasna/apps#1720) a
+// station that configures nothing at all exits non-zero with no SQLite, and the
+// on-box registry is reached only through the explicit HASNA_PROJECTS_LOCAL
+// opt-in, answered before the resolver runs (see lib/local-opt-in.ts). The one
+// caller that needs to tell the loud case apart from "nothing configured" is
+// the serve process's `resolveContactsAuthority()`, where "no Contacts
+// anywhere" simply means the projects server does not offer the
+// contact-membership surface.
 //
-//   - `resolveProjectStore()`, which may then fall to the unhosted OSS mode
-//     projects supports by design (announced, never silent), and
-//   - `resolveContactsAuthority()`, where "no Contacts anywhere" simply means
-//     the projects server does not offer the contact-membership surface.
-//
-// Both ask THIS function, so there is one spelling of what "configured" means.
+// It asks THIS function, so there is one spelling of what "configured" means.
 // Any declaration counts: a canonical or aliased API URL, an override, a vault
 // pointer, a profile selector, the Keychain `api-url` item, an authority in the
 // credentials file, or a credential from any of the five tiers.

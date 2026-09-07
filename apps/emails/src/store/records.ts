@@ -208,6 +208,7 @@ export interface MessageRecord {
   body_text: string | null;
   body_html: string | null;
   status: string;
+  provider_id?: string | null;
   provider_message_id: string | null;
   message_id: string | null;
   in_reply_to: string | null;
@@ -241,6 +242,7 @@ export interface MessageListRecord {
   cc_addrs: string[];
   subject: string | null;
   status: string;
+  provider_id?: string | null;
   provider_message_id: string | null;
   message_id: string | null;
   in_reply_to: string | null;
@@ -277,6 +279,7 @@ export interface MessageInput {
   body_text?: string | null;
   body_html?: string | null;
   status?: string;
+  provider_id?: string | null;
   provider_message_id?: string | null;
   direction?: string;
   message_id?: string | null;
@@ -309,6 +312,7 @@ export const MESSAGE_FOLDERS: readonly MessageFolder[] = [
 
 /** Filters for a message list. Declared flat; `cursor` wins over `offset`. */
 export interface ListMessagesOptions {
+  provider_id?: string;
   limit?: number;
   offset?: number;
   cursor?: string;

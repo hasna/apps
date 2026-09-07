@@ -116,7 +116,8 @@ export interface V1StoreApiOptions {
   unreadByAddress?: (options: { limit?: number; offset?: number }) => Promise<Array<{ address: string; unread: number }>>;
 }
 
-const DEFAULT_API_KEY = "hasna_emails_store_api_fixture_key";
+// Each test process gets a fresh fixture bearer; it is never a real credential.
+const DEFAULT_API_KEY = crypto.randomUUID();
 
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -208,6 +209,8 @@ function messagesOptions(url: URL): ListMessagesOptions | Response {
   const direction = stringParam(url, "direction");
   const since = stringParam(url, "since");
   const options: ListMessagesOptions = {};
+  const providerId = stringParam(url, "provider_id");
+  if (providerId !== undefined) options.provider_id = providerId;
   const limit = intParam(url, "limit");
   if (limit !== undefined) options.limit = limit;
   const offset = intParam(url, "offset");
@@ -717,6 +720,7 @@ function messageWriteInput(body: Record<string, unknown>): { input: MessageWrite
     from_addr: String(from).trim(),
     to_addrs: to,
     ...(direction === undefined ? {} : { direction }),
+    ...(body["provider_id"] === undefined ? {} : { provider_id: body["provider_id"] as string | null }),
     ...(body["cc"] === undefined && body["cc_addrs"] === undefined
       ? {}
       : { cc_addrs: (body["cc"] ?? body["cc_addrs"]) as string[] }),

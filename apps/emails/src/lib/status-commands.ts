@@ -45,9 +45,12 @@ import type { ClientMode } from "./mode.js";
  */
 export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
   // src/cli/commands/provision.ts — notImplementedAnywhere()
-  "emails provision",
+  "emails provision domain",
+  "emails provision up",
+  "emails provision roundtrip",
+  "emails provision daemon",
+  "emails provision retry",
   // src/cli/commands/address.ts — notImplementedAnywhere()
-  "emails address provision",
   // src/cli/commands/domain.ts — notImplementedAnywhere(). Both the singular
   // `domain` and the plural `domains` alias refuse, and `emails domain status`
   // is the one that was reaching `next_actions`.
@@ -57,16 +60,8 @@ export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
   // src/lib/mx-ownership.ts, which always implemented them, and are now the
   // remedies several of the refusals below point at. Leaving them listed would
   // have suppressed a working command from every suggestion path.
-  "emails domain connect",
   "emails domain setup",
   "emails domain setup-cloudflare",
-  "emails domain status",
-  "emails domain verify",
-  "emails domains connect",
-  "emails domains disable-outbound",
-  "emails domains enable-inbound",
-  "emails domains enable-outbound",
-  "emails domains verify",
   // NOT a refusal call site — `emails refresh` is not a registered command at all
   // (`error: unknown command 'refresh'`; the verb is `emails pull`, alias
   // `emails provider sync`). It belongs here rather than in a per-mode list for
@@ -77,54 +72,8 @@ export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
   "emails refresh",
 ];
 
-/**
- * Command prefixes that refuse in self_hosted mode because they need
- * server-side state, local SQLite, or a local daemon.
- * Source of truth: `grep -n 'serverOnly(' src/cli/commands/*.remote.ts`.
- */
+/** Remaining API-client command stubs; implemented operations must stay suggestible. */
 export const SELF_HOSTED_REFUSED_COMMANDS: readonly string[] = [
-  "emails analytics",
-  "emails batch",
-  // Only the delivery sub-diagnosis refuses; `emails doctor` itself reads through
-  // the store seam (src/lib/doctor.ts) and is a real remedy.
-  "emails doctor delivery",
-  "emails inbox explain",
-  "emails inbox listen",
-  "emails inbox open",
-  "emails inbox realtime-status",
-  "emails inbox setup-realtime",
-  "emails inbox sync-s3",
-  "emails inbox watch",
-  // ── FLAG-CONDITIONAL refusals ───────────────────────────────────────────────
-  // The base commands all RUN; only these flag forms throw, from an inline
-  // `handleError(new Error(...))` rather than a `serverOnly("emails ...")` call.
-  // src/lib/status-commands-coverage.test.ts reads those string literals, so it is
-  // structurally blind to every one of these — they can only be caught by hand, and
-  // are pinned by name in src/lib/status-commands.test.ts so they cannot drift.
-  // Nothing proposes these flag forms today; the entries make that hold by
-  // construction rather than by nobody having tried.
-  //
-  // `emails send --to-group` is deliberately NOT here. It used to belong on this
-  // list and no longer refuses — group fan-out is now a client-side recipient
-  // lookup (src/cli/commands/send.ts) — and listing a command that runs would
-  // suppress a real remedy from every suggestion path, which is the mirror image of
-  // the defect this registry exists to prevent. Verify before adding.
-  // `emails inbox unread-count --by-address` is deliberately NOT here either:
-  // it used to refuse in self_hosted and is now served by the /v1 server
-  // endpoint (GET /v1/messages/unread-by-address), so it RUNS in both modes.
-  "emails inbox clear --provider",
-  "emails monitor",
-  "emails provider sync",
-  "emails pull",
-  // `emails refresh` moved to NEVER_AVAILABLE_COMMANDS — it is not a command in
-  // any mode, and a per-mode entry only suppressed it in self_hosted.
-  // The scheduler LOOP refuses (it needs the local send pipeline); reading and
-  // cancelling the schedule over /v1/scheduled does not.
-  "emails schedule run",
-  "emails scheduler",
-  "emails stats",
-  "emails test",
-  "emails webhook listen",
 ];
 
 /** Command prefixes that refuse in local mode (server/API-only surfaces). */

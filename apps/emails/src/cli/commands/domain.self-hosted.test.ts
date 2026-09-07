@@ -195,31 +195,23 @@ describe("domain CLI — self-hosted (self_hosted) /v1 routing", () => {
     expect(result.stderr).not.toContain("not available in the self-hosted client");
   });
 
-  it("refuses unshipped domain subcommands without claiming a server implements them", async () => {
-    // These do not ship in ANY configuration: the connect/setup orchestrations
-    // were deleted, and the lifecycle-readiness ledger is reachable only from
-    // the library export and the HTTP readiness API. `/v1` carries plain domain
-    // CRUD and no route for any of them, so the old "it runs on the self-hosted
-    // server" was false in exactly this arm, where it sounded most credible.
-    // Required options are supplied so commander reaches the action.
-    const blocked = [
-      ["domain", "status"],
-      ["domain", "connect", "ex.com", "--provider", "x"],
-      ["domain", "verify", "ex.com"],
-      ["domains", "connect", "ex.com", "--provider", "x"],
-      ["domains", "verify", "ex.com"],
-      ["domains", "enable-inbound", "ex.com"],
-      ["domains", "enable-outbound", "ex.com"],
-      ["domains", "disable-outbound", "ex.com"],
-    ];
-    for (const args of blocked) {
-      const result = await runDomainCommandExpectingExit(args);
+  it("singular status lists API metadata and lifecycle operations resolve domains before acting", async () => {
+    expect((await runDomainCommand(["domain", "status"])).data).toEqual([]);
+    for (const action of ["verify", "enable-inbound", "enable-outbound", "disable-outbound"]) {
+      const result = await runDomainCommandExpectingExit(["domains", action, "missing.example"]);
       expect(result.error).toBe("process.exit:1");
-      expect(result.stderr).toContain("is not implemented in this build");
-      expect(result.stderr).not.toContain("not available in the self-hosted client");
-      expect(result.stderr).not.toContain("runs on the self-hosted server");
+      expect(result.stderr).toContain("not found");
+      expect(result.stderr).not.toContain("not implemented");
     }
-    // None of the blocked reads/writes reached the store.
+  });
+
+  it("reports older APIs without domain connect support without a local fallback", async () => {
+    for (const noun of ["domain", "domains"]) {
+      const result = await runDomainCommandExpectingExit([noun,"connect","ex.com","--provider","x"]);
+      expect(result.error).toBe("process.exit:1");
+      expect(result.stderr).toContain("POST /v1/domains/connect");
+      expect(result.stderr).toContain("405");
+    }
     expect((await serverDomains()).length).toBe(0);
   });
 

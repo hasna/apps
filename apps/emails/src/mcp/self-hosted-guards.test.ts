@@ -67,7 +67,7 @@ describe("MCP self_hosted guards", () => {
     });
   });
 
-  it("refuses a provider selector the send contract has no room for, and sends nothing", async () => {
+  it("refuses a provider selector when the API cannot advertise its send contract, and sends nothing", async () => {
     // This assertion inverted when the email-ops family collapsed to one
     // implementation. It used to check a guard in the deleted arm module whose
     // refusal text told the caller which deployment word to set to reach the other
@@ -82,7 +82,7 @@ describe("MCP self_hosted guards", () => {
       provider_id: "provider-1",
     });
     expect(result.isError).toBe(true);
-    expect(resultText(result)).toContain("--provider is not supported");
+    expect(resultText(result)).toContain("/openapi.json");
     // The discriminating half: refused BEFORE dispatch, so no mail and no row.
     expect(await stub.list("messages")).toHaveLength(0);
   });
@@ -275,13 +275,17 @@ describe("MCP self_hosted guards", () => {
     expect(payload.gaps).toEqual({});
   });
 
+  it("reports address provisioning API incompatibility without using client cloud credentials", async () => {
+    const result=await callTool("provision_address",{email:"ops@example.com",provider_id:"provider-1"});
+    expect(result.isError).toBe(true);expect(resultText(result)).toContain("POST /v1/provision/address");expect(resultText(result)).toContain("HTTP 405");
+  });
+
   it("tells the truth about provisioning tools that no mode implements", async () => {
     // The local provisioning orchestrator was unreachable dead code and is gone;
     // the self-hosted server exposes no /v1 provisioning route. Claiming these
     // "run on the self-hosted server" sent operators looking for a service that
     // does not exist, so the error names the real, runnable alternative instead.
     const cases: Array<[string, Record<string, unknown>, string]> = [
-      ["provision_address", { email: "ops@example.com", provider_id: "provider-1" }, "emails address add"],
       ["provision_status", {}, "emails domain list --json"],
       ["provision_domain", { domain: "example.com", provider_id: "provider-1" }, "emails domain adopt"],
     ];

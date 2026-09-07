@@ -91,7 +91,7 @@ describe("refusal registry covers every CLI refusal call site", () => {
     // fixture-driven case below, which cannot be eroded by deleting refusals.
     expect(refusals.length).toBeGreaterThan(0);
     expect(refusals.filter((r) => r.shared).length).toBeGreaterThan(0);
-    expect(refusals.filter((r) => !r.shared).length).toBeGreaterThan(0);
+    expect(refusals.filter((r) => !r.shared)).toEqual([]); // All namespaced API-only refusals are restored.
     expect(new Set(refusals.map((r) => r.file))).toContain("domain.ts");
     expect(new Set(refusals.map((r) => r.file))).toContain("provision.ts");
   });
@@ -132,9 +132,16 @@ describe("refusal registry covers every CLI refusal call site", () => {
   // src/lib/status-commands.test.ts pins those by name instead.
   it("declares what the scan cannot see", () => {
     const inbox = readFileSync(join(COMMANDS_DIR, "inbox.remote.ts"), "utf8");
-    // Real refusals in the file, invisible because the literal omits the `emails ` prefix.
-    expect(inbox).toContain('serverOnly("sync-s3")');
-    expect(refusals.map((r) => r.command)).not.toContain("emails inbox sync-s3");
+    expect(inbox).not.toContain('serverOnly("listen")');
+    expect(inbox).toContain("startApiSmtpListener(Number(opts.port), opts.provider)");
+    expect(isCommandAvailableInMode("emails inbox listen", "self_hosted")).toBe(true);
+    for (const operation of ["sync-s3", "watch"]) {
+      expect(inbox).not.toContain(`serverOnly("${operation}")`);
+      expect(inbox).toContain(`.action(ingestAction("${operation}"))`);
+      expect(isCommandAvailableInMode(`emails inbox ${operation}`, "self_hosted")).toBe(true);
+    }
+    expect(inbox).not.toContain('serverOnly("setup-realtime")');
+    expect(isCommandAvailableInMode("emails inbox setup-realtime example.com", "self_hosted")).toBe(true);
     // `inbox unread-count --by-address` USED to be a flag-conditional refusal here;
     // it is now served by the /v1 endpoint, so the refusal literal must be gone and
     // the flag form must never appear on any refusal-derived suggestion list.
@@ -150,9 +157,12 @@ describe("refusal registry covers every CLI refusal call site", () => {
   // someone re-refuses it this test says so.
   it("sees the shared-module refusals the original grep could not", () => {
     const shared = refusals.filter((r) => r.shared).map((r) => r.command);
-    expect(shared).toContain("emails domain status");
-    expect(shared).toContain("emails domain verify");
-    expect(shared).toContain("emails address provision");
+    expect(shared).not.toContain("emails domain status");
+    expect(shared).not.toContain("emails domain verify");
+    expect(shared).not.toContain("emails address provision");
+    expect(shared).toContain("emails provision domain");
+    expect(isCommandAvailableInMode("emails address provision ops@example.com", "self_hosted")).toBe(true);
+    expect(isCommandAvailableInMode("emails provision address ops@example.com", "self_hosted")).toBe(true);
   });
 
   it("no longer counts the DNS commands that were wired to their libraries", () => {

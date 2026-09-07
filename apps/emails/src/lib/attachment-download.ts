@@ -218,7 +218,7 @@ async function removeCreatedDirectoryChain(directory: string, firstCreated: stri
   }
 }
 
-interface AttachmentWriteHooks {
+export interface AttachmentWriteHooks {
   /** @internal Deterministic regression seam for directory-swap tests. */
   beforeDescriptorWrite?: () => Promise<void> | void;
   /** @internal Deterministic regression seam for temp-entry replacement tests. */
@@ -652,10 +652,24 @@ export async function writeAttachmentFile(
   content: AvailableAttachmentContent,
   outputDir: string,
 ): Promise<SavedAttachment> {
-  return writeAttachmentFileWithHooks(content, outputDir);
+  return writePlatformAttachmentFile(content, outputDir);
 }
+
+async function writePlatformAttachmentFile(content: AvailableAttachmentContent, outputDir: string, hooks: AttachmentWriteHooks = {}): Promise<SavedAttachment> {
+  if (process.platform === "darwin") {
+    const { writeDarwinAttachmentFile } = await import("./attachment-download-darwin.js");
+    return writeDarwinAttachmentFile(content, outputDir, hooks);
+  }
+  return writeAttachmentFileWithHooks(content, outputDir, hooks);
+}
+
+/** @internal Shared validation only; the Linux descriptor writer stays unchanged. */
+export const attachmentDownloadValidation = {
+  safeFilename, collisionName, sameFileIdentity, createPrivateDirectoryChain,
+  assertTrustedOutputPath, removeCreatedDirectoryChain,
+};
 
 /** @internal Source-only deterministic seams; not re-exported by the package. */
 export const attachmentDownloadTestBoundary = {
-  writeAttachmentFile: writeAttachmentFileWithHooks,
+  writeAttachmentFile: writePlatformAttachmentFile,
 };

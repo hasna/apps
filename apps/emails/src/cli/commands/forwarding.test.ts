@@ -168,18 +168,11 @@ describe("forwarding command", () => {
     expect(await listForwardingRules()).toEqual([]);
   });
 
-  it("REFUSES `forwarding run` at the command level when the mail lives behind the API", async () => {
-    // THE REFUSAL HAS TO REACH THE OPERATOR, not just the function. `emails forwarding run` is the
-    // path an operator actually takes, and the wrong outcome here is not an exception — it is a
-    // cheerful "forwarding: 0 sent, 0 failed, 0 skipped (0 attempted)" for an inbox this side
-    // never looked at. Asserted through the CLI's own error channel, and the setting to unset is
-    // asserted too, because a refusal an operator cannot act on is a dead end.
+  it("reports an older API lacking forwarding execution without opening a local ledger", async () => {
     configureApiStore();
     const errors = await runForwardingCommandExpectingError(["forwarding", "run"]);
-    expect(errors).toContain("reads its mail through an Emails API");
-    expect(errors).toContain(API_BASE_URL_SETTING);
-    // The positive control: nothing was recorded, so the refusal really did precede every read
-    // and every write rather than aborting halfway through a run.
+    expect(errors).toContain("POST /v1/forwarding/run");
+    expect(errors).toContain("HTTP 405");
     const ledger = db.query("SELECT COUNT(*) AS n FROM forwarding_deliveries").get() as { n: number };
     expect(ledger.n).toBe(0);
   });

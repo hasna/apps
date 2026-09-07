@@ -1,12 +1,7 @@
 // Storage-free SMTP receiver: session parser + bounded loopback TCP adapter.
 //
-// SCOPE (receiver-only): this module ships the SMTP wire parser and a TCP
-// adapter that acknowledges (250) only after the caller's authoritative
-// `persist()` resolves with a non-empty durable receipt id. It does NOT wire
-// any durable remote persistence itself — the caller provides `persist()`.
-// Follow-up: wire a minimal remote-store `persist()` implementation; until
-// then the PR title/body must read "receiver-only", not "durable remote
-// persistence".
+// Persistence is supplied by the authenticated SMTP API adapter. This receiver
+// acknowledges only a durable receipt; it never opens local storage.
 //
 // SECURITY (loopback-only): `listenSmtp` defaults to 127.0.0.1. Do not bind
 // 0.0.0.0 without an authenticating proxy/firewall in front. There is no
@@ -38,6 +33,7 @@ export interface SmtpDelivery {
   envelope: { from: string; to: string[] };
   message: NormalizedInboundEmail;
   receivedAt: string;
+  raw: Buffer;
   rawSize: number;
   rawSha256: string;
 }
@@ -132,6 +128,7 @@ export function createSmtpSession(options: SmtpReceiverOptions): SmtpSession {
             message,
             receivedAt: new Date().toISOString(),
             rawSize: data.byteLength,
+            raw: data,
             rawSha256: createHash("sha256").update(data).digest("hex"),
           });
           if (!receipt || typeof receipt.id !== "string" || !receipt.id.trim()) throw new Error("missing durable receipt");

@@ -1,3 +1,4 @@
+import { emailsSelfHostedOpenApi } from "../server/self-hosted/openapi.js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import {
   SelfHostedMailDataSource,
@@ -643,7 +644,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     const { ds } = make([
       v1("kpmg", {
         attachments: [
-          { filename: "D300.pdf", content_type: "application/pdf", size: 189834 },
+          { filename: "D300.pdf", content_type: "application/pdf", size: 189834, content_id: "<chart@example.test>" },
           { filename: "D394.pdf", content_type: "application/pdf", size: 28580 },
         ],
       }),
@@ -654,6 +655,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     const body = await ds.getMessageBody(summary!);
     expect(body!.attachments.map((a) => a.filename)).toEqual(["D300.pdf", "D394.pdf"]);
     expect(body!.attachments[0]!.size).toBe(189834);
+    expect(body!.attachments[0]!.content_id).toBe("<chart@example.test>");
   });
 
   // An unnamed inline MIME part arrives as filename:"". Left empty it is dropped
@@ -2009,20 +2011,29 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(result.warning).toBeUndefined();
   });
 
-  it("rejects --provider instead of silently ignoring it (the server owns the sender)", async () => {
-    // The flag was parsed and then dropped, so an operator who "re-pointed" a
-    // send at another SES provider got the old one with no warning at all.
-    let called = 0;
-    const serve: SelfHostedFetch = async () => {
-      called += 1;
-      return { status: 202, async text() { return JSON.stringify({ message: { id: "m" }, sent: true }); } };
-    };
-    const ds = new SelfHostedMailDataSource({ baseUrl: "https://emails.example/v1", apiKey: "k", fetchImpl: serve });
-    await expect(ds.send({
-      to: "x@example.com", from: "me@example.com", subject: "s", body: "b", providerId: "some-provider-id",
-    })).rejects.toThrow(/--provider is not supported in self_hosted mode/);
-    expect(called).toBe(0);
+  it("rejects explicit blank and null providers without contacting the API", async () => {
+    let calls = 0;
+    const ds = new SelfHostedMailDataSource({ baseUrl: "https://emails.example/v1", apiKey: "k", fetchImpl: async () => { calls++; throw new Error("must not request"); } });
+    for (const providerId of ["", "  ", null]) {
+      await expect(ds.send({ to: "x@example.com", from: "me@example.com", subject: "s", body: "b", providerId: providerId as string })).rejects.toThrow("provider");
+    }
+    expect(calls).toBe(0);
   });
+
+  for (const options of [{ providerId: "some-provider-id" }, { unsubscribeUrl: "https://example.com/unsubscribe" }, {trackOpens:true}, {trackClicks:true,trackingUrl:"https://track.example"}]) {
+    it(`refuses unsupported ${Object.keys(options)[0]} on an older server without sending`, async () => {
+      const paths: string[] = [];
+      const serve: SelfHostedFetch = async (url) => {
+        paths.push(String(url));
+        return { status: 200, async text() { return JSON.stringify({ ...emailsSelfHostedOpenApi, paths: {} }); } };
+      };
+      const ds = new SelfHostedMailDataSource({ baseUrl: "https://emails.example/v1", apiKey: "k", fetchImpl: serve });
+      await expect(ds.send({
+        to: "x@example.com", from: "me@example.com", subject: "s", body: "b", ...options,
+      })).rejects.toThrow(/API needs an update/);
+      expect(paths).toEqual(["https://emails.example/v1/openapi.json"]);
+    });
+  }
 
   it("never turns a provider REJECT into a resolved send", async () => {
     const serveReject: SelfHostedFetch = async () => ({
@@ -2144,19 +2155,12 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(serve.requests.some((request) => /archive|trash|spam|remove/i.test(request))).toBe(false);
   });
 
-  it("supports explicit-id bulk mutations and rejects scheduled sends honestly", async () => {
+  it("supports explicit-id bulk mutations", async () => {
     const { ds, serve } = make([v1("2"), v1("3")]);
     const result = await ds.bulk({ action: "read", ids: ["2", "3"] });
     expect(result).toMatchObject({ affected: 2, matched: 2 });
     expect(serve.rows.get("2")?.["is_read"]).toBe(true);
     expect(serve.rows.get("3")?.["is_read"]).toBe(true);
-    await expect(ds.send({
-      to: "a@example.com",
-      from: "me@example.com",
-      subject: "later",
-      body: "body",
-      scheduledAt: "2030-01-01T00:00:00.000Z",
-    })).rejects.toThrow(/Scheduled send is not supported/);
     expect(serve.posted).toHaveLength(0);
   });
 
@@ -2600,7 +2604,6 @@ describe("SelfHostedMailDataSource — source scoping", () => {
     const { ds } = make([v1("2"), v1("5")]);
 
     for (const source of [
-      { providerId: "cred-1" },
       { sourceId: "s3:mail-bucket", s3Bucket: "mail-bucket" },
       { sourceId: "legacy", legacy: true },
       { sourceId: "no-such-source" },
@@ -2613,7 +2616,7 @@ describe("SelfHostedMailDataSource — source scoping", () => {
 
   it("refuses an unsupported scope on clear rather than deleting the whole store", async () => {
     const { ds, serve } = make([v1("2"), v1("5")]);
-    await expect(ds.clear({ source: { providerId: "cred-1" } })).rejects.toThrow(/cannot be applied/);
+    await expect(ds.clear({ source: { providerId: "cred-1" } })).rejects.toThrow(/API|openapi/);
     expect(serve.deleted).toEqual([]);
   });
 
@@ -2625,8 +2628,8 @@ describe("SelfHostedMailDataSource — source scoping", () => {
   it("refuses a provider-scoped clear instead of widening it to the whole store", async () => {
     const { ds, serve } = make([v1("2"), v1("5")]);
 
-    await expect(ds.clear({ providerId: "cred-1" })).rejects.toThrow(/no provider provenance/);
-    await expect(ds.clear({ providerId: "cred-1" })).rejects.toThrow(/Refusing rather than clearing the whole store/);
+    await expect(ds.clear({ providerId: "cred-1" })).rejects.toThrow(/API|openapi/);
+    await expect(ds.clear({ providerId: "cred-1" })).rejects.toThrow(/API|openapi/);
     // The whole point: nothing was deleted, and no count was invented.
     expect(serve.deleted).toEqual([]);
     expect(serve.rows.size).toBe(2);
@@ -2635,9 +2638,9 @@ describe("SelfHostedMailDataSource — source scoping", () => {
   it("refuses a provider-scoped clear regardless of the mailbox or address scope alongside it", async () => {
     const { ds, serve } = make([v1("2", { to_addrs: ["andrei@example.com"] }), v1("5")]);
 
-    await expect(ds.clear({ providerId: "cred-1", mailbox: "trash" })).rejects.toThrow(/no provider provenance/);
+    await expect(ds.clear({ providerId: "cred-1", mailbox: "trash" })).rejects.toThrow(/API|openapi/);
     await expect(ds.clear({ providerId: "cred-1", source: { address: "andrei@example.com" } }))
-      .rejects.toThrow(/no provider provenance/);
+      .rejects.toThrow(/API|openapi/);
     expect(serve.deleted).toEqual([]);
     expect(serve.rows.size).toBe(2);
   });
@@ -3597,4 +3600,17 @@ describe("SelfHostedMailDataSource — scoped mailboxCounts scan budget", () => 
     const afterClear = serve.requests.filter((request) => request.startsWith("GET /v1/messages?")).length;
     expect(afterClear).toBeGreaterThan(afterCounts);
   });
+});
+
+it("scheduled sends use enqueue and preserve payload without claiming delivery", async () => {
+ const calls: Array<{path:string;body:Record<string,unknown>}> = [];
+ const ds = new SelfHostedMailDataSource({baseUrl:"https://fixture.example/v1",apiKey:crypto.randomUUID(),fetchImpl:async (url,init) => {
+  const path = new URL(String(url)).pathname;
+  if(path.endsWith("openapi.json")) return new Response(JSON.stringify(emailsSelfHostedOpenApi),{headers:{"content-type":"application/json"}});
+  const body=JSON.parse(String(init?.body));calls.push({path,body});
+  return new Response(JSON.stringify({enqueued:true,idempotent_replay:false,scheduled:{id:"job-fixture",status:"pending",scheduled_at:body.scheduled_at}}),{status:201,headers:{"content-type":"application/json"}});
+ }});
+ const result=await ds.send({from:"sender@example.com",to:"a@example.com",subject:"Fixture",body:"Body",trackOpens:true,trackClicks:true,trackingUrl:"https://track.example",scheduledAt:"2030-01-01T00:00:00Z",idempotencyKey:"stable-fixture",providerId:"provider-fixture",cc:"copy@example.com",bcc:"blind@example.com",replyTo:"reply@example.com",unsubscribeUrl:"https://example.com/unsubscribe",allowSuppressedRecipients:true,attachments:[{filename:"a.txt",content:"YQ==",content_type:"text/plain"}]});
+ expect(result.messageId).toBe("");expect(result.scheduled?.id).toBe("job-fixture");expect(calls).toHaveLength(1);
+ expect(calls[0]).toMatchObject({path:"/v1/scheduled/enqueue",body:{track_opens:true,track_clicks:true,tracking_url:"https://track.example",scheduled_at:"2030-01-01T00:00:00.000Z",idempotency_key:"stable-fixture",provider_id:"provider-fixture",cc:["copy@example.com"],bcc:["blind@example.com"],reply_to:"reply@example.com",unsubscribe_url:"https://example.com/unsubscribe",allow_suppressed_recipients:true,attachments:[{filename:"a.txt",content:"YQ==",content_type:"text/plain"}]}});
 });

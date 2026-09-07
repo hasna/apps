@@ -201,10 +201,9 @@ storage](docs/CONFIGURATION.md) and the [cloud cutover runbook](docs/CUTOVER-RUN
 ## TypeScript APIs
 
 The main package exports the synchronous database/domain API from
-`@hasna/mementos` and an authenticated fetch client from `@hasna/mementos/sdk`.
-The repository also contains the separately published zero-dependency
-`@hasna/mementos-sdk` client. See [Library and SDK APIs](docs/LIBRARY.md) and
-the [standalone SDK README](sdk/README.md).
+`@hasna/mementos` and an authenticated fetch client from `@hasna/mementos/sdk`
+— one package carries every surface (CLI, MCP server, REST server, SDK); there
+is no separate `-sdk` or `-mcp` package. See [Library and SDK APIs](docs/LIBRARY.md).
 
 ## Shared event webhooks
 
