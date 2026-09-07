@@ -114,3 +114,26 @@ test("tenant suspension or binding removal during cloud reads prevents subsequen
     await expect(f.run()).rejects.toThrow(); expect(f.state.writes).toEqual([]);
   }
 });
+
+test("Describe response object order does not block first activation; action order remains meaningful", async () => {
+  const f = sesSetupFixture(), send = f.cloud.send.bind(f.cloud);
+  f.cloud.send = async (service, operation, input) => {
+    const result = await send(service, operation, input);
+    if (operation === "DescribeReceiptRuleSet" && result.Rules) {
+      return { ...result, Rules: result.Rules.map((rule: any) => ({ Name: rule.Name, Enabled: rule.Enabled, TlsPolicy: rule.TlsPolicy, Recipients: rule.Recipients, Actions: rule.Actions.map((action: any) => ({ S3Action: { ObjectKeyPrefix: action.S3Action.ObjectKeyPrefix, BucketName: action.S3Action.BucketName } })), ScanEnabled: rule.ScanEnabled })) };
+    }
+    return result;
+  };
+  expect(await f.run()).toMatchObject({ ok: true, verified: true });
+  expect(f.state.writes).toContain("SetActiveReceiptRuleSet");
+  const ordered = sesSetupFixture();
+  ordered.state.rules = [{ Name: "bound-example", Enabled: true, Recipients: ["example.test"], Actions: [{ S3Action: { BucketName: "bound-inbound", ObjectKeyPrefix: "inbound/example.test/" } }, { StopAction: { Scope: "RuleSet" } }] }];
+  const original = ordered.cloud.send.bind(ordered.cloud); let reads = 0;
+  ordered.cloud.send = async (service, operation, input) => {
+    const result = await original(service, operation, input);
+    if (operation === "DescribeReceiptRuleSet" && ++reads === 2) return { Rules: result.Rules.map((rule: any) => ({ ...rule, Actions: [...rule.Actions].reverse() })) };
+    return result;
+  };
+  expect(await ordered.run()).toMatchObject({ ok: false, verified: false });
+  expect(ordered.state.writes).not.toContain("SetActiveReceiptRuleSet");
+});

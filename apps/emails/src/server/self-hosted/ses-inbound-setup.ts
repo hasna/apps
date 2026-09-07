@@ -7,7 +7,12 @@ import { createHash } from "node:crypto";
 export interface SesInboundSetupInput { domain: string; bucket: string; region?: string; prefix?: string; catch_all?: boolean }
 export interface SesInboundSetupCloud { send(service: "s3" | "ses" | "sts", operation: string, input: Record<string, unknown>): Promise<any>; close(): void }
 export type SesInboundSetupCloudFactory = (binding: IngestBinding, signal: AbortSignal) => SesInboundSetupCloud;
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const canonical = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => [key, canonical(item)]));
+  return value;
+};
+const same = (a: unknown, b: unknown) => JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
 const missing = (error: any) => ["NotFound", "NoSuchBucket", "NoSuchBucketPolicy", "NoSuchPublicAccessBlockConfiguration", "RuleDoesNotExist", "RuleSetDoesNotExist"].includes(error?.name) || error?.$metadata?.httpStatusCode === 404;
 
 /** Configure only an operator-bound bucket and SES receipt rule; never start a worker. */
