@@ -152,15 +152,27 @@ defaults to the fleet gateway `https://api.hasna.com/instructions`.
 
 ## SDK
 
-`@hasna/instructions-sdk` ships a zero-dependency typed client. The versioned
-`InstructionsV1Client` is generated from the serve OpenAPI document
-(`bun run generate:sdk`). The resolver-wired factory in
-`@hasna/instructions-sdk/resolve` (`createInstructionsV1ClientFromEnv`) resolves
-the credential through the same `@hasna/contracts` chain as the CLI and the MCP
-server — fresh on every request, so a rotated key heals a long-lived client
-without rebuilding it. An explicit `baseUrl` requires an explicit `apiKey`: the
-SDK never attaches the machine's fleet key to an authority the caller chose
-itself.
+The importable module ships INSIDE `@hasna/instructions` at the `./sdk` export
+(one package per app — there is no split `@hasna/instructions-sdk`). It is a
+self-contained bundle (node builtins only; the `@hasna/contracts` resolver is
+inlined at build time). The versioned `InstructionsV1Client` is generated from
+the serve OpenAPI document (`bun run generate:sdk` → `src/sdk/v1.generated.ts`).
+
+```typescript
+import { createInstructionsV1ClientFromEnv } from "@hasna/instructions/sdk";
+
+const client = createInstructionsV1ClientFromEnv(); // Keychain -> disk -> HASNA_INSTRUCTIONS_API_KEY
+const { configs = [] } = await client.listConfigs({ category: "rules" });
+```
+
+`createInstructionsV1ClientFromEnv` resolves the credential through the same
+`@hasna/contracts` chain as the CLI and the MCP server — fresh on every
+request, so a rotated key heals a long-lived client without rebuilding it.
+`resolveInstructionsSdkTransport(options)` reports WHICH tier supplied the
+credential (never the value). An explicit `baseUrl` requires an explicit
+`apiKey` (hasna/apps#1794): the SDK never attaches the machine's fleet key to
+an authority the caller chose itself. No credential anywhere throws; there is
+no local mode and no unauthenticated client on this surface.
 
 ## Client transports
 

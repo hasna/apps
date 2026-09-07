@@ -1,5 +1,5 @@
 /**
- * Credential and authority resolution for the `@hasna/instructions-sdk` `/v1`
+ * Credential and authority resolution for the `@hasna/instructions/sdk` `/v1`
  * surface.
  *
  * There is exactly ONE resolver on the fleet — the client chain in
@@ -47,8 +47,8 @@ import { InstructionsV1Client, type InstructionsV1ClientOptions } from "./v1.gen
 export const INSTRUCTIONS_SDK_APP = "instructions";
 
 // ── Local spellings of the crossing types ─────────────────────────────────────
-// `@hasna/contracts` is a BUILD-TIME dependency of this package (the `./resolve`
-// entry inlines it with `--target bun`), so the emitted `resolve.d.ts` must not
+// `@hasna/contracts` is a BUILD-TIME dependency of this package (the `./sdk`
+// entry inlines it with `--target bun`), so the emitted `sdk/resolve.d.ts` must not
 // import it — every type below is spelled locally and checked against the real
 // shapes by the assignments at the seam in this module (hasna/apps#1782).
 // `client-types.test.ts` in the main package asserts the same spellings against

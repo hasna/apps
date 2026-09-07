@@ -345,7 +345,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "instructions", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -424,7 +423,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "instructions",
-    cause: "bins_match_package: package.json ships legacy alias bins configs/configs-mcp (fleet-compat, not contract-allowlisted — same class as the recorded economy hasna-events precedent); surface_matrix: missing sdk surface (no ./sdk export; SDK lane c7ce8b75); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required; credential_seam_compliance: src/db/database.ts reads HASNA_INSTRUCTIONS_API_KEY from the process environment. Manifest schema-valid at kit 0.11.1.",
+    cause: "bins_match_package: package.json ships legacy alias bins configs/configs-mcp (fleet-compat, not contract-allowlisted — same class as the recorded economy hasna-events precedent); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required; credential_seam_compliance: src/db/database.ts reads HASNA_INSTRUCTIONS_API_KEY from the process environment. Manifest schema-valid at kit 0.11.1.",
     task: "todos c15cca18 (contracts task — instructions)",
   },
   {
