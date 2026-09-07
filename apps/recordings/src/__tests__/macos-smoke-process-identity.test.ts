@@ -85,6 +85,7 @@ function createSmokeFixture(
     wrapperExitsBeforeAppCompletion?: boolean;
     appIdentityChangesAfterCalls?: number;
     wrapperExitCode?: number;
+    startupDelaySeconds?: number;
   } = {},
 ) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "recordings-smoke-identity-")));
@@ -115,9 +116,9 @@ function createSmokeFixture(
   expect(smokeSource).toContain('"$KILL_EXECUTABLE" -KILL "$pid"');
   expect(smokeSource).toContain("run_smoke normal\nrun_smoke permission-helper\nrun_smoke resolver");
   smokeSource = smokeSource
-    // Allow a full second for the confined shell app to launch; the old 300ms
-    // budget sometimes expired before it had written any evidence.
-    .replace("SMOKE_MAX_ATTEMPTS=100", "SMOKE_MAX_ATTEMPTS=10")
+    // Keep the production readiness window: a confined subprocess can take
+    // several seconds to launch on a busy Darwin host. Only completion and
+    // cleanup waits are shortened for these behavioral fixtures.
     .replace("SMOKE_COMPLETION_ATTEMPTS=200", "SMOKE_COMPLETION_ATTEMPTS=3")
     .replace("SMOKE_CLEANUP_ATTEMPTS=20", "SMOKE_CLEANUP_ATTEMPTS=3")
     .replace(
@@ -159,6 +160,7 @@ while [ "$#" -gt 0 ]; do
   if [ "$1" = --runtime-smoke-completion ]; then completion="$2"; shift 2; continue; fi
   shift
 done
+${options.startupDelaySeconds ? `/bin/sleep ${options.startupDelaySeconds}` : ":"}
 printf '%s\\n' "$acknowledgement" > "${appAcknowledgementPath}"
 printf '%s\\n' "$$" > "${appPid}"
 while [ ! -s "${appPid}" ]; do /bin/sleep 0.01; done
@@ -601,22 +603,25 @@ describe("macOS runtime smoke process identity", () => {
     expect(processIsRunning(fixture.wrapperPid)).toBeFalse();
   });
 
-  test("terminates the exact live app when PID evidence is malformed", async () => {
-    const fixture = createSmokeFixture({
-      malformedPidEvidence: true,
-      preexistingExactApp: true,
-      stayAliveUntilSignaled: true,
+  for (const startupDelaySeconds of [0, 3]) {
+    test(`terminates the exact live app when PID evidence is malformed (launch delay ${startupDelaySeconds} seconds)`, async () => {
+      const fixture = createSmokeFixture({
+        malformedPidEvidence: true,
+        preexistingExactApp: true,
+        stayAliveUntilSignaled: true,
+        startupDelaySeconds,
+      });
+      const result = await runSmoke(fixture);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain("reported a process that is not running");
+      expect(existsSync(fixture.signalMarker)).toBeTrue();
+      expect(existsSync(fixture.appExitMarker)).toBeTrue();
+      expect(existsSync(fixture.wrapperExitMarker)).toBeTrue();
+      expect(processIsRunning(fixture.appPid)).toBeFalse();
+      expect(processIsRunning(fixture.preexistingAppPid)).toBeTrue();
+      expect(processIsRunning(fixture.wrapperPid)).toBeFalse();
     });
-    const result = await runSmoke(fixture);
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain("reported a process that is not running");
-    expect(existsSync(fixture.signalMarker)).toBeTrue();
-    expect(existsSync(fixture.appExitMarker)).toBeTrue();
-    expect(existsSync(fixture.wrapperExitMarker)).toBeTrue();
-    expect(processIsRunning(fixture.appPid)).toBeFalse();
-    expect(processIsRunning(fixture.preexistingAppPid)).toBeTrue();
-    expect(processIsRunning(fixture.wrapperPid)).toBeFalse();
-  });
+  }
 
   test("fails when the app ignores the completion challenge", async () => {
     const fixture = createSmokeFixture({ completionBehavior: "ignore" });
