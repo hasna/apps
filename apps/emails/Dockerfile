@@ -24,11 +24,8 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json bun.lock tsconfig.json ./
 COPY --chown=bun:bun src ./src
 
-# The self-hosted runtime keeps its local database store under the container HOME
-# at /runtime/home/bun/.hasna/emails — the legacy data root, which stays the
-# effective data root of @hasna/paths resolution until the store is migrated to
-# the XDG data home or the operator sets HASNA_DATA_HOME. Nothing in the image
-# moves the store; the resolver merely makes the location overridable.
+# Private HOME and temporary directories support the non-root runtime.
+# Production mail and control state live in operator-owned PostgreSQL.
 FROM base AS runtime-files
 RUN mkdir -p /runtime/usr/local/bin /runtime/lib /runtime/lib/apk/db /runtime/usr/lib \
     /runtime/opt/emails/certs /runtime/tmp /runtime/home/bun/.hasna/emails /runtime/etc \
@@ -80,7 +77,7 @@ WORKDIR /app
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD ["/usr/local/bin/bun", "-e", "const port = Number(process.env.PORT || 8080); const postgres = (process.env.EMAILS_DATABASE_URL ?? '').trim() !== ''; const path = postgres ? '/ready' : '/api/providers?limit=1'; const r=await fetch(`http://127.0.0.1:${port}${path}`);process.exit(r.ok?0:1)"]
+  CMD ["/usr/local/bin/bun", "-e", "const port = Number(process.env.PORT || 8080); if (!(process.env.EMAILS_DATABASE_URL ?? '').trim()) { process.exit(1); } else { try { const r=await fetch(`http://127.0.0.1:${port}/ready`);process.exit(r.ok?0:1); } catch { process.exit(1); } }"]
 
 VOLUME ["/tmp"]
 USER 1000:1000
