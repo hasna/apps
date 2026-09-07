@@ -4,10 +4,15 @@ title: "Switcher changelog"
 type: "release-notes"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:54:59Z"
-updated_at: "2026-09-06T15:15:27Z"
+updated_at: "2026-09-07T04:00:19.108311+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+## 0.1.3
+### Patch Changes
+
+- Inject model guidance automatically into managed inference requests, enforce profile model allowlists and explicit transient fallbacks, pin native child/utility model roles, and persist bounded routing evidence. Guard Ori's native launch paths and reject older launchers without model-policy support.
 
 ## 0.1.2
 

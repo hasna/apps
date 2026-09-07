@@ -8,6 +8,8 @@ export type ProviderInput = components["schemas"]["ProviderInput"];
 export type Provider = components["schemas"]["Provider"];
 export type ProfileInput = components["schemas"]["ProfileInput"];
 export type Profile = components["schemas"]["Profile"];
+export type ModelPolicy = components["schemas"]["ModelPolicy"];
+export type RoutingEvent = components["schemas"]["RoutingEvent"];
 export type Model = components["schemas"]["Model"];
 export type Catalog = components["schemas"]["Catalog"];
 export type LaunchPlan = components["schemas"]["LaunchPlan"];
@@ -92,8 +94,8 @@ export class SwitcherClient {
   launchPlan(profileId: string, idempotencyKey?: string) { return this.request<LaunchPlan>("POST", "/v1/launch-plans", {profileId}, {idempotencyKey}); }
   listRuns(options = {}) { return this.request<Page<Run>>("GET", `/v1/runs?${this.query(options)}`); }
   getRun(id: string) { return this.request<Run>("GET", `/v1/runs/${encodeURIComponent(id)}`); }
-  createRun(input: components["schemas"]["RunInput"], idempotencyKey?: string) { return this.request<Run>("POST", "/v1/runs", input, {idempotencyKey}); }
-  finishRun(id: string, version: number, input: {status: "exited"|"failed"|"interrupted"; exitCode: number}, idempotencyKey?: string) { return this.request<Run>("PATCH", `/v1/runs/${encodeURIComponent(id)}`, input, {version, idempotencyKey}); }
+  createRun(input: Omit<components["schemas"]["RunInput"],"modelPolicyVersion"> & {modelPolicyVersion?:1}, idempotencyKey?: string) { return this.request<Run>("POST", "/v1/runs", {...input,modelPolicyVersion:1}, {idempotencyKey}); }
+  finishRun(id: string, version: number, input: components["schemas"]["RunUpdate"], idempotencyKey?: string) { return this.request<Run>("PATCH", `/v1/runs/${encodeURIComponent(id)}`, input, {version, idempotencyKey}); }
 }
 export function clientFromEnv(env: Record<string, string | undefined> = process.env) {
   // Fleet policy requires per-process injection. Deliberately omit HOME and disk

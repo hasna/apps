@@ -5,6 +5,8 @@ import { parseTree, getNodeValue, type ParseError, type Node } from "jsonc-parse
 import { privateDirectory } from "./runtime";
 import { geminiPolicyArguments } from "./harness-arguments";
 import type { HarnessLaunchInput, PreparedLaunch } from "./harness-types";
+import { compileGeminiModelPolicy } from "./gemini-model-policy";
+import { compileModelPolicy } from "./model-policy";
 
 type Settings = Record<string, any>;
 // DEFAULT_MODEL_CONFIGS.modelDefinitions in the pinned official 0.58.0 bundle.
@@ -116,11 +118,11 @@ export async function prepareGemini(input: HarnessLaunchInput): Promise<Prepared
   try { await snapshotContext(join(original.home, ".gemini"), dir, original.contextNames); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   const defaults = join(input.stateDir, "gemini-system-defaults.json"), system = join(input.stateDir, "gemini-system.json"), user = join(dir, "settings.json");
-  const modelDefinitions = {...Object.fromEntries(nativeModels.map(id => [id, {isVisible: false}])), ...Object.fromEntries(input.models.map(model => [model.id, {displayName: model.name, tier: "custom", family: "switcher", isPreview: false, isVisible: true, features: {thinking: false, multimodalToolUse: model.inputModalities?.includes("image") ?? false}}]))};
-  const modelIdResolutions = Object.fromEntries(input.models.map(model => [model.id, {default: model.id, contexts: []}]));
+  const modelPolicy=compileGeminiModelPolicy(input.model,input.models,input.compiledPolicy??compileModelPolicy(input.model,input.models,input.modelPolicy));
+  const modelDefinitions = {...Object.fromEntries(nativeModels.map(id => [id, {isVisible: false}])),...modelPolicy.modelConfigs.modelDefinitions};
   // Empty maps do not clear Gemini's recursive settings merge. Preflight above
   // rejects inherited modelConfigs; these generated definitions add the catalog.
-  const enforced = {...original.system, security: {...original.system.security, auth: {...original.system.security?.auth, selectedType: "gemini-api-key"}}, model: {...original.system.model, name: input.model}, modelConfigs: {modelDefinitions, modelIdResolutions}, experimental: {...original.system.experimental, dynamicModelConfiguration: true}};
+  const enforced = {...original.system, security: {...original.system.security, auth: {...original.system.security?.auth, selectedType: "gemini-api-key"}}, model: {...original.system.model, name: input.model}, modelConfigs: {...modelPolicy.modelConfigs,modelDefinitions},agents:{...original.system.agents,overrides:{...original.system.agents?.overrides,...modelPolicy.agents?.overrides}}, experimental: {...original.system.experimental, dynamicModelConfiguration: true}};
   for (const [path, value] of [[defaults, original.defaults], [user, original.user], [system, enforced]] as const) {
     const text = JSON.stringify(value, null, 2) + "\n";
     if (input.credential && text.includes(input.credential)) throw new Error("Gemini native settings must not contain the runtime credential.");

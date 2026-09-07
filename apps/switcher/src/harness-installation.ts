@@ -21,7 +21,7 @@ const records: Record<HarnessId, HarnessInstallation> = {
   claude: {
     displayName: "Claude Code",
     executable: "claude",
-    versionRequirement: ">=2.1.242",
+    versionRequirement: ">=2.1.257",
     packageOrProject: "Claude Code official distribution",
     documentationUrl: "https://code.claude.com/docs/en/quickstart",
     installationGuidance: "follow the official Claude Code installation instructions, then ensure the claude executable is on PATH or pass its absolute path with --executable",
