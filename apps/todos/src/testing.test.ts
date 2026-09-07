@@ -68,22 +68,37 @@ describe("localTodosTestEnv", () => {
   test("a test that blanks the opt-in back off exercises the fail-closed arm", () => {
     // Local-intent defaults must not blind a fail-closed test: overrides are
     // applied last, so blanking the opt-in hands the resolver the real
-    // "API env missing" shape and it must throw.
-    const env = localTodosTestEnv({
-      HASNA_TODOS_API_URL: "",
-      HASNA_TODOS_API_KEY: "",
-      HASNA_TODOS_LOCAL: "",
-      TODOS_LOCAL: "",
-    });
-    expect(() => resolveTodosCliTransport(env)).toThrow("REMOTE_API_CONFIG_MISSING");
+    // "API env missing" shape and it must throw. A throwaway HOME keeps the
+    // machine's own credential file (this station has one at
+    // ~/.hasna/todos/config/credentials) out of the disk tier, or the
+    // "absent pair" would resolve to it.
+    const hermeticHome = mkdtempSync(join(tmpdir(), "todos-testing-failclosed-"));
+    try {
+      const env = localTodosTestEnv({
+        HOME: hermeticHome,
+        HASNA_TODOS_API_URL: "",
+        HASNA_TODOS_API_KEY: "",
+        HASNA_TODOS_LOCAL: "",
+        TODOS_LOCAL: "",
+      });
+      expect(() => resolveTodosCliTransport(env)).toThrow("REMOTE_API_CONFIG_MISSING");
+    } finally {
+      rmSync(hermeticHome, { recursive: true, force: true });
+    }
   });
 
   test("still resolves http when a test opts back in explicitly", () => {
-    const env = localTodosTestEnv({
-      HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
-      HASNA_TODOS_API_KEY: "throwaway",
-    });
-    expect(resolveTodosCliTransport(env).transport).toBe("http");
+    const hermeticHome = mkdtempSync(join(tmpdir(), "todos-testing-http-"));
+    try {
+      const env = localTodosTestEnv({
+        HOME: hermeticHome,
+        HASNA_TODOS_API_URL: "http://127.0.0.1:3901",
+        HASNA_TODOS_API_KEY: "throwaway",
+      });
+      expect(resolveTodosCliTransport(env).transport).toBe("http");
+    } finally {
+      rmSync(hermeticHome, { recursive: true, force: true });
+    }
   });
 
   test("overrides are applied after the scrub, not before", () => {

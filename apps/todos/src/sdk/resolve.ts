@@ -97,7 +97,7 @@ function announceLocal(notice: ((line: string) => void) | undefined, reason: str
   if (localNoticePrinted) return;
   localNoticePrinted = true;
   const line =
-    `todos: LOCAL mode — no Hasna credential resolved (${reason}); reading and writing the local ` +
+    `todos: this client is unhosted — no Hasna credential resolved (${reason}); reading and writing the local ` +
     `todos-serve at ${TODOS_LOCAL_SERVE_URL}, not the hosted fleet. Set HASNA_TODOS_API_KEY, add the ` +
     `Keychain item hasna.credentials.todos.api-key, or write ~/.hasna/todos/config/credentials to go hosted.`;
   if (notice) notice(line);
@@ -240,7 +240,7 @@ export function createTodosV1Client(
   // The per-request re-resolution must not TALK. It re-runs the same resolution
   // that already succeeded above against the same environment, so any notice it
   // produces is about a state this client is not in: a mid-flight degradation
-  // prints the "LOCAL mode — ... not the hosted fleet" line while the client is
+  // prints the "unhosted — ... not the hosted fleet" line while the client is
   // still addressing its original hosted authority with its constructed key.
   // The refreshed credential is used; the commentary is dropped.
   const refreshOptions: ResolveTodosSdkTransportOptions = { ...options, notice: () => {} };

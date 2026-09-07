@@ -1259,6 +1259,11 @@ export function registerTaskCommands(program: Command) {
       }
 
       const creatorFilterActive = Boolean(filter["created_by"] || filter["not_created_by"]);
+      // The hosted /v1 list route has no `has_recurrence` query parameter, so a
+      // recurring filter must be enforced client-side from `recurrence_rule`,
+      // exactly like `created_by` (measured: the authority ignores unknown
+      // params and returns the unfiltered set at 200).
+      const recurringFilterActive = Boolean(cloud && opts.recurring);
       // A server that predates created_by IGNORES these query params and returns an
       // unfiltered list at 200 — measured against the deployed 0.13.0 API, which
       // drops created_by entirely. So the client must enforce the filter itself.
@@ -1305,7 +1310,7 @@ export function registerTaskCommands(program: Command) {
       // just like creator/due filters below.
       const taskListFilterActive = Boolean(cloud && filter["task_list_id"]);
       const narrowsAfterQuery = Boolean(opts.dueToday) || Boolean(opts.overdue) ||
-        (creatorFilterActive && cloud) || taskListFilterActive;
+        (creatorFilterActive && cloud) || taskListFilterActive || recurringFilterActive;
       const withholdLimit = requestedLimit !== undefined && (reordersAfterQuery || narrowsAfterQuery);
 
       // Withholding the caller's limit fixed the ordering defect and removed the only
@@ -1402,6 +1407,20 @@ export function registerTaskCommands(program: Command) {
       if (opts.dueToday) {
         const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
         tasks = tasks.filter(t => t.due_at && t.due_at <= todayEnd.toISOString());
+      }
+      if (recurringFilterActive) {
+        // A server that predates recurrence_rule omits the key entirely, so
+        // every row reads as non-recurring and the filter excludes nothing —
+        // the same silent-unfiltered failure the creator filter warns about.
+        if (tasks.length > 0 && tasks.every((t) => !("recurrence_rule" in (t as object)))) {
+          console.error(chalk.yellow(
+            "Warning: this server does not record task recurrence, so the recurring filter matched nothing to exclude.\n" +
+            "         Results are unfiltered. The API needs upgrading past the release that added recurrence_rule.",
+          ));
+        }
+        tasks = tasks.filter(
+          (t) => (t.recurrence_rule ?? "") !== "" || (t.recurrence_parent_id ?? "") !== "",
+        );
       }
       if (opts.overdue) {
         const now = new Date().toISOString();
@@ -2561,6 +2580,13 @@ export function registerTaskCommands(program: Command) {
       const isTagAction = action === "tag" || action === "untag";
       if (isPlanAction && Boolean(opts.plan) === Boolean(opts.clearPlan)) {
         handleError(new Error("Use exactly one of --plan or --clear-plan with bulk plan."));
+      }
+      // Plan flags are plan-action semantics: on done/start/delete/tag/untag
+      // they used to be silently ignored (and refused on the hosted route).
+      if (!isPlanAction && (opts.plan !== undefined || opts.clearPlan !== undefined)) {
+        handleError(new Error(
+          `--plan and --clear-plan apply to the plan/move-plan action only; not to bulk ${action}.`,
+        ));
       }
       const knownActions = new Set(["done", "complete", "start", "delete", "plan", "move-plan", "tag", "untag"]);
       if (!knownActions.has(action)) {

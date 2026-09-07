@@ -981,7 +981,8 @@ describe("CLI integration", () => {
       const json = await runCli(["manual", "--json"], dbPath);
       expect(json.exitCode).toBe(0);
       const parsed = JSON.parse(json.stdout);
-      expect(parsed.local_only).toBe(true);
+      // The manual is transport-neutral: no route-conditional fields.
+      expect(parsed.local_only).toBeUndefined();
       expect(parsed.completion_shells).toEqual(["bash", "zsh", "fish"]);
       expect(parsed.commands.some((command: { command: string }) => command.command === "usage report")).toBe(true);
       expect(parsed.json_contracts).toContain("local_usage_ledger");
@@ -2389,11 +2390,14 @@ describe("CLI integration", () => {
     try { unlinkSync(dbPath); } catch {}
   });
 
-  it("should reject native storage sync planning on the HTTP route before local helpers", async () => {
+  it("should route native storage sync planning to the on-box store even when a hosted authority is configured", async () => {
     const dbPath = "/tmp/test-cli-storage-sync-plan.db";
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync(dbPath); } catch {}
 
+    // Sync planning is a workstation-store operation: it previews a schema
+    // sync against the on-box database, so a hosted-configured run serves the
+    // on-box store, says so on stderr, and still can't reach the network.
     const plan = await runCli(["storage", "sync-plan", "--schema-sql", "--json"], dbPath, {
       HASNA_TODOS_API_URL: "https://todos.example.invalid",
       HASNA_TODOS_API_KEY: "fixture-key",
@@ -2404,10 +2408,11 @@ describe("CLI integration", () => {
       TODOS_S3_BUCKET: "",
     });
 
-    expect(plan.exitCode).toBe(1);
-    expect(plan.stdout).toBe("");
-    expect(plan.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
-    expect(plan.stderr).toContain("local SQLite fallback is disabled");
+    expect(plan.exitCode).toBe(0);
+    expect(plan.stderr).toContain("reads the on-box SQLite store");
+    expect(plan.stderr).toContain("not consulted for this run");
+    const preview = JSON.parse(plan.stdout);
+    expect(preview).toMatchObject({ ok: true, dry_run: true, no_network: true });
 
     try { unlinkSync(dbPath); } catch {}
   });

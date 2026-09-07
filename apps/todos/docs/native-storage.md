@@ -10,8 +10,8 @@ ruling (2026-09-04, hasna/apps#1613), a CLI run with neither API variable
 present exits non-zero with an error naming `HASNA_TODOS_API_URL` and
 `HASNA_TODOS_API_KEY` — it never silently serves the on-box SQLite store.
 Serving local SQLite through the CLI requires the explicit opt-in
-`HASNA_TODOS_LOCAL=1` (alias `TODOS_LOCAL=1`), which is how local-only CLI
-deployments, self-hosters, and tests opt in deliberately.
+`HASNA_TODOS_LOCAL=1` (alias `TODOS_LOCAL=1`), which is how on-box store
+deployments, machines without a hosted authority, and tests opt in deliberately.
 
 Remote storage is explicit and repo-native. Internal Hasna deployments and
 future SaaS wrappers should configure it through `HASNA_TODOS_*` variables and
@@ -33,9 +33,8 @@ exactly two arms on each side of the HTTP boundary:
 `HASNA_TODOS_API_URL` + `HASNA_TODOS_API_KEY` select the authenticated HTTP
 authority (client). `HASNA_TODOS_DATABASE_URL` selects the Postgres backend
 (server/native storage tooling). The storage-mode variables
-(`HASNA_TODOS_STORAGE_MODE` and their aliases) are RETIRED: their mere presence
-is a hard error (owner directive 2026-08-15), and no deployment-mode token is
-accepted. No third arm exists.
+(`HASNA_TODOS_STORAGE_MODE` and their aliases) are RETIRED: nothing reads them,
+and no deployment-mode token is accepted. No third arm exists.
 
 Legacy hosted API toggles are not storage selectors. They cannot select the
 local store and cannot rescue a run that lacks both the API pair and the local
@@ -73,11 +72,12 @@ or server failure is reported with a `REMOTE_*` diagnostic before local SQLite
 can open. A resource-level 404 remains a normal not-found result. There is no
 SQLite or Postgres fallback for a remote CLI invocation.
 
-The supported coordination surface includes storage/status diagnostics,
-projects, task lists, project-scoped plans, task create/upsert/list/show/update,
-task-list and plan moves, comments, start/complete/delete, and next/claim. A
-command without a safe `/v1` equivalent exits with `REMOTE_COMMAND_UNSUPPORTED`
-before local helpers run.
+The supported coordination surface is the FULL command catalog in every
+transport. Hosted-served commands reach the authenticated `/v1` routes;
+workstation-store commands (machines, backups, snapshots, redaction
+configuration and scans, fixture imports, plan artifacts, …) serve the on-box
+store even when a hosted authority is configured, and print a one-line stderr
+notice naming the store so a run can never be mistaken for a hosted read.
 
 `todos storage status --json` is a configuration-only diagnostic. On the http
 transport it reports the redacted `/v1` base, URL/key presence, HTTP transport, and
@@ -93,8 +93,8 @@ the server-side aggregate `GET /v1/integrity`, which the storage adapter compute
 with one SQL COUNT per condition on Postgres and SQLite alike; an authority that
 does not expose it leaves the task-level conditions `NOT CHECKED` unless
 `--scan-tasks` completes a read-only paged walk of `/v1/tasks`. Findings are
-report-only — `doctor --apply` remains refused outright in remote mode and never
-repairs an integrity finding in any mode.
+report-only — `doctor --apply` routes to the on-box store (it repairs the
+on-box schema) and never repairs an integrity finding in any store.
 
 ## Native AWS Configuration
 

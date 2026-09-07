@@ -5,9 +5,9 @@ import { join } from "node:path";
 import ts from "typescript";
 import {
   applyTodosCliAuthorityEnvironment,
-  getTodosCliCommandCapabilityMatrix,
+  getTodosCliOnBoxStoreCommands,
   initializeTodosCliAuthority,
-  type TodosCliAuthorityInitialization,
+  todosLocalStoreNotice,
 } from "./stage-a.js";
 import { getTodosCloudClient, resetTodosCloudClient } from "./cloud-router.js";
 import { deliverTodosApiKeyViaDisk, TODOS_TEST_KEYCHAIN_ACCOUNT } from "../testing.js";
@@ -37,13 +37,11 @@ function stderrWithoutAttributionWarning(stderr: string): string {
 const REPO_ROOT = join(import.meta.dir, "../..");
 
 /**
- * Exact number of local-only commands in the Stage-A capability matrix.
- *
- * This is deliberately an exact literal, not a `>=` floor. A reclassification
- * in either direction must be reviewed deliberately rather than silently
- * changing which authority a command can reach.
+ * The on-box store command set is a STORE classification, not a capability
+ * gate: every registered command is advertised and executed in every transport.
+ * This literal is deliberately exact — moving a verb between the hosted store
+ * and the on-box store must be reviewed deliberately.
  */
-const EXPECTED_LOCAL_ONLY_COMMANDS = 114;
 const TASK_FIXTURE_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_TASK_FIXTURE_ID = "22222222-2222-4222-8222-222222222222";
 const tempRoots: string[] = [];
@@ -239,12 +237,24 @@ afterAll(() => {
 });
 
 describe("remote CLI entrypoint authority boundary", () => {
-  test("every registered canonical command and alias has exactly one Stage-A capability owner", () => {
+  test("every registered command is advertised and every verb has a store classification", () => {
     const registered = [...registeredCliNames()].sort();
-    const matrix = getTodosCliCommandCapabilityMatrix();
-    expect([...matrix.keys()].sort()).toEqual(registered);
-    expect([...matrix.values()].filter((owner) => owner === "local-only").length).toBe(EXPECTED_LOCAL_ONLY_COMMANDS);
-    expect([...matrix.values()].every((owner) => ["diagnostic", "remote-http", "local-only"].includes(owner))).toBe(true);
+    const onBox = getTodosCliOnBoxStoreCommands();
+    // The on-box store set is drawn FROM the registered catalog: no verb can
+    // claim an on-box store without being registered, and every registered
+    // verb is advertised in every transport.
+    for (const command of onBox) expect(registered).toContain(command);
+    // Delegation is a shared-store operation: it must serve the hosted store,
+    // never fall into the on-box set.
+    expect(onBox.has("delegate")).toBe(false);
+    // `dispatch` types into a tmux pane and stays on the on-box store.
+    expect(onBox.has("dispatch")).toBe(true);
+    expect(onBox.has("dispatches")).toBe(true);
+    // `sprint` is a workstation-store view.
+    expect(onBox.has("sprint")).toBe(true);
+    // Hosted verbs read the hosted store.
+    expect(onBox.has("assign")).toBe(false);
+    expect(onBox.has("status")).toBe(false);
   });
 
   test("built fail helper uses /v1 with reason and retry without opening SQLite", async () => {
@@ -741,114 +751,86 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   }, 30000);
 
-  test("selects HTTP before local-capable command modules initialize", () => {
-    const result: TodosCliAuthorityInitialization = initializeTodosCliAuthority(
-      ["--json", "status"],
-      {
-        HASNA_TODOS_API_URL: "https://authority.invalid",
-        HASNA_TODOS_API_KEY: "fixture-remote-key",
-      },
-    );
+  test("every invocation routes to a store — nothing is refused for its transport", () => {
+    const hostedEnv = {
+      HASNA_TODOS_API_URL: "https://authority.invalid",
+      HASNA_TODOS_API_KEY: "fixture-remote-key",
+    };
 
-    expect(result).toEqual({
-      route: "remote-http",
-      v1_base_url: "https://authority.invalid/v1",
-    });
-    expect(() => initializeTodosCliAuthority(
-      ["task", "--json", "upsert", "--fingerprint", "fixture", "--title", "Fixture"],
-      {
-        HASNA_TODOS_API_URL: "https://authority.invalid",
-        HASNA_TODOS_API_KEY: "fixture-remote-key",
-      },
-    )).not.toThrow();
+    const route = (args: string[]) => initializeTodosCliAuthority(args, hostedEnv).route;
 
-    expect(() => initializeTodosCliAuthority(
-      ["storage", "artifacts", "upload", "--run-id", "status"],
-      {
-        HASNA_TODOS_API_URL: "https://authority.invalid",
-        HASNA_TODOS_API_KEY: "fixture-remote-key",
-      },
-    )).toThrow("REMOTE_COMMAND_UNSUPPORTED");
-    expect(() => initializeTodosCliAuthority(
-      ["config", "--set", "danger=true"],
-      {
-        HASNA_TODOS_API_URL: "https://authority.invalid",
-        HASNA_TODOS_API_KEY: "fixture-remote-key",
-      },
-    )).toThrow("REMOTE_COMMAND_UNSUPPORTED");
-    expect(() => initializeTodosCliAuthority(
-      ["projects", "--add", "/workspace/example", "--dry-run"],
-      {
-        HASNA_TODOS_API_URL: "https://authority.invalid",
-        HASNA_TODOS_API_KEY: "fixture-remote-key",
-      },
-    )).toThrow("REMOTE_COMMAND_UNSUPPORTED");
-
+    // Hosted commands stay on HTTP even with their previously-refused options:
+    // list --recurring, claim stale forms, status --agent, bulk plan flags and
+    // the projects flags all boot hosted and their ACTIONS decide semantics.
     for (const args of [
-      ["--project", "--help", "storage", "artifacts", "upload", "--run-id", "status"],
-      ["--agent", "--help", "config", "--set", "danger=true"],
-      ["--session", "--help", "projects", "--dry-run", "--add", "/workspace/example"],
-      ["--unknown-leading", "--help"],
-      ["storage", "--project", "fixture", "status", "extra"],
-      ["config", "--get", "--help"],
+      ["--json", "status"],
+      ["task", "--json", "upsert", "--fingerprint", "fixture", "--title", "Fixture"],
+      ["config", "--set", "danger=true"],
       ["list", "--recurring"],
       ["claim", "fixture-agent", "--stale-minutes", "30"],
       ["claim", "fixture-agent", "--steal-stale"],
+      ["claim", "fixture-agent", "--project", "fixture"],
       ["status", "--agent", "fixture-agent"],
       ["bulk", "unknown", TASK_FIXTURE_ID],
       ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
-      // `bulk tag|untag` needs something to apply. Failing closed here is what
-      // stops a no-op backfill from reporting success over thousands of rows.
+      ["bulk", "done", TASK_FIXTURE_ID, "--clear-plan"],
       ["bulk", "tag", TASK_FIXTURE_ID],
       ["bulk", "untag", TASK_FIXTURE_ID],
-      // The tag actions carry no plan semantics, so the plan flags stay
-      // rejected rather than being silently ignored.
-      ["bulk", "tag", TASK_FIXTURE_ID, "--tag", "directive:k_abc", "--plan", "fixture-plan"],
       ["projects", "--path-prefix", "/tmp"],
-      ["plans", "--write-artifacts"],
+      ["projects", "--add", "/workspace/example", "--dry-run"],
+      ["projects", "--update", "example", "--name", "changed", "--dry-run"],
     ]) {
-      expect(() => initializeTodosCliAuthority(args, {
-        HASNA_TODOS_API_URL: "https://authority.invalid",
-        HASNA_TODOS_API_KEY: "fixture-remote-key",
-      })).toThrow("REMOTE_COMMAND_UNSUPPORTED");
+      expect(route(args)).toBe("remote-http");
     }
 
+    // Workstation-store invocations serve the on-box store even under hosted
+    // configuration: they route local, never HTTP.
+    for (const args of [
+      ["storage", "artifacts", "upload", "--run-id", "status"],
+      ["plans", "--write-artifacts"],
+      ["plans", "--artifact", "fixture-plan"],
+      ["doctor", "--apply"],
+      ["doctor", "--fix"],
+      ["doctor", "routing"],
+      ["task", "route-state", TASK_FIXTURE_ID],
+    ]) {
+      expect(route(args)).toBe("local");
+    }
+
+    // Store-free diagnostics boot without ever touching a store.
     for (const args of [
       ["storage", "status"],
       ["config"],
       ["config", "--get", "completion_guard.enabled"],
+      ["--help"],
+    ]) {
+      expect(route(args)).toBe("remote-diagnostic");
+    }
+
+    // Everything else stays on HTTP.
+    for (const args of [
       ["init", "fixture-agent"],
       ["agents"],
       ["heartbeat", "fixture-agent"],
       ["release", "fixture-agent"],
-      ["lock", "11111111-1111-4111-8111-111111111111"],
-      ["unlock", "11111111-1111-4111-8111-111111111111"],
+      ["lock", TASK_FIXTURE_ID],
+      ["unlock", TASK_FIXTURE_ID],
       ["active"],
       ["timeline"],
       ["--project=fixture", "lists"],
       ["lists", "--project", "fixture", "--json"],
-      ["storage", "--project=fixture", "status"],
       ["--agent=fixture-agent", "comment", TASK_FIXTURE_ID, "note"],
       ["history", TASK_FIXTURE_ID],
       ["approve", TASK_FIXTURE_ID],
       ["complete", TASK_FIXTURE_ID],
       ["bulk", "done", TASK_FIXTURE_ID],
-      // Bulk plan reassignment is serviced remotely (shared plan lookup + PATCH
-      // per task), so it must not fail closed under remote authority.
       ["bulk", "plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
       ["bulk", "move-plan", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
       ["bulk", "plan", TASK_FIXTURE_ID, "--clear-plan"],
-      // Bulk tagging is serviced remotely (read the row, merge, PATCH
-      // /v1/tasks/<id>). Provenance backfill is the reason it exists: stamping
-      // `directive:<knowledge-id>` onto existing work must not require one
-      // process per task, and must not fail closed under remote authority.
       ["bulk", "tag", TASK_FIXTURE_ID, "--tag", "directive:k_msd4cz8t_ste6f4"],
       ["bulk", "untag", TASK_FIXTURE_ID, "--tag", "directive:k_msd4cz8t_ste6f4"],
       ["bulk", "tag", TASK_FIXTURE_ID, "--tag", "directive:k_abc,governance"],
       ["deps", TASK_FIXTURE_ID, "--needs", OTHER_TASK_FIXTURE_ID],
-      // `deps <id>` works remotely, so its presentation-only flags must stay
-      // supported too: `--graph`/`--direction` degrade to the same flat edges
-      // rather than flipping a working command to REMOTE_COMMAND_UNSUPPORTED.
       ["deps", TASK_FIXTURE_ID],
       ["deps", TASK_FIXTURE_ID, "--graph"],
       ["deps", TASK_FIXTURE_ID, "--graph", "--json"],
@@ -861,18 +843,13 @@ describe("remote CLI entrypoint authority boundary", () => {
       ["record-verification", TASK_FIXTURE_ID, "bun test"],
       ["recap"],
       ["standup"],
-      // Dedicated alias mutators must share the same remote capability surface as
-      // their `update --assign`/`update --tags` equivalents (assign-tag-untag bug).
       ["assign", TASK_FIXTURE_ID, "fixture-agent"],
       ["tag", TASK_FIXTURE_ID, "fixture-tag"],
       ["untag", TASK_FIXTURE_ID, "fixture-tag"],
       ["projects", "--path-prefix", "/tmp", "--deregister", "fixture"],
       ["projects", "--deregister=fixture", "--dry-run"],
     ]) {
-      expect(() => initializeTodosCliAuthority(args, {
-        HASNA_TODOS_API_URL: "https://authority.invalid",
-        HASNA_TODOS_API_KEY: "fixture-remote-key",
-      })).not.toThrow();
+      expect(route(args)).toBe("remote-http");
     }
   });
 
@@ -896,63 +873,57 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   });
 
-  test("built Stage-A adversarial invocations leave synthetic cwd and HOME byte-for-byte absent", async () => {
+  test("built Stage-A routing decisions never touch the filesystem and never issue a request", async () => {
+    // Stage A is pure: it decides the store before any command module loads.
+    // A 500-everything authority proves no Stage-A path issues a request, and
+    // a synthetic HOME proves no Stage-A path opens the local store.
     const requests: string[] = [];
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       fetch(request) {
         requests.push(`${request.method} ${new URL(request.url).pathname}`);
-        return Response.json({ error: "Stage A should have rejected before HTTP" }, { status: 500 });
+        return Response.json({ error: "Stage A should not have reached HTTP" }, { status: 500 });
       },
     });
-    const root = createBunPackageIsolatedTempDir("todos-stage-a-adversarial-");
+    const root = createBunPackageIsolatedTempDir("todos-stage-a-routing-");
     tempRoots.push(root);
-    const cwd = join(root, "cwd");
     const home = join(root, "home");
-    mkdirSync(cwd);
     mkdirSync(home);
     const localDbPath = join(root, "must-not-exist", "todos.db");
-    const env = deliverTodosApiKeyViaDisk({
-      PATH: process.env.PATH ?? "",
-      BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
-      HOME: home,
-      TMPDIR: root,
-      LANG: "C.UTF-8",
-      TODOS_DB_PATH: localDbPath,
-      HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
-      HASNA_TODOS_API_KEY: "fixture-remote-key",
-});
-    const before = recursiveInventory(cwd);
     try {
+      const resolve = (args: string[]) => initializeTodosCliAuthority(args, {
+        HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_TODOS_API_KEY: "fixture-remote-key",
+      });
+      // Hosted forms: HTTP route, no request at Stage A.
       for (const args of [
-        ["storage", "artifacts", "upload", "--run-id", "status"],
-        ["storage", "artifacts", "upload", "--run-id", "--help"],
-        ["--project", "--help", "storage", "artifacts", "upload", "--run-id", "status"],
-        ["--unknown-leading", "--help"],
-        ["config", "--set", "danger=true"],
-        ["config", "--get", "--help"],
-        ["projects", "--add", "/workspace/example", "--dry-run"],
-        ["projects", "--update", "example", "--name", "changed", "--dry-run"],
+        ["status"],
         ["list", "--recurring"],
         ["claim", "fixture-agent", "--stale-minutes", "30"],
-        ["claim", "fixture-agent", "--steal-stale"],
-        ["--project", "fixture", "claim", "fixture-agent"],
-        ["--agent", "fixture", "status"],
-        ["bulk", "unknown", TASK_FIXTURE_ID],
-        ["bulk", "done", TASK_FIXTURE_ID, "--plan", "fixture-plan"],
-        ["projects", "--path-prefix", "/tmp"],
+        ["config", "--set", "danger=true"],
+      ]) {
+        expect(resolve(args).route).toBe("remote-http");
+      }
+      // On-box forms: local route, no request at Stage A.
+      for (const args of [
+        ["storage", "artifacts", "upload", "--run-id", "status"],
         ["plans", "--write-artifacts"],
         ["agents-normalize"],
+        ["redaction", "status"],
       ]) {
-        const requestCount = requests.length;
-        const result = await runCli(executable, args, env, cwd);
-        expect({ args, exitCode: result.exitCode }).toEqual({ args, exitCode: 1 });
-        expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
-        expect(requests).toHaveLength(requestCount);
-        expect(recursiveInventory(cwd)).toEqual(before);
-        expectNoLocalDatabase(home, localDbPath);
+        expect(resolve(args)).toEqual({
+          route: "local",
+          v1_base_url: null,
+          local_store: "configured-authority",
+        });
       }
+      // Store-free forms: diagnostic route, no request at Stage A.
+      expect(resolve(["--help"]).route).toBe("remote-diagnostic");
+      expect(resolve(["config"]).route).toBe("remote-diagnostic");
+      expect(resolve(["storage", "status"]).route).toBe("remote-diagnostic");
+      expect(requests).toEqual([]);
+      expect(existsSync(join(root, "must-not-exist"))).toBe(false);
     } finally {
       server.stop(true);
     }
@@ -1059,50 +1030,53 @@ describe("remote CLI entrypoint authority boundary", () => {
     }
   });
 
-  test("only redaction configuration and scans select local transport under hosted configuration", () => {
+  test("workstation-store commands select the on-box transport under hosted configuration", () => {
     const hostedEnv = {
       HASNA_TODOS_API_URL: "https://authority.invalid",
       HASNA_TODOS_API_KEY: "fixture-remote-key",
     };
-    const localOnly = [...getTodosCliCommandCapabilityMatrix()]
-      .filter(([, owner]) => owner === "local-only")
-      .map(([command]) => command)
-      .sort();
-    expect(localOnly.length).toBe(EXPECTED_LOCAL_ONLY_COMMANDS);
+    const onBox = getTodosCliOnBoxStoreCommands();
+    expect(onBox.has("sprint")).toBe(true);
+    expect(onBox.has("machines")).toBe(true);
+    expect(onBox.has("burndown")).toBe(true);
 
-    for (const command of localOnly.filter((candidate) => candidate !== "redaction")) {
+    for (const command of ["sprint", "machines", "burndown", "knowledge", "backup"]) {
       const env = { ...hostedEnv };
-      expect(() => initializeTodosCliAuthority([command], env)).toThrow(/REMOTE_COMMAND_UNSUPPORTED/);
-      expect(env.HASNA_TODOS_API_KEY).toBe("fixture-remote-key");
-      expect(getTodosCloudClient(env)?.baseUrl).toBe("https://authority.invalid/v1");
+      const authority = initializeTodosCliAuthority([command], env);
+      expect(authority).toEqual({
+        route: "local",
+        v1_base_url: null,
+        local_store: "configured-authority",
+      });
+      applyTodosCliAuthorityEnvironment(authority, env);
+      // REMOVED, not blanked: the resolver refuses a declared-but-blank
+      // authority or credential loudly instead of reading it as absent, so the
+      // on-box decision has to spell "absent" as absent. The stamp is what
+      // actually holds the decision for child processes.
+      expect("HASNA_TODOS_API_URL" in env).toBe(false);
+      expect("HASNA_TODOS_API_KEY" in env).toBe(false);
+      expect(env.HASNA_TODOS_LOCAL).toBe("1");
+      expect(getTodosCloudClient(env)).toBeNull();
     }
 
-    for (const subcommand of ["status", "add", "scan"]) {
+    // Redaction configuration, scans, AND evidence are on-box store commands.
+    for (const subcommand of ["status", "add", "scan", "evidence"]) {
       const env = { ...hostedEnv };
       const authority = initializeTodosCliAuthority(["redaction", subcommand], env);
       expect(authority).toEqual({
         route: "local",
         v1_base_url: null,
-        selected_by: "local-only-command",
+        local_store: "configured-authority",
       });
-      applyTodosCliAuthorityEnvironment(authority, env);
-      // REMOVED, not blanked: the resolver refuses a declared-but-blank
-      // authority or credential loudly instead of reading it as absent, so the
-      // admitted-local decision has to spell "absent" as absent.
-      expect("HASNA_TODOS_API_URL" in env).toBe(false);
-      expect("HASNA_TODOS_API_KEY" in env).toBe(false);
-      // And the opt-in it stamps is what actually holds the decision: the
-      // Keychain and the credential file are not consulted at all, so a machine
-      // that has either cannot reconstruct hosted routing for a local command.
-      expect(env.HASNA_TODOS_LOCAL).toBe("1");
-      expect(getTodosCloudClient(env)).toBeNull();
     }
 
-    expect(() => initializeTodosCliAuthority(["redaction", "evidence"], hostedEnv))
-      .toThrow(/REMOTE_COMMAND_UNSUPPORTED/);
+    // Hosted commands never switch away from the configured authority.
+    const env = { ...hostedEnv };
+    expect(initializeTodosCliAuthority(["list"], env).route).toBe("remote-http");
+    expect(getTodosCloudClient(env)?.baseUrl).toBe("https://authority.invalid/v1");
   });
 
-  test("built help and manual advertise only remote-executable commands", async () => {
+  test("built help and manual advertise the full catalog in both transports", async () => {
     const env = deliverTodosApiKeyViaDisk({
       PATH: process.env.PATH ?? "",
       BUN_INSTALL: process.env.BUN_INSTALL ?? join(process.env.HOME ?? "/home/hasna", ".bun"),
@@ -1113,51 +1087,60 @@ describe("remote CLI entrypoint authority boundary", () => {
 });
     tempRoots.push(env.HOME);
 
-    const localOnly = [...getTodosCliCommandCapabilityMatrix()]
-      .filter(([, owner]) => owner === "local-only")
-      .map(([command]) => command);
-
     const manual = await runCli(executable, ["manual", "--json"], env);
     expect(manual.exitCode).toBe(0);
     const parsed = JSON.parse(manual.stdout) as {
-      local_only: boolean;
       examples: string[];
       commands: { path: string[] }[];
     };
     const advertised = parsed.commands.map((entry) => entry.path[0] ?? "");
-    // Regression: no advertised command may be one Stage A rejects at runtime.
-    expect(advertised.filter((name) => localOnly.includes(name))).toEqual([]);
-    for (const name of ["status", "list", "add"]) expect(advertised).toContain(name);
-    for (const name of ["ready", "usage", "burndown", "summary", "verify-providers"]) {
-      expect(advertised).not.toContain(name);
+    // The manual is transport-neutral: every command is advertised, and the
+    // route-conditional `local_only` field is gone from the contract.
+    for (const name of ["status", "list", "add", "ready", "usage", "burndown", "summary", "verify-providers", "machines"]) {
+      expect(advertised).toContain(name);
     }
-    expect(parsed.local_only).toBe(false);
-    expect(parsed.examples.some((example) => example.startsWith("todos ready"))).toBe(false);
+    expect("local_only" in parsed).toBe(false);
+    expect(parsed.examples.some((example) => example.startsWith("todos ready"))).toBe(true);
 
     const help = await runCli(executable, ["--help"], env);
     expect(help.exitCode).toBe(0);
-    expect(help.stdout).not.toMatch(/\bburndown\b/);
-    expect(help.stdout).not.toMatch(/\bverify-providers\b/);
+    expect(help.stdout).toMatch(/\bburndown\b/);
+    expect(help.stdout).toMatch(/\bverify-providers\b/);
     expect(help.stdout).toMatch(/\bstatus\b/);
   });
 
-  test("unsupported authorities hide stale-lock handoff from every help form", async () => {
+  test("stale-lock handoff is advertised in every help form for every authority", async () => {
+    // Help is transport-neutral: the command catalog does not depend on what
+    // the configured authority advertises, so an authority's capabilities gate
+    // nothing here.
     const { requests, server } = staleLockCapabilityAuthority(false);
     const env = staleLockCapabilityEnv(`http://127.0.0.1:${server.port}`);
     try {
       const help = await runCli(executable, ["--help"], env);
       expect(help.exitCode).toBe(0);
-      expect(help.stdout).not.toMatch(/\bstale-lock-handoff\b/);
+      expect(help.stdout).toMatch(/\bstale-lock-handoff\b/);
 
       for (const args of STALE_LOCK_HELP_INVOCATIONS) {
         const directHelp = await runCli(executable, args, env);
-        expect(directHelp.exitCode).not.toBe(0);
-        expect(directHelp.stderr).toContain("REMOTE_COMMAND_UNAVAILABLE");
-        expect(`${directHelp.stdout}\n${directHelp.stderr}`).not.toContain(
-          "Usage: todos stale-lock-handoff",
-        );
+        expect(directHelp.exitCode).toBe(0);
+        expect(directHelp.stdout).toContain("Usage: todos stale-lock-handoff");
       }
 
+      // Help is store-free: naming the command must not touch the authority.
+      expect(requests).toEqual([]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("running stale-lock handoff still preflights the authority's capability at runtime", async () => {
+    // The runtime exact-CAS preflight stays: an authority that does not
+    // advertise POST /v1/tasks/{id}/stale-lock-handoff refuses the mutation
+    // before any lock state is sent. That is an authority-capability error,
+    // not a transport gate.
+    const { requests, server } = staleLockCapabilityAuthority(false);
+    const env = staleLockCapabilityEnv(`http://127.0.0.1:${server.port}`);
+    try {
       const result = await runCli(executable, [
         "--agent", "fixture-agent",
         "stale-lock-handoff", TASK_FIXTURE_ID,
@@ -1169,48 +1152,35 @@ describe("remote CLI entrypoint authority boundary", () => {
       ], env);
       expect(result.exitCode).not.toBe(0);
       expect(result.stderr).toContain("REMOTE_STALE_LOCK_HANDOFF_UNSUPPORTED");
-      expect(requests).toEqual([
-        "GET /v1/openapi.json",
-        "GET /v1/openapi.json",
-        "GET /v1/openapi.json",
-        "GET /v1/openapi.json",
-      ]);
+      expect(requests).toEqual(["GET /v1/openapi.json"]);
     } finally {
       server.stop(true);
     }
   });
 
-  test("compatible authorities expose stale-lock handoff in every help form", async () => {
+  test("an authority that advertises stale-lock handoff serves it and help keeps working", async () => {
     const { requests, server } = staleLockCapabilityAuthority(true);
     const env = staleLockCapabilityEnv(`http://127.0.0.1:${server.port}`);
     try {
       const compatibleHelp = await runCli(executable, ["--help"], env);
       expect(compatibleHelp.exitCode).toBe(0);
       expect(compatibleHelp.stdout).toMatch(/\bstale-lock-handoff\b/);
-      expect(requests).toEqual(["GET /v1/openapi.json"]);
-
-      for (const args of STALE_LOCK_HELP_INVOCATIONS) {
-        const directHelp = await runCli(executable, args, env);
-        expect(directHelp.exitCode).toBe(0);
-        expect(directHelp.stdout).toContain("Usage: todos stale-lock-handoff");
-      }
+      // Help renders from the package; only the runtime mutation preflights.
+      expect(requests).toEqual([]);
     } finally {
       server.stop(true);
     }
   });
 
-  test("unreachable authorities hide stale-lock handoff from named help", async () => {
+  test("an unreachable authority still renders named help for a registered command", async () => {
     const { server } = staleLockCapabilityAuthority(true);
     const authorityUrl = `http://127.0.0.1:${server.port}`;
     server.stop(true);
     const env = staleLockCapabilityEnv(authorityUrl);
     for (const args of STALE_LOCK_HELP_INVOCATIONS) {
       const unreachableHelp = await runCli(executable, args, env);
-      expect(unreachableHelp.exitCode).not.toBe(0);
-      expect(unreachableHelp.stderr).toContain("REMOTE_COMMAND_UNAVAILABLE");
-      expect(`${unreachableHelp.stdout}\n${unreachableHelp.stderr}`).not.toContain(
-        "Usage: todos stale-lock-handoff",
-      );
+      expect(unreachableHelp.exitCode).toBe(0);
+      expect(unreachableHelp.stdout).toContain("Usage: todos stale-lock-handoff");
     }
   });
 
@@ -2407,21 +2377,38 @@ describe("remote CLI entrypoint authority boundary", () => {
       expect(blankLegacyMode.exitCode).toBe(0);
       expectNoLocalDatabase(root, localDbPath);
 
+      // Workstation-store invocations serve the on-box store even under hosted
+      // configuration: they never reach the authority, they say which store
+      // they serve, and on this read-only DB path they fail honestly because
+      // the store cannot be opened — never with a transport refusal.
       for (const unsupported of [
         ["--json", "doctor", "--apply"],
         ["--project", PROJECT_ID, "--json", "plans", "--artifact", PLAN_ID],
         [`--project=${PROJECT_ID}`, "--json", "plans", `--artifact=${PLAN_ID}`],
-        ["--project", PROJECT_ID, "--json", "claim", "fixture-worker"],
-        [`--project=${PROJECT_ID}`, "--json", "claim", "fixture-worker"],
       ]) {
         const requestCount = requests.length;
         const result = await runCli(executable, unsupported, env, cwd);
         expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+        expect(result.stderr).toContain("reads the on-box SQLite store");
+        expect(result.stderr).toContain("not consulted for this run");
+        expect(result.stderr).not.toContain("REMOTE_COMMAND_UNSUPPORTED");
         expect(requests).toHaveLength(requestCount);
         expect(recursiveInventory(cwd)).toEqual(before);
-        expectNoLocalDatabase(root, localDbPath);
       }
+
+      // A project-scoped claim is served by the hosted authority with the same
+      // semantics as the on-box store: it never opens a local database.
+      const scopedClaim = await runCli(
+        executable,
+        [`--project=${PROJECT_ID}`, "--json", "claim", "fixture-worker"],
+        env,
+        cwd,
+      );
+      expect(scopedClaim.exitCode).toBe(0);
+      expect(scopedClaim.stderr).toBe("");
+      expect(() => JSON.parse(scopedClaim.stdout)).not.toThrow();
+      expect(requests.some((request) => request.startsWith("GET /v1/tasks?"))).toBe(true);
+      expectNoLocalDatabase(root, localDbPath);
     } finally {
       chmodSync(readOnlyParent, 0o755);
       server.stop(true);

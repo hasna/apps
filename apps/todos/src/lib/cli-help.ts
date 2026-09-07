@@ -22,7 +22,6 @@ export interface CliManual {
   title: string;
   synopsis: string;
   package_name: string;
-  local_only: boolean;
   install: string[];
   update: string[];
   completion_shells: CompletionShell[];
@@ -88,14 +87,10 @@ export function collectCliCommandEntries(program: Command, prefix: string[] = []
 export interface CreateCliManualOptions {
   /**
    * Predicate deciding whether a top-level command is advertised in the manual.
-   * Defaults to advertising everything (local route). In a remote route the
-   * caller passes the authority visibility predicate so the manual describes
-   * the shared authority surface; admitted workstation redaction invocations
-   * select a separate local route.
+   * Defaults to advertising everything — the command catalog is identical in
+   * every transport, so the manual always describes the full surface.
    */
   isCommandVisible?: (topLevelCommand: string) => boolean;
-  /** Whether the resolved route serves entirely from local state. */
-  localOnly?: boolean;
 }
 
 function exampleCommand(example: string): string | undefined {
@@ -114,7 +109,6 @@ export function createCliManual(program: Command, options: CreateCliManualOption
     title: "todos(1)",
     synopsis: "todos [global options] <command> [command options]",
     package_name: "@hasna/todos",
-    local_only: options.localOnly ?? true,
     install: ["bun install -g @hasna/todos"],
     update: ["bun install -g @hasna/todos", "todos upgrade"],
     completion_shells: COMPLETION_SHELLS,

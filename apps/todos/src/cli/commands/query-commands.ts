@@ -77,7 +77,7 @@ import {
   cloudTaskStats,
   cloudRecentActivity,
   cloudNextTask,
-  cloudClaimNext,
+  cloudClaimBest,
   cloudResolveProjectRef,
   cloudBlockingDepsMap,
   cloudRecap,
@@ -327,11 +327,19 @@ export function registerQueryCommands(program: Command) {
       const globalOpts = program.opts();
       const json = opts.json || globalOpts.json;
       const cloud = getTodosCloudClient();
+      // The hosted surface serves the same claim semantics in every transport:
+      // a project-scoped or steal-stale claim is composed from bounded reads
+      // plus the exact-task routes (see `cloudClaimBest`).
       if (cloud) {
-        const task = await cloudClaimNext(cloud, agent);
+        const projectRef = opts.project || globalOpts.project;
+        const task = await cloudClaimBest(cloud, agent, {
+          ...(projectRef ? { project_id: await cloudResolveProjectRef(cloud, projectRef) } : {}),
+          steal_stale: Boolean(opts.stealStale),
+          stale_minutes: parseInt(opts.staleMinutes, 10),
+        });
         if (!task) {
           if (json) { console.log(JSON.stringify(null)); return; }
-          console.log(chalk.dim("No tasks available to claim."));
+          console.log(chalk.dim(opts.stealStale ? "No stale tasks available to steal." : "No tasks available to claim."));
           return;
         }
         if (json) { console.log(JSON.stringify(task, null, 2)); return; }
@@ -400,13 +408,17 @@ export function registerQueryCommands(program: Command) {
         // http authority routing: build the health snapshot from the shared
         // cloud dataset (counts + active/next lists) instead of the local mirror.
         const baseFilter = projectId ? { project_id: projectId } : {};
+        // `--agent <id>` scopes the "next up" read to that agent's pending
+        // queue: the shared dataset is queried directly, matching the local
+        // `getStatus(..., opts.agent, ...)` semantics.
+        const agentFilter = opts.agent ? { ...baseFilter, assigned_to: opts.agent } : baseFilter;
         const [stats, pending, in_progress, completed, activeTasks, nextTasks] = await Promise.all([
           cloudGetStats(cloud),
           cloudCountTasks(cloud, { ...baseFilter, status: "pending" } as never),
           cloudCountTasks(cloud, { ...baseFilter, status: "in_progress" } as never),
           cloudCountTasks(cloud, { ...baseFilter, status: "completed" } as never),
           cloudListTasks(cloud, { ...baseFilter, status: "in_progress", limit: 5 } as never),
-          cloudListTasks(cloud, { ...baseFilter, status: "pending", limit: 1 } as never),
+          cloudListTasks(cloud, { ...agentFilter, status: "pending", limit: 1 } as never),
         ]);
         s = {
           source: "cloud",
@@ -964,12 +976,9 @@ export function registerQueryCommands(program: Command) {
       const jsonMode = Boolean(opts.json || globalOpts.json);
       const cloud = getTodosCloudClient();
       if (cloud) {
-        // Guarded before any request: --apply must never reach a shared authority.
-        if (opts.apply || opts.fix) {
-          handleError(new Error(
-            "REMOTE_COMMAND_UNSUPPORTED: doctor --apply cannot repair a remote /v1 authority; local SQLite fallback is disabled",
-          ));
-        }
+        // Stage A routes `doctor --apply` / `doctor --fix` to the on-box store
+        // (they repair the on-box schema), so this branch only ever runs for
+        // the read-only diagnostic against the shared authority.
         const [stats, projects, taskLists, plans] = await Promise.all([
           cloudGetStats(cloud),
           cloudListProjects(cloud),

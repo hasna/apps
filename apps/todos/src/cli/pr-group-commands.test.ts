@@ -22,6 +22,11 @@ function childEnv(): Record<string, string> {
   delete env["HASNA_TODOS_MODE"];
   delete env["TODOS_MODE"];
   env["HASNA_TODOS_DB_PATH"] = dbPath;
+  // Isolate from the machine's real credential stores: on a station with
+  // ~/.hasna/todos/config/credentials the resolver would refuse a fixture
+  // authority that disagrees with the real one (REMOTE_API_URL_INVALID), so a
+  // fixture run must operate from a home that carries no credentials file.
+  env["HOME"] = dir;
   return env;
 }
 

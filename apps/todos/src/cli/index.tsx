@@ -2,18 +2,11 @@
 import { Command } from "commander";
 import { getPackageVersion } from "../lib/package-version.js";
 import {
-  announceTodosCliLocalMode,
+  announceTodosCliStore,
   applyTodosCliAuthorityEnvironment,
-  applyTodosCliHelpVisibility,
-  getUnavailableTodosCliRemoteMetadataCommand,
   initializeTodosCliAuthority,
   type TodosCliAuthorityInitialization,
 } from "./stage-a.js";
-import {
-  getTodosCloudClient,
-  getTodosRemoteCommandCapabilities,
-  type TodosRemoteCommandCapability,
-} from "./cloud-router.js";
 
 const program = new Command();
 
@@ -200,28 +193,16 @@ program
 let authority: TodosCliAuthorityInitialization;
 try {
   authority = initializeTodosCliAuthority();
+  // Say it out loud: a run that serves the on-box store must never be
+  // mistakable for a hosted one with an empty store (hasna/apps#1720).
+  announceTodosCliStore(authority);
+  // An on-box run deletes the hosted authority variables so no later
+  // `getTodosCloudClient()` call and no child process can reconstruct hosted
+  // routing.
   applyTodosCliAuthorityEnvironment(authority);
-  // Say it out loud: a local run must never be mistakable for a hosted one with
-  // an empty store (hasna/apps#1720).
-  announceTodosCliLocalMode(authority);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
-}
-
-let remoteCommandCapabilities: ReadonlySet<TodosRemoteCommandCapability> = new Set();
-const metadataRequested = authority.route === "remote-diagnostic";
-if (authority.route !== "local" && metadataRequested) {
-  try {
-    const client = getTodosCloudClient();
-    if (client) {
-      remoteCommandCapabilities = await getTodosRemoteCommandCapabilities(client);
-    }
-  } catch {
-    // Remote metadata fails closed: an unreachable or older authority cannot
-    // make a version-gated mutation appear executable in help or completions.
-    remoteCommandCapabilities = new Set();
-  }
 }
 
 const [
@@ -335,12 +316,7 @@ registerPrGroupCommands(program);
 registerTaskManifestCommands(program);
 registerTaskSubtreeTransferCommands(program);
 await registerOptionalEventsCommands(program);
-registerHelpCommands(program, authority.route, remoteCommandCapabilities);
-
-// Remote metadata describes the authority-served catalog. An admitted local
-// redaction invocation is a separate Stage-A route that pins the process to
-// local storage before the command modules above are imported.
-applyTodosCliHelpVisibility(program, authority.route, remoteCommandCapabilities);
+registerHelpCommands(program);
 
 // Single top-level guard: any error thrown from an async action handler (e.g. a
 // TaskNotFoundError when a full UUID references a task absent from the local
@@ -356,19 +332,6 @@ try {
       `ACTIVE_FORMAT_UNSUPPORTED: ${activeFormat} is not supported by todos active; ` +
         "use --json for machine-readable output",
     );
-  }
-  if (metadataRequested) {
-    const unavailableCommand = getUnavailableTodosCliRemoteMetadataCommand(
-      authority.route,
-      remoteCommandCapabilities,
-      process.argv.slice(2),
-    );
-    if (unavailableCommand) {
-      throw new Error(
-        `REMOTE_COMMAND_UNAVAILABLE: configured Todos authority does not advertise ${unavailableCommand}; ` +
-          "help is unavailable for this command",
-      );
-    }
   }
   await program.parseAsync();
 } catch (err) {

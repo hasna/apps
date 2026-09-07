@@ -21,7 +21,7 @@
  * an absolute path, an env key NAME) and on observable routing.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { KeychainCommandResult } from "@hasna/contracts/client";
@@ -220,6 +220,61 @@ describe("tier 4 — ~/.hasna/todos/config/credentials", () => {
     const home = tempHome("disk-absent");
     const resolution = resolveTodosCliTransport({ HOME: home, HASNA_TODOS_API_KEY: ENV_KEY });
     expect(resolution.authority!.apiKeyTier).toBe("env");
+  });
+});
+
+// The station credential contract: a fully scrubbed run must resolve the
+// machine's own `~/.hasna/todos/config/credentials`. The probe below reads
+// that file read-only and runs the CLI with `env -i`-equivalent variables; it
+// skips entirely on machines that carry no such file.
+const machineHome = process.env["HOME"] ?? "";
+const machineCredentialsFile = machineHome
+  ? join(machineHome, ...TODOS_CREDENTIALS_FILE_SEGMENTS)
+  : "";
+const machineCredentialsUrlLine = existsSync(machineCredentialsFile)
+  ? readFileSync(machineCredentialsFile, "utf8").split("\n")
+    .find((line) => line.startsWith("HASNA_TODOS_API_URL="))
+  : undefined;
+
+describe.skipIf(!machineCredentialsUrlLine)("tier 4b — the machine's own credentials file, no sourced env", () => {
+  test("a fully scrubbed `env -i` run resolves the machine's own credentials file", async () => {
+    // `todos storage status --json` resolves the FULL credential chain and
+    // reports the SOURCES without opening a network connection or a local
+    // store, so this is the read-only probe that proves pickup. It never
+    // mutates the file, and the run's env is only HOME, USER and PATH.
+    const scrubbedEnv: Record<string, string> = Object.fromEntries(
+      ["HOME", "USER", "PATH"].map((key) => [key, process.env[key] ?? ""]),
+    );
+    const proc = Bun.spawn(
+      ["bun", "run", "src/cli/index.tsx", "storage", "status", "--json"],
+      { cwd: join(import.meta.dir, "../.."), env: scrubbedEnv, stdout: "pipe", stderr: "pipe" },
+    );
+    const [[stdout, stderr], exitCode] = await Promise.all([
+      Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]),
+      proc.exited,
+    ]);
+
+    expect(stderr).toBe("");
+    expect(exitCode).toBe(0);
+    const report = JSON.parse(stdout) as {
+      mode: string;
+      remote_authority: {
+        ok: boolean;
+        api_key_source: string;
+        api_url_source: string;
+        api_key_tier: string;
+        v1_base_url: string;
+      };
+    };
+    // The disk tier supplied BOTH halves, from the machine's own file.
+    expect(report.mode).toBe("http");
+    expect(report.remote_authority).toMatchObject({
+      ok: true,
+      api_key_tier: "disk",
+      api_key_source: machineCredentialsFile,
+      api_url_source: machineCredentialsFile,
+      v1_base_url: `${machineCredentialsUrlLine!.split("=", 2)[1]!.replace(/\/+$/, "")}/v1`,
+    });
   });
 });
 

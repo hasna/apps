@@ -355,15 +355,48 @@ describe("todos doctor against a remote /v1 authority", () => {
     }
   });
 
-  test("--apply against a remote authority still refuses before issuing any request", async () => {
+  test("--apply serves the on-box store and never reaches the configured authority", async () => {
+    // The repair flags are workstation-store semantics: Stage A routes them to
+    // the on-box store even when a hosted authority is configured, fixes the
+    // on-box schema, and says which store the run served. The configured
+    // authority is never consulted.
     const { server, requests } = startFixtureAuthority({ taskLists: [] });
+    const applyRoot = mkdtempSync(join(tmpdir(), "todos-doctor-apply-"));
+    mkdirSync(join(applyRoot, "home"), { recursive: true });
+    const dbPath = join(applyRoot, "doctor.db");
     try {
-      const result = await runRemoteCli(["--json", "doctor", "--apply"], server.port);
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("REMOTE_COMMAND_UNSUPPORTED");
+      const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", "--json", "doctor", "--apply"], {
+        cwd: CWD,
+        env: deliverTodosApiKeyViaDisk({
+          PATH: process.env["PATH"] ?? "",
+          BUN_INSTALL: process.env["BUN_INSTALL"] ?? join(process.env["HOME"] ?? "/home/hasna", ".bun"),
+          HOME: join(applyRoot, "home"),
+          TMPDIR: applyRoot,
+          LANG: "C.UTF-8",
+          TODOS_AUTO_PROJECT: "false",
+          TODOS_DB_PATH: dbPath,
+          HASNA_TODOS_API_URL: `http://127.0.0.1:${server.port}`,
+          HASNA_TODOS_API_KEY: "fixture-remote-key",
+        }),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
       expect(requests).toEqual([]);
+      // The run says which store it served, so it cannot read as a hosted read.
+      expect(stderr).toContain("reads the on-box SQLite store");
+      expect(stderr).toContain("not consulted for this run");
+      // The on-box store was actually served and repaired.
+      expect(existsSync(dbPath)).toBe(true);
+      const report = JSON.parse(stdout) as { ok: boolean; dry_run: boolean; exit_code: number };
+      expect(report).toMatchObject({ ok: true, dry_run: false, exit_code: 0 });
     } finally {
       server.stop(true);
+      rmSync(applyRoot, { recursive: true, force: true });
     }
   });
 });

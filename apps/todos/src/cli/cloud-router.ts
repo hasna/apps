@@ -3753,6 +3753,193 @@ export async function cloudClaimNext(client: HasnaStorageClient, agentId: string
   return task && (task as Task).id ? task : null;
 }
 
+const CLAIM_SCAN_CEILING = 1000;
+
+const CLAIM_PRIORITY_RANK: Record<string, number> = {
+  critical: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+};
+
+function claimPriorityRank(task: Task): number {
+  return CLAIM_PRIORITY_RANK[task.priority ?? ""] ?? 4;
+}
+
+/** The highest-priority pending task (earliest created_at breaks ties). */
+function bestPendingTask(tasks: readonly Task[]): Task | null {
+  let best: Task | null = null;
+  for (const task of tasks) {
+    if (!best) {
+      best = task;
+      continue;
+    }
+    const bestRank = claimPriorityRank(best);
+    const rank = claimPriorityRank(task);
+    if (rank < bestRank || (rank === bestRank && new Date(task.created_at).getTime() > new Date(best.created_at).getTime())) {
+      best = task;
+    }
+  }
+  return best;
+}
+
+/** In_progress tasks whose lock is older than `staleMinutes` and held by another agent. */
+function staleTaskCandidates(tasks: readonly Task[], agentId: string, staleMinutes: number): Task[] {
+  const cutoff = Date.now() - staleMinutes * 60_000;
+  return tasks.filter(
+    (task) =>
+      task.status === "in_progress" &&
+      (task.locked_by ?? "") !== "" &&
+      task.locked_by !== agentId &&
+      (task.locked_at ?? "") !== "" &&
+      new Date(task.locked_at!).getTime() <= cutoff,
+  );
+}
+
+function isStartConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const status = (error as { status?: unknown }).status;
+  const code = (error as { code?: unknown }).code ?? (error as { error?: { code?: unknown } }).error?.code;
+  return status === 409 ||
+    code === "TASK_NOT_STARTABLE" ||
+    code === "STALE_TASK_LOCK" ||
+    code === "TASK_LOCK_VERSION_MISMATCH" ||
+    code === "TASK_LOCK_HOLDER_MISMATCH";
+}
+
+/**
+ * Steal the highest-priority stale task from another agent through the hosted
+ * stale-lock-handoff CAS route. Returns the handed-off task, or null when no
+ * stale candidate exists within the read ceiling. An authority that does not
+ * advertise the handoff route fails the capability preflight with
+ * REMOTE_STALE_LOCK_HANDOFF_UNSUPPORTED — a runtime authority-capability
+ * error, not a transport gate.
+ */
+export async function cloudStealStaleTask(
+  client: HasnaStorageClient,
+  agentId: string,
+  staleMinutes: number,
+): Promise<Task | null> {
+  const candidates = staleTaskCandidates(
+    await cloudListTasks(client, { status: "in_progress", limit: CLAIM_SCAN_CEILING } as never),
+    agentId,
+    staleMinutes,
+  );
+  candidates.sort((left, right) => {
+    const rankDelta = claimPriorityRank(left) - claimPriorityRank(right);
+    if (rankDelta !== 0) return rankDelta;
+    return new Date(left.locked_at!).getTime() - new Date(right.locked_at!).getTime();
+  });
+  let lastError: unknown = null;
+  for (const task of candidates) {
+    try {
+      await cloudHandoffStaleTaskLock(client, {
+        task_id: task.id,
+        expected_holder: task.locked_by!,
+        expected_lock_version: task.locked_at!,
+        stale_after_seconds: staleMinutes * 60,
+        new_holder: agentId,
+        reason: "claim --steal-stale",
+      });
+      return task;
+    } catch (error) {
+      // A concurrent handoff or a no-longer-stale lock moves us to the next
+      // candidate; everything else (capability preflight, transport) rethrows.
+      if (!isStartConflict(error)) throw error;
+      lastError = error;
+    }
+  }
+  if (candidates.length > 0 && lastError) throw lastError;
+  return null;
+}
+
+/**
+ * Claim the best pending task with the same options in every transport.
+ *
+ * The hosted /v1 atomically claims the server-side "next" task with no
+ * project scoping, so the scoped forms are composed from bounded reads plus
+ * the exact-task routes:
+ *   - `project_id`: read the project's pending queue (bounded), pick the best
+ *     candidate, and claim it via the exact-task start route (claim + lock +
+ *     start). A claim that lost a race (TASK_NOT_STARTABLE) moves to the next
+ *     candidate.
+ *   - `steal_stale`: try the atomic claim first; when nothing is pending,
+ *     steal the best stale task through the stale-lock-handoff CAS route.
+ */
+export async function cloudClaimBest(
+  client: HasnaStorageClient,
+  agentId: string,
+  options: { project_id?: string; steal_stale?: boolean; stale_minutes?: number } = {},
+): Promise<Task | null> {
+  if (options.project_id) {
+    const pending = await cloudListTasks(
+      client,
+      { project_id: options.project_id, status: "pending", limit: CLAIM_SCAN_CEILING } as never,
+    );
+    const best = bestPendingTask(pending);
+    if (best) {
+      let lastConflict: unknown = null;
+      for (const candidate of [best, ...pending.filter((task) => task.id !== best.id)]) {
+        try {
+          return await cloudTaskAction(client, candidate.id, "start", { agent_id: agentId });
+        } catch (error) {
+          if (!isStartConflict(error)) throw error;
+          lastConflict = error;
+        }
+      }
+      if (lastConflict) throw lastConflict;
+      return null;
+    }
+    if (!options.steal_stale) return null;
+    return cloudStealStaleTaskInProject(client, agentId, options.project_id, options.stale_minutes ?? 30);
+  }
+  if (!options.steal_stale) return cloudClaimNext(client, agentId);
+  const direct = await cloudClaimNext(client, agentId);
+  if (direct) return direct;
+  return cloudStealStaleTask(client, agentId, options.stale_minutes ?? 30);
+}
+
+/** Steal a stale task scoped to one project. */
+async function cloudStealStaleTaskInProject(
+  client: HasnaStorageClient,
+  agentId: string,
+  projectId: string,
+  staleMinutes: number,
+): Promise<Task | null> {
+  const candidates = staleTaskCandidates(
+    await cloudListTasks(
+      client,
+      { project_id: projectId, status: "in_progress", limit: CLAIM_SCAN_CEILING } as never,
+    ),
+    agentId,
+    staleMinutes,
+  );
+  candidates.sort((left, right) => {
+    const rankDelta = claimPriorityRank(left) - claimPriorityRank(right);
+    if (rankDelta !== 0) return rankDelta;
+    return new Date(left.locked_at!).getTime() - new Date(right.locked_at!).getTime();
+  });
+  let lastError: unknown = null;
+  for (const task of candidates) {
+    try {
+      await cloudHandoffStaleTaskLock(client, {
+        task_id: task.id,
+        expected_holder: task.locked_by!,
+        expected_lock_version: task.locked_at!,
+        stale_after_seconds: staleMinutes * 60,
+        new_holder: agentId,
+        reason: "claim --steal-stale --project",
+      });
+      return task;
+    } catch (error) {
+      if (!isStartConflict(error)) throw error;
+      lastError = error;
+    }
+  }
+  if (candidates.length > 0 && lastError) throw lastError;
+  return null;
+}
+
 /**
  * Every dependency edge in the shared dataset (`GET /v1/dependencies`). Edges are
  * far fewer than tasks, so this stays cheap even on the full cloud set. Powers the

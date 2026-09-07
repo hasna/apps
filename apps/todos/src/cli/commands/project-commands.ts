@@ -1012,6 +1012,14 @@ export function registerProjectCommands(program: Command) {
       if (opts.dryRun && opts.apply && (opts.ensureTaskList || opts.rollbackTaskList)) {
         handleError(new Error("Choose either --dry-run or --apply, not both"));
       }
+      // `--dry-run` is only meaningfully supported by the branches that honor
+      // it; on --add/--update it used to be silently ignored.
+      if (opts.dryRun && !opts.ensureTaskList && !opts.rollbackTaskList && !opts.deregister) {
+        handleError(new Error("--dry-run is supported with --ensure-task-list, --rollback-task-list, or --deregister only"));
+      }
+      if (opts.pathPrefix && !opts.deregister) {
+        handleError(new Error("--path-prefix is supported with --deregister only"));
+      }
 
       if (opts.ensureTaskList) {
         const project = cloud

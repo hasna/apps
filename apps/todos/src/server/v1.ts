@@ -1236,7 +1236,11 @@ export async function handleV1Request(
           });
         }
         if (action === "claim" && method === "POST") {
-          return json({ task: await store.tasks.claimNext(agentId, {}) });
+          // Exact-task claim: the id is the subject, so the store's start (claim +
+          // lock + start) is the correct exact-id semantics. The previous handler
+          // answered with a claim of the server's "next" task and silently ignored
+          // the requested id — a claim that could lock any other task on the fleet.
+          return json({ task: await store.tasks.start(id, agentId) });
         }
         return error(404, `unknown task action: ${action}`);
       }

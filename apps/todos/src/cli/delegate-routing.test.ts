@@ -1,65 +1,56 @@
 import { describe, expect, test } from "bun:test";
-import { getTodosCliCommandCapabilityMatrix, isTodosCliCommandVisibleForRoute } from "./stage-a.js";
+import { getTodosCliOnBoxStoreCommands, initializeTodosCliAuthority } from "./stage-a.js";
 
 /**
  * THE CONSTRAINT THAT IS INVISIBLE FROM `--help`, and the single most important
  * one in this change.
  *
- * Stage A defaults EVERY canonical command to `local-only` and promotes only
- * the members of `REMOTE_COMMANDS` to `remote-http`. Under hosted
- * configuration a `local-only` verb remains fail-closed unless an invocation
- * is explicitly admitted as workstation-only.
+ * The command catalog is transport-neutral: every verb is registered,
+ * advertised and executed in every transport. The STORE a verb serves is a
+ * property of its data plane — `delegate` hands a filed task to a worker on
+ * the SHARED dataset, so it must route to the hosted store whenever a hosted
+ * authority is configured; `dispatch` types into a tmux pane, so it serves
+ * the on-box store.
  *
- * `dispatch` is the worked example: it is registered, absent from
- * REMOTE_COMMANDS, and therefore refused on the hosted route. A `delegate`
- * registered in only ONE of the two arrays would ship unusable on the shared
- * fleet authority. Nothing in the command's local tests would reveal that
- * authority error, hence a test against the matrix itself.
+ * A `delegate` that fell into the on-box store set would route away from the
+ * fleet it was built for, and nothing in the command's local tests would
+ * reveal that. Hence a test against the store classification itself.
  */
 
-describe("delegate is routable on the remote /v1 authority, not just registered", () => {
-  const matrix = getTodosCliCommandCapabilityMatrix();
+const HOSTED_ENV = {
+  HASNA_TODOS_API_URL: "https://authority.invalid",
+  HASNA_TODOS_API_KEY: "fixture-remote-key",
+};
+
+describe("delegate routes to the hosted store whenever a hosted authority is configured", () => {
+  const onBox = getTodosCliOnBoxStoreCommands();
 
   test("delegate is a KNOWN command — absent from the registry it would be UNKNOWN_COMMAND", () => {
-    expect(matrix.has("delegate")).toBe(true);
+    expect(() => initializeTodosCliAuthority(["delegate", "TASK", "worker"], HOSTED_ENV)).not.toThrow();
   });
 
-  test("delegate is owned by remote-http, so the /v1 route serves it", () => {
-    expect(matrix.get("delegate")).toBe("remote-http");
+  test("delegate serves the hosted store, so it never falls into the on-box set", () => {
+    expect(onBox.has("delegate")).toBe(false);
+    expect(initializeTodosCliAuthority(["delegate", "TASK", "worker"], HOSTED_ENV).route).toBe("remote-http");
   });
 
-  test("delegate stays visible in a remote route's help and completions", () => {
-    expect(isTodosCliCommandVisibleForRoute("delegate", "remote-http")).toBe(true);
-    expect(isTodosCliCommandVisibleForRoute("delegate", "local")).toBe(true);
-  });
-
-  test("CONTROL: dispatch is registered but local-only, which is the authority mismatch being avoided", () => {
-    // If this ever flips, either someone made `dispatch` remote-capable — a
-    // change operating rule 12 forbids, since it types into a tmux pane — or
-    // this test is reading a matrix that no longer means what it says.
-    expect(matrix.has("dispatch")).toBe(true);
-    expect(matrix.get("dispatch")).toBe("local-only");
-    expect(isTodosCliCommandVisibleForRoute("dispatch", "remote-http")).toBe(false);
+  test("CONTROL: dispatch is registered and serves the on-box store, which is exactly the split being avoided", () => {
+    // `dispatch` types into a tmux pane and carries a scheduler, a history
+    // verb and two SQLite tables, so it stays on the on-box store. If it ever
+    // flips, either someone made it hosted — a change operating rule 12
+    // forbids — or this test is reading a classification that no longer means
+    // what it says.
+    expect(onBox.has("dispatch")).toBe(true);
+    expect(onBox.has("dispatches")).toBe(true);
+    expect(initializeTodosCliAuthority(["dispatch"], HOSTED_ENV).route).toBe("local");
   });
 
   test("CONTROL: a name that was never registered is absent, so `has` is not answering true to everything", () => {
-    expect(matrix.has("delegate-nonexistent-control")).toBe(false);
+    expect(onBox.has("delegate-nonexistent-control")).toBe(false);
   });
 
-  test("CONTROL: an established remote verb reads the same way delegate does", () => {
-    expect(matrix.get("assign")).toBe("remote-http");
-  });
-});
-
-describe("the existing dispatch family is untouched", () => {
-  const matrix = getTodosCliCommandCapabilityMatrix();
-
-  test("dispatch and its sibling dispatches both remain registered", () => {
-    // `delegate` is an ADDITION. Renaming or unregistering `dispatch` would
-    // reach a scheduler, a history verb and two SQLite tables, and is expressly
-    // out of scope.
-    expect(matrix.has("dispatch")).toBe(true);
-    expect(matrix.has("dispatches")).toBe(true);
-    expect(matrix.get("dispatches")).toBe("local-only");
+  test("CONTROL: an established hosted verb routes the same way delegate does", () => {
+    expect(onBox.has("assign")).toBe(false);
+    expect(initializeTodosCliAuthority(["assign", "TASK", "worker"], HOSTED_ENV).route).toBe("remote-http");
   });
 });

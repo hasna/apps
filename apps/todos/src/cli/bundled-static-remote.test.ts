@@ -1,20 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { getTodosCliCommandCapabilityMatrix, initializeTodosCliAuthority } from "./stage-a.js";
+import { initializeTodosCliAuthority } from "./stage-a.js";
 import { resetTodosCloudClient } from "./cloud-router.js";
 
 /**
- * Bundled static content must render on the /v1 route (todos 3e5e773f).
+ * Bundled static content renders on the /v1 route (todos 3e5e773f), and the
+ * forms that reach the on-box store serve the workstation store even when a
+ * hosted authority is configured.
  *
- * `todos manual` is bundled static and works in remote mode, while `workflows`,
- * `template-library`, `sdk-fixtures` and `onboarding` were refused as
- * `local-only`. The shipped manual even documents `todos workflows` in its
- * examples, so the CLI advertised a command it then refused on the route most
- * of this fleet runs.
+ * `todos manual` is bundled static and works in remote mode; `workflows`,
+ * `template-library`, `sdk-fixtures` and `onboarding` used to be refused as
+ * transport-dependent even though the shipped manual documents `todos
+ * workflows` in its own examples.
  *
- * The reclassification is deliberately at the INVOCATION level rather than the
+ * The classification is deliberately at the INVOCATION level rather than the
  * COMMAND level, because two of those four verbs are genuinely mixed. Measured
- * against an isolated `HASNA_TODOS_DB_PATH` on 0.13.12, with `todos list` as the
- * positive control that a database is created when one is needed:
+ * against an isolated `HASNA_TODOS_DB_PATH`, with `todos list` as the positive
+ * control that a database is created when one is needed:
  *
  *   todos workflows list            no database created
  *   todos template-library          no database created
@@ -28,9 +29,9 @@ import { resetTodosCloudClient } from "./cloud-router.js";
  *
  * `onboarding --import` reaches `importLocalBridgeBundle`, and `sdk-fixtures
  * --show/--write` reach `ensureFixtureImported`, which performs a NON-dry-run
- * bridge import; both land in `getDatabase()` on bun:sqlite. Admitting those on
- * a route where the local SQLite fallback is disabled would be a regression, so
- * the second half of this file is as load-bearing as the first.
+ * bridge import; both land in `getDatabase()` on bun:sqlite. Those forms serve
+ * the on-box store (routed local with the store notice), while every store-free
+ * form stays diagnostic.
  */
 
 const REMOTE_ENV = {
@@ -43,7 +44,13 @@ const DIAGNOSTIC_RESULT = {
   v1_base_url: "https://authority.invalid/v1",
 } as const;
 
-describe("bundled static commands on the /v1 route", () => {
+const ON_BOX_RESULT = {
+  route: "local",
+  v1_base_url: null,
+  local_store: "configured-authority",
+} as const;
+
+describe("bundled static commands in a hosted-configured transport", () => {
   beforeEach(() => resetTodosCloudClient());
   afterEach(() => resetTodosCloudClient());
 
@@ -52,9 +59,8 @@ describe("bundled static commands on the /v1 route", () => {
   });
 
   test("negative control: a near-miss verb is still an UNKNOWN_COMMAND, not a silent pass", () => {
-    // A near-miss rather than an invented string: `workflowz` is one edit from a
-    // verb this change makes diagnostic, so it exercises the same matrix lookup
-    // the reclassification touches.
+    // A near-miss rather than an invented string: `workflowz` is one edit from
+    // a verb this change keeps store-free.
     expect(() => initializeTodosCliAuthority(["workflowz"], REMOTE_ENV)).toThrow(/UNKNOWN_COMMAND/);
   });
 
@@ -79,7 +85,8 @@ describe("bundled static commands on the /v1 route", () => {
   });
 
   test("bundled verbs are advertised in remote help once they are executable there", () => {
-    const matrix = getTodosCliCommandCapabilityMatrix();
+    // They were never gated; their help is present in every transport and the
+    // routed forms serve the on-box store.
     for (const command of [
       "workflows",
       "template-library",
@@ -88,11 +95,11 @@ describe("bundled static commands on the /v1 route", () => {
       "demo-fixtures",
       "sdk-fixtures",
     ]) {
-      expect(matrix.get(command)).toBe("diagnostic");
+      expect(() => initializeTodosCliAuthority([command], REMOTE_ENV)).not.toThrow();
     }
   });
 
-  test("invocations that reach bun:sqlite are still refused on the /v1 route", () => {
+  test("invocations that reach bun:sqlite serve the on-box store on the hosted route", () => {
     for (const args of [
       // importLocalBridgeBundle -> getDatabase()
       ["onboarding", "--import", "agent-project-demo"],
@@ -103,25 +110,7 @@ describe("bundled static commands on the /v1 route", () => {
       ["sdk-fixtures", "--show"],
       ["sdk-fixtures", "--write", "/tmp/todos-fixture-sdk"],
     ]) {
-      expect(() => initializeTodosCliAuthority([...args], REMOTE_ENV)).toThrow(/REMOTE_COMMAND_UNSUPPORTED/);
-    }
-  });
-
-  test("a refused bundled invocation names the offending flag, not the whole verb", () => {
-    // `sdk-fixtures` alone works, so a message that blames `sdk-fixtures` would
-    // send the reader to debug a verb that is fine.
-    expect(() => initializeTodosCliAuthority(["sdk-fixtures", "--show"], REMOTE_ENV)).toThrow(/--show/);
-    expect(() => initializeTodosCliAuthority(["onboarding", "--import", "agent-project-demo"], REMOTE_ENV))
-      .toThrow(/--import/);
-  });
-
-  test("a refused bundled invocation does not blame the /v1 authority it never used", () => {
-    // These verbs are served from the package, so "`onboarding` is served by
-    // the Todos /v1 authority but ..." would send the reader to debug their
-    // connection, credentials or storage mode for a purely local refusal.
-    for (const args of [["sdk-fixtures", "--show"], ["onboarding", "--import", "agent-project-demo"]]) {
-      expect(() => initializeTodosCliAuthority([...args], REMOTE_ENV)).toThrow(/renders bundled content on this route/);
-      expect(() => initializeTodosCliAuthority([...args], REMOTE_ENV)).not.toThrow(/is served by the Todos \/v1 authority/);
+      expect(initializeTodosCliAuthority([...args], REMOTE_ENV)).toEqual(ON_BOX_RESULT);
     }
   });
 });
