@@ -193,8 +193,14 @@ function isCredentialResolutionError(error: unknown): boolean {
   );
 }
 
-/** True for this package's own refusal, across bundle boundaries. */
-function isSkillsFleetCredentialError(error: unknown): boolean {
+/**
+ * True for this package's own refusal, across bundle boundaries.
+ *
+ * Exported for the surfaces that turn the refusal into data (an MCP tool's
+ * `AUTH_REQUIRED` result, a CLI handler's one-line stderr exit) so they match
+ * on the error's NAME rather than on a class identity a bundle may not share.
+ */
+export function isSkillsFleetCredentialError(error: unknown): error is SkillsFleetCredentialError {
   return (
     error instanceof SkillsFleetCredentialError ||
     (typeof error === "object" &&
@@ -406,16 +412,18 @@ function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): Skill
     if (!configured) {
       // Nothing at all: no credential, no authority, no opt-in. Fail closed —
       // the alternative is quietly answering from the bundled corpus for a
-      // machine that was never told to serve it.
+      // machine that was never told to serve it. The one line names WHERE the
+      // credential should live (#1720 validation): an operator reading it on a
+      // station has to be able to fix the station, not only log in.
       throw new SkillsFleetCredentialError(
         `No API key resolved and no Skills API URL is configured — failing closed ` +
           `(local mode is opt-in only: set ${SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]}=1 to run on this machine). ` +
-          `Sign in with: skills auth login`,
+          `Looked in ${credentialLocations(env)}. Sign in with: skills auth login`,
       );
     }
     throw new SkillsFleetCredentialError(
       `${configured.source} points this CLI at a Skills service but no API key resolved — refusing to run locally instead. ` +
-        `Looked in hasna.credentials.skills.api-key, ${skillsCredentialFiles(env).join(" or ") || "no credentials file"}, and ${SKILLS_API_KEY_ENV}. Sign in with: skills auth login`,
+        `Looked in ${credentialLocations(env)}. Sign in with: skills auth login`,
     );
   }
   const apiOrigin = normalizeSkillsApiOrigin(configured?.value ?? defaultFleetGatewayBaseUrl(SKILLS_APP));
@@ -456,6 +464,16 @@ function resolveSkillsFleetOrThrow(env: Env, options: SkillsFleetOptions): Skill
   }
 
   return { ...base, apiKey: credential.apiKey, apiKeyPointer: null };
+}
+
+/**
+ * Every place the ladder looked for a credential, for a refusal that has to
+ * say where one should be put: the Keychain item (with the account rule), the
+ * credentials file(s) this environment resolves, and the env tier. Names only.
+ */
+function credentialLocations(env: Env): string {
+  const files = skillsCredentialFiles(env).join(" or ") || "no credentials file (HOME is unset)";
+  return `hasna.credentials.${SKILLS_APP}.api-key (macOS Keychain, account HASNA_STATION or the host name), ${files}, and ${SKILLS_API_KEY_ENV}`;
 }
 
 function assertCredentialInstance(credential: ResolvedCredential, apiOrigin: string, env: Env, options: SkillsFleetOptions): void {

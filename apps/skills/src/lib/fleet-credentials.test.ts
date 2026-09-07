@@ -225,6 +225,37 @@ describe("fleet credential ladder", () => {
     expect(configuredSkillsApiUrl({})).toBeNull();
   });
 
+  test("the nothing-configured refusal names every place the credential could live", () => {
+    // The negative control on a station reads ONE line and has to be able to
+    // fix the station from it: the Keychain item and its account rule, the
+    // credentials file this environment resolves, and the env tier — names
+    // only, never a value, never a URL (#1720 validation).
+    withTempDir((home) => {
+      let thrown: unknown;
+      try {
+        resolveSkillsFleet({ HOME: home });
+      } catch (error) {
+        thrown = error;
+      }
+      const message = (thrown as Error).message;
+      expect(message).toContain("hasna.credentials.skills.api-key");
+      expect(message).toContain("HASNA_STATION");
+      expect(message).toContain(join(home, ".hasna", "skills", "config", "credentials"));
+      expect(message).toContain(SKILLS_API_KEY_ENV);
+      expect(message).toContain("skills auth login");
+      expect(message).not.toContain("https://");
+      expect(message.split("\n")).toHaveLength(1);
+    });
+    // With no home at all there is no file to name, and the line says so.
+    let noHome: unknown;
+    try {
+      resolveSkillsFleet({});
+    } catch (error) {
+      noHome = error;
+    }
+    expect((noHome as Error).message).toContain("no credentials file");
+  });
+
   test("the explicit opt-in is local mode, and says so once", () => {
     const fleet = resolveSkillsFleet({ [SKILLS_LOCAL_OPT_IN_ENV_KEYS[0]]: "1" });
     expect(fleet).toEqual({ mode: "local", apiOrigin: null, apiKey: null });
