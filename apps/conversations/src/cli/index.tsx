@@ -87,12 +87,21 @@ program
   .command("events-drain")
   .description("Drain the Conversations→Events source outbox into the Events durable spool inbox (local store only)")
   .option("--limit <n>", "Maximum pending rows to transport per run", parseInt)
+  // Declared so the refusal above can honour the JSON error contract: without
+  // the option Commander rejected `--json` as unknown before the action ran,
+  // and the fail-closed refusal was reachable on the human path only
+  // (hasna/apps#1720 validation, round 2).
+  .option("-j, --json", "Output the drain report as JSON")
   .action(async (opts) => {
     requireConversationsLocalStore("events-drain");
     const { getDb } = await import("../lib/db.js");
     const { drainConversationEventOutbox } = await import("../lib/events-bridge.js");
     const db = getDb();
     const result = await drainConversationEventOutbox(db, { limit: Number.isFinite(opts.limit) && opts.limit > 0 ? opts.limit : undefined });
+    if (opts.json) {
+      printJsonLine({ scanned: result.scanned, transported: result.transported, skipped: result.skipped, spooled: result.spooled });
+      return;
+    }
     printLine(`events-drain: scanned ${result.scanned}, transported ${result.transported}, skipped ${result.skipped}, spooled ${result.spooled}`);
   });
 
