@@ -1,6 +1,6 @@
 import { createDecipheriv, randomBytes, timingSafeEqual } from "node:crypto";
 import { openSync, fstatSync, readFileSync, closeSync, constants } from "node:fs";
-import { resolveSecretsStorageClient, resolveCredential } from "../store/client.js";
+import { migrationTransport } from "./transport.js";
 import { readSnapshot, proof, MigrationError, TABLES } from "./snapshot.js";
 
 /** Deliberately separate from getMasterKey(): migration must never create/rewrap a key. */
@@ -48,17 +48,16 @@ export async function migrateVault(args: string[]) {
   }
   if(!['--source','--key-file','--source-id','--migration-id','--tenant'].every(k=>opts[k]) || !!opts['--kms-key-id']!==!!opts['--kms-region'])throw new MigrationError('migration_requires_source_key_file_source_id_migration_id_tenant');
   if(!['--source-id','--migration-id','--tenant'].every(k=>/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(opts[k]!)))throw new MigrationError('invalid_migration_identity');
-  const credential=resolveCredential('secrets',process.env);if(!credential)throw new MigrationError('migration_credential_required');
-  const {client}=resolveSecretsStorageClient('secrets',process.env,{credentials:{apiKey:credential.apiKey}});const url=new URL(client.baseUrl);
+  const transport=migrationTransport();const url=new URL(transport.baseUrl);
   if(url.protocol!=='https:' && !(url.protocol==='http:' && ['127.0.0.1','[::1]','localhost'].includes(url.hostname)))throw new MigrationError('migration_requires_https');
   // Capability and destination identity verified BEFORE opening either source file.
-  const capability=await client.transport.get<{protocol:string;tenant_id:string;kid:string;tables:string[]}>('/migrations/vault',{retry:false});
+  const capability=await transport.get<{protocol:string;tenant_id:string;kid:string;tables:string[]}>('/migrations/vault',{retry:false});
   if(typeof capability.kid!=='string' || !capability.kid || capability.protocol!=='secrets-lossless-v1' || capability.tenant_id!==opts['--tenant'] || [...capability.tables].sort().join()!==[...TABLES].sort().join())throw new MigrationError('migration_capability_or_tenant_mismatch');
   const key=opts['--kms-key-id'] ? await readExistingKmsKey(opts['--key-file']!,opts['--kms-key-id']!,opts['--kms-region']!) : readExistingKey(opts['--key-file']!);
   try {
     const snapshot=readSnapshot(opts['--source']!,value=>decryptWithKey(value,key));
     const nonce=randomBytes(32).toString('hex');const expected=proof(snapshot,nonce);
-    const receipt=await client.transport.post<{protocol:string;tenant_id:string;migration_id:string;source_id:string;verified:boolean;proof:string;counts:Record<string,number>;replayed:boolean;deletion_authorized:boolean}>('/migrations/vault',{
+    const receipt=await transport.post<{protocol:string;tenant_id:string;migration_id:string;source_id:string;verified:boolean;proof:string;counts:Record<string,number>;replayed:boolean;deletion_authorized:boolean}>('/migrations/vault',{
       expected_tenant_id:capability.tenant_id,expected_kid:capability.kid,migration_id:opts['--migration-id'],source_id:opts['--source-id'],nonce,snapshot,
     },{idempotencyKey:opts['--migration-id'],headers:{'x-secrets-migration-tenant':capability.tenant_id,'x-secrets-migration-kid':capability.kid},retry:false,timeoutMs:120000});
     if(!TABLES.every(t=>receipt.counts?.[t]===snapshot.tables[t].length) || receipt.protocol!=='secrets-lossless-v1' || receipt.tenant_id!==opts['--tenant'] || receipt.migration_id!==opts['--migration-id'] || receipt.source_id!==opts['--source-id'] || !receipt.verified || !/^[a-f0-9]{64}$/.test(receipt.proof) || !timingSafeEqual(Buffer.from(receipt.proof,'hex'),Buffer.from(expected,'hex'))) throw new MigrationError('migration_receipt_not_verified');

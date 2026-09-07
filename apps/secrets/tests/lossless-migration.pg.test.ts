@@ -87,7 +87,7 @@ const dsn=process.env.SECRETS_TEST_DATABASE_URL;
     for(const name of ['HASNA_SECRETS_API_KEY_OVERRIDE','HASNA_SECRETS_API_KEY','SECRETS_API_KEY','HASNA_SECRETS_API_KEY_REF','HASNA_PROFILE'])delete diskEnv[name];
     const rotating=Bun.spawn(command,{cwd:join(import.meta.dir,'..'),env:diskEnv,stdout:'pipe',stderr:'pipe'});
     const [rotatingOut,rotatingErr,rotatingCode]=await Promise.all([new Response(rotating.stdout).text(),new Response(rotating.stderr).text(),rotating.exited]);afterCapability=undefined;
-    expect(rotatingCode).toBe(0);expect(JSON.parse(rotatingOut).tenant_id).toBe(tenant);expect(rotatingOut+rotatingErr).not.toContain(token.token);expect(rotatingOut+rotatingErr).not.toContain(other.token);
+    expect(rotatingCode).toBe(1);expect(rotatingOut).toBe('');expect((await db.get<{n:string}>('SELECT count(*) n FROM vault_migrations WHERE tenant_id=$1',[otherTenant]))!.n).toBe('0');expect(rotatingOut+rotatingErr).not.toContain(token.token);expect(rotatingOut+rotatingErr).not.toContain(other.token);
     async function otherRequest(path:string,method='GET',body?:unknown){return fetch(`http://127.0.0.1:${server.port}/v1${path}`,{method,headers:{'x-api-key':other.token,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});}
     expect((await otherRequest('/secrets/get?key=fixture/key')).status).toBe(404);
     for(const [path,field] of [['/secrets','secrets'],['/secrets/search?q=fixture','results'],['/secrets/versions?key=fixture/key','versions'],['/secrets/versions?key=fixture/orphan','versions'],['/items','items'],['/items/search?q=fixture','results'],['/users','users']] as const) {
