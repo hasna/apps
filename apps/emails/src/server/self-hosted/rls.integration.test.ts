@@ -65,6 +65,7 @@ async function countAsProbe(tenantId: string | null, table: string): Promise<num
   return asProbe(tenantId, async (tx) => (await tx.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)).n);
 }
 
+// Run the complete migration ledger before assertions; CI can exceed the default 5s hook limit.
 beforeAll(async () => {
   if (!pg) return;
   // Fresh schema (drops any table a crashed prior run left owned by the probe),
@@ -169,7 +170,7 @@ beforeAll(async () => {
   for (const t of [...TABLES, ...ROLLUP_TABLES, ...REPAIR_TABLES, ...REPAIR_ALIAS_TABLES]) {
     await pg.execute(`ALTER TABLE ${t} OWNER TO ${PROBE}`);
   }
-});
+}, 60_000);
 
 afterAll(async () => {
   if (!pg) return;

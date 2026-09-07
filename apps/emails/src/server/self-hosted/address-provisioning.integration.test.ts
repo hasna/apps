@@ -25,6 +25,7 @@ let pool: ReturnType<typeof createPgPool>,
   store: TenantScopedStore;
 let input: AddressProvisioningInput, sender: SelfHostedSender, options: any;
 const role = `provision_rls_${crypto.randomUUID().replaceAll("-", "")}`;
+// Run the complete migration ledger before assertions; CI can exceed the default 5s hook limit.
 beforeAll(async () => {
   if (!url) return;
   pool = createPgPool({ connectionString: url, env: { PGSSLMODE: "disable" } });
@@ -42,7 +43,7 @@ beforeAll(async () => {
   await client.execute(
     `CREATE ROLE "${role}" NOLOGIN; GRANT USAGE ON SCHEMA public TO "${role}"; GRANT SELECT,INSERT,UPDATE ON provisioning_jobs TO "${role}"`,
   );
-});
+}, 60_000);
 beforeEach(async () => {
   if (!url) return;
   await client.execute(
