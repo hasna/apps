@@ -639,7 +639,6 @@ async function runInstaller(
       ["source_app='/Applications/Tailscale.app'", `source_app=${quote(environment.RECORDINGS_TEST_TRUSTED_TAILSCALE_APP ?? fixture.tailscaleApp)}`, 1],
       ["codesign_executable='/usr/bin/codesign'", `codesign_executable=${quote(join(fixture.bin, "codesign"))}`, 2],
       ["ditto_executable='/usr/bin/ditto'", `ditto_executable=${quote(join(fixture.bin, "ditto"))}`, 1],
-      ["/usr/bin/realpath", quote(join(fixture.bin, "realpath")), 3],
     ];
     for (const [before, after, count] of substitutions) {
       if (resolver.split(before).length !== count + 1) throw new Error("Tailscale fixture capability boundary changed");

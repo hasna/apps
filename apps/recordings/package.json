@@ -69,7 +69,9 @@
   },
   "files": [
     "dist/",
+    "!dist/__tests__/",
     "scripts/",
+    "!scripts/test-recorder-fixtures.ts",
     "!scripts/**/__pycache__/",
     "!scripts/**/*.pyc",
     "Dockerfile.package",

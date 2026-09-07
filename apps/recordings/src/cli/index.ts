@@ -1129,7 +1129,7 @@ appCommand
       installed: status.installed,
       legacy_install_paths: status.legacy_install_paths,
       // The grants below belong to this bundle, not to the terminal running this command.
-      permission_subject: describeTccAuthorizationSubject(status.installed_app_path),
+      permission_subject: describeTccAuthorizationSubject(status.installed ? status.installed_app_path : null),
       microphone: status.microphone_permission,
       accessibility: status.accessibility_permission,
       app_code_hash: status.app_code_hash,

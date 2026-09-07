@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { signingFixtureCommand } from "./helpers/signing-fixture";
 import {
   chmodSync,
   existsSync,
@@ -29,6 +30,15 @@ import { expectOrder, sliceBetween, sliceBetweenUnique } from "./helpers/source-
 const tempDirs: string[] = [];
 const cliEntry = join(process.cwd(), "src", "cli", "index.ts");
 
+function appFixtureHome() {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), "recordings-cli-app-")));
+  chmodSync(home, 0o700); tempDirs.push(home); return home;
+}
+function appFixtureCommand(home: string, args: string[]) {
+  return signingFixtureCommand(home, [process.execPath, join(import.meta.dir, "helpers/cli-app-fixture.ts"), ...args]);
+}
+
+
 // On-box CLI tests must declare local mode EXPLICITLY: the client never falls
 // back to the local file when no hosted env is configured, so the unhosted
 // opt-in below is what points these spawns at the isolated test database. It
@@ -37,6 +47,7 @@ const cliEntry = join(process.cwd(), "src", "cli", "index.ts");
 function isolatedCliEnv(home: string, overrides: Record<string, string> = {}) {
   return {
     HOME: home,
+    TMPDIR: realpathSync(tmpdir()),
     PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
     HASNA_RECORDINGS_API_URL: "",
     HASNA_RECORDINGS_API_KEY: "",
@@ -59,6 +70,21 @@ afterEach(() => {
 });
 
 describe("recordings CLI", () => {
+  test("app fixture blocks every process boundary before host execution", async () => {
+    const home = appFixtureHome();
+    const child = Bun.spawn(appFixtureCommand(home, ["--fixture-boundary-probe"]), {
+      cwd: process.cwd(), env: isolatedCliEnv(home), stdout: "pipe", stderr: "pipe",
+    });
+    const [status, out, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(status, error).toBe(0);
+    expect(JSON.parse(out)).toEqual({ blocked: 9, platform: process.platform });
+    if (process.platform === "darwin") {
+      const probe = Bun.spawnSync(signingFixtureCommand(home, ["/bin/bash", "-c", "/usr/bin/codesign --help"]), { env: isolatedCliEnv(home), stdout: "pipe", stderr: "pipe" });
+      expect(probe.exitCode).not.toBe(0);
+      expect(probe.stderr.toString()).toContain("Operation not permitted");
+    }
+  });
+
   test("command failures print a clean ERROR line instead of a stack trace", async () => {
     const home = join(tmpdir(), `open-recordings-cli-err-${Date.now()}`);
     tempDirs.push(home);
@@ -215,13 +241,12 @@ describe("recordings CLI", () => {
   });
 
   test("--json app status reports package installer paths", async () => {
-    const home = join(tmpdir(), `open-recordings-cli-app-status-${Date.now()}`);
-    tempDirs.push(home);
+    const home = appFixtureHome();
     const proc = Bun.spawn(
-      [process.execPath, "src/cli/index.ts", "--json", "app", "status"],
+      appFixtureCommand(home, ["--json", "app", "status"]),
       {
         cwd: process.cwd(),
-        env: { ...process.env, HOME: home },
+        env: isolatedCliEnv(home),
         stdout: "pipe",
         stderr: "pipe",
       }
@@ -233,7 +258,7 @@ describe("recordings CLI", () => {
       proc.exited,
     ]);
 
-    expect(exitCode).toBe(0);
+    expect(exitCode, stderr).toBe(0);
     expect(stderr).toBe("");
 
     const status = JSON.parse(stdout) as {
@@ -651,7 +676,8 @@ describe("recordings CLI", () => {
   });
 
   test("compiled app install rejects itself as Bun and ignores a hostile PATH", () => {
-    const root = mkdtempSync(join(tmpdir(), "open-recordings-compiled-bun-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "recordings-cli-compiled-bun-")));
+    chmodSync(root, 0o700);
     tempDirs.push(root);
     const compiledCli = join(root, "recordings");
     const compile = Bun.spawnSync(
@@ -699,15 +725,13 @@ describe("recordings CLI", () => {
     ];
     const baseEnvironment = (home: string) => {
       const environment = {
-        ...process.env,
-        HOME: home,
+        ...isolatedCliEnv(home),
         PATH: `${hostileBin}:/usr/bin:/bin:/usr/sbin:/sbin`,
       };
-      delete environment.RECORDINGS_BUN_EXECUTABLE;
       return environment;
     };
     const runInstall = (environment: Record<string, string | undefined>) =>
-      Bun.spawnSync([compiledCli, ...installArgs], {
+      Bun.spawnSync(signingFixtureCommand(root, [compiledCli, ...installArgs]), {
         cwd: process.cwd(),
         env: environment,
         stdout: "pipe",
@@ -721,7 +745,7 @@ describe("recordings CLI", () => {
       RECORDINGS_BUN_EXECUTABLE: compiledCli,
     });
     expect(selfResult.exitCode).not.toBe(0);
-    expect(selfResult.stderr.toString()).toContain("only supported on macOS");
+    expect(selfResult.stderr.toString()).toContain(process.platform === "darwin" ? "Release installation requires --envelope" : "only supported on macOS");
     expect(existsSync(hostileMarker)).toBeFalse();
 
     expect(() =>
@@ -743,8 +767,7 @@ describe("recordings CLI", () => {
   });
 
   test("app status inspects the canonical app and reports legacy duplicates", async () => {
-    const home = join(tmpdir(), `open-recordings-cli-app-layout-${Date.now()}`);
-    tempDirs.push(home);
+    const home = appFixtureHome();
     // The canonical bundle is Hasna Recordings.app since the fleet rename (#519); the
     // pre-rename 0.3.2-era Recordings.app forms are legacy duplicates.
     const canonical = join(home, "Applications", "Hasna Recordings.app");
@@ -757,10 +780,10 @@ describe("recordings CLI", () => {
     mkdirSync(rollbackLegacy, { recursive: true });
 
     const proc = Bun.spawn(
-      [process.execPath, "src/cli/index.ts", "--json", "app", "status"],
+      appFixtureCommand(home, ["--json", "app", "status"]),
       {
         cwd: process.cwd(),
-        env: { ...process.env, HOME: home },
+        env: isolatedCliEnv(home),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -771,7 +794,7 @@ describe("recordings CLI", () => {
       proc.exited,
     ]);
 
-    expect(exitCode).toBe(0);
+    expect(exitCode, stderr).toBe(0);
     expect(stderr).toBe("");
     const status = JSON.parse(stdout) as {
       installed_app_path: string;
@@ -801,8 +824,7 @@ describe("recordings CLI", () => {
   });
 
   test("duplicate installs are still flagged when the canonical path is absent", async () => {
-    const home = join(tmpdir(), `open-recordings-cli-app-ambiguous-${Date.now()}`);
-    tempDirs.push(home);
+    const home = appFixtureHome();
     // No canonical bundle at all — the case that previously suppressed the flag, letting a
     // bundle nobody named answer for the grant holder in silence.
     const hiddenLegacy = join(home, ".hasna", "recordings", "Recordings.app");
@@ -812,8 +834,8 @@ describe("recordings CLI", () => {
     mkdirSync(rollbackLegacy, { recursive: true });
 
     const proc = Bun.spawn(
-      [process.execPath, "src/cli/index.ts", "--json", "app", "status"],
-      { cwd: process.cwd(), env: { ...process.env, HOME: home }, stdout: "pipe", stderr: "pipe" },
+      appFixtureCommand(home, ["--json", "app", "status"]),
+      { cwd: process.cwd(), env: isolatedCliEnv(home), stdout: "pipe", stderr: "pipe" },
     );
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -821,7 +843,7 @@ describe("recordings CLI", () => {
       proc.exited,
     ]);
 
-    expect(exitCode).toBe(0);
+    expect(exitCode, stderr).toBe(0);
     expect(stderr).toBe("");
     const status = JSON.parse(stdout) as {
       installed_app_path: string;
@@ -836,13 +858,12 @@ describe("recordings CLI", () => {
   });
 
   test("with nothing installed no permission state reads as allowed and --json carries the warnings", async () => {
-    const home = join(tmpdir(), `open-recordings-cli-app-empty-${Date.now()}`);
-    tempDirs.push(home);
+    const home = appFixtureHome();
     mkdirSync(home, { recursive: true });
 
     const proc = Bun.spawn(
-      [process.execPath, "src/cli/index.ts", "--json", "app", "permissions"],
-      { cwd: process.cwd(), env: { ...process.env, HOME: home }, stdout: "pipe", stderr: "pipe" },
+      appFixtureCommand(home, ["--json", "app", "permissions"]),
+      { cwd: process.cwd(), env: isolatedCliEnv(home), stdout: "pipe", stderr: "pipe" },
     );
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
@@ -850,7 +871,7 @@ describe("recordings CLI", () => {
       proc.exited,
     ]);
 
-    expect(exitCode).toBe(0);
+    expect(exitCode, stderr).toBe(0);
     expect(stderr).toBe("");
     const permissions = JSON.parse(stdout) as {
       installed: boolean;
@@ -867,7 +888,9 @@ describe("recordings CLI", () => {
     expect(permissions.accessibility.startsWith("allowed")).toBeFalse();
     // `--json` used to return before every warning, leaving machine consumers no signal at all.
     if (process.platform === "darwin") {
-      expect(permissions.microphone).toBe("unverified_no_installed_bundle");
+      // This fixture has neither a bundle nor a stored grant. The stronger
+      // unverified_no_installed_bundle state applies when a stored grant exists.
+      expect(permissions.microphone).toBe("not_determined");
       expect(permissions.permission_subject).toContain("no installed bundle");
       expect(permissions.warnings.join(" ")).toContain("no app bundle exists");
     }
@@ -944,42 +967,44 @@ describe("recordings CLI", () => {
   });
 
   test("app status is compact by default and verbose on request", async () => {
+    const home = appFixtureHome();
     const compactProc = Bun.spawn(
-      [process.execPath, "src/cli/index.ts", "app", "status"],
-      { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" }
+      appFixtureCommand(home, ["app", "status"]),
+      { cwd: process.cwd(), env: isolatedCliEnv(home), stdout: "pipe", stderr: "pipe" }
     );
     const [compactStdout, compactStderr, compactExit] = await Promise.all([
       new Response(compactProc.stdout).text(),
       new Response(compactProc.stderr).text(),
       compactProc.exited,
     ]);
-    expect(compactExit).toBe(0);
+    expect(compactExit, compactStderr).toBe(0);
     expect(compactStderr).toBe("");
     expect(compactStdout).toContain("Recordings.app");
     expect(compactStdout).toContain("Use --verbose");
     expect(compactStdout).not.toContain(`Package: ${process.cwd()}`);
 
     const verboseProc = Bun.spawn(
-      [process.execPath, "src/cli/index.ts", "app", "status", "--verbose"],
-      { cwd: process.cwd(), env: process.env, stdout: "pipe", stderr: "pipe" }
+      appFixtureCommand(home, ["app", "status", "--verbose"]),
+      { cwd: process.cwd(), env: isolatedCliEnv(home), stdout: "pipe", stderr: "pipe" }
     );
     const [verboseStdout, verboseStderr, verboseExit] = await Promise.all([
       new Response(verboseProc.stdout).text(),
       new Response(verboseProc.stderr).text(),
       verboseProc.exited,
     ]);
-    expect(verboseExit).toBe(0);
+    expect(verboseExit, verboseStderr).toBe(0);
     expect(verboseStderr).toBe("");
     expect(verboseStdout).toContain(`Package: ${process.cwd()}`);
     expect(verboseStdout).toContain("Executable path:");
   });
 
   test("--json app permissions emits permission diagnostics", async () => {
+    const home = appFixtureHome();
     const proc = Bun.spawn(
-      [process.execPath, "src/cli/index.ts", "--json", "app", "permissions"],
+      appFixtureCommand(home, ["--json", "app", "permissions"]),
       {
         cwd: process.cwd(),
-        env: process.env,
+        env: isolatedCliEnv(home),
         stdout: "pipe",
         stderr: "pipe",
       }
@@ -991,7 +1016,7 @@ describe("recordings CLI", () => {
       proc.exited,
     ]);
 
-    expect(exitCode).toBe(0);
+    expect(exitCode, stderr).toBe(0);
     expect(stderr).toBe("");
 
     const permissions = JSON.parse(stdout) as {
@@ -1011,11 +1036,12 @@ describe("recordings CLI", () => {
   });
 
   test("app help advertises permission request command", async () => {
+    const home = appFixtureHome();
     const proc = Bun.spawn(
-      [process.execPath, "src/cli/index.ts", "app", "--help"],
+      appFixtureCommand(home, ["app", "--help"]),
       {
         cwd: process.cwd(),
-        env: process.env,
+        env: isolatedCliEnv(home),
         stdout: "pipe",
         stderr: "pipe",
       }
@@ -1027,17 +1053,18 @@ describe("recordings CLI", () => {
       proc.exited,
     ]);
 
-    expect(exitCode).toBe(0);
+    expect(exitCode, stderr).toBe(0);
     expect(stderr).toBe("");
     expect(stdout).toContain("request-permissions");
   });
 
   test("app exposes a manual desktop snapshot export command", async () => {
+    const home = appFixtureHome();
     const proc = Bun.spawn(
-      [process.execPath, "src/cli/index.ts", "app", "snapshot", "--help"],
+      appFixtureCommand(home, ["app", "snapshot", "--help"]),
       {
         cwd: process.cwd(),
-        env: process.env,
+        env: isolatedCliEnv(home),
         stdout: "pipe",
         stderr: "pipe",
       },
@@ -1049,23 +1076,21 @@ describe("recordings CLI", () => {
       proc.exited,
     ]);
 
-    expect(exitCode).toBe(0);
+    expect(exitCode, stderr).toBe(0);
     expect(stderr).toBe("");
     expect(stdout).toContain("snapshot [options] [output]");
     expect(stdout).toContain("current main desktop");
   });
 
   test("--json check emits machine-readable dependency status", async () => {
-    const home = join(tmpdir(), `open-recordings-cli-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    tempDirs.push(home);
+    const home = appFixtureHome();
 
     const proc = Bun.spawn(
-      [process.execPath, "src/cli/index.ts", "--json", "check"],
+      appFixtureCommand(home, ["--json", "check"]),
       {
         cwd: process.cwd(),
         env: {
-          ...process.env,
-          HOME: home,
+          ...isolatedCliEnv(home),
           OPENAI_API_KEY: "test-openai-key",
           RECORDINGS_ENHANCEMENT_KEY: "test-enhancement-key",
         },
@@ -1080,7 +1105,7 @@ describe("recordings CLI", () => {
       proc.exited,
     ]);
 
-    expect(exitCode).toBe(0);
+    expect(exitCode, stderr).toBe(0);
     expect(stderr).toBe("");
 
     const report = JSON.parse(stdout) as {
