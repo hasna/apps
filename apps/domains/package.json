@@ -1,6 +1,6 @@
 {
   "name": "@hasna/domains",
-  "version": "0.0.47",
+  "version": "0.1.0",
   "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents — CLI + MCP + HTTP API + SDK, shared account API and PostgreSQL",
   "type": "module",
   "main": "dist/index.js",
