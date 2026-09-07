@@ -644,7 +644,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     const { ds } = make([
       v1("kpmg", {
         attachments: [
-          { filename: "D300.pdf", content_type: "application/pdf", size: 189834 },
+          { filename: "D300.pdf", content_type: "application/pdf", size: 189834, content_id: "<chart@example.test>" },
           { filename: "D394.pdf", content_type: "application/pdf", size: 28580 },
         ],
       }),
@@ -655,6 +655,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     const body = await ds.getMessageBody(summary!);
     expect(body!.attachments.map((a) => a.filename)).toEqual(["D300.pdf", "D394.pdf"]);
     expect(body!.attachments[0]!.size).toBe(189834);
+    expect(body!.attachments[0]!.content_id).toBe("<chart@example.test>");
   });
 
   // An unnamed inline MIME part arrives as filename:"". Left empty it is dropped

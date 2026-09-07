@@ -21,8 +21,8 @@ function Demo() {
           padding={1}
           backgroundColor="#ffffff"
         >
-          <text fg="#1f2937">Emails · Native image preview</text>
-          <text fg="#6b7280">
+          <text height={1} flexShrink={0} fg="#1f2937">Emails · Native image preview</text>
+          <text height={2} flexShrink={0} fg="#6b7280">
             Synthetic embedded image. Auto protocol uses Kitty/Sixel or Unicode
             blocks.
           </text>
@@ -53,7 +53,7 @@ function Demo() {
               }
             />
           </scrollbox>
-          <text fg="#6b7280">
+          <text height={2} flexShrink={0} fg="#6b7280">
             Tab focuses · Enter/Space expands/loads · Ctrl+C closes. All image
             bytes are synthetic.
           </text>
