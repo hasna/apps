@@ -151,7 +151,7 @@ describe("CLI discovery", () => {
       const proc = Bun.spawn(["bash", "-c", command], {
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
+        env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1", HASNA_SKILLS_LOCAL: "1" },
       });
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();
@@ -575,7 +575,7 @@ describe("CLI discovery", () => {
       const proc = Bun.spawn(["bash", "-c", command], {
         stdout: "pipe",
         stderr: "pipe",
-        env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1" },
+        env: { ...process.env, HOME: CLEAN_CLI_HOME, NO_COLOR: "1", SKILLS_TEST_MODE: "1", HASNA_SKILLS_LOCAL: "1" },
       });
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();

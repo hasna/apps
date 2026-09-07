@@ -3,16 +3,22 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertClientStoreConfigured, DB_PATH_ENV_KEYS } from "../db/api-mode.js";
+import {
+  MEMENTOS_LOCAL_OPT_IN_ENV_KEYS,
+  hasMementosEnvAuthorityIntent,
+} from "../lib/local-opt-in.js";
 import { STORE_SELECTOR_ENV_KEYS } from "../test-support/store-isolation.js";
 
 // ============================================================================
 // Fail-closed store configuration (owner ruling 2026-09-04, fleet fail-closed
-// wave): a mementos CLI run WITHOUT its API env (HASNA_MEMENTOS_API_URL +
-// HASNA_MEMENTOS_API_KEY, aliases MEMENTOS_API_URL / MEMENTOS_API_KEY) must
-// fail closed — non-zero exit + an actionable error naming the required env —
-// and must NEVER silently serve the default on-box SQLite store
-// (~/.hasna/mementos/mementos.db) with exit 0. Local mode is reachable only
-// through the explicit opt-in env (HASNA_MEMENTOS_DB_PATH / MEMENTOS_DB_PATH).
+// wave): a mementos CLI run WITHOUT a resolvable credential — no
+// HASNA_MEMENTOS_API_KEY (or alias), no Keychain item, no
+// ~/.hasna/mementos/config/credentials file — must fail closed: non-zero exit
+// + an actionable error naming the tiers consulted, and must NEVER silently
+// serve the default on-box SQLite store (~/.hasna/mementos/mementos.db) with
+// exit 0. Local mode is reachable only through the explicit opt-in env
+// (HASNA_MEMENTOS_DB_PATH / MEMENTOS_DB_PATH, or HASNA_MEMENTOS_LOCAL=1 /
+// MEMENTOS_LOCAL=1 with nothing configured).
 //
 // Two layers lock this in:
 //   1. in-process: `assertClientStoreConfigured()` (src/db/api-mode.ts), the
@@ -26,6 +32,7 @@ const ENV_KEYS_TO_CLEAR: readonly string[] = Array.from(
   new Set([
     ...STORE_SELECTOR_ENV_KEYS,
     ...DB_PATH_ENV_KEYS,
+    ...MEMENTOS_LOCAL_OPT_IN_ENV_KEYS,
     "MEMENTOS_DB_SCOPE",
     "HASNA_DATA_HOME",
     "HASNA_CONFIG_HOME",
@@ -50,7 +57,7 @@ describe("assertClientStoreConfigured — fail-closed store gate", () => {
     }
   });
 
-  test("no API env and no explicit DB_PATH -> throws naming the required env", () => {
+  test("no credential and no explicit local opt-in -> throws naming the tiers", () => {
     let message = "";
     let code = "";
     try {
@@ -64,12 +71,15 @@ describe("assertClientStoreConfigured — fail-closed store gate", () => {
     expect(message).toContain("HASNA_MEMENTOS_API_KEY");
     expect(message).toContain("MEMENTOS_API_URL");
     expect(message).toContain("MEMENTOS_API_KEY");
+    expect(message).toContain("hasna.credentials.mementos.api-key");
+    expect(message).toContain("config/credentials");
     // The message must make the refusal explicit — this is never a fallback.
     expect(message).toContain("will NOT fall back");
     expect(message).toContain("~/.hasna/mementos/mementos.db");
-    // And it must point at the explicit local opt-in.
+    // And it must point at the explicit local opt-ins.
     expect(message).toContain("HASNA_MEMENTOS_DB_PATH");
     expect(message).toContain("MEMENTOS_DB_PATH");
+    expect(message).toContain("HASNA_MEMENTOS_LOCAL");
   });
 
   test("full API pair (HASNA_* prefix) -> configured, no throw", () => {
@@ -78,7 +88,7 @@ describe("assertClientStoreConfigured — fail-closed store gate", () => {
     expect(() => assertClientStoreConfigured()).not.toThrow();
   });
 
-  test("full API pair via the MEMENTOS_* aliases -> configured, no throw", () => {
+  test("a credential via the MEMENTOS_* alias pair -> configured, no throw", () => {
     process.env["MEMENTOS_API_URL"] = "https://mementos.hasna.xyz";
     process.env["MEMENTOS_API_KEY"] = "sk-test";
     expect(() => assertClientStoreConfigured()).not.toThrow();
@@ -94,6 +104,16 @@ describe("assertClientStoreConfigured — fail-closed store gate", () => {
     expect(() => assertClientStoreConfigured()).not.toThrow();
   });
 
+  test("the deliberate local flag (HASNA_MEMENTOS_LOCAL) with nothing configured -> configured, no throw", () => {
+    process.env["HASNA_MEMENTOS_LOCAL"] = "1";
+    expect(() => assertClientStoreConfigured()).not.toThrow();
+  });
+
+  test("a KEY ALONE is a complete configuration -> configured, no throw (fleet gateway)", () => {
+    process.env["HASNA_MEMENTOS_API_KEY"] = "sk-test";
+    expect(() => assertClientStoreConfigured()).not.toThrow();
+  });
+
   test("half an API pair still throws naming the missing variable", () => {
     process.env["HASNA_MEMENTOS_API_URL"] = "https://mementos.hasna.xyz";
     let message = "";
@@ -105,17 +125,15 @@ describe("assertClientStoreConfigured — fail-closed store gate", () => {
     expect(message).toContain("HASNA_MEMENTOS_API_KEY");
   });
 
-  test("a retired storage-mode variable throws first, even with a full API pair", () => {
+  test("a retired storage-mode variable is INERT — it neither throws nor selects anything", () => {
+    // The *_MODE / *_STORAGE_MODE switches were stripped with the resolver
+    // adoption (hasna/apps#1720): nothing reads them, a full API pair still
+    // resolves, and a stale variable cannot move the transport.
     process.env["HASNA_MEMENTOS_STORAGE_MODE"] = "";
     process.env["HASNA_MEMENTOS_API_URL"] = "https://mementos.hasna.xyz";
     process.env["HASNA_MEMENTOS_API_KEY"] = "sk-test";
-    let message = "";
-    try {
-      assertClientStoreConfigured();
-    } catch (e) {
-      message = e instanceof Error ? e.message : String(e);
-    }
-    expect(message).toContain("HASNA_MEMENTOS_STORAGE_MODE");
+    expect(() => assertClientStoreConfigured()).not.toThrow();
+    expect(hasMementosEnvAuthorityIntent()).toBe(true); // mode vars are NOT authority intent
   });
 });
 
@@ -132,10 +150,9 @@ const CLI_PATH = new URL("./index.tsx", import.meta.url).pathname;
 
 function scrubbedCliEnv(extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-  for (const key of [...STORE_SELECTOR_ENV_KEYS, ...DB_PATH_ENV_KEYS, "NODE_ENV"]) {
+  for (const key of [...STORE_SELECTOR_ENV_KEYS, ...DB_PATH_ENV_KEYS, ...MEMENTOS_LOCAL_OPT_IN_ENV_KEYS, "NODE_ENV", "MEMENTOS_DB_SCOPE"]) {
     delete env[key];
   }
-  delete env["MEMENTOS_DB_SCOPE"];
   return { ...env, ...extra };
 }
 
@@ -159,7 +176,7 @@ async function runCli(
 }
 
 describe("mementos CLI without store configuration fails closed", () => {
-  test("FAILING INPUT: env-less `list` exits non-zero, names the env, creates no local db", async () => {
+  test("FAILING INPUT: env-less `list` exits non-zero, names the tiers, creates no local db", async () => {
     const scratch = mkdtempSync(join(tmpdir(), "mementos-failclosed-noenv-"));
     const dataHome = join(scratch, "data");
     const env = scrubbedCliEnv({ HASNA_DATA_HOME: dataHome });
@@ -167,7 +184,6 @@ describe("mementos CLI without store configuration fails closed", () => {
     const { stdout, stderr, exitCode } = await runCli(["list", "--limit", "1"], env, scratch);
 
     expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("HASNA_MEMENTOS_API_URL");
     expect(stderr).toContain("HASNA_MEMENTOS_API_KEY");
     expect(stderr).toContain("HASNA_MEMENTOS_DB_PATH");
     expect(stdout).toBe("");
@@ -189,6 +205,19 @@ describe("mementos CLI without store configuration fails closed", () => {
     expect(existsSync(dbPath)).toBe(true);
     const parsed = JSON.parse(stdout) as unknown;
     expect(Array.isArray(parsed)).toBe(true);
+  });
+
+  test("the deliberate local flag (HASNA_MEMENTOS_LOCAL=1) works end-to-end", async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "mementos-failclosed-flag-"));
+    const dataHome = join(scratch, "data");
+    const env = scrubbedCliEnv({ HASNA_MEMENTOS_LOCAL: "1", HASNA_DATA_HOME: dataHome });
+
+    const { stdout, stderr, exitCode } = await runCli(["list", "--limit", "1", "--json"], env, scratch);
+
+    expect(exitCode).toBe(0);
+    expect(Array.isArray(JSON.parse(stdout) as unknown)).toBe(true);
+    // Local mode must SAY it is local — on stderr, once (fail-closed wave).
+    expect(stderr).toMatch(/local/i);
   });
 
   test("--version and --help stay usable without any store configuration", async () => {

@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import {
   getSkillToolDependencies,
   getToolPrimitive,
@@ -83,11 +83,10 @@ export function registerToolPrimitives(parent: Command) {
   tools
     .command("validate")
     .option("--json", "Output as JSON", false)
-    .option("--profile <profile>", "Registry profile: basic or all", "all")
+    .addOption(new Option("--profile <profile>", "Registry profile: basic or all").choices(["basic", "all"]).default("all"))
     .description("Validate primitive tool coverage for the bundled skill catalog")
     .action((options: { json: boolean; profile: "basic" | "all" }) => {
-      const profile = options.profile === "basic" ? "basic" : "all";
-      const result = validateToolPrimitiveCoverage(profile);
+      const result = validateToolPrimitiveCoverage(options.profile);
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));
       } else if (result.valid) {

@@ -58,7 +58,7 @@ async function main() {
   const config = resolveConfig({ HASNA_NOTES_API_SIGNING_KEY: SIGNING_SECRET }, ['--dev']);
   const app = await createApp({ db, config });
 
-  const login = await app.request('/api/v1/auth/login', {
+  const login = await app.request('/v1/auth/login', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email: `pg-gate-${crypto.randomUUID()}@example.test` }),
@@ -67,7 +67,7 @@ async function main() {
   if (!loginBody.devCode) fail('OTP login did not return a dev code');
   checks++;
 
-  const verify = await app.request('/api/v1/auth/verify', {
+  const verify = await app.request('/v1/auth/verify', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email: loginBody.email, code: loginBody.devCode, requestId: loginBody.requestId, name: 'PG Gate' }),
@@ -78,7 +78,7 @@ async function main() {
   }
   checks++;
 
-  const created = await app.request('/api/v1/notes', {
+  const created = await app.request('/v1/notes', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${verifyBody.apiKey}` },
     body: JSON.stringify({ title: 'pg-test-gate note', bodyMarkdown: 'round-trip' }),
@@ -89,7 +89,7 @@ async function main() {
   }
   checks++;
 
-  const got = await app.request(`/api/v1/notes/${createdBody.id}`, {
+  const got = await app.request(`/v1/notes/${createdBody.id}`, {
     method: 'GET',
     headers: { authorization: `Bearer ${verifyBody.apiKey}` },
   }, { ip: '127.0.0.1' });

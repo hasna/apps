@@ -1,8 +1,10 @@
+import { parseWorkspaceMembersPage, workspaceMembersQuery, type RemoteWorkspaceMembersOptions, type RemoteWorkspaceMembersPage } from "./remote-workspace.js";
 import { getApiUrl } from "./auth-store.js";
 import { normalizeSkillsApiOrigin, resolveSkillsConnection } from "./fleet-credentials.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
 import { creditCount, parseRemoteBillingStatus, parseRemoteCheckout, parseRemoteCreditPacks, parseRemoteRunQuote, RemoteCreditApprovalError, type RemoteCreditPack, type RemoteRunApproval, type RemoteRunQuote } from "./remote-account.js";
 import { describeRemoteFiles, readBoundedResponse, sha256, MAX_REMOTE_FILE_BYTES, type RemoteInputFile } from "./remote-files.js";
+import { customerNamePatch, parseUpdatedProfile, parseUpdatedWorkspace, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
 
 /**
  * A server that predates this client's pin/tag/incremental-sync routes answered
@@ -30,10 +32,24 @@ export class RemoteRequestError extends Error {
   constructor(
     readonly path: string,
     readonly status: number,
-    statusText: string,
+    _statusText?: string,
   ) {
-    super(`Remote request to ${path} failed: HTTP ${status}${statusText ? ` ${statusText}` : ""}`);
+    // HTTP reason phrases are server-controlled, just like response bodies.
+    // Keep the optional argument for existing SDK callers without displaying it.
+    super(`Remote request to ${path} failed: HTTP ${status}`);
     this.name = "RemoteRequestError";
+  }
+}
+
+/** A recognized unavailable capability; all displayed text is client-owned. */
+export class RemoteCapabilityUnavailableError extends RemoteRequestError {
+  readonly code = "SUBSCRIPTION_CHECKOUT_UNAVAILABLE" as const;
+
+  constructor() {
+    super("/api/v1/billing/checkout", 503);
+    this.name = "RemoteCapabilityUnavailableError";
+    this.message = "Subscription checkout is unavailable on the configured Skills server. " +
+      "Use skills credits packs to view credit packs, or skills billing portal to manage an existing subscription.";
   }
 }
 
@@ -133,9 +149,15 @@ export class RemoteSkillsClient {
       ) {
         return response;
       }
+      void response.body?.cancel().catch(() => {});
       throw new RemoteRouteUnsupportedError(routePath, response.status, this.apiUrl);
     }
     if (!response.ok) {
+      if (path === "/api/v1/billing/checkout" && options?.method === "POST" && response.status === 503 &&
+        await responseBodyCarriesCode(response, ["SUBSCRIPTION_CHECKOUT_UNAVAILABLE"])) {
+        throw new RemoteCapabilityUnavailableError();
+      }
+      void response.body?.cancel().catch(() => {});
       throw new RemoteRequestError(routePath, response.status, response.statusText);
     }
     return response;
@@ -224,6 +246,27 @@ export class RemoteSkillsClient {
 
   async getIdentity(): Promise<Record<string, unknown>> {
     return (await this.requestNewRoute("/api/auth/whoami")).json();
+  }
+  /** Requires a customer session; API keys and support impersonation cannot edit names. */
+  async updateProfile(input: UpdateRemoteProfile) {
+    const body = customerNamePatch(input, "displayName");
+    return parseUpdatedProfile(await (await this.requestNewRoute("/api/v1/account/profile", { method: "PATCH", body: JSON.stringify(body) })).json());
+  }
+  /** Owner/admin session only; the current workspace identity and slug stay fixed. */
+  async updateCurrentWorkspace(input: UpdateRemoteWorkspace) {
+    const body = customerNamePatch(input, "name");
+    return parseUpdatedWorkspace(await (await this.requestNewRoute("/api/v1/workspaces/current", { method: "PATCH", body: JSON.stringify(body) })).json());
+  }
+  /** Current owner/admin customer session only; the server refuses API keys and impersonation. */
+  async listWorkspaceMembers(options: RemoteWorkspaceMembersOptions = {}): Promise<RemoteWorkspaceMembersPage> {
+    const query = workspaceMembersQuery(options);
+    const requestedCursor = options.cursor;
+    const response = await this.requestNewRoute(`/api/v1/workspace/members${query}`);
+    let value: unknown;
+    try { value = await response.json(); } catch { throw new Error("The server returned an invalid workspace roster."); }
+    const page = parseWorkspaceMembersPage(value);
+    if (requestedCursor !== undefined && page.nextCursor === requestedCursor) throw new Error("The server returned an invalid workspace roster.");
+    return page;
   }
   async listApiKeys(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/auth/keys"); }
   async createApiKey(name: string, scopes?: string[]): Promise<{ key: string; [field: string]: unknown }> {
@@ -418,8 +461,10 @@ export class RemoteSkillsClient {
     const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/versions`, undefined, { domainNotFoundCodes: ["SKILL_NOT_FOUND"] });
     if (response.status === 404) return [];
     if (!response.ok) throw new Error(`versions request failed: ${response.status}`);
-    const body = (await response.json()) as { versions?: RemoteSkillVersion[] };
-    return Array.isArray(body.versions) ? body.versions : [];
+    const body = await readSkillVersionPayload(response);
+    if (!isVersionRecord(body) || !Array.isArray(body.versions) ||
+      (body.slug !== undefined && body.slug !== slug)) throw new Error(INVALID_SKILL_VERSION_RESPONSE);
+    return body.versions.map(entry => normalizeSkillVersion(entry, slug));
   }
 
   /** One version's manifest, or null when the slug@version was never published. */
@@ -427,7 +472,7 @@ export class RemoteSkillsClient {
     const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/versions/${encodeURIComponent(version)}`, undefined, { domainNotFoundCodes: ["SKILL_NOT_FOUND", "SKILL_VERSION_NOT_FOUND"] });
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`version request failed: ${response.status}`);
-    return (await response.json()) as RemoteSkillVersion;
+    return normalizeSkillVersion(await readSkillVersionPayload(response), slug, version);
   }
 
   /** List the pins the instance holds for this principal. */
@@ -511,6 +556,32 @@ function requireOptionalString(record: Record<string, unknown>, field: string): 
   return record[field] as string;
 }
 
+const INVALID_SKILL_VERSION_RESPONSE = "Remote skill version payload did not match the expected contract.";
+
+function isVersionRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function readSkillVersionPayload(response: Response): Promise<unknown> {
+  try { return await response.json(); }
+  catch { throw new Error(INVALID_SKILL_VERSION_RESPONSE); }
+}
+
+/** Validate the shared row without rewriting timestamps or dropping additive server fields. */
+function normalizeSkillVersion(entry: unknown, slug: string, version?: string): RemoteSkillVersion {
+  if (!isVersionRecord(entry) || typeof entry.slug !== "string" || !entry.slug.trim() || entry.slug !== slug ||
+    typeof entry.version !== "string" || !entry.version.trim() || (version !== undefined && entry.version !== version) ||
+    typeof entry.bundleSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(entry.bundleSha256) ||
+    typeof entry.bundleByteSize !== "number" || !Number.isSafeInteger(entry.bundleByteSize) || entry.bundleByteSize < 0 ||
+    typeof entry.createdAt !== "string" || !entry.createdAt.trim() ||
+    (entry.current !== undefined && typeof entry.current !== "boolean") ||
+    (entry.storageKind !== undefined && typeof entry.storageKind !== "string") ||
+    (entry.manifest !== undefined && !isVersionRecord(entry.manifest))) {
+    throw new Error(INVALID_SKILL_VERSION_RESPONSE);
+  }
+  return entry as unknown as RemoteSkillVersion;
+}
+
 function normalizePin(entry: unknown): RemotePin {
   if (!entry || typeof entry !== "object") {
     throw new Error("Remote pin payload did not match the expected contract (expected an object)");
@@ -568,14 +639,39 @@ function normalizeSkillSummaryList(payload: unknown): RemoteSkillSummary[] {
 
 /** True when a 404's JSON body carries one of the given `code` values. */
 async function responseBodyCarriesCode(response: Response, codes: string[]): Promise<boolean> {
+  const reader = response.body?.getReader();
+  if (!reader) return false;
+  const maximum = 8 * 1024;
+  let deadline: ReturnType<typeof setTimeout>;
+  const expired = new Promise<never>((_, reject) => {
+    deadline = setTimeout(() => reject(new Error("Error response read deadline exceeded")), 1_000);
+  });
   try {
-    const payload: unknown = await response.clone().json();
-    if (!payload || typeof payload !== "object") return false;
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const next = await Promise.race([reader.read(), expired]);
+      if (next.done) break;
+      size += next.value.byteLength;
+      // Never retain or parse an oversized chunk, even without Content-Length.
+      if (size > maximum) return false;
+      chunks.push(next.value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const payload: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) || !Object.hasOwn(payload, "code")) return false;
     const code = (payload as Record<string, unknown>).code;
     return typeof code === "string" && codes.includes(code);
   } catch {
-    // A bare 404 (route missing, no domain body) does not parse as JSON.
+    // Malformed, oversized, or stalled bodies cannot establish a known code.
     return false;
+  } finally {
+    clearTimeout(deadline!);
+    // A broken stream's cancel hook may never settle: do not await it.
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }
 
@@ -597,11 +693,12 @@ function normalizeUpdatedSincePage(payload: unknown): UpdatedSincePage {
 
 /**
  * The client for the configured instance, or null when this install runs on
- * this machine (no credential and no authority).
+ * this machine — which is now the explicit local opt-in only
+ * (`HASNA_SKILLS_LOCAL=1`); with no credential, no authority and no opt-in the
+ * shared ladder throws (fail-closed ruling), so the caller fails loudly instead
+ * of quietly reading the bundled corpus while authentication is unconfigured.
  *
- * A configured authority with no credential does NOT return null: the shared
- * ladder throws, so the caller fails loudly instead of quietly reading the
- * bundled corpus while authentication is unconfigured.
+ * A configured authority with no credential also throws for the same reason.
  *
  * ASYNC because the credential ladder is: a vault pointer
  * (`HASNA_SKILLS_API_KEY_REF`) is completed through the secrets vault before a

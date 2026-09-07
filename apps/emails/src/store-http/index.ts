@@ -22,7 +22,7 @@
 
 import type { StoreCapabilities } from "../store/capabilities.js";
 import type { StoreDescriptor } from "../store/descriptor.js";
-import type { EmailsClientCredentialCandidate, EmailsClientCredentialSetting } from "../lib/client-env.js";
+import type { EmailsClientCredentialCandidate, EmailsClientCredentialSetting } from "../lib/emails-credentials.js";
 import type { AddressOwnershipLedger } from "../store-address-ownership-ledger.js";
 import type { GroupMembership } from "../store-group-membership.js";
 import type { SequenceCapableEmailStore } from "../store-sequence-subledger.js";

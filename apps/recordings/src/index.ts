@@ -23,16 +23,28 @@ export {
 export { getStore, __resetStore, APP } from "./store.js";
 export type { Store, RecordingStats, FeedbackInput } from "./store.js";
 export {
-  resolveStorageClient,
-  resolveTransport,
+  RECORDINGS_LOCAL_OPT_IN_ENV_KEYS,
+  isRecordingsLocalOptIn,
+  resolveRecordingsCloudClient,
+  resolveRecordingsTransport,
+  getRecordingsTransportStatus,
   createHttpTransport,
   createStorageClient,
+  toV1BaseUrl,
   HasnaHttpError,
 } from "./http/client.js";
 export type {
+  RecordsClientResolveOptions,
+  RecordsCredentialChainOptions,
+  RecordsKeychainTierOptions,
+  RecordsKeychainCommandResult,
+  RecordsKeychainCommandRunner,
+  RecordsAuthorityResolution,
+  RecordsTransportResolution,
+  RecordsTransportStatus,
+  RecordsCloudClient,
   StorageClient,
-  ClientStore,
-  TransportResolution,
+  QueryParams,
   HttpTransport,
 } from "./http/client.js";
 
@@ -102,7 +114,7 @@ export {
   describeActiveStore,
   probeRecordingPersistence,
   safeBaseUrl,
-  AUTO_FLIP_MODE_SOURCE,
+  ENV_CREDENTIAL_MODE_SOURCE,
   PERSISTENCE_PROBE_TAG,
   PERSISTENCE_PROBE_MARKER_PREFIX,
   type ActiveStoreDescription,

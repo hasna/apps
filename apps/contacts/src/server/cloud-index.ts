@@ -42,8 +42,38 @@ async function runMigrate(): Promise<void> {
   await closeCloud();
 }
 
+/**
+ * Classify early-exit arguments before any bind or database connection.
+ * `--help` / `--version` answer with rc=0 and the server never starts:
+ * previously `contacts-serve --help` fell through to `startCloudServer` and
+ * bound the port (hasna/apps#1720 validation, the binds-before-help class).
+ */
+function handleEarlyArgs(argv: string[]): "help" | "version" | "start" {
+  if (argv.includes("--help") || argv.includes("-h")) return "help";
+  if (argv.includes("--version") || argv.includes("-V")) return "version";
+  return "start";
+}
+
+function usage(): string {
+  return `usage: contacts-serve [--port <n>] [--host <h>]   Start the authenticated /v1 HTTP API over PostgreSQL
+       contacts-serve migrate                     Apply the PostgreSQL schema and exit
+       contacts-serve --version                   Print the version
+
+options:
+  --port <n>          listen port (default ${DEFAULT_PORT}; PORT)
+  --host <h>          bind host (default ${DEFAULT_HOST}; CONTACTS_HOST)
+  --help, -h          show this help and exit
+  --version, -V       print the package version and exit
+`;
+}
+
 async function main(): Promise<void> {
-  if (process.argv.includes("--version") || process.argv.includes("-V")) {
+  const early = handleEarlyArgs(process.argv.slice(2));
+  if (early === "help") {
+    console.log(usage());
+    return;
+  }
+  if (early === "version") {
     console.log(getPackageVersion());
     return;
   }

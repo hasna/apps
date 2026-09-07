@@ -24,7 +24,7 @@ import {
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
   type EmailsClientCredentialSetting,
-} from "../lib/client-env.js";
+} from "../lib/emails-credentials.js";
 
 /** The default per-request deadline, matching `EMAILS_SELF_HOSTED_HTTP_TIMEOUT`. */
 const DEFAULT_TIMEOUT_MS = 30_000;

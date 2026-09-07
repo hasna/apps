@@ -5,13 +5,19 @@ import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { lookup as mimeLookup } from "mime-types";
 import type { Attachment } from "./db";
-import { resolveClientConfig } from "./client-config";
+import {
+  resolveAttachmentsTransport,
+  type Env,
+  type ResolveAttachmentsTransportOptions,
+} from "./client-config";
 
 
 type JsonFetch = typeof fetch;
 
-type ResolveStorageClientOverrides = {
+export type ResolveStorageClientOverrides = {
   fetchImpl?: JsonFetch;
+  /** Tier-1 credential inputs and Keychain-tier controls, as accepted by the shared seam. */
+  credentials?: ResolveAttachmentsTransportOptions["credentials"];
 };
 
 type ListResult<T> = { items: T[] };
@@ -135,19 +141,27 @@ function toAttachment(input: ApiAttachment): Attachment {
   };
 }
 
-/** Resolve an explicit authenticated HTTPS client, or fail before side effects. */
+/**
+ * Resolve an explicit authenticated HTTPS client, or fail before side effects.
+ *
+ * The credential and authority are re-resolved through the @hasna/contracts
+ * client chain on EVERY request (the `credentials` closure), so a long-lived
+ * process picks up a key rotation or a disk/keychain change without being
+ * rebuilt. The authority is pinned for the life of the client: a credential
+ * written for one authority is never sent to another (#1794).
+ */
 export function resolveAttachmentsV1(
-  env: NodeJS.ProcessEnv = process.env,
+  env: Env = process.env,
   overrides?: ResolveStorageClientOverrides,
 ): ResolveAttachmentsV1Result {
-  const authority = resolveClientConfig(env).url;
-  const credentials = () => {
-    const current = resolveClientConfig(env);
-    if (current.url !== authority) throw new Error("Attachments API authority changed; construct a new client explicitly.");
-    return current;
+  const authority = resolveAttachmentsTransport(env, overrides);
+  const credentials = (): { url: string; key: string } => {
+    const current = resolveAttachmentsTransport(env, overrides);
+    if (current.url !== authority.url) throw new Error("Attachments API authority changed; construct a new client explicitly.");
+    return { url: current.url, key: current.apiKey };
   };
   const fetchImpl = overrides?.fetchImpl ?? fetch;
-  const client = createStorageClient(authority, credentials, fetchImpl);
+  const client = createStorageClient(authority.url, credentials, fetchImpl);
   return { transport: "cloud-http", store: makeStore(client, credentials, fetchImpl) };
 }
 

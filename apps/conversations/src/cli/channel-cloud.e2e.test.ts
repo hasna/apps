@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { startApiServer, type ApiServerDeps } from "../server/api.js";
 import { mintApiKey, verifyApiKey, ApiKeyStore, type ApiKeyStatus } from "@hasna/contracts/auth";
 import { STORE_SELECTING_KEYS } from "../lib/store/isolated-test-env.js";
+import { HERMETIC_STATION } from "../test/hermetic.js";
 
 const SIGNING = ["test", "signing", "material", "0123456789"].join("-");
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
@@ -93,6 +94,10 @@ async function runCli(args: string[], env: Record<string, string | undefined>) {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && !STORE_SELECTING_KEYS.includes(key)) childEnv[key] = value;
   }
+  // The station Keychain sits ABOVE the env tier in the shared chain: pin the
+  // account to one no real item uses, or the operator's real key and api-url
+  // items win over the fixture pair a case exports.
+  childEnv.HASNA_STATION = HERMETIC_STATION;
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined) childEnv[key] = value;
   }

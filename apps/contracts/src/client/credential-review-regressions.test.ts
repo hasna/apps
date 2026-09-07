@@ -33,6 +33,38 @@ describe("credential review regressions", () => {
     expect(pointer.pointerVaultKey).toBe("hasna/todos/live/api_key");
   });
 
+  test("ordinary credentials resolve independently, and pointer selection stays deliberate", () => {
+    const env = {
+      HOME: "/path-that-does-not-exist",
+      HASNA_TODOS_API_KEY: "environment-key",
+    };
+    const ordinary = resolveCredential("todos", env)!;
+    expect(ordinary.tier).toBe("env");
+    expect(ordinary.apiKey).toBe("environment-key");
+
+    const keychain = resolveCredential(
+      "todos",
+      { HASNA_STATION: "fixture" },
+      {
+        keychain: {
+          platform: "darwin",
+          hostname: () => "fixture",
+          run: () => ({ status: 0, stdout: "keychain-key\n", stderr: "" }),
+        },
+      },
+    )!;
+    expect(keychain.tier).toBe("keychain");
+    expect(keychain.apiKey).toBe("keychain-key");
+
+    const pointer = resolveCredential("todos", {
+      ...env,
+      HASNA_TODOS_API_KEY_REF: "hasna/todos/live/api_key",
+    })!;
+    expect(pointer.tier).toBe("pointer");
+    expect(pointer.pointerVaultKey).toBe("hasna/todos/live/api_key");
+    expect(pointer.deliberate).toBe(true);
+  });
+
   test("resolved credentials cannot spill through serialization or inspection", () => {
     const secret = "never-print-this";
     const resolved = explicitCredential("todos", secret);

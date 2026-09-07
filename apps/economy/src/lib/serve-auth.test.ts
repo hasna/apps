@@ -5,7 +5,7 @@ describe('serve auth', () => {
   const env = { ...process.env }
 
   beforeEach(() => {
-    delete process.env['ECONOMY_API_TOKEN']
+    delete process.env['HASNA_ECONOMY_API_TOKEN']
     delete process.env['ECONOMY_BIND']
   })
 
@@ -18,18 +18,18 @@ describe('serve auth', () => {
   })
 
   test('binds localhost when API token is set', () => {
-    process.env['ECONOMY_API_TOKEN'] = 'secret'
+    process.env['HASNA_ECONOMY_API_TOKEN'] = 'secret'
     expect(getServeBindHost()).toBe('127.0.0.1')
   })
 
   test('honors ECONOMY_BIND override', () => {
-    process.env['ECONOMY_API_TOKEN'] = 'secret'
+    process.env['HASNA_ECONOMY_API_TOKEN'] = 'secret'
     process.env['ECONOMY_BIND'] = '0.0.0.0'
     expect(getServeBindHost()).toBe('0.0.0.0')
   })
 
   test('requires bearer token when configured', () => {
-    process.env['ECONOMY_API_TOKEN'] = 'secret'
+    process.env['HASNA_ECONOMY_API_TOKEN'] = 'secret'
     const okReq = new Request('http://localhost/api/summary', {
       headers: { Authorization: 'Bearer secret' },
     })

@@ -343,14 +343,15 @@ export class MementosClient {
   }
 
   /**
-   * Create a client from environment variables.
-   * Reads MEMENTOS_URL (default: http://localhost:19428)
-   * @example const client = MementosClient.fromEnv();
+   * Create a client from an explicit base URL.
+   *
+   * The SDK used to read `MEMENTOS_URL` directly; that unprefixed legacy name
+   * was retired with the credential-chain adoption (hasna/apps#1720) — pass an
+   * explicit `baseUrl`, or rely on the default `http://localhost:19428`.
+   * @example const client = MementosClient.fromEnv({ baseUrl: "http://localhost:19428" });
    */
   static fromEnv(overrides: Partial<MementosClientConfig> = {}): MementosClient {
-    const envUrl = typeof process !== "undefined" ? process.env?.["MEMENTOS_URL"] : undefined;
-    const baseUrl = envUrl ?? "http://localhost:19428";
-    return new MementosClient({ baseUrl, ...overrides });
+    return new MementosClient(overrides);
   }
 
   // --------------------------------------------------------------------------

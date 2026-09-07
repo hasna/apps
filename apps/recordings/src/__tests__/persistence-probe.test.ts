@@ -12,7 +12,6 @@ import {
   probeRecordingPersistence,
   renderPersistenceMarker,
   safeBaseUrl,
-  AUTO_FLIP_MODE_SOURCE,
   PERSISTENCE_PROBE_TAG,
   PERSISTENCE_PROBE_MARKER_PREFIX,
   PROBE_SEVERITY_GLYPHS,
@@ -65,22 +64,22 @@ describe("describeActiveStore", () => {
     const description = describeActiveStore(makeConfig(dbPath), {});
 
     expect(description.transport).toBe("sqlite");
-    expect(description.mode_source).toBe("default");
+    expect(description.mode_source).toBe("unresolved");
     expect(description.base_url).toBeNull();
     expect(description.local_db_path).toBe(dbPath);
     expect(description.local_db_recordings).toBe(3);
-    // The on-box file is not the live store: with no hosted env the client
-    // fails closed, and the diagnostic says so (naming the required variables
-    // and the explicit opt-in) instead of silently treating the file as active.
-    expect(description.warning).toContain("HASNA_RECORDINGS_API_URL");
-    expect(description.warning).toContain("HASNA_RECORDINGS_API_KEY");
-    expect(description.warning).toContain("HASNA_RECORDINGS_CLIENT_STORE=sqlite");
+    // The on-box file is not the live store: with no hosted env and no opt-in
+    // the client fails closed, and the diagnostic says so (naming the refusal
+    // code and the explicit opt-in) instead of silently treating the file as
+    // active.
+    expect(description.warning).toContain("REMOTE_API_CONFIG_MISSING");
+    expect(description.warning).toContain("HASNA_RECORDINGS_LOCAL=1");
     expect(description.divergent).toBe(false);
   });
 
-  // The station03 shape: URL + key present, no store variable anywhere, so
-  // nothing in a config file or a login profile reveals that writes left the box.
-  test("reports the http store and names the URL+key presence as the reason", () => {
+  // The station03 shape: a credential resolving from the process env, where
+  // nothing in a config file or a login profile reveals where the writes go.
+  test("reports the http store and names the credential/authority sources", () => {
     const dbPath = join(makeTempDir(), "recordings.db");
 
     const description = describeActiveStore(makeConfig(dbPath), {
@@ -89,7 +88,7 @@ describe("describeActiveStore", () => {
     });
 
     expect(description.transport).toBe("http");
-    expect(description.mode_source).toBe(AUTO_FLIP_MODE_SOURCE);
+    expect(description.mode_source).toBe("HASNA_RECORDINGS_API_KEY+HASNA_RECORDINGS_API_URL");
     expect(description.base_url).toBe("https://recordings.example.test/v1");
     expect(description.warning).toContain("launchctl getenv");
   });
@@ -330,8 +329,12 @@ describe("probeRecordingPersistence", () => {
 
 describe("credential safety in reports", () => {
   // Refutes the branch's own "no credential value can reach the report" claim as
-  // it originally stood: toV1BaseUrl clears query and fragment but keeps
-  // userinfo, so a password in the API URL reached stdout and --json intact.
+  // it originally stood: the old URL normaliser cleared query and fragment but
+  // kept userinfo, so a password in the API URL reached stdout and --json
+  // intact. @hasna/contracts 1.0.2 is stricter: an authority URL carrying
+  // userinfo is REFUSED at resolution (fail closed), so the password never even
+  // reaches the report — the refusal names no URL, and the report's JSON must
+  // not contain it.
   const URL_WITH_PASSWORD = `https://svc:${FAKE_API_KEY}@recordings.example.test`;
 
   test("a password embedded in the API URL never reaches the report", () => {
@@ -342,10 +345,12 @@ describe("credential safety in reports", () => {
       HASNA_RECORDINGS_API_KEY: FAKE_API_KEY,
     });
 
-    expect(description.transport).toBe("http");
+    // Fail closed: the malformed authority is refused, not resolved around.
+    expect(description.transport).toBe("sqlite");
+    expect(description.mode_source).toBe("unresolved");
+    expect(description.warning).toContain("REMOTE_API_URL_INVALID");
     expect(JSON.stringify(description)).not.toContain(FAKE_API_KEY);
-    expect(description.base_url).toContain("recordings.example.test");
-    expect(description.base_url).toContain("redacted");
+    expect(JSON.stringify(description)).not.toContain("recordings.example.test");
   });
 
   test("the divergence warning does not leak the URL password either", () => {
@@ -357,8 +362,12 @@ describe("credential safety in reports", () => {
       HASNA_RECORDINGS_API_KEY: FAKE_API_KEY,
     });
 
-    expect(description.divergent).toBe(true);
+    // Fail closed: no divergence can be flagged for an authority that was
+    // refused, and the warning carries none of the URL's material.
+    expect(description.divergent).toBe(false);
+    expect(description.warning).toContain("REMOTE_API_URL_INVALID");
     expect(description.warning).not.toContain(FAKE_API_KEY);
+    expect(JSON.stringify(description)).not.toContain("recordings.example.test");
   });
 
   test("the persistence probe message does not leak the URL password", async () => {

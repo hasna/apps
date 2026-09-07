@@ -88,6 +88,10 @@ function pathsResolverResolve(kind: PathKind, options: PathsResolverOptions): st
 export function dataDir(options: PathsResolverOptions): string {
   return pathsResolverResolve("data", options);
 }
+/** The resolver (XDG / macOS) CACHE root for an app; `HASNA_CACHE_HOME` overrides it. */
+export function cacheDir(options: PathsResolverOptions): string {
+  return pathsResolverResolve("cache", options);
+}
 import type {
   EconomyRequest,
   EconomySession,
@@ -132,7 +136,7 @@ function macHostMachineId(): string | null {
 }
 
 export function getMachineId(): string {
-  const envMachine = normalizeMachineId(process.env['ECONOMY_MACHINE_ID'])
+  const envMachine = normalizeMachineId(process.env['HASNA_ECONOMY_MACHINE_ID'])
   if (envMachine) return envMachine
   const hostMachine = normalizeMachineId(hostname()) ?? 'unknown'
   if (hostMachine === 'mac' || hostMachine === 'localhost') return macHostMachineId() ?? hostMachine

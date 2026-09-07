@@ -8,30 +8,39 @@
 //     ../db/* modules (domain-records, dns-records, alerts, domain-owners,
 //     domain-history, domain-reputation). Those modules are the sqlite backing
 //     of this transport and are ONLY reached through LocalStore.
-//   • ApiStore   — the hosted HTTP API at `<API_URL>/v1` with a bearer key.
-//     Delegates to the vendored @hasna/contracts storage client and its
-//     transport escape hatch for nested resources.
+//   • ApiStore   — the hosted HTTP API at `<origin>/v1` with a bearer key.
+//     Delegates to the @hasna/contracts storage client and its transport
+//     escape hatch for nested resources.
 //
-// `getStore()` resolves which transport to use from the client env contract:
-// BOTH HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY set -> hosted ApiStore;
-// NEITHER set -> FAIL CLOSED with an error naming the env pair — the default
-// local database (~/.hasna/domains/domains.db) is never opened implicitly.
-// Local SQLite is reachable ONLY on an explicit opt-in: one of the local path
-// variables (DOMAINS_DB_PATH / HASNA_DOMAINS_DB_PATH / DOMAINS_DIR /
-// HASNA_DOMAINS_DIR) naming a concrete database. Exactly one API var set ->
-// hard error (fail-closed). Callers NEVER branch on a mode themselves and
-// NEVER touch sqlite or fetch directly — that split-brain bug is exactly what
-// this module eliminates.
+// `getStore()` resolves which transport to use through the ONE shared client
+// resolver in @hasna/contracts (`../lib/domains-resolver.ts`) — the same five
+// tiers the CLI and the SDK use, resolved FRESH on every call — plus the
+// explicit local opt-in in `../lib/local-opt-in.ts`:
+//
+//   • explicit local path opt-in set AND the environment configures no
+//     authority and no credential -> LocalStore (local mode is announced on
+//     stderr, once per process);
+//   • a local path set NEXT TO a configured authority/credential -> CONFLICT,
+//     fail loud — configuring both a sqlite path and a hosted credential asks
+//     for two different datasets and nothing here can tell which the operator
+//     meant;
+//   • otherwise -> the resolver decides. URL + key (env, Keychain, disk) ->
+//     hosted ApiStore; a key alone defaults to the fleet gateway; and NO
+//     credential at all FAILS CLOSED with an error naming the canonical env
+//     pair — the default local database (~/.hasna/domains/domains.db) is never
+//     opened implicitly, and no `*_MODE` / `*_STORAGE_MODE` variable selects
+//     anything (those switches are stripped from the package entirely).
+//
+// Callers NEVER branch on a mode themselves and NEVER touch sqlite or fetch
+// directly — that split-brain bug is exactly what this module eliminates.
 //
 // SAFETY: the API key never leaves the transport; it is never logged, returned,
 // or embedded in any value produced here. Only the HTTP transport ever holds it.
 // A raw DB DSN/DATABASE_URL is NEVER used on the client side.
 
-import {
-  resolveStorageClient,
-  type HasnaStorageClient,
-} from "@hasna/contracts/client/storage";
-import { clientTransportEnvKeys } from "@hasna/contracts/client";
+import { resolveDomainsHttpClient, resolveDomainsTransport } from "../lib/domains-resolver.js";
+import type { CredentialChainOptions, CredentialTier, HasnaStorageClient } from "../lib/client-types.js";
+import { announceLocal, explicitLocalPathVar, selectsLocalStore, LOCAL_PATH_VARS } from "../lib/local-opt-in.js";
 
 import * as records from "./domain-records.js";
 import * as dns from "./dns-records.js";
@@ -76,16 +85,12 @@ import type {
   CreateReputationInput,
 } from "./domain-reputation.js";
 
-const APP = "domains";
-
 /**
  * The server's per-response row cap for `/v1/domains` (server/repo.ts clamps
  * `limit` to `[1, 1000]`). ApiStore paginates in units of this size so cloud
  * reads return the full result set instead of the server's default LIMIT 100.
  */
 const DOMAINS_PAGE_SIZE = 1000;
-
-type Env = Record<string, string | undefined>;
 
 // ── The single data interface ────────────────────────────────────────────────
 
@@ -720,300 +725,138 @@ export class ApiStore implements DomainsStore {
 
 // ── Resolver ──────────────────────────────────────────────────────────────────
 
-/** The retired storage-mode env keys. They are NOT read: the client flip is the env contract only. */
-export const RETIRED_MODE_KEYS = [
-  "HASNA_DOMAINS_STORAGE_MODE",
-  "DOMAINS_STORAGE_MODE",
-  "HASNA_DOMAINS_MODE",
-  "DOMAINS_MODE",
-] as const;
-
-/** Drop the retired storage-mode keys so a stale operator env can never select a backend. */
-function withoutRetiredModeKeys(env: Env): Env {
-  const out: Env = { ...env };
-  for (const key of RETIRED_MODE_KEYS) delete out[key];
-  return out;
-}
-
-export interface ClientFlip {
-  /** True when both API URL and key are set: the hosted HTTP client. */
-  readonly hosted: boolean;
-  /** The env key the API URL came from, or null. */
-  readonly urlSource: string | null;
-  /** The env key the API key came from, or null. */
-  readonly keySource: string | null;
-}
+export { LOCAL_PATH_VARS, explicitLocalPathVar } from "../lib/local-opt-in.js";
 
 /**
- * Resolve the client transport from the env contract:
- * `HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY` (or the unprefixed
- * aliases) BOTH set -> hosted; exactly one set is misconfiguration and throws
- * — fail-closed, so a partial flip can never silently read the wrong dataset.
- * NEITHER set is not itself a licence to open local sqlite: {@link getStore}
- * still demands an explicit local opt-in before a {@link LocalStore} resolves.
+ * A resolved store, with the sources that decided it — never a key value, and
+ * never a URL for the local transport.
  */
-export function resolveClientFlip(env: Env): ClientFlip {
-  const { apiUrlKeys, apiKeyKeys } = clientTransportEnvKeys("domains");
-  const urlKey = apiUrlKeys.find((k) => env[k]) ?? null;
-  const keyKey = apiKeyKeys.find((k) => env[k]) ?? null;
-  if (Boolean(urlKey) !== Boolean(keyKey)) {
-    throw new Error(
-      `Misconfigured domains client: ${urlKey ?? keyKey} is set without the other. ` +
-        `The hosted client needs BOTH HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY. ` +
-        `With neither set, resolution fails closed unless local sqlite is explicitly opted into ` +
-        `via one of ${LOCAL_PATH_VARS.join(" / ")}.`,
-    );
-  }
-  return { hosted: urlKey !== null, urlSource: urlKey, keySource: keyKey };
+export interface DomainsStoreResolution {
+  /** Which transport backs the store. */
+  transport: "local" | "http";
+  /** The local-path var that opted into LocalStore, or null for http. */
+  localPathVar: string | null;
+  /** For http: the `<origin>/v1` base URL the resolver produced. */
+  baseUrl: string | null;
+  /** WHERE the API URL came from: env key NAME, Keychain reference, file PATH, or `"default"`. */
+  apiUrlSource: string | null;
+  /** WHERE the API key came from: env key NAME, Keychain reference, or file PATH. Never a value. */
+  apiKeySource: string | null;
+  /** Which tier of the credential chain supplied the key, or null for local. */
+  apiKeyTier: CredentialTier | null;
 }
 
-/** Env var that deliberately re-enables the cloud transport inside a test run. */
-export const ALLOW_CLOUD_IN_TESTS = "HASNA_DOMAINS_ALLOW_CLOUD_IN_TESTS";
-
-/** Env var that deliberately resolves a local-path/cloud conflict in favour of cloud. */
-export const ALLOW_CLOUD_WITH_LOCAL_PATH = "HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH";
-
-/**
- * Env vars that name a local sqlite file or directory. MUST stay in sync with
- * `getDbPath()` in `database.ts` — these are exactly the names it reads.
- * Setting any of them is an explicit request for the LOCAL transport, because
- * no other transport has a sqlite file to point at.
- */
-export const LOCAL_PATH_VARS = [
-  "DOMAINS_DB_PATH",
-  "HASNA_DOMAINS_DB_PATH",
-  "DOMAINS_DIR",
-  "HASNA_DOMAINS_DIR",
-] as const;
-
-/**
- * Opt-in flags are read strictly: `=0`, `=false`, `=no`, `=off` and empty mean
- * NO. A bare `Boolean(env[k])` treats the string "0" as true, which turns an
- * operator's explicit refusal into consent — the fail-open shape tracked on
- * 47115b75 for {@link ALLOW_CLOUD_IN_TESTS}. That flag is left as-is here
- * because it belongs to that row; new flags do not repeat the defect.
- */
-function enabled(value: string | undefined): boolean {
-  if (!value) return false;
-  const v = value.trim().toLowerCase();
-  return v !== "0" && v !== "false" && v !== "no" && v !== "off";
-}
-
-/** The first local-path var this env sets, or undefined when none is set. */
-export function explicitLocalPathVar(env: Env): string | undefined {
-  return LOCAL_PATH_VARS.find((key) => Boolean(env[key]));
-}
-
-/**
- * FAIL CLOSED — the store must never silently default to the local database.
- *
- * The ONLY way to reach {@link LocalStore} is an explicit local opt-in: one of
- * the {@link LOCAL_PATH_VARS} naming a concrete sqlite file or directory.
- * Without the hosted client env pair AND without that opt-in this THROWS with
- * the action the operator must take. A fleet CLI that runs with no env must
- * never open the default local database (~/.hasna/domains/domains.db) and
- * report success against the wrong dataset.
- *
- * `hostedConfigured` selects the lead sentence: when the hosted env pair WAS
- * set but a guard refused it (a test run without
- * {@link ALLOW_CLOUD_IN_TESTS}), the error must not advise setting the pair
- * that is already there.
- */
-function localStoreOrThrow(env: Env, hostedConfigured: boolean): LocalStore {
-  const pathVar = explicitLocalPathVar(env);
-  if (pathVar) return new LocalStore();
-  const names = LOCAL_PATH_VARS.join(" / ");
-  const lead = hostedConfigured
-    ? "domains fails closed: the hosted store was refused for this process (a test run may not " +
-      `reach the production API unless ${ALLOW_CLOUD_IN_TESTS}=1) and local sqlite was not ` +
-      "explicitly opted into"
-    : "domains fails closed: HASNA_DOMAINS_API_URL and HASNA_DOMAINS_API_KEY are not set and " +
-      "local sqlite was not explicitly opted into";
-  throw new Error(
-    lead +
-      `. Opt into local sqlite by setting one of ${names} to a concrete database path, or ` +
-      "configure the hosted client env pair. The default local database (~/.hasna/domains/domains.db) " +
-      "is never opened implicitly.",
-  );
-}
-
-/**
- * True when this process is a test runner. Measured on bun 1.3.14: `bun test`
- * sets `NODE_ENV=test` and does NOT set `BUN_TEST`, so NODE_ENV is the signal.
- * The jest/vitest worker vars are accepted too for non-bun runners.
- *
- * THIS FUNCTION IS NOT, AND CANNOT BE, THE PRODUCTION-WRITE GUARD. It answers
- * "is a test runner in charge", and the set of runners is open-ended: `bun run`,
- * a bare `bun script.ts`, `node`, and every CLI invocation set none of these,
- * and each new runner would need another clause here. Measured on bun 1.3.14,
- * station01, 2026-08-07:
- *
- *   bun test <file>   NODE_ENV="test"   -> underTest TRUE   (protected)
- *   bun run <script>  NODE_ENV unset    -> underTest FALSE  (NOT protected)
- *   bun <file>        NODE_ENV unset    -> underTest FALSE  (NOT protected)
- *
- * A guard keyed only on this therefore protects the suite and nothing else,
- * which is precisely why the hazard was invisible: every test that could prove
- * the guard works runs inside the one context it covers. The conflict check in
- * {@link assertNoStoreConflict} keys on INTENT instead, and so needs no
- * per-runner maintenance.
- */
-function underTest(env: Env): boolean {
-  return (
-    env.NODE_ENV === "test" ||
-    Boolean(env.VITEST) ||
-    Boolean(env.JEST_WORKER_ID)
-  );
-}
-
-let warnedCloudDowngrade = false;
-
-/**
- * FAIL CLOSED: a test run must never reach the production dataset.
- *
- * `DOMAINS_DIR` / `DOMAINS_DB_PATH` — the variables every suite in this repo
- * sets to a mkdtemp directory for isolation — are inputs to `getDbPath()` in
- * `database.ts`, which is reached ONLY from {@link LocalStore}, i.e. only after
- * the transport has already been chosen. They are not inputs to the transport
- * decision at all. So on any box that exports `HASNA_DOMAINS_API_URL` +
- * `HASNA_DOMAINS_API_KEY`, every `createDomain()` in the suite went to the
- * production API while the author believed it was writing to a temp directory.
- * That is not a hypothetical: 122 rows landed in the production portfolio in
- * one hour on 2026-07-11, and twelve more across 2026-07-24/30/31, each one
- * carrying its own run's mkdtemp path inside the persisted domain name.
- *
- * Setting an isolation variable is a REQUEST. Only the resolved transport says
- * whether it was honoured — which is why this guard keys on the resolved
- * transport rather than on whether an isolation variable was set.
- *
- * Default behaviour is to downgrade to {@link LocalStore}, which is what the
- * suite intended, and to say so once on stderr so the downgrade is never
- * silent. Set `HASNA_DOMAINS_TEST_GUARD=throw` to hard-fail instead, or
- * `HASNA_DOMAINS_ALLOW_CLOUD_IN_TESTS=1` for a genuine cloud integration test.
- */
-function cloudAllowedHere(env: Env): boolean {
-  if (!underTest(env)) return true;
-  if (env[ALLOW_CLOUD_IN_TESTS]) return true;
-  if (env.HASNA_DOMAINS_TEST_GUARD === "throw") {
-    throw new Error(
-      "Refusing to resolve the hosted domains store inside a test run: " +
-        "a test would read and write the PRODUCTION portfolio. Note that DOMAINS_DIR and " +
-        "DOMAINS_DB_PATH do not affect this decision — they only choose the sqlite file " +
-        `AFTER a local transport has been selected. Unset HASNA_DOMAINS_API_URL/API_KEY, or set ${ALLOW_CLOUD_IN_TESTS}=1 ` +
-        "if you really intend this test to hit the hosted API.",
-    );
-  }
-  if (!warnedCloudDowngrade) {
-    warnedCloudDowngrade = true;
-    console.error(
-      `[domains] test run detected: refusing the cloud store, using local sqlite instead. Set ${ALLOW_CLOUD_IN_TESTS}=1 to override.`,
-    );
-  }
-  return false;
+/** Options forwarded to the shared resolver (credential tier-1 inputs, Keychain seam). */
+export interface StoreResolutionOptions {
+  credentials?: CredentialChainOptions;
+  /** Where the one-line local-mode notice goes. Defaults to `process.stderr`. */
+  notice?: (line: string) => void;
 }
 
 /**
  * FAIL CLOSED on a contradictory store configuration.
  *
- * `DOMAINS_DB_PATH` (and its siblings) name a SQLITE FILE. Only the local
- * transport has one. So setting such a variable while the cloud transport also
- * resolves is not a preference to be ranked — it is two mutually exclusive
- * requests, and nothing in the configuration says which the operator meant.
- * The rule this repo is held to is explicit that configuring both a DB path and
- * an API URL is a hard boot error, never a precedence rule.
+ * `HASNA_DOMAINS_DB_PATH` (and its siblings) name a SQLITE FILE. Only the
+ * local transport has one. So setting such a variable while the environment
+ * also configures a hosted authority or credential is not a preference to be
+ * ranked — it is two mutually exclusive requests, and nothing in the
+ * configuration says which the operator meant. Writing to the wrong one is
+ * silent, so this is a hard boot error, never a precedence rule.
  *
- * WHY THIS AND NOT "JUST HONOUR THE PATH". Silently preferring local would
- * close the measured hole, and would open the mirror image of it: a caller who
- * genuinely wants cloud but carries a stale `DOMAINS_DB_PATH` would read and
- * write an invisible local file while believing it was on the portfolio. That
- * is the same defect class — a silent store substitution — pointed the other
- * way, and silent-and-wrong is strictly worse than loud-and-stopped.
- *
- * WHY THIS NEEDS NO MAINTENANCE. It keys on the operator's INTENT (a sqlite
- * path was configured), not on detecting which runner is in charge, so a new
- * runner cannot open a new hole in it.
- *
- * Ordered AFTER {@link cloudAllowedHere} deliberately: inside a test run the
- * guard has already downgraded to local, which is unambiguously what a suite
- * meant, so a test that sets both never reaches this error.
- *
- * Escape: set `HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH=1` to keep the hosted
- * store, or unset the two API vars (`HASNA_DOMAINS_API_URL` +
- * `HASNA_DOMAINS_API_KEY`) to take the path. Both routes are measured to work
- * in `store-runner-context.test.ts`.
+ * The local opt-in applies ONLY when the environment configures nothing (see
+ * `selectsLocalStore`); this error is the loud answer to every other
+ * combination.
  */
-function assertNoStoreConflict(env: Env): void {
-  if (enabled(env[ALLOW_CLOUD_WITH_LOCAL_PATH])) return;
+function assertNoStoreConflict(env: Record<string, string | undefined>): void {
   const pathVar = explicitLocalPathVar(env);
   if (!pathVar) return;
   throw new Error(
     `Refusing to resolve the hosted domains store while ${pathVar} is set: that variable ` +
       `names a local sqlite file, so the configuration asks for BOTH stores at once and ` +
-      `nothing here can tell which you meant. Writing to the wrong one is silent — a plain ` +
-      `\`bun run\` script that set ${pathVar} put 230 rows into the production portfolio on ` +
-      `2026-08-07 while reporting success. Pick one: unset HASNA_DOMAINS_API_URL and ` +
-      `HASNA_DOMAINS_API_KEY to use ${pathVar}; unset ${pathVar} to use the hosted store; or set ` +
-      `${ALLOW_CLOUD_WITH_LOCAL_PATH}=1 if you really intend the hosted store with that variable present.`,
+      `nothing here can tell which you meant. Local mode is an explicit opt-in that applies ` +
+      `only when the environment configures no authority and no credential. Pick one: unset ` +
+      `${pathVar} (and every other of ${LOCAL_PATH_VARS.join(" / ")}) to use the hosted store, or ` +
+      `keep ${pathVar} and unset every authority/credential variable (HASNA_DOMAINS_API_URL, ` +
+      `HASNA_DOMAINS_API_KEY, HASNA_DOMAINS_API_KEY_OVERRIDE, HASNA_DOMAINS_API_KEY_REF, ` +
+      `HASNA_PROFILE — plus the Keychain item and ~/.hasna/domains/config/credentials) to use ` +
+      `the local store.`,
   );
 }
 
 /**
  * Resolve the active {@link DomainsStore} for the current environment.
  *
- * FAIL CLOSED: an {@link ApiStore} resolves only when the client env contract
- * flips hosted (HASNA_DOMAINS_API_URL + HASNA_DOMAINS_API_KEY). A
- * {@link LocalStore} resolves only on an explicit local opt-in (one of the
- * {@link LOCAL_PATH_VARS}). With neither, this THROWS — a CLI run without its
- * fleet env must never silently serve the default local database. Throws too
- * when the flip is misconfigured (exactly one of URL/key set), so callers can
- * never silently read the wrong dataset. The retired storage-mode env keys are
- * never read. Inside a test run the hosted transport is refused — see
- * {@link cloudAllowedHere}. Outside one, a local path set alongside the hosted
- * transport is refused — see {@link assertNoStoreConflict}.
+ * FAIL CLOSED. An {@link ApiStore} resolves through the shared @hasna/contracts
+ * resolver (URL + key from env, Keychain, or disk; a key alone defaults to the
+ * fleet gateway). A {@link LocalStore} resolves ONLY on the explicit local
+ * opt-in (one of the {@link LOCAL_PATH_VARS}) when the environment configures
+ * no authority and no credential — and every local run announces itself on
+ * stderr. With neither, this THROWS (the resolver's fail-closed error naming
+ * the canonical env pair) — a CLI run without its fleet credential must never
+ * silently serve the default local database. A local path set NEXT TO a
+ * configured authority/credential is a hard conflict error. The resolver is
+ * called fresh on every request (see `resolveDomainsHttpClient`), so a key
+ * rotation heals a long-lived process without a rebuild.
  */
-/**
- * Resolve the hosted storage client for an env whose flip already said hosted.
- * Fail-closed: if the installed @hasna/contracts does not resolve the client
- * to the hosted transport, THROW — silently falling back to local while the
- * operator configured the hosted store is the store-substitution defect this
- * module exists to remove.
- */
-function requireHostedClient(env: Env, flip: ClientFlip): HasnaStorageClient {
-  const resolved = resolveStorageClient(APP, withoutRetiredModeKeys(env));
-  if (resolved.transport !== "http") {
-    throw new Error(
-      `Hosted domains client was requested (${flip.urlSource} + ${flip.keySource}) but ` +
-        `@hasna/contracts resolved transport '${resolved.transport}'. Refusing to read the wrong dataset.`,
-    );
+export function getStore(
+  env: Record<string, string | undefined> = process.env,
+  options: StoreResolutionOptions = {},
+): DomainsStore {
+  if (selectsLocalStore(env)) {
+    announceLocal(env, options.notice);
+    return new LocalStore();
   }
-  return resolved.client;
+  assertNoStoreConflict(env);
+  const wired = resolveDomainsHttpClient(env, {
+    ...(options.credentials ? { credentials: options.credentials } : {}),
+  });
+  return new ApiStore(wired.client);
 }
 
-export function getStore(env: Env = process.env): DomainsStore {
-  const flip = resolveClientFlip(env);
-  if (!flip.hosted) return localStoreOrThrow(env, false);
-  if (!cloudAllowedHere(env)) return localStoreOrThrow(env, true);
+/**
+ * Resolve the store WITHOUT constructing it — the same decision {@link
+ * getStore} makes, returned as a report a diagnostic (`domains doctor`) or a
+ * caller can show. Mirrors {@link getStore} exactly: an env that would make
+ * {@link getStore} throw throws here too.
+ */
+export function getStoreResolution(
+  env: Record<string, string | undefined> = process.env,
+  options: StoreResolutionOptions = {},
+): DomainsStoreResolution {
+  if (selectsLocalStore(env)) {
+    return {
+      transport: "local",
+      localPathVar: explicitLocalPathVar(env) ?? null,
+      baseUrl: null,
+      apiUrlSource: null,
+      apiKeySource: null,
+      apiKeyTier: null,
+    };
+  }
   assertNoStoreConflict(env);
-  return new ApiStore(requireHostedClient(env, flip));
+  const { report } = resolveDomainsTransport(env, {
+    ...(options.credentials ? { credentials: options.credentials } : {}),
+  });
+  return {
+    transport: "http",
+    localPathVar: null,
+    baseUrl: report.baseUrl,
+    apiUrlSource: report.apiUrlSource,
+    apiKeySource: report.apiKeySource,
+    apiKeyTier: report.apiKeyTier,
+  };
 }
 
 /**
  * True when the resolved store is the hosted HTTP transport. Mirrors
  * {@link getStore} exactly: an env that would make {@link getStore} throw
- * (no hosted env pair AND no explicit local opt-in) throws here too — a bare
- * `false` must never be read as a licence to open the default local database.
+ * (no resolvable credential AND no explicit local opt-in) throws here too — a
+ * bare `false` must never be read as a licence to open the default local
+ * database.
  */
-export function isCloudStore(env: Env = process.env): boolean {
-  const flip = resolveClientFlip(env);
-  if (!flip.hosted) {
-    localStoreOrThrow(env, false);
-    return false;
-  }
-  if (!cloudAllowedHere(env)) {
-    localStoreOrThrow(env, true);
-    return false;
-  }
-  assertNoStoreConflict(env);
-  requireHostedClient(env, flip);
-  return true;
+export function isCloudStore(
+  env: Record<string, string | undefined> = process.env,
+  options: StoreResolutionOptions = {},
+): boolean {
+  return getStoreResolution(env, options).transport === "http";
 }

@@ -20,17 +20,22 @@ const TEST_DIR = mkdtempSync(join(tmpdir(), "hooks-redirect-test-"));
 beforeAll(() => {
   process.env.HASNA_HOOKS_DATA_DIR = TEST_DIR;
   process.env.HASNA_HOOKS_DB_PATH = ":memory:";
-  process.env.HASNA_HOOKS_API_KEY = "test-sentinel-key-1234567890";
 });
 
 afterAll(() => {
   delete process.env.HASNA_HOOKS_DATA_DIR;
   delete process.env.HASNA_HOOKS_DB_PATH;
-  delete process.env.HASNA_HOOKS_API_KEY;
-  delete process.env.HASNA_HOOKS_API_URL;
   closeDb();
   rmSync(TEST_DIR, { recursive: true, force: true });
 });
+
+/**
+ * Hermetic registry env (hasna/apps#1720): caller-built, so the ambient
+ * Keychain/disk tiers of the machine cannot leak into the run.
+ */
+function redirectEnv(base: string): Record<string, string> {
+  return { HOME: TEST_DIR, HASNA_HOOKS_API_URL: base, HASNA_HOOKS_API_KEY: "test-sentinel-key-1234567890" };
+}
 
 function sha(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -70,12 +75,10 @@ describe("redirect handling (QA-3 P1 key-leak fix)", () => {
       return found ? found[1] : new Response("not found", { status: 404 });
     });
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
-      const plan = await syncHooks();
+      const plan = await syncHooks({ env: redirectEnv(base) });
       expect(plan.diff.added).toContain("redirect-demo");
       expect(readLock().hooks["redirect-demo"]?.version).toBe("1.0.0");
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       stop();
     }
   });
@@ -96,13 +99,11 @@ describe("redirect handling (QA-3 P1 key-leak fix)", () => {
     });
 
     try {
-      process.env.HASNA_HOOKS_API_URL = hostA.base;
-      await expect(syncHooks()).rejects.toThrow();
+      await expect(syncHooks({ env: redirectEnv(hostA.base) })).rejects.toThrow();
       // The fetch was refused at the redirect; the second origin never saw
       // the key header.
       expect(leaked).toHaveLength(0);
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       hostA.stop();
       hostB.stop();
     }
@@ -121,11 +122,9 @@ describe("redirect handling (QA-3 P1 key-leak fix)", () => {
       return new Response("not found", { status: 404 });
     });
     try {
-      process.env.HASNA_HOOKS_API_URL = base;
-      await expect(syncHooks()).rejects.toThrow();
+      await expect(syncHooks({ env: redirectEnv(base) })).rejects.toThrow();
       expect(targetReached).toBe(false);
     } finally {
-      delete process.env.HASNA_HOOKS_API_URL;
       stop();
     }
   });

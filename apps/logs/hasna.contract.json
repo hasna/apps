@@ -3,8 +3,8 @@
   "name": "logs",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.12.0",
-  "description": "Agent-friendly log + telemetry sink. CLI + MCP + HTTP API (logs-serve) + SDK. SQLite at ~/.hasna/logs/logs.db is authoritative when no DATABASE_URL is configured; with one, the serve process reads/writes the operator-owned Postgres directly, with API-key auth via @hasna/contracts. This is the shared S3-backed log sink other apps route to.",
+  "kitVersion": "1.0.2",
+  "description": "Agent-friendly log + telemetry sink. CLI + MCP + HTTP API (logs-serve) + SDK. Clients resolve their API key and URL through the @hasna/contracts client chain (Keychain item hasna.credentials.logs.api-key, ~/.hasna/logs/config/credentials, HASNA_LOGS_API_KEY; authority HASNA_LOGS_API_URL else the fleet gateway https://api.hasna.com/logs) and fail closed with no credential: the local SQLite store is reachable only via the explicit HASNA_LOGS_LOCAL=1 opt-in. The serve reads/writes the operator-owned Postgres directly with HASNA_LOGS_DATABASE_URL (API-key auth via @hasna/contracts), or the on-box SQLite collector under HASNA_LOGS_LOCAL=1. This is the shared S3-backed log sink other apps route to.",
   "bins": [
     "logs",
     "logs-mcp",
@@ -87,8 +87,8 @@
       ]
     },
     "client": {
-      "apiUrlEnv": "LOGS_API_URL",
-      "apiKeyEnv": "LOGS_API_KEY"
+      "apiUrlEnv": "HASNA_LOGS_API_URL",
+      "apiKeyEnv": "HASNA_LOGS_API_KEY"
     }
   }
 }

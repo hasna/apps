@@ -31,7 +31,7 @@ for (const engine of ["sqlite","postgresql"] as const) {
     test("auth, input validation, durable idempotency, conflicts and restart persistence",async()=>{
       expect((await handle(new Request("http://localhost/health"))).status).toBe(200);
       expect((await handle(new Request("http://localhost/v1/providers"))).status).toBe(401);
-      const input={id:"test-provider",name:"Test provider",baseUrl:"https://example.com/api/v1",protocol:"openai-responses" as const,manualModels:[{id:"test-model",name:"Test model",outputModalities:["text"],supportedParameters:["tools"]}]};
+      const input={id:"test-provider",name:"Test provider",baseUrl:"https://example.com/api/v1",protocol:"openai-responses" as const,catalogBaseUrl:"https://example.com/catalog/v1",catalogFormat:"openai" as const,catalogAuthStyle:"none" as const,manualModels:[{id:"test-model",name:"Test model",outputModalities:["text"],supportedParameters:["tools"]}]};
       const p=await client.createProvider(input,"stable-request-001");
       expect(p.version).toBe(1);
       expect(await client.createProvider(input,"stable-request-001")).toEqual(p);
@@ -40,7 +40,8 @@ for (const engine of ["sqlite","postgresql"] as const) {
       await expect(client.createProvider({...input,id:"invalid",apiKey:"not-accepted"} as any)).rejects.toMatchObject({status:400});
       await expect(client.createProfile({id:"bad-protocol",name:"Bad",providerId:p.id,harness:"claude",model:"test-model"})).rejects.toMatchObject({code:"protocol_mismatch"});
       expect((await client.listProfiles()).total).toBe(0);
-      const profile=await client.createProfile({id:"profile",name:"Native test",providerId:p.id,harness:"codex",model:"test-model"});
+      const modelPolicy={version:1 as const,roles:{subagent:"test-model",summary:"test-model"},allowedModels:["test-model"],aliases:{fast:"test-model"},fallbacks:{}};
+      const profile=await client.createProfile({id:"profile",name:"Native test",providerId:p.id,harness:"codex",model:"test-model",modelPolicy});
       await expect(client.launchPlan(profile.id)).rejects.toMatchObject({code:"catalog_missing"});
       await client.refreshModels(p.id);
       let plan=await client.launchPlan(profile.id);
@@ -50,10 +51,19 @@ for (const engine of ["sqlite","postgresql"] as const) {
       await client.updateProfile({...profileInput,name:"Changed before launch"},profileVersion);
       await expect(client.createRun({profileId:profile.id,harness:profile.harness,model:profile.model,planToken:plan.planToken})).rejects.toMatchObject({code:"plan_changed"});
       plan=await client.launchPlan(profile.id);
+      const policyChanged={...profileInput,modelPolicy:{...modelPolicy,roles:{...modelPolicy.roles,review:"test-model"}}};
+      const currentProfile=await client.getProfile(profile.id);
+      await client.updateProfile(policyChanged,currentProfile.version);
+      await expect(client.createRun({profileId:profile.id,harness:profile.harness,model:profile.model,planToken:plan.planToken})).rejects.toMatchObject({code:"plan_changed"});
+      plan=await client.launchPlan(profile.id);
       await client.refreshModels(p.id); // Identical catalog refresh must not invalidate concurrent launches.
-      const run=await client.createRun({profileId:profile.id,harness:profile.harness,model:profile.model,planToken:plan.planToken});
-      const finished=await client.finishRun(run.id,run.version,{status:"exited",exitCode:0});
+      const oldLauncher=await handle(new Request("http://localhost/v1/runs",{method:"POST",headers:{authorization:`Bearer ${token}`,"content-type":"application/json","idempotency-key":crypto.randomUUID()},body:JSON.stringify({profileId:profile.id,harness:profile.harness,model:profile.model,planToken:plan.planToken})}));
+      expect(oldLauncher.status).toBe(409);expect((await oldLauncher.json() as any).error.code).toBe("launcher_upgrade_required");
+      const run=await client.createRun({modelPolicyVersion:undefined,profileId:profile.id,harness:profile.harness,model:profile.model,planToken:plan.planToken,modelPolicy:{...policyChanged.modelPolicy,roles:{review:"test-model",summary:"test-model",subagent:"test-model"}}});
+      expect(run.modelPolicy).toEqual(policyChanged.modelPolicy);
+      const finished=await client.finishRun(run.id,run.version,{status:"exited",exitCode:0,routingEvents:[{at:"2026-09-06T19:00:00.000Z",requestId:"req-1",requestedModel:"test-model",resolvedModel:"test-model",decision:"allow",role:"main",reason:"policy_allow",upstreamStatus:200}],routingEventsDropped:2});
       expect(finished.endedAt).toBeDefined();
+      expect(finished.routingEvents).toHaveLength(1); expect(finished.routingEventsDropped).toBe(2);
       await expect(client.finishRun(run.id,finished.version,{status:"failed",exitCode:1})).rejects.toMatchObject({code:"run_finished"});
       await expect(client.deleteProvider(p.id,p.version)).rejects.toMatchObject({status:409});
       await expect(client.updateProvider(input,99)).rejects.toMatchObject({code:"version_conflict"});
@@ -61,6 +71,8 @@ for (const engine of ["sqlite","postgresql"] as const) {
       await expect(client.launchPlan(profile.id)).rejects.toMatchObject({code:"catalog_missing"});
       await store.close(); store=await Store.open(config); handle=createHandler(store,token);
       expect((await client.getProvider(p.id)).name).toBe("Updated");
+      expect((await client.getProvider(p.id)).catalogBaseUrl).toBe(input.catalogBaseUrl);
+      expect((await client.getProvider(p.id)).catalogAuthStyle).toBe("none");
       expect(await client.createProvider(input,"stable-request-001")).toEqual(p);
       expect((await client.getRun(run.id)).exitCode).toBe(0);
     });
@@ -72,6 +84,19 @@ for (const engine of ["sqlite","postgresql"] as const) {
       const input={id:"concurrent",name:"Concurrent",baseUrl:"https://example.com",protocol:"openai-chat" as const};
       const results=await Promise.all([client.createProvider(input,"concurrent-request"),client.createProvider(input,"concurrent-request")]);
       expect(results[0]).toEqual(results[1]);
+    });
+    test("generation methods survive API storage and prevent unsupported launch plans",async()=>{
+      const provider=await client.createProvider({id:"generation-methods",name:"Generation methods",baseUrl:"https://example.com/v1beta",protocol:"gemini-generate-content",authStyle:"x-api-key",manualModels:[
+        {id:"chat",name:"Chat",supportedGenerationMethods:["generateContent","countTokens"]},
+        {id:"embedding",name:"Embedding",supportedGenerationMethods:["embedContent"]},
+      ]});
+      await client.refreshModels(provider.id);
+      const list=await client.listModels(provider.id);
+      expect(list.data).toMatchObject([{id:"chat",supportedGenerationMethods:["generateContent","countTokens"],codingEligible:true},{id:"embedding",supportedGenerationMethods:["embedContent"],codingEligible:false}]);
+      const supported=await client.createProfile({id:"methods-chat",name:"Chat",providerId:provider.id,harness:"gemini",model:"chat"});
+      const rejected=await client.createProfile({id:"methods-embedding",name:"Embedding",providerId:provider.id,harness:"gemini",model:"embedding"});
+      expect((await client.launchPlan(supported.id)).catalog.models).toHaveLength(2);
+      await expect(client.launchPlan(rejected.id)).rejects.toMatchObject({code:"model_ineligible"});
     });
   });
 }
@@ -106,4 +131,32 @@ test("OpenAPI model lists declare eligibility and catalog provenance",async()=>{
   expect(response.$ref).toBe('#/components/schemas/ModelPage');
   expect(spec.components.schemas.ModelPage.required).toContain('refreshedAt');
   expect(spec.components.schemas.ModelPage.properties.data.items.properties.codingEligible.type).toBe('boolean');
+});
+
+test("exhausted catalog refresh preserves the last committed snapshot", async()=>{
+  let failed = false;
+  const upstream = Bun.serve({hostname:"127.0.0.1", port:0, fetch(){
+    return failed
+      ? new Response("temporarily unavailable", {status:503})
+      : Response.json({data:[{id:"stable-model",name:"Stable model"}]});
+  }});
+  const base = process.env.SWITCHER_TEST_ROOT ?? join(homedir(), "Workspace", "scratch", "switcher-tests");
+  await mkdir(base,{recursive:true});
+  const root = await mkdtemp(join(base, "f04-service-"));
+  let store: Store | undefined;
+  try {
+    store = await Store.open({sqlitePath:join(root,"store.db")});
+    const handle = createHandler(store, token);
+    const client = new SwitcherClient({baseUrl:"http://127.0.0.1:9911",apiKey:token,fetch:((url:any,init:any)=>handle(new Request(url,init))) as typeof fetch});
+    const provider = await client.createProvider({id:"snapshot-provider",name:"Snapshot provider",baseUrl:upstream.url.origin,protocol:"openai-chat"});
+    await client.refreshModels(provider.id);
+    const before = await client.listModels(provider.id);
+    failed = true;
+    await expect(client.refreshModels(provider.id)).rejects.toMatchObject({code:"provider_rejected"});
+    expect(await client.listModels(provider.id)).toEqual(before);
+  } finally {
+    await store?.close();
+    await upstream.stop(true);
+    await rm(root,{recursive:true,force:true});
+  }
 });

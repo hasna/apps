@@ -6,6 +6,17 @@ import { dirname, join, resolve } from "node:path";
 export const SERVICE_NAME = "shortlinks";
 export const DEFAULT_DATA_DIR = join(homedir(), ".hasna", SERVICE_NAME);
 
+/**
+ * The environment the app-home helpers read. Every helper takes the env the
+ * CALLER hands over (defaulting to the live process env) instead of reading
+ * `process.env` behind the caller's back: a caller-built environment — a test
+ * fixture, an env injected into the MCP server or the SDK — must never leak the
+ * on-box store into the real `~/.hasna/shortlinks` (hasna/apps#1720
+ * validation: `bun test` used to plant `~/.hasna/shortlinks/shortlinks.db` on
+ * the station this way).
+ */
+export type ConfigEnv = Record<string, string | undefined>;
+
 export interface ShortlinksConfig {
   defaultDomain?: string;
   publicBaseUrl?: string;
@@ -16,28 +27,49 @@ export interface ShortlinksConfig {
   };
 }
 
-export function getDataDir(): string {
-  return resolve(process.env.SHORTLINKS_HOME || DEFAULT_DATA_DIR);
+/**
+ * The app home. `SHORTLINKS_HOME` names the directory itself; otherwise
+ * `HASNA_HOME` replaces `~/.hasna` exactly as it does for the @hasna/contracts
+ * credential chain (`$HASNA_HOME/shortlinks`); otherwise `$HOME/.hasna/shortlinks`.
+ * A pure derivation — nothing on disk is created here. A declared-but-blank
+ * variable means unset, as everywhere else at this app's seam.
+ */
+export function getDataDir(env: ConfigEnv = process.env): string {
+  const explicit = env.SHORTLINKS_HOME?.trim();
+  if (explicit) return resolve(explicit);
+  const hasnaHome = env.HASNA_HOME?.trim();
+  if (hasnaHome) return resolve(hasnaHome, SERVICE_NAME);
+  const home = env.HOME?.trim();
+  if (home) return resolve(home, ".hasna", SERVICE_NAME);
+  return DEFAULT_DATA_DIR;
 }
 
-export function ensureDataDir(): string {
-  const dir = getDataDir();
+export function ensureDataDir(env: ConfigEnv = process.env): string {
+  const dir = getDataDir(env);
   mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-export function getConfigPath(): string {
-  return join(ensureDataDir(), "config.json");
+/** Path of the config file. A lookup creates nothing; only a write creates the app home. */
+export function getConfigPath(env: ConfigEnv = process.env): string {
+  return join(getDataDir(env), "config.json");
 }
 
-export function getClickSaltPath(): string {
-  return join(ensureDataDir(), "click-salt");
+export function getClickSaltPath(env: ConfigEnv = process.env): string {
+  return join(getDataDir(env), "click-salt");
 }
 
-export function getDatabasePath(explicitPath?: string): string {
+/**
+ * The on-box SQLite path: an explicit path, else `SHORTLINKS_DB`, else
+ * `<app home>/shortlinks.db`. A derivation only — OPENING the database is what
+ * creates it (and its directory), and only the explicit local opt-in does that;
+ * a hosted-mode read (`doctor`, MCP startup) creates nothing under the app home.
+ */
+export function getDatabasePath(explicitPath?: string, env: ConfigEnv = process.env): string {
   if (explicitPath) return resolve(explicitPath);
-  if (process.env.SHORTLINKS_DB) return resolve(process.env.SHORTLINKS_DB);
-  return join(ensureDataDir(), `${SERVICE_NAME}.db`);
+  const fromEnv = env.SHORTLINKS_DB?.trim();
+  if (fromEnv) return resolve(fromEnv);
+  return join(getDataDir(env), `${SERVICE_NAME}.db`);
 }
 
 function readClickSaltFile(path: string): string | null {
@@ -54,17 +86,18 @@ function clickSaltError(path: string, error: unknown): Error {
   return new Error(`Could not initialize click salt at ${path}. Set SHORTLINKS_CLICK_SALT or fix data directory permissions. ${detail}`);
 }
 
-export function getClickSalt(): string {
-  const explicit = process.env.SHORTLINKS_CLICK_SALT?.trim();
+export function getClickSalt(env: ConfigEnv = process.env): string {
+  const explicit = env.SHORTLINKS_CLICK_SALT?.trim();
   if (explicit) return explicit;
 
-  const path = getClickSaltPath();
+  const path = getClickSaltPath(env);
   const saved = readClickSaltFile(path);
   if (saved) return saved;
 
   const generated = randomBytes(32).toString("hex");
   const tempPath = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
+    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(tempPath, `${generated}\n`, { flag: "wx", mode: 0o600 });
     try {
       linkSync(tempPath, path);
@@ -87,8 +120,8 @@ export function getClickSalt(): string {
   }
 }
 
-export function loadConfig(): ShortlinksConfig {
-  const path = getConfigPath();
+export function loadConfig(env: ConfigEnv = process.env): ShortlinksConfig {
+  const path = getConfigPath(env);
   if (!existsSync(path)) return {};
   try {
     const parsed = JSON.parse(readFileSync(path, "utf-8")) as ShortlinksConfig;
@@ -98,22 +131,23 @@ export function loadConfig(): ShortlinksConfig {
   }
 }
 
-export function saveConfig(config: ShortlinksConfig): void {
-  const path = getConfigPath();
+export function saveConfig(config: ShortlinksConfig, env: ConfigEnv = process.env): void {
+  const path = getConfigPath(env);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`);
 }
 
-export function updateConfig(patch: ShortlinksConfig): ShortlinksConfig {
+export function updateConfig(patch: ShortlinksConfig, env: ConfigEnv = process.env): ShortlinksConfig {
+  const current = loadConfig(env);
   const next: ShortlinksConfig = {
-    ...loadConfig(),
+    ...current,
     ...patch,
     cloudflare: {
-      ...loadConfig().cloudflare,
+      ...current.cloudflare,
       ...patch.cloudflare,
     },
   };
-  saveConfig(next);
+  saveConfig(next, env);
   return next;
 }
 

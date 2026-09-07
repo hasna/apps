@@ -1,6 +1,58 @@
-// Calendar domain HTTPS seam; no claim of unpublished Contracts provenance.
+// Calendar domain HTTPS seam — the sole client transport.
+//
+// The authority AND the credential are resolved by the ONE fleet resolver in
+// `@hasna/contracts/client` (owner ruling 2026-09-04, hasna/apps#1720): the
+// macOS Keychain (`hasna.credentials.calendar.api-key` / `.api-url`, account
+// HASNA_STATION -> hostname -s -> USER), the credentials file
+// `~/.hasna/calendar/config/credentials` (owner-only 0400/0600; HASNA_HOME /
+// HASNA_CONFIG_HOME move it), `HASNA_CALENDAR_API_KEY`/`_API_URL` (the
+// unprefixed CALENDAR_* spellings live on as the resolver's documented silent
+// alias), the deliberate `_OVERRIDE` / `_REF` / `HASNA_PROFILE` pointers, and
+// the fleet gateway `https://api.hasna.com/calendar` (the client appends
+// `/v1`) once a credential resolves — URLs never need configuring.
+//
+// This module contributes NO tier of its own. The resolver is called fresh on
+// every `resolveStorageClient` / `resolveClientTransport` invocation, so the
+// CLI, the MCP server, `getStore()` and `./sdk` all re-read the chain per
+// request and a rotated key heals without a restart.
+//
+// FAIL LOUD. `resolveStorageClient` — the path every store-backed command and
+// MCP tool takes — THROWS on any refusal: no credential, an unreadable
+// credential file, a disagreeing pair, a locked Keychain. There is no SQLite
+// fallback, no local-store default and no `*-local-fallback` event; local mode
+// does not exist on this client (the only local surface is the explicit legacy
+// `db-migrate` command, see local-opt-in.ts). `resolveClientTransport` is the
+// one non-throwing seam, used only by diagnostics (`calendar status`) and the
+// serve posture check; it classifies any refusal as `unconfigured` with the
+// resolver's warning so a misconfigured box can still be steered.
+//
+// #1788: the resolver's Keychain tier is AMBIENT — it runs for the live
+// `process.env` and never for a caller-built env object. Blank-variable
+// normalisation must therefore not silently hand the resolver a copy:
+// `calendarResolverInputs` (local-opt-in.ts) carries the ambient gate across
+// any copy as `keychain.enabled` instead of letting the tier turn itself off.
+//
+// RETIRED, never inputs: the `*_MODE` / `*_STORAGE_MODE` / `*_BACKEND` /
+// `*_LOCAL` / `*_SELF_HOSTED` / `*_CLOUD` placement selectors (refused as a
+// ratchet below), the old `~/.hasna` fleet-env and cloud folders,
+// `~/.config/hasna` with `$XDG_CONFIG_HOME`, and any `~/.calendar/config.json`
+// key store (there never was one). A DEPRECATED notice for
+// `HASNA_CALENDAR_API_KEY` is gone: it is a legitimate tier, deliberately
+// below disk.
 import { CalendarResponseError, validateResponseEnvelope } from "./response-envelope.js";
-export type Env = Record<string, string | undefined>;
+import {
+  calendarResolverInputs,
+  type CalendarCredentialChainOptions,
+  type CalendarCredentialTier,
+  type CalendarEnv,
+} from "./local-opt-in.js";
+import {
+  resolveClientTransport as resolveContractsClientTransport,
+  resolveCredential,
+  type CredentialChainOptions,
+} from "@hasna/contracts/client";
+
+export type Env = CalendarEnv;
 export type QueryParams = Record<string, string | number | boolean | null | undefined>;
 export interface RequestOptions { query?: QueryParams; idempotencyKey?: string; timeoutMs?: number; headers?: HeadersInit; signal?: AbortSignal | null; retries?: number; }
 export function toV1BaseUrl(value: string): string {
@@ -17,28 +69,127 @@ export function validateApiKey(value: unknown): string {
   if (typeof value !== "string" || !value || /[\s\x00-\x1f\x7f]/.test(value) || /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) throw new Error("Calendar API key must be nonblank without whitespace, control characters or database URLs.");
   return value;
 }
-function select(env: Env, keys: string[]) {
-  const hits = keys.filter(k => env[k] !== undefined);
-  if (!hits.length) throw new Error(keys[0] + " is required; no local domain fallback.");
-  if (hits.some(k => !env[k]?.trim() || env[k] !== env[k]?.trim())) throw new Error(keys[0] + " is blank or malformed.");
-  if (hits.some(k => env[k] !== env[hits[0]!])) throw new Error(keys[0] + " conflicts with its alias.");
-  return { key: hits[0]!, value: env[hits[0]!]! };
-}
-function configuration(name: string, env: Env) {
-  const token = name.toUpperCase().replace(/-/g, "_");
-  for (const s of ["MODE", "STORAGE_MODE", "BACKEND", "LOCAL", "SELF_HOSTED", "CLOUD"]) {
-    if (["HASNA_" + token + "_" + s, token + "_" + s].some(k => env[k] !== undefined)) throw new Error("Remove retired Calendar placement selectors and configure the HTTPS API URL and key.");
+
+/** Retired placement selectors, kept as a fail-loud ratchet (see module doc). */
+const RETIRED_PLACEMENT_SUFFIXES = ["MODE", "STORAGE_MODE", "BACKEND", "LOCAL", "SELF_HOSTED", "CLOUD"] as const;
+const RETIRED_PLACEMENT_PREFIXES = ["HASNA_CALENDAR_", "CALENDAR_"] as const;
+
+function firstDefined(env: Env, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined) return key;
   }
-  const url = select(env, ["HASNA_" + token + "_API_URL", token + "_API_URL"]);
-  const key = select(env, ["HASNA_" + token + "_API_KEY", token + "_API_KEY"]);
-  return { baseUrl: toV1BaseUrl(url.value), apiKey: validateApiKey(key.value), urlSource: url.key, keySource: key.key };
+  return null;
 }
+
+/** Reject stale placement-selector variables even when their value is blank. */
+export function assertNoRetiredCalendarSelector(env: Env): void {
+  const retired: string[] = [];
+  for (const prefix of RETIRED_PLACEMENT_PREFIXES) {
+    for (const suffix of RETIRED_PLACEMENT_SUFFIXES) retired.push(prefix + suffix);
+  }
+  const hit = firstDefined(env, retired);
+  if (hit) throw new Error(`Remove retired Calendar placement selectors (${hit}) and configure the HTTPS API URL and key through the @hasna/contracts credential chain.`);
+}
+
+/** Tier-1 inputs and Keychain-tier controls a calendar surface forwards to the resolver. */
+export interface CalendarResolverOptions {
+  /** Tier 1: an explicit key, e.g. from `--api-key` (reserved for future flags). */
+  credentials?: CalendarCredentialChainOptions;
+}
+
+/**
+ * What the resolver decided, in this package's seam spelling. Sources are
+ * names, paths or tier words — NEVER a credential value.
+ */
 export type ClientTransportKind = "http-api" | "unconfigured";
-export function resolveClientTransport(name: string, env: Env = process.env) {
-  try { const c = configuration(name, env); return { transport: "http-api" as ClientTransportKind, baseUrl: c.baseUrl, apiUrlSource: c.urlSource, apiKeyPresent: true, apiKeySource: c.keySource, misconfigured: false, warning: null }; }
-  catch (e) { return { transport: "unconfigured" as ClientTransportKind, baseUrl: null, apiUrlSource: null, apiKeyPresent: false, apiKeySource: null, misconfigured: true, warning: (e as Error).message }; }
+export interface CalendarTransportResolution {
+  transport: ClientTransportKind;
+  /** `<origin>/v1` base; null when nothing resolves. */
+  baseUrl: string | null;
+  /** WHERE the authority came from: an env key NAME, a Keychain item reference, a file PATH, or "default". Never a value. */
+  apiUrlSource: string | null;
+  apiKeyPresent: boolean;
+  /** WHERE the credential came from. Never a value. */
+  apiKeySource: string | null;
+  /** Which tier of the credential chain supplied it. */
+  apiKeyTier: CalendarCredentialTier | null;
+  misconfigured: boolean;
+  warning: string | null;
 }
-export type ClientTransportResolution = ReturnType<typeof resolveClientTransport>;
+export type ClientTransportResolution = CalendarTransportResolution;
+
+const UNCONFIGURED: CalendarTransportResolution = Object.freeze({
+  transport: "unconfigured",
+  baseUrl: null,
+  apiUrlSource: null,
+  apiKeyPresent: false,
+  apiKeySource: null,
+  apiKeyTier: null,
+  misconfigured: true,
+  warning: null,
+});
+
+/**
+ * The non-throwing classification seam (`calendar status`, the serve posture).
+ * Any refusal — retired selector, blank, conflicting, missing, unusable — is
+ * reported as `unconfigured` with the resolver's actionable warning, never
+ * thrown: the diagnostic must work on a misconfigured box so it can steer.
+ * The strict, throwing path is `calendarResolveStorageClient`.
+ *
+ * The name spells this module's adapter ("calendar…"), following the fleet's
+ * credential-seam rule that a member must not DEFINE the @hasna/contracts
+ * seam names itself; the seam surface is re-exported under the historic names
+ * at the bottom of this module for the app's internal call sites.
+ */
+export function calendarResolveClientTransport(
+  name: string,
+  env: Env = process.env,
+  options: CalendarResolverOptions = {},
+): CalendarTransportResolution {
+  if (typeof name !== "string" || name.trim() === "") {
+    return { ...UNCONFIGURED, warning: "Calendar app slug is required." };
+  }
+  try {
+    assertNoRetiredCalendarSelector(env);
+    const inputs = calendarResolverInputs(env, options.credentials);
+    const resolution = resolveContractsClientTransport(name, inputs.env, {
+      credentials: inputs.credentials as CredentialChainOptions,
+    });
+    return {
+      transport: "http-api",
+      baseUrl: resolution.baseUrl,
+      apiUrlSource: resolution.apiUrlSource,
+      apiKeyPresent: resolution.apiKeyPresent,
+      apiKeySource: resolution.apiKeySource,
+      apiKeyTier: resolution.apiKeyTier as CalendarCredentialTier | null,
+      misconfigured: false,
+      warning: resolution.warning,
+    };
+  } catch (error) {
+    return {
+      ...UNCONFIGURED,
+      warning: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/** Re-throw a resolver refusal as the Calendar CLI's fail-closed diagnostic. */
+function calendarConfigurationError(name: string, error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/is not set and no API key could be resolved/.test(message)) {
+    return new Error(
+      `HASNA_CALENDAR_API_URL is required: no Calendar credential resolved from the macOS Keychain item ` +
+        `hasna.credentials.${name}.api-key, ~/.hasna/${name}/config/credentials, or HASNA_CALENDAR_API_KEY, so there is ` +
+        `no hosted Calendar authority to reach. Refusing to serve local data instead — no local fallback.`,
+      { cause: error },
+    );
+  }
+  if (/no API key could be resolved/.test(message)) {
+    return new Error(`HASNA_CALENDAR_API_KEY is required: ${message}`, { cause: error });
+  }
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 export class HasnaHttpError extends Error {
   readonly body: unknown = undefined;
   constructor(readonly method: string, readonly path: string, readonly status: number, _body?: unknown) { super("Calendar API request failed (" + status + ")."); this.name = "HasnaHttpError"; }
@@ -116,7 +267,81 @@ export function createStorageClient(name: string, transport: HttpTransport): Sto
  update: <T>(r: string,id: string,b: unknown,o?: RequestOptions & {method?: "PATCH" | "PUT"}) => transport.request<T>(o?.method ?? "PATCH",entity(r,id),b,o),
  delete: <T>(r: string,id: string,o?: RequestOptions) => transport.del<T>(entity(r,id),undefined,o) });
 }
-export function resolveStorageClient(name: string, env: Env = process.env) {
- const c = configuration(name,env);
- return {transport: "http-api" as const,client:createStorageClient(name,createHttpTransport({name,baseUrl:c.baseUrl,apiKey:c.apiKey})),resolution:resolveClientTransport(name,env)};
+
+/**
+ * The strict resolver path: resolve ONE credential and ONE authority through
+ * `@hasna/contracts/client`, fresh on every call, and build a ready client.
+ * Any refusal THROWS with an actionable message — there is no local fallback.
+ *
+ * ONE pass down the chain, not two: the credential is resolved once and handed
+ * to the authority resolution as its tier-1 argument, so a repeated `/usr/bin/security`
+ * spawn (and the TOCTOU of two separate reads) is avoided; the TRUE source and
+ * tier of the credential are still reported by masking the tier-1 spelling.
+ * The secrets-vault pointer tier (`HASNA_CALENDAR_API_KEY_REF`) is refused
+ * loudly: the Calendar transport resolves credentials synchronously at
+ * construction and cannot complete a vault pointer per request.
+ */
+export function calendarResolveStorageClient(
+  name: string,
+  env: Env = process.env,
+  options: CalendarResolverOptions = {},
+): { transport: "http-api"; client: StorageClient; resolution: CalendarTransportResolution } {
+  assertNoRetiredCalendarSelector(env);
+  const inputs = calendarResolverInputs(env, options.credentials);
+  const credential = resolveCredential(name, inputs.env, inputs.credentials as CredentialChainOptions);
+  if (credential?.tier === "pointer") {
+    // The Calendar transport resolves credentials synchronously at
+    // construction and cannot complete a vault pointer per request, so a
+    // deliberate pointer is refused loudly (never resolved around).
+    throw new Error(
+      `Calendar resolves credentials synchronously and cannot complete the secrets-vault pointer ${credential.source} per request. ` +
+        `Use a literal credential tier instead: an explicit apiKey argument, the Keychain item ` +
+        `hasna.credentials.${name}.api-key, ~/.hasna/${name}/config/credentials, or HASNA_CALENDAR_API_KEY.`,
+    );
+  }
+  // ONE pass down the chain: the credential (when one resolved) is handed back
+  // as the tier-1 argument so the authority resolution does no second Keychain
+  // read; a missing credential makes the resolver THROW, and the refusal is
+  // mapped to this CLI's fail-closed diagnostic below.
+  let resolution: ReturnType<typeof resolveContractsClientTransport>;
+  try {
+    resolution = resolveContractsClientTransport(name, inputs.env, {
+      credentials: credential
+        ? ({ ...inputs.credentials, apiKey: credential.apiKey } as CredentialChainOptions)
+        : (inputs.credentials as CredentialChainOptions),
+    });
+  } catch (error) {
+    throw calendarConfigurationError(name, error);
+  }
+  if (!credential) {
+    // Defensive, exercised by no current resolver: a resolution without a
+    // credential must never produce an anonymous client.
+    throw new Error(`HASNA_CALENDAR_API_URL is required: no Calendar credential resolved from the macOS Keychain item hasna.credentials.${name}.api-key, ~/.hasna/${name}/config/credentials, or HASNA_CALENDAR_API_KEY. Refusing to build an unauthenticated Calendar client — no local fallback.`);
+  }
+  const client = createStorageClient(name, createHttpTransport({ name, baseUrl: resolution.baseUrl, apiKey: credential.apiKey }));
+  return {
+    transport: "http-api",
+    client,
+    resolution: {
+      transport: "http-api",
+      baseUrl: resolution.baseUrl,
+      apiUrlSource: resolution.apiUrlSource,
+      apiKeyPresent: true,
+      // The TRUE tier, not the tier-1 spelling the authority resolution saw.
+      apiKeySource: credential.source,
+      apiKeyTier: credential.tier as CalendarCredentialTier,
+      misconfigured: false,
+      warning: resolution.warning,
+    },
+  };
 }
+
+/**
+ * The seam surface this app has always used, re-exported. The resolver body
+ * is @hasna/contracts'; these names are imported-then-re-exported here, never
+ * redefined, so the fleet credential-seam gate sees a USE, not a fork.
+ */
+export {
+  calendarResolveClientTransport as resolveClientTransport,
+  calendarResolveStorageClient as resolveStorageClient,
+};

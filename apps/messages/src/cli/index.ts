@@ -4,10 +4,14 @@
  *
  * Interface layer over the single domain implementation. Local mode uses a
  * local SQLite store and is an EXPLICIT opt-in (HASNA_MESSAGES_LOCAL=1);
- * `--url` / HASNA_MESSAGES_API_URL targets a running messages-serve instance
- * through the SDK client. Without the API env AND without the local opt-in
- * the CLI fails closed (non-zero exit, actionable error) — it never silently
- * falls back to the on-box store. Agent identity is
+ * `--url` pins a messages-serve authority, and otherwise the shared
+ * @hasna/contracts resolver (CLI, MCP server and ./sdk all call it, per
+ * request, fresh — hasna/apps#1720) supplies the credential and the
+ * authority, defaulting to the fleet gateway
+ * https://api.hasna.com/messages once a credential resolves. Hosted with no
+ * credential anywhere the CLI fails closed (non-zero exit, actionable error,
+ * no SQLite file, no local fallback) — only the explicit opt-in reaches the
+ * on-box store, and it says "local" on stderr. Agent identity is
  * first-class: acting verbs take --agent, and `messages register` / `messages
  * agents` manage the identity registry.
  *
@@ -20,13 +24,9 @@
 import { Command } from "commander";
 import {
   createMessagesClient,
-  MESSAGES_API_KEY_ENV,
-  MESSAGES_API_URL_ENV,
-  MESSAGES_LOCAL_MODE_ENV,
-  isLocalModeOptIn,
-  isPresent,
-  resolveMessagesApiBase,
   resolveMessagesClientTransport,
+  type MessagesClientResolveOptions,
+  type MessagesClientTransportReport,
 } from "../sdk";
 import { MessagesService } from "../service";
 import { SqliteMessagesStore } from "../server/sqlite-store";
@@ -42,26 +42,32 @@ interface CliOpts {
   apiKey?: string;
 }
 
-/** The process env with the per-invocation `--url` / `--api-key` overrides applied. */
-function cliEnv(opts: CliOpts): Record<string, string | undefined> {
+/**
+ * The resolver options for a CLI invocation: `--url` / `--api-key` are tier-1
+ * arguments — the environment is handed to the resolver BY IDENTITY (never a
+ * copy, #1788), with only the cli `--url` text used verbatim.
+ */
+function cliResolveOptions(opts: CliOpts): MessagesClientResolveOptions {
   return {
-    ...process.env,
-    [MESSAGES_API_URL_ENV]: opts.url ?? process.env[MESSAGES_API_URL_ENV],
-    [MESSAGES_API_KEY_ENV]: opts.apiKey ?? process.env[MESSAGES_API_KEY_ENV],
+    ...(opts.url !== undefined ? { baseUrl: opts.url } : {}),
+    ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
   };
 }
 
 /**
- * Resolve the client transport from CLI overrides + env. Fails closed when
- * neither the API env nor the explicit local opt-in (HASNA_MESSAGES_LOCAL=1)
- * is present: resolveMessagesClientTransport throws and the top-level handler
- * below exits non-zero with the actionable error.
+ * Resolve the client transport from CLI overrides + env, through the shared
+ * @hasna/contracts resolver. Fails closed: hosted with no credential throws
+ * and the top-level handler exits non-zero with the actionable error.
  */
 function resolveStore(opts: CliOpts): { transport: "http" | "local"; local?: MessagesService; remote?: ReturnType<typeof createMessagesClient> } {
-  const env = cliEnv(opts);
-  const report = resolveMessagesClientTransport(env);
+  const report = resolveMessagesClientTransport(process.env, cliResolveOptions(opts));
   if (report.transport === "http") {
-    return { transport: "http", remote: createMessagesClient(env) };
+    const client = createMessagesClient(process.env, {
+      ...(opts.url !== undefined ? { baseUrl: opts.url } : {}),
+      ...(opts.apiKey !== undefined ? { apiKey: opts.apiKey } : {}),
+    });
+    if (!client) throw new Error("HTTP transport resolved but no client could be created");
+    return { transport: "http", remote: client };
   }
   return { transport: "local", local: new MessagesService(new SqliteMessagesStore()) };
 }
@@ -78,32 +84,61 @@ interface MessagesApiStatus {
   transport: "http" | "local" | "unconfigured";
   /** The resolved `/v1` authority, e.g. https://api.hasna.com/messages/v1. */
   api_url: string | null;
-  /** The base URL exactly as configured, before `/v1` resolution. */
+  /** The base URL exactly as configured (before `/v1` resolution), or null under the gateway default. */
   api_base: string | null;
   api_key_present: boolean;
+  /** WHERE the authority came from: an env key NAME, a Keychain item reference, a file PATH, "default", or null. */
+  api_url_source: string | null;
+  /** WHERE the key came from, or null. Never a value. */
+  api_key_source: string | null;
+  api_key_tier: string | null;
+  /** True when `--url` pinned the authority, so no ambient credential applies. */
+  authority_pinned: boolean;
+  /** Refusal detail when `transport` is `unconfigured`. */
+  issues: string[];
 }
 
 function apiStatus(opts: CliOpts): MessagesApiStatus {
-  const env = cliEnv(opts);
-  const rawBase = env[MESSAGES_API_URL_ENV]?.trim() || null;
-  const apiKeyPresent = isPresent(env, MESSAGES_API_KEY_ENV);
-  if (rawBase) {
+  const base = {
+    app: "messages" as const,
+    version,
+    api_key_present: false,
+    api_url_source: null as string | null,
+    api_key_source: null as string | null,
+    api_key_tier: null as string | null,
+    authority_pinned: false,
+    issues: [],
+  };
+  let report: MessagesClientTransportReport;
+  try {
+    report = resolveMessagesClientTransport(process.env, cliResolveOptions(opts));
+  } catch (error) {
     return {
-      app: "messages",
-      version,
-      transport: "http",
-      api_url: resolveMessagesApiBase(rawBase).apiUrl,
-      api_base: rawBase,
-      api_key_present: apiKeyPresent,
+      ...base,
+      transport: "unconfigured",
+      api_url: null,
+      api_base: null,
+      issues: [error instanceof Error ? error.message : String(error)],
+    };
+  }
+  if (report.transport === "local") {
+    return {
+      ...base,
+      transport: "local",
+      api_url: null,
+      api_base: null,
     };
   }
   return {
-    app: "messages",
-    version,
-    transport: isLocalModeOptIn(env) ? "local" : "unconfigured",
-    api_url: null,
-    api_base: null,
-    api_key_present: apiKeyPresent,
+    ...base,
+    transport: "http",
+    api_url: report.baseUrl,
+    api_base: report.configuredApiBase,
+    api_key_present: report.apiKeyPresent,
+    api_url_source: report.apiUrlSource,
+    api_key_source: report.apiKeySource,
+    api_key_tier: report.apiKeyTier,
+    authority_pinned: report.authorityPinned,
   };
 }
 
@@ -129,8 +164,8 @@ withJsonFlag(program.command("register"))
   .description("Register (or return) an agent identity")
   .option("--name <agent>", `agent name ${AGENT_DEFAULT_HINT}`)
   .option("--display-name <text>", "human/seat-friendly label")
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { name?: string; displayName?: string } & CliOpts) => {
     const store = resolveStore(opts);
     if (store.transport === "http") {
@@ -142,8 +177,8 @@ withJsonFlag(program.command("register"))
 
 withJsonFlag(program.command("agents"))
   .description("List registered agent identities")
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: CliOpts) => {
     const store = resolveStore(opts);
     const agents = store.transport === "http" ? (await store.remote!.listAgents()).agents : await store.local!.listAgents();
@@ -153,8 +188,8 @@ withJsonFlag(program.command("agents"))
 withJsonFlag(program.command("whoami"))
   .description("Show an agent identity (or register it if absent)")
   .option("--agent <agent>", `agent name ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
     const agent = store.transport === "http"
@@ -175,8 +210,8 @@ withJsonFlag(program.command("send"))
   .requiredOption("--to <agent>", "receiving agent")
   .requiredOption("--content <text>", "message body")
   .option("--reply-to <id>", "message id being replied to (threads)")
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { from?: string; to: string; content: string; replyTo?: string } & CliOpts) => {
     const store = resolveStore(opts);
     const result = store.transport === "http"
@@ -188,8 +223,8 @@ withJsonFlag(program.command("send"))
 withJsonFlag(program.command("receive"))
   .description("Drain the agent's inbox: transition stored -> delivered and print the delivered messages")
   .option("--agent <agent>", `the agent receiving ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
     const messages = store.transport === "http"
@@ -201,8 +236,8 @@ withJsonFlag(program.command("receive"))
 withJsonFlag(program.command("delivery"))
   .description("Show per-recipient delivery state for a thread (stored | delivered | read)")
   .requiredOption("--id <threadId>", "thread id")
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { id: string } & CliOpts) => {
     const store = resolveStore(opts);
     const deliveries = store.transport === "http"
@@ -217,8 +252,8 @@ withJsonFlag(program.command("threads"))
   .description("List threads involving an agent, with unread counts")
   .option("--agent <agent>", `the agent whose threads to list ${AGENT_DEFAULT_HINT}`)
   .option("--all", "include threads the agent has closed")
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { agent?: string; all?: boolean } & CliOpts) => {
     const store = resolveStore(opts);
     const threads = store.transport === "http"
@@ -231,8 +266,8 @@ withJsonFlag(program.command("thread"))
   .description("Expand a thread: its messages with your per-message delivery state (does NOT mark read)")
   .requiredOption("--id <threadId>", "thread id")
   .option("--agent <agent>", `the agent expanding ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
     const result = store.transport === "http"
@@ -244,8 +279,8 @@ withJsonFlag(program.command("thread"))
 withJsonFlag(program.command("unread"))
   .description("List threads with unread messages for an agent (and the total)")
   .option("--agent <agent>", `the agent ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
     if (store.transport === "http") {
@@ -260,8 +295,8 @@ withJsonFlag(program.command("read"))
   .description("Mark a thread read from an agent's perspective (stored/delivered -> read)")
   .requiredOption("--id <threadId>", "thread id")
   .option("--agent <agent>", `the agent marking it read ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
     if (store.transport === "http") {
@@ -276,8 +311,8 @@ withJsonFlag(program.command("close"))
   .description("Close a thread from an agent's perspective (excluded from the default list)")
   .requiredOption("--id <threadId>", "thread id")
   .option("--agent <agent>", `the agent closing it ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
     const thread = store.transport === "http"
@@ -290,8 +325,8 @@ withJsonFlag(program.command("reopen"))
   .description("Reopen a thread from an agent's perspective")
   .requiredOption("--id <threadId>", "thread id")
   .option("--agent <agent>", `the agent reopening it ${AGENT_DEFAULT_HINT}`)
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action(async (opts: { id: string; agent?: string } & CliOpts) => {
     const store = resolveStore(opts);
     const thread = store.transport === "http"
@@ -304,8 +339,8 @@ withJsonFlag(program.command("reopen"))
 
 withJsonFlag(program.command("status"))
   .description("Show the resolved API authority, transport and key presence")
-  .option("--url <url>", "messages-serve base URL (overrides HASNA_MESSAGES_API_URL; local mode requires HASNA_MESSAGES_LOCAL=1)")
-  .option("--api-key <key>", "API key for the remote server")
+  .option("--url <url>", "messages-serve base URL (explicit authority pin; no ambient credential is attached without --api-key)")
+  .option("--api-key <key>", "API key for the remote server (a deliberate pin; never re-resolved)")
   .action((opts: { json?: boolean } & CliOpts) => {
     const status = apiStatus(opts);
     if (opts.json) {
@@ -319,10 +354,7 @@ withJsonFlag(program.command("status"))
       console.log(`api key: ${status.api_key_present ? "present" : "absent"}`);
     }
     if (status.transport === "unconfigured") {
-      console.error(
-        `${MESSAGES_API_URL_ENV} is not set and ${MESSAGES_LOCAL_MODE_ENV}=1 was not given; ` +
-          "no transport is configured.",
-      );
+      for (const issue of status.issues) console.error(issue);
       process.exit(1);
     }
   });

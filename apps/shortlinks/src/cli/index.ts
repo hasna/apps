@@ -59,10 +59,12 @@ function handleError(error: unknown): never {
 
 /**
  * Run `fn` with the resolved client {@link Store}. The store is the hosted-API
- * ApiStore when HASNA_SHORTLINKS_API_URL + HASNA_SHORTLINKS_API_KEY are set
- * (or a fleet app-config / credential the contracts resolver accepts);
- * otherwise the CLI FAILS CLOSED with an error naming the required env unless
- * local mode was explicitly opted into (SHORTLINKS_LOCAL=1 or --db <path>).
+ * ApiStore when the @hasna/contracts client resolver finds a shortlinks
+ * credential — the Keychain item, ~/.hasna/shortlinks/config/credentials, or
+ * HASNA_SHORTLINKS_API_KEY, with the authority defaulting to the fleet gateway
+ * — otherwise the CLI FAILS CLOSED with an error naming the credential chain
+ * unless local mode was explicitly opted into (HASNA_SHORTLINKS_LOCAL=1 /
+ * SHORTLINKS_LOCAL=1 or --db <path>), which is announced on stderr.
  * There is no DSN/postgres client path: a client never touches the raw RDS.
  */
 async function withRuntimeStore<T>(fn: (store: Store) => T | Promise<T>): Promise<T> {
@@ -1122,35 +1124,41 @@ program
   .action(async (opts) => {
     try {
       const dbPath = getDatabasePath(program.opts().db);
-      // Client-credential presence goes through the contracts client seam (the
-      // same resolver that builds the hosted transport), never a hand-rolled
-      // env read of the API key.
-      const clientTransport = resolveClientTransport("shortlinks", process.env);
-      const data = await withRuntimeStore(async (store) => ({
-        service: "shortlinks",
-        ok: true,
-        // Which transport the client resolver selected: "local" or "http".
-        store: store.kind,
-        data_dir: getDataDir(),
-        config_path: getConfigPath(),
-        db_path: dbPath,
-        db_exists: existsSync(dbPath),
-        stats: await store.totalStats(),
-        commands: {
-          domains: commandExists("domains"),
-          wrangler: commandExists("wrangler"),
-          secrets: commandExists("secrets"),
-        },
-        environment: {
-          // Hosted-API client is bearer-key only — never a DB DSN on the client.
-          api_url_present: Boolean(clientTransport.apiUrlSource),
-          api_key_present: clientTransport.apiKeyPresent,
-          cloudflare_api_token_present: Boolean(process.env.CLOUDFLARE_API_TOKEN),
-          cloudflare_api_key_present: Boolean(process.env.CLOUDFLARE_API_KEY),
-          cloudflare_email_present: Boolean(process.env.CLOUDFLARE_EMAIL),
-          shortlinks_origin_present: Boolean(process.env.SHORTLINKS_ORIGIN),
-        },
-      }));
+      const data = await withRuntimeStore(async (store) => {
+        // The hosted transport report comes from the contracts client seam —
+        // the same resolver that built the store — never a hand-rolled env
+        // read of the API key. In explicit local mode there is no hosted
+        // transport to report, so the sources are null rather than resolved
+        // and discarded.
+        const hosted = store.kind === "http" ? resolveClientTransport("shortlinks", process.env) : null;
+        return {
+          service: "shortlinks",
+          ok: true,
+          // Which transport the client resolver selected: "local" or "http".
+          store: store.kind,
+          data_dir: getDataDir(),
+          config_path: getConfigPath(),
+          db_path: dbPath,
+          db_exists: existsSync(dbPath),
+          stats: await store.totalStats(),
+          commands: {
+            domains: commandExists("domains"),
+            wrangler: commandExists("wrangler"),
+            secrets: commandExists("secrets"),
+          },
+          environment: {
+            // Hosted-API client is bearer-key only — never a DB DSN on the client.
+            api_url_present: Boolean(hosted?.apiUrlSource),
+            api_url_source: hosted?.apiUrlSource ?? null,
+            api_key_present: hosted?.apiKeyPresent ?? false,
+            api_key_source: hosted?.apiKeySource ?? null,
+            cloudflare_api_token_present: Boolean(process.env.CLOUDFLARE_API_TOKEN),
+            cloudflare_api_key_present: Boolean(process.env.CLOUDFLARE_API_KEY),
+            cloudflare_email_present: Boolean(process.env.CLOUDFLARE_EMAIL),
+            shortlinks_origin_present: Boolean(process.env.SHORTLINKS_ORIGIN),
+          },
+        };
+      });
       print(data, opts, () => {
         if (printVerbose(data, opts)) return;
         printDoctorSummary(data);

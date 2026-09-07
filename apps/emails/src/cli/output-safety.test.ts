@@ -243,11 +243,12 @@ describe("CLI JSON output safety", () => {
 });
 
 describe("CLI self-hosted bootstrap failures", () => {
-  it("refuses a client-env entry that still carries a retired mode variable, never leaking its payload", () => {
-    // A vault entry written against the older contract carries the word next to
-    // the settings (hasna/apps#1566). The loader refuses the whole entry with the
-    // guard's sentence, which names the variable and never echoes its value — so
-    // a secret-shaped payload stays out of both stderr forms.
+  it("ignores a vault entry's retired mode field, never leaking its payload", () => {
+    // A vault entry written against the older contract still carries the mode word
+    // next to the settings (hasna/apps#1566). The word now selects NOTHING
+    // (hasna/apps#1720): the loader merges only the app's own principals and never
+    // echoes the word's value — so a secret-shaped payload stays out of both stderr
+    // forms. With no URL and no credential in the environment, the CLI fails closed.
     for (const json of [false, true]) {
       const { env, sentinel, invalidMode } = vaultEntryCarryingRetiredModeVariable();
       const result = runCli(json ? ["--json", "status"] : ["status"], env);
@@ -258,12 +259,11 @@ describe("CLI self-hosted bootstrap failures", () => {
       expect(stdout).toBe("");
       expect(stderr).not.toContain(sentinel);
       expect(stderr).not.toContain(invalidMode);
-      expect(stderr).toContain("was removed");
-      expect(stderr).toContain("Deployment modes no longer exist in Emails");
+      expect(stderr).toContain("refusing to start");
 
       if (json) {
         const parsed = JSON.parse(stderr) as { error: { message: string } };
-        expect(parsed.error.message).toContain("Deployment modes no longer exist in Emails");
+        expect(parsed.error.message).toContain("refusing to start");
       }
     }
   });
@@ -317,10 +317,10 @@ describe("CLI self-hosted bootstrap failures", () => {
     }
   });
 
-  it("refuses any carried-forward mode value with the descriptive retired-variable diagnostic", () => {
-    // There is no mode vocabulary left to validate against (hasna/apps#1566):
-    // whatever value the retired variable carries — even an old "valid" one — the
-    // guard refuses it in its own sentence, and the value is never echoed back.
+  it("a carried-forward mode value now selects nothing and the all-unset row fails closed", () => {
+    // The deployment-mode variables are DELETED (hasna/apps#1566, #1720): a value in
+    // EMAILS_MODE selects nothing and is never echoed back. With no storage
+    // configuration at all, the CLI meets the fail-closed all-unset row instead.
     const modeSetting = ["EMAILS", "MODE"].join("_");
     for (const json of [false, true]) {
       const result = runCli(
@@ -331,40 +331,25 @@ describe("CLI self-hosted bootstrap failures", () => {
 
       expect(result.exitCode).toBe(1);
       expect(text(result.stdout)).toBe("");
-      if (json) {
-        const parsed = JSON.parse(stderr) as { error: { code: string; message: string } };
-        expect(parsed.error.code).toBe("error");
-        expect(parsed.error.message).toContain("Deployment modes no longer exist in Emails");
-        expect(parsed.error.message).toContain("Delete EMAILS_MODE");
-        expect(parsed.error.message).not.toContain("staging");
-      } else {
-        expect(stderr).toContain("Deployment modes no longer exist in Emails");
-        expect(stderr).toContain("Delete EMAILS_MODE");
-        expect(stderr).not.toContain("staging");
-      }
+      expect(stderr).toContain("refusing to start");
+      expect(stderr).not.toContain("staging");
+      expect(stderr).not.toContain("Deployment modes no longer exist");
     }
   });
 
   it("returns one structured JSON error and creates no local SQLite state for invalid configuration", () => {
     const cases = [
       {
-        // A carried-forward deployment-mode variable is refused by the guard
-        // before any store is opened — even beside a fully configured local path.
-        name: "retired-mode",
-        env: { EMAILS_MODE: "self_hosted" },
-        withDbPath: true,
-        message: "was removed",
-      },
-      {
         // Storage configuration alone routes now (hasna/apps#1566): a non-http(s)
-        // API origin fails the seam's scheme validation without any local store.
+        // API origin fails the shared resolver's scheme validation without any
+        // local store.
         name: "bad-url",
         env: {
           EMAILS_SELF_HOSTED_URL: "ftp://emails.example.invalid",
           EMAILS_SELF_HOSTED_API_KEY: "not-a-real-key",
         },
         withDbPath: false,
-        message: "must be an http or https URL",
+        message: "must use http or https",
       },
     ] as const;
 

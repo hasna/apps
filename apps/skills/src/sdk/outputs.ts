@@ -9,6 +9,7 @@
  * is the retention half: artifacts whose expiresAt is in the past are deleted
  * (row + object) and every deletion lands one append-only receipt.
  */
+import { createHash } from "node:crypto";
 import type { ArtifactBody, ObjectStore } from "./storage.js";
 import { publicPrincipal } from "../server/auth.js";
 import type { GovernanceStore, LifecycleReceipt } from "./governance-store.js";
@@ -97,10 +98,14 @@ export function createGovernedArtifactWriter(options: OutputGovernanceOptions): 
 
   return {
     async write(run, meta, body) {
+      if (typeof body?.bodyText !== "string") {
+        throw new TypeError("Governed artifacts require a text body before persistence");
+      }
       const redacted = redactRunOutput(body.bodyText, config.redactPatterns);
       const redactedBody = { ...body, bodyText: redacted };
 
-      const outputBytes = new TextEncoder().encode(redacted).byteLength;
+      const persistedBytes = new TextEncoder().encode(redacted);
+      const outputBytes = persistedBytes.byteLength;
       if (outputBytes > config.perOutputBytes) {
         throw new GovernanceError(
           GOVERNANCE_ERROR_CODES.ARTIFACT_LIMIT_EXCEEDED,
@@ -122,6 +127,10 @@ export function createGovernedArtifactWriter(options: OutputGovernanceOptions): 
       const createdAt = new Date().toISOString();
       const stamped: Omit<ServerArtifact, "createdAt" | "storageKind" | "storageKey" | "bodyText"> = {
         ...meta,
+        // The writer owns the text transformation. Its metadata must describe
+        // the bytes handed to either storage adapter, not the caller's input.
+        byteSize: outputBytes,
+        sha256: createHash("sha256").update(persistedBytes).digest("hex"),
         visibility: options.visibility ?? config.defaultVisibility,
         ...(config.artifactTtlSeconds !== undefined ? { expiresAt: expiresAtFor(createdAt, config.artifactTtlSeconds) } : {}),
       };

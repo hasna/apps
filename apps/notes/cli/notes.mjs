@@ -35,13 +35,20 @@ Usage:
   notes storage status [--json]
   notes storage migrate-legacy-path --source legacy|nested|server-nested (--dry-run|--yes --plan-fingerprint <sha256>) [--json]
 
-Client configuration:
-  HASNA_NOTES_API_URL   absolute HTTPS service URL
-  HASNA_NOTES_API_KEY   application API key
+Client configuration is resolved through the @hasna/contracts chain, per
+call:
 
-Both values are required. The CLI never opens a local SQLite/markdown store
-and never accepts a database DSN. Legacy path migration is an explicit,
-copy-only maintenance action; source data is preserved.`;
+  HASNA_NOTES_API_URL     absolute HTTPS service URL (default: the fleet
+                          gateway https://api.hasna.com/notes)
+  HASNA_NOTES_API_KEY     application API key (Keychain item
+                          hasna.credentials.notes.api-key and
+                          ~/.hasna/notes/config/credentials are consulted
+                          first)
+
+A resolved credential is required; the CLI never opens a local
+SQLite/markdown store, never accepts a database DSN, and has no local
+fallback. Legacy path migration is an explicit, copy-only maintenance action;
+source data is preserved.`;
 }
 
 function parseArgs(argv) {
@@ -299,16 +306,24 @@ async function main() {
     const report = {
       client: {
         transport: client.transport,
+        baseUrl: client.baseUrl,
         source: client.source,
         scheme: client.scheme,
         apiUrlPresent: client.api_url_present,
         apiKeyPresent: client.api_key_present,
+        apiUrlSource: client.apiUrlSource,
+        apiKeySource: client.apiKeySource,
+        apiKeyTier: client.apiKeyTier,
       },
       localFallback: false,
       clientDatabaseDsn: false,
+      warning: client.warning,
     };
     if (opts.json) return jsonOut(report);
     lineOut('client transport : authenticated https');
+    lineOut(`authority source : ${report.client.apiUrlSource}`);
+    lineOut(`api key source   : ${report.client.apiKeySource}`);
+    lineOut(`api key tier     : ${report.client.apiKeyTier}`);
     lineOut('local fallback   : disabled');
     return;
   }

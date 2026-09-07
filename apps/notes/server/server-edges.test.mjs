@@ -30,8 +30,8 @@ function call(app, method, path, { token, body, env = LOOPBACK, headers: extra =
 }
 
 async function login(app, email = 'owner@example.com') {
-  const started = await (await call(app, 'POST', '/api/v1/auth/login', { body: { email } })).json();
-  const res = await call(app, 'POST', '/api/v1/auth/verify', { body: { email, code: started.devCode, requestId: started.requestId } });
+  const started = await (await call(app, 'POST', '/v1/auth/login', { body: { email } })).json();
+  const res = await call(app, 'POST', '/v1/auth/verify', { body: { email, code: started.devCode, requestId: started.requestId } });
   expect(res.status).toBe(200);
   return res.json(); // { token, user, tenant, apiKey? }
 }
@@ -78,8 +78,8 @@ describe('http helpers', () => {
 });
 
 describe('OTP login edges', () => {
-  const mint = (app, email, ip = '127.0.0.1') => call(app, 'POST', '/api/v1/auth/login', { body: { email }, env: { ip } });
-  const verify = (app, body, ip = '127.0.0.1') => call(app, 'POST', '/api/v1/auth/verify', { body, env: { ip } });
+  const mint = (app, email, ip = '127.0.0.1') => call(app, 'POST', '/v1/auth/login', { body: { email }, env: { ip } });
+  const verify = (app, body, ip = '127.0.0.1') => call(app, 'POST', '/v1/auth/verify', { body, env: { ip } });
   const pendingCount = async (db, email) =>
     (await db.query("SELECT COUNT(*) AS n FROM otp_login_requests WHERE email = ? AND status = 'pending'").get(email)).n;
   const requestRow = (db, id) => db.query('SELECT status, failed_attempts FROM otp_login_requests WHERE id = ?').get(id);
@@ -315,8 +315,8 @@ describe('OTP login edges', () => {
   test('per-IP quotas key on the forwarded client behind a trusted proxy, not on the balancer peer (ALB case, #1784)', async () => {
     const alb = { ip: '10.0.5.1' };
     const via = (xff) => ({ env: alb, headers: { 'x-forwarded-for': xff } });
-    const loginVia = (app, email, xff) => call(app, 'POST', '/api/v1/auth/login', { body: { email }, ...via(xff) });
-    const verifyVia = (app, body, xff) => call(app, 'POST', '/api/v1/auth/verify', { body, ...via(xff) });
+    const loginVia = (app, email, xff) => call(app, 'POST', '/v1/auth/login', { body: { email }, ...via(xff) });
+    const verifyVia = (app, body, xff) => call(app, 'POST', '/v1/auth/verify', { body, ...via(xff) });
     const guess = { email: 'x@example.com', code: '000000' };
     // The pre-#1784 shape, for contrast: with no trusted hop every request
     // shares the balancer's bucket, so 20 wrong verifies from one client
@@ -338,13 +338,13 @@ describe('OTP login edges', () => {
     expect((await loginVia(app, 's5@example.com', '10.9.9.9, 192.0.2.44')).status).toBe(429);
     // No forwarded header at all: the request did not traverse the proxy, so
     // the socket peer is the key.
-    expect((await call(app, 'POST', '/api/v1/auth/login', { body: { email: 'direct@example.com' }, env: alb })).status).toBe(200);
+    expect((await call(app, 'POST', '/v1/auth/login', { body: { email: 'direct@example.com' }, env: alb })).status).toBe(200);
   });
 
   test('x-real-ip is the key only when the trusted hop is an allowlisted gateway peer (api.hasna.com case)', async () => {
     const { app } = await makeApp({ trustedProxyHops: 1, trustedGatewayPeers: parsePeerList('173.245.48.0/20') });
     const alb = { ip: '10.0.5.1' };
-    const loginWith = (email, headers) => call(app, 'POST', '/api/v1/auth/login', { body: { email }, env: alb, headers });
+    const loginWith = (email, headers) => call(app, 'POST', '/v1/auth/login', { body: { email }, env: alb, headers });
     // Through the gateway: the ALB appended the gateway's egress, and
     // x-real-ip (set by the gateway from cf-connecting-ip) is the client.
     const gw = (client) => ({ 'x-forwarded-for': `${client}, 173.245.50.9`, 'x-real-ip': client });
@@ -361,10 +361,10 @@ describe('OTP login edges', () => {
 
   test('--auto-approve trusts only the raw socket peer: a forwarded loopback never approves a remote device login', async () => {
     const { app } = await makeApp({ autoApprove: true, trustedProxyHops: 1 });
-    const remote = await (await call(app, 'POST', '/api/v1/auth/device/start', {
+    const remote = await (await call(app, 'POST', '/v1/auth/device/start', {
       body: {}, env: { ip: '203.0.113.9' }, headers: { 'x-forwarded-for': '127.0.0.1' },
     })).json();
-    const poll = await (await call(app, 'POST', '/api/v1/auth/device/token', { body: { deviceCode: remote.deviceCode } })).json();
+    const poll = await (await call(app, 'POST', '/v1/auth/device/token', { body: { deviceCode: remote.deviceCode } })).json();
     expect(poll.status).toBe('pending');
   });
 
@@ -413,7 +413,7 @@ describe('OTP login edges', () => {
   test('device login pairing codes are never written to the server log', async () => {
     const lines = [];
     const { app } = await makeApp({ log: (line) => lines.push(String(line)) });
-    const started = await (await call(app, 'POST', '/api/v1/auth/device/start', { body: {} })).json();
+    const started = await (await call(app, 'POST', '/v1/auth/device/start', { body: {} })).json();
     expect(started.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
     const output = lines.join('\n');
     expect(output).not.toContain(started.userCode);
@@ -423,7 +423,7 @@ describe('OTP login edges', () => {
 
 describe('api key scopes', () => {
   async function makeScopedKey(app, sessionToken, scopes) {
-    const res = await call(app, 'POST', '/api/v1/api-keys', {
+    const res = await call(app, 'POST', '/v1/api-keys', {
       token: sessionToken,
       body: { name: 'scoped', scopes },
     });
@@ -436,12 +436,12 @@ describe('api key scopes', () => {
     const { token } = await login(app);
     const key = await makeScopedKey(app, token, ['notes_read']);
 
-    const list = await call(app, 'GET', '/api/v1/notes', { token: key });
+    const list = await call(app, 'GET', '/v1/notes', { token: key });
     expect(list.status).toBe(200);
-    const write = await call(app, 'POST', '/api/v1/notes', { token: key, body: { title: 'x' } });
+    const write = await call(app, 'POST', '/v1/notes', { token: key, body: { title: 'x' } });
     expect(write.status).toBe(403);
     expect((await write.json()).error.code).toBe('forbidden');
-    const admin = await call(app, 'GET', '/api/v1/api-keys', { token: key });
+    const admin = await call(app, 'GET', '/v1/api-keys', { token: key });
     expect(admin.status).toBe(403);
   });
 
@@ -449,9 +449,9 @@ describe('api key scopes', () => {
     const { app } = await makeApp();
     const { token } = await login(app);
     const key = await makeScopedKey(app, token, ['notes_write']);
-    const write = await call(app, 'POST', '/api/v1/notes', { token: key, body: { clientId: 'w-1', title: 'w' } });
+    const write = await call(app, 'POST', '/v1/notes', { token: key, body: { clientId: 'w-1', title: 'w' } });
     expect(write.status).toBe(201);
-    const read = await call(app, 'GET', '/api/v1/notes', { token: key });
+    const read = await call(app, 'GET', '/v1/notes', { token: key });
     expect(read.status).toBe(403);
   });
 
@@ -459,11 +459,11 @@ describe('api key scopes', () => {
     const { app } = await makeApp();
     const { token, apiKey } = await login(app);
     const adminKey = await makeScopedKey(app, token, ['admin']);
-    const list = await call(app, 'GET', '/api/v1/api-keys', { token: adminKey });
+    const list = await call(app, 'GET', '/v1/api-keys', { token: adminKey });
     expect(list.status).toBe(200);
-    const whoamiRead = await (await call(app, 'GET', '/api/v1/auth/whoami', { token: apiKey })).json();
+    const whoamiRead = await (await call(app, 'GET', '/v1/auth/whoami', { token: apiKey })).json();
     expect(whoamiRead.auth).toEqual({ via: 'api_key', scopes: ['full'] });
-    const whoamiScoped = await (await call(app, 'GET', '/api/v1/auth/whoami', { token: adminKey })).json();
+    const whoamiScoped = await (await call(app, 'GET', '/v1/auth/whoami', { token: adminKey })).json();
     expect(whoamiScoped.auth.scopes).toEqual(['admin']);
   });
 });
@@ -474,23 +474,23 @@ describe('tenant isolation', () => {
     const a = await login(app, 'a@example.com');
     const b = await login(app, 'b@example.com');
 
-    const created = await (await call(app, 'POST', '/api/v1/notes', { token: a.apiKey, body: { clientId: 'iso-1', title: 'A secret' } })).json();
+    const created = await (await call(app, 'POST', '/v1/notes', { token: a.apiKey, body: { clientId: 'iso-1', title: 'A secret' } })).json();
     expect(created.seq).toBe(1);
 
     for (const method of ['GET', 'PATCH', 'DELETE']) {
-      const res = await call(app, method, `/api/v1/notes/${created.id}`, {
+      const res = await call(app, method, `/v1/notes/${created.id}`, {
         token: b.apiKey,
         body: method === 'PATCH' ? { title: 'hijack' } : undefined,
       });
       expect(res.status).toBe(404, `${method} from another tenant must 404`);
     }
-    const aList = await (await call(app, 'GET', '/api/v1/notes', { token: a.apiKey })).json();
+    const aList = await (await call(app, 'GET', '/v1/notes', { token: a.apiKey })).json();
     expect(aList.data).toHaveLength(1);
-    const bList = await (await call(app, 'GET', '/api/v1/notes', { token: b.apiKey })).json();
+    const bList = await (await call(app, 'GET', '/v1/notes', { token: b.apiKey })).json();
     expect(bList.data).toHaveLength(0);
 
     // Per-tenant seq: B's first note starts at 1, not 2.
-    const bNote = await (await call(app, 'POST', '/api/v1/notes', { token: b.apiKey, body: { clientId: 'iso-b', title: 'B' } })).json();
+    const bNote = await (await call(app, 'POST', '/v1/notes', { token: b.apiKey, body: { clientId: 'iso-b', title: 'B' } })).json();
     expect(bNote.seq).toBe(1);
   });
 });
@@ -501,7 +501,7 @@ describe('notes CRUD edges', () => {
     const { apiKey } = await login(app);
     const id = '00000000-0000-4000-8000-0000000000ff';
     for (const method of ['GET', 'PATCH', 'DELETE']) {
-      const res = await call(app, method, `/api/v1/notes/${id}`, {
+      const res = await call(app, method, `/v1/notes/${id}`, {
         token: apiKey,
         body: method === 'PATCH' ? { title: 'x' } : undefined,
       });
@@ -517,13 +517,13 @@ describe('notes CRUD edges', () => {
     // restore impossible; server.test.mjs pins the same contract.
     const { app } = await makeApp();
     const { apiKey } = await login(app);
-    const note = await (await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'del-1', title: 'x' } })).json();
-    await call(app, 'DELETE', `/api/v1/notes/${note.id}`, { token: apiKey });
-    const restored = await (await call(app, 'PATCH', `/api/v1/notes/${note.id}`, { token: apiKey, body: { title: 'y' } })).json();
+    const note = await (await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: 'del-1', title: 'x' } })).json();
+    await call(app, 'DELETE', `/v1/notes/${note.id}`, { token: apiKey });
+    const restored = await (await call(app, 'PATCH', `/v1/notes/${note.id}`, { token: apiKey, body: { title: 'y' } })).json();
     expect(restored.deletedAt).toBeNull();
     expect(restored.title).toBe('y');
     // A second PATCH on the restored note is an ordinary update.
-    const again = await (await call(app, 'PATCH', `/api/v1/notes/${note.id}`, { token: apiKey, body: { title: 'z' } })).json();
+    const again = await (await call(app, 'PATCH', `/v1/notes/${note.id}`, { token: apiKey, body: { title: 'z' } })).json();
     expect(again.deletedAt).toBeNull();
     expect(again.title).toBe('z');
   });
@@ -532,7 +532,7 @@ describe('notes CRUD edges', () => {
     const { app } = await makeApp();
     const { apiKey } = await login(app);
     const labels = Array.from({ length: 60 }, (_, i) => `label-${i % 10}-${i}`);
-    const note = await (await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'edge-1', title: '   ', labels } })).json();
+    const note = await (await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: 'edge-1', title: '   ', labels } })).json();
     expect(note.title).toBe('Untitled');
     expect(note.labels).toHaveLength(50);
     expect(new Set(note.labels).size).toBe(50);
@@ -541,29 +541,29 @@ describe('notes CRUD edges', () => {
   test('folder:null clears the folder while absent folder keeps the current value', async () => {
     const { app } = await makeApp();
     const { apiKey } = await login(app);
-    const note = await (await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'f-1', title: 'x', folder: 'work' } })).json();
+    const note = await (await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: 'f-1', title: 'x', folder: 'work' } })).json();
     expect(note.folder).toBe('work');
-    const kept = await (await call(app, 'PATCH', `/api/v1/notes/${note.id}`, { token: apiKey, body: { title: 'x2' } })).json();
+    const kept = await (await call(app, 'PATCH', `/v1/notes/${note.id}`, { token: apiKey, body: { title: 'x2' } })).json();
     expect(kept.folder).toBe('work');
-    const cleared = await (await call(app, 'PATCH', `/api/v1/notes/${note.id}`, { token: apiKey, body: { folder: null } })).json();
+    const cleared = await (await call(app, 'PATCH', `/v1/notes/${note.id}`, { token: apiKey, body: { folder: null } })).json();
     expect(cleared.folder).toBeNull();
   });
 
   test('pinned/archived flags round-trip and revision/contentHash move on every patch', async () => {
     const { app } = await makeApp();
     const { apiKey } = await login(app);
-    const note = await (await call(app, 'POST', '/api/v1/notes', { token: apiKey, body: { clientId: 'pa-1', title: 'x', pinned: true, archived: true } })).json();
+    const note = await (await call(app, 'POST', '/v1/notes', { token: apiKey, body: { clientId: 'pa-1', title: 'x', pinned: true, archived: true } })).json();
     expect(note.pinned).toBe(true);
     expect(note.archived).toBe(true);
     expect(note.revision).toBe(1);
 
-    const patched = await (await call(app, 'PATCH', `/api/v1/notes/${note.id}`, { token: apiKey, body: { archived: false, bodyMarkdown: 'new body' } })).json();
+    const patched = await (await call(app, 'PATCH', `/v1/notes/${note.id}`, { token: apiKey, body: { archived: false, bodyMarkdown: 'new body' } })).json();
     expect(patched.archived).toBe(false);
     expect(patched.pinned).toBe(true);
     expect(patched.revision).toBe(2);
     expect(patched.contentHash).not.toBe(note.contentHash);
 
-    const renamed = await (await call(app, 'PATCH', `/api/v1/notes/${note.id}`, { token: apiKey, body: { title: 'renamed' } })).json();
+    const renamed = await (await call(app, 'PATCH', `/v1/notes/${note.id}`, { token: apiKey, body: { title: 'renamed' } })).json();
     expect(renamed.revision).toBe(3);
     expect(renamed.contentHash).not.toBe(patched.contentHash);
   });

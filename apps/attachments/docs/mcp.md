@@ -1,8 +1,18 @@
 # MCP reference
 
 attachments-mcp bridges MCP tools to the authenticated HTTPS attachment service.
-Inject the same explicit URL/key pair used by the CLI. Missing, blank or conflicting
-configuration never selects a local dataset.
+Its credential and authority resolve through the shared @hasna/contracts chain
+(1.0.2) fresh on EVERY tool call — the same ladder the CLI uses:
+`HASNA_ATTACHMENTS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
+`HASNA_ATTACHMENTS_API_KEY_REF`, the macOS Keychain item
+`hasna.credentials.attachments.api-key`, `~/.hasna/attachments/config/credentials`,
+then `HASNA_ATTACHMENTS_API_URL` / `HASNA_ATTACHMENTS_API_KEY` (legacy
+unprefixed aliases accepted below the canonical names for one release), with
+the fleet gateway `https://api.hasna.com/attachments` as the default once a
+credential resolves. Per-call resolution is what lets a running MCP server pick
+up a key rotation without a restart. Missing, blank or conflicting
+configuration never selects a local dataset — a tool call with no resolvable
+credential fails closed per call.
 
 The existing MCP host transport supports --stdio (or MCP_STDIO=1), and Streamable
 HTTP on loopback port 8850 by default (--port or MCP_HTTP_PORT overrides the port).

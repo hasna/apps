@@ -118,7 +118,7 @@ async function runWorkspaceCommandInProcess(args: string[], env: Record<string, 
     previousEnv.set(key, process.env[key]);
     delete process.env[key];
   }
-  for (const [key, value] of [["HASNA_HOME", TEST_HASNA_HOME], ["HASNA_STATION", TEST_KEYCHAIN_STATION]] as const) {
+  for (const [key, value] of [["HASNA_HOME", TEST_HASNA_HOME], ["HASNA_STATION", TEST_KEYCHAIN_STATION], ["HASNA_PROJECTS_LOCAL", "1"]] as const) {
     if (key in env) continue;
     previousEnv.set(key, process.env[key]);
     process.env[key] = value;
@@ -4650,10 +4650,27 @@ describe("projects store resolution routes on URL + key only", () => {
     expect(existsSync(join(root, "home"))).toBe(false);
   });
 
-  cliProcessTest("a completely silent environment runs unhosted and says so in one line", () => {
-    const root = mkdtempSync(join(tmpdir(), "projects-cli-unhosted-"));
-    const dbPath = join(root, "unhosted.db");
-    const env = { HASNA_PROJECTS_DB_PATH: dbPath };
+  cliProcessTest("a completely silent environment FAILS CLOSED — non-zero, no SQLite, no notice", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-fail-closed-silent-"));
+    const dbPath = join(root, "never-created.db");
+    // testSpawnEnv defaults the explicit local opt-in; this test's subject is
+    // the missing credential, so it blanks the opt-in to restore the
+    // fail-closed case (a blank has always meant "not configured" at this seam).
+    const env = { HASNA_PROJECTS_DB_PATH: dbPath, HASNA_PROJECTS_LOCAL: "" };
+
+    const result = runProjects(["roots", "list", "--json"], env);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(text(result.stderr)).toContain("no API key could be resolved");
+    // No SQLite was opened, and no local-fallback notice or event exists.
+    expect(existsSync(dbPath)).toBe(false);
+    expect(text(result.stderr)).not.toContain("local mode");
+  });
+
+  cliProcessTest("the explicit local opt-in runs the on-box registry and says so in one line", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-local-opt-in-"));
+    const dbPath = join(root, "opt-in.db");
+    const env = { HASNA_PROJECTS_DB_PATH: dbPath, HASNA_PROJECTS_LOCAL: "1" };
 
     const result = runProjects(["roots", "list", "--json"], env);
 
@@ -4663,7 +4680,24 @@ describe("projects store resolution routes on URL + key only", () => {
     const notices = rawStderr.split("\n").filter((line) => line.startsWith(UNHOSTED_MODE_NOTICE_PREFIX));
     expect(notices).toHaveLength(1);
     expect(notices[0]!).toContain("projects: local mode");
+    expect(notices[0]!).toContain("HASNA_PROJECTS_LOCAL");
     expect(notices[0]!).toContain(dbPath);
+  });
+
+  cliProcessTest("a half-configured opt-in run (URL, no key) still exits non-zero", () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-cli-opt-in-half-configured-"));
+    const dbPath = join(root, "never-created.db");
+    const env = {
+      HASNA_PROJECTS_DB_PATH: dbPath,
+      HASNA_PROJECTS_LOCAL: "1",
+      HASNA_PROJECTS_API_URL: "https://projects.test.invalid",
+    };
+
+    const result = runProjects(["roots", "list", "--json"], env);
+
+    expect(result.exitCode).not.toBe(0);
+    expect(text(result.stderr)).toContain("no API key could be resolved");
+    expect(existsSync(dbPath)).toBe(false);
   });
 
   cliProcessTest("a credentials file on disk selects the hosted store with no URL configured", () => {
@@ -4676,9 +4710,12 @@ describe("projects store resolution routes on URL + key only", () => {
     chmodSync(credentials, 0o600);
 
     // No URL anywhere: the default fleet gateway applies, so the command tries
-    // to REACH it and fails on the network, never on a local read.
+    // to REACH it and fails on the network, never on a local read. The opt-in
+    // is explicitly blanked: were it set, this run would be LOCAL (the opt-in
+    // is answered before the resolver reads the disk tier).
     const result = runProjects(["roots", "list", "--json"], {
       HASNA_PROJECTS_DB_PATH: dbPath,
+      HASNA_PROJECTS_LOCAL: "",
       HASNA_HOME: join(root, "hasna-home"),
     });
 

@@ -1,6 +1,6 @@
 # @hasna/domains
 
-Domain portfolio, registrar, marketplace, and DNS management for AI agents. The package ships a CLI, MCP server, authenticated HTTP API, generated SDK, and library exports. Data commands fail closed when no store is configured: `HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY` select the hosted HTTP API, and local SQLite is reachable only through an explicit path opt-in — never as a silent default; `domains-serve` connects directly to cloud Postgres.
+Domain portfolio, registrar, marketplace, and DNS management for AI agents. The package ships a CLI, MCP server, authenticated HTTP API, generated SDK, and library exports. Every client surface resolves its credential and authority through the one shared `@hasna/contracts` resolver (macOS Keychain, `~/.hasna/domains/config/credentials`, or `HASNA_DOMAINS_API_KEY`, with the fleet gateway `https://api.hasna.com/domains` as the default authority), and data commands fail closed when no credential resolves: local SQLite is reachable only through an explicit path opt-in — never as a silent default; `domains-serve` connects directly to cloud Postgres.
 
 ## Features
 
@@ -33,7 +33,7 @@ Domain portfolio, registrar, marketplace, and DNS management for AI agents. The 
 npm install -g @hasna/domains
 ```
 
-Data is stored in the local domains data directory. The home is resolved through `@hasna/paths` (XDG / macOS home layout, honoring `HASNA_*_HOME` overrides). The legacy `~/.hasna/domains` default stays the effective home until the XDG data home is adopted — the operator sets `HASNA_DATA_HOME`, or the store is physically migrated there (`domains.db` exists at the resolver home) — so an existing local store never becomes invisible on upgrade. `HASNA_DOMAINS_HOME` / `DOMAINS_HOME` / `HASNA_DOMAINS_DIR` / `DOMAINS_DIR` are exact-app overrides that win unconditionally; override the db file itself with `DOMAINS_DB_PATH` / `HASNA_DOMAINS_DB_PATH`.
+Data is stored in the local domains data directory when the local store is opted into. The default home is `~/.hasna/domains` and follows `HASNA_HOME` (the shared root override) when set; `HASNA_DOMAINS_HOME` / `HASNA_DOMAINS_DIR` (and the legacy `DOMAINS_HOME` / `DOMAINS_DIR` aliases) are exact-app overrides that win unconditionally; override the db file itself with `HASNA_DOMAINS_DB_PATH` / `DOMAINS_DB_PATH`. The XDG layout and `~/.config/hasna` are never consulted (hasna/apps#1720).
 
 ## Optional Command Groups
 
@@ -232,16 +232,21 @@ Route 53 sync imports registered domains when the selected AWS account permits `
 
 ## Storage
 
-Data commands fail closed when no store is configured: they exit non-zero with an error naming the missing env rather than silently serving a default local database. The client selects the hosted HTTP API when both `HASNA_DOMAINS_API_URL` and `HASNA_DOMAINS_API_KEY` are set — a database DSN is never exposed to clients.
+Every client surface — the CLI, the MCP server and the `./sdk` — resolves its credential and authority through the ONE shared `@hasna/contracts` resolver, fresh on every call:
 
-```bash
-export HASNA_DOMAINS_API_URL=https://domains.example.com
-export HASNA_DOMAINS_API_KEY=dom_...
-```
+1. an explicit `--api-key` / `--profile` argument (code-level)
+2. a deliberate env pointer — `HASNA_DOMAINS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_DOMAINS_API_KEY_REF`
+3. the macOS Keychain — item `hasna.credentials.domains.api-key` / `.api-url`, account `HASNA_STATION`, else the short hostname, else `$USER`
+4. disk, read at call time — `~/.hasna/domains/config/credentials` (owner-only 0600; `HASNA_HOME` / `HASNA_CONFIG_HOME` override the root)
+5. `HASNA_DOMAINS_API_KEY` in the process env — a legitimate tier
 
-Local SQLite is available only as an explicit opt-in: set one of `DOMAINS_DB_PATH`, `HASNA_DOMAINS_DB_PATH`, `DOMAINS_DIR` or `HASNA_DOMAINS_DIR` to name the database you mean. Without the hosted env pair and without such an opt-in, `getStore()` throws and CLI data commands fail — `~/.hasna/domains/domains.db` is never opened implicitly.
+The authority follows the same ladder — `HASNA_DOMAINS_API_URL`, the Keychain `api-url` item, the credentials file — and **defaults to the fleet gateway `https://api.hasna.com/domains`** once a credential resolves, so a key alone is a complete configuration. The unprefixed `DOMAINS_API_URL` / `DOMAINS_API_KEY` aliases are accepted by the resolver for one release; the canonical `HASNA_DOMAINS_*` names always win. Retired locations (`~/.hasna/fleet-env`, the cloud dirs under `~/.hasna`, `~/.config/hasna`, `$XDG_CONFIG_HOME`) are never read, and no `*_MODE` / `*_STORAGE_MODE` variable selects anything.
 
-The unprefixed `DOMAINS_API_URL` and `DOMAINS_API_KEY` aliases are also accepted. When only one of URL and key is set, the client refuses to start (fail-closed). The standalone `domains-serve` process is the server side: it connects directly to PostgreSQL using `HASNA_DOMAINS_DATABASE_URL` (SQLite when unset) and requires `HASNA_DOMAINS_API_SIGNING_KEY`. Apply owner-role migrations first with `domains db migrate`.
+**Fail closed.** A hosted run with no credential exits non-zero naming the canonical env pair — never a silent fallback to SQLite, never a `*-local-fallback` event. A database DSN is never exposed to clients.
+
+**Local SQLite is available only as an explicit opt-in**: set one of `HASNA_DOMAINS_DB_PATH`, `DOMAINS_DB_PATH`, `HASNA_DOMAINS_DIR`, `DOMAINS_DIR` or `HASNA_DOMAINS_HOME` to name the database you mean, and only when the environment configures no authority and no credential. Every local run prints one line on stderr saying it is local. Without a resolvable credential and without such an opt-in, `getStore()` throws and CLI data commands fail — `~/.hasna/domains/domains.db` is never opened implicitly.
+
+The standalone `domains-serve` process is the server side: it connects directly to PostgreSQL using `HASNA_DOMAINS_DATABASE_URL` (SQLite when unset) and requires `HASNA_DOMAINS_API_SIGNING_KEY`. Apply owner-role migrations first with `domains db migrate`.
 
 ## MCP Server
 
@@ -299,10 +304,12 @@ Safe mode registers only read-only/list/check/export tools. Mutating tools such 
 ```bash
 domains-serve --host 0.0.0.0 --port 8080
 curl http://127.0.0.1:8080/health
-curl -H "x-api-key: $DOMAINS_API_KEY" http://127.0.0.1:8080/v1/domains
+curl -H "x-api-key: $HASNA_DOMAINS_API_KEY" http://127.0.0.1:8080/v1/domains
 ```
 
-The package also exports the generated client:
+The package also exports the generated client, wired to the same shared
+resolver the CLI and MCP server use — fresh on every request, so a key rotation
+heals a long-lived client:
 
 ```ts
 import { createDomainsClientFromEnv } from "@hasna/domains/sdk";
@@ -311,24 +318,33 @@ const domains = createDomainsClientFromEnv();
 const portfolio = await domains.listDomains({ status: "active" });
 ```
 
+An explicit `baseUrl` with no `apiKey` builds a client pinned to that authority
+that never picks up an ambient fleet key; without a resolvable credential the
+SDK throws — it never degrades to an anonymous client or to local data.
+
 `domains serve` is a separate, unauthenticated local-development server over the local store. Use `domains-serve` for the cloud Postgres API.
 
 ## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
-| `DOMAINS_DB_PATH` | Explicit local-sqlite opt-in: override database file path |
+| `HASNA_DOMAINS_API_KEY` | Hosted API key (canonical env tier of the shared resolver; below the Keychain and the credential file) |
+| `HASNA_DOMAINS_API_URL` | Optional hosted API base URL — defaults to the fleet gateway `https://api.hasna.com/domains` once a key resolves |
+| `HASNA_DOMAINS_API_KEY_OVERRIDE` | Deliberate per-run key override that outranks every other tier |
+| `HASNA_DOMAINS_API_KEY_REF` | Deliberate secrets-vault pointer resolved through the `@hasna/secrets` SDK at request time |
+| `HASNA_PROFILE` | Global identity profile pointer (`credentials-<profile>` beside the credential file) |
+| `HASNA_HOME` | Shared root override — `<HASNA_HOME>/domains/` for local data, `<HASNA_HOME>/domains/config/credentials` for the credential file |
+| `HASNA_CONFIG_HOME` | Config-root override for the resolver's credential file |
 | `HASNA_DOMAINS_DB_PATH` | Explicit local-sqlite opt-in: override database file path |
-| `DOMAINS_CONFIG_PATH` | Override config file path |
-| `DOMAINS_CONFIG_DIR` | Override config directory |
+| `DOMAINS_DB_PATH` | Legacy alias for `HASNA_DOMAINS_DB_PATH` (explicit local-sqlite opt-in) |
 | `HASNA_DOMAINS_DIR` | Explicit local-sqlite opt-in: override database directory |
-| `DOMAINS_DIR` | Explicit local-sqlite opt-in: override database directory fallback |
+| `DOMAINS_DIR` | Legacy alias for `HASNA_DOMAINS_DIR` (explicit local-sqlite opt-in) |
+| `HASNA_DOMAINS_HOME`, `DOMAINS_HOME` | Exact-app home overrides (canonical name wins over the alias) |
+| `HASNA_DOMAINS_CONFIG_PATH`, `DOMAINS_CONFIG_PATH` | Override the settings config file path |
+| `DOMAINS_CONFIG_DIR` | Override the settings config directory |
 | `DOMAINS_COMMAND_GROUPS` | Comma-separated optional command groups to load, or `all` |
 | `DOMAINS_ENABLE_EXTRAS` | Set to `1` to load all optional command groups |
 | `DOMAINS_MCP_SAFE_MODE` | Set to `1` to expose only read-only MCP tools |
-| `HASNA_DOMAINS_API_URL`, `DOMAINS_API_URL` | Hosted HTTP API base URL for the CLI/library store (set together with the key) |
-| `HASNA_DOMAINS_API_KEY`, `DOMAINS_API_KEY` | Hosted HTTP API key for the CLI/library store and SDK (set together with the URL) |
-| `HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH` | Set to `1` to keep the hosted store even though a local path variable is set. Without it that combination is a hard error — see below |
 | `HASNA_DOMAINS_DATABASE_URL` | Server-side PostgreSQL DSN used by `domains-serve` and DB migrations; SQLite backend when unset |
 | `HASNA_DOMAINS_API_SIGNING_KEY` | HMAC signing secret used by `domains-serve` to verify API keys |
 | `AWS_PROFILE` | AWS profile for Route 53 Domains and hosted zones |
@@ -346,27 +362,33 @@ const portfolio = await domains.listDomains({ status: "active" });
 | `BRANDSIGHT_DEMO_STUBS`, `BRANDSIGHT_ALLOW_STUBS` | Set either to `1` to allow demo stub responses when the Brandsight API is unreachable |
 | `SEDO_PARTNER_ID`, `SEDO_API_KEY`, `SEDO_USERNAME`, `SEDO_PASSWORD` | Sedo marketplace API credentials |
 
-### Picking a store: a local path and cloud credentials are mutually exclusive
+### Picking a store: a local path and a configured credential are mutually exclusive
 
-`DOMAINS_DB_PATH`, `HASNA_DOMAINS_DB_PATH`, `DOMAINS_DIR` and `HASNA_DOMAINS_DIR` all name a
-**local sqlite file**. Only the local store has one. So setting any of them while
-`HASNA_DOMAINS_API_URL` + `HASNA_DOMAINS_API_KEY` are also set asks for two different stores at
-once, and `getStore()` **refuses to start** rather than pick one for you.
+`HASNA_DOMAINS_DB_PATH`, `DOMAINS_DB_PATH`, `HASNA_DOMAINS_DIR`, `DOMAINS_DIR` and
+`HASNA_DOMAINS_HOME` all name a **local sqlite file or directory**. Only the local store
+has one. So setting any of them while the environment also configures a hosted
+authority or credential (`HASNA_DOMAINS_API_URL`, `HASNA_DOMAINS_API_KEY`, the
+deliberate pointers, `HASNA_PROFILE`, or a Keychain / credential-file entry)
+asks for two different stores at once, and **`getStore()` refuses to start**
+rather than pick one for you. Local mode applies only when the environment
+configures nothing at all.
 
-This is deliberate. Before it, the combination silently resolved to the cloud store: a script
-that set `DOMAINS_DB_PATH` created no sqlite file, wrote to the remote portfolio, and printed
-success. Nothing on any surface said which store it had used.
+This is deliberate. Before it, the combination silently resolved to the cloud
+store: a script that set `DOMAINS_DB_PATH` created no sqlite file, wrote to the
+remote portfolio, and printed success. Nothing on any surface said which store
+it had used.
 
 To resolve it, say which you meant:
 
 ```sh
-unset HASNA_DOMAINS_API_URL HASNA_DOMAINS_API_KEY   # use the sqlite file the path variable names
-unset DOMAINS_DB_PATH                                # use the hosted store
-HASNA_DOMAINS_ALLOW_CLOUD_WITH_LOCAL_PATH=1          # keep the hosted store with the variable present
+unset HASNA_DOMAINS_DB_PATH DOMAINS_DB_PATH HASNA_DOMAINS_DIR DOMAINS_DIR HASNA_DOMAINS_HOME   # use the hosted store
+unset HASNA_DOMAINS_API_URL HASNA_DOMAINS_API_KEY HASNA_DOMAINS_API_KEY_OVERRIDE HASNA_DOMAINS_API_KEY_REF HASNA_PROFILE   # use the sqlite file the path variable names
 ```
 
-`domains doctor` names the store it resolved, in its `Store` section, before any other check
-runs. Run it whenever you are unsure which dataset a command is about to touch.
+`domains doctor` names the store it resolved, in its `Store` section — including
+where the URL and key came from and which tier supplied the key — before any
+other check runs. Run it whenever you are unsure which dataset a command is
+about to touch.
 
 ## License
 

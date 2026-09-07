@@ -24,8 +24,42 @@ export function buildServer(): McpServer {
   return server;
 }
 
+/**
+ * Classify early-exit arguments before any http-mode parse, server build, or
+ * stdio bind. `--help` / `--version` answer with rc=0 and the MCP server never
+ * starts: previously `contacts-mcp --version` fell through to the stdio
+ * JSON-RPC loop and printed "running on stdio" instead of the version
+ * (hasna/apps#1720 validation, the binds-before-version class).
+ */
+export function handleEarlyArgs(argv: string[]): "help" | "version" | "start" {
+  if (argv.includes("--help") || argv.includes("-h")) return "help";
+  if (argv.includes("--version") || argv.includes("-V")) return "version";
+  return "start";
+}
+
+export function mcpUsage(): string {
+  return `usage: contacts-mcp                       MCP server over stdio (default)
+       contacts-mcp --http [--port <n>]   Streamable-HTTP dev server (loopback)
+       contacts-mcp --version             Print the version
+
+options:
+  --help, -h          show this help and exit
+  --version, -V       print the package version and exit
+`;
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  const early = handleEarlyArgs(args);
+  if (early === "help") {
+    console.log(mcpUsage());
+    return;
+  }
+  if (early === "version") {
+    console.log(getServerVersion());
+    return;
+  }
+
   if (isHttpMode(args)) {
     startMcpHttpServer({
       name: "contacts",

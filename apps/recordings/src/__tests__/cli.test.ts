@@ -30,15 +30,17 @@ const tempDirs: string[] = [];
 const cliEntry = join(process.cwd(), "src", "cli", "index.ts");
 
 // On-box CLI tests must declare local mode EXPLICITLY: the client never falls
-// back to the local file when no hosted env is configured, so the store-switch
-// override below is what points these spawns at the isolated test database.
+// back to the local file when no hosted env is configured, so the unhosted
+// opt-in below is what points these spawns at the isolated test database. It
+// is answered before the resolver runs, so these runs read neither the
+// Keychain nor any credential file.
 function isolatedCliEnv(home: string, overrides: Record<string, string> = {}) {
   return {
     HOME: home,
     PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/sbin:/sbin",
     HASNA_RECORDINGS_API_URL: "",
     HASNA_RECORDINGS_API_KEY: "",
-    HASNA_RECORDINGS_CLIENT_STORE: "sqlite",
+    HASNA_RECORDINGS_LOCAL: "1",
     RECORDINGS_API_URL: "",
     RECORDINGS_API_KEY: "",
     HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
@@ -126,9 +128,9 @@ describe("recordings CLI", () => {
       [process.execPath, cliEntry, "--json", "list", "--limit", "1"],
       {
         cwd: home,
-        // No hosted vars AND no HASNA_RECORDINGS_CLIENT_STORE: the on-box file
-        // must never become a silent default, so this process fails closed.
-        env: { ...isolatedCliEnv(home), HASNA_RECORDINGS_CLIENT_STORE: "" },
+        // No hosted vars AND no local opt-in: the on-box file must never
+        // become a silent default, so this process fails closed.
+        env: { ...isolatedCliEnv(home), HASNA_RECORDINGS_LOCAL: "" },
         stdout: "pipe",
         stderr: "pipe",
       }
@@ -141,8 +143,9 @@ describe("recordings CLI", () => {
     ]);
 
     expect(exitCode).toBe(1);
-    expect(stderr).toContain("ERROR: HASNA_RECORDINGS_API_URL and HASNA_RECORDINGS_API_KEY are not set");
-    expect(stderr).toContain("HASNA_RECORDINGS_CLIENT_STORE=sqlite");
+    expect(stderr).toContain("ERROR:");
+    expect(stderr).toContain("REMOTE_API_CONFIG_MISSING");
+    expect(stderr).toContain("HASNA_RECORDINGS_LOCAL=1");
     expect(stdout).toBe("");
     // Failing closed must not have opened (and thereby created) the on-box database.
     expect(existsSync(join(home, ".hasna", "recordings", "recordings.db"))).toBe(false);

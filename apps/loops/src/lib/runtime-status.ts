@@ -11,11 +11,10 @@ import { packageVersion } from "./version.js";
 import {
   ROUTE_ADMISSION_GATES,
   displayControlPlaneUrl,
-  type LoopRouteAdmissionGate,
-  type RuntimeConfig,
-  type RuntimeConnection,
-  type RuntimeStorage,
+  envValue,
 } from "./runtime-config.js";
+import { resolveCloudStorage, type CloudStorageResolution } from "./cloud/resolve.js";
+import type { Env, LoopRouteAdmissionGate, RuntimeConfig, RuntimeConnection, RuntimeStorage } from "./runtime-config.js";
 
 export type LoopRemoteSchedulerBackend = "none" | "control_plane_http" | "postgres_contract";
 
@@ -55,6 +54,36 @@ export interface StorageConnectionReport {
   databaseUrlPresent: boolean;
   configured: boolean;
   warnings: string[];
+}
+
+/**
+ * The runtime config a RESOLVED client connection implies.
+ *
+ * The connection fields come from the shared credential resolver, not from
+ * env presence: a Keychain or credential-file identity reports `api` even when
+ * no HASNA_LOOPS_* env variable is set. This is what the CLI `status` command
+ * reports; server surfaces keep the env-presence `resolveRuntimeConfig`.
+ *
+ * Throws when nothing is configured — the same fail-closed refusal the data
+ * path gives — so an unconfigured `status` never reports a file connection
+ * that no data command would use.
+ */
+export function resolvedClientRuntimeConfig(env: Env = process.env): RuntimeConfig {
+  const resolution: CloudStorageResolution = resolveCloudStorage("loops", env);
+  const databaseUrlPresent = Boolean(envValue(env, ["HASNA_LOOPS_DATABASE_URL"]));
+  return {
+    storage: databaseUrlPresent ? "postgresql" : "sqlite",
+    connection: resolution.transport,
+    apiUrl: resolution.transport === "api" ? authorityWithoutV1(resolution.baseUrl) : undefined,
+    apiUrlPresent: resolution.transport === "api",
+    apiKeyPresent: resolution.transport === "api",
+    databaseUrlPresent,
+  };
+}
+
+/** The resolver's `<origin>/v1` base without the transport suffix, for display. */
+function authorityWithoutV1(baseUrl: string): string {
+  return baseUrl.replace(/\/v1\/?$/, "");
 }
 
 /**

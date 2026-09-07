@@ -64,6 +64,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/provider-presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listProviderPresets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/provider-presets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getProviderPreset"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/providers/{id}/models": {
         parameters: {
             query?: never;
@@ -212,18 +244,48 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ProviderPreset: {
+            id: string;
+            name: string;
+            credentialEnv?: string;
+            credentialAliases: string[];
+            protocols: {
+                /** @enum {string} */
+                protocol: "anthropic-messages" | "openai-responses" | "openai-chat" | "gemini-generate-content";
+                baseUrl?: string;
+                /** @enum {string} */
+                authStyle: "bearer" | "x-api-key" | "api-key";
+                catalogBaseUrl?: string;
+                /** @enum {string} */
+                catalogFormat: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
+                /** @enum {string} */
+                catalogAuthStyle?: "bearer" | "x-api-key" | "api-key" | "none";
+                modelsPath: string;
+                notes: string[];
+            }[];
+            sources: string[];
+            /** @enum {string} */
+            verification: "documented";
+        };
         ProviderInput: {
             id: string;
             name: string;
             baseUrl: string;
             /** @enum {string} */
-            protocol: "anthropic-messages" | "openai-responses" | "openai-chat";
+            protocol: "anthropic-messages" | "openai-responses" | "openai-chat" | "gemini-generate-content";
             credentialEnv?: string;
             /**
              * @default bearer
              * @enum {string}
              */
-            authStyle: "bearer" | "x-api-key";
+            authStyle: "bearer" | "x-api-key" | "api-key";
+            catalogBaseUrl?: string;
+            /** @enum {string} */
+            catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
+            /** @enum {string} */
+            catalogAuthStyle?: "bearer" | "x-api-key" | "api-key" | "none";
+            catalogCredentialEnv?: string;
+            catalogAccountId?: string;
             /** @default models */
             modelsPath: string;
             /** @default [] */
@@ -231,11 +293,13 @@ export interface components {
                 id: string;
                 name: string;
                 description?: string;
+                available?: boolean;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
             }[];
         };
         Provider: {
@@ -243,13 +307,20 @@ export interface components {
             name: string;
             baseUrl: string;
             /** @enum {string} */
-            protocol: "anthropic-messages" | "openai-responses" | "openai-chat";
+            protocol: "anthropic-messages" | "openai-responses" | "openai-chat" | "gemini-generate-content";
             credentialEnv?: string;
             /**
              * @default bearer
              * @enum {string}
              */
-            authStyle: "bearer" | "x-api-key";
+            authStyle: "bearer" | "x-api-key" | "api-key";
+            catalogBaseUrl?: string;
+            /** @enum {string} */
+            catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
+            /** @enum {string} */
+            catalogAuthStyle?: "bearer" | "x-api-key" | "api-key" | "none";
+            catalogCredentialEnv?: string;
+            catalogAccountId?: string;
             /** @default models */
             modelsPath: string;
             /** @default [] */
@@ -257,11 +328,13 @@ export interface components {
                 id: string;
                 name: string;
                 description?: string;
+                available?: boolean;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
             }[];
             version: number;
             updatedAt: string;
@@ -271,16 +344,64 @@ export interface components {
             name: string;
             providerId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
+            modelPolicy?: {
+                /**
+                 * @default 1
+                 * @enum {number}
+                 */
+                version: 1;
+                roles?: {
+                    subagent?: string;
+                    fast?: string;
+                    planning?: string;
+                    review?: string;
+                    summary?: string;
+                    compaction?: string;
+                    weak?: string;
+                    editor?: string;
+                };
+                allowedModels?: string[];
+                aliases?: {
+                    [key: string]: string;
+                };
+                fallbacks?: {
+                    [key: string]: string[];
+                };
+            };
         };
         Profile: {
             id: string;
             name: string;
             providerId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
+            modelPolicy?: {
+                /**
+                 * @default 1
+                 * @enum {number}
+                 */
+                version: 1;
+                roles?: {
+                    subagent?: string;
+                    fast?: string;
+                    planning?: string;
+                    review?: string;
+                    summary?: string;
+                    compaction?: string;
+                    weak?: string;
+                    editor?: string;
+                };
+                allowedModels?: string[];
+                aliases?: {
+                    [key: string]: string;
+                };
+                fallbacks?: {
+                    [key: string]: string[];
+                };
+            };
             version: number;
             updatedAt: string;
         };
@@ -288,22 +409,64 @@ export interface components {
             id: string;
             name: string;
             description?: string;
+            available?: boolean;
             contextWindow?: number;
             maxOutputTokens?: number;
             inputModalities?: string[];
             outputModalities?: string[];
             supportedParameters?: string[];
+            supportedGenerationMethods?: string[];
+        };
+        ModelPolicy: {
+            /**
+             * @default 1
+             * @enum {number}
+             */
+            version: 1;
+            roles?: {
+                subagent?: string;
+                fast?: string;
+                planning?: string;
+                review?: string;
+                summary?: string;
+                compaction?: string;
+                weak?: string;
+                editor?: string;
+            };
+            allowedModels?: string[];
+            aliases?: {
+                [key: string]: string;
+            };
+            fallbacks?: {
+                [key: string]: string[];
+            };
+        };
+        RoutingEvent: {
+            /** Format: date-time */
+            at: string;
+            requestId: string;
+            requestedModel: string;
+            resolvedModel?: string;
+            reportedModel?: string;
+            /** @enum {string} */
+            decision: "allow" | "alias" | "reject" | "fallback";
+            /** @enum {string} */
+            role?: "main" | "subagent" | "fast" | "planning" | "review" | "summary" | "compaction" | "weak" | "editor";
+            reason?: string;
+            upstreamStatus?: number;
         };
         ModelPage: {
             data: {
                 id: string;
                 name: string;
                 description?: string;
+                available?: boolean;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
                 codingEligible: boolean;
             }[];
             total: number;
@@ -318,11 +481,13 @@ export interface components {
                 id: string;
                 name: string;
                 description?: string;
+                available?: boolean;
                 contextWindow?: number;
                 maxOutputTokens?: number;
                 inputModalities?: string[];
                 outputModalities?: string[];
                 supportedParameters?: string[];
+                supportedGenerationMethods?: string[];
             }[];
             refreshedAt: string;
             /** @enum {string} */
@@ -334,13 +499,20 @@ export interface components {
                 name: string;
                 baseUrl: string;
                 /** @enum {string} */
-                protocol: "anthropic-messages" | "openai-responses" | "openai-chat";
+                protocol: "anthropic-messages" | "openai-responses" | "openai-chat" | "gemini-generate-content";
                 credentialEnv?: string;
                 /**
                  * @default bearer
                  * @enum {string}
                  */
-                authStyle: "bearer" | "x-api-key";
+                authStyle: "bearer" | "x-api-key" | "api-key";
+                catalogBaseUrl?: string;
+                /** @enum {string} */
+                catalogFormat?: "openai" | "ollama" | "mistral" | "together" | "fireworks" | "dashscope" | "gemini" | "none";
+                /** @enum {string} */
+                catalogAuthStyle?: "bearer" | "x-api-key" | "api-key" | "none";
+                catalogCredentialEnv?: string;
+                catalogAccountId?: string;
                 /** @default models */
                 modelsPath: string;
                 /** @default [] */
@@ -348,11 +520,13 @@ export interface components {
                     id: string;
                     name: string;
                     description?: string;
+                    available?: boolean;
                     contextWindow?: number;
                     maxOutputTokens?: number;
                     inputModalities?: string[];
                     outputModalities?: string[];
                     supportedParameters?: string[];
+                    supportedGenerationMethods?: string[];
                 }[];
                 version: number;
                 updatedAt: string;
@@ -362,8 +536,32 @@ export interface components {
                 name: string;
                 providerId: string;
                 /** @enum {string} */
-                harness: "claude" | "codex" | "grok" | "opencode2";
+                harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
                 model: string;
+                modelPolicy?: {
+                    /**
+                     * @default 1
+                     * @enum {number}
+                     */
+                    version: 1;
+                    roles?: {
+                        subagent?: string;
+                        fast?: string;
+                        planning?: string;
+                        review?: string;
+                        summary?: string;
+                        compaction?: string;
+                        weak?: string;
+                        editor?: string;
+                    };
+                    allowedModels?: string[];
+                    aliases?: {
+                        [key: string]: string;
+                    };
+                    fallbacks?: {
+                        [key: string]: string[];
+                    };
+                };
                 version: number;
                 updatedAt: string;
             };
@@ -372,11 +570,13 @@ export interface components {
                     id: string;
                     name: string;
                     description?: string;
+                    available?: boolean;
                     contextWindow?: number;
                     maxOutputTokens?: number;
                     inputModalities?: string[];
                     outputModalities?: string[];
                     supportedParameters?: string[];
+                    supportedGenerationMethods?: string[];
                 }[];
                 refreshedAt: string;
                 /** @enum {string} */
@@ -386,22 +586,89 @@ export interface components {
             warnings: string[];
         };
         RunInput: {
+            /** @enum {number} */
+            modelPolicyVersion: 1;
             profileId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
+            modelPolicy?: {
+                /**
+                 * @default 1
+                 * @enum {number}
+                 */
+                version: 1;
+                roles?: {
+                    subagent?: string;
+                    fast?: string;
+                    planning?: string;
+                    review?: string;
+                    summary?: string;
+                    compaction?: string;
+                    weak?: string;
+                    editor?: string;
+                };
+                allowedModels?: string[];
+                aliases?: {
+                    [key: string]: string;
+                };
+                fallbacks?: {
+                    [key: string]: string[];
+                };
+            };
             planToken: string;
         };
         RunUpdate: {
             /** @enum {string} */
             status: "exited" | "failed" | "interrupted";
             exitCode: number;
+            routingEvents?: {
+                /** Format: date-time */
+                at: string;
+                requestId: string;
+                requestedModel: string;
+                resolvedModel?: string;
+                reportedModel?: string;
+                /** @enum {string} */
+                decision: "allow" | "alias" | "reject" | "fallback";
+                /** @enum {string} */
+                role?: "main" | "subagent" | "fast" | "planning" | "review" | "summary" | "compaction" | "weak" | "editor";
+                reason?: string;
+                upstreamStatus?: number;
+            }[];
+            routingEventsDropped?: number;
         };
         Run: {
+            /** @enum {number} */
+            modelPolicyVersion?: 1;
             profileId: string;
             /** @enum {string} */
-            harness: "claude" | "codex" | "grok" | "opencode2";
+            harness: "claude" | "codex" | "grok" | "opencode" | "opencode2" | "pi" | "omp" | "dsh" | "cline" | "hermes" | "prime-agent" | "gemini" | "aider" | "kilo";
             model: string;
+            modelPolicy?: {
+                /**
+                 * @default 1
+                 * @enum {number}
+                 */
+                version: 1;
+                roles?: {
+                    subagent?: string;
+                    fast?: string;
+                    planning?: string;
+                    review?: string;
+                    summary?: string;
+                    compaction?: string;
+                    weak?: string;
+                    editor?: string;
+                };
+                allowedModels?: string[];
+                aliases?: {
+                    [key: string]: string;
+                };
+                fallbacks?: {
+                    [key: string]: string[];
+                };
+            };
             planToken: string;
             version: number;
             updatedAt: string;
@@ -414,6 +681,21 @@ export interface components {
             startedAt: string;
             endedAt?: string;
             exitCode?: number;
+            routingEvents?: {
+                /** Format: date-time */
+                at: string;
+                requestId: string;
+                requestedModel: string;
+                resolvedModel?: string;
+                reportedModel?: string;
+                /** @enum {string} */
+                decision: "allow" | "alias" | "reject" | "fallback";
+                /** @enum {string} */
+                role?: "main" | "subagent" | "fast" | "planning" | "review" | "summary" | "compaction" | "weak" | "editor";
+                reason?: string;
+                upstreamStatus?: number;
+            }[];
+            routingEventsDropped?: number;
         };
         Health: {
             /** @enum {string} */
@@ -792,6 +1074,68 @@ export interface operations {
                     "application/json": {
                         deleted: string;
                     };
+                };
+            };
+            /** @description Structured error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listProviderPresets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["ProviderPreset"][];
+                    };
+                };
+            };
+            /** @description Structured error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getProviderPreset: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderPreset"];
                 };
             };
             /** @description Structured error */

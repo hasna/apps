@@ -53,13 +53,18 @@ export interface KnowledgeAuthStatus {
     configured: boolean;
     /**
      * WHICH KIND of source supplied the credential — `keychain` for the macOS
-     * Keychain item, `file` for `~/.hasna/knowledge/config/credentials` (or the
-     * legacy `auth.json`), `env` for an environment tier, `none` when nothing
-     * resolved. `source_ref` names the exact one.
+     * Keychain item, `file` for `~/.hasna/knowledge/config/credentials`, `env`
+     * for an environment tier, `none` when nothing resolved. `source_ref` names
+     * the exact one. The legacy `auth.json` is never a source.
      */
     source: KnowledgeCredentialSourceKind;
     api_url: string;
+    /** The canonical credentials file path the DISK tier reads (`auth login` writes it). */
     auth_path: string;
+    /**
+     * Always null at runtime: the canonical credentials file format carries no
+     * email/org metadata, and the retired auth.json is never consulted.
+     */
     email: string | null;
     org_id: string | null;
     org_slug: string | null;
@@ -86,11 +91,23 @@ export interface KnowledgeCredentialResolution {
     source: KnowledgeCredentialSourceKind;
     /** An env key NAME, a Keychain item reference, or an absolute file PATH. Never a value. */
     sourceRef: string | null;
-    /** The shared chain's tier, or null for the legacy auth.json fallback and for nothing. */
+    /**
+     * The shared chain's tier, or null when nothing resolved. The legacy
+     * auth.json file is never consulted.
+     */
     tier: CredentialTier | null;
 }
 export declare function normalizeKnowledgeApiOrigin(apiUrl: string): string;
 export declare function knowledgeAuthPath(env?: Record<string, string | undefined>): string;
+/**
+ * The canonical credentials file the shared chain's DISK tier reads:
+ * `~/.hasna/knowledge/config/credentials` (0400/0600; `HASNA_HOME` /
+ * `HASNA_CONFIG_HOME` move the root), derived from the resolver itself so this
+ * module never carries a second copy of that precedence. `knowledge auth
+ * login` writes here; `auth status` reports it as `auth_path`; `auth logout`
+ * removes it.
+ */
+export declare function knowledgeCredentialsPath(env?: Record<string, string | undefined>): string;
 /**
  * The service authority, through the shared ladder: `HASNA_KNOWLEDGE_API_URL`
  * (then its unprefixed alias), the Keychain `api-url` item, the credentials
@@ -103,24 +120,54 @@ export declare function resolveKnowledgeApiAuthority(env?: Record<string, string
     url: string;
     source: string;
 };
+/**
+ * LEGACY auth.json store, kept read/write for migration and for API
+ * compatibility only. `knowledge auth login` no longer writes here, and the
+ * credential chain NEVER consults this file: since 0.3.2 the client resolves
+ * credentials only through the shared @hasna/contracts chain plus the
+ * canonical `~/.hasna/knowledge/config/credentials` file
+ * ({@link knowledgeCredentialsPath}). A login written to auth.json by an older
+ * release is invisible to every surface — move it to the Keychain item or the
+ * credentials file.
+ */
 export declare function getKnowledgeAuth(env?: Record<string, string | undefined>): KnowledgeAuthConfig | null;
+/**
+ * LEGACY auth.json writer, kept for API compatibility; the chain never reads
+ * what it writes. New logins land in the canonical credentials file
+ * ({@link saveKnowledgeCredentials}).
+ */
 export declare function saveKnowledgeAuth(auth: Omit<KnowledgeAuthConfig, 'created_at'> & {
     created_at?: string;
 }, env?: Record<string, string | undefined>): KnowledgeAuthConfig;
+/**
+ * LEGACY auth.json remover, kept for API compatibility. The credentials the
+ * chain actually reads are removed with {@link clearKnowledgeCredentials}.
+ */
 export declare function clearKnowledgeAuth(env?: Record<string, string | undefined>): boolean;
+/**
+ * Write the client credential to the canonical credentials file
+ * (`~/.hasna/knowledge/config/credentials`, 0600) — the DISK tier of the
+ * shared chain. This is what `knowledge auth login` does, so a login lands on
+ * a tier the resolver actually reads, and `auth whoami` right after a login
+ * probes through it. The URL line is written only when one is given or
+ * configured in the env; with nothing configured the fleet gateway default
+ * applies at read time. Email/org metadata is not representable in the
+ * canonical file format and is not persisted.
+ */
+export declare function saveKnowledgeCredentials(auth: Omit<KnowledgeAuthConfig, 'created_at'> & {
+    created_at?: string;
+}, env?: Record<string, string | undefined>): KnowledgeAuthConfig;
+/** Remove the canonical credentials file. Returns false when nothing was there. */
+export declare function clearKnowledgeCredentials(env?: Record<string, string | undefined>): boolean;
 /**
  * The client credential, resolved through the SHARED chain in
  * `@hasna/contracts/client` — argument, deliberate env pointer, macOS
  * Keychain, `~/.hasna/knowledge/config/credentials`, then
  * `HASNA_KNOWLEDGE_API_KEY`. This package no longer carries a second copy of
- * that precedence.
- *
- * `auth.json` — what `knowledge auth login` writes — is consulted only when
- * the shared chain answers with nothing. It is a documented LEGACY fallback
- * kept for one release so an existing login keeps working; move the key to the
- * Keychain item or the credentials file. A deliberate tier that cannot be
- * honoured throws instead of falling through to it: `auth login` is not an
- * identity the operator asked for when they named another one.
+ * that precedence, and the legacy `auth.json` file is NOT consulted at all:
+ * a fallback read from a different file would authenticate as a principal the
+ * operator did not name, the same false green the fail-closed ruling closes.
+ * A deliberate tier that cannot be honoured throws instead of falling through.
  */
 export declare function getKnowledgeApiKey(env?: Record<string, string | undefined>): KnowledgeCredentialResolution;
 export declare function knowledgeAuthStatus(env?: Record<string, string | undefined>): KnowledgeAuthStatus;

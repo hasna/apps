@@ -1,16 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const repoRoot = join(import.meta.dirname, '..');
 const mcpPath = join(repoRoot, 'mcp', 'notes-mcp.mjs');
 
+// Hermetic against the machine (hasna/apps#1720 validation): notes-mcp hands
+// its own live process.env to the resolver, so the AMBIENT tiers run in the
+// child. On a provisioned macOS station the Keychain api-url item would then
+// conflict with the fixture authority ("... select different service
+// authorities") and the server would exit 1 before stdio — the McpClient
+// tests timed out that way. A sentinel HASNA_STATION makes every Keychain
+// lookup miss (item not found, exit 44) and a throwaway HASNA_HOME gives the
+// disk tier an empty root; both can still be overridden per test.
+const STATION_SENTINEL = 'notes-test-no-such-station';
+const hermeticHome = mkdtempSync(join(tmpdir(), 'notes-mcp-hermetic-home-'));
+process.on('exit', () => rmSync(hermeticHome, { recursive: true, force: true }));
+
 function cleanEnv(extra = {}) {
-  const env = { ...process.env, ...extra };
-  for (const key of ['HASNA_NOTES_API_URL', 'HASNA_NOTES_API_KEY', 'HASNA_NOTES_DATABASE_URL']) {
+  const env = { ...process.env, HASNA_STATION: STATION_SENTINEL, HASNA_HOME: hermeticHome, ...extra };
+  for (const key of [
+    'HASNA_NOTES_API_URL', 'HASNA_NOTES_API_KEY', 'HASNA_NOTES_DATABASE_URL',
+    'HASNA_NOTES_API_KEY_OVERRIDE', 'HASNA_NOTES_API_KEY_REF', 'HASNA_PROFILE',
+    'HASNA_CONFIG_HOME',
+    'PERSONALNOTES_MODE', 'HASNA_NOTES_STORAGE_MODE', 'HASNA_NOTES_MODE', 'NOTES_STORAGE_MODE', 'NOTES_MODE',
+  ]) {
     if (!(key in extra)) delete env[key];
   }
   return env;
@@ -56,14 +73,23 @@ test('MCP fails closed before stdio when HTTPS client configuration is missing',
   const home = mkdtempSync(join(tmpdir(), 'notes-mcp-closed-'));
   try {
     const result = spawnSync(process.execPath, [mcpPath], {
-      env: cleanEnv({ HOME: home, HASNA_DATA_HOME: join(home, 'xdg') }),
+      env: cleanEnv({ HOME: home, HASNA_HOME: join(home, 'hasna'), HASNA_DATA_HOME: join(home, 'xdg') }),
       encoding: 'utf8',
       timeout: 3000,
+      // stdin closed, as a supervisor that starts the server and walks away
+      // would leave it: the refusal must come before any framing is read.
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
     assert.equal(result.status, 1);
+    assert.equal(result.stdout, '');
     assert.match(result.stderr, /HASNA_NOTES_API_URL/);
-    assert.equal(existsSync(join(home, '.hasna')), false);
-    assert.equal(existsSync(join(home, 'xdg')), false);
+    // The first stderr line names where the credential should live, tier by
+    // tier, and never a local mode.
+    assert.match(result.stderr.split('\n')[0], /Keychain[\s\S]*credential file[\s\S]*HASNA_NOTES_API_KEY/);
+    assert.doesNotMatch(result.stderr, /local-fallback|local mode/i);
+    // Nothing under the fake home: no ~/.hasna, no HASNA_HOME root, no XDG
+    // data dir — so no *.db anywhere.
+    assert.deepEqual(readdirSync(home), []);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

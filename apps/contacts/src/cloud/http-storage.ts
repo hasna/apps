@@ -2,28 +2,34 @@
  * Canonical contacts client transport.
  *
  * Public clients have exactly one data path: an authenticated HTTPS `/v1`
- * authority. The server URL is always explicit; this module never composes or
- * guesses a hosted URL. API-key resolution and per-request rotation are owned
- * by `@hasna/contracts/client`, so key material is never exposed by status
- * objects or cached in this package.
+ * authority, resolved by `@hasna/contracts/client` — the ONE fleet resolver.
+ * The authority defaults to the fleet gateway `https://api.hasna.com/contacts`
+ * once any credential tier resolves, and `HASNA_CONTACTS_API_URL`, the
+ * Keychain `api-url` item, or the credentials file override it. API-key
+ * resolution and per-request rotation are owned by the shared resolver, so
+ * key material is never exposed by status objects or cached in this package.
  *
  * SQLite, PostgreSQL DSNs, and storage/deployment modes are not client
  * transports. A stale selector is a configuration error, not a reason to read
  * a different data set.
  */
 import {
+  ClientTransportConfigurationError,
   createHasnaHttpTransport,
   resolveCredential,
   resolveClientTransport as resolveSharedClientTransport,
   type ClientTransportResolution as SharedClientTransportResolution,
+  type CredentialChainOptions,
+  type CredentialTier,
   type HasnaHttpTransport,
   type HasnaRequestOptions,
   type QueryParams,
 } from "@hasna/contracts/client";
 import { assertConfigurationUnchanged, clientConfigurationStamp } from "./client-config.js";
+import { contactsResolverCredentials } from "./resolver-inputs.js";
+import type { Env } from "./resolver-inputs.js";
 
-export type Env = Record<string, string | undefined>;
-export type { QueryParams };
+export type { Env, QueryParams };
 
 export const RETIRED_CLIENT_SELECTOR_KEYS = [
   "HASNA_CONTACTS_STORAGE_MODE",
@@ -74,7 +80,7 @@ export interface ClientTransportResolution {
   apiUrlSource: string | null;
   apiKeyPresent: boolean;
   apiKeySource: string | null;
-  apiKeyTier: SharedClientTransportResolution["apiKeyTier"];
+  apiKeyTier: CredentialTier | null;
   configured: boolean;
   misconfigured: boolean;
   issue: string | null;
@@ -82,49 +88,68 @@ export interface ClientTransportResolution {
 }
 
 function unconfiguredResolution(
-  resolution: SharedClientTransportResolution,
   issue: string,
+  resolution: Pick<
+    SharedClientTransportResolution,
+    "apiUrlSource" | "apiKeyPresent" | "apiKeySource" | "apiKeyTier"
+  > | null,
+  warning: string | null = null,
 ): ClientTransportResolution {
   return {
     transport: "unconfigured",
     baseUrl: null,
-    apiUrlSource: resolution.apiUrlSource,
-    apiKeyPresent: resolution.apiKeyPresent,
-    apiKeySource: resolution.apiKeySource,
-    apiKeyTier: resolution.apiKeyTier,
+    apiUrlSource: resolution?.apiUrlSource ?? null,
+    apiKeyPresent: resolution?.apiKeyPresent ?? false,
+    apiKeySource: resolution?.apiKeySource ?? null,
+    apiKeyTier: resolution?.apiKeyTier ?? null,
     configured: false,
     misconfigured: true,
     issue,
-    warning: null,
+    warning,
   };
 }
 
 /**
- * Resolve value-free connection diagnostics. This function does not invent a
- * default authority and never reports a local transport as usable.
+ * Resolve value-free connection diagnostics.
+ *
+ * @hasna/contracts 1.0.2 THROWS `ClientTransportConfigurationError` for every
+ * incomplete or invalid configuration — nothing resolves to a local or
+ * partial transport any more. A refusal of that class is reported here as
+ * `unconfigured` (never as a usable transport); the shared resolver's own
+ * hard refusals — a blank declared variable, a conflict, an unreadable
+ * credential file — stay hard errors, exactly as the resolver throws them.
  */
-export function resolveContactsClientTransport(name: string, env: Env = process.env): ClientTransportResolution {
+export function resolveContactsClientTransport(
+  name: string,
+  env: Env = process.env,
+  credentials: CredentialChainOptions = {},
+): ClientTransportResolution {
   if (name !== "contacts") {
     throw new ContactsClientConfigurationError("CONTACTS_CLIENT_NAME_INVALID", "This resolver only accepts the contacts app slug.");
   }
   assertNoRetiredClientSelectors(env);
   const stamp = clientConfigurationStamp(env);
-  const resolution = resolveSharedClientTransport(name, env);
-  assertConfigurationUnchanged(env, stamp);
-  if (resolution.transport !== "http" || !resolution.baseUrl) {
-    const issue = resolution.misconfigured
-      ? "The configured contacts API URL or credential is invalid or incomplete."
-      : "HASNA_CONTACTS_API_URL and a resolvable contacts API key are required; no local fallback exists.";
-    return unconfiguredResolution(resolution, issue);
+  let resolution: SharedClientTransportResolution;
+  try {
+    resolution = resolveSharedClientTransport(name, env, {
+      credentials: contactsResolverCredentials(env, credentials),
+    });
+  } catch (error) {
+    assertConfigurationUnchanged(env, stamp);
+    if (error instanceof ClientTransportConfigurationError) {
+      return unconfiguredResolution(error.message, null);
+    }
+    throw error;
   }
+  assertConfigurationUnchanged(env, stamp);
 
   try {
     assertHttpsBaseUrl(resolution.baseUrl);
   } catch (error) {
     return {
       ...unconfiguredResolution(
-        resolution,
         error instanceof Error ? error.message : String(error),
+        resolution,
       ),
       apiKeyPresent: resolution.apiKeyPresent,
     };
@@ -140,7 +165,7 @@ export function resolveContactsClientTransport(name: string, env: Env = process.
     configured: true,
     misconfigured: false,
     issue: null,
-    warning: null,
+    warning: resolution.warning,
   };
 }
 
@@ -215,8 +240,12 @@ export interface ResolveStorageClientResult {
 }
 
 /** Build the sole contacts client. Any incomplete configuration is terminal. */
-export function resolveContactsStorageClient(name: string, env: Env = process.env): ResolveStorageClientResult {
-  const resolution = resolveContactsClientTransport(name, env);
+export function resolveContactsStorageClient(
+  name: string,
+  env: Env = process.env,
+  credentials: CredentialChainOptions = {},
+): ResolveStorageClientResult {
+  const resolution = resolveContactsClientTransport(name, env, credentials);
   if (!resolution.configured || !resolution.baseUrl) {
     throw new ContactsClientConfigurationError(
       "CONTACTS_API_NOT_CONFIGURED",
@@ -226,6 +255,11 @@ export function resolveContactsStorageClient(name: string, env: Env = process.en
   }
 
   const baseUrl = resolution.baseUrl;
+  // The chain options the resolver saw, decided on the ORIGINAL env before
+  // any snapshot copy exists: the per-request re-resolution below hands the
+  // resolver a copy, and #1788 requires the Keychain gate to travel with it
+  // rather than silently turning the machine's tier off on every request.
+  const chainOptions = contactsResolverCredentials(env, credentials);
   // Bind the authority for the lifetime of this Store. Each request resolves a
   // fresh credential, but a changed authority requires a new client, not a key
   // intended for the new server sent to the previous server. The send guard
@@ -233,11 +267,11 @@ export function resolveContactsStorageClient(name: string, env: Env = process.en
   const request: HasnaHttpTransport["request"] = async (method, path, body, opts) => {
     const stamp = clientConfigurationStamp(env);
     const snapshot = { ...env };
-    const current = resolveContactsClientTransport(name, snapshot);
+    const current = resolveContactsClientTransport(name, snapshot, chainOptions);
     if (!current.configured || current.baseUrl !== baseUrl) {
       throw new ContactsClientConfigurationError("CONTACTS_AUTHORITY_CHANGED", "Client authority changed or disappeared; construct a new client before sending data.");
     }
-    const credential = resolveCredential(name, snapshot);
+    const credential = resolveCredential(name, snapshot, chainOptions);
     if (!credential) throw new ContactsClientConfigurationError("CONTACTS_API_NOT_CONFIGURED", "No credential is available.");
     assertConfigurationUnchanged(env, stamp);
     const transport = createHasnaHttpTransport({

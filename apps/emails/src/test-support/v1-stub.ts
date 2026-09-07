@@ -1536,6 +1536,13 @@ const URL_ENV = "EMAILS_SELF_HOSTED_URL";
 const KEY_ENV = "EMAILS_SELF_HOSTED_API_KEY";
 const SESSION_ENV = "EMAILS_SESSION_TOKEN";
 const CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
+// CANONICAL client names (hasna/apps#1720): the shared resolver reads the canonical
+// names FIRST and the one-release aliases only beneath them. A sibling test block
+// that pointed the canonical names at an in-process fixture must not out-rank the
+// stub's own configuration for a later block, so applyEnv clears them and clearEnv
+// restores whatever it displaced.
+const CANONICAL_URL_ENV = "HASNA_EMAILS_API_URL";
+const CANONICAL_KEY_ENV = "HASNA_EMAILS_API_KEY";
 
 /**
  * Every environment key `applyEnv` writes and `clearEnv` puts back, in one list so the
@@ -1562,6 +1569,8 @@ const CLIENT_ENV_SECRET_ENV = "EMAILS_CLIENT_ENV_SECRET";
 const MANAGED_ENV_KEYS: readonly string[] = Object.freeze([
   URL_ENV,
   KEY_ENV,
+  CANONICAL_URL_ENV,
+  CANONICAL_KEY_ENV,
   SESSION_ENV,
   CLIENT_ENV_SECRET_ENV,
   ...DATABASE_PATH_SETTINGS,
@@ -1713,6 +1722,10 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
       }
       process.env[URL_ENV] = baseUrl;
       process.env[KEY_ENV] = apiKey;
+      // The canonical names the shared resolver reads FIRST must not point at a
+      // fixture a sibling block left behind — the stub's own authority owns them now.
+      delete process.env[CANONICAL_URL_ENV];
+      delete process.env[CANONICAL_KEY_ENV];
       delete process.env[SESSION_ENV];
       delete process.env[CLIENT_ENV_SECRET_ENV];
       // The local store's configuration goes away while the API's is in force, so this

@@ -26,7 +26,7 @@ Full, unfiltered sync also attempts to import active metadata from `@hasna/proje
 File/database state is cached in the `ingest_state` table, and request IDs are upserted and deduplicated. Consequently, normal repeated syncs are incremental.
 
 - `--force` clears the ingest-state entries for the supported sources and reprocesses them.
-- `--backfill-machine` fills empty `machine_id` values with `ECONOMY_MACHINE_ID` or the normalized hostname.
+- `--backfill-machine` fills empty `machine_id` values with `HASNA_ECONOMY_MACHINE_ID` or the normalized hostname.
 - `--recalculate` prices token-bearing requests whose `cost_usd` is zero, then rerolls affected sessions. It reports buckets still missing usable pricing.
 - Budget webhooks are checked after a CLI or REST sync. Failed deliveries remain eligible for a later retry.
 

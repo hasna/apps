@@ -24,10 +24,10 @@ import { join } from "node:path";
 const stateHome = mkdtempSync(join(realpathSync(tmpdir()), "hasna-instructions-state-"));
 process.env.HASNA_STATE_HOME = stateHome;
 
-// Fail-closed default (owner directive 2026-09-04): with no fleet API env the
-// store layer refuses to open the local SQLite store unless the operator set
-// the explicit opt-in HASNA_INSTRUCTIONS_LOCAL=1. The suite exercises the
-// local transport heavily with no API env, so the runner pins the opt-in here.
-// Fail-closed tests that assert the refusal delete the variable (or pass an
-// explicit env without it), exactly as they already delete the API vars.
+// Fail-closed default (owner directive 2026-09-04): with no hosted credential
+// the store layer refuses to open the local SQLite store unless the operator
+// set the explicit opt-in HASNA_INSTRUCTIONS_LOCAL=1. The suite exercises the
+// local transport heavily with no credential, so the runner pins the opt-in
+// here. Fail-closed tests that assert the refusal delete the variable (or pass
+// an explicit env without it), exactly as they already delete the API vars.
 process.env.HASNA_INSTRUCTIONS_LOCAL = "1";

@@ -41,7 +41,9 @@ afterEach(() => {
 });
 
 function localStore(): ProjectStore {
-  return resolveProjectStore({});
+  // Explicit local opt-in: the fail-closed ruling left no implicit fallback,
+  // and these fixtures pin the fresh in-memory on-box registry.
+  return resolveProjectStore({ HASNA_PROJECTS_LOCAL: "1" });
 }
 
 function makeProject(overrides: {

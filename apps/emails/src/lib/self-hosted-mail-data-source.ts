@@ -24,7 +24,7 @@ import {
   EMAILS_SELF_HOSTED_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
   type EmailsClientCredentialCandidate,
-} from "./client-env.js";
+} from "./emails-credentials.js";
 import { getClientMode } from "./mode.js";
 import {
   type AttachmentPath,

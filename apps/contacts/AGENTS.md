@@ -97,10 +97,17 @@ export_contacts({ format: "vcf", tag: "client" })
 
 ## Connection contract
 
-Every tool uses the canonical authenticated HTTPS `/v1` client. Configure an
-explicit `HASNA_CONTACTS_API_URL` and a contacts API key through the shared
-`@hasna/contracts` credential chain. There is no default hosted URL, client
-database path, storage mode, or local SQLite fallback.
+Every tool uses the canonical authenticated HTTPS `/v1` client, resolved fresh
+per request through the shared `@hasna/contracts` 1.0.2 client chain. A
+contacts API key is resolved from, in order: deliberate pointers
+(`HASNA_CONTACTS_API_KEY_OVERRIDE`, `HASNA_PROFILE`,
+`HASNA_CONTACTS_API_KEY_REF`), the macOS Keychain item
+`hasna.credentials.contacts.api-key` (account `HASNA_STATION` → short
+hostname → `$USER`), `~/.hasna/contacts/config/credentials` (0400/0600), then
+`HASNA_CONTACTS_API_KEY`. The authority defaults to the fleet gateway
+`https://api.hasna.com/contacts`; `HASNA_CONTACTS_API_URL` (or the Keychain
+`api-url` item / credentials file) overrides it. There is no client database
+path, storage mode, or local SQLite fallback.
 
 Use `contacts_connection_status` to inspect value-free configuration details.
 For retired local data, use `contacts legacy inspect` and `contacts legacy

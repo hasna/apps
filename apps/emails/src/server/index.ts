@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import pkg from "../../package.json" with { type: "json" };
-import { assertNoLegacyHostedEnvironment } from "../lib/retired-deployment-mode.js";
 import { resolveServerBindOptions } from "./bind-options.js";
 import { resolveServerStorageBackend } from "./storage-backend.js";
 
@@ -74,13 +73,38 @@ Options:
 
 // EVERY command fails closed on a removed hosted/legacy variable, ahead of dispatch.
 // This is deliberately eager while the storage resolution below is lazy: the legacy
-// variables configure a runtime that no longer exists, so honouring one for a worker
-// while refusing it for the service would be a silent difference between two entry
-// points of the same binary. The STORE, by contrast, is resolved only by the branches
-// that actually open one — the workers and one-shot commands validate their own
-// PostgreSQL, signing and AWS requirements after dispatch, and must be able to report a
-// bad flag without a database being configured at all.
-assertNoLegacyHostedEnvironment();
+// Mailery variables configure a runtime that no longer exists, so honouring one for
+// a worker while refusing it for the service would be a silent difference between
+// two entry points of the same binary. The STORE, by contrast, is resolved only by
+// the branches that actually open one — the workers and one-shot commands validate
+// their own PostgreSQL, signing and AWS requirements after dispatch, and must be
+// able to report a bad flag without a database being configured at all.
+//
+// The deployment-mode word (EMAILS_MODE / HASNA_EMAILS_MODE / *STORAGE_MODE) is
+// DELETED, not listed here: nothing anywhere in the client reads it any more
+// (hasna/apps#1720), so the server does not police it either.
+const LEGACY_HOSTED_ENV_KEYS = [
+  "MAILERY_MODE",
+  "HASNA_MAILERY_MODE",
+  "MAILERY_STORAGE_MODE",
+  "HASNA_MAILERY_STORAGE_MODE",
+  "MAILERY_API_URL",
+  "MAILERY_API_KEY",
+  "MAILERY_CLOUD_API_URL",
+  "MAILERY_CLOUD_TOKEN",
+  "HASNA_MAILERY_API_URL",
+  "HASNA_MAILERY_API_KEY",
+  "HASNA_MAILERY_ENV_FILE",
+] as const;
+for (const key of LEGACY_HOSTED_ENV_KEYS) {
+  if (process.env[key]?.trim()) {
+    throw new Error(
+      `${key} belongs to the removed Mailery/cloud runtime, which this package does not ` +
+        "ship. Deployment modes no longer exist in Emails: the server's internal store " +
+        "follows EMAILS_DATABASE_URL alone. Delete " + `${key}.`,
+    );
+  }
+}
 
 function repeated(flag: string): string[] {
   const values: string[] = [];

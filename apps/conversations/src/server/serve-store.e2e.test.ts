@@ -25,6 +25,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { storeStatusLocation } from "../lib/store/status-location.js";
 import { LOCAL, statusConnectionMarkers } from "./serve-store.probe.js";
+import { HERMETIC_STATION } from "../test/hermetic.js";
 
 const PROBE = join(import.meta.dir, "serve-store.probe.ts");
 
@@ -77,7 +78,9 @@ async function probe(mode: string, env: Record<string, string> = {}) {
   const proc = Bun.spawn({
     cmd: ["bun", "run", PROBE, mode],
     cwd: process.cwd(),
-    env: { PATH: process.env.PATH ?? "", HOME: sandboxHome, ...CLEARED, ...env },
+    // HASNA_STATION pins the Keychain account to one no real item uses, so the
+    // shared chain's Keychain tier (above the env tier) cannot answer for a case.
+    env: { PATH: process.env.PATH ?? "", HOME: sandboxHome, HASNA_STATION: HERMETIC_STATION, ...CLEARED, ...env },
     stdout: "pipe",
     stderr: "pipe",
   });

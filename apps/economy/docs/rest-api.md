@@ -23,7 +23,7 @@ These routes are open. The checked-in OpenAPI source is [`openapi/economy.json`]
 
 ## Authentication
 
-In local mode, set `ECONOMY_API_TOKEN` or `HASNA_ECONOMY_API_TOKEN` and send either:
+In local mode, set `HASNA_ECONOMY_API_TOKEN` (the unprefixed `ECONOMY_API_TOKEN` spelling is retired) and send either:
 
 ```text
 Authorization: Bearer <token>

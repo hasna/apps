@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { afterAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, describe, expect, it } from "bun:test";
+import { createSerialIntegrationFixture, MIGRATION_CASE_TIMEOUT_MS, MIGRATION_DRAIN_TIMEOUT_MS } from "../../../scripts/serial-integration-fixture.js";
 import {
   createPgPool,
   createQueryClient,
@@ -22,6 +23,14 @@ const databaseUrl = process.env["EMAILS_TEST_POSTGRES_URL"];
 const client = databaseUrl
   ? createQueryClient(createPgPool({ connectionString: databaseUrl, env: { PGSSLMODE: "disable" } }))
   : null;
+
+// These cases repeatedly apply the full migration history to one disposable
+// schema. CI has measured valid callbacks close to the default five seconds.
+// A timeout does not cancel their SQL: drain before another case can drop public.
+const fixture = createSerialIntegrationFixture();
+const postgresTest = (skip: boolean) => (name: string, work: () => Promise<void>) =>
+  it.skipIf(skip)(name, () => fixture.run(work), MIGRATION_CASE_TIMEOUT_MS);
+afterEach(() => fixture.drain(), MIGRATION_DRAIN_TIMEOUT_MS + 1_000);
 
 // Ground-truth prod schema dump (pg_dump --schema-only), used as the highest-
 // fidelity drift fixture when present. It is a gitignored local artifact, so the
@@ -157,7 +166,7 @@ async function serverWriteFailures(store: TenantScopedStore): Promise<string[]> 
 }
 
 describe("self-hosted Postgres integration", () => {
-  it.skipIf(!client)("migrates dirty text legacy rows and enforces durable send idempotency", async () => {
+  postgresTest(!client)("migrates dirty text legacy rows and enforces durable send idempotency", async () => {
     await resetPublicSchema();
     await client!.execute(`
       CREATE TABLE inbound_emails (
@@ -235,7 +244,7 @@ describe("self-hosted Postgres integration", () => {
     expect((await store.completeSendIntent(first.record.id, "provider-ci")).send_state).toBe("sent");
   });
 
-  it.skipIf(!client)("0025 preserves provider-scoped address identity with tenant isolation", async () => {
+  postgresTest(!client)("0025 preserves provider-scoped address identity with tenant isolation", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
 
@@ -277,7 +286,7 @@ describe("self-hosted Postgres integration", () => {
     expect(await indexExists("addresses_tenant_unbound_email_uidx")).toBe(true);
   });
 
-  it.skipIf(!client)("0022 rejects new non-enum event types without deleting legacy poison", async () => {
+  postgresTest(!client)("0022 rejects new non-enum event types without deleting legacy poison", async () => {
     await resetPublicSchema();
     const migrations = emailsSelfHostedMigrations();
     const guardIndex = migrations.findIndex((migration) => migration.id === "0022_events_type_enum_check");
@@ -306,7 +315,7 @@ describe("self-hosted Postgres integration", () => {
     expect(constraint.convalidated).toBe(false);
   });
 
-  it.skipIf(!client)("atomically tombstones send intents with tenant isolation and real claim/cancel concurrency", async () => {
+  postgresTest(!client)("atomically tombstones send intents with tenant isolation and real claim/cancel concurrency", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const root = new EmailsSelfHostedStore(client!);
@@ -434,7 +443,7 @@ describe("self-hosted Postgres integration", () => {
     expect(policy.with_check).toContain("app.current_tenant");
   });
 
-  it.skipIf(!client)("migrates typed timestamp legacy rows without text-assignment failures", async () => {
+  postgresTest(!client)("migrates typed timestamp legacy rows without text-assignment failures", async () => {
     await resetPublicSchema();
     await client!.execute(`
       CREATE TABLE inbound_emails (
@@ -490,7 +499,7 @@ describe("self-hosted Postgres integration", () => {
     ]);
   });
 
-  it.skipIf(!client)("round-2 parity: new generic resources round-trip through real jsonb", async () => {
+  postgresTest(!client)("round-2 parity: new generic resources round-trip through real jsonb", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
@@ -552,7 +561,7 @@ describe("self-hosted Postgres integration", () => {
     expect(wh["provider"]).toBe("ses");
   });
 
-  it.skipIf(!client)("0026 saved filters resolve, apply, update and delete BY NAME without a uuid cast error", async () => {
+  postgresTest(!client)("0026 saved filters resolve, apply, update and delete BY NAME without a uuid cast error", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
@@ -608,7 +617,7 @@ describe("self-hosted Postgres integration", () => {
     await expect(store.updateMailboxFilter("support queue", { mailbox: "inbox" })).rejects.toThrow(/not found/);
   });
 
-  it.skipIf(!client)("unread-by-address rolls up unread counts per to-recipient (SQLite-local parity)", async () => {
+  postgresTest(!client)("unread-by-address rolls up unread counts per to-recipient (SQLite-local parity)", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
@@ -652,7 +661,7 @@ describe("self-hosted Postgres integration", () => {
     expect(limited).toEqual([{ address: "second@example.test", unread: 1 }]);
   });
 
-  it.skipIf(!client)("0027 domain criteria match the SENDER domain and to/cc recipient domains (SQLite-local parity)", async () => {
+  postgresTest(!client)("0027 domain criteria match the SENDER domain and to/cc recipient domains (SQLite-local parity)", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
@@ -690,7 +699,7 @@ describe("self-hosted Postgres integration", () => {
     expect(emptyApplied.page.items).toEqual([]);
   });
 
-  it.skipIf(!client)("priority folder lists only messages whose sender matches a priority rule (two-sided)", async () => {
+  postgresTest(!client)("priority folder lists only messages whose sender matches a priority rule (two-sided)", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
@@ -742,7 +751,7 @@ describe("self-hosted Postgres integration", () => {
     expect(again.items.map((m) => m.id).sort()).toEqual([alice.id, bob.id, displayed.id].sort());
   });
 
-  it.skipIf(!client)("round-2 parity: send-key mint/verify/revoke + address ownership authorization", async () => {
+  postgresTest(!client)("round-2 parity: send-key mint/verify/revoke + address ownership authorization", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const store = new EmailsSelfHostedStore(client!).forTenant(DEFAULT_TENANT_ID);
@@ -788,7 +797,7 @@ describe("self-hosted Postgres integration", () => {
   // This test recreates every class, runs the FULL migration set, and asserts it
   // applies, reconciles the drift, that EVERY representative server write then
   // succeeds, and that a second run is a clean no-op.
-  it.skipIf(!client)("reconciles the fully-drifted ad-hoc prod schema (checks / FKs / missing cols / NOT NULL / defaults)", async () => {
+  postgresTest(!client)("reconciles the fully-drifted ad-hoc prod schema (checks / FKs / missing cols / NOT NULL / defaults)", async () => {
     await resetPublicSchema();
 
     await client!.execute(`
@@ -1030,7 +1039,7 @@ describe("self-hosted Postgres integration", () => {
   // artifact) rather than a reconstructed fixture, so the reconcile is validated
   // against the real legacy DDL — every table, every one of the 29 CHECKs, all
   // FKs, defaults and indexes exactly as they exist in production.
-  it.skipIf(!client || !hasProdDump)("migrates the REAL prod schema dump and every server write succeeds", async () => {
+  postgresTest(!client || !hasProdDump)("migrates the REAL prod schema dump and every server write succeeds", async () => {
     await resetPublicSchema();
     await client!.execute(loadableDump(readFileSync(prodDumpPath, "utf8")));
 
@@ -1102,7 +1111,7 @@ describe("self-hosted Postgres integration", () => {
     return rows.map((r) => r.attname);
   }
 
-  it.skipIf(!client)("0012 creates identity tables, backfills tenant_id to the default tenant, and swaps uniques (drift-aware + idempotent)", async () => {
+  postgresTest(!client)("0012 creates identity tables, backfills tenant_id to the default tenant, and swaps uniques (drift-aware + idempotent)", async () => {
     await resetPublicSchema();
 
     // Drifted prod-shaped base schema (before any migration).
@@ -1319,7 +1328,7 @@ describe("self-hosted Postgres integration", () => {
   // survivor is kept, dependents are reparented (no orphaned references), losers are
   // deleted, the composite unique is built, unrelated data is untouched, and a
   // re-run of the whole 0012 body is a clean no-op.
-  it.skipIf(!client)("0012 dedups pre-existing duplicate data (deterministic survivor + FK reparent) before building the composite uniques", async () => {
+  postgresTest(!client)("0012 dedups pre-existing duplicate data (deterministic survivor + FK reparent) before building the composite uniques", async () => {
     await resetPublicSchema();
 
     // Drifted prod-shaped base: domains/addresses carry the (provider_id, <col>)
@@ -1504,7 +1513,7 @@ describe("self-hosted Postgres integration", () => {
     expect(rerun.plan.filter((p) => p.state === "pending")).toHaveLength(0);
   });
 
-  it.skipIf(!client)("0016 removes pending, unverified, and stale legacy inbound routes", async () => {
+  postgresTest(!client)("0016 removes pending, unverified, and stale legacy inbound routes", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const tenantId = "33333333-3333-3333-3333-333333333333";
@@ -1537,7 +1546,7 @@ describe("self-hosted Postgres integration", () => {
     expect(routes.map((route) => route.domain)).toEqual(["active-route.example"]);
   });
 
-  it.skipIf(!client)("0017 makes source provenance immutable, cascade-safe, and tenant-isolated", async () => {
+  postgresTest(!client)("0017 makes source provenance immutable, cascade-safe, and tenant-isolated", async () => {
     await resetPublicSchema();
     await client!.execute("DROP ROLE IF EXISTS emails_source_probe");
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
@@ -1624,7 +1633,7 @@ describe("self-hosted Postgres integration", () => {
     await client!.execute("DROP ROLE IF EXISTS emails_source_probe");
   });
 
-  it.skipIf(!client)("captures the cutover fence from PostgreSQL before migration 0017 exists", async () => {
+  postgresTest(!client)("captures the cutover fence from PostgreSQL before migration 0017 exists", async () => {
     await resetPublicSchema();
     const before = await client!.one<{ at: Date }>(`SELECT clock_timestamp() AS at`);
     const fenceAt = await new EmailsSelfHostedStore(client!).captureInboundProvenanceFence();
@@ -1635,7 +1644,7 @@ describe("self-hosted Postgres integration", () => {
     expect(parsed.getTime()).toBeLessThanOrEqual(new Date(after.at).getTime());
   });
 
-  it.skipIf(!client)("proves a pre-fence writer can commit after the cutoff yet remain outside the audit", async () => {
+  postgresTest(!client)("proves a pre-fence writer can commit after the cutoff yet remain outside the audit", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const tenantId = "77777777-7777-4777-8777-777777777777";
@@ -1711,7 +1720,7 @@ describe("self-hosted Postgres integration", () => {
     await resetPublicSchema();
   });
 
-  it.skipIf(!client)("audits every tenant for post-fence S3 provenance without returning row identities", async () => {
+  postgresTest(!client)("audits every tenant for post-fence S3 provenance without returning row identities", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const tenantA = "88888888-8888-8888-8888-888888888888";
@@ -1778,7 +1787,7 @@ describe("self-hosted Postgres integration", () => {
     await resetPublicSchema();
   });
 
-  it.skipIf(!client)("fails global repair discovery when any exact-source row lacks or conflicts with provenance", async () => {
+  postgresTest(!client)("fails global repair discovery when any exact-source row lacks or conflicts with provenance", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const tenantA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -1854,7 +1863,7 @@ describe("self-hosted Postgres integration", () => {
     await resetPublicSchema();
   });
 
-  it.skipIf(!client)("atomically couples ingest provenance and globally repairs same-object rows under concurrency", async () => {
+  postgresTest(!client)("atomically couples ingest provenance and globally repairs same-object rows under concurrency", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
     const tenantA = "66666666-6666-6666-6666-666666666666";
@@ -2031,7 +2040,7 @@ describe("self-hosted Postgres integration", () => {
     )).n).toBe(0);
   });
 
-  it.skipIf(!client)("priority sender rules persist, dedupe, remove, and drive the priority count", async () => {
+  postgresTest(!client)("priority sender rules persist, dedupe, remove, and drive the priority count", async () => {
     await resetPublicSchema();
     await new MigrationLedger(client!, emailsSelfHostedMigrations()).migrate();
 

@@ -88,7 +88,7 @@ describe("isolated PostgreSQL gate input", () => {
         expect(readdirSync(home)).toEqual([]);
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
-  });
+  }, 12_000); // Three independently bounded 3s children plus fixture overhead.
 });
 
 describe("PostgreSQL evidence must be complete", () => {

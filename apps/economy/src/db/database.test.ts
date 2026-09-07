@@ -1349,12 +1349,12 @@ describe('machine_id support', () => {
     expect(getMachineId().length).toBeGreaterThan(0)
   })
 
-  it('respects ECONOMY_MACHINE_ID env var', () => {
-    const orig = process.env['ECONOMY_MACHINE_ID']
-    process.env['ECONOMY_MACHINE_ID'] = 'test-machine'
+  it('respects HASNA_ECONOMY_MACHINE_ID env var', () => {
+    const orig = process.env['HASNA_ECONOMY_MACHINE_ID']
+    process.env['HASNA_ECONOMY_MACHINE_ID'] = 'test-machine'
     expect(getMachineId()).toBe('test-machine')
-    if (orig) process.env['ECONOMY_MACHINE_ID'] = orig
-    else delete process.env['ECONOMY_MACHINE_ID']
+    if (orig) process.env['HASNA_ECONOMY_MACHINE_ID'] = orig
+    else delete process.env['HASNA_ECONOMY_MACHINE_ID']
   })
 
   it('stores and retrieves machine_id on requests', () => {

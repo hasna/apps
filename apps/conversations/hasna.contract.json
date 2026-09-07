@@ -4,7 +4,7 @@
   "class": "service",
   "contractVersion": "v1",
   "kitVersion": "0.13.4",
-  "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. Clients use local SQLite or the HTTP API selected by HASNA_CONVERSATIONS_API_URL; conversations-serve reads PostgreSQL selected by HASNA_CONVERSATIONS_DATABASE_URL. The data backend is the only runtime switch.",
+  "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. The CLI, MCP server and library resolve the credential and the service authority through the @hasna/contracts client chain (HASNA_CONVERSATIONS_API_KEY, the macOS Keychain item hasna.credentials.conversations.api-key, ~/.hasna/conversations/config/credentials; authority HASNA_CONVERSATIONS_API_URL or the fleet gateway https://api.hasna.com/conversations). Hosted runs fail closed without a resolvable credential; the on-box SQLite store is reachable only by the explicit HASNA_CONVERSATIONS_DB_PATH opt-in. conversations-serve reads PostgreSQL selected by HASNA_CONVERSATIONS_DATABASE_URL.",
   "bins": [
     "conversations",
     "conversations-mcp",

@@ -3,6 +3,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
+import { runRedactionCli } from "../../test-support/redaction-cli.js";
 import {
   assertLocalStoreBackend,
   blankLlmProviderEnv,
@@ -49,16 +50,7 @@ async function runCli(
   env: Record<string, string>,
   ...args: string[]
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const proc = Bun.spawn(["bun", "run", CLI_PATH, ...args], {
-    env,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: await proc.exited };
+  return runRedactionCli(CLI_PATH, env, args);
 }
 
 /** Wait a fixed number of milliseconds (test-only helper for the live tail). */
@@ -309,7 +301,7 @@ describe("mementos read verbs never leak credential-shaped keys on stdout", () =
     ]);
 
     // Exact key "registry" is absent -> falls back to nearest match (exit 2).
-    const { stdout, exitCode } = await runCli(env, "--json", "recall", "registry", "--fuzzy");
+    const { stdout, exitCode } = await runRedactionCli(CLI_PATH, env, ["--json", "recall", "registry", "--fuzzy"], 2);
     expect(exitCode).toBe(2);
     expect(stdout).not.toContain(NPM_REGISTRY_TOKEN);
     const parsed = JSON.parse(stdout) as Record<string, unknown>;

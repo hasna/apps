@@ -1,16 +1,18 @@
 /**
  * Base-URL resolution for the messages SDK (hasna/apps#1601, #1588).
  *
- * The station wrappers configure the gateway form
- * `https://api.hasna.com/messages` (no `/v1`), the deploy descriptors use the
- * legacy origin, and some operators paste the already-resolved `/v1` root.
- * All three must reach the same routes, and the printed authority must always
- * be the resolved `/v1` root.
+ * The old in-package resolver is gone: `resolveMessagesApiBase` is a thin
+ * wrapper over the shared `@hasna/contracts` normaliser (`toV1BaseUrl`), the
+ * same one every hosted Hasna client uses (hasna/apps#1720). The station
+ * wrappers configure the gateway form `https://api.hasna.com/messages` (no
+ * `/v1`), the deploy descriptors use the legacy origin, and some operators
+ * paste the already-resolved `/v1` root — all three must reach the same
+ * routes, and the printed authority must always be the resolved `/v1` root.
  */
 import { describe, expect, test } from "bun:test";
 import { MessagesClient, resolveMessagesApiBase } from "./index";
 
-describe("resolveMessagesApiBase (#1601)", () => {
+describe("resolveMessagesApiBase (#1601) — the shared contracts normaliser", () => {
   test("keeps the gateway path prefix and appends /v1 exactly once", () => {
     expect(resolveMessagesApiBase("https://api.hasna.com/messages")).toEqual({
       baseUrl: "https://api.hasna.com/messages",
@@ -36,6 +38,7 @@ describe("resolveMessagesApiBase (#1601)", () => {
       baseUrl: "https://messages.hasna.xyz",
       apiUrl: "https://messages.hasna.xyz/v1",
     });
+    // Plain HTTP is restricted to exact loopback authorities.
     expect(resolveMessagesApiBase("http://127.0.0.1:8080")).toEqual({
       baseUrl: "http://127.0.0.1:8080",
       apiUrl: "http://127.0.0.1:8080/v1",
@@ -43,19 +46,18 @@ describe("resolveMessagesApiBase (#1601)", () => {
   });
 
   test("refuses a base carrying userinfo, a query or a fragment", () => {
-    for (const raw of [
-      "https://user:pass@api.hasna.com/messages",
-      "https://api.hasna.com/messages?token=abc",
-      "https://api.hasna.com/messages#frag",
-    ]) {
-      expect(() => resolveMessagesApiBase(raw)).toThrow(/userinfo, query, or fragment/);
+    expect(() => resolveMessagesApiBase("https://user:pass@api.hasna.com/messages")).toThrow(
+      /authority must be canonical ASCII without credentials/,
+    );
+    for (const raw of ["https://api.hasna.com/messages?token=abc", "https://api.hasna.com/messages#frag"]) {
+      expect(() => resolveMessagesApiBase(raw)).toThrow(/must not include a query string or fragment/);
     }
   });
 
   test("refuses a non-http(s) or unparseable base", () => {
-    expect(() => resolveMessagesApiBase("ftp://api.hasna.com/messages")).toThrow(/absolute http\(s\) URL/);
-    expect(() => resolveMessagesApiBase("not a url")).toThrow(/absolute http\(s\) URL/);
-    expect(() => resolveMessagesApiBase("")).toThrow(/absolute http\(s\) URL/);
+    expect(() => resolveMessagesApiBase("ftp://api.hasna.com/messages")).toThrow(/http or https/);
+    expect(() => resolveMessagesApiBase("not a url")).toThrow(/absolute/);
+    expect(() => resolveMessagesApiBase("")).toThrow(/absolute/);
   });
 });
 

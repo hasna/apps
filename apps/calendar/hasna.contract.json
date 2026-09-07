@@ -3,8 +3,8 @@
   "name": "calendar",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.2",
-  "description": "Partial Calendar domain migration: authenticated explicit HTTPS clients and PostgreSQL-only server. Embedded Events/channel/replay remain unresolved local integrations; explicit legacy db-migrate is LOCAL-ONLY and refused in api mode (no local database is created when HASNA_CALENDAR_API_URL is set).",
+  "kitVersion": "1.0.2",
+  "description": "Partial Calendar domain migration: authenticated explicit HTTPS clients and PostgreSQL-only server. Client credentials and authority resolve through the @hasna/contracts 1.0.2 fleet chain (Keychain hasna.credentials.calendar.api-key, ~/.hasna/calendar/config/credentials 0400/0600, HASNA_CALENDAR_API_KEY, default gateway https://api.hasna.com/calendar), fail loud with no credential, and never fall back to local data. Embedded Events/channel/replay remain unresolved local integrations; explicit legacy db-migrate is LOCAL-ONLY and refused whenever a hosted credential or authority resolves (no local database is created in hosted runs).",
   "bins": [
     "calendar",
     "calendar-mcp",

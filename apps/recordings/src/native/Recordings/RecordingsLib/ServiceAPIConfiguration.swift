@@ -89,7 +89,8 @@ public enum ServiceAPIConfiguration {
     ) throws -> [String: String] {
         // Explicit environment routing wins. Never attach a saved credential to an
         // unrelated environment endpoint, or silently turn a local override into HTTP.
-        if ["HASNA_RECORDINGS_API_URL", "HASNA_RECORDINGS_CLIENT_STORE", "RECORDINGS_CLIENT_STORE"]
+        if base["HASNA_RECORDINGS_LOCAL"] == "1" || base["RECORDINGS_LOCAL"] == "1" { return base }
+        if ["HASNA_RECORDINGS_API_URL"]
             .contains(where: { !(base[$0] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) {
             return base
         }
@@ -97,7 +98,6 @@ public enum ServiceAPIConfiguration {
         let endpoint = try normalizedURL(saved)
         var result = base
         result["HASNA_RECORDINGS_API_URL"] = endpoint
-        result["HASNA_RECORDINGS_CLIENT_STORE"] = "http"
         if ["HASNA_RECORDINGS_API_KEY_OVERRIDE", "HASNA_RECORDINGS_API_KEY"]
             .allSatisfy({ (base[$0] ?? "").isEmpty }), let key = try keyLoader(endpoint), !key.isEmpty {
             result["HASNA_RECORDINGS_API_KEY_OVERRIDE"] = key

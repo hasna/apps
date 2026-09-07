@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, readdirSync, rmSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, readdirSync, rmSync, mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
 import {
   createProfile,
   getProfile,
@@ -268,9 +269,43 @@ describe("profiles", () => {
   });
 
   describe("getProfilesDir", () => {
-    test("returns path ending with .hasna/hooks/profiles", () => {
-      const dir = getProfilesDir();
-      expect(dir.endsWith(".hasna/hooks/profiles")).toBe(true);
+    test("returns the profiles directory under the effective data root", () => {
+      // bun test runs files in one process with a SHARED process.env, so a
+      // concurrent file pinning HASNA_HOOKS_DATA_DIR (or HOME) would move the
+      // data root under this assertion. Isolate the data-root env keys around
+      // the call — one synchronous block, no awaits inside — and assert the
+      // exact legacy-root path under a fresh HOME.
+      const keys = [
+        "HOME",
+        "USERPROFILE",
+        "HASNA_DATA_HOME",
+        "HASNA_HOOKS_DATA_DIR",
+        "HOOKS_DATA_DIR",
+        "HASNA_HOOKS_HOME",
+        "HOOKS_HOME",
+        "HASNA_HOOKS_DB_PATH",
+        "HOOKS_DB_PATH",
+        "HASNA_HOOKS_LOCK_PATH",
+        "HOOKS_LOCK_PATH",
+      ] as const;
+      const home = mkdtempSync(join(tmpdir(), "hooks-profiles-dir-"));
+      const saved = new Map<string, string | undefined>();
+      for (const key of keys) {
+        saved.set(key, process.env[key]);
+        delete process.env[key];
+      }
+      process.env.HOME = home;
+      try {
+        const dir = getProfilesDir();
+        expect(dir.endsWith(join(".hasna", "hooks", "profiles"))).toBe(true);
+      } finally {
+        for (const key of keys) {
+          const value = saved.get(key);
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+        rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 });

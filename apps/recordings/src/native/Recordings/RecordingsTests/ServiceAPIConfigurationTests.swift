@@ -31,12 +31,12 @@ struct ServiceAPIConfigurationTests {
         }
         #expect(lookedUp == ["https://service.example.test/recordings/v1"])
         #expect(environment["HASNA_RECORDINGS_API_URL"] == lookedUp.first)
-        #expect(environment["HASNA_RECORDINGS_CLIENT_STORE"] == "http")
+        #expect(environment["HASNA_RECORDINGS_CLIENT_STORE"] == nil)
         #expect(environment["HASNA_RECORDINGS_API_KEY_OVERRIDE"] != nil)
         #expect(environment["OPENAI_API_KEY"] == nil)
         #expect(environment["PATH"] == "/bin")
         #expect(defaults.string(forKey: "HASNA_RECORDINGS_API_KEY_OVERRIDE") == nil)
-        for base in [["HASNA_RECORDINGS_API_URL": "https://another.example.test/v1"], ["HASNA_RECORDINGS_CLIENT_STORE": "sqlite"]] {
+        for base in [["HASNA_RECORDINGS_API_URL": "https://another.example.test/v1"], ["HASNA_RECORDINGS_LOCAL": "1"], ["RECORDINGS_LOCAL": "1"]] {
             let overridden = try ServiceAPIConfiguration.childEnvironment(base: base, defaults: defaults) { _ in
                 Issue.record("Environment routing must not read the saved endpoint credential")
                 return nil
@@ -65,7 +65,7 @@ struct ServiceAPIConfigurationTests {
         preferences.settings.postProcessingMode = "always"
         preferences.settings.projects = [RecProject(id: "legacy", name: "Legacy", systemPrompt: "Project cleanup")]
         preferences.settings.activeProjectId = "legacy"
-        let engine = RecordingEngine(homePath: home)
+        let engine = RecordingEngine(homePath: home, installsGlobalHandlers: false)
         engine.globalRecordingPreferences = preferences
         #expect(engine.projectStore == nil)
         #expect(engine.recordingCleanupPreferences.prompt == "Global cleanup")

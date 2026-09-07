@@ -494,6 +494,17 @@ events channels match ops
 events channels remove ops
 ```
 
+`channels test` exits with code 1 when delivery fails and code 0 when delivery
+succeeds or is skipped by `--honor-filters`. Its JSON delivery result and human
+status output are preserved in either case.
+
+The standalone CLI and default embedded Commander commands deny private webhook
+targets unless the administrator sets `HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS`
+to a comma-separated list of exact hostnames or IP addresses. For an intentional
+local receiver, set `HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS=127.0.0.1`.
+This setting does not change SDK defaults or override an embedded host's custom
+`createClient` policy. Redirects and DNS results still undergo target validation.
+
 Field filters can match nested `data` or `metadata` values. Plain
 `--data`/`--metadata` values are strings, which keeps ids and slugs such as
 `001` intact. Use `--data-json` or `--metadata-json` for typed JSON predicates.

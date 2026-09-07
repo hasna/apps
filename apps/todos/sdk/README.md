@@ -47,10 +47,10 @@ runtimes), so it does not read the macOS Keychain or
 [`@hasna/todos`](https://www.npmjs.com/package/@hasna/todos) instead — same
 client, full fleet credential chain behind it.
 
-| Setting | Option | Environment variable, in precedence order | Default |
+| Setting | Option | Environment variable | Default |
 | --- | --- | --- | --- |
-| Authority | `baseUrl` | `HASNA_TODOS_API_URL`, then `TODOS_API_URL`, then `TODOS_URL` | `https://api.hasna.com/todos` with a credential, `http://localhost:19427` without one |
-| Credential | `apiKey` | `HASNA_TODOS_API_KEY`, then `TODOS_API_KEY` | none |
+| Authority | `baseUrl` | `HASNA_TODOS_API_URL` | `https://api.hasna.com/todos` with a credential, `http://localhost:19427` without one |
+| Credential | `apiKey` | `HASNA_TODOS_API_KEY` | none |
 
 **A credential means hosted.** When a key resolves and nothing names an
 authority, the authority is the fleet gateway — the same answer the
@@ -58,9 +58,8 @@ authority, the authority is the fleet gateway — the same answer the
 clients never disagree about where your key is going.
 
 `HASNA_TODOS_API_URL` / `HASNA_TODOS_API_KEY` are the canonical fleet names and
-always win. `TODOS_API_URL`, `TODOS_URL` and `TODOS_API_KEY` are this package's
-legacy spellings, still accepted as a **silent fallback for one release** and
-scheduled for removal — move to the canonical names now.
+always win. The unprefixed legacy spellings are retired; use the canonical
+names.
 
 ```bash
 export HASNA_TODOS_API_URL=https://api.hasna.com/todos

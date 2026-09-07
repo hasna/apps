@@ -1,5 +1,12 @@
 # @hasna/events
 
+## 0.1.18
+
+### Patch Changes
+
+- e951bd9: Return a failing exit code for failed channel test deliveries in both the standalone and embedded Commander CLIs, preserving success/skipped exit codes and delivery output. Honor the existing explicit private-webhook administrator allowlist in default embedded CLI clients as well as the standalone CLI; SDK defaults and custom client policies remain unchanged.
+- 8e7403f: Switch @hasna/events local path reads/writes through the in-package resolver (XDG/macOS home layout). The legacy `~/.hasna/events` default (with the `HASNA_EVENTS_DIR` / `HASNA_EVENTS_HOME` exact-app overrides) stays the effective data home until the store has actually been migrated to the XDG data home or the operator sets the data-kind override `HASNA_DATA_HOME` — an existing local store never becomes invisible on upgrade. The wave-wide resolver dependency (`@hasna/paths@0.1.0`) was deleted 2026-09-03 (hasna/apps#1535); the resolver is now implemented locally in-package.
+
 ## 0.1.17
 
 ### Patch Changes

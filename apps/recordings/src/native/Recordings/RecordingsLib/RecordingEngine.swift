@@ -16,19 +16,23 @@ extension KeyboardShortcuts.Name {
 
 public struct TranscriptionResult: Identifiable, Sendable {
     public let id = UUID()
-    let rawText: String
-    let processedText: String?
-    let timestamp: Date
-    let projectId: String?
-    let projectName: String?
+    public let rawText: String
+    public let processedText: String?
+    public let timestamp: Date
+    public let projectId: String?
+    public let projectName: String?
+    public let captureID: String?
+    public let audioURL: URL?
     public var displayText: String { processedText ?? rawText }
 
-    init(rawText: String, processedText: String?, timestamp: Date, projectId: String?, projectName: String?) {
+    public init(rawText: String, processedText: String?, timestamp: Date, projectId: String?, projectName: String?, captureID: String? = nil, audioURL: URL? = nil) {
         self.rawText = rawText
         self.processedText = processedText
         self.timestamp = timestamp
         self.projectId = projectId
         self.projectName = projectName
+        self.captureID = captureID
+        self.audioURL = audioURL
     }
 }
 
@@ -671,7 +675,7 @@ private final class PCMStreamPipe: @unchecked Sendable {
     private let continuation: AsyncStream<Data>.Continuation
     private let processor: Task<Data, Never>
 
-    init(chunkSize: Int, client: RealtimeTranscriptionClient?) {
+    init(chunkSize: Int, client: RealtimeTranscriptionClient?, providerSession: (any RecordingTranscriptionSession)? = nil) {
         var streamContinuation: AsyncStream<Data>.Continuation!
         let stream = AsyncStream<Data>(bufferingPolicy: .unbounded) { continuation in
             streamContinuation = continuation
@@ -682,17 +686,21 @@ private final class PCMStreamPipe: @unchecked Sendable {
             var pendingChunk = Data()
 
             for await data in stream {
+                guard !Task.isCancelled else { break }
                 guard !data.isEmpty else { continue }
                 recordedPCM.append(data)
                 pendingChunk.append(data)
 
                 while pendingChunk.count >= chunkSize {
-                    await client?.sendAudio(pendingChunk.prefixData(count: chunkSize))
+                    let chunk = pendingChunk.prefixData(count: chunkSize)
+                    providerSession?.appendPCM(chunk)
+                    await client?.sendAudio(chunk)
                     pendingChunk.removeFirst(chunkSize)
                 }
             }
 
-            if !pendingChunk.isEmpty {
+            if !Task.isCancelled && !pendingChunk.isEmpty {
+                providerSession?.appendPCM(pendingChunk)
                 await client?.sendAudio(pendingChunk)
             }
             return recordedPCM
@@ -737,7 +745,7 @@ public final class RecordingEngine: ObservableObject {
     @Published public private(set) var isWarmingUpCapture = false
     @Published public var useFnKey: Bool = false {
         didSet {
-            UserDefaults.standard.set(useFnKey, forKey: "useFnKey")
+            preferences.set(useFnKey, forKey: "useFnKey")
             updateFnMonitor()
             refreshTriggerDiagnostics()
         }
@@ -856,7 +864,7 @@ public final class RecordingEngine: ObservableObject {
     /// literally and the classifier is never consulted.
     @Published public var intentDetectionEnabled: Bool = false {
         didSet {
-            UserDefaults.standard.set(intentDetectionEnabled, forKey: "intentDetectionEnabled")
+            preferences.set(intentDetectionEnabled, forKey: "intentDetectionEnabled")
         }
     }
     /// Typed Record-page state; views render idle/listening/finalizing/processing/ready/error
@@ -880,8 +888,8 @@ public final class RecordingEngine: ObservableObject {
     @Published public private(set) var latestAudioPath: String?
     @Published public var autoPasteEnabled = true {
         didSet {
-            if home == FileManager.default.homeDirectoryForCurrentUser.path {
-                UserDefaults.standard.set(autoPasteEnabled, forKey: "recordingsAutoPaste")
+            if usesIsolatedProvider || home == FileManager.default.homeDirectoryForCurrentUser.path {
+                preferences.set(autoPasteEnabled, forKey: "recordingsAutoPaste")
             }
         }
     }
@@ -916,10 +924,21 @@ public final class RecordingEngine: ObservableObject {
 
     @Published public var transcriptionLanguage = OpenAIAPIKeyStore.defaultLanguage {
         didSet {
-            UserDefaults.standard.set(transcriptionLanguage, forKey: "recordingsLanguage")
-            try? OpenAIAPIKeyStore.saveLanguage(language: transcriptionLanguage, homePath: home)
+            preferences.set(transcriptionLanguage, forKey: "recordingsLanguage")
+            if !usesIsolatedProvider {
+                try? OpenAIAPIKeyStore.saveLanguage(language: transcriptionLanguage, homePath: home)
+            }
         }
     }
+
+    private let preferences: UserDefaults
+    private let preferencesSuiteName: String?
+    private let installsGlobalHandlers: Bool
+    private let transcriptionProvider: (any RecordingTranscriptionProvider)?
+    private var usesIsolatedProvider: Bool { transcriptionProvider != nil }
+    private var providerSession: (any RecordingTranscriptionSession)?
+    private var providerConfiguration: RecordingProviderSessionConfiguration?
+    private var providerCompletionTask: Task<Void, Never>?
 
     private var nativeRecorder: PCMRecordingSource?
     private var recordingTimer: Timer?
@@ -1238,18 +1257,36 @@ public final class RecordingEngine: ObservableObject {
     let home: String
     private var audioDir: String { "\(home)/.hasna/recordings/audio" }
 
-    public init(homePath: String = FileManager.default.homeDirectoryForCurrentUser.path, installsGlobalHandlers: Bool = true) {
+    public convenience init(homePath: String = FileManager.default.homeDirectoryForCurrentUser.path, installsGlobalHandlers: Bool = true) {
+        self.init(homePath: homePath, preferences: .standard, preferencesSuiteName: nil, installsGlobalHandlers: installsGlobalHandlers, transcriptionProvider: nil)
+    }
+
+    /// Reuses native capture and paste with isolated preferences and an explicit provider.
+    /// No global handlers, legacy keys, environment routing or helper CLI are consulted.
+    public convenience init(configuration: RecordingEngineConfiguration, transcriptionProvider: any RecordingTranscriptionProvider) {
+        // A validated non-empty suite name is supported by Foundation on macOS.
+        let preferences = UserDefaults(suiteName: configuration.preferencesSuiteName)!
+        self.init(homePath: configuration.isolatedHomePath, preferences: preferences, preferencesSuiteName: configuration.preferencesSuiteName, installsGlobalHandlers: false, transcriptionProvider: transcriptionProvider)
+    }
+
+    private init(homePath: String, preferences: UserDefaults, preferencesSuiteName: String?, installsGlobalHandlers: Bool, transcriptionProvider: (any RecordingTranscriptionProvider)?) {
         home = homePath
+        self.preferences = preferences
+        self.preferencesSuiteName = preferencesSuiteName
+        self.installsGlobalHandlers = installsGlobalHandlers
+        self.transcriptionProvider = transcriptionProvider
         try? FileManager.default.createDirectory(atPath: audioDir, withIntermediateDirectories: true)
         log("RecordingEngine init; microphone=\(microphonePermissionLabel); accessibility=\(accessibilityPermissionLabel)")
 
         // Load preferences
-        if home == FileManager.default.homeDirectoryForCurrentUser.path {
-            autoPasteEnabled = UserDefaults.standard.object(forKey: "recordingsAutoPaste") as? Bool ?? true
+        if usesIsolatedProvider || home == FileManager.default.homeDirectoryForCurrentUser.path {
+            autoPasteEnabled = storedPreference("recordingsAutoPaste") as? Bool ?? true
         }
-        intentDetectionEnabled = UserDefaults.standard.object(forKey: "intentDetectionEnabled") as? Bool ?? false
-        transcriptionLanguage = OpenAIAPIKeyStore.loadLanguage(homePath: home)
-        useFnKey = UserDefaults.standard.object(forKey: "useFnKey") as? Bool ?? false
+        intentDetectionEnabled = storedPreference("intentDetectionEnabled") as? Bool ?? false
+        transcriptionLanguage = usesIsolatedProvider
+            ? (storedPreference("recordingsLanguage") as? String ?? "en")
+            : OpenAIAPIKeyStore.loadLanguage(homePath: home)
+        useFnKey = storedPreference("useFnKey") as? Bool ?? false
         guard installsGlobalHandlers else { statusMessage = "Ready"; return }
         if KeyboardShortcuts.getShortcut(for: .toggleRecording) == nil {
             KeyboardShortcuts.setShortcut(.init(.f5), for: .toggleRecording)
@@ -1322,6 +1359,15 @@ public final class RecordingEngine: ObservableObject {
         updateStatus()
     }
 
+    private func storedPreference(_ key: String) -> Any? {
+        if let preferencesSuiteName {
+            // UserDefaults.object also consults process/global domains. A separate app's
+            // engine reads only its explicitly named persistent domain.
+            return preferences.persistentDomain(forName: preferencesSuiteName)?[key]
+        }
+        return preferences.object(forKey: key)
+    }
+
     public var microphonePermissionLabel: String {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
@@ -1385,6 +1431,7 @@ public final class RecordingEngine: ObservableObject {
     /// was indistinguishable from a working one. Log the resolved binding so "is the
     /// trigger armed, and to what" is answerable from the log alone.
     public func logResolvedTrigger() {
+        guard installsGlobalHandlers else { return }
         let stored = KeyboardShortcuts.getShortcut(for: .toggleRecording)
         let bound = stored
             .map { "carbonKeyCode=\($0.carbonKeyCode) carbonModifiers=\($0.carbonModifiers)" }
@@ -1460,6 +1507,7 @@ public final class RecordingEngine: ObservableObject {
     }
 
     private func updateFnMonitor(allowAutomaticPrompt: Bool = true) {
+        guard installsGlobalHandlers else { return }
         // Decided as a local first, then handed to the single writer once. Assigning the
         // published property from each branch is how the per-source erasure bug got in.
         var reason: String?
@@ -1566,6 +1614,7 @@ public final class RecordingEngine: ObservableObject {
     /// Re-evaluate every trigger's health, push it to the UI, and record it. The one entry
     /// point callers should use after anything changes a binding.
     public func refreshTriggerDiagnostics() {
+        guard installsGlobalHandlers else { updateStatus(); return }
         refreshHotkeyDiagnostics()
         updateStatus()
         logResolvedTrigger()
@@ -1756,7 +1805,7 @@ public final class RecordingEngine: ObservableObject {
         let shouldCaptureSelection = Self.shouldCaptureSelection(
             targetPid: targetAppPid,
             accessibilityTrusted: accessibilityTrustCheck(),
-            intentDetectionEnabled: intentDetectionEnabled
+            intentDetectionEnabled: !usesIsolatedProvider && intentDetectionEnabled
         )
         let capturePid = targetAppPid
         let captureSelection = selectionCapture
@@ -1779,7 +1828,8 @@ public final class RecordingEngine: ObservableObject {
         let cleanupPreferences = recordingCleanupPreferences
         let targetBundleIdentifierForProjects = targetAppBundleIdentifier
         let transcriptionLanguageAtStart = transcriptionLanguage
-        let intentDetectionEnabledAtStart = intentDetectionEnabled
+        let intentDetectionEnabledAtStart = !usesIsolatedProvider && intentDetectionEnabled
+        let usesIsolatedProvider = usesIsolatedProvider
         let homePath = home
         let startContext = Task { @MainActor [weak self] () -> RecordingStartResolvedContext in
             let axSnapshot = await axSnapshotTask.value
@@ -1803,7 +1853,9 @@ public final class RecordingEngine: ObservableObject {
                     self.log("project synchronization degraded; continuing capture: \(warning)")
                 }
             }
-            let modelSelection = OpenAIAPIKeyStore.loadProcessingModelSelection(homePath: homePath)
+            let modelSelection = usesIsolatedProvider
+                ? ProcessingModelSelection(transcriptionPrompt: "", transcriptionModel: "", transcriberModel: "", enhancementModel: "", intentModel: "", enhanceTriggersJSON: "[]", keywordTransformsJSON: "{}")
+                : OpenAIAPIKeyStore.loadProcessingModelSelection(homePath: homePath)
             return RecordingStartResolvedContext(
                 selectionToken: axSnapshot.selectionToken,
                 canonicalProjectId: projectStore?.activeCanonicalProjectIdForRecording,
@@ -2000,7 +2052,26 @@ public final class RecordingEngine: ObservableObject {
     }
 
     private func startNativeRecording(startContext: Task<RecordingStartResolvedContext, Never>) {
-        let apiKey = openAIAPIKeyProvider()
+        let apiKey = usesIsolatedProvider ? "" : openAIAPIKeyProvider()
+        if let transcriptionProvider {
+            let generation = recordingGeneration
+            let configuration = RecordingProviderSessionConfiguration(captureID: UUID().uuidString, language: transcriptionLanguage)
+            do {
+                providerSession = try transcriptionProvider.makeSession(configuration: configuration) { [weak self] text in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.recordingGeneration == generation,
+                              self.captureIsActive || self.isTranscribing else { return }
+                        self.liveTranscriptionText = text
+                    }
+                }
+                providerConfiguration = configuration
+            } catch {
+                resetRecordingIntent()
+                statusMessage = error.localizedDescription
+                flowPhase = .failed(statusMessage)
+                return
+            }
+        }
         let captureConfiguration = RecordingCaptureConfiguration(
             targetAppBundleIdentifier: targetAppBundleIdentifier,
             targetAppPid: targetAppPid,
@@ -2019,7 +2090,7 @@ public final class RecordingEngine: ObservableObject {
             : RealtimeTranscriptionClient(apiKey: apiKey, homePath: home)
         realtimeClient = client
 
-        let streamPipe = PCMStreamPipe(chunkSize: 4_800, client: client)
+        let streamPipe = PCMStreamPipe(chunkSize: 4_800, client: client, providerSession: providerSession)
         pcmStreamPipe = streamPipe
         let homePath = home
         let captureGeneration = recordingGeneration
@@ -2071,6 +2142,7 @@ public final class RecordingEngine: ObservableObject {
                 }
             }
         } catch {
+            cancelProviderSession()
             log("native recorder failed error=\(error.localizedDescription)")
             // Unreachable today — nothing between `recorder.start()` and `isWarmingUpCapture`
             // can throw — but a warming flag left set here wedges the engine permanently: the
@@ -2112,6 +2184,7 @@ public final class RecordingEngine: ObservableObject {
     private func abandonWarmingCapture(reason: String, alert: RecordingAttemptAlert?) {
         guard isWarmingUpCapture else { return }
         log("capture abandoned before first audio reason=\(reason)")
+        cancelProviderSession()
         // Supersede the attempt so every completion still bound to it — a queued first-chunk
         // confirmation, the resolved start context — is stale and cannot apply.
         recordingGeneration &+= 1
@@ -2217,6 +2290,18 @@ public final class RecordingEngine: ObservableObject {
     // MARK: - Cancel (discard without transcribing)
 
     public func cancelRecording() {
+        if usesIsolatedProvider && isTranscribing {
+            pipelineDeliveryGate.abandonPipeline(recordingGeneration)
+            recordingGeneration &+= 1
+            cancelProviderSession()
+            isTranscribing = false
+            liveTranscriptionText = ""
+            recordedPCM.removeAll(keepingCapacity: true)
+            activeAudioPath = nil
+            resetRecordingIntent()
+            updateStatus()
+            return
+        }
         // Discard during warm-up: identical teardown, but the user asked for it, so the glyph
         // stays quiet.
         if isWarmingUpCapture {
@@ -2225,6 +2310,7 @@ public final class RecordingEngine: ObservableObject {
         }
         guard isRecording else { return }
         log("cancelRecording")
+        cancelProviderSession()
 
         recordingTimer?.invalidate()
         recordingTimer = nil
@@ -2256,6 +2342,89 @@ public final class RecordingEngine: ObservableObject {
     }
 
     // MARK: - Stop & Transcribe
+
+    private func cancelProviderSession() {
+        providerCompletionTask?.cancel()
+        providerCompletionTask = nil
+        providerSession?.cancel()
+        providerSession = nil
+        providerConfiguration = nil
+    }
+
+    /// The provider path shares capture, WAV writing and verified paste delivery with the
+    /// legacy recorder. It never enters the legacy CLI, credential or intent-model paths.
+    private func stopWithProvider(
+        recorder: PCMRecordingSource?, pipe: PCMStreamPipe?,
+        session: any RecordingTranscriptionSession,
+        configuration: RecordingProviderSessionConfiguration, audioPath: String?,
+        targetAppBundleIdentifier: String?, targetAppPid: pid_t?,
+        pipelineGeneration: UInt64, pipelineTrace: RecordingPipelineTrace
+    ) {
+        providerCompletionTask = Task { [weak self] in
+            // Shutdown and drain belong to this capture even if the user cancels and starts
+            // another one before the native input tap has stopped.
+            await Task.detached(priority: .userInitiated) { recorder?.stop() }.value
+            let pcm = await pipe?.finish() ?? Data()
+            guard !Task.isCancelled, let self,
+                  self.recordingGeneration == pipelineGeneration else { return }
+            do {
+                guard !pcm.isEmpty, let audioPath else { throw RecordingProviderError.noAudio }
+                let audioURL = URL(fileURLWithPath: audioPath)
+                try await Task.detached(priority: .userInitiated) {
+                    try Self.writeWAV(pcmData: pcm, sampleRate: 24_000, channelCount: 1, bitsPerSample: 16, to: audioURL)
+                }.value
+                try Task.checkCancellation()
+                guard self.recordingGeneration == pipelineGeneration else { return }
+                let duration = Double(pcm.count) / 48_000
+                self.recordingDuration = duration
+                let result = try await session.finish(RecordingTranscriptionRequest(
+                    captureID: configuration.captureID, audioURL: audioURL,
+                    duration: duration, language: configuration.language
+                ))
+                try Task.checkCancellation()
+                guard self.recordingGeneration == pipelineGeneration else { return }
+                let rawText = result.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let processed = result.processedText?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let text = (processed?.isEmpty == false ? processed : nil) ?? rawText
+                guard !text.isEmpty else { throw RecordingProviderError.emptyTranscript }
+                self.isTranscribing = false
+                self.liveTranscriptionText = ""
+                self.activeAudioPath = nil
+                self.providerSession = nil
+                self.providerConfiguration = nil
+                self.providerCompletionTask = nil
+                // Publication precedes delivery. Consumers may persist asynchronously without
+                // delaying paste; this is an in-memory result, not a persistence receipt.
+                self.recentTranscriptions.insert(TranscriptionResult(
+                    rawText: rawText, processedText: processed?.isEmpty == false ? processed : nil,
+                    timestamp: Date(), projectId: nil, projectName: nil,
+                    captureID: configuration.captureID, audioURL: audioURL
+                ), at: 0)
+                if self.recentTranscriptions.count > 20 { self.recentTranscriptions.removeLast() }
+                guard self.pipelineDeliveryGate.claimDelivery(for: pipelineGeneration) else { return }
+                self.pasteIntoFrontApp(
+                    text, targetAppBundleIdentifier: targetAppBundleIdentifier,
+                    targetAppPid: targetAppPid, restoreClipboard: true,
+                    deliveryKind: .ordinaryDictation, captureID: configuration.captureID, pipelineTrace: pipelineTrace,
+                    pipelineGeneration: pipelineGeneration, deliveryCompleted: nil
+                )
+            } catch {
+                guard self.recordingGeneration == pipelineGeneration, !Task.isCancelled else { return }
+                session.cancel()
+                self.providerSession = nil
+                self.providerConfiguration = nil
+                self.providerCompletionTask = nil
+                self.activeAudioPath = nil
+                self.pipelineDeliveryGate.abandonPipeline(pipelineGeneration)
+                // Do not log provider errors: third-party error text can contain a token or
+                // request URL. The host UI receives the localized description for diagnosis.
+                self.isTranscribing = false
+                self.liveTranscriptionText = ""
+                self.statusMessage = error.localizedDescription
+                self.flowPhase = .failed(self.statusMessage)
+            }
+        }
+    }
 
     public func stopAndTranscribe() {
         // Stop during the warm-up window has nothing to transcribe — the microphone was opened
@@ -2307,6 +2476,16 @@ public final class RecordingEngine: ObservableObject {
         flowPhase = .finalizing
         resetRecordingIntent()
         self.pcmStreamPipe = nil
+
+        if let providerSession, let providerConfiguration {
+            stopWithProvider(
+                recorder: recorder, pipe: pcmStreamPipe, session: providerSession,
+                configuration: providerConfiguration, audioPath: audioPath,
+                targetAppBundleIdentifier: targetAppBundleIdentifier, targetAppPid: targetAppPid,
+                pipelineGeneration: pipelineGeneration, pipelineTrace: pipelineTrace
+            )
+            return
+        }
 
         Task {
             // AVAudioEngine shutdown can block for hundreds of milliseconds. Keep
@@ -4042,7 +4221,8 @@ public final class RecordingEngine: ObservableObject {
         _ text: String,
         targetAppBundleIdentifier: String? = nil,
         targetAppPid: pid_t? = nil,
-        restoreClipboard: Bool = false
+        restoreClipboard: Bool = false,
+        captureID: String? = nil
     ) {
         pasteIntoFrontApp(
             text,
@@ -4050,6 +4230,7 @@ public final class RecordingEngine: ObservableObject {
             targetAppPid: targetAppPid,
             restoreClipboard: restoreClipboard,
             deliveryKind: .manualPaste,
+            captureID: captureID,
             pipelineTrace: nil,
             pipelineGeneration: nil,
             deliveryCompleted: nil
@@ -4062,6 +4243,7 @@ public final class RecordingEngine: ObservableObject {
         targetAppPid: pid_t? = nil,
         restoreClipboard: Bool = false,
         deliveryKind: PasteDeliveryKind,
+        captureID: String? = nil,
         selectionToken: AccessibilitySelectionToken? = nil,
         pipelineTrace: RecordingPipelineTrace?,
         pipelineGeneration: UInt64?,
@@ -4255,9 +4437,11 @@ public final class RecordingEngine: ObservableObject {
                 ))
             }
             let verified = Self.pasteTraceStage(for: outcome) == "paste_delivery_confirmed"
+            let deliveryStatus = Self.recentPasteDeliveryStatus(for: outcome)
             self.recentPastes.insert(RecentPaste(
                 text: transaction.text, bundleIdentifier: app.bundleIdentifier, appName: app.localizedName ?? "Application",
-                location: "Focused field", status: verified ? "Pasted" : "Unconfirmed", verified: verified
+                location: "Focused field", status: verified ? "Pasted" : "Unconfirmed", verified: verified,
+                captureID: captureID, deliveryStatus: deliveryStatus
             ), at: 0)
             if self.recentPastes.count > 50 { self.recentPastes.removeLast() }
             deliveryCompleted?()
@@ -4605,6 +4789,15 @@ public final class RecordingEngine: ObservableObject {
     /// Pipeline-timing stage name. `paste_posted` used to be emitted for every posted
     /// keystroke, which made the timing trace read like a delivery record; the three delivery
     /// verdicts are now distinct stages.
+    nonisolated static func recentPasteDeliveryStatus(for outcome: PasteDeliveryOutcome) -> RecentPasteDeliveryStatus {
+        switch outcome {
+        case .pasted: .confirmed
+        case .deliveredUnverified: .unconfirmed
+        case .deliveryNotObserved, .secureInputActive, .targetUnavailable,
+             .clipboardOwnershipLost, .clipboardWriteFailed, .eventPostFailed: .notDelivered
+        }
+    }
+
     nonisolated static func pasteTraceStage(for outcome: PasteDeliveryOutcome) -> String {
         switch outcome {
         case .pasted: "paste_delivery_confirmed"

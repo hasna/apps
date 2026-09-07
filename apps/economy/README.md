@@ -268,7 +268,9 @@ Data is stored under a single data root resolved through the `@hasna/paths` reso
 
 The main SQLite database lives at `<data-root>/economy.db` (`~/.hasna/economy/economy.db` by default). Older `~/.economy/` data is copied on first open when the new directory does not exist. Override the database path with `HASNA_ECONOMY_DB_PATH` or `ECONOMY_DB`.
 
-For shared deployments, CLI and MCP can use a remote `/v1` API instead of local SQLite by setting `HASNA_ECONOMY_API_URL` and `HASNA_ECONOMY_API_KEY`. See [configuration](docs/configuration.md) for client resolution, server auth, Postgres mode, and all environment variables.
+For shared deployments, CLI, MCP and `./sdk` can use a remote `/v1` API instead of local SQLite. Their credential is resolved by `@hasna/contracts` 1.0.2, fresh per request, from: an explicit `--api-key`/`--profile` argument, the env pointers `HASNA_ECONOMY_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_ECONOMY_API_KEY_REF`, the macOS Keychain item `hasna.credentials.economy.api-key`, the 0600 file `~/.hasna/economy/config/credentials` (`HASNA_ECONOMY_API_KEY=…`), then `HASNA_ECONOMY_API_KEY` in the environment. The authority follows the same ladder (`HASNA_ECONOMY_API_URL`, the Keychain `api-url` item, the credentials file) and defaults to the fleet gateway `https://api.hasna.com/economy`. Unprefixed `ECONOMY_API_URL`/`ECONOMY_API_KEY` aliases are legacy, accepted for one release.
+
+**A run without a credential fails closed**: non-zero exit, no SQLite file, no local-fallback event. The on-box store is served only with the explicit opt-in `HASNA_ECONOMY_LOCAL=1` (alias `ECONOMY_LOCAL=1`), which prints `economy: local mode …` on stderr. See [configuration](docs/configuration.md) for the full client resolution, server auth, Postgres mode, and all environment variables.
 
 ## Development
 

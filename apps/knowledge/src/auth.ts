@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import {
   appConfigDiskValue,
   CredentialResolutionError,
+  credentialDiskSources,
   HasnaHttpError,
   keychainConfigValue,
   resolveCredential,
@@ -10,6 +11,7 @@ import {
 } from '@hasna/contracts/client';
 import { ownAgentClaim, ownTenantId, parseApiKey } from '@hasna/contracts/auth';
 import {
+  KNOWLEDGE_API_KEY_ENV,
   KNOWLEDGE_API_KEY_ENV_KEYS,
   KNOWLEDGE_API_URL_ENV_KEYS,
   KNOWLEDGE_APP_SLUG,
@@ -84,13 +86,18 @@ export interface KnowledgeAuthStatus {
   configured: boolean;
   /**
    * WHICH KIND of source supplied the credential — `keychain` for the macOS
-   * Keychain item, `file` for `~/.hasna/knowledge/config/credentials` (or the
-   * legacy `auth.json`), `env` for an environment tier, `none` when nothing
-   * resolved. `source_ref` names the exact one.
+   * Keychain item, `file` for `~/.hasna/knowledge/config/credentials`, `env`
+   * for an environment tier, `none` when nothing resolved. `source_ref` names
+   * the exact one. The legacy `auth.json` is never a source.
    */
   source: KnowledgeCredentialSourceKind;
   api_url: string;
+  /** The canonical credentials file path the DISK tier reads (`auth login` writes it). */
   auth_path: string;
+  /**
+   * Always null at runtime: the canonical credentials file format carries no
+   * email/org metadata, and the retired auth.json is never consulted.
+   */
   email: string | null;
   org_id: string | null;
   org_slug: string | null;
@@ -120,7 +127,10 @@ export interface KnowledgeCredentialResolution {
   source: KnowledgeCredentialSourceKind;
   /** An env key NAME, a Keychain item reference, or an absolute file PATH. Never a value. */
   sourceRef: string | null;
-  /** The shared chain's tier, or null for the legacy auth.json fallback and for nothing. */
+  /**
+   * The shared chain's tier, or null when nothing resolved. The legacy
+   * auth.json file is never consulted.
+   */
   tier: CredentialTier | null;
 }
 
@@ -154,6 +164,21 @@ export function knowledgeAuthPath(env: Record<string, string | undefined> = proc
 }
 
 /**
+ * The canonical credentials file the shared chain's DISK tier reads:
+ * `~/.hasna/knowledge/config/credentials` (0400/0600; `HASNA_HOME` /
+ * `HASNA_CONFIG_HOME` move the root), derived from the resolver itself so this
+ * module never carries a second copy of that precedence. `knowledge auth
+ * login` writes here; `auth status` reports it as `auth_path`; `auth logout`
+ * removes it.
+ */
+export function knowledgeCredentialsPath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return credentialDiskSources(KNOWLEDGE_APP_SLUG, env as NodeJS.ProcessEnv)[0]
+    ?? join(getDataHome(env), 'config', 'credentials');
+}
+
+/**
  * The service authority, through the shared ladder: `HASNA_KNOWLEDGE_API_URL`
  * (then its unprefixed alias), the Keychain `api-url` item, the credentials
  * file, and finally the fleet gateway. Returns the normalized base — the
@@ -178,6 +203,16 @@ export function resolveKnowledgeApiAuthority(
   return { url: DEFAULT_KNOWLEDGE_API_URL, source: 'default' };
 }
 
+/**
+ * LEGACY auth.json store, kept read/write for migration and for API
+ * compatibility only. `knowledge auth login` no longer writes here, and the
+ * credential chain NEVER consults this file: since 0.3.2 the client resolves
+ * credentials only through the shared @hasna/contracts chain plus the
+ * canonical `~/.hasna/knowledge/config/credentials` file
+ * ({@link knowledgeCredentialsPath}). A login written to auth.json by an older
+ * release is invisible to every surface — move it to the Keychain item or the
+ * credentials file.
+ */
 export function getKnowledgeAuth(env: Record<string, string | undefined> = process.env): KnowledgeAuthConfig | null {
   try {
     const path = knowledgeAuthPath(env);
@@ -189,6 +224,11 @@ export function getKnowledgeAuth(env: Record<string, string | undefined> = proce
   }
 }
 
+/**
+ * LEGACY auth.json writer, kept for API compatibility; the chain never reads
+ * what it writes. New logins land in the canonical credentials file
+ * ({@link saveKnowledgeCredentials}).
+ */
 export function saveKnowledgeAuth(
   auth: Omit<KnowledgeAuthConfig, 'created_at'> & { created_at?: string },
   env: Record<string, string | undefined> = process.env,
@@ -204,9 +244,50 @@ export function saveKnowledgeAuth(
   return stored;
 }
 
+/**
+ * LEGACY auth.json remover, kept for API compatibility. The credentials the
+ * chain actually reads are removed with {@link clearKnowledgeCredentials}.
+ */
 export function clearKnowledgeAuth(env: Record<string, string | undefined> = process.env): boolean {
   try {
     unlinkSync(knowledgeAuthPath(env));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Write the client credential to the canonical credentials file
+ * (`~/.hasna/knowledge/config/credentials`, 0600) — the DISK tier of the
+ * shared chain. This is what `knowledge auth login` does, so a login lands on
+ * a tier the resolver actually reads, and `auth whoami` right after a login
+ * probes through it. The URL line is written only when one is given or
+ * configured in the env; with nothing configured the fleet gateway default
+ * applies at read time. Email/org metadata is not representable in the
+ * canonical file format and is not persisted.
+ */
+export function saveKnowledgeCredentials(
+  auth: Omit<KnowledgeAuthConfig, 'created_at'> & { created_at?: string },
+  env: Record<string, string | undefined> = process.env,
+): KnowledgeAuthConfig {
+  const path = knowledgeCredentialsPath(env);
+  const normalizedUrl = auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined;
+  const lines = [`${KNOWLEDGE_API_KEY_ENV}=${auth.api_key}`];
+  if (normalizedUrl) lines.push(`${KNOWLEDGE_API_URL_ENV_KEYS[0]}=${normalizedUrl}`);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, `${lines.join('\n')}\n`, { mode: 0o600 });
+  return {
+    ...auth,
+    api_url: normalizedUrl,
+    created_at: auth.created_at ?? new Date().toISOString(),
+  };
+}
+
+/** Remove the canonical credentials file. Returns false when nothing was there. */
+export function clearKnowledgeCredentials(env: Record<string, string | undefined> = process.env): boolean {
+  try {
+    unlinkSync(knowledgeCredentialsPath(env));
     return true;
   } catch {
     return false;
@@ -218,14 +299,10 @@ export function clearKnowledgeAuth(env: Record<string, string | undefined> = pro
  * `@hasna/contracts/client` — argument, deliberate env pointer, macOS
  * Keychain, `~/.hasna/knowledge/config/credentials`, then
  * `HASNA_KNOWLEDGE_API_KEY`. This package no longer carries a second copy of
- * that precedence.
- *
- * `auth.json` — what `knowledge auth login` writes — is consulted only when
- * the shared chain answers with nothing. It is a documented LEGACY fallback
- * kept for one release so an existing login keeps working; move the key to the
- * Keychain item or the credentials file. A deliberate tier that cannot be
- * honoured throws instead of falling through to it: `auth login` is not an
- * identity the operator asked for when they named another one.
+ * that precedence, and the legacy `auth.json` file is NOT consulted at all:
+ * a fallback read from a different file would authenticate as a principal the
+ * operator did not name, the same false green the fail-closed ruling closes.
+ * A deliberate tier that cannot be honoured throws instead of falling through.
  */
 export function getKnowledgeApiKey(
   env: Record<string, string | undefined> = process.env,
@@ -241,24 +318,14 @@ export function getKnowledgeApiKey(
       tier: resolved.tier,
     };
   }
-  const auth = getKnowledgeAuth(env);
-  return auth?.api_key
-    ? { apiKey: auth.api_key, source: 'file', sourceRef: knowledgeAuthPath(env), tier: null }
-    : { apiKey: null, source: 'none', sourceRef: null, tier: null };
+  return { apiKey: null, source: 'none', sourceRef: null, tier: null };
 }
 
 export function knowledgeAuthStatus(
   env: Record<string, string | undefined> = process.env,
 ): KnowledgeAuthStatus {
-  const auth = getKnowledgeAuth(env);
   const key = getKnowledgeApiKey(env);
   const authority = resolveKnowledgeApiAuthority(env);
-  // The legacy auth.json `api_url` decides only when nothing in the shared
-  // ladder does — an env var, the Keychain item and the credentials file all
-  // outrank it, exactly as they do for the key.
-  const apiUrl = authority.source === 'default' && auth?.api_url
-    ? normalizeKnowledgeApiOrigin(auth.api_url)
-    : normalizeKnowledgeApiOrigin(authority.url);
   // A vault pointer carries no value until request time, yet a credential IS
   // configured; reporting it as unauthenticated would be a false negative.
   const configured = Boolean(key.apiKey) || key.tier === 'pointer';
@@ -270,12 +337,16 @@ export function knowledgeAuthStatus(
     // `/v1` root for the api.hasna.com gateway form, never the bare base or
     // origin alone (issue #1588). Legacy/self-hosted origins keep their
     // existing normalized base.
-    api_url: gatewayApiV1Root(apiUrl) ?? apiUrl,
-    auth_path: knowledgeAuthPath(env),
-    email: key.tier === null && key.source === 'file' ? auth?.email ?? null : null,
-    org_id: key.tier === null && key.source === 'file' ? auth?.org_id ?? null : null,
-    org_slug: key.tier === null && key.source === 'file' ? auth?.org_slug ?? null : null,
-    user_id: key.tier === null && key.source === 'file' ? auth?.user_id ?? null : null,
+    api_url: gatewayApiV1Root(normalizeKnowledgeApiOrigin(authority.url)) ?? normalizeKnowledgeApiOrigin(authority.url),
+    // The canonical credentials file the chain's DISK tier consults — the
+    // file `auth login` writes and `auth logout` removes.
+    auth_path: knowledgeCredentialsPath(env),
+    // Email/org metadata lived only in the retired auth.json fallback; the
+    // canonical file format carries no such fields, so they are always null.
+    email: null,
+    org_id: null,
+    org_slug: null,
+    user_id: null,
     api_key_present: configured,
     source_ref: key.sourceRef,
     tier: key.tier,

@@ -16,6 +16,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
     }
   },
   "files": [
@@ -26,13 +30,13 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg && tsc --emitDeclarationOnly --outDir dist",
-    "build:server": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg",
+    "build": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build:server": "bun run clean && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun",
     "migrate": "bun run src/server/index.ts migrate",
     "generate:sdk": "bun run scripts/generate-sdk.ts",
     "kit:check": "bunx @hasna/contracts vendor-kit --check",
     "typecheck": "tsc --noEmit",
-    "test": "env -u HASNA_INSTRUCTIONS_API_URL -u HASNA_INSTRUCTIONS_API_KEY HASNA_STATE_HOME=$(mktemp -d) bun test",
+    "test": "env -u HASNA_INSTRUCTIONS_API_URL -u HASNA_INSTRUCTIONS_API_KEY -u INSTRUCTIONS_API_URL -u INSTRUCTIONS_API_KEY -u HASNA_INSTRUCTIONS_API_KEY_OVERRIDE -u HASNA_INSTRUCTIONS_API_KEY_REF -u HASNA_PROFILE HASNA_STATE_HOME=$(mktemp -d) bun test",
     "check:package-secrets": "bun run src/cli/index.tsx package-manager-scan --fail-on-findings .",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
@@ -73,7 +77,6 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "0.14.2",
     "@hasna/events": "^0.1.16",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
@@ -85,6 +88,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@hasna/contracts": "1.0.2",
     "@types/bun": "1.3.14",
     "@types/pg": "^8.11.11",
     "@types/react": "^18.3.18",

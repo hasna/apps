@@ -10,7 +10,7 @@
 // SAFETY: the bearer key lives only inside the transport; it is never logged,
 // returned, or embedded in any value produced here.
 
-import type { HasnaStorageClient } from "../contracts-client/storage.js";
+import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { randomUUID } from "crypto";
 import type { ConversationsStore } from "./index.js";
 import { normalizeChannelName } from "../channel-names.js";

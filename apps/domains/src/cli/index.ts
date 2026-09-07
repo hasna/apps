@@ -143,4 +143,16 @@ registerRoute53Commands(program); // domains r53 <...>
 registerOptionalHelp(program);
 
 await registerOptionalCommands(program, enabledOptionalGroups());
-program.parse(process.argv);
+
+// The CLI boundary: an error that escapes a command action (the shared
+// resolver's fail-closed refusal is the important one — "domains fails closed:
+// …" naming the Keychain item, the credentials file and HASNA_DOMAINS_API_KEY)
+// is reported as ONE stderr line and a non-zero exit, so an operator reads the
+// actionable message first instead of a Bun source-context stack dump.
+try {
+  await program.parseAsync(process.argv);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  printErrorLine(message.startsWith("domains ") ? message : `domains: ${message}`);
+  process.exit(1);
+}

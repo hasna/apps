@@ -30,14 +30,16 @@ describe('knowledge HTTP store resolver', () => {
     expect(KNOWLEDGE_RESOURCE).toBe('notes');
   });
 
-  test('returns null (the on-box store) when nothing configures a client', () => {
+  test('fails closed when nothing configures a client (the on-box store is opt-in only)', () => {
     // An env object with no credential in any tier and no HOME to anchor the
-    // credentials file is an unhosted install: the caller uses the on-box
-    // store. It is the CONFIGURED-authority-without-a-credential case that
-    // fails loudly, exercised below.
+    // credentials file is NOT an implicit local install: hosted with no
+    // credential fails closed, and the on-box store is reachable only by the
+    // explicit opt-in. The announcement path is a resolver concern, not a
+    // store one — nothing may be printed and nothing may be returned.
     const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      expect(resolveKnowledgeHttpStore(CLEAN_ENV)).toBeNull();
+      expect(() => resolveKnowledgeHttpStore(CLEAN_ENV)).toThrow(/no API key could be resolved/);
+      expect(errSpy).not.toHaveBeenCalled();
     } finally {
       errSpy.mockRestore();
       resetKnowledgeLocalModeNotice();

@@ -68,10 +68,10 @@ export function registerRuntime(parent: Command) {
     .option("--remote", "List runs on the configured server", false)
     .option("--json", "Output as JSON", false)
     .option("--limit <n>", "Maximum number of runs", "20")
-    .option("--cursor <n>", "Numeric offset for human-output pagination", "0")
+    .option("--cursor <n>", "Local human-output offset; remote accepts only 0", "0")
     .description("List recent skill runs")
     .action((options: { json: boolean; limit: string; cursor?: string; remote?: boolean }) => options.remote
-      ? executeRemote(options, client => client.listRuns(Number(options.limit))) : handleRunsList(options));
+      ? handleRemoteRunsList(options) : handleRunsList(options));
 
   runs.command("logs").argument("<run-id>").option("--json", "Output as JSON", false)
     .action((id: string, options: { json: boolean }) => executeRemote(options, client => client.getRunLogs(id)));
@@ -267,22 +267,23 @@ async function handleSetup(options: SetupCommandOptions) {
   let error: string | null = null;
   try {
     const fleet = resolveSkillsFleet();
-    if (fleet.mode === "hosted") {
-      configured = fleet.apiOrigin;
-      source = fleet.apiUrlSource;
-      authenticated = true;
-    }
+    if (fleet.mode === "hosted") authenticated = true;
   } catch (err) {
     // Setup configures an instance before login. Missing authentication is
     // expected here; malformed configuration and a mismatched saved key still fail.
-    if (err instanceof SkillsFleetCredentialError && err.code === "MISSING_API_CREDENTIAL") {
-      const authority = resolveSkillsApiOrigin();
-      configured = authority?.origin ?? saved;
-      source = authority?.source ?? null;
-    } else {
+    if (!(err instanceof SkillsFleetCredentialError && err.code === "MISSING_API_CREDENTIAL")) {
       error = (err as Error).message;
       configured = saved;
     }
+  }
+  if (!error) {
+    // The authority in effect, read back independently of the mode decision:
+    // the local opt-in and a missing credential can both make the fleet
+    // resolution above refuse, while the address this command manages (env,
+    // Keychain, the file it just wrote) is still configured and must be shown.
+    const authority = resolveSkillsApiOrigin();
+    configured = authority?.origin ?? null;
+    source = authority?.source ?? null;
   }
 
   const next = error
@@ -562,6 +563,19 @@ function writeBlogArticleValidationError(errors: string[], json: boolean) {
     for (const error of errors) console.error(chalk.dim(`  ${error}`));
   }
   process.exitCode = 1;
+}
+
+function handleRemoteRunsList(options: { json: boolean; limit: string; cursor?: string }) {
+  // The remote contract accepts a limit, not a continuation cursor. Validate
+  // before resolving credentials or sending a request that would repeat page one.
+  if (!/^0+$/.test(options.cursor ?? "0")) {
+    const error = "Remote runs do not support cursor pagination. Omit --cursor or use --cursor 0; use --limit 1–100 to choose the number of recent runs.";
+    if (options.json) console.log(JSON.stringify({ error, code: "REMOTE_CURSOR_UNSUPPORTED" }));
+    else console.error(error);
+    process.exitCode = 1;
+    return;
+  }
+  return executeRemote(options, client => client.listRuns(Number(options.limit)));
 }
 
 function handleRunsList(options: { json: boolean; limit: string; cursor?: string }) {

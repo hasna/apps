@@ -1,6 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-const READ_ONLY_TOOLS = new Set([
+/**
+ * Tools that DOMAINS_MCP_SAFE_MODE=1 keeps enabled. Every name here must be a
+ * tool registered in `./index.ts` — `tool-filter.test.ts` pins that, so a
+ * renamed or removed tool cannot leave a dead allow-list entry behind.
+ */
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "get_domain",
   "list_domains",
   "list_domain_offers",
@@ -37,7 +42,6 @@ const READ_ONLY_TOOLS = new Set([
   "dns_list",
   "list_domain_owners",
   "get_domain_owner",
-  "storage_status",
 ]);
 
 export function isReadOnlyMcpTool(name: string): boolean {

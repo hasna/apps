@@ -4,26 +4,60 @@
  * the recent hasna/apps control-surface fixes). messages-mcp --version/--help
  * must answer before the stdio framing loop; messages-serve --version/--help
  * must answer before resolveStore()/Bun.serve binds the port. Ordering after
- * the early exits: the messages-mcp fail-closed gate (no HASNA_MESSAGES_API_URL,
- * no HASNA_MESSAGES_LOCAL opt-in -> exit non-zero naming the env) runs before
- * the stdio connect, never before --version/--help.
+ * the early exits: the messages-mcp fail-closed gate (no credential resolves,
+ * no HASNA_MESSAGES_LOCAL opt-in -> exit non-zero naming the required env)
+ * runs before the stdio connect, never before --version/--help. The spawn
+ * environment is hermetic against every ambient credential tier: a fake HOME
+ * (the disk tier reads ~/.hasna/messages/config/credentials under it), no
+ * fleet env variable of any spelling, and HASNA_STATION pinned to a sentinel
+ * account so the macOS Keychain tier (hasna.credentials.messages.api-key,
+ * account HASNA_STATION -> hostname -s -> USER) misses on a provisioned
+ * station. Without the sentinel the fail-closed test was a false red on any
+ * Mac that holds the real station key in its login keychain.
  */
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ROOT = new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
 const PKG_VERSION = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version as string;
+
+const fakeHome = mkdtempSync(join(tmpdir(), "messages-early-args-home-"));
+afterAll(() => {
+  rmSync(fakeHome, { recursive: true, force: true });
+});
 
 async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<string> {
   if (!stream) return "";
   return new Response(stream).text();
 }
 
+/** Keychain account that holds no `hasna.credentials.messages.api-key` item anywhere. */
+const NO_SUCH_STATION = "messages-early-args-no-such-station";
+
+/**
+ * Hermetic spawn env: fake HOME (applied after the copy, so the inherited HOME
+ * can never win), HASNA_STATION pinned to a sentinel account, no fleet
+ * credential variables of any spelling.
+ */
+function hermeticEnv(env: Record<string, string> = {}): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value === undefined) continue;
+    if (key === "HOME" || key === "USERPROFILE" || key === "HASNA_STATION") continue;
+    if (key.startsWith("HASNA_MESSAGES_") || key.startsWith("MESSAGES_")) continue;
+    if (key === "HASNA_PROFILE" || key === "HASNA_HOME" || key === "HASNA_CONFIG_HOME") continue;
+    if (key === "CONVERSATIONS_AGENT_ID") continue;
+    out[key] = value;
+  }
+  return { ...out, HOME: fakeHome, HASNA_STATION: NO_SUCH_STATION, ...env };
+}
+
 async function runEntry(entry: string, args: string[], env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }> {
   const proc = Bun.spawn([process.execPath, "run", entry, ...args], {
     cwd: ROOT,
-    env: { ...(process.env as Record<string, string>), ...env },
+    env: hermeticEnv(env),
     stdout: "pipe",
     stderr: "pipe",
     stdin: "pipe",

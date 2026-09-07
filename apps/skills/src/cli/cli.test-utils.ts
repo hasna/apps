@@ -28,15 +28,17 @@ export const SLOW_TEST_TIMEOUT = DEFAULT_TEST_TIMEOUT_MS;
 export const CLEAN_CLI_HOME = mkdtempSync(join(tmpdir(), "skills-cli-home-"));
 
 /**
- * The one line an unconfigured install is allowed to print on stderr.
+ * The one line an opted-in local install is allowed to print on stderr.
  *
- * Local mode announces itself (owner ruling 2026-09-04, hasna/apps#1720): with no
- * credential and no API URL, the CLI says once, per process, that it is running
- * on this machine. That is not the deleted onboarding nudge — it demands no
- * choice and asks no question — but it does mean "stderr is empty" is the wrong
- * assertion for a local command. Use {@link stderrWithoutLocalNotice}, which
- * strips exactly this line and nothing else, so an unexpected warning still
- * fails the test it would have failed before.
+ * Local mode is opt-in only and announces itself (owner ruling 2026-09-04,
+ * hasna/apps#1720; class-patch order 2026-09-06): with the explicit
+ * `HASNA_SKILLS_LOCAL=1` opt-in and no API credential or URL, the CLI says
+ * once, per process, that it is running on this machine. The harness below
+ * passes the opt-in itself, so the suite's local runs are deliberate ones —
+ * and "stderr is empty" remains the wrong assertion for a local command. Use
+ * {@link stderrWithoutLocalNotice}, which strips exactly this line and nothing
+ * else, so an unexpected warning still fails the test it would have failed
+ * before.
  */
 export const LOCAL_MODE_NOTICE_MARKER = "skills: local mode";
 
@@ -60,13 +62,21 @@ export function stderrWithoutLocalNotice(stderr: string): string {
 function testEnv(env: Record<string, string>): Record<string, string> {
   // withoutDataDirOverrideEnv() also strips every fleet credential variable and
   // blinds the Keychain tier (see test-preload.ts): a child CLI must resolve the
-  // same "runs on this machine" state on a developer's Mac as on CI.
+  // same "runs on this machine" state on a developer's Mac as on CI. The local
+  // opt-in is passed EXPLICITLY below, the same way an operator who wants the
+  // on-machine run sets it — local mode is no longer the silence that follows
+  // a missing credential, and a test that spawns a CLI to assert fail-closed
+  // behaviour passes its own environment without it.
   return {
     ...withoutDataDirOverrideEnv({ ...process.env }),
     HOME: CLEAN_CLI_HOME,
     ...env,
     NO_COLOR: "1",
     SKILLS_TEST_MODE: "1",
+    // The default before `...env`, so a test can deliberately opt OUT (or
+    // blank) and exercise the fail-closed path through the harness itself —
+    // same explicit-over-ambient rule every other variable in this env follows.
+    HASNA_SKILLS_LOCAL: env.HASNA_SKILLS_LOCAL ?? env.SKILLS_LOCAL ?? "1",
   } as Record<string, string>;
 }
 

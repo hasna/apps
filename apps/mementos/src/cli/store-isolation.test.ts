@@ -8,9 +8,14 @@ import {
   DATABASE_URL_ENV_KEYS,
 } from "../db/api-mode.js";
 import { MEMENTOS_STORAGE_ENV, MEMENTOS_STORAGE_FALLBACK_ENV } from "../storage.js";
-import { LEGACY_STORAGE_MODE_KEYS } from "../lib/retired-storage-mode.js";
+import { credentialOverrideEnvKey } from "@hasna/contracts/client";
+import {
+  mementosAuthorityEnvKeys,
+} from "../lib/local-opt-in.js";
 import {
   STORE_SELECTOR_ENV_KEYS,
+  LOCAL_ONLY_STORE_ENV_KEYS,
+  REMOVED_STORE_ENV_KEYS,
   assertLocalStoreBackend,
   cloudSelectingEnv,
   isolatedStoreEnv,
@@ -84,7 +89,9 @@ describe("store-isolation guard", () => {
     const report = await reportFor(cloudSelectingEnv(UNREACHABLE_API_URL, FAKE_API_KEY));
     expect(report.api_mode).toBe(true);
     expect(report.backend).toBe("cloud-api");
-    expect(report.selected_by).toContain("presence");
+    // The report names the resolver sources (env key names — never values).
+    expect(report.selected_by).toContain(API_URL_ENV_KEYS[0]);
+    expect(report.selected_by).toContain(API_KEY_ENV_KEYS[0]);
   });
 
   test("PRECEDENCE 1: the original defective harness env now resolves LOCAL, not cloud", async () => {
@@ -211,17 +218,27 @@ describe("store-isolation guard", () => {
 
   test("STORE_SELECTOR_ENV_KEYS covers every key the resolvers read", () => {
     // Derived from the resolvers' own exported lists, so this fails the moment a
-    // new selector is added anywhere without widening the isolation set.
+    // new selector is added anywhere without widening the isolation set. The
+    // local-only (pinned) and retired (deleted) sets are handled separately and
+    // are listed so the coverage assertion treats them as accounted for.
     const required = [
       ...API_URL_ENV_KEYS,
       ...API_KEY_ENV_KEYS,
       ...DATABASE_URL_ENV_KEYS,
-      ...LEGACY_STORAGE_MODE_KEYS,
+      ...mementosAuthorityEnvKeys(),
       MEMENTOS_STORAGE_ENV.databaseUrl,
       MEMENTOS_STORAGE_FALLBACK_ENV.databaseUrl,
     ];
     const missing = required.filter((key) => !STORE_SELECTOR_ENV_KEYS.includes(key));
     expect(missing).toEqual([]);
+    // The authoritative credential tiers (override/pointer/profile) and the
+    // DSN key must be scrubbed; the local-only and retired sets must be
+    // accounted for without being scrubbed by the selector list.
+    expect(STORE_SELECTOR_ENV_KEYS).toContain(credentialOverrideEnvKey("mementos"));
+    expect(STORE_SELECTOR_ENV_KEYS).toContain("HASNA_PROFILE");
+    for (const key of [...LOCAL_ONLY_STORE_ENV_KEYS, ...REMOVED_STORE_ENV_KEYS]) {
+      expect(STORE_SELECTOR_ENV_KEYS).not.toContain(key);
+    }
   });
 
   test("storage mode neither opens nor creates a database", async () => {

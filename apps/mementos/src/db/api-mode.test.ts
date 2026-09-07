@@ -8,6 +8,7 @@ import {
   isApiMode,
   toQuery,
 } from "./api-mode.js";
+import { MEMENTOS_LOCAL_OPT_IN_ENV_KEYS } from "../lib/local-opt-in.js";
 
 const SAVED = { ...process.env };
 
@@ -23,6 +24,7 @@ function clearEnv(): void {
     ...API_KEY_ENV_KEYS,
     ...DATABASE_URL_ENV_KEYS,
     ...DB_PATH_ENV_KEYS,
+    ...MEMENTOS_LOCAL_OPT_IN_ENV_KEYS,
   ]) {
     delete process.env[k];
   }
@@ -48,13 +50,30 @@ describe("api-mode", () => {
     expect(getApiConfig()?.baseUrl).toBe("https://mementos.hasna.xyz/v1");
   });
 
-  test("keeps an explicit /v1 or /api suffix as-is; strips trailing slash", () => {
+  test("resolves the alias pair as a complete configuration and normalizes /v1", () => {
+    // The resolver's silent legacy-alias fallback: MEMENTOS_API_URL +
+    // MEMENTOS_API_KEY (a mixed prefixed/unprefixed pair) is complete.
+    clearEnv();
+    process.env["MEMENTOS_API_URL"] = "https://api.hasna.com/mementos/";
+    process.env["MEMENTOS_API_KEY"] = "k";
+    expect(isApiMode()).toBe(true);
+    expect(getApiConfig()?.baseUrl).toBe("https://api.hasna.com/mementos/v1");
+  });
+
+  test("keeps an explicit /v1 suffix as-is; strips trailing slash", () => {
     clearEnv();
     process.env["HASNA_MEMENTOS_API_KEY"] = "k";
     process.env["HASNA_MEMENTOS_API_URL"] = "https://mementos.hasna.xyz/v1/";
     expect(getApiConfig()?.baseUrl).toBe("https://mementos.hasna.xyz/v1");
-    process.env["HASNA_MEMENTOS_API_URL"] = "https://mementos.hasna.xyz/api";
-    expect(getApiConfig()?.baseUrl).toBe("https://mementos.hasna.xyz/api");
+  });
+
+  test("a key alone resolves to the fleet gateway default authority", () => {
+    // A credential alone is a COMPLETE configuration since the resolver
+    // adoption: the authority defaults to https://api.hasna.com/mementos.
+    clearEnv();
+    process.env["HASNA_MEMENTOS_API_KEY"] = "k";
+    expect(isApiMode()).toBe(true);
+    expect(getApiConfig()?.baseUrl).toBe("https://api.hasna.com/mementos/v1");
   });
 
   test("fail-closed: refuses to engage when a client DSN is present", () => {
@@ -65,19 +84,16 @@ describe("api-mode", () => {
     expect(isApiMode()).toBe(false);
   });
 
-  // CONTRACT CHANGE (2026-07-30). This test previously asserted that a half
-  // configured client is "off", i.e. silently reads the local SQLite store. That
-  // was the defect, codified as a passing test: a store serving stale local data
-  // where a cloud store was expected is indistinguishable, from the caller's
-  // side, from a store that is working. It now refuses and names what is missing.
-  // Full rationale and precedence table: assertUnambiguousStoreEnv in api-mode.ts.
-  test("refuses — does not silently go local — when only one of URL/KEY is set", () => {
+  // CONTRACT CHANGE (2026-07-30, retained through the resolver adoption): a
+  // half-configured client must not silently read the local SQLite store. An
+  // API URL set without a resolvable credential is an ERROR — never a
+  // fall-back — because a store serving stale local data where a cloud store
+  // was expected is indistinguishable, from the caller's side, from a store
+  // that is working. Full rationale: assertUnambiguousStoreEnv in api-mode.ts.
+  test("refuses — does not silently go local — when only the URL is set", () => {
     clearEnv();
     process.env["HASNA_MEMENTOS_API_URL"] = "https://mementos.hasna.xyz";
     expect(() => isApiMode()).toThrow(/HASNA_MEMENTOS_API_KEY/);
-    clearEnv();
-    process.env["HASNA_MEMENTOS_API_KEY"] = "k";
-    expect(() => isApiMode()).toThrow(/HASNA_MEMENTOS_API_URL/);
   });
 
   test("toQuery skips empties, joins arrays, encodes booleans", () => {

@@ -18,16 +18,16 @@
 // is never logged or embedded in an error.
 
 import { spawnSync } from "node:child_process";
+import { loadEmailsClientEnvSecret } from "../lib/client-env.js";
 import {
-  CLIENT_ENV_CREDENTIAL_SELECTION_KEYS,
-  EMAILS_IDP_TOKEN_ENV,
+  resolveEmailsApiUrl,
+  resolveEmailsHostedTransport,
+  emailsKeychainItem,
   EMAILS_SELF_HOSTED_API_KEY_ENV,
   EMAILS_SESSION_TOKEN_ENV,
-  loadEmailsClientEnvSecret,
-  resolveEmailsClientCredentialCandidates,
   type EmailsClientCredentialCandidate,
   type EmailsClientCredentialSetting,
-} from "../lib/client-env.js";
+} from "../lib/emails-credentials.js";
 import { getClientMode } from "../lib/mode.js";
 import {
   parseSelfHostedErrorJson,
@@ -54,8 +54,10 @@ export interface SelfHostedConfig {
   baseUrl: string; // `<origin>/v1`
   /**
    * Bearer credential threaded into BOTH transports. A user session token
-   * (emss_…) when present, otherwise the next configured credential. The client never
-   * sends a tenant — the server derives it from this credential.
+   * (emss_…) when present, otherwise the next configured credential (an agent
+   * identity token, else the API key resolved by the shared @hasna/contracts
+   * client resolver). The client never sends a tenant — the server derives it
+   * from this credential.
    */
   credential: string;
   /** Which setting supplied `credential`; safe to report. */
@@ -71,7 +73,7 @@ function toV1BaseUrl(apiUrl: string): string {
   }
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1";
   if (url.protocol !== "https:" && !loopback) {
-    throw new Error("EMAILS_SELF_HOSTED_URL must use https except for a loopback development URL.");
+    throw new Error("HASNA_EMAILS_API_URL must use https except for a loopback development URL.");
   }
   let path = url.pathname.replace(/\/+$/, "");
   if (path.endsWith("/v1")) path = path.slice(0, -"/v1".length);
@@ -81,20 +83,18 @@ function toV1BaseUrl(apiUrl: string): string {
   return url.toString().replace(/\/+$/, "");
 }
 
-let _cachedSignature: string | null = null;
-let _cachedConfig: SelfHostedConfig | null = null;
-
 const CONFIG_HELP =
-  "Set EMAILS_SELF_HOSTED_URL and one of EMAILS_SESSION_TOKEN, EMAILS_IDP_TOKEN or " +
-  "EMAILS_SELF_HOSTED_API_KEY (or point EMAILS_CLIENT_ENV_SECRET at a vault entry that " +
-  "carries them) to use the API.";
+  "Set HASNA_EMAILS_API_URL and HASNA_EMAILS_API_KEY (or the legacy " +
+  "EMAILS_SELF_HOSTED_URL / EMAILS_SELF_HOSTED_API_KEY aliases), store the key in " +
+  `the Keychain item ${emailsKeychainItem("api-key")}, or write ` +
+  "~/.hasna/emails/config/credentials to use the API.";
 
 /**
- * Resolve strict self-hosted client configuration. This function is called only
- * after the storage plan selected the API arm — local storage never loads a
- * client-env secret and never needs an HTTP endpoint — and the caller must say
- * so: `selectedMode` is REQUIRED, because there is no deployment-mode variable
- * left to infer it from.
+ * Resolve the hosted client configuration through the shared @hasna/contracts
+ * client resolver, FRESH on every call. This function is called only after the
+ * storage plan selected the API arm — local storage never needs an HTTP endpoint —
+ * and the caller must say so: `selectedMode` is REQUIRED, because there is no
+ * deployment-mode variable left to infer it from.
  */
 export function resolveSelfHostedConfig(
   env: NodeJS.ProcessEnv = process.env,
@@ -104,83 +104,39 @@ export function resolveSelfHostedConfig(
   // this bridge to the API arm — there is no deployment-mode variable left that
   // could mean anything else — so the value itself is deliberately never read.
   void options;
-  // Delivering the client-env pointer first turns a pointer-only environment into
-  // one the API settings are present in. Loading is an early no-op without the
-  // pointer, and a no-op again when the canonical settings are already present.
+  // Deliver the app's own principals (session/identity tokens) from a configured
+  // EMAILS_CLIENT_ENV_SECRET vault pointer first, so a live session in the vault is
+  // a credential the resolver can hand to the transport.
   loadEmailsClientEnvSecret(env);
-  const apiUrl = env["EMAILS_SELF_HOSTED_URL"]?.trim();
-  const candidates = resolveEmailsClientCredentialCandidates(env);
-  // Credential precedence: an explicit user session first, then the caller's
-  // own idp identity token (ADR-0002 — an agent uses ITS identity even when
-  // an operator API key is also present in the env), then the operator key.
-  // The server maps whichever credential to its tenant; the client never sends one.
-  const signature = `self_hosted|${apiUrl ?? ""}|${credentialSettingsSignature(candidates)}`;
-  if (signature === _cachedSignature && _cachedConfig) return _cachedConfig;
-
-  const config = computeConfig(apiUrl, candidates);
-  _cachedSignature = signature;
-  _cachedConfig = config;
-  return config;
-}
-
-function credentialSettingsSignature(candidates: readonly EmailsClientCredentialCandidate[]): string {
-  const markers: Record<EmailsClientCredentialSetting, string> = {
-    [EMAILS_SESSION_TOKEN_ENV]: "s",
-    [EMAILS_IDP_TOKEN_ENV]: "f",
-    [EMAILS_SELF_HOSTED_API_KEY_ENV]: "k",
-  };
-  return candidates.map((candidate) => markers[candidate.setting]).join("");
-}
-
-function computeConfig(
-  apiUrl: string | undefined,
-  candidates: readonly EmailsClientCredentialCandidate[],
-): SelfHostedConfig {
-  if (!apiUrl || candidates.length === 0) {
-    const missing = [
-      !apiUrl ? "EMAILS_SELF_HOSTED_URL" : null,
-      candidates.length === 0 ? CLIENT_ENV_CREDENTIAL_SELECTION_KEYS.join(", or ") : null,
-    ].filter(Boolean).join(" and ");
-    throw new Error(
-      `${APP}: the self-hosted client is not configured (${missing} missing). ${CONFIG_HELP}`,
-    );
-  }
-  const [primary, ...fallbacks] = candidates;
+  const hosted = resolveEmailsHostedTransport(env);
   return {
-    baseUrl: toV1BaseUrl(apiUrl),
-    credential: primary!.value,
-    credentialSetting: primary!.setting,
-    credentialFallbacks: fallbacks,
+    baseUrl: hosted.baseUrl,
+    credential: hosted.credential,
+    credentialSetting: hosted.credentialSetting,
+    credentialFallbacks: hosted.credentialFallbacks,
   };
 }
 
 /**
  * Resolve the `<origin>/v1` base URL WITHOUT requiring a credential. Used only
  * by the unauthenticated auth endpoints (signup/login), where the caller may not
- * hold a credential yet. A vault load failure caused solely by a missing
- * credential is tolerated as long as the URL is present.
+ * hold a credential yet. The authority comes from the shared resolver: the
+ * configured URL (canonical env name or its alias, the Keychain `api-url` item,
+ * the credentials file), else the shared default gateway when a credential resolves.
  */
 function resolveSelfHostedBaseUrlLenient(env: NodeJS.ProcessEnv = process.env): string {
-  let loadError: unknown;
-  try {
-    loadEmailsClientEnvSecret(env);
-  } catch (error) {
-    loadError = error;
-  }
-  const apiUrl = env["EMAILS_SELF_HOSTED_URL"]?.trim();
-  if (!apiUrl) {
-    if (loadError) throw loadError;
+  const resolved = resolveEmailsApiUrl(env);
+  if (!resolved) {
     throw new Error(
-      `${APP}: the self-hosted client is not configured (EMAILS_SELF_HOSTED_URL missing). ${CONFIG_HELP}`,
+      `${APP}: the self-hosted client is not configured (${CONFIG_HELP})`,
     );
   }
-  return toV1BaseUrl(apiUrl);
+  return toV1BaseUrl(resolved.value);
 }
 
-/** Reset the memoized config (tests flip env between cases). */
+/** Kept for compatibility with callers that reset a memoized config between cases. */
 export function resetSelfHostedConfigCache(): void {
-  _cachedSignature = null;
-  _cachedConfig = null;
+  // The resolver is fresh on every call now — there is no cache to clear.
 }
 
 /**

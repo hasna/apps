@@ -83,14 +83,33 @@ with the configured Twilio auth token. Replayed MessageSid, CallSid, SmsSid, or
 RecordingSid values are rejected before inbound messages, calls, or webhook
 dispatch rows are written.
 
-## Fleet API vs local mode (fail closed)
+## Credentials and transport (fail closed)
 
-The CLI, MCP and SDK surfaces route data operations through the telephony HTTP
-API when `HASNA_TELEPHONY_API_URL` and `HASNA_TELEPHONY_API_KEY` are set
-(unprefixed `TELEPHONY_API_URL` / `TELEPHONY_API_KEY` aliases are accepted).
-Without that API env the client **fails closed**: a store-backed command exits
-non-zero with an actionable error naming the required variables. It never
-silently falls back to the on-box SQLite store.
+The CLI, MCP and SDK surfaces resolve their credential and their service
+authority through the **one shared `@hasna/contracts` client resolver**, per
+call, fresh — a key rotation heals a long-lived shell, MCP server or agent
+without a restart:
+
+| tier | credential | authority |
+|---|---|---|
+| 1. explicit argument | `--api-key` / `--profile` *(not surfaced by telephony today)* | explicit `baseUrl` |
+| 2. deliberate env pointer | `HASNA_TELEPHONY_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_TELEPHONY_API_KEY_REF` | — |
+| 3. macOS Keychain | `hasna.credentials.telephony.api-key` (account `HASNA_STATION` → `hostname -s` → `$USER`) | Keychain `api-url` item |
+| 4. disk (0600/0400, re-read per call) | `~/.hasna/telephony/config/credentials` (`HASNA_HOME` / `HASNA_CONFIG_HOME` move it; XDG is never consulted) | the same file's `HASNA_TELEPHONY_API_URL` |
+| 5. env | `HASNA_TELEPHONY_API_KEY` — a legitimate tier, no deprecation notice | `HASNA_TELEPHONY_API_URL` |
+
+The authority defaults to the fleet gateway **`https://api.hasna.com/telephony`**
+(`/v1` appended) once a credential resolves — a key alone is a complete
+configuration, and URLs never need configuring. The unprefixed
+`TELEPHONY_API_URL` / `TELEPHONY_API_KEY` spellings are accepted as the shared
+resolver's silent alias fallback for one release; the canonical
+`HASNA_TELEPHONY_*` names always win.
+
+**Hosted mode fails closed.** With no credential resolving from any tier —
+Keychain, credentials file, or env — a store-backed command exits non-zero with
+an actionable error naming the required variables. It never silently falls back
+to the on-box SQLite store, never emits a local-fallback event, and a
+configured authority whose credential does not resolve is a hard error.
 
 The on-box SQLite store is available only through the **explicit opt-in**
 
@@ -98,8 +117,15 @@ The on-box SQLite store is available only through the **explicit opt-in**
 export HASNA_TELEPHONY_LOCAL=1   # alias: TELEPHONY_LOCAL=1
 ```
 
-Local mode is never the default: no environment means no local database is
-opened or created, only the error above.
+Local mode applies **only when nothing at all resolves a credential** — any
+resolved credential outranks the opt-in and selects the hosted API — and every
+local run says `local` on stderr. Local mode is never the default: no
+credential and no opt-in means no local database is opened or created, only
+the fail-closed error above.
+
+Retired credential locations (`fleet-env`, the shared-cloud dirs, `~/.config/hasna`,
+`~/.telephony/config.json`) and every `*_MODE` / `*_STORAGE_MODE` switch are
+gone: routing follows what resolves, not a mode word.
 
 ## Data Directory
 

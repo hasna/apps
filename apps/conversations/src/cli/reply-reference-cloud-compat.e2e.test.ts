@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { STORE_SELECTING_KEYS } from "../lib/store/isolated-test-env.js";
+import { HERMETIC_STATION } from "../test/hermetic.js";
 
 const CLI = ["bun", "run", "./src/cli/index.tsx"];
 const PARENT = {
@@ -30,6 +31,10 @@ function cloudChildEnv(url: string): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && !STORE_SELECTING_KEYS.includes(key)) env[key] = value;
   }
+  // The station Keychain sits ABOVE the env tier in the shared chain: pin the
+  // account to one no real item uses, or the operator's real key and api-url
+  // items win over the fixture pair below.
+  env.HASNA_STATION = HERMETIC_STATION;
   env.HASNA_CONVERSATIONS_API_URL = url;
   env.HASNA_CONVERSATIONS_API_KEY = ["fixture", "not", "a", "credential"].join("-");
   env.CONVERSATIONS_AGENT_ID = "bob";

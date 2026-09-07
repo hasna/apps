@@ -5,14 +5,16 @@
 //   • LocalStore  — on-box SQLite (src/db/*), first-class, fully functional.
 //   • ApiStore    — the server's HTTP `/v1` API with a bearer key.
 //
-// The transport is resolved from the environment by `resolveStoreClient`
-// (src/http/client.ts): the presence of BOTH HASNA_RECORDINGS_API_URL and
-// HASNA_RECORDINGS_API_KEY routes to the ApiStore. An environment that sets
-// neither fails CLOSED with an error naming the required variables — the
-// LocalStore is never a silent default and is read only through the explicit
-// `HASNA_RECORDINGS_CLIENT_STORE=sqlite` override. WHO operates the server,
-// and whether its internal storage is SQLite or PostgreSQL, is invisible here
-// — the client has exactly two stores, `sqlite` and `http`.
+// The transport is resolved by `resolveRecordingsCloudClient`
+// (src/http/client.ts), which declares the on-box file reachable ONLY through
+// the deliberate unhosted opt-in (HASNA_RECORDINGS_LOCAL=1, alias
+// RECORDINGS_LOCAL=1) and otherwise resolves the credential and the service
+// authority through the ONE resolver in @hasna/contracts (fail closed with no
+// credential — the LocalStore is never a silent default). The hosted client's
+// transport re-resolves the credential on every request, so a rotation heals
+// a long-lived MCP server without a restart. WHO operates the server, and
+// whether its internal storage is SQLite or PostgreSQL, is invisible here —
+// the client has exactly two stores, `sqlite` and `http`.
 //
 // SAFETY: the ApiStore authenticates with a bearer key ONLY. A raw database DSN
 // is NEVER read or accepted on the client. The key value is never logged.
@@ -29,8 +31,9 @@ import * as agentsDb from "./db/agents.js";
 import * as projectsDb from "./db/projects.js";
 import { saveFeedback as saveFeedbackLocal, type FeedbackInput } from "./db/feedback.js";
 import {
-  resolveStoreClient,
-  type HasnaStorageClient,
+  resolveRecordingsCloudClient,
+  type RecordsCloudClient,
+  type RecordsClientResolveOptions,
   type QueryParams,
 } from "./http/client.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -186,7 +189,7 @@ const localStore: Store = {
 // (`{ recordings, count }`, `{ agents, count }`, `{ projects, count }`), not
 // the shared client's standard envelope keys, so list reads go through the
 // transport with the resource key added to the extraction order.
-async function listResource<T>(client: HasnaStorageClient, resource: string, query?: QueryParams): Promise<{ items: T[]; raw: unknown }> {
+async function listResource<T>(client: RecordsCloudClient, resource: string, query?: QueryParams): Promise<{ items: T[]; raw: unknown }> {
   const raw = await client.transport.get<unknown>(`/${resource}`, query ? { query } : undefined);
   return { items: extractEnvelopeItems<T>(raw, resource), raw };
 }
@@ -202,7 +205,7 @@ function extractEnvelopeItems<T>(raw: unknown, resource: string): T[] {
   return [];
 }
 
-function apiStore(client: HasnaStorageClient): Store {
+function apiStore(client: RecordsCloudClient): Store {
   return {
     mode: "http",
     baseUrl: client.baseUrl,
@@ -417,14 +420,20 @@ export function __resetLocalArtifactStorage(): void {
 /**
  * Resolve the active Store from the environment. Cached per-process after first
  * resolution against `process.env`; pass an explicit `env` (e.g. in tests) to
- * bypass the cache. Throws if the cloud transport is requested but misconfigured
- * (URL/key mismatch) so callers never silently read the wrong dataset.
+ * bypass the cache. The hosted client re-resolves its credential on every
+ * request through the @hasna/contracts chain, so the cache never freezes a
+ * key. Throws a `REMOTE_API_*` failure when no credential resolves — the
+ * on-box file is reachable only through the explicit
+ * `HASNA_RECORDINGS_LOCAL=1` opt-in, never as a fallback.
  */
-export function getStore(env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env): Store {
-  if (env === process.env && cached) return cached;
-  const resolved = resolveStoreClient(APP, env);
-  const store = resolved.transport === "http" ? apiStore(resolved.client) : localStore;
-  if (env === process.env) cached = store;
+export function getStore(
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+  options: RecordsClientResolveOptions = {},
+): Store {
+  if (env === process.env && cached && options.credentials === undefined) return cached;
+  const client = resolveRecordingsCloudClient(env, options);
+  const store = client ? apiStore(client) : localStore;
+  if (env === process.env && options.credentials === undefined) cached = store;
   return store;
 }
 

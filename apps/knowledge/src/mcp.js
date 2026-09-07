@@ -39,8 +39,10 @@ function resolveStorePath(storePath, scope) {
 /**
  * Resolve the unified knowledge-item Store for an MCP item tool. When no
  * explicit `store_path` is given and the shared @hasna/contracts credential
- * chain selects HTTP transport, item reads/writes route to the app API;
- * otherwise the on-box JSON store. An explicit `store_path` always pins local.
+ * chain selects HTTP transport, item reads/writes route to the app API.
+ * Otherwise — explicit `store_path`, or the `HASNA_KNOWLEDGE_LOCAL=1` opt-in —
+ * the on-box JSON store. With no credential and no opt-in the tool fails
+ * closed (an MCP error), never a silent local read.
  * Every MCP item tool routes through this Store — never the JSON file directly.
  */
 function itemStoreFor(storePath, scope) {

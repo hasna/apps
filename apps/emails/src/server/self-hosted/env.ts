@@ -1,5 +1,4 @@
 import { createPgPool, createQueryClient, type PoolQueryClient } from "../../storage-kit/index.js";
-import { assertNoLegacyHostedEnvironment } from "../../lib/retired-deployment-mode.js";
 import {
   SERVER_DATABASE_URL_SETTING,
   resolveServerStorageBackend,
@@ -23,12 +22,24 @@ export const SELF_HOSTED_APP_ALIASES = ["mailery"] as const;
 export const SELF_HOSTED_DATABASE_ENV = SERVER_DATABASE_URL_SETTING;
 export const SELF_HOSTED_SIGNING_ENV = "EMAILS_API_SIGNING_KEY";
 
-// Removed hosted-runtime vars kept rejected.
-const REMOVED_ENV_KEYS = [
+// Removed hosted-runtime vars kept rejected. The deployment-mode words
+// (EMAILS_MODE / HASNA_EMAILS_MODE / *STORAGE_MODE) are DELETED, not listed here:
+// nothing anywhere in the client reads them any more (hasna/apps#1720), so the
+// server does not police them either. The array is named LEGACY_HOSTED_ENV_KEYS so
+// the no-cloud boundary stripper erases the retired runtime literals exactly as it
+// did for the removed guard module.
+const LEGACY_HOSTED_ENV_KEYS = [
   "MAILERY_MODE",
   "HASNA_MAILERY_MODE",
   "MAILERY_STORAGE_MODE",
   "HASNA_MAILERY_STORAGE_MODE",
+  "MAILERY_API_URL",
+  "MAILERY_API_KEY",
+  "MAILERY_CLOUD_API_URL",
+  "MAILERY_CLOUD_TOKEN",
+  "HASNA_MAILERY_API_URL",
+  "HASNA_MAILERY_API_KEY",
+  "HASNA_MAILERY_ENV_FILE",
   "HASNA_MAILERY_DATABASE_URL",
   "HASNA_MAILERY_API_SIGNING_KEY",
 ] as const;
@@ -39,8 +50,7 @@ export interface SelfHostedPool {
 }
 
 export function assertSelfHostedEnvironment(env: NodeJS.ProcessEnv = process.env): void {
-  assertNoLegacyHostedEnvironment(env);
-  for (const key of REMOVED_ENV_KEYS) {
+  for (const key of LEGACY_HOSTED_ENV_KEYS) {
     if (env[key]?.trim()) {
       throw new Error(
         `${key} belongs to the removed Mailery/cloud runtime. ` +

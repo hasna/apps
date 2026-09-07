@@ -39,9 +39,9 @@ export { HasnaHttpError as ApiError } from "../store/http-storage.js";
 export class CalendarV1Client {
   #transport: HttpTransport;
   #headers: Headers;
-  constructor(options: CalendarV1ClientOptions | { env: Env }) {
-    this.#transport = "env" in options ? resolveStorageClient("calendar", options.env).client.transport : createHttpTransport({ name: "calendar", baseUrl: options.baseUrl, apiKey: options.apiKey, fetchImpl: options.fetch });
-    this.#headers = new Headers("env" in options ? undefined : options.headers);
+  constructor(options: CalendarV1ClientOptions) {
+    this.#transport = createHttpTransport({ name: "calendar", baseUrl: options.baseUrl, apiKey: options.apiKey, fetchImpl: options.fetch });
+    this.#headers = new Headers(options.headers);
     for (const h of ["authorization", "x-api-key", "host", "cookie", "proxy-authorization"]) {
       if (this.#headers.has(h)) throw new Error("Calendar authority headers cannot be overridden.");
     }
@@ -56,7 +56,7 @@ export class CalendarV1Client {
   }
 `;
 const hardened = code.slice(0, start) + seam + code.slice(operationsStart);
-writeFileSync(outPath, header + 'import { createHttpTransport, resolveStorageClient, type Env, type HttpTransport, type QueryParams } from "../store/http-storage.js";\n' + hardened);
+writeFileSync(outPath, header + 'import { createHttpTransport, type HttpTransport, type QueryParams } from "../store/http-storage.js";\n' + hardened);
 
 console.log(`Wrote ${outPath}`);
 console.log(`Operations: ${operations.map((o) => o.functionName).join(", ")}`);

@@ -40,8 +40,11 @@ compared with a constant-time compare.
 
 ## The sync client
 
-`hooks sync` talks to the Worker when an API URL is configured
-(`HASNA_HOOKS_API_URL` or `HOOKS_API_URL`). When the registry requires a key,
+`hooks sync` talks to the Worker when the @hasna/contracts chain resolves a
+registry URL and key together (hasna/apps#1720 — `HASNA_HOOKS_API_URL`, the
+Keychain item `hasna.credentials.hooks.api-url`, or
+`~/.hasna/hooks/config/credentials`; the unprefixed `HOOKS_API_URL` survives
+only as the resolver's silent alias). When the registry requires a key,
 deliver it through the vault and let `secrets exec` place it in the
 environment — the client never stores the value:
 
@@ -50,12 +53,11 @@ secrets exec <org>/<name>/<key> --as HASNA_HOOKS_API_KEY -- \
   hooks sync
 ```
 
-The client sends `X-API-Key: $HASNA_HOOKS_API_KEY` (fallback
-`HOOKS_API_KEY`) on every registry request. A `401` response fails the sync
-with:
+The client sends `X-API-Key` (the key resolved with the authority it is being
+sent to) on every registry request. A `401` response fails the sync with:
 
 ```
-registry requires API key — set HASNA_HOOKS_API_KEY or HOOKS_API_KEY (vault-delivered, never stored)
+registry requires API key — set HASNA_HOOKS_API_KEY, the Keychain item hasna.credentials.hooks.api-key, or ~/.hasna/hooks/config/credentials (resolved per call, never stored)
 ```
 
 ## Storage layout

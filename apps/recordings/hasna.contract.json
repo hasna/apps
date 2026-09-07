@@ -3,8 +3,8 @@
   "name": "recordings",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.14.2",
-  "description": "Speech-to-text recording store for AI coding agents. CLI + MCP + HTTP API (recordings-serve) + generated SDK. The server's data backend is selected by the environment: a HASNA_RECORDINGS_DATABASE_URL selects postgresql, anything else serves from sqlite; on postgresql the serve process reads/writes that database directly with API-key auth via @hasna/contracts. The client has exactly two stores — on-box sqlite, or the server's /v1 HTTP API selected by the presence of both HASNA_RECORDINGS_API_URL and HASNA_RECORDINGS_API_KEY — and never opens Postgres.",
+  "kitVersion": "1.0.2",
+  "description": "Speech-to-text recording store for AI coding agents. CLI + MCP + HTTP API (recordings-serve) + generated SDK. The server's data backend is selected by the environment: a HASNA_RECORDINGS_DATABASE_URL selects postgresql, anything else serves from sqlite; on postgresql the serve process reads/writes that database directly with API-key auth via @hasna/contracts. The client has exactly two stores — on-box sqlite, or the server's /v1 HTTP API selected by the @hasna/contracts resolver — and never opens Postgres. The on-box file is reachable only through the explicit HASNA_RECORDINGS_LOCAL=1 opt-in; hosted mode with no resolvable credential fails closed (REMOTE_API_* non-zero exit, no fallback).",
   "bins": [
     "recordings",
     "recordings-mcp",
@@ -91,8 +91,9 @@
       "auth": "api-key"
     },
     "client": {
-      "apiUrlEnv": "RECORDINGS_API_URL",
-      "apiKeyEnv": "RECORDINGS_API_KEY"
+      "apiUrlEnv": "HASNA_RECORDINGS_API_URL",
+      "apiKeyEnv": "HASNA_RECORDINGS_API_KEY",
+      "localOptInEnv": "HASNA_RECORDINGS_LOCAL"
     }
   }
 }

@@ -4,9 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   clearKnowledgeAuth,
+  clearKnowledgeCredentials,
   knowledgeAuthStatus,
+  knowledgeCredentialsPath,
   normalizeKnowledgeApiOrigin,
   resolveKnowledgeApiUrl,
+  saveKnowledgeCredentials,
 } from '../src/auth';
 import { createKnowledgeService } from '../src/service';
 import { defaultKnowledgeConfig, projectKnowledgeHome, writeKnowledgeConfig } from '../src/workspace';
@@ -98,12 +101,14 @@ describe('API environment and server contracts', () => {
     }
   });
 
-  test('stores auth locally, lets env credentials win, and clears credentials', () => {
+  test('stores auth in the canonical credentials file; disk outranks env; clearing re-exposes env', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-hosted-auth-'));
-    const authDir = join(dir, 'auth');
-    const env = { HASNA_KNOWLEDGE_AUTH_DIR: authDir };
+    const home = mkdtempSync(join(tmpdir(), 'ok-hosted-auth-home-'));
     const service = createKnowledgeService({ scope: 'project', cwd: dir });
     service.setup();
+
+    const env: Record<string, string | undefined> = { HOME: home, USERPROFILE: home };
+    const credentialsPath = knowledgeCredentialsPath(env);
 
     expect(knowledgeAuthStatus(env).authenticated).toBe(false);
     const auth = service.saveAuth({
@@ -115,28 +120,44 @@ describe('API environment and server contracts', () => {
       userId: 'user_123',
     }, env);
     expect(auth.api_url).toBe('https://knowledge.example.com');
-    expect(existsSync(join(authDir, 'auth.json'))).toBe(true);
+    // The login lands on the shared chain's DISK tier — the canonical
+    // credentials file — so `auth whoami` right after a login probes through
+    // the very file the resolver reads.
+    expect(existsSync(credentialsPath)).toBe(true);
 
     const status = service.authStatus(env);
     expect(status).toMatchObject({
       authenticated: true,
       source: 'file',
-      email: 'agent@example.com',
-      org_slug: 'hasna',
+      // The canonical file format carries no email/org metadata; the retired
+      // auth.json is never consulted.
+      email: null,
+      org_slug: null,
       api_url: 'https://knowledge.example.com',
+      auth_path: credentialsPath,
     });
 
+    // The disk tier outranks the shell export by design (a rotated on-disk
+    // key beats a stale export), so an env key added on top does NOT dethrone
+    // the file. The authority ladder is independent: the env URL still wins.
     const envStatus = service.authStatus({ ...env, HASNA_KNOWLEDGE_API_KEY: 'kh_env', HASNA_KNOWLEDGE_API_URL: 'https://env.example.com/api/v1' });
     expect(envStatus).toMatchObject({
       authenticated: true,
-      source: 'env',
+      source: 'file',
       email: null,
       api_url: 'https://env.example.com',
     });
 
+    // Only after the file is cleared does the env credential answer.
     expect(service.clearAuth(env)).toBe(true);
+    expect(existsSync(credentialsPath)).toBe(false);
+    const afterClear = service.authStatus({ ...env, HASNA_KNOWLEDGE_API_KEY: 'kh_env', HASNA_KNOWLEDGE_API_URL: 'https://env.example.com/api/v1' });
+    expect(afterClear).toMatchObject({ authenticated: true, source: 'env', api_url: 'https://env.example.com' });
+    expect(saveKnowledgeCredentials({ api_key: 'kh_test' }, env)).toMatchObject({ api_key: 'kh_test' });
+    expect(clearKnowledgeCredentials(env)).toBe(true);
     expect(clearKnowledgeAuth(env)).toBe(false);
     expect(service.authStatus(env).authenticated).toBe(false);
+    rmSync(home, { recursive: true, force: true });
   });
 
   test('normalizes API origins to the bare https origin', () => {

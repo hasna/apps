@@ -9,6 +9,7 @@ import {
   type TransportKind,
 } from "./index.js";
 import { parseFilterOptions } from "./filter-options.js";
+import { webhookTargetPolicyFromEnv } from "./cli-webhook-policy.js";
 
 type CommanderLike = any;
 type CommanderCommandLike = any;
@@ -58,7 +59,7 @@ function parseHeaders(values: string[] | undefined): Record<string, string> | un
 
 function createClient(options: RegisterEventsCommandsOptions): EventsClient {
   if (options.createClient) return options.createClient();
-  return new EventsClient({ store: new JsonEventsStore(options.dataDir) });
+  return new EventsClient({ store: new JsonEventsStore(options.dataDir), webhookTargetPolicy: webhookTargetPolicyFromEnv() });
 }
 
 function print(value: unknown, json: boolean, text: string): void {
@@ -242,6 +243,7 @@ export function registerChannelCommands(program: CommanderLike, options: Registe
           metadata: parseJsonObject(actionOptions.metadata, {}),
         }, { honorFilters: actionOptions.honorFilters });
         print(result, json, `${result.status}: ${result.channelId}`);
+        if (result.status === "failed") process.exitCode = 1;
       } catch (error) {
         fail(error, json);
       }

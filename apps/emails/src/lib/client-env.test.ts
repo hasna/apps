@@ -3,7 +3,6 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  CLIENT_ENV_REQUIRED_KEYS,
   EMAILS_CLIENT_ENV_SECRET_ENV,
   EMAILS_IDP_TOKEN_ENV,
   EMAILS_SESSION_TOKEN_ENV,
@@ -76,7 +75,7 @@ function installCapturingSecretsCommand(): string {
 ENV_PATH=${JSON.stringify(envPath)}
 env | sort > "$ENV_PATH"
 if [ "$1" = "get" ] && [ "$2" = "hasna/test/opensource/emails/prod/client-env" ]; then
-  printf '%s\\n' '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid","EMAILS_SELF_HOSTED_API_KEY":"loaded-client-key"}'
+  printf '%s\\n' '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid","EMAILS_SELF_HOSTED_API_KEY":"loaded-client-key","EMAILS_SESSION_TOKEN":"loaded-session-token"}'
   exit 0
 fi
 exit 2
@@ -198,22 +197,18 @@ describe("Emails client-env loader", () => {
     expect(message).not.toContain(process.env[EMAILS_CLIENT_ENV_SECRET_ENV]!);
   });
 
-  it("does not echo client-env input when the loaded entry is incomplete", () => {
-    installStaticSecretsCommand("{}");
+  it("does not echo client-env input when the loaded entry is unreadable", () => {
+    // A malformed entry delivers no principals and never contaminates the environment
+    // with anything the `secrets` child produced or echoed.
+    installStaticSecretsCommand('{"""broken');
     const sentinel = "OPE105_00301_INCOMPLETE_SENTINEL";
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = JSON.stringify({ fixture: sentinel });
 
-    let message = "";
-    try {
-      loadEmailsClientEnvSecret();
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
+    const loaded = loadEmailsClientEnvSecret();
 
-    expect(message).toContain("EMAILS_CLIENT_ENV_SECRET loaded from the secrets vault");
-    expect(message).toContain(`missing ${CLIENT_ENV_REQUIRED_KEYS[0]}`);
-    expect(message).not.toContain(sentinel);
-    expect(message).not.toContain(process.env[EMAILS_CLIENT_ENV_SECRET_ENV]!);
+    expect(loaded.ready).toBe(true);
+    expect(process.env[EMAILS_SESSION_TOKEN_ENV]).toBeUndefined();
+    expect(process.env[EMAILS_IDP_TOKEN_ENV]).toBeUndefined();
   });
 
   it("runs secrets get with a scrubbed environment", () => {
@@ -242,10 +237,13 @@ describe("Emails client-env loader", () => {
       loaded: true,
       ready: true,
     });
-    // The vault entry expands ONLY the canonical API settings — the retired
-    // deployment-mode variable is never merged into the environment.
-    expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBe("https://emails.example.invalid");
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe("loaded-client-key");
+    // The vault entry expands ONLY the app's own principals — the legacy URL and
+    // API-key fields now resolve through the shared credential resolver instead of
+    // being delivered by this loader (hasna/apps#1720). A pre-existing operator
+    // value stays untouched.
+    expect(process.env["EMAILS_SESSION_TOKEN"]).toBe("loaded-session-token");
+    expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBeUndefined();
+    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe("stale-self-hosted-key-must-not-pass");
 
     const childEnvKeys = new Set(
       readFileSync(envPath, "utf8")
@@ -286,6 +284,10 @@ describe("Emails client-env loader", () => {
 
     expect(loaded.ready).toBe(true);
     expect(process.env[EMAILS_SESSION_TOKEN_ENV]).toBe("emss_from_vault");
+    // The legacy URL/key fields stay in the entry but are NOT merged: the shared
+    // resolver owns the authority and the operator key now.
+    expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBeUndefined();
+    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBeUndefined();
   });
 
   it("accepts a session-token-only vault entry (no API key required)", () => {
@@ -322,16 +324,21 @@ describe("Emails client-env loader", () => {
     expect(process.env[EMAILS_SESSION_TOKEN_ENV]).toBeUndefined();
   });
 
-  it("fails loud when the vault entry carries NO credential of any kind", () => {
+  it("accepts a vault entry that no longer carries the legacy URL/key fields", () => {
+    // Existing vault entries still carry EMAILS_SELF_HOSTED_URL /
+    // EMAILS_SELF_HOSTED_API_KEY. They are no longer REQUIRED and are never merged:
+    // the shared credential resolver owns the authority and the operator key now
+    // (hasna/apps#1720), so such an entry simply delivers no principals and is ready.
     installStaticSecretsCommand(
       '{"EMAILS_SELF_HOSTED_URL":"https://emails.example.invalid"}',
     );
     process.env[EMAILS_CLIENT_ENV_SECRET_ENV] = "hasna/test/opensource/emails/prod/client-env";
 
-    // The refusal is typed and names every accepted credential setting — never an
-    // empty success, and never a message missing the identity token.
-    expect(() => loadEmailsClientEnvSecret()).toThrow("EMAILS_SELF_HOSTED_API_KEY or EMAILS_SESSION_TOKEN");
-    expect(() => loadEmailsClientEnvSecret()).toThrow(EMAILS_IDP_TOKEN_ENV);
+    const loaded = loadEmailsClientEnvSecret();
+
+    expect(loaded.ready).toBe(true);
+    expect(process.env[EMAILS_SESSION_TOKEN_ENV]).toBeUndefined();
+    expect(process.env["EMAILS_SELF_HOSTED_URL"]).toBeUndefined();
   });
 
   it("persists a session token into env and merges it into the vault entry", () => {
@@ -378,8 +385,7 @@ describe("Emails client-env loader", () => {
     // Canonical API settings only: the vault entry contract has no mode word any
     // more, and an entry that still carries one is refused at load.
     const guardedEntry = JSON.stringify({
-      EMAILS_SELF_HOSTED_URL: "https://emails.example.invalid",
-      EMAILS_SELF_HOSTED_API_KEY: "guarded-client-key",
+      EMAILS_SESSION_TOKEN: "guarded-session-token",
     });
     writeFileSync(bin, `#!/bin/sh
 if [ "$1" = "get" ]; then
@@ -399,7 +405,7 @@ exit 2
     const loaded = loadEmailsClientEnvSecret();
 
     expect(loaded.ready).toBe(true);
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe("guarded-client-key");
+    expect(process.env["EMAILS_SESSION_TOKEN"]).toBe("guarded-session-token");
   });
 
   it("falls back to the legacy argv `set` when the installed secrets predates --stdin", () => {
@@ -517,7 +523,7 @@ exit 2
     const loaded = loadEmailsClientEnvSecret();
 
     expect(loaded.ready).toBe(true);
-    expect(process.env["EMAILS_SELF_HOSTED_API_KEY"]).toBe("loaded-client-key");
+    expect(process.env["EMAILS_SESSION_TOKEN"]).toBe("loaded-session-token");
 
     const childEnvKeys = new Set(
       readFileSync(envPath, "utf8")

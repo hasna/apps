@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ApiStore } from "./api-store.js";
 import { DEFAULT_READ_LIMIT } from "../message-window.js";
-import type { HasnaStorageClient } from "../contracts-client/storage.js";
+import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import type { MessagePreview } from "../../types.js";
 
 // A minimal fake HasnaStorageClient whose transport returns whatever the test

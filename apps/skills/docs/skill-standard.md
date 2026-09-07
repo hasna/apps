@@ -298,6 +298,7 @@ them alone by design. Adoption is the migration mode for that population:
 ```bash
 skills sync --adopt             # dry-run: hash unmarked home skills vs the corpus
 skills sync --adopt --apply     # write markers for exact matches; ledger the rest
+skills sync my-skill --adopt --for codex --source ./skills --apply
 ```
 
 Each unmarked home skill's `SKILL.md` is hashed (line endings normalized,
@@ -312,6 +313,26 @@ Each unmarked home skill's `SKILL.md` is hashed (line endings normalized,
 Every written marker is listed in a rollback record under
 `~/.hasna/skills/rollback/`. Nothing is ever deleted by adoption.
 
+### Managed home ownership
+
+Ordinary sync updates an existing directory only when its regular
+`.hasna-skills.json` sidecar contains `managedBy: "@hasna/skills"`. Missing,
+foreign or malformed markers leave the directory unmanaged. A directory with
+`SKILL.md` can still be explicitly replaced using `skills sync --force`;
+an unmanaged directory without `SKILL.md` is always preserved. Preview mode
+uses the same ownership decision and writes nothing.
+
+The library's `removeManagedAgentSkill` and `removeSkillForAgent` follow the same
+exact-owner check, including project and global agent installs. They return
+`false` and preserve a directory without valid Skills ownership; neither has a
+force override.
+
+Remote tombstones also preserve directories without exact Skills ownership.
+Registry reconciliation accepts a marker's baseline hash and version only when
+that same marker names the Skills owner. Foreign or invalid markers cannot choose
+which divergent copy wins; the existing conflict policy and explicit overrides
+still apply.
+
 ### Home drift census
 
 ```bash
@@ -324,5 +345,12 @@ Compares each existing agent home against the canonical corpus and lists
 candidates, not drift. `skills diff <name>` and `skills outdated` use the same
 home-vs-canonical comparison; the pinned-skill version comparison remains as a
 subset. `skills sync --prune [--apply]` removes only marked-and-stray dirs,
-recording each removal in the rollback store before it happens.
-
+recording each removal in the rollback store before it happens. Adoption and
+prune honor `--source` (then `$SKILLS_SOURCE`, then the installed cache), `--for`
+and optional skill names. Names are normalized and must exist in the selected
+corpus or selected agent homes; a stale prune target need not exist in the corpus.
+Invalid selections fail before any apply write. Prune requires the marker
+`managedBy` to be exactly `@hasna/skills`; another tool's marker never grants
+deletion authority. Adoption also leaves every already-marked directory alone.
+Rollback records contain identities, hashes and markers, not backups of removed
+file content.

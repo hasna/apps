@@ -36,7 +36,14 @@ describe("resolveAttachmentsV1", () => {
     if (r.transport === "cloud-http") expect(r.store.baseUrl).toBe(`${BASE}/v1`);
   });
 
-  test("rejects a surviving local selector", () => { expect(() => resolveAttachmentsV1({ ...cloudEnv, HASNA_ATTACHMENTS_STORAGE_MODE: "local" })).toThrow(); });
+  test("mode/storage selectors are inert — the resolver ignores retired switches", () => {
+    // The app's own `*_MODE` / `*_STORAGE_MODE` switches are stripped from the
+    // chain: they select nothing, block nothing, and never route to a local
+    // store. The resolver decides the transport by what RESOLVES.
+    const r = resolveAttachmentsV1({ ...cloudEnv, HASNA_ATTACHMENTS_STORAGE_MODE: "local", HASNA_ATTACHMENTS_MODE: "local", ATTACHMENTS_MODE: "local" });
+    expect(r.transport).toBe("cloud-http");
+    if (r.transport === "cloud-http") expect(r.store.baseUrl).toBe(`${BASE}/v1`);
+  });
 
   test("list routes GET /v1/attachments with bearer key and maps the envelope", async () => {
     const { calls, fetchImpl } = mockFetch(() => ({

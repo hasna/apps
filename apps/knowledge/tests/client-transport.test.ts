@@ -18,7 +18,7 @@ import {
   KNOWLEDGE_API_KEY_ENV,
   KNOWLEDGE_API_URL_ENV,
   KNOWLEDGE_DEFAULT_API_URL,
-  RETIRED_KNOWLEDGE_LOCAL_ENV,
+  KNOWLEDGE_LOCAL_OPT_IN_ENV,
   RetiredKnowledgeStorageSelectorError,
   resetKnowledgeLocalModeNotice,
   resolveKnowledgeClientTransport,
@@ -163,26 +163,72 @@ describe('Knowledge client transport', () => {
     }
   });
 
-  test('nothing configured anywhere selects the on-box store and says so once', () => {
+  test('hosted with NO credential anywhere FAILS CLOSED: no sqlite, no fallback event', () => {
+    // Nothing at all configured — not even an authority — is still a hosted
+    // process with no credential. It exits non-zero; the on-box store is not
+    // a default the resolver can drop onto.
     const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const report = resolveKnowledgeClientTransport({});
+      let caught: unknown;
+      try {
+        resolveKnowledgeClientTransport({});
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect(String(caught)).toMatch(/no API key could be resolved/);
+      expect(String(caught)).toMatch(/no local fallback/);
+      expect(String(caught)).toContain(`${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1`);
+      // No local-mode announcement, no fallback notice: the failure is loud
+      // and it is the only thing that is loud.
+      expect(errSpy).not.toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  test('the explicit local opt-in selects the on-box store and says "local" once on stderr', () => {
+    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const report = resolveKnowledgeClientTransport({ [KNOWLEDGE_LOCAL_OPT_IN_ENV]: '1' });
       expect(report).toMatchObject({
         transport: 'sqlite',
-        source: 'local',
+        source: 'local-opt-in',
         base_url: null,
         api_url_present: false,
         api_key_present: false,
         api_key_tier: null,
+        local_opt_in_present: true,
       });
-      // Local is legitimate for this package, but never silent — and never
-      // repeated, because the resolver is consulted many times per command.
-      resolveKnowledgeClientTransport({});
+      // Local is legitimate for this package, but ONLY by explicit opt-in, and
+      // never silent — and never repeated, because the resolver is consulted
+      // many times per command.
+      resolveKnowledgeClientTransport({ [KNOWLEDGE_LOCAL_OPT_IN_ENV]: '1' });
       expect(errSpy).toHaveBeenCalledTimes(1);
-      expect(String(errSpy.mock.calls[0]?.[0])).toMatch(/using the on-box store \(local mode\)/);
+      expect(String(errSpy.mock.calls[0]?.[0])).toMatch(/local mode/);
+      expect(String(errSpy.mock.calls[0]?.[0])).toContain('HASNA_KNOWLEDGE_LOCAL');
     } finally {
       errSpy.mockRestore();
     }
+  });
+
+  test('a configured authority outranks the local opt-in: half-configured still fails closed', () => {
+    // A run that names an authority goes hosted: a stale opt-in must not
+    // quietly serve a different dataset because the credential half broke.
+    expect(() => resolveKnowledgeClientTransport({
+      [KNOWLEDGE_LOCAL_OPT_IN_ENV]: '1',
+      [KNOWLEDGE_API_URL_ENV]: 'https://knowledge.example.test',
+    })).toThrow(/no API key could be resolved/);
+    // ... and a FULL configured pair goes hosted, with the opt-in reported as
+    // present but overridden.
+    expect(resolveKnowledgeClientTransport({
+      [KNOWLEDGE_LOCAL_OPT_IN_ENV]: '1',
+      [KNOWLEDGE_API_URL_ENV]: 'https://knowledge.example.test',
+      [KNOWLEDGE_API_KEY_ENV]: 'test-only-key',
+    })).toMatchObject({
+      transport: 'http',
+      local_opt_in_present: true,
+    });
   });
 
   test('a Keychain item that exists but cannot be read is never resolved around', () => {
@@ -228,28 +274,24 @@ describe('Knowledge client transport', () => {
     }) as NodeJS.ProcessEnv;
     const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      expect(resolveKnowledgeClientTransport(env)).toMatchObject({ transport: 'sqlite', source: 'local' });
+      // Inherited props are not a configuration and not an opt-in: this fails
+      // closed rather than reading them.
+      expect(() => resolveKnowledgeClientTransport(env)).toThrow(/no API key could be resolved/);
+      // The same env with an OWN opt-in selects the on-box store.
+      Object.defineProperty(env, KNOWLEDGE_LOCAL_OPT_IN_ENV, { value: '1', enumerable: true });
+      expect(resolveKnowledgeClientTransport(env)).toMatchObject({ transport: 'sqlite', source: 'local-opt-in' });
     } finally {
       errSpy.mockRestore();
     }
   });
 
-  test('the retired local opt-in is accepted, ignored, and reported', () => {
-    // It could only ever have selected the on-box store, which is now what
-    // happens when nothing resolves — so a stale station fragment lands on the
-    // transport it asked for instead of failing. It never downgrades a
-    // resolved credential.
-    const errSpy = spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      expect(resolveKnowledgeClientTransport({ [RETIRED_KNOWLEDGE_LOCAL_ENV]: '1' }))
-        .toMatchObject({ transport: 'sqlite', legacy_local_opt_in_present: true });
-    } finally {
-      errSpy.mockRestore();
-    }
+  test('the explicit local opt-in never downgrades a resolved credential', () => {
+    // The opt-in answers only when the environment configures no authority:
+    // with a key present the run goes hosted and the opt-in is reported.
     expect(resolveKnowledgeClientTransport({
-      [RETIRED_KNOWLEDGE_LOCAL_ENV]: '1',
+      [KNOWLEDGE_LOCAL_OPT_IN_ENV]: '1',
       [KNOWLEDGE_API_KEY_ENV]: 'test-only-key',
-    })).toMatchObject({ transport: 'http', legacy_local_opt_in_present: true });
+    })).toMatchObject({ transport: 'http', local_opt_in_present: true });
   });
 
   test('retired selector fails loudly even when blank', () => {
@@ -269,12 +311,21 @@ describe('Knowledge client transport', () => {
 
   test('the Keychain tier is off while the outbound network guard is armed', () => {
     // A test process must never adopt the developer's station credential: the
-    // guard that refuses non-loopback egress also closes tier 3.
+    // guard that refuses non-loopback egress also closes tier 3. The opt-in
+    // keeps the transport on-box while the guard is measured.
     const keychain = fakeKeychain({ [KEYCHAIN_KEY_SERVICE]: 'keychain-only-key' });
     const errSpy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      const report = resolveKnowledgeClientTransport({ NODE_ENV: 'test', HASNA_STATION: 'station-test' });
-      expect(report).toMatchObject({ transport: 'sqlite', keychain_tier_enabled: false, network_guard_active: true });
+      const report = resolveKnowledgeClientTransport({
+        NODE_ENV: 'test',
+        HASNA_STATION: 'station-test',
+        [KNOWLEDGE_LOCAL_OPT_IN_ENV]: '1',
+      });
+      expect(report).toMatchObject({
+        transport: 'sqlite',
+        keychain_tier_enabled: false,
+        network_guard_active: true,
+      });
       expect(keychain.calls).toHaveLength(0);
     } finally {
       errSpy.mockRestore();

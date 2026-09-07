@@ -10,8 +10,10 @@ It ships with no endpoint of its own: the authority comes from the shared
 @hasna/contracts client ladder — `HASNA_SKILLS_API_URL`, the macOS Keychain
 `api-url` item, `~/.hasna/skills/config/credentials`, then the fleet gateway once
 a credential has resolved. An operator naming their own instance writes it with
-`skills setup --api-url <origin>`. That API path is explicit configuration, not a
-dependency of local-only use, and an install with no credential never sends
+`skills setup --api-url <origin>`. That API path is explicit configuration, and
+the on-machine run is explicit too — the deliberate opt-in `HASNA_SKILLS_LOCAL=1`:
+an install with no credential and no opt-in fails closed (non-zero exit, no local
+database, no local-fallback event) and an install with no credential never sends
 anything anywhere.
 
 ## Target Users
@@ -27,8 +29,9 @@ anything anywhere.
 ## Core Use Cases
 
 - Browse, search, inspect, and pin bundled skills from the CLI or MCP.
-- Run free or explicitly local skills on the user's machine.
-- Point the CLI at a compatible API origin, or at nothing and stay local-only.
+- Run free or explicitly local skills on the user's machine (with the deliberate
+  `HASNA_SKILLS_LOCAL=1` opt-in when nothing else is configured).
+- Point the CLI at a compatible API origin, or at the opt-in and stay local-only.
 - Submit server-executed skills to the API when the skill contract says execution
   is server-owned.
 - Export machine-readable registry, MCP, config, quote, run, and validation

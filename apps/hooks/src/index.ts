@@ -297,13 +297,20 @@ export {
   getHooksDataDir,
   getCustomHooksDir,
   getLockPath,
-  getConfigPath,
-  readConfig,
-  writeConfig,
-  resolveApiUrl,
-  resolveApiKey,
 } from "./config.js";
-export type { HooksConfig } from "./config.js";
+
+export {
+  resolveHooksTransport,
+  resolveHooksServePublishKey,
+  hooksRegistryOrigin,
+  type HooksRemoteAuthority,
+  type HooksCredentialOptions,
+  type HooksTransportMode,
+  type HooksTransportNotice,
+  type HooksTransportOptions,
+  type HooksTransportResolution,
+} from "./lib/transport.js";
+export type { HooksLocalOptInEnv } from "./lib/resolver-types.js";
 
 export {
   getHookRecord,

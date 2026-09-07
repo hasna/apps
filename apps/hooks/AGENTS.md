@@ -6,6 +6,24 @@ Guidance for AI agents working with this repository.
 
 This is `@hasna/hooks`, an open-source monorepo of Claude Code hooks providing CLI installation and management of 15+ lifecycle hooks.
 
+## Credential chain (2026-09-04 adoption, hasna/apps#1720)
+
+The registry authority and its credential resolve through the ONE
+`@hasna/contracts` client resolver (`src/lib/transport.ts` / `local-opt-in.ts`),
+fresh on every call, as a STRICT pair — a URL without a key is a refusal, and a
+key alone resolves the fleet gateway. Order: an explicit argument, then
+`HASNA_HOOKS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_HOOKS_API_KEY_REF`,
+the macOS Keychain `hasna.credentials.hooks.api-key` / `.api-url`, disk
+`~/.hasna/hooks/config/credentials`, then `HASNA_HOOKS_API_URL` /
+`HASNA_HOOKS_API_KEY`. Retired and never read: `~/.hasna/fleet-env`,
+`~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME`,
+`~/.hasna/hooks/config.json`, `HASNA_HOOKS_REGISTRY_URL` / `HOOKS_REGISTRY_URL`,
+and any `*_MODE` switch. Local mode is opt-in only (`HASNA_HOOKS_LOCAL=1`,
+alias `HOOKS_LOCAL=1`) and prints "LOCAL mode" on stderr once per process;
+without it, an unconfigured run fails closed. When touching resolution code,
+add hermetic tests (fake HOME / injected `security` runner) — see
+`src/lib/transport.test.ts`.
+
 ## Quick Commands
 
 ```bash

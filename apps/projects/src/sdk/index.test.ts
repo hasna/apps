@@ -142,6 +142,16 @@ describe("createProjectsClientFromEnv", () => {
     expect(() => createProjectsClientFromEnv({ HASNA_HOME: home })).toThrow(/0400 or 0600/);
   });
 
+  test("an explicit base URL with no apiKey still throws — the ambient fleet key is never attached to a named authority", () => {
+    // #1794: a caller that names the authority but provides no credential must
+    // not get a client that silently attaches the machine's fleet key. With a
+    // caller-built env the Keychain/disk tiers are out of scope, so the only
+    // thing that could authenticate this client is nothing — it throws.
+    expect(() =>
+      createProjectsClientFromEnv({}, { baseUrl: "https://projects.override.test" }),
+    ).toThrow(/no API key could be resolved/i);
+  });
+
   test("an explicit base URL still wins, and /v1 is appended by the generated routes", async () => {
     const { calls, fetchImpl } = captureFetch();
     const client = createProjectsClientFromEnv(

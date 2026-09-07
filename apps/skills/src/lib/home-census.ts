@@ -27,6 +27,7 @@ import {
 import { indexCanonicalCorpus, type AdoptionOptions } from "./home-adoption.js";
 import { resolveCorpusRoot } from "./home-migration.js";
 import { hashSkillMarkdownFile } from "./skill-hash.js";
+import { normalizePortableSkillName } from "./portable-skills.js";
 
 export type DriftKind = "missing-from-home" | "stray-in-home" | "diverged";
 
@@ -62,11 +63,20 @@ function sortEntries(entries: DriftEntry[]): DriftEntry[] {
   });
 }
 
-export function censusHomeDrift(options: AdoptionOptions = {}): DriftCensus {
+export function censusHomeDrift(options: AdoptionOptions & { names?: string[] } = {}): DriftCensus {
   const homeDir = options.homeDir ?? homedir();
   const corpusRoot = resolveCorpusRoot(options);
   const index = indexCanonicalCorpus(corpusRoot);
   const agents = options.agents?.length ? options.agents : [...SYNC_AGENTS];
+  const requested = options.names?.length
+    ? new Set(options.names.map(name => name.trim()).filter(Boolean).map(normalizePortableSkillName)) : undefined;
+  if (requested) {
+    // An unknown explicit selection must not silently report a clean census,
+    // including when the selected agent home does not exist yet.
+    for (const name of requested) {
+      if (!index.has(name)) throw new Error(`Skill '${name}' not found in this machine's corpus`);
+    }
+  }
 
   const entries: DriftEntry[] = [];
   let unmarked = 0;
@@ -87,6 +97,7 @@ export function censusHomeDrift(options: AdoptionOptions = {}): DriftCensus {
     }
     for (const skill of dirEntries.sort()) {
       if (skill.startsWith(".")) continue;
+      if (requested && !requested.has(skill)) continue;
       const dir = join(home, skill);
       try {
         if (!statSync(dir).isDirectory()) continue;
@@ -136,6 +147,7 @@ export function censusHomeDrift(options: AdoptionOptions = {}): DriftCensus {
     }
 
     for (const [name, canonicalHash] of index) {
+      if (requested && !requested.has(name)) continue;
       if (!present.has(name)) {
         entries.push({
           agent,

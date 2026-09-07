@@ -8,6 +8,7 @@
 // MailboxCounts / MessageBody / …) so callers stay independent of the backend.
 
 import { getClientMode, type ClientMode } from "./mode.js";
+import { noticeLocalEmailsMode } from "./local-notice.js";
 import { getDatabase, resolvePartialIdOrThrow } from "../db/database.js";
 import { sqlEmailAddress } from "../db/email-address-sql.js";
 import { SelfHostedMailDataSource, resolveSelfHostedMailDataSource } from "./self-hosted-mail-data-source.js";
@@ -607,12 +608,14 @@ export function resolveMailDataSource(opts: ResolveMailDataSourceOptions = {}): 
     const selfHosted = opts.selfHosted ?? resolveSelfHostedMailDataSource();
     if (!selfHosted) {
       throw new Error(
-        "Emails self-hosted mode requires EMAILS_SELF_HOSTED_URL and EMAILS_SELF_HOSTED_API_KEY " +
-          "(or EMAILS_CLIENT_ENV_SECRET). No hosted endpoint is inferred.",
+        "Emails self-hosted mode requires the hosted API configuration resolved by the shared " +
+          "credential resolver (HASNA_EMAILS_API_URL / HASNA_EMAILS_API_KEY or the legacy " +
+          "EMAILS_SELF_HOSTED_URL / EMAILS_SELF_HOSTED_API_KEY aliases). No hosted endpoint is inferred.",
       );
     }
     source = selfHosted;
   } else {
+    if (!opts.mode && !opts.selfHosted) noticeLocalEmailsMode();
     source = new SqliteMailDataSource();
   }
   if (!override) memoized = { mode, source };

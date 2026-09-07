@@ -19,6 +19,8 @@ const envKeys = [
   'ACCOUNTS_STORAGE_MODE',
   'HASNA_ACCOUNTS_MODE',
   'ACCOUNTS_MODE',
+  'HOME',
+  'HASNA_HOME',
 ] as const
 const originalEnv = new Map<string, string | undefined>()
 const originalFetch = globalThis.fetch
@@ -34,6 +36,12 @@ function makeRoot(): string {
 beforeEach(() => {
   globalThis.fetch = originalFetch
   for (const key of envKeys) delete process.env[key]
+  // The @hasna/contracts accounts chain reads `~/.hasna/accounts/config/credentials`
+  // under HOME / HASNA_HOME, and a station that already received a real
+  // credentials file must not outrank the fixture env: anchor both roots at an
+  // empty temp dir so the resolver's disk tier performs no read.
+  process.env['HOME'] = makeRoot()
+  process.env['HASNA_HOME'] = makeRoot()
 })
 
 afterEach(() => {

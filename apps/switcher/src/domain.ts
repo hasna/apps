@@ -1,8 +1,12 @@
 import { z } from "zod";
+import { modelPolicySchema, routingEventsSchema, type ModelPolicy, type RoutingEvent } from "./model-policy-schema";
+export { modelPolicySchema, routingEventSchema, routingEventsSchema } from "./model-policy-schema";
+export type { ModelPolicy, RoutingEvent } from "./model-policy-schema";
+export type { AuthStyle } from "./auth";
 
-export const VERSION = "0.1.0";
-export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode2"]);
-export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat"]);
+export const VERSION = "0.1.3";
+export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "aider", "kilo"]);
+export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat", "gemini-generate-content"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
 const label = z.string().min(1).max(200);
 const envRef = z.string().regex(/^SWITCHER_PROVIDER_[A-Z0-9_]+$/);
@@ -19,39 +23,64 @@ const urlSchema = z.string().max(2000).superRefine((v, ctx) => {
 }).transform(endpoint);
 export const modelSchema = z.object({
   id: z.string().min(1).max(300), name: label, description: z.string().max(8000).optional(),
+  available: z.boolean().optional(),
   contextWindow: z.number().int().positive().optional(), maxOutputTokens: z.number().int().positive().optional(),
   inputModalities: z.array(z.string().max(50)).max(20).optional(),
   outputModalities: z.array(z.string().max(50)).max(20).optional(),
   supportedParameters: z.array(z.string().max(100)).max(100).optional(),
+  supportedGenerationMethods: z.array(z.string().min(1).max(100)).max(100).optional(),
 }).strict();
 export const providerInputSchema = z.object({
   id: idSchema, name: label, baseUrl: urlSchema, protocol: protocolSchema,
   credentialEnv: envRef.optional(),
-  authStyle: z.enum(["bearer", "x-api-key"]).default("bearer"),
+  authStyle: z.enum(["bearer", "x-api-key", "api-key"]).default("bearer"),
+  catalogBaseUrl: urlSchema.optional(),
+  catalogFormat: z.enum(["openai", "ollama", "mistral", "together", "fireworks", "dashscope", "gemini", "none"]).optional(),
+  catalogAuthStyle: z.enum(["bearer", "x-api-key", "api-key", "none"]).optional(),
+  catalogCredentialEnv: envRef.optional(),
+  catalogAccountId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).optional(),
   modelsPath: z.string().regex(/^[a-zA-Z0-9_/-]+$/).max(200).default("models"),
   manualModels: z.array(modelSchema).max(10000).default([]),
 }).strict().refine(p => !p.modelsPath.split("/").includes("..") && !p.modelsPath.startsWith("/"), "modelsPath must be relative");
+export const providerPresetSchema = z.object({
+  id: idSchema, name: label, credentialEnv: envRef.optional(),
+  credentialAliases: z.array(z.string().regex(/^[A-Z][A-Z0-9_]+$/)),
+  protocols: z.array(z.object({
+    protocol: protocolSchema, baseUrl: urlSchema.optional(),
+    authStyle: z.enum(["bearer", "x-api-key", "api-key"]),
+    catalogBaseUrl: urlSchema.optional(), catalogFormat: z.enum(["openai", "ollama", "mistral", "together", "fireworks", "dashscope", "gemini", "none"]),
+    catalogAuthStyle: z.enum(["bearer", "x-api-key", "api-key", "none"]).optional(),
+    modelsPath: z.string(), notes: z.array(z.string()),
+  }).strict()).min(1),
+  sources: z.array(z.string().url()), verification: z.literal("documented"),
+}).strict();
+export type ProviderPreset = z.infer<typeof providerPresetSchema>;
 export const profileInputSchema = z.object({
   id: idSchema, name: label, providerId: idSchema, harness: harnessSchema,
-  model: z.string().min(1).max(300),
+  model: z.string().min(1).max(300), modelPolicy: modelPolicySchema.optional(),
 }).strict();
 export const runInputSchema = z.object({
-  profileId: idSchema, harness: harnessSchema, model: z.string().min(1).max(300), planToken:z.string().regex(/^[a-f0-9]{64}$/),
+  modelPolicyVersion:z.literal(1),
+  profileId: idSchema, harness: harnessSchema, model: z.string().min(1).max(300), modelPolicy: modelPolicySchema.optional(), planToken:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 export const runUpdateSchema = z.object({
   status: z.enum(["exited", "failed", "interrupted"]),
   exitCode: z.number().int().min(0).max(255),
+  routingEvents: routingEventsSchema.optional(), routingEventsDropped: z.number().int().min(0).max(1000000).optional(),
 }).strict();
 export type ProviderInput = z.input<typeof providerInputSchema>;
 export type Provider = z.output<typeof providerInputSchema> & {version: number; updatedAt: string};
 export type ProfileInput = z.infer<typeof profileInputSchema>;
 export type Profile = ProfileInput & {version: number; updatedAt: string};
 export type Model = z.infer<typeof modelSchema>;
-export type Run = z.infer<typeof runInputSchema> & {providerId:string;providerVersion:number;profileVersion:number;id: string; status: "running"|"exited"|"failed"|"interrupted"; startedAt: string; endedAt?: string; exitCode?: number; version: number; updatedAt: string};
+export type Run = Omit<z.infer<typeof runInputSchema>,"modelPolicyVersion"> & {modelPolicyVersion?:1;providerId:string;providerVersion:number;profileVersion:number;id: string; status: "running"|"exited"|"failed"|"interrupted"; startedAt: string; endedAt?: string; exitCode?: number; routingEvents?:RoutingEvent[];routingEventsDropped?:number;version: number; updatedAt: string};
 export type Catalog = {models: Model[]; refreshedAt: string; source: "remote"|"manual"};
 export type LaunchPlan = {planToken:string; profile: Profile; provider: Provider; catalog: Catalog; warnings: string[]};
 export class Fault extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
+}
+export class CommandInterrupted extends Fault {
+  constructor(readonly exitCode: number, message: string) { super(499,"interrupted",message); }
 }
 export function parse<T>(schema: z.ZodType<T, any, any>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -59,9 +88,22 @@ export function parse<T>(schema: z.ZodType<T, any, any>, value: unknown): T {
   return result.data;
 }
 export function compatible(harness: Profile["harness"], protocol: Provider["protocol"]) {
-  return harness === "claude" ? protocol === "anthropic-messages" : harness === "codex" ? protocol === "openai-responses" : true;
+  if(harness === "claude") return protocol === "anthropic-messages";
+  if(harness === "codex") return protocol === "openai-responses";
+  if(harness === "gemini") return protocol === "gemini-generate-content";
+  if(protocol === "gemini-generate-content") return false;
+  return true;
+}
+export function validateHarnessProvider(harness: Profile["harness"], provider: Pick<Provider, "protocol" | "authStyle">): void {
+  if (!compatible(harness, provider.protocol))
+    throw new Fault(422, "protocol_mismatch", "Harness does not support this provider protocol.");
+  if (harness === "gemini" && provider.authStyle !== "x-api-key")
+    throw new Fault(422, "auth_mismatch", "Gemini CLI requires x-api-key authentication for its native generateContent protocol.");
 }
 export function codingEligible(model: Model): boolean {
-  return (!model.outputModalities || model.outputModalities.includes("text")) &&
+  return model.available !== false && (!model.supportedGenerationMethods || model.supportedGenerationMethods.includes("generateContent")) && (!model.outputModalities || model.outputModalities.includes("text")) &&
     (!model.supportedParameters || model.supportedParameters.includes("tools"));
+}
+export function harnessEligible(model:Model,harness:Profile["harness"]):boolean {
+  return harness==="aider"?model.available!==false&&(!model.supportedGenerationMethods||model.supportedGenerationMethods.includes("generateContent"))&&(!model.inputModalities||model.inputModalities.includes("text"))&&(!model.outputModalities||model.outputModalities.includes("text")):codingEligible(model);
 }

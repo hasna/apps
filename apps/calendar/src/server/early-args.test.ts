@@ -43,6 +43,15 @@ async function runServe(...args: string[]): Promise<{
     "CALENDAR_API_URL",
     "HASNA_CALENDAR_API_KEY",
     "CALENDAR_API_KEY",
+    "HASNA_CALENDAR_API_KEY_OVERRIDE",
+    "HASNA_CALENDAR_API_KEY_REF",
+    "HASNA_PROFILE",
+    "HASNA_CALENDAR_MODE",
+    "CALENDAR_MODE",
+    "HASNA_CALENDAR_STORAGE_MODE",
+    "CALENDAR_STORAGE_MODE",
+    "HASNA_CALENDAR_LOCAL",
+    "CALENDAR_LOCAL",
   ]) {
     delete env[key];
   }

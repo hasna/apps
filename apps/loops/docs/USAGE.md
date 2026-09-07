@@ -20,9 +20,13 @@ by `HASNA_LOOPS_DATABASE_URL`, with the embeddable `loops-api` contract shared
 by serve, SDK, and tests. This release exposes storage-backed `/v1` loop CRUD
 and run listing, runner claim/lease heartbeat/finalize foundations, and local
 migration previews. Durable runner registration is not exposed until the
-machine-record lifecycle is implemented. Control-plane clients require
-`HASNA_LOOPS_API_URL` plus `HASNA_LOOPS_API_KEY` before status can report
-ready.
+machine-record lifecycle is implemented. Control-plane clients resolve their
+credential through the shared `@hasna/contracts` resolver (macOS Keychain
+`hasna.credentials.loops.api-key`, the file
+`~/.hasna/loops/config/credentials`, or `HASNA_LOOPS_API_KEY`), with the fleet
+gateway defaulting the authority; the local file connection is the explicit
+`HASNA_LOOPS_CONNECTION=file` opt-in only, and an unconfigured invocation
+fails closed with a non-zero exit.
 
 `loops status` reports the storage backend and the client connection
 (`storage=sqlite|postgresql`, `connection=file|api`). Scheduler state is

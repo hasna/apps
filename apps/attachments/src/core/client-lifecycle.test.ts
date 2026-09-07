@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAttachmentsV1 } from "./cloud-v1";
-import { AttachmentsApiClient } from "../../sdk/src/generated";
+import { AttachmentsApiClient } from "../sdk/generated";
 
 describe("live credential lifecycle", () => {
   test("revalidates the pair before every operation, including binary downloads", async () => {
@@ -24,7 +24,7 @@ describe("live credential lifecycle", () => {
     let calls = 0;
     const client = resolveAttachmentsV1(env, { fetchImpl: (async () => { calls++; return Response.json([]); }) as typeof fetch }).store;
     env.ATTACHMENTS_API_KEY = "conflicting";
-    await expect(client.list()).rejects.toThrow("conflicting");
+    await expect(client.list()).rejects.toThrow(/disagree|conflicting/);
     delete env.ATTACHMENTS_API_KEY; env.HASNA_ATTACHMENTS_API_KEY = "";
     await expect(client.uploadBuffer("a", new Uint8Array())).rejects.toThrow();
     expect(calls).toBe(0);

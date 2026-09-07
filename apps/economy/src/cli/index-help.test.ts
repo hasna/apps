@@ -204,7 +204,9 @@ describe('economy CLI help', () => {
       expect(result.stdout).toContain('more rows hidden')
       expect(result.stdout).toContain('--verbose')
       expect(result.stdout).toContain('--json')
-      expect(result.stderr).toBe('')
+      // The explicit local opt-in announces itself on stderr (owner directive
+      // 2026-09-04): an unhosted run is never mistaken for a hosted one.
+      expect(result.stderr).toContain('local mode')
     }
 
     const jsonResult = await runCli(['breakdown', '--by', 'model', '--json'], env)
@@ -213,7 +215,7 @@ describe('economy CLI help', () => {
     expect(payload.by).toBe('model')
     expect(payload.total).toBe(25)
     expect(payload.rows).toHaveLength(25)
-    expect(jsonResult.stderr).toBe('')
+    expect(jsonResult.stderr).toContain('local mode')
   })
 
   test('documents Gemini as a billing sync provider', async () => {

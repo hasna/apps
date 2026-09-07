@@ -2,6 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Credential & transport resolution (adoption 2026-09-04, hasna/apps#1720)
+
+Every data surface — CLI, MCP server, `conversations-hook`, and the library
+`getStore()` — routes through `src/lib/store/index.ts`, which resolves the
+credential and the service authority through the ONE shared seam in
+`@hasna/contracts/client` (and `/client/storage`), fresh on every call. There
+is NO vendored resolver copy in this app: `src/lib/contracts-client/` was
+deleted. `src/lib/contracts-env.ts` holds the app-specific preamble — the
+explicit local opt-in (`HASNA_CONVERSATIONS_DB_PATH` /
+`CONVERSATIONS_DB_PATH`), the declared-but-blank normalisation that keeps the
+Keychain tier's ambient gate alive across a copy (#1788), and the once-per-
+process `LOCAL mode` stderr notice.
+
+Fail-closed rules that hold here: hosted with no resolvable credential →
+non-zero exit, no SQLite opened, no `*-local-fallback` event; local is ONLY the
+explicit DB_PATH opt-in and never a default; the resolver's failures are
+wrapped as `ConversationsStoreConfigError` so the CLI's error surface (and the
+`--json` error contract) stays one shape. The legacy `~/.hasna/fleet-env/`,
+`~/.hasna/cloud/`, `~/.config/hasna/` locations and `*_MODE` /
+`*_STORAGE_MODE` variables are inputs nowhere. Never re-introduce an app-owned
+credential read: route through the store.
+
 ## Build & Development Commands
 
 ```bash

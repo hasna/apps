@@ -7,9 +7,13 @@
  * tools — `register_agent` / `heartbeat` / `set_focus` / `list_agents` —
  * previously provided by the `@hasna/agent-registry` npm package. That package
  * was deleted entirely (owner directive 2026-09-03, hasna/apps#1529); this
- * module keeps the same tool names, schemas, and SQLite-backed persistence
- * (a dedicated `agent-registry.db` beside economy's own store, so the registry
- * survives restarts and is shared by every MCP process on the box).
+ * module keeps the same tool names and schemas. Persistence follows the
+ * client's storage lane: under the explicit local opt-in
+ * (`HASNA_ECONOMY_LOCAL=1`) the registry is a dedicated `agent-registry.db`
+ * beside economy's own store (survives restarts, shared by every MCP process
+ * on the box); a HOSTED client keeps it in memory, because a hosted station
+ * never writes a SQLite file under the app home (hasna/apps#1720). An explicit
+ * `HASNA_AGENT_REGISTRY_DB_PATH` names a file in either lane.
  *
  * The original implementation was built on the retired cloud storage kit; this
  * port uses bun:sqlite directly with the same table shape, active window
@@ -20,6 +24,7 @@ import { dirname, join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { z } from 'zod'
 import { getDataDir } from '../db/database.js'
+import { economyCloudStorage } from '../lib/cloud-storage.js'
 
 /**
  * Structural subset of @hasna/events' EventsClient that the registry emits
@@ -82,10 +87,22 @@ function envSessionId(): string | null {
   return envVar('SESSION_ID') ?? null
 }
 
-/** Dedicated registry file beside economy's data root; explicit env wins. */
+/** bun:sqlite's in-memory database: no file, process-local. */
+export const MEMORY_REGISTRY_PATH = ':memory:'
+
+/**
+ * Where the registry lives. An explicit `HASNA_AGENT_REGISTRY_DB_PATH` always
+ * wins. Otherwise the storage seam decides: a hosted client (a credential
+ * resolved through the @hasna/contracts chain) gets the in-memory registry —
+ * the app home stays free of SQLite files in hosted mode — and only the
+ * explicit local opt-in persists `agent-registry.db` beside economy's store.
+ * With neither, the seam throws its fail-closed error (the same one the
+ * server's own store raised at startup).
+ */
 export function resolveRegistryDbPath(): string {
   const explicit = process.env.HASNA_AGENT_REGISTRY_DB_PATH
   if (explicit && explicit.trim()) return explicit
+  if (economyCloudStorage().active) return MEMORY_REGISTRY_PATH
   return join(getDataDir(), 'agent-registry.db')
 }
 
@@ -101,7 +118,7 @@ class RegistryDb implements SqlLike {
   private db: Database;
 
   constructor(path: string) {
-    if (dirname(path) && !existsSync(dirname(path))) {
+    if (path !== MEMORY_REGISTRY_PATH && dirname(path) && !existsSync(dirname(path))) {
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
     }
     this.db = new Database(path);
@@ -499,7 +516,12 @@ export function registerAgentTools(
   },
   opts: RegisterAgentToolsOptions = {},
 ): void {
-  const db = opts.db ?? getDefaultStore()
+  // The store is resolved on FIRST USE, never at registration. buildServer()
+  // registers these tools at startup, and resolving the store here opened
+  // `agent-registry.db` under the app home before any tool was called — in
+  // hosted mode too, where no SQLite file may exist (hasna/apps#1720).
+  let resolved: SqlLike | undefined
+  const db = (): SqlLike => (resolved ??= opts.db ?? getDefaultStore())
   const events = opts.events
   const focus = opts.agentFocus
   const includeExtended = opts.includeExtendedTools ?? false
@@ -537,7 +559,7 @@ export function registerAgentTools(
           capabilities: args.capabilities,
           force: args.force,
         },
-        db,
+        db(),
       )
       if (isAgentConflict(result)) {
         await emitConflictEvent(events, result)
@@ -556,7 +578,7 @@ export function registerAgentTools(
       name: z.string().optional().describe('Agent name (alternative to agent_id)'),
     },
     async (args: { agent_id?: string; name?: string }) => {
-      const agent = heartbeat(args.agent_id ?? args.name, db)
+      const agent = heartbeat(args.agent_id ?? args.name, db())
       if (!agent)
         return errorText(`Agent not found: ${args.agent_id ?? args.name ?? '(none)'}`)
       await emitAgentEvent(events, 'agent.heartbeat', agent)
@@ -574,7 +596,7 @@ export function registerAgentTools(
     },
     async (args: { agent_id?: string; name?: string; project_id?: string }) => {
       const projectId = args.project_id ?? null
-      const agent = setFocus(args.agent_id ?? args.name, projectId, db)
+      const agent = setFocus(args.agent_id ?? args.name, projectId, db())
       if (!agent)
         return errorText(`Agent not found: ${args.agent_id ?? args.name ?? '(none)'}`)
       focus?.set(agent.id, { project_id: projectId })
@@ -593,7 +615,7 @@ export function registerAgentTools(
     async (args: { online_only?: boolean; include_archived?: boolean }) => {
       const agents = listAgents(
         { online_only: args.online_only, include_archived: args.include_archived },
-        db,
+        db(),
       )
       return jsonText(agents)
     },
@@ -608,7 +630,7 @@ export function registerAgentTools(
         name: z.string().optional(),
       },
       async (args: { agent_id?: string; name?: string }) => {
-        const agent = resolveAgent(args.agent_id ?? args.name, db)
+        const agent = resolveAgent(args.agent_id ?? args.name, db())
         if (!agent)
           return errorText(`Agent not found: ${args.agent_id ?? args.name ?? '(none)'}`)
         return jsonText({ agent_id: agent.id, project_id: agent.active_project_id })
@@ -623,7 +645,7 @@ export function registerAgentTools(
         name: z.string().optional(),
       },
       async (args: { agent_id?: string; name?: string }) => {
-        const agent = setFocus(args.agent_id ?? args.name, null, db)
+        const agent = setFocus(args.agent_id ?? args.name, null, db())
         if (!agent)
           return errorText(`Agent not found: ${args.agent_id ?? args.name ?? '(none)'}`)
         focus?.set(agent.id, { project_id: null })

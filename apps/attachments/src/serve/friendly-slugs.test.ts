@@ -51,6 +51,8 @@ function makeApp() {
     version: "test",
     mode: "self_hosted",
     signingSecret: SIGNING_SECRET,
+    // Strict 1.0.2 verifier: a permissive test fixture declares its posture.
+    keyStatus: async () => "active" as const,
   });
   return { app, store };
 }

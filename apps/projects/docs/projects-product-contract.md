@@ -110,9 +110,13 @@ and `client:foo` are metadata/query filters only. Labels must not become source
 of truth for directory layout. Optional aliases may exist only when they are
 rebuildable from metadata.
 
-The hosted backend is selected by a complete API URL and API key pair. With
-neither variable set, local SQLite and local files are the active runtime stores:
-the global registry uses
+The hosted backend is selected by a complete API URL and API key pair, resolved
+through the shared `@hasna/contracts` credential seam (see the README
+"Credentials and Connection" section). With neither variable set, the CLI and
+MCP server fail closed (non-zero exit, no SQLite) unless the operator opts in
+with `HASNA_PROJECTS_LOCAL=1` (alias `PROJECTS_LOCAL`); an opt-in run prints
+one line saying it is local on stderr, and local SQLite and local files are the
+active runtime stores: the global registry uses
 `projects.db`, and per-project canvases, data records, and OpenLoops links use
 `data/<workspace_id>/project.db`. A configured Projects Postgres URL enables
 the server's global registry only; it does not make `project.db` hosted-backed.

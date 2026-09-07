@@ -14,6 +14,7 @@ import type {
 import {
   type Store,
   requireLocalStore,
+  resolveLogsTransport,
   resolveStore,
 } from "../store/index.ts";
 import type { LogLevel, LogSource } from "../types/index.ts";
@@ -52,25 +53,30 @@ function colorLevel(level: string): string {
 
 /**
  * The unified data-plane {@link Store}: ApiStore (HTTP /v1 + bearer key) when
- * the fleet API env is present, LocalStore (SQLite) only under the EXPLICIT
- * opt-in HASNA_LOGS_LOCAL=1 (alias LOGS_LOCAL). Running without the fleet API
- * env and without the opt-in FAILS CLOSED with an actionable error (owner
- * ruling 2026-09-04) — the CLI never silently serves the local store
- * (~/.hasna/logs/logs.db). Every data-plane command routes through this — no
- * per-command transport branching, no `getDb()` in handlers.
+ * the @hasna/contracts client transport resolves a credential (Keychain,
+ * ~/.hasna/logs/config/credentials, HASNA_LOGS_API_KEY — the authority
+ * defaults to the fleet gateway https://api.hasna.com/logs), LocalStore
+ * (SQLite) only under the EXPLICIT opt-in HASNA_LOGS_LOCAL=1 (alias
+ * LOGS_LOCAL). Running without a resolvable fleet credential and without the
+ * opt-in FAILS CLOSED with an actionable error (owner ruling 2026-09-04) —
+ * the CLI never silently serves the local store (~/.hasna/logs/logs.db), and
+ * a run that does serve it says "local" once on stderr. Every data-plane
+ * command routes through this — no per-command transport branching, no
+ * `getDb()` in handlers.
  *
  * The store is resolved LAZILY on first data-plane use so that meta and
  * non-data-plane invocations (`--help`/`--version`, `db migrate`/`db status`
  * schema admin, `db doctor *` local maintenance, `mcp`, `serve`, and the
- * explicit `watch --server` SSE tail) keep working without fleet env.
+ * explicit `watch --server` SSE tail) keep working without a fleet
+ * credential.
  *
  * The event-catalog maintenance commands (`db doctor segments`,
  * `db doctor rebuild-index`, `db doctor repair-segments`) call
  * `requireLocalStore(cmd)` instead: their subject — the raw JSONL segment
  * files and SQLite projections — exists only on the on-box backend, so they
  * throw loudly in api mode rather than touch a stale local db, and require
- * HASNA_LOGS_LOCAL=1 when no api env is set (see src/store/index.ts for the
- * recorded strong reason).
+ * HASNA_LOGS_LOCAL=1 when no credential resolves (see src/store/index.ts for
+ * the recorded strong reason).
  */
 let store: Store | null = null;
 function getStore(): Store {
@@ -1450,6 +1456,34 @@ program
     console.log(JSON.stringify(h, null, 2));
   });
 
+// ── logs transport ────────────────────────────────────────
+program
+  .command("transport")
+  .description(
+    "Show which transport and credential source this CLI resolves — never the credential value",
+  )
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    // The report re-runs the @hasna/contracts chain once (fresh, like every
+    // data-plane command) and names WHERE things came from: an env key NAME,
+    // a Keychain item reference, a credential file PATH, the fleet gateway
+    // default, or the explicit local opt-in. Values are never printed.
+    const report = resolveLogsTransport();
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    console.log(`transport: ${report.transport}`);
+    console.log(`source: ${report.source}`);
+    console.log(`base_url: ${report.base_url ?? "(none)"}`);
+    console.log(`api_url_present: ${report.api_url_present}`);
+    console.log(`api_url_source: ${report.api_url_source ?? "(none)"}`);
+    console.log(`api_key_present: ${report.api_key_present}`);
+    console.log(`api_key_source: ${report.api_key_source ?? "(none)"}`);
+    console.log(`api_key_tier: ${report.api_key_tier ?? "(none)"}`);
+    console.log(`local_opt_in: ${report.local_opt_in}`);
+  });
+
 // ── logs mcp / logs serve ─────────────────────────────────
 program
   .command("mcp")
@@ -1490,7 +1524,9 @@ program
 
 program
   .command("serve")
-  .description("Start the REST API server")
+  .description(
+    "Start the REST API server (PostgreSQL via HASNA_LOGS_DATABASE_URL, or the on-box SQLite collector with HASNA_LOGS_LOCAL=1)",
+  )
   .option("--port <n>", "Port", "3460")
   .option(
     "--local-open",

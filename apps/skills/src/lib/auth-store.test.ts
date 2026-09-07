@@ -134,12 +134,15 @@ describe("the credential this CLI writes", () => {
     withFleetHome((env, root) => {
       // Both places a key used to live. Neither is a credential source now, and
       // an operator holding one is told to sign in again rather than being
-      // silently authenticated from a file the shared ladder cannot see.
+      // silently authenticated from a file the shared ladder cannot see. The
+      // local opt-in keeps the unconfigured shape legal here (local mode),
+      // which is the point: the legacy files must still resolve NOTHING.
       const appDir = join(root, "skills");
       mkdirSync(appDir, { recursive: true });
       writeFileSync(join(appDir, "auth.json"), JSON.stringify({ apiKey: "sk_legacy_app_dir" }), { mode: 0o600 });
-      expect(getApiKey(env)).toBeNull();
-      expect(getAuthConfig(env)).toBeNull();
+      const optedIn = { ...env, HASNA_SKILLS_LOCAL: "1" };
+      expect(getApiKey(optedIn)).toBeNull();
+      expect(getAuthConfig(optedIn)).toBeNull();
     });
   });
 

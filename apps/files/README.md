@@ -12,15 +12,31 @@ bun install -g @hasna/files
 ```
 
 The published executables use Bun. The client talks to the hosted files
-service when `HASNA_FILES_API_URL` + `HASNA_FILES_API_KEY` are set (aliases
-`FILES_API_URL` / `FILES_API_KEY` are accepted). Without those it **fails
-closed** — it never silently falls back to the on-box SQLite store. Local
-SQLite mode is an explicit opt-in: set `HASNA_FILES_LOCAL_MODE=1` (alias
-`FILES_LOCAL_MODE=1`), and no PostgreSQL or S3 configuration is required for
-local folders.
+service through the ONE `@hasna/contracts` credential resolver, resolved fresh
+on every request: the macOS Keychain item
+`hasna.credentials.files.api-key` (account `HASNA_STATION`, else the short
+hostname, else `$USER`), the disk credential file
+`~/.hasna/files/config/credentials` (owner-only 0400/0600), or
+`HASNA_FILES_API_KEY`. The service authority follows the same ladder —
+`HASNA_FILES_API_URL`, the Keychain `api-url` item, the credentials file — and
+**defaults to the fleet gateway `https://api.hasna.com/files`** once a
+credential resolves, so a key alone is a complete configuration. The
+unprefixed `FILES_API_URL` / `FILES_API_KEY` names survive only as a silent
+alias inside the resolver for one release; the canonical `HASNA_FILES_*` names
+work and win.
+
+Without any resolvable credential the CLI **fails closed** — non-zero exit, no
+SQLite, no `*-local-fallback` event. Local SQLite mode is an explicit opt-in:
+set `HASNA_FILES_LOCAL=1` (alias `FILES_LOCAL=1`), and no credential or
+PostgreSQL/S3 configuration is required for local folders. Every local run
+prints one `files: LOCAL mode — ...` line on stderr so an unhosted run is never
+mistaken for an empty hosted one. The retired `HASNA_FILES_LOCAL_MODE` /
+`FILES_LOCAL_MODE` / `*_STORAGE_MODE` switches are gone, and nothing reads
+`~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna` or
+`$XDG_CONFIG_HOME`.
 
 ```bash
-export HASNA_FILES_LOCAL_MODE=1   # explicit opt-in for the local SQLite store
+export HASNA_FILES_LOCAL=1   # explicit opt-in for the local SQLite store
 files sources add ~/Documents --name documents
 files index
 files search "quarterly plan"
@@ -42,12 +58,13 @@ files sources --help
 files knowledge manifest --help
 ```
 
-The CLI supports local SQLite mode (explicit opt-in: `HASNA_FILES_LOCAL_MODE=1`
-/ `FILES_LOCAL_MODE=1`) and an HTTP API client mode. With neither the hosted
-API env nor the local opt-in set, commands fail closed with an error naming
-the required env — never a silent local session. Commands that need on-box
-bytes or ingestion state fail explicitly in API mode; the complete command and
-availability matrix is in the [CLI reference](docs/cli-reference.md).
+The CLI supports local SQLite mode (explicit opt-in: `HASNA_FILES_LOCAL=1`
+/ `FILES_LOCAL=1`) and a hosted HTTP API mode. With neither a resolvable
+credential nor the local opt-in set, commands fail closed with an error naming
+every credential tier the resolver consulted — never a silent local session.
+Commands that need on-box bytes or ingestion state fail explicitly in API
+mode; the complete command and availability matrix is in the [CLI
+reference](docs/cli-reference.md).
 
 Build bounded agent context packs with citations instead of dumping full files:
 
@@ -287,20 +304,35 @@ boundary and object layout.
 
 ## Storage
 
-The client has exactly two transports, selected by the environment, and no
-SQLite/PostgreSQL sync engine:
+The client has exactly two transports, and the selection is the credential
+resolver's to make — the client never reads a raw database DSN:
 
-- Local: the default. Reads and writes use SQLite at
-  `~/.hasna/files/files.db` (the resolver-resolved data root — see the
-  [Data Directory](#data-directory) section below).
-- Hosted HTTP API: routing supported data-plane reads and writes to
-  `<API_URL>/v1`. It does not read or update the local SQLite index.
+- Hosted HTTP API: the `@hasna/contracts` chain resolves the credential (an
+  explicit `--api-key`/`--profile` argument, a vault pointer, the macOS
+  Keychain item `hasna.credentials.files.api-key`,
+  `~/.hasna/files/config/credentials`, or `HASNA_FILES_API_KEY`) and the
+  authority (`HASNA_FILES_API_URL`, the Keychain `api-url` item, the
+  credentials file, else the fleet gateway `https://api.hasna.com/files`),
+  and supported data-plane reads and writes go to `<origin>/v1`. Resolved
+  fresh per request: a rotation heals a long-lived shell, MCP server or agent
+  loop without a restart.
+- Local: the on-box SQLite store at `~/.hasna/files/files.db` (the
+  resolver-resolved data root — see the [Data Directory](#data-directory)
+  section below), reachable ONLY under the explicit opt-in
+  `HASNA_FILES_LOCAL=1` (alias `FILES_LOCAL=1`). It never reads or updates the
+  local SQLite index in hosted mode.
 
-Setting `HASNA_FILES_API_URL` **and** `HASNA_FILES_API_KEY` together selects the
-hosted API. A URL without a key (or vice versa) is a misconfiguration and fails
-closed — the client never silently switches datasets.
+Hosted mode with no credential fails closed — non-zero exit, no SQLite, no
+`*-local-fallback` event. A URL without a key (or a key with no URL and no
+resolvable authority) is a misconfiguration and fails closed — the client
+never silently switches datasets.
 
 ```bash
+# A key alone is a complete hosted configuration (fleet gateway default):
+export HASNA_FILES_API_KEY=<scoped-api-key>
+files list --json
+
+# Or pin an explicit authority (canonical URL + key together):
 export HASNA_FILES_API_URL=https://files.example.test
 export HASNA_FILES_API_KEY=<scoped-api-key>
 files list --json

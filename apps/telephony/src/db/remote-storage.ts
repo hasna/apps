@@ -12,10 +12,11 @@ export const TELEPHONY_APP_NAME = "telephony";
  *
  * Requires the `postgresql` data backend and `HASNA_TELEPHONY_DATABASE_URL`.
  * Setting the URL is enough — the kit resolves `postgresql` from its presence —
- * and any retired STORAGE_MODE variable throws via the kit's own
- * `assertNoLegacyStorageMode`. Throws (without logging the URL) when the
- * backend resolves to `sqlite` or the URL is missing. Returns the kit's typed
- * client so callers get `query/many/get/one/execute/transaction` uniformly.
+ * and a missing, blank, invalid, or conflicting URL throws via the kit's own
+ * fail-closed backend resolver (retired STORAGE_MODE variables are inert and
+ * never select anything). Throws (without logging the URL) when the URL is
+ * absent. Returns the kit's typed client so callers get
+ * `query/many/get/one/execute/transaction` uniformly.
  */
 export function createTelephonyCloudClient(): PoolQueryClient {
   const client = createServerPoolFromEnv(TELEPHONY_APP_NAME, {

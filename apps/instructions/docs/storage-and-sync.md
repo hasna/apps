@@ -18,16 +18,33 @@ local DB plus WAL/SHM sidecars before rebuilding it.
 
 ## API transport
 
-Set both variables to route all store operations through authenticated `/v1`:
+Every client surface resolves its credential and authority through the ONE
+shared resolver in `@hasna/contracts` (hasna/apps#1720) — the package owns no
+second chain. The tiers, fresh on every request:
 
-```bash
-export HASNA_INSTRUCTIONS_API_URL=https://instructions.example.com
-export HASNA_INSTRUCTIONS_API_KEY=...
-```
+- tier 1 — explicit `--api-key` / `--profile` arguments;
+- tier 2 — deliberate env pointers (`HASNA_INSTRUCTIONS_API_KEY_OVERRIDE`,
+  `HASNA_PROFILE`, `HASNA_INSTRUCTIONS_API_KEY_REF`);
+- tier 3 — the macOS Keychain item `hasna.credentials.instructions.api-key`
+  (account `HASNA_STATION` → `hostname -s` → `$USER`);
+- tier 4 — `~/.hasna/instructions/config/credentials`, owner-only 0400/0600
+  (`HASNA_HOME` / `HASNA_CONFIG_HOME` move the root; XDG never);
+- tier 5 — `HASNA_INSTRUCTIONS_API_KEY` in the environment.
 
-Setting exactly one is an error. The client does not fall back to SQLite,
-which prevents silent local/cloud divergence. API requests use a 30-second
-timeout, bearer authentication, and idempotency keys for create operations.
+The authority follows `HASNA_INSTRUCTIONS_API_URL`, then the Keychain `api-url`
+item, then the credentials file, and defaults to the fleet gateway
+`https://api.hasna.com/instructions` once a credential resolves. The unprefixed
+`INSTRUCTIONS_API_URL` / `INSTRUCTIONS_API_KEY` names remain as silent aliases
+for one release.
+
+Hosted runs fail LOUD with no credential — non-zero exit naming the tiers
+consulted, no SQLite fallback, no local-fallback event. The on-box store is
+reachable only through the explicit opt-in `HASNA_INSTRUCTIONS_LOCAL=1`
+(honoured only when nothing else configures an authority), and every local run
+says `local mode` on stderr. Retired locations (`~/.hasna/fleet-env`,
+`~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME`, a
+`~/.instructions/config.json` key store) are never read, and no `*_MODE` /
+`*_STORAGE_MODE` switch exists.
 
 The server-side Postgres variables are different; see [HTTP
 API](http-api.md). A client never needs a database DSN.

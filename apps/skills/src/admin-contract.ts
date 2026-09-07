@@ -1,4 +1,6 @@
-import { z } from "zod";
+// The canonical build uses Zod 3; declared consumer dependencies may use Zod 4.
+// Both expose this schema API at /v3, including its inferred declaration types.
+import { z } from "zod/v3";
 
 /** Version of the public, contract-only Skills administration API surface. */
 export const SKILLS_ADMIN_API_CONTRACT_VERSION = "1.0.0" as const;
@@ -251,7 +253,10 @@ export const SkillsAdminSuspendOrganizationResponseSchema = z.object({
 }).passthrough();
 
 export const SkillsAdminListUsersResponseSchema = z.object({
-  users: z.array(SkillsAdminUserSchema),
+  // Global identities remain visible when their default workspace membership
+  // is absent/revoked. Null grants no role; active organization rosters and
+  // role mutations keep their nonnullable contracts.
+  users: z.array(SkillsAdminUserSchema.extend({ role: SkillsAdminUserSchema.shape.role.nullable() })),
   limit: positiveInt,
   offset: nonNegativeInt,
 }).passthrough();

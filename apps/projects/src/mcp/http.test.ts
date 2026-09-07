@@ -18,6 +18,7 @@ describe("projects MCP HTTP transport", () => {
   let previousDbPath: string | undefined;
   let previousHasnaHome: string | undefined;
   let previousStation: string | undefined;
+  let previousLocalOptIn: string | undefined;
   let previousApiEnv: Record<string, string | undefined>;
 
 
@@ -28,9 +29,10 @@ describe("projects MCP HTTP transport", () => {
     for (const key of HOSTED_API_ENV_KEYS) previousApiEnv[key] = process.env[key];
     previousHasnaHome = process.env["HASNA_HOME"];
     previousStation = process.env["HASNA_STATION"];
-    // Silence all five tiers of the shared @hasna/contracts resolver, so this
-    // fixture takes the unhosted OSS path onto the on-box SQLite registry
-    // instead of the operator's real fleet credential.
+    previousLocalOptIn = process.env["HASNA_PROJECTS_LOCAL"];
+    // Silence all five tiers of the shared @hasna/contracts resolver and set
+    // the explicit local opt-in, so this fixture serves the on-box SQLite
+    // registry instead of the operator's real fleet credential.
     silenceHostedApiEnv();
     process.env.HASNA_PROJECTS_DB_PATH = join(root, "projects.db");
     __resetProjectStore();
@@ -71,6 +73,8 @@ describe("projects MCP HTTP transport", () => {
     else process.env["HASNA_HOME"] = previousHasnaHome;
     if (previousStation === undefined) delete process.env["HASNA_STATION"];
     else process.env["HASNA_STATION"] = previousStation;
+    if (previousLocalOptIn === undefined) delete process.env["HASNA_PROJECTS_LOCAL"];
+    else process.env["HASNA_PROJECTS_LOCAL"] = previousLocalOptIn;
 
     __resetProjectStore();
     rmSync(root, { recursive: true, force: true });

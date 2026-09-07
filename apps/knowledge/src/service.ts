@@ -17,12 +17,12 @@ import {
   type AppWikiNoteWriteResult,
 } from './app-wiki';
 import {
-  clearKnowledgeAuth,
+  clearKnowledgeCredentials,
   getKnowledgeApiKey,
   knowledgeAuthStatus,
   probeKnowledgeAuth,
   resolveKnowledgeApiUrl,
-  saveKnowledgeAuth,
+  saveKnowledgeCredentials,
   type KnowledgeAuthProbe,
   type KnowledgeAuthStatus,
 } from './auth';
@@ -1927,19 +1927,21 @@ export class KnowledgeService {
     userId?: string;
     apiUrl?: string;
   }, env: Record<string, string | undefined> = process.env) {
-    const apiUrl = input.apiUrl ?? resolveKnowledgeApiUrl(env);
-    return saveKnowledgeAuth({
+    // The canonical credentials file (the shared chain's DISK tier), never
+    // the retired auth.json: a login must land where the resolver reads it,
+    // and `auth whoami` right after `auth login` probes through it.
+    return saveKnowledgeCredentials({
       api_key: input.apiKey,
       email: input.email,
       org_id: input.orgId,
       org_slug: input.orgSlug,
       user_id: input.userId,
-      api_url: apiUrl,
+      api_url: input.apiUrl,
     }, env);
   }
 
   clearAuth(env: Record<string, string | undefined> = process.env) {
-    return clearKnowledgeAuth(env);
+    return clearKnowledgeCredentials(env);
   }
 
   paths(): KnowledgePathsResult {

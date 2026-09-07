@@ -205,9 +205,11 @@ function parseRemoteContract<T>(schema: z.ZodType<T>, payload: unknown, message:
  * `resolveSkillsApiKey()` completes the pointer, and refuses (loudly) rather
  * than ever returning a blank key, so a hosted install always sends a real one.
  *
- * The header is still omitted when NOTHING is configured and the caller passed
- * an explicit `apiUrl` — a library consumer reading an unauthenticated instance
- * of its own — and when the caller passed `authToken: null` on purpose.
+ * The header is omitted when the caller passed `authToken: null` on purpose —
+ * a library consumer reading an unauthenticated instance of its own. That null
+ * is now the ONLY unauthenticated route: with nothing configured, the ladder
+ * itself refuses (fail-closed ruling, hasna/apps#1720), so an implicit
+ * credentialless read cannot silently pass as one the operator meant.
  */
 async function remoteRequestHeaders(options: RemoteRegistryOptions): Promise<Headers> {
   const headers = new Headers({ Accept: "application/json" });
@@ -257,9 +259,13 @@ export async function loadRemoteRegistry(options: RemoteRegistryOptions = {}): P
  * origin sees the folder UNION cloud in the plain `list`/`search` path, while
  * every other install keeps today's exact local behavior.
  *
- *   - Nothing configured (no credential, no authority) -> the local list is
- *     returned unchanged and no request is attempted. An install running on
- *     this machine must stay byte-identical to the pre-merge output.
+ *   - Nothing configured, local opted in -> the local list is returned
+ *     unchanged and no request is attempted. An install running on this
+ *     machine must stay byte-identical to the pre-merge output.
+ *   - Nothing configured and NO local opt-in -> this throws, from the shared
+ *     ladder (MISSING_API_CREDENTIAL, naming `HASNA_SKILLS_LOCAL` as the
+ *     deliberate way out): local mode is opt-in only, and an unconfigured
+ *     install is a refusal rather than a silent local listing.
  *   - An authority configured with NO credential -> this throws, from the
  *     shared ladder. It used to return the local half silently, which is the
  *     false green the 2026-09-04 ruling removes: an operator who pointed this

@@ -344,11 +344,11 @@ describe("MCP inbox tools — self_hosted via seam", () => {
 });
 
 describe("MCP list_attachments — self_hosted inventory API", () => {
-  it("refuses a config file that still declares a mode, without touching the API", async () => {
-    // Deployment modes are removed (hasna/apps#1566): a config file that still
-    // declares `emails_mode` must fail resolution loudly — even beside a complete
-    // API configuration and a database path — rather than let the stale key pick
-    // a store. The inventory tool therefore never reaches the API.
+  it("fails on a contradictory storage configuration, without touching the API", async () => {
+    // Deployment modes are removed (hasna/apps#1566/#1720): a config file that still
+    // declares `emails_mode` is now IGNORED, and a both-configured environment (an
+    // explicit API config plus a database path) is the store plan's contradiction row.
+    // The inventory tool therefore fails closed and never reaches the API.
     attachmentInventoryPages = new Map([["", { items: [], next_cursor: null }]]);
     const configHome = mkdtempSync(join(tmpdir(), "emails-mcp-config-only-inventory-"));
     const poisonDbDir = mkdtempSync(join(tmpdir(), "emails-mcp-config-only-poison-db-"));
@@ -360,10 +360,8 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
     const previousSelfHostedApiKey = process.env.EMAILS_SELF_HOSTED_API_KEY;
     try {
       process.env.HOME = configHome;
+      // A stale config-file mode key selects nothing and is never read.
       saveConfig({ emails_mode: "self_hosted" });
-      // No retired mode variable may survive in the environment (a set word is
-      // itself refused); only the canonical API settings and a poison database
-      // path are configured, so any refusal below comes from the config file.
       for (const key of ["MAILERY_MODE", "HASNA_MAILERY_MODE", "EMAILS_MODE", "HASNA_EMAILS_MODE"]) {
         delete process.env[key];
       }
@@ -376,7 +374,7 @@ describe("MCP list_attachments — self_hosted inventory API", () => {
 
       const result = await runInboxTool("list_attachments", {});
       expect(result.isError).toBe(true);
-      expect(result.content[0]?.text).toContain("'emails_mode' in the Emails config file was removed");
+      expect(result.content[0]?.text).toContain("two configured places to keep its mail");
       expect(attachmentInventoryRequests).toHaveLength(0);
     } finally {
       if (previousHome === undefined) delete process.env.HOME;

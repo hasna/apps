@@ -6,7 +6,7 @@ struct MenuBarStatusLabel: View {
     @ObservedObject var store: RecordingsStore
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: store.engine.captureIsActive ? (store.engine.isPaused ? "play.fill" : "record.circle.fill") : store.isPlaying ? "play.fill" : "mic.fill")
+            Image(systemName: presentation.iconName)
                 .symbolRenderingMode(.palette)
                 .foregroundStyle(store.engine.captureIsActive && !store.engine.isPaused ? .red : .primary)
             if store.engine.captureIsActive || store.isPlaying {
@@ -16,8 +16,13 @@ struct MenuBarStatusLabel: View {
         }.accessibilityLabel(presentation.accessibilityLabel)
     }
     private var presentation: MenuBarPresentation {
-        MenuBarPresentation(isRecording: store.engine.isRecording, isWarmingUpCapture: store.engine.isWarmingUpCapture,
-            canStartRecording: store.engine.canStartRecording, statusMessage: store.engine.statusMessage, blockedReason: store.engine.blockedReason)
+        MenuBarPresentation(
+            isRecording: store.engine.isRecording,
+            isWarmingUpCapture: store.engine.isWarmingUpCapture,
+            canStartRecording: store.engine.canStartRecording,
+            statusMessage: store.engine.statusMessage,
+            blockedReason: store.engine.blockedReason
+        )
     }
 }
 
@@ -36,19 +41,16 @@ struct MenuBarStatusView: View {
     var body: some View {
         VStack(spacing: 16) {
             HStack(spacing: 12) {
-                Button {
-                    if store.engine.captureIsActive { store.engine.stopAndTranscribe() }
-                    else { store.beginRecording() }
-                } label: {
-                    GlassCircle(symbol: store.engine.captureIsActive ? "stop.fill" : "mic.fill", size: 34, red: store.engine.captureIsActive)
+                Button(action: toggleRecording) {
+                    GlassCircle(symbol: recordButtonIcon, size: 34, red: store.engine.captureIsActive)
                 }
                 .buttonStyle(.plain).disabled(!presentation.primaryActionEnabled)
-                .accessibilityLabel(store.engine.captureIsActive ? "Stop and transcribe" : "Start recording")
+                .accessibilityLabel(recordButtonTitle)
                 AudioWaveform(level: store.engine.audioLevel, recording: store.engine.captureIsActive && !store.engine.isPaused)
                     .frame(width: 84, height: 30).accessibilityLabel("Microphone level")
                 Divider().frame(height: 30)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Live Transcript").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(presentation.statusText).font(.system(size: 11)).foregroundStyle(statusColor)
                     Text(transcript).font(.system(size: 13)).lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -92,9 +94,31 @@ struct MenuBarStatusView: View {
         if store.engine.isTranscribing { return store.engine.statusMessage }
         return store.engine.recentTranscriptions.first?.displayText ?? "Your words appear here as you speak…"
     }
+    private var statusColor: Color {
+        if store.engine.captureIsActive { return .red }
+        return presentation.isBlocked ? .orange : .accentColor
+    }
+    private var recordButtonTitle: String {
+        store.engine.captureIsActive ? "Stop and Transcribe" : "Start Recording"
+    }
+    private var recordButtonIcon: String {
+        store.engine.captureIsActive ? "stop.fill" : "mic.fill"
+    }
+    private func toggleRecording() {
+        if store.engine.captureIsActive {
+            store.engine.stopAndTranscribe()
+        } else {
+            store.beginRecording()
+        }
+    }
     private var presentation: MenuBarPresentation {
-        MenuBarPresentation(isRecording: store.engine.isRecording, isWarmingUpCapture: store.engine.isWarmingUpCapture,
-            canStartRecording: store.engine.canStartRecording, statusMessage: store.engine.statusMessage, blockedReason: store.engine.blockedReason)
+        MenuBarPresentation(
+            isRecording: store.engine.isRecording,
+            isWarmingUpCapture: store.engine.isWarmingUpCapture,
+            canStartRecording: store.engine.canStartRecording,
+            statusMessage: store.engine.statusMessage,
+            blockedReason: store.engine.blockedReason
+        )
     }
 }
 

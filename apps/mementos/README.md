@@ -152,11 +152,47 @@ HASNA_MEMENTOS_API_URL=https://mementos.example.com
 HASNA_MEMENTOS_API_KEY=...
 ```
 
-Both API variables must be present to select the HTTP client transport, and
-exactly one of them set is an error naming the missing variable.
+### Hosted clients — one credential chain
+
+The CLI, the MCP server and the `./sdk` client resolve their credential and
+service authority through the ONE resolver in `@hasna/contracts`
+(`@hasna/contracts/client`), fresh on every call so a key rotation heals a
+long-lived shell or MCP server without a restart:
+
+| Tier | Source |
+| --- | --- |
+| 1 | explicit arguments (`--api-key` / `--profile`, or `baseUrl` / `apiKey` in the SDK) |
+| 2 | deliberate env pointer: `HASNA_MEMENTOS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_MEMENTOS_API_KEY_REF` (a secrets-vault item key, never a value) |
+| 3 | macOS Keychain: generic password `hasna.credentials.mementos.api-key`, account `HASNA_STATION` → `hostname -s` → `USER` |
+| 4 | disk: `~/.hasna/mementos/config/credentials`, owner-only `0400`/`0600` (`HASNA_HOME` / `HASNA_CONFIG_HOME` move the root) |
+| 5 | environment: `HASNA_MEMENTOS_API_KEY` |
+
+The authority follows `HASNA_MEMENTOS_API_URL`, the Keychain `api-url` item,
+the credentials file, and finally the fleet gateway
+`https://api.hasna.com/mementos` — a credential ALONE is a complete
+configuration. The legacy unprefixed `MEMENTOS_API_URL` / `MEMENTOS_API_KEY`
+spellings survive only as the resolver's silent alias fallback for one
+release. Writing a key to the disk tier:
+
+```bash
+mkdir -p ~/.hasna/mementos/config
+printf 'HASNA_MEMENTOS_API_KEY=%s\n' "$KEY" > ~/.hasna/mementos/config/credentials
+chmod 600 ~/.hasna/mementos/config/credentials
+```
+
+FAIL LOUD (owner ruling 2026-09-04): a hosted run with no credential anywhere
+exits non-zero naming every tier it consulted; there is no SQLite fallback and
+no local-fallback event. The on-box SQLite store is reachable ONLY through the
+deliberate opt-ins `HASNA_MEMENTOS_DB_PATH` / `MEMENTOS_DB_PATH` (an explicit
+file) or `HASNA_MEMENTOS_LOCAL=1` (alias `MEMENTOS_LOCAL=1`, honoured only when
+nothing configures an authority) — and every local run prints one line saying
+it is local on stderr. Retired locations (`~/.hasna/fleet-env/`,
+`~/.hasna/cloud/`, `~/.config/hasna/`, `$XDG_CONFIG_HOME`) and retired
+`*_MODE` / `*_STORAGE_MODE` variables are inputs nowhere.
+
 `mementos storage mode` reports the chosen transport without opening a
-database or making a network request. Any retired storage-mode variable
-(`HASNA_MEMENTOS_STORAGE_MODE` or an alias) is an error: delete it.
+database or making a network request; `mementos status` prints the resolved
+`API:` line (hasna/apps#1588).
 
 The old `storage push`, `pull`, and `sync` commands remain for compatibility;
 they are not the cutover architecture. See [Configuration and

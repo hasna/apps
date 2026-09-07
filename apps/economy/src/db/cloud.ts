@@ -8,7 +8,6 @@
 // SQLite-flavored SQL to Postgres and executes it synchronously against a pooled
 // connection.
 import type { AuthQueryClient } from '@hasna/contracts/auth'
-import type { ServerDataBackend } from '@hasna/contracts/schemas'
 import pg from 'pg'
 import type { DbAdapter, SqliteAdapter as Database } from './sqlite-adapter.js'
 import { SyncPgAdapter } from './sync-pg.js'
@@ -50,18 +49,28 @@ export function getCloudDatabaseUrl(env: Env = process.env): string | undefined 
 /**
  * Resolve the server data backend from database configuration ALONE.
  *
- * `@hasna/contracts` 0.9.0 removed the deployment-mode axis: the only switch is
- * the server's data backend, `sqlite | postgresql`, and a present database URL
- * is what selects `postgresql`. Retired `STORAGE_MODE` / `MODE` variables are
- * rejected with a migration hint rather than normalized or silently mapped
- * (CONTRACT.md section 2), so a half-migrated deployment fails loudly at startup
- * instead of quietly serving the wrong store.
+ * `@hasna/contracts` 1.0.2 narrowed its published `ServerDataBackendSchema` to
+ * `z.literal("postgresql")` — SQLite is legacy-import input, never a LIVE
+ * backend, so the contract's health vocabulary only speaks the authoritative
+ * arm. Economy's serve still runs a real on-box SQLite backend in local mode,
+ * so the resolver keeps its own two-arm union and the runtime reports the
+ * honest backend on `/health` (the contract schema is asserted against the
+ * postgresql arm in `foundation-probe.contract.test.ts`).
+ *
+ * The retired deployment-mode axis stays gone: the only switch is the server's
+ * data backend, `sqlite | postgresql`, and a present database URL is what
+ * selects `postgresql`. Retired `STORAGE_MODE` / `MODE` variables are rejected
+ * with a migration hint rather than normalized or silently mapped, so a
+ * half-migrated deployment fails loudly at startup instead of quietly serving
+ * the wrong store.
  *
  * The rejection stays local because economy also honours the bare `DATABASE_URL`
  * alias, which the contract's own resolver does not read — deferring to it
  * wholesale would silently downgrade such a deployment to sqlite.
  */
-export function resolveEconomyServerBackend(env: Env = process.env): ServerDataBackend {
+export type EconomyServerBackend = 'sqlite' | 'postgresql'
+
+export function resolveEconomyServerBackend(env: Env = process.env): EconomyServerBackend {
   assertNoRetiredBackendKey(env)
   return getCloudDatabaseUrl(env) ? 'postgresql' : 'sqlite'
 }

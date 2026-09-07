@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer } from "./index.js";
-import { resetStoreCache } from "../store/index.js";
 
 /**
  * Behavior lock for the per-tool transport triage of the 26 `requireLocalTransport`
@@ -26,7 +25,6 @@ const ENV_KEYS = [
   "HASNA_FILES_DB_PATH",
   "HASNA_FILES_API_URL",
   "HASNA_FILES_API_KEY",
-  "HASNA_FILES_STORAGE_MODE",
   "OPEN_FILES_MCP_ALLOW_DOWNLOADS",
   "OPEN_FILES_MCP_ALLOW_SIGNED_URLS",
   "OPEN_FILES_MCP_ALLOW_ALL",
@@ -43,11 +41,9 @@ function setLocalMode() {
   process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
   delete process.env.HASNA_FILES_API_URL;
   delete process.env.HASNA_FILES_API_KEY;
-  delete process.env.HASNA_FILES_STORAGE_MODE;
   process.env.OPEN_FILES_MCP_ALLOW_DOWNLOADS = "1";
   process.env.OPEN_FILES_MCP_ALLOW_SIGNED_URLS = "1";
   process.env.OPEN_FILES_MCP_ALLOW_ALL = "1";
-  resetStoreCache();
 }
 
 beforeEach(() => {
@@ -64,7 +60,6 @@ afterEach(async () => {
   }
   if (testDir) rmSync(testDir, { recursive: true, force: true });
   testDir = undefined;
-  resetStoreCache();
 });
 
 async function connectedClient(): Promise<{ client: Client; close: () => Promise<void> }> {
@@ -212,11 +207,9 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
     for (const key of ENV_KEYS) old.set(key, process.env[key]);
     process.env.HASNA_FILES_API_URL = fake.baseUrl;
     process.env.HASNA_FILES_API_KEY = "k_test";
-    delete process.env.HASNA_FILES_STORAGE_MODE;
     process.env.OPEN_FILES_MCP_ALLOW_DOWNLOADS = "1";
     process.env.OPEN_FILES_MCP_ALLOW_SIGNED_URLS = "1";
     process.env.OPEN_FILES_MCP_ALLOW_ALL = "1";
-    resetStoreCache();
     envRestore = () => {
       for (const [key, value] of old) {
         if (value === undefined) delete process.env[key];
@@ -228,7 +221,6 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
   afterEach(async () => {
     await fake.close();
     envRestore?.();
-    resetStoreCache();
   });
 
   test("download_file streams the hosted content route to the destination path", async () => {
@@ -309,8 +301,6 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
     for (const key of ENV_KEYS) old.set(key, process.env[key]);
     process.env.HASNA_FILES_API_URL = `http://127.0.0.1:${server.port}/v1`;
     process.env.HASNA_FILES_API_KEY = "k_test";
-    delete process.env.HASNA_FILES_STORAGE_MODE;
-    resetStoreCache();
     try {
       const { client, close } = await connectedClient();
       try {
@@ -331,8 +321,7 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
-      resetStoreCache();
-    }
+      }
   });
 
   test("extract_file_text posts to the hosted extract-text route and returns the result", async () => {
@@ -478,9 +467,7 @@ describe("write/ingest MCP tools keep the local-transport guard in api mode", ()
   beforeEach(async () => {
     process.env.HASNA_FILES_API_URL = "https://files.example.test/v1";
     process.env.HASNA_FILES_API_KEY = "k_test";
-    delete process.env.HASNA_FILES_STORAGE_MODE;
     process.env.OPEN_FILES_MCP_ALLOW_ALL = "1";
-    resetStoreCache();
   });
 
   for (const { tool, args } of LOCAL_ONLY_TOOLS) {

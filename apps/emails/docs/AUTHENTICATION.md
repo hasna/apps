@@ -6,27 +6,39 @@ not use these accounts.
 
 ## Client configuration
 
-A self-hosted client sets the service URL and one bearer credential:
+A self-hosted client resolves the service URL and a bearer credential through
+the shared credential resolver (hasna/apps#1720). The canonical env names are
+`HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`; the legacy
+`EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` spellings remain
+accepted as aliases for one release. The resolver also consults the macOS
+Keychain items for this app (`api-url` / `api-key`) and the
+`~/.hasna/emails/config/credentials` file, and defaults the URL to the shared
+gateway once a credential resolves:
 
 ```bash
-export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
-export EMAILS_SELF_HOSTED_API_KEY="..."   # operator or tenant API key
+export HASNA_EMAILS_API_URL="https://emails.example.com"
+export HASNA_EMAILS_API_KEY="..."                # operator or tenant API key
+# …or, for one more release, the legacy spellings:
+# export EMAILS_SELF_HOSTED_URL="https://emails.example.com"
+# export EMAILS_SELF_HOSTED_API_KEY="..."
 ```
 
-Setting the service URL is what selects the hosted client store; there is no
-separate deployment-mode variable.
+The URL is what selects the hosted client store; there is no separate
+deployment-mode variable.
 
-The accepted credential variables, in precedence order, are:
+The accepted bearer credentials, in precedence order, are:
 
 1. `EMAILS_SESSION_TOKEN` — an opaque user session created by `emails auth login`;
 2. `EMAILS_IDP_TOKEN` — an access token from the configured identity provider;
-3. `EMAILS_SELF_HOSTED_API_KEY` — an HMAC application or tenant API key.
+3. the resolver-resolved key (`HASNA_EMAILS_API_KEY`, the Keychain item, or the
+   credentials file).
 
-`EMAILS_CLIENT_ENV_SECRET` may point to a `secrets` vault entry containing
-`EMAILS_SELF_HOSTED_URL` and any one of those credentials.
-`emails auth login`, `logout`, and `switch-tenant` update that entry when the
-pointer is configured. Without it, a login token exists only in the current CLI
-process and is not durable across later invocations.
+`EMAILS_CLIENT_ENV_SECRET` may point to a `secrets` vault entry that persists
+the user session (and identity token). `emails auth login`, `logout`, and
+`switch-tenant` update that entry when the pointer is configured. Without it, a
+login token exists only in the current CLI process and is not durable across
+later invocations. The vault entry no longer delivers the URL or the API key —
+those come from the resolver tiers.
 
 ## User and organization commands
 

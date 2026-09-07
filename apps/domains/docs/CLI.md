@@ -4,6 +4,34 @@
 DNS providers, and related diagnostics. Run `domains <command> --help` for the
 full option list for any command.
 
+## Credentials and authority
+
+Every data command resolves its API key and service URL through the one shared
+`@hasna/contracts` resolver, fresh on every call. The tiers, in order:
+
+1. an explicit `--api-key` / `--profile` argument (code-level)
+2. a deliberate env pointer — `HASNA_DOMAINS_API_KEY_OVERRIDE`, `HASNA_PROFILE`,
+   `HASNA_DOMAINS_API_KEY_REF`
+3. the macOS Keychain — `hasna.credentials.domains.api-key` / `.api-url`,
+   account `HASNA_STATION`, else the short hostname, else `$USER`
+4. disk — `~/.hasna/domains/config/credentials` (owner-only 0600;
+   `HASNA_HOME` / `HASNA_CONFIG_HOME` override the root)
+5. `HASNA_DOMAINS_API_KEY` in the process env
+
+The authority follows the same ladder (`HASNA_DOMAINS_API_URL`, the Keychain
+`api-url` item, the credentials file) and defaults to the fleet gateway
+`https://api.hasna.com/domains` once a credential resolves. Retired locations
+(`~/.hasna/fleet-env`, the cloud dirs under `~/.hasna`, `~/.config/hasna`,
+`$XDG_CONFIG_HOME`) are never read, and no `*_MODE` / `*_STORAGE_MODE` variable
+selects a backend. A data command with no resolvable credential exits non-zero
+with the canonical env pair named; it never opens the default local database.
+
+Local SQLite is an explicit opt-in: set `HASNA_DOMAINS_DB_PATH` /
+`HASNA_DOMAINS_DIR` (or their legacy aliases) to name the database, with no
+authority or credential configured in the environment. Every local run prints
+one `LOCAL mode` line on stderr. `domains doctor` reports which store resolved,
+where the URL and key came from, and which tier supplied the key.
+
 ## Command loading
 
 Core commands load on every invocation. Optional groups load only when selected:

@@ -39,19 +39,29 @@ function store(handler: (call: Call) => { status?: number; json?: unknown }) {
 }
 
 describe("CloudShortlinksStore.fromEnv client selection", () => {
-  test("returns null (local) when env is unset", () => {
+  test("returns null (no hosted client) when env is unset", () => {
     expect(CloudShortlinksStore.fromEnv({})).toBeNull();
   });
 
-  test("throws (no silent local drift) when the hosted client is partially configured", () => {
-    // API_URL without API_KEY (or the reverse) must fail loudly, never fall
+  test("throws (no silent local drift) when a URL is set without a credential", () => {
+    // An API_URL with no resolvable credential must fail loudly, never fall
     // back silently to the local store.
     expect(() =>
       CloudShortlinksStore.fromEnv({ HASNA_SHORTLINKS_API_URL: "https://shortlinks.hasna.xyz" }),
-    ).toThrow(/partially configured/);
+    ).toThrow(/no API key could be resolved/);
+    // A declared-but-blank variable is refused loudly too.
     expect(() =>
-      CloudShortlinksStore.fromEnv({ HASNA_SHORTLINKS_API_KEY: "hasna_shortlinks_test_key" }),
-    ).toThrow(/partially configured/);
+      CloudShortlinksStore.fromEnv({ HASNA_SHORTLINKS_API_URL: "" }),
+    ).toThrow(/set but blank/);
+  });
+
+  test("a credential alone selects the hosted store at the fleet gateway (URLs never need configuring)", () => {
+    // Owner directive 2026-09-04: the resolver decides, and a key from any
+    // tier is enough — the authority defaults to https://api.hasna.com/<app>.
+    const s = CloudShortlinksStore.fromEnv({ HASNA_SHORTLINKS_API_KEY: "hasna_shortlinks_test_key" });
+    expect(s).not.toBeNull();
+    expect(s!.baseUrl).toBe("https://api.hasna.com/shortlinks/v1");
+    void s!.close();
   });
 
   test("returns a hosted-API store when fully configured", () => {

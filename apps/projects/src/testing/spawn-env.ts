@@ -21,12 +21,17 @@
  *     resolves nothing for ANY app;
  *   - sets `HASNA_STATION` to an account with no Keychain items, so the macOS
  *     Keychain tier finds nothing (`security` exits 44) instead of picking up
- *     the developer's own station credentials.
+ *     the developer's own station credentials;
+ *   - sets `HASNA_PROJECTS_LOCAL=1`, the explicit opt-in: since the fail-closed
+ *     ruling (hasna/apps#1720) there is NO implicit local fallback, so a
+ *     completely silent environment would exit non-zero. These tests exercise
+ *     the on-box SQLite registry, so they state the opt-in explicitly.
  *
- * With every tier silent, `resolveProjectStore()` takes the unhosted OSS path
- * and drives the on-box SQLite registry — which is what these tests exercise.
- * A test that wants the hosted path passes the API env in `overrides`; a test
- * that wants the LOUD half-configured failure passes only the URL.
+ * With every tier silent and the opt-in set, `resolveProjectStore()` serves the
+ * on-box SQLite registry — which is what these tests exercise. A test that
+ * wants the hosted path passes the API env in `overrides` (an env-declared
+ * authority outranks the opt-in); a test that wants the LOUD fail-closed
+ * failure passes only the URL, or blanks the opt-in.
  */
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -76,6 +81,12 @@ export function testSpawnEnv(overrides: Record<string, string> = {}): Record<str
   if (!("HASNA_HOME" in overrides)) env["HASNA_HOME"] = TEST_HASNA_HOME;
   if (!("HASNA_CONFIG_HOME" in overrides)) delete env["HASNA_CONFIG_HOME"];
   if (!("HASNA_STATION" in overrides)) env["HASNA_STATION"] = TEST_KEYCHAIN_STATION;
+  // The fail-closed ruling made the on-box registry opt-in only; these fixtures
+  // exercise that registry, so they state the opt-in explicitly. An override
+  // that declares an authority or credential outranks it (see
+  // selectsProjectsLocalStore); an override that blanks it ("") restores the
+  // fail-closed case for tests whose subject IS the missing credential.
+  if (!("HASNA_PROJECTS_LOCAL" in overrides)) env["HASNA_PROJECTS_LOCAL"] = "1";
   return { ...env, ...overrides };
 }
 
@@ -90,15 +101,16 @@ export function silenceHostedApiEnv(env: NodeJS.ProcessEnv = process.env): void 
   delete env["HASNA_CONFIG_HOME"];
   env["HASNA_HOME"] = TEST_HASNA_HOME;
   env["HASNA_STATION"] = TEST_KEYCHAIN_STATION;
+  env["HASNA_PROJECTS_LOCAL"] = "1";
 }
 
 /**
- * The prefix of the one line unhosted mode prints on stderr.
+ * The prefix of the one line the explicit local opt-in prints on stderr.
  *
- * Local (OSS) mode is never silent — the owner ruling requires exactly one
- * line saying so — but that line is noise for every OTHER stderr assertion.
- * Suites therefore strip it with {@link withoutUnhostedNotice} and assert its
- * presence explicitly where the notice itself is the subject.
+ * Local mode is never silent — the owner ruling requires exactly one line
+ * saying it is local — but that line is noise for every OTHER stderr
+ * assertion. Suites therefore strip it with {@link withoutUnhostedNotice} and
+ * assert its presence explicitly where the notice itself is the subject.
  */
 export const UNHOSTED_MODE_NOTICE_PREFIX = "projects: local mode";
 

@@ -1,83 +1,70 @@
 // HTTP storage client for the Hasna Service Contract v1.
 //
-// The shared client seam (resolveStorageClient and the storage-client types)
+// The shared client seam (`resolveStorageClient` and the storage-client types)
 // is imported from `@hasna/contracts/client` rather than vendored: a fork does
 // not receive credential-resolution fixes, so the credential chain (argument,
-// deliberate override, profile, disk, then the deprecated env fallback) is the
-// maintained code path. This file keeps the app's own env-selection resolver
-// (resolveTransport — the documented two-backend contract, incl. the
-// HASNA_<APP>_CLIENT_STORE override) and the local transport/CRUD plumbing used
-// by tests and the ./storage public surface; only credential resolution goes
-// through the shared seam.
+// deliberate override, profile, Keychain, disk, then the canonical env name)
+// is the maintained code path. This file keeps the app's local transport
+// plumbing (createHttpTransport / createStorageClient) used by tests and the
+// ./storage public surface, and adapts the surfaces onto the seam:
+//
+//   - resolveRecordingsTransport — the transport decision ("is this run hosted
+//     or the deliberate unhosted opt-in?") with everything recorded for a
+//     diagnostic but nothing secret in it.
+//   - getRecordingsTransportStatus — the non-throwing variant for
+//     diagnostics (src/lib/persistence-probe.ts).
+//   - resolveRecordingsCloudClient — the hosted store client itself, resolved
+//     fresh per call; the transport re-resolves the credential on every
+//     request, so a rotation heals a long-lived MCP server without a restart.
 //
 // THE CLIENT HAS EXACTLY TWO STORES: `sqlite` (an on-box file) and `http` (the
 // server's `<API_URL>/v1` API with a bearer key). It NEVER opens Postgres — the
 // server's internal storage engine is the server's business and is invisible
-// here. Which store is active is decided by the environment alone: the
-// presence of BOTH `HASNA_<APP>_API_URL` and `HASNA_<APP>_API_KEY` selects the
-// hosted API. The on-box SQLite file is NEVER a silent default: an environment
-// that sets neither variable fails closed with an error naming the required
-// variables, and the local file is read only when the explicit
-// `HASNA_<APP>_CLIENT_STORE=sqlite` override selects it. A partial hosted
-// setup (one of the two variables set, the other absent) is a misconfiguration
-// and fails closed — the client must never silently drift onto the wrong
-// on-box dataset. The explicit `HASNA_<APP>_CLIENT_STORE` override
-// (`sqlite` | `http`) wins over the auto-selection, so a config that sets
-// `..._CLIENT_STORE=sqlite` keeps reading the local file even when the hosted
-// URL/key pair is present.
+// here. Which store is active is decided by the @hasna/contracts resolver (an
+// explicit `--api-key`/`--profile`, the deliberate pointers
+// `HASNA_RECORDINGS_API_KEY_OVERRIDE` / `HASNA_RECORDINGS_API_KEY_REF` /
+// `HASNA_PROFILE`, the macOS Keychain item
+// `hasna.credentials.recordings.api-key`, `~/.hasna/recordings/config/credentials`
+// at 0400/0600, then `HASNA_RECORDINGS_API_KEY`), with the authority following
+// `HASNA_RECORDINGS_API_URL`, the Keychain `api-url` item, the credentials
+// file, and finally the fleet gateway `https://api.hasna.com/recordings` (the
+// client appends `/v1`). The unprefixed `RECORDINGS_API_KEY` keeps its
+// older meaning — the OpenAI transcription-key override (src/lib/config.ts,
+// credential-seam waiver) — and is carved out of the resolver environment
+// (src/lib/local-opt-in.ts), so it can never authenticate as a Hasna
+// credential. Retired locations — `~/.hasna/fleet-env`, `~/.hasna/cloud`,
+// `~/.config/hasna`, `$XDG_CONFIG_HOME` — are inputs nowhere, and no
+// `*_MODE` / `*_STORAGE_MODE` / `*_CLIENT_STORE` variable is read: the
+// transport is decided by what RESOLVES, never by a mode word.
+//
+// FAIL LOUD. Hosted mode with no credential throws (CLI/MCP surface: non-zero
+// exit, no SQLite, no local-fallback event). The on-box SQLite file is
+// reachable ONLY through the deliberate unhosted opt-in
+// `HASNA_RECORDINGS_LOCAL=1` (alias `RECORDINGS_LOCAL=1`), which is answered
+// BEFORE the resolver runs so an opted-in run reads neither the Keychain nor
+// any credential file.
 //
 // SAFETY: never logs, returns, or embeds the API key value.
 
-import { createClientTransport } from "@hasna/contracts/client";
 import {
-  createHasnaStorageClient,
+  clientTransportEnvKeys,
+  resolveClientTransport,
+  type CredentialTier,
+} from "@hasna/contracts/client";
+import {
   resolveStorageClient,
   type HasnaStorageClient,
 } from "@hasna/contracts/client/storage";
+import {
+  RECORDINGS_LOCAL_OPT_IN_ENV_KEYS,
+  isRecordingsLocalOptIn,
+  recordingsResolverInputs,
+  selectsRecordingsLocalStore,
+} from "../lib/local-opt-in.js";
+
+export { RECORDINGS_LOCAL_OPT_IN_ENV_KEYS, isRecordingsLocalOptIn };
 
 export type Env = Record<string, string | undefined>;
-
-/** Where a client reads and writes. Two arms, no third. */
-export type ClientStore = "sqlite" | "http";
-
-function envToken(name: string): string {
-  return name.toUpperCase().replace(/-/g, "_");
-}
-
-interface EnvKeys {
-  /** The explicit client-store switch. Wins over auto-selection. */
-  storeKeys: [string, ...string[]];
-  apiUrlKeys: [string, ...string[]];
-  apiKeyKeys: [string, ...string[]];
-}
-
-// The hosted contract is the HASNA_-prefixed pair only. The unprefixed
-// `<APP>_API_KEY` is the legacy OpenAI transcription-key override
-// (src/lib/config.ts) and must never select or fail client transport; the
-// unprefixed `<APP>_API_URL` is legacy and equally outside the contract.
-function envKeys(name: string): EnvKeys {
-  const token = envToken(name);
-  return {
-    storeKeys: [`HASNA_${token}_CLIENT_STORE`, `${token}_CLIENT_STORE`],
-    apiUrlKeys: [`HASNA_${token}_API_URL`],
-    apiKeyKeys: [`HASNA_${token}_API_KEY`],
-  };
-}
-
-function normalizeClientStore(value: string): ClientStore {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "sqlite") return "sqlite";
-  if (normalized === "http" || normalized === "https") return "http";
-  throw new Error(`Unknown client store: ${value}. Use sqlite or http.`);
-}
-
-function firstEnv(env: Env, keys: readonly string[]): { key: string; value: string } | null {
-  for (const key of keys) {
-    const value = env[key]?.trim();
-    if (value) return { key, value };
-  }
-  return null;
-}
 
 export function toV1BaseUrl(apiUrl: string): string {
   const url = new URL(apiUrl);
@@ -92,133 +79,190 @@ export function toV1BaseUrl(apiUrl: string): string {
   return url.toString().replace(/\/+$/, "");
 }
 
-export type TransportKind = ClientStore;
+// ── The @hasna/contracts shapes this package PUBLISHES ─────────────────────
+//
+// `@hasna/contracts` is a build-time inlining dependency of the CLI and MCP
+// bundles, and the runtime dependency of the serve bundle and the public
+// declaration graph. The declarations `tsc` emits are not bundled, though —
+// they keep every import the source wrote, so a published `*.d.ts` that
+// reached into `@hasna/contracts/client` would import a module the consumer's
+// resolution may not have. The shapes below are the crossing types spelled
+// locally (the #1782 pattern): no imports, no logic, and each one checked
+// against the real @hasna/contracts declaration at compile time by
+// `src/__tests__/credential-resolution.test.ts` and by the assignments at the
+// seam in this file — a shape that drifts fails the build, it does not
+// silently publish a lie.
 
-export interface TransportResolution {
-  /**
-   * The store selected by this resolution: `sqlite` when the explicit
-   * `..._CLIENT_STORE=sqlite` override chose the on-box file, or when routing
-   * to `http` was refused and the resolution is misconfigured. A `sqlite`
-   * transport with `misconfigured: true` means NO store is active — callers
-   * must fail closed, never open the on-box file.
-   */
-  transport: TransportKind;
-  /** The store that was asked for. Differs from `transport` only when misconfigured. */
-  requested: ClientStore;
-  /** What decided it: an env var NAME, `auto:api-url+api-key`, or `default`. Never a value. */
-  modeSource: string;
-  baseUrl: string | null;
+/** An account/host selection for the Keychain tier; injected by tests. */
+export interface RecordsKeychainCommandResult {
+  /** Exit status; null when the tool could not be started or was killed. */
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** Runs `/usr/bin/security` with the given argv — no shell. Injected by tests. */
+export type RecordsKeychainCommandRunner = (
+  argv: readonly string[],
+) => RecordsKeychainCommandResult;
+
+/** Keychain-tier controls. Every field is optional; production callers pass nothing. */
+export interface RecordsKeychainTierOptions {
+  /** Whether the Keychain is consulted for a caller-built env object. The tier is AMBIENT. */
+  enabled?: boolean;
+  /** Defaults to `process.platform`; the tier exists only on `"darwin"`. */
+  platform?: string;
+  /** The machine's host name (label before the first dot), used when `HASNA_STATION` is unset. */
+  hostname?: () => string;
+  /** The `security` runner. Defaults to spawning `/usr/bin/security` by argv. */
+  run?: RecordsKeychainCommandRunner;
+}
+
+/** Tier-1 credential inputs (`--api-key` / `--profile`) plus the Keychain-tier seam. */
+export interface RecordsCredentialChainOptions {
+  /** Tier 1: an explicit key, e.g. from `--api-key`. */
+  apiKey?: string;
+  /** Tier 1: an explicit profile name, e.g. from `--profile`. Beats `HASNA_PROFILE`. */
+  profile?: string;
+  /** Tier 3: Keychain controls — a fake `security` runner in tests, an opt-out on CI. */
+  keychain?: RecordsKeychainTierOptions;
+}
+
+/** Which tier of the credential chain supplied a key. */
+export type RecordsCredentialTier =
+  | "argument"
+  | "override"
+  | "pointer"
+  | "profile"
+  | "keychain"
+  | "disk"
+  | "env";
+
+/** The transport decision, with every source named and no key value in it. */
+export interface RecordsAuthorityResolution {
+  /** Where the client should read/write from. Always `"http"` in a resolution. */
+  transport: "http";
+  /** What selected the transport: an env key NAME, a Keychain item reference, a file PATH, or `"default"`. */
+  transportSource: string;
+  /** `<origin>/v1` base for the server API. */
+  baseUrl: string;
+  /** WHERE the API URL came from: an env key NAME, a Keychain item reference, a file PATH, `"default"`, or null. */
+  apiUrlSource: string | null;
+  /** Whether an API key is present (value never exposed). */
   apiKeyPresent: boolean;
+  /** WHERE the API key came from: an env key NAME or an absolute file path. Never the value. */
+  apiKeySource: string | null;
+  /** Which tier of the credential chain supplied the key. */
+  apiKeyTier: RecordsCredentialTier;
+  /** Kept for diagnostic shape compatibility; a successful resolution is never misconfigured. */
   misconfigured: boolean;
+  /** Human-readable warning, or null. Never contains secret values. */
   warning: string | null;
 }
 
-// Resolve where a client should read/write given the environment.
-// An explicit `HASNA_<APP>_CLIENT_STORE` wins; otherwise transport is `http`
-// IFF both the (prefixed) API URL and the API key are present. A partial
-// hosted setup — URL without key, or key without URL — is reported as
-// misconfigured (callers hard-fail) so the client never silently drifts onto
-// the wrong on-box dataset. An environment that configures NOTHING is
-// misconfigured too: the on-box store is not a fallback, and the client fails
-// closed naming the required variables (only an explicit
-// `..._CLIENT_STORE=sqlite` override selects the on-box file).
-export function resolveTransport(name: string, env: Env = process.env): TransportResolution {
-  const keys = envKeys(name);
-  const storeHit = firstEnv(env, keys.storeKeys);
-  const urlHit = firstEnv(env, keys.apiUrlKeys);
-  const keyHit = firstEnv(env, keys.apiKeyKeys);
-
-  let requested: ClientStore = "sqlite";
-  let modeSource = "default";
-
-  if (storeHit) {
-    // The explicit store switch is the patch-compatible override: it wins over
-    // auto-selection, so `..._CLIENT_STORE=sqlite` forces the on-box file even
-    // when the hosted URL/key pair is present.
-    requested = normalizeClientStore(storeHit.value);
-    modeSource = storeHit.key;
-  } else if (urlHit && keyHit) {
-    // The presence of BOTH variables IS the signal to use the API. Rollback =
-    // unset either variable -> no store is selected, never a silent local file.
-    requested = "http";
-    modeSource = "auto:api-url+api-key";
-  } else if (urlHit || keyHit) {
-    const missing = urlHit ? keys.apiKeyKeys[0] : keys.apiUrlKeys[0];
-    const present = urlHit ? keys.apiUrlKeys[0] : keys.apiKeyKeys[0];
-    return {
-      transport: "sqlite",
-      requested,
-      modeSource,
-      baseUrl: null,
-      apiKeyPresent: Boolean(keyHit),
-      misconfigured: true,
-      warning:
-        `${present} is set but ${missing} is not: the hosted API is only ` +
-        `selected when BOTH are present. Set ${missing}, or unset ${present} ` +
-        `and opt in to the on-box store explicitly with ${keys.storeKeys[0]}=sqlite.`,
-    };
-  }
-
-  if (requested === "sqlite") {
-    if (storeHit) {
-      // Explicit on-box opt-in: the override decided it, so the local file is
-      // the active store even though nothing hosted is configured.
-      return { transport: "sqlite", requested, modeSource, baseUrl: null, apiKeyPresent: Boolean(keyHit), misconfigured: false, warning: null };
-    }
-    // Nothing is configured and nothing explicitly selected the on-box file:
-    // the on-box store is never a silent default. Fail closed so a caller
-    // (or the shared seam it consults for a credential) decides between the
-    // hosted API and an actionable error — never a local fallback.
-    return {
-      transport: "sqlite",
-      requested,
-      modeSource,
-      baseUrl: null,
-      apiKeyPresent: Boolean(keyHit),
-      misconfigured: true,
-      warning:
-        `${keys.apiUrlKeys[0]} and ${keys.apiKeyKeys[0]} are not set: the hosted ` +
-        `API is selected only when BOTH are present, and the on-box store is not ` +
-        `a fallback. Set both (or run through the '${name}' station wrapper), or ` +
-        `opt in to the on-box store explicitly with ${keys.storeKeys[0]}=sqlite.`,
-    };
-  }
-
-  if (!urlHit) {
-    return {
-      transport: "sqlite",
-      requested,
-      modeSource,
-      baseUrl: null,
-      apiKeyPresent: Boolean(keyHit),
-      misconfigured: true,
-      warning: `${modeSource}=http but no API URL is set (${keys.apiUrlKeys[0]}). Refusing to route to the API.`,
-    };
-  }
-
-  if (!keyHit) {
-    return {
-      transport: "sqlite",
-      requested,
-      modeSource,
-      baseUrl: null,
-      apiKeyPresent: false,
-      misconfigured: true,
-      warning: `${modeSource}=http but no API key is set (${keys.apiKeyKeys[0]}). Refusing to route to the API.`,
-    };
-  }
-
-  const rawUrl = urlHit.value;
-  let baseUrl: string;
-  try {
-    baseUrl = toV1BaseUrl(rawUrl);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { transport: "sqlite", requested, modeSource, baseUrl: null, apiKeyPresent: true, misconfigured: true, warning: `Invalid API URL: ${message}.` };
-  }
-
-  return { transport: "http", requested, modeSource, baseUrl, apiKeyPresent: true, misconfigured: false, warning: null };
+/** Tier-1 credential inputs and Keychain-tier controls, forwarded verbatim. */
+export interface RecordsClientResolveOptions {
+  /** `--api-key` / `--profile`, and the injectable `security` runner tests use. */
+  credentials?: RecordsCredentialChainOptions;
 }
+
+export type RecordsClientTransport = "sqlite" | "http";
+
+export interface RecordsTransportResolution {
+  /** Canonical transport the environment resolved to (`sqlite` | `http`). */
+  transport: RecordsClientTransport;
+  /** False only for the deliberate unhosted opt-in. */
+  selected: boolean;
+  /**
+   * What selected the transport: `"local-opt-in"` for the deliberate unhosted
+   * store, else `"<api key source>+<api url source>"` as the contracts resolver
+   * reported them (env key NAMES, a Keychain item reference, a file path, or
+   * `"default"` for the fleet gateway). Never a credential value.
+   */
+  source: string;
+  /** The contracts resolution for the http transport; null for sqlite. It never carries the key. */
+  authority: RecordsAuthorityResolution | null;
+}
+
+/**
+ * The `{ items, total, cursor, raw }` shape the shared storage client returns
+ * from a `list()`.
+ */
+export interface RecordsListResult<T> {
+  items: T[];
+  total: number | null;
+  cursor: string | null;
+  raw: unknown;
+}
+
+/** The hosted store client, spelled locally so the public surface stays boundary-clean. */
+export interface RecordsCloudClient {
+  readonly name: string;
+  /** `<origin>/v1` base URL. */
+  readonly baseUrl: string;
+  /** The underlying HTTP transport (escape hatch for non-CRUD routes). */
+  readonly transport: HttpTransport;
+
+  list<T = unknown>(
+    resource: string,
+    options?: {
+      query?: QueryParams;
+      timeoutMs?: number;
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+    },
+  ): Promise<RecordsListResult<T>>;
+  /** Fetch one entity by id. Returns `null` on 404. */
+  get<T = unknown>(
+    resource: string,
+    id: string,
+    options?: {
+      query?: QueryParams;
+      timeoutMs?: number;
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+    },
+  ): Promise<T | null>;
+  /** Create one entity. Retry-safe via an auto `Idempotency-Key`. */
+  create<T = unknown>(
+    resource: string,
+    body: unknown,
+    options?: {
+      query?: QueryParams;
+      timeoutMs?: number;
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+      idempotencyKey?: string;
+    },
+  ): Promise<T>;
+  /** Update one entity by id (PATCH by default). */
+  update<T = unknown>(
+    resource: string,
+    id: string,
+    patch: unknown,
+    options?: {
+      query?: QueryParams;
+      timeoutMs?: number;
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+      method?: "PATCH" | "PUT";
+      idempotencyKey?: string;
+    },
+  ): Promise<T>;
+  /** Delete one entity by id. Resolves for 2xx and 404 (already gone). */
+  delete(
+    resource: string,
+    id: string,
+    options?: {
+      query?: QueryParams;
+      timeoutMs?: number;
+      headers?: Record<string, string>;
+      signal?: AbortSignal;
+    },
+  ): Promise<void>;
+}
+
+// ── Local transport plumbing (unchanged public surface) ────────────────────
 
 export class HasnaHttpError extends Error {
   readonly status: number;
@@ -433,59 +477,228 @@ export function createStorageClient(name: string, transport: HttpTransport): Sto
   };
 }
 
-export type ResolveStoreClientResult =
-  | { transport: "sqlite"; client: null; resolution: TransportResolution }
-  | { transport: "http"; client: HasnaStorageClient; resolution: TransportResolution };
+// ── The resolver adapter ────────────────────────────────────────────────────
 
-// The one call the app's storage resolver makes. Selection is this file's
-// documented env contract (resolveTransport — incl. the CLIENT_STORE override
-// and the partial-pair fail-closed), so the app's recorded selection semantics
-// are unchanged. The client itself is built through the @hasna/contracts seam,
-// which resolves the credential at call time through the maintained chain
-// instead of a process-start env snapshot. Throws when the hosted API is
-// partially configured (so callers never silently read the wrong dataset).
-export function resolveStoreClient(name: string, env: Env = process.env): ResolveStoreClientResult {
-  const resolution = resolveTransport(name, env);
-  if (resolution.misconfigured) {
-    // A partial env pair is not necessarily a hard failure: the shared seam
-    // resolves the credential at CALL TIME through the full chain (deliberate
-    // override, profile, disk, then the deprecated env fallback). A URL that
-    // the seam can back with a resolvable credential is a valid http client;
-    // only a URL with NO resolvable credential anywhere is a true
-    // misconfiguration and fails closed (never silently drift onto the wrong
-    // on-box dataset). Consult the seam before throwing.
-    const wired = createClientTransport(name, env);
-    if (wired.transport === "http") {
-      return {
-        transport: "http",
-        client: createHasnaStorageClient(name, wired.client),
-        resolution: {
-          transport: "http",
-          requested: "http",
-          modeSource: resolution.modeSource === "default" ? "auto:api-url+seam-credential" : resolution.modeSource,
-          baseUrl: wired.resolution.baseUrl,
-          apiKeyPresent: true,
-          misconfigured: false,
-          warning: null,
-        },
-      };
+/**
+ * Re-throw a `@hasna/contracts` resolution failure as the recordings
+ * fail-closed diagnostic, preserving the resolver's message (which names every
+ * tier it consulted) behind the stable `REMOTE_API_*` code callers match on.
+ * Nothing here ever returns a client or a local store: every arm throws.
+ */
+export function throwRecordingsAuthorityFailure(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  const name = error instanceof Error ? error.name : "";
+  if (name === "CredentialResolutionError" || name === "CredentialFileUnsafeError") {
+    throw new Error(
+      `REMOTE_API_CREDENTIAL_INVALID: ${message} There is no local fallback: ` +
+        "local SQLite is opt-in only (HASNA_RECORDINGS_LOCAL=1) and is disabled by default — failing closed",
+      { cause: error },
+    );
+  }
+  if (/no API key could be resolved/.test(message)) {
+    if (/is not set and no API key could be resolved/.test(message)) {
+      throw new Error(
+        "REMOTE_API_CONFIG_MISSING: no Recordings credential resolved from the Keychain item " +
+          `hasna.credentials.recordings.api-key, ~/.hasna/recordings/config/credentials, or HASNA_RECORDINGS_API_KEY. ${message} ` +
+          "There is no local fallback: local SQLite is opt-in only (HASNA_RECORDINGS_LOCAL=1, alias RECORDINGS_LOCAL=1) " +
+          "and is disabled by default — failing closed instead of serving the local store",
+        { cause: error },
+      );
     }
-    // The seam could not route either (no URL, or a URL with no resolvable
-    // credential): keep the app's fail-closed contract.
-    throw new Error(resolution.warning ?? `Client for '${name}' is misconfigured for the /v1 API.`);
+    throw new Error(
+      "REMOTE_API_KEY_MISSING: remote Recordings storage requires HASNA_RECORDINGS_API_KEY, the Keychain item " +
+        `hasna.credentials.recordings.api-key, or ~/.hasna/recordings/config/credentials. ${message} ` +
+        "There is no local fallback: local SQLite is opt-in only (HASNA_RECORDINGS_LOCAL=1) and is disabled by default — failing closed",
+      { cause: error },
+    );
   }
-  if (resolution.transport === "sqlite" || !resolution.baseUrl) {
-    return { transport: "sqlite", client: null, resolution };
-  }
-  const wired = createClientTransport(name, env);
-  if (wired.transport !== "http") {
-    throw new Error(`Client for '${name}' resolved to the /v1 API without an API key.`);
-  }
-  return { transport: "http", client: createHasnaStorageClient(name, wired.client), resolution };
+  throw new Error(
+    `REMOTE_API_URL_INVALID: ${message} local SQLite fallback is disabled`,
+    { cause: error },
+  );
 }
 
-// The canonical seam entry point, re-exported for consumers of the public
-// storage surface. The seam's own resolution semantics apply (an API URL with
-// a resolvable credential selects http; anything else is the local store).
-export { resolveStorageClient };
+function toRecordsAuthority(resolution: {
+  transport: "http";
+  transportSource: string;
+  baseUrl: string;
+  apiUrlSource: string | null;
+  apiKeyPresent: boolean;
+  apiKeySource: string | null;
+  apiKeyTier: CredentialTier;
+  misconfigured: boolean;
+  warning: string | null;
+}): RecordsAuthorityResolution {
+  return {
+    transport: resolution.transport,
+    transportSource: resolution.transportSource,
+    baseUrl: resolution.baseUrl,
+    apiUrlSource: resolution.apiUrlSource,
+    apiKeyPresent: resolution.apiKeyPresent,
+    apiKeySource: resolution.apiKeySource,
+    apiKeyTier: resolution.apiKeyTier,
+    misconfigured: resolution.misconfigured,
+    warning: resolution.warning,
+  };
+}
+
+/**
+ * Resolve the recordings transport. The deliberate unhosted opt-in is answered
+ * first and WITHOUT consulting the resolver; otherwise `@hasna/contracts`
+ * resolves the credential and the authority, and any failure to do so is a
+ * throw — the client never defaults to the on-box SQLite file (owner ruling
+ * 2026-09-04, hasna/apps#1720).
+ */
+export function resolveRecordingsTransport(
+  env: Env = process.env,
+  options: RecordsClientResolveOptions = {},
+): RecordsTransportResolution {
+  if (selectsRecordingsLocalStore(env)) {
+    return { transport: "sqlite", selected: false, source: "local-opt-in", authority: null };
+  }
+  // Normalising blanks (and carving the unprefixed names) hands the resolver a
+  // copy, and a copy is not the ambient environment its Keychain tier gates on
+  // — so the gate travels with the env as `keychain.enabled` rather than being
+  // silently lost (see `recordingsResolverInputs`).
+  const resolverInputs = recordingsResolverInputs(env, options.credentials);
+  let resolution: ReturnType<typeof resolveClientTransport>;
+  try {
+    resolution = resolveClientTransport("recordings", resolverInputs.env, {
+      credentials: resolverInputs.credentials,
+    });
+  } catch (error) {
+    throwRecordingsAuthorityFailure(error);
+  }
+  return {
+    transport: "http",
+    selected: true,
+    source: `${resolution.apiKeySource ?? resolution.apiKeyTier}+${resolution.apiUrlSource ?? "default"}`,
+    authority: toRecordsAuthority(resolution),
+  };
+}
+
+/** Non-throwing transport status for diagnostics. Never includes a key value. */
+export interface RecordsTransportStatus {
+  selected: boolean;
+  ok: boolean;
+  transport: RecordsClientTransport | "invalid";
+  api_url_configured: boolean;
+  api_key_configured: boolean;
+  api_url_source: string | null;
+  api_key_source: string | null;
+  api_key_tier: RecordsCredentialTier | null;
+  v1_base_url: string | null;
+  issues: string[];
+  local_fallback: false;
+}
+
+/**
+ * The status surface `recordings check` renders: every refusal is reported as
+ * a status, never thrown. A refused configuration still says WHICH half it
+ * has: the flags are read from the environment alone, deliberately — the
+ * resolver already refused, so re-running its Keychain and filesystem tiers to
+ * decorate a failure would spend the machine's credential stores on a
+ * diagnostic, and the message already names every tier it consulted.
+ */
+export function getRecordingsTransportStatus(
+  env: Env = process.env,
+  options: RecordsClientResolveOptions = {},
+): RecordsTransportStatus {
+  let resolution: RecordsTransportResolution;
+  try {
+    resolution = resolveRecordingsTransport(env, options);
+  } catch (error) {
+    const issue = error instanceof Error ? error.message : String(error);
+    const envKeys = clientTransportEnvKeys("recordings");
+    const declared = (keys: readonly string[]) => keys.some((key) => (env[key] ?? "").trim() !== "");
+    return {
+      selected: true,
+      ok: false,
+      transport: "invalid",
+      api_url_configured: declared(envKeys.apiUrlKeys),
+      api_key_configured: declared(envKeys.apiKeyKeys),
+      api_url_source: null,
+      api_key_source: null,
+      api_key_tier: null,
+      v1_base_url: null,
+      issues: [issue],
+      local_fallback: false,
+    };
+  }
+  if (!resolution.selected) {
+    return {
+      selected: false,
+      ok: true,
+      transport: resolution.transport,
+      api_url_configured: false,
+      api_key_configured: false,
+      api_url_source: null,
+      api_key_source: null,
+      api_key_tier: null,
+      v1_base_url: null,
+      issues: [],
+      local_fallback: false,
+    };
+  }
+  const authority = resolution.authority!;
+  return {
+    selected: true,
+    ok: true,
+    transport: resolution.transport,
+    // The default fleet gateway is a resolved authority, not a configured one:
+    // an operator reading this line must be able to tell "I pointed this at a
+    // URL" apart from "the gateway default applied".
+    api_url_configured: authority.apiUrlSource !== null && authority.apiUrlSource !== "default",
+    api_key_configured: authority.apiKeyPresent,
+    api_url_source: authority.apiUrlSource,
+    api_key_source: authority.apiKeySource,
+    api_key_tier: authority.apiKeyTier,
+    v1_base_url: authority.baseUrl,
+    issues: [],
+    local_fallback: false,
+  };
+}
+
+/**
+ * Resolve the hosted storage client, or `null` for the on-box SQLite store,
+ * which is reachable ONLY under the deliberate unhosted opt-in. Every other
+ * outcome THROWS a `REMOTE_API_*` failure: no credential, an unusable
+ * credential file, or a malformed authority. There is no silent local default
+ * and no local-fallback event (fail closed, hasna/apps#1720).
+ *
+ * The returned client's transport re-resolves the credential on every request
+ * through the @hasna/contracts chain, so a rotation heals a long-lived MCP
+ * server without a restart; only the authority is fixed for the life of the
+ * client, so a credential written for one authority is never sent to another.
+ */
+export function resolveRecordingsCloudClient(
+  env: Env = process.env,
+  options: RecordsClientResolveOptions = {},
+): RecordsCloudClient | null {
+  if (selectsRecordingsLocalStore(env)) return null;
+  const resolverInputs = recordingsResolverInputs(env, options.credentials);
+  let resolved: ReturnType<typeof resolveStorageClient>;
+  try {
+    resolved = resolveStorageClient("recordings", resolverInputs.env, {
+      fetchImpl: (input, init) => globalThis.fetch(input, { ...init, redirect: "manual" }),
+      credentials: resolverInputs.credentials,
+    });
+  } catch (error) {
+    throwRecordingsAuthorityFailure(error);
+  }
+  // The assignment below is the compile-time correspondence check between the
+  // shared client's shape and the locally spelled public one (#1782): if the
+  // published @hasna/contracts client ever drifts from the boundary spelling,
+  // this file stops compiling.
+  const client: RecordsCloudClient = resolved.client;
+  return client;
+}
+
+/**
+ * The shared seam entry point, re-exported for consumers of the public storage
+ * surface. The seam's own resolution semantics apply (resolve or throw — the
+ * recordings surfaces add the local opt-in on top; see
+ * {@link resolveRecordingsCloudClient}).
+ */
+export { resolveStorageClient }; // eslint-disable-line no-restricted-syntax
 export type { HasnaStorageClient };

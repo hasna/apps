@@ -81,7 +81,7 @@ export function applyTodosCliAuthorityEnvironment(
   if (authority.route !== "local" || authority.selected_by !== "local-only-command") return;
   delete env.HASNA_TODOS_API_URL;
   delete env.HASNA_TODOS_API_KEY;
-  delete env.TODOS_API_URL;
+  env.TODOS_API_URL = "";
   delete env.TODOS_API_KEY;
   delete env.HASNA_TODOS_API_KEY_OVERRIDE;
   delete env.HASNA_TODOS_API_KEY_REF;

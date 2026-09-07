@@ -4,14 +4,17 @@ Mementos has three effective backends:
 
 | Backend | Selected by | Authority |
 | --- | --- | --- |
-| `local-sqlite` | Default local environment | SQLite file on this machine |
-| `cloud-api` | API URL and API key on a client | Authenticated HTTP service |
+| `local-sqlite` | Explicit opt-in: `HASNA_MEMENTOS_DB_PATH` / `MEMENTOS_DB_PATH` (or `HASNA_MEMENTOS_LOCAL=1` with nothing configured) | SQLite file on this machine |
+| `cloud-api` | A resolved `@hasna/contracts` credential on a client | Authenticated HTTP service |
 | `cloud-postgres` | `HASNA_MEMENTOS_DATABASE_URL` inside `mementos-serve` | PostgreSQL/RDS-compatible database |
 
 There are no deployment modes (owner directive 2026-07-29; knowledge
-k_ms5wv466_u0jidq). The client transport is selected by the API URL + key pair;
-the server data backend by `HASNA_MEMENTOS_DATABASE_URL` presence. Any retired
-storage-mode variable (`HASNA_MEMENTOS_STORAGE_MODE` or an alias) throws.
+k_ms5wv466_u0jidq). The client transport is decided by what the
+`@hasna/contracts` credential chain RESOLVES against the deliberate local
+opt-ins; the server data backend by `HASNA_MEMENTOS_DATABASE_URL` presence.
+The retired storage-mode variables (`HASNA_MEMENTOS_STORAGE_MODE` and aliases)
+are inert — nothing reads them, and they must simply be deleted from old
+environments.
 
 Run this before a write when there is any doubt:
 
@@ -111,19 +114,35 @@ the file is loaded. Invalid values are ignored.
 
 ## Client HTTP API transport
 
-Clients select the authenticated HTTP transport only when both an endpoint and
-a key are present:
+Clients (CLI, MCP server, `./sdk`) resolve their credential and service
+authority through the ONE resolver in `@hasna/contracts/client`, fresh on every
+call. The tiers, highest first:
 
-| Canonical variable | Fallback alias | Purpose |
-| --- | --- | --- |
-| `HASNA_MEMENTOS_API_URL` | `MEMENTOS_API_URL` | Service origin or prefixed base URL |
-| `HASNA_MEMENTOS_API_KEY` | `MEMENTOS_API_KEY` | Bearer/API key |
-| `HASNA_MEMENTOS_API_TIMEOUT` | — | curl timeout in seconds; default 45 |
+| Tier | Source |
+| --- | --- |
+| 1 | explicit arguments (`--api-key` / `--profile`; `baseUrl` / `apiKey` in the SDK) |
+| 2 | `HASNA_MEMENTOS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_MEMENTOS_API_KEY_REF` (a secrets-vault item key, never a value) |
+| 3 | macOS Keychain item `hasna.credentials.mementos.api-key` (account `HASNA_STATION` → `hostname -s` → `USER`) |
+| 4 | `~/.hasna/mementos/config/credentials` (owner-only `0400`/`0600`; `HASNA_HOME` / `HASNA_CONFIG_HOME` move the root) |
+| 5 | `HASNA_MEMENTOS_API_KEY` |
 
-A base URL without `/v1` or `/api` is normalized by appending `/v1`. Exactly one
-of URL/key present is an ERROR naming the missing variable — the client never
-silently falls back to a different dataset. Neither present selects local
-SQLite.
+| Canonical variable | Purpose |
+| --- | --- |
+| `HASNA_MEMENTOS_API_URL` | Service origin or prefixed base URL (authority override) |
+| `HASNA_MEMENTOS_API_KEY` | Bearer/API key |
+| `HASNA_MEMENTOS_API_TIMEOUT` | curl timeout in seconds; default 45 |
+| `HASNA_MEMENTOS_LOCAL` / `MEMENTOS_LOCAL` | Deliberate unhosted opt-in (honoured only when nothing configures an authority) |
+
+The legacy unprefixed `MEMENTOS_API_URL` / `MEMENTOS_API_KEY` spellings survive
+only as the resolver's silent alias fallback for one release; the resolver
+refuses alias disagreement rather than picking one silently. The authority
+defaults to the fleet gateway `https://api.hasna.com/mementos` (the client
+appends `/v1`) once a credential resolves — a credential ALONE is a complete
+configuration, and a URL configured without a resolvable credential is an
+ERROR naming every tier consulted. Nothing configured anywhere refuses at
+every store entry point (fail closed, owner ruling 2026-09-04): the on-box
+SQLite store is reachable only through the explicit opt-ins above, and every
+local run prints one line saying it is local on stderr.
 
 If `HASNA_MEMENTOS_DATABASE_URL` or `MEMENTOS_DATABASE_URL` is also present,
 API mode deliberately refuses to engage. Client and database transports are
@@ -153,7 +172,8 @@ The postgresql backend is selected by the URL's presence; fallback name
 `MEMENTOS_DATABASE_URL` is accepted, with the canonical `HASNA_...` variable
 winning. Without a URL the server uses SQLite. The retired storage-mode
 variables (`HASNA_MEMENTOS_STORAGE_MODE`, `HASNA_MEMENTOS_MODE`,
-`MEMENTOS_STORAGE_MODE`, `MEMENTOS_MODE`) are errors and must be deleted.
+`MEMENTOS_STORAGE_MODE`, `MEMENTOS_MODE`) are inert and must simply be deleted
+from old environments.
 
 The postgresql backend is pure remote: server reads and writes go directly to
 PostgreSQL; there is no local SQLite cache and no raw-file synchronization.

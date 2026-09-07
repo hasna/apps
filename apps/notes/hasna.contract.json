@@ -3,8 +3,8 @@
   "name": "notes",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.10.6",
-  "description": "Authenticated HTTPS Notes CLI, MCP and SDK with a PostgreSQL-only server. Clients require HASNA_NOTES_API_URL plus HASNA_NOTES_API_KEY, reject database DSNs, and have no local fallback. notes-serve requires server-only HASNA_NOTES_DATABASE_URL and fails closed. XDG paths are maintenance-only; explicit fingerprint-bound legacy copies do not become authoritative storage. The personalnotes/v1 wire dialect and separate PersonalNotes product remain unchanged.",
+  "kitVersion": "1.0.2",
+  "description": "Authenticated HTTPS Notes CLI, MCP and SDK with a PostgreSQL-only server. Clients resolve their credential and authority through the @hasna/contracts chain per request: HASNA_NOTES_API_KEY, the Keychain item hasna.credentials.notes.api-key, then ~/.hasna/notes/config/credentials (owner-only), and the authority follows HASNA_NOTES_API_URL, the Keychain api-url item, the credentials file, and finally the fleet gateway https://api.hasna.com/notes (the wire dialect lives at the /v1 authority root). Hosted with no credential fails loud on every surface: no SQLite, no local fallback. Clients reject database DSNs. notes-serve requires server-only HASNA_NOTES_DATABASE_URL and fails closed. The personalnotes/v1 wire name and the separate PersonalNotes product remain unchanged.",
   "hosting": [
     "user-hosted"
   ],

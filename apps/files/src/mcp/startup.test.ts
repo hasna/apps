@@ -93,16 +93,22 @@ test("MCP initialize responds without creating or opening the files database", a
   throw new Error(`MCP initialize did not respond. stderr: ${stderr}`);
 });
 
-test("MCP refuses to start without hosted env or a local opt-in (fail closed)", async () => {
+test("MCP refuses to start without a resolvable credential or a local opt-in (fail closed)", async () => {
   const dataDir = makeDataDir();
-  const env = { ...process.env, HASNA_FILES_DATA_DIR: dataDir };
+  const env = { ...process.env, HOME: dataDir, HASNA_HOME: dataDir, HASNA_FILES_DATA_DIR: dataDir };
   for (const key of [
     "HASNA_FILES_API_URL",
     "FILES_API_URL",
     "HASNA_FILES_API_KEY",
     "FILES_API_KEY",
+    "HASNA_FILES_LOCAL",
+    "FILES_LOCAL",
     "HASNA_FILES_LOCAL_MODE",
     "FILES_LOCAL_MODE",
+    "HASNA_FILES_STORAGE_MODE",
+    "HASNA_PROFILE",
+    "HASNA_FILES_API_KEY_OVERRIDE",
+    "HASNA_FILES_API_KEY_REF",
   ]) {
     delete env[key];
   }
@@ -122,7 +128,6 @@ test("MCP refuses to start without hosted env or a local opt-in (fail closed)", 
 
   expect(exitCode).not.toBe(0);
   expect(stderr).toContain("HASNA_FILES_API_URL");
-  expect(stderr).toContain("HASNA_FILES_API_KEY");
-  expect(stderr).toContain("HASNA_FILES_LOCAL_MODE");
+  expect(stderr).toContain("no local fallback");
   await expect(Bun.file(join(dataDir, "files.db")).exists()).resolves.toBe(false);
 });

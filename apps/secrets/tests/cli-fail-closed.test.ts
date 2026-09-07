@@ -166,6 +166,28 @@ describe("CLI fail-closed default (owner ruling 2026-09-04)", () => {
     expect(existsSync(join(testDir, "vault.db"))).toBe(false);
   });
 
+  it("`status` fails closed with the same one-line message — never a stack dump", () => {
+    // `status` did not route through the CLI's store() accessor, so a missing
+    // credential surfaced as an uncaught throw whose FIRST stderr line was a
+    // bundle snippet (`4054 | }`), with the actionable message buried below.
+    const res = runSecrets(["status"]);
+
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stdout).toBe("");
+    const lines = res.stderr.split("\n").filter((line) => line.trim().length > 0);
+    expect(lines[0]).toMatch(/^HASNA_SECRETS_API_URL is not set and no API key could be resolved/);
+    expect(res.stderr).toContain("Keychain");
+    expect(res.stderr).toContain("HASNA_SECRETS_LOCAL_VAULT");
+    expect(res.stderr).not.toMatch(/^\s*\d+ \|/m);
+    expect(res.stderr).not.toContain("    at ");
+    expect(existsSync(join(testDir, "vault.db"))).toBe(false);
+
+    const json = runSecrets(["status", "--json"]);
+    expect(json.exitCode).not.toBe(0);
+    expect(json.stdout).toBe("");
+    expect(json.stderr.split("\n")[0]).toMatch(/^HASNA_SECRETS_API_URL is not set and no API key could be resolved/);
+  });
+
   it("leaves utility surfaces available without any env", () => {
     const version = runSecrets(["--version"]);
     expect(version.exitCode).toBe(0);

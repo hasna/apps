@@ -40,22 +40,26 @@ function fakeTransport(): { transport: HasnaHttpTransport; calls: Call[] } {
 
 describe("resolveStore", () => {
   it("fails closed (throws, never LocalStore) when no env and no local opt-in", () => {
+    expect(() => resolveStore({})).toThrow(/REMOTE_API_CONFIG_MISSING/);
     expect(() => resolveStore({})).toThrow(/HASNA_FILES_API_URL/);
-    expect(() => resolveStore({})).toThrow(/HASNA_FILES_API_KEY/);
-    expect(() => resolveStore({})).toThrow(/HASNA_FILES_LOCAL_MODE/);
   });
 
   it("returns a LocalStore only under the explicit local opt-in", () => {
-    const s = resolveStore({ HASNA_FILES_LOCAL_MODE: "1" });
+    const s = resolveStore({ HASNA_FILES_LOCAL: "1" });
     expect(s.transport).toBe("local");
     expect(s instanceof LocalStore).toBe(true);
   });
 
   it("honours the unprefixed local opt-in alias", () => {
-    expect(resolveStore({ FILES_LOCAL_MODE: "1" }).transport).toBe("local");
+    expect(resolveStore({ FILES_LOCAL: "1" }).transport).toBe("local");
   });
 
-  it("returns an ApiStore when API url + key are present", () => {
+  it("ignores the retired *_MODE local switches", () => {
+    expect(() => resolveStore({ HASNA_FILES_LOCAL_MODE: "1" })).toThrow(/REMOTE_API_CONFIG_MISSING/);
+    expect(() => resolveStore({ FILES_LOCAL_MODE: "1" })).toThrow(/REMOTE_API_CONFIG_MISSING/);
+  });
+
+  it("returns an ApiStore when a credential resolves (env tier)", () => {
     const s = resolveStore({
       HASNA_FILES_API_URL: "https://files.md",
       HASNA_FILES_API_KEY: "k_test",

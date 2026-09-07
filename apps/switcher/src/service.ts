@@ -1,13 +1,16 @@
+import { canonicalPolicyJSON } from "./model-policy-schema";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { Store } from "./store";
-import { discover } from "./catalog";
+import { discover, type CatalogCredentialResolver } from "./catalog";
 import { boundedJson } from "./http";
-import { Fault, VERSION, parse, idSchema, providerInputSchema, profileInputSchema, runInputSchema, runUpdateSchema, compatible, codingEligible, type Provider, type Profile, type Run, type Catalog, type LaunchPlan } from "./domain";
+import { Fault, VERSION, parse, idSchema, providerInputSchema, profileInputSchema, runInputSchema, runUpdateSchema, validateHarnessProvider, codingEligible, harnessEligible, type Provider, type Profile, type Run, type Catalog, type LaunchPlan } from "./domain";
+import { compileModelPolicy } from "./model-policy";
+import { providerPresets, getProviderPreset } from "./presets";
 import openapi from "../openapi.json";
 const snapshot=(profile:Profile,provider:Provider,catalog:Catalog)=>createHash("sha256").update(JSON.stringify([profile,provider,{models:catalog.models,source:catalog.source}])).digest("hex");
 const hash = (s: string) => createHash("sha256").update(s).digest();
-export function createHandler(store: Store, apiKey: string, providerEnv: Record<string, string | undefined> = process.env) {
+export function createHandler(store: Store, apiKey: string, providerEnv: Record<string, string | undefined> = process.env, resolveCredential?: CatalogCredentialResolver) {
   if (!apiKey || apiKey.length < 24) throw new Fault(500, "auth_config", "Set HASNA_SWITCHER_API_KEY to a random token of at least 24 characters.");
   const expected = hash(`Bearer ${apiKey}`);
   return async (request: Request): Promise<Response> => {
@@ -33,6 +36,7 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
         search: z.string().max(200).default(""),
       }).strict(), Object.fromEntries(url.searchParams));
       if (request.method === "GET") {
+        if (resource === "provider-presets" && parts.length <= 3) return json(id ? getProviderPreset(id) : {data: providerPresets});
         if (["providers", "profiles", "runs"].includes(resource) && parts.length <= 3) {
           const kind = resource as "providers"|"profiles"|"runs";
           return json(id ? await store.get(kind, id) : await store.list(kind, page()));
@@ -64,7 +68,7 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
       if (resource === "providers" && id && parts[3] === "refresh" && parts.length === 4 && request.method === "POST") {
         parse(z.object({}).strict(), body);
         const provider = await store.get<Provider>("providers", id);
-        refreshed = {provider, catalog: await discover(provider, providerEnv)};
+        refreshed = {provider, catalog: await discover(provider, providerEnv, resolveCredential)};
       }
       const result = await store.mutate(key, fingerprint, async db => {
         if ((resource === "providers" || resource === "profiles") && parts.length <= 3) {
@@ -75,7 +79,7 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
             if (resource === "profiles") {
               const profile = value as Profile;
               const provider = await store.get<Provider>("providers", profile.providerId, db);
-              if (!compatible(profile.harness, provider.protocol)) throw new Fault(422, "protocol_mismatch", "Harness does not support this provider protocol.");
+              validateHarnessProvider(profile.harness, provider);
             }
             const saved = await store.put(resource, value, id ? version() : undefined, db);
             if (resource === "providers" && id) await db.unsafe("DELETE FROM switcher_catalogs WHERE id = $1", [id]);
@@ -95,20 +99,22 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
           const {profileId} = parse(z.object({profileId: idSchema}).strict(), body);
           const profile = await store.get<Profile>("profiles", profileId, db);
           const provider = await store.get<Provider>("providers", profile.providerId, db);
-          if (!compatible(profile.harness, provider.protocol)) throw new Fault(422, "protocol_mismatch", "Harness does not support this provider protocol.");
+          validateHarnessProvider(profile.harness, provider);
           let catalog: Catalog;
           try { catalog = await store.get<Catalog>("catalogs", provider.id, db); }
           catch (e) { if (e instanceof Fault && e.status === 404) throw new Fault(422, "catalog_missing", "Refresh the provider catalog before launching."); throw e; }
           const selected = catalog.models.find(m => m.id === profile.model);
           if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
-          if (!codingEligible(selected)) throw new Fault(422, "model_ineligible", "Selected model explicitly lacks text output or tool support.");
+          if (!harnessEligible(selected,profile.harness)) throw new Fault(422, "model_ineligible", "Selected model is unavailable or explicitly lacks a required generation method, text output or tool support.");
+          compileModelPolicy(profile.model,catalog.models.filter(model=>harnessEligible(model,profile.harness)),profile.modelPolicy);
           const warnings: string[] = [];
-          if (!selected.supportedParameters) warnings.push("Provider does not declare tool capabilities; execution compatibility is unverified.");
+          if (profile.harness!=="aider"&&!selected.supportedParameters) warnings.push("Provider does not declare tool capabilities; execution compatibility is unverified.");
           if (profile.harness === "claude" && !/claude/i.test(profile.model)) warnings.push("Anthropic does not support non-Claude models in Claude Code; this combination is experimental.");
           if (Date.now() - Date.parse(catalog.refreshedAt) > 300000) warnings.push("Catalog snapshot is older than five minutes; refresh before launching.");
           return {profile, provider, catalog, warnings,planToken:snapshot(profile,provider,catalog)} satisfies LaunchPlan;
         }
         if (resource === "runs" && !id && request.method === "POST") {
+          if((body as {modelPolicyVersion?:unknown})?.modelPolicyVersion!==1)throw new Fault(409,"launcher_upgrade_required","This API requires a launcher with automatic model policy version 1; upgrade the Switcher CLI/SDK.");
           const input = parse(runInputSchema, body);
           if(store.engine === "postgresql") await db.unsafe("SELECT id FROM switcher_profiles WHERE id = $1 FOR SHARE",[input.profileId]);
           const profile=await store.get<Profile>("profiles",input.profileId,db);
@@ -119,8 +125,8 @@ export function createHandler(store: Store, apiKey: string, providerEnv: Record<
           const provider=await store.get<Provider>("providers",profile.providerId,db);
           let catalog:Catalog;
           try{catalog=await store.get<Catalog>("catalogs",profile.providerId,db);}catch(error){if(error instanceof Fault&&error.status===404)throw new Fault(409,"plan_changed","Catalog changed; request a fresh launch plan.");throw error;}
-          if (profile.harness !== input.harness || profile.model !== input.model || snapshot(profile,provider,catalog)!==input.planToken) throw new Fault(409, "plan_changed", "Provider, profile or catalog changed; request a fresh launch plan.");
-          return store.put("runs", {...input,providerId:provider.id,providerVersion:provider.version,profileVersion:profile.version,id: crypto.randomUUID(), status: "running", startedAt: new Date().toISOString()}, undefined, db);
+          if (profile.harness !== input.harness || profile.model !== input.model || canonicalPolicyJSON(profile.modelPolicy ?? null) !== canonicalPolicyJSON(input.modelPolicy ?? profile.modelPolicy ?? null) || snapshot(profile,provider,catalog)!==input.planToken) throw new Fault(409, "plan_changed", "Provider, profile, model policy or catalog changed; request a fresh launch plan.");
+          return store.put("runs", {...input,modelPolicy:profile.modelPolicy,providerId:provider.id,providerVersion:provider.version,profileVersion:profile.version,id: crypto.randomUUID(), status: "running", startedAt: new Date().toISOString()}, undefined, db);
         }
         if (resource === "runs" && id && request.method === "PATCH" && parts.length === 3) {
           const input = parse(runUpdateSchema, body); const run = await store.get<Run>("runs", id, db);

@@ -124,7 +124,7 @@ The unprefixed `SKILLS_API_KEY` and `SKILLS_API_URL` spellings are still accepte
 as silent aliases one rung below the canonical names, for one release. Use the
 `HASNA_`-prefixed names. `SKILL_API_KEY` (singular) is no longer read at all.
 
-**Three outcomes, and no fourth:**
+**Fail closed, and the local run is a deliberate choice:**
 
 - a credential resolves → **hosted**, against the configured URL or the gateway.
   A credential that resolves but cannot produce a usable key — a deliberate
@@ -133,13 +133,34 @@ as silent aliases one rung below the canonical names, for one release. Use the
 - no credential but a URL is configured → **loud failure**, exit non-zero. There
   is no local fallback: answering from the bundled corpus while authentication is
   unconfigured is a false green;
-- neither → **local**. Skills ships its corpus, so running on this machine is a
-  real mode; it prints one line on stderr saying so.
+- neither a credential nor a URL, and no opt-in → **loud failure**, exit
+  non-zero. Running on this machine is no longer the silence that follows a
+  missing credential: an unconfigured install fails closed, opening no local
+  database and emitting no local-fallback event, and the error names the way
+  out;
+- the explicit local opt-in → **local**. Skills ships its corpus, so running on
+  this machine is a real mode — but it must be asked for:
+  `HASNA_SKILLS_LOCAL=1` (alias `SKILLS_LOCAL=1`). It prints one line saying
+  "local mode" on stderr. A configured environment always outranks the opt-in:
+  with an authority or credential in the environment, `HASNA_SKILLS_LOCAL` is
+  ignored and the run goes (or fails) hosted.
 
 The retired locations are not read: `auth.json` (in either the app directory or
 the legacy `~/.skills/`), the old fleet-env and per-machine cloud env folders
 under `~/.hasna`, and the XDG config directory. `~/.hasna` is a closed namespace
 of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
+
+### Routing environment variables
+
+| Variable | Meaning |
+|---|---|
+| `HASNA_SKILLS_API_KEY` | The API key (tier 5 of the ladder). The silent alias `SKILLS_API_KEY` is accepted for one release. |
+| `HASNA_SKILLS_API_URL` | The Skills API origin (HTTPS, or loopback HTTP). The silent alias `SKILLS_API_URL` is accepted for one release. |
+| `HASNA_SKILLS_LOCAL` | Explicit unhosted opt-in: run on this machine against the bundled corpus when no authority is configured. Any non-blank value (`1`). Alias `SKILLS_LOCAL`. Ignored whenever an authority or credential variable IS set. |
+| `HASNA_SKILLS_API_KEY_OVERRIDE` | Deliberate tier-2 key that outranks every store. |
+| `HASNA_SKILLS_API_KEY_REF` | Deliberate tier-2 vault-item pointer (resolved through `@hasna/secrets`). |
+| `HASNA_PROFILE` | Selects an isolated `credentials-<profile>` file (tier 1). |
+| `HASNA_STATION` | The Keychain account for tier 3; falls back to `hostname -s`, then `$USER`. |
 
 ## CLI Commands
 
@@ -151,7 +172,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills unpin <name>` | | Remove a project pin |
 | `skills pins list` | | List pinned skills |
 | `skills setup --api-url <url>` | | Point the CLI at a Skills API origin for remote runs |
-| `skills setup` | | Show whether an API origin is configured; with none, skills run on this machine |
+| `skills setup` | | Show whether an API origin is configured; with none, running on this machine requires `HASNA_SKILLS_LOCAL=1` |
 | `skills setup agents` | | Register the Skills MCP server with all supported agents |
 | `skills list` | `ls` | List available skills (filter with `-c`, `--pinned`, `-t`, `--brief`) |
 | `skills search <query>` | `s` | Search by name, description, or tags |
@@ -168,6 +189,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills categories` | | List all categories with skill counts |
 | `skills tags` | | List all unique tags with occurrence counts |
 | `skills doctor` | | Check env vars, system deps, and pinned skill health |
+| `skills env-check [name]` | `check-env` | Show required environment variables; `--set KEY=VALUE` updates the project's `.env` |
 | `skills test [name]` | | Test skill readiness (env, system, npm deps) |
 | `skills outdated` | | Compare pinned vs registry versions |
 | `skills auth login --api-key <key>` | | Verify and store a Skills API key |
@@ -186,6 +208,7 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills create <name>` | | Scaffold a new custom skill directory |
 | `skills sync --to claude` | | Disabled by design; use `skills mcp --register <agent|all>` |
 | `skills sync --from claude` | | Disabled by design; agent skill folders are not used |
+| `skills sync [names...] --check --for <agent> --source <path>` | `render` | Read-only drift census for the selected corpus, skills and agent; explicit source overrides `SKILLS_SOURCE`, then the installed cache. Unknown selections or drift exit nonzero. Without selectors, check all existing agent homes. |
 | `skills sync --station <id>` | | Per-station snapshot mode: snapshot the installed skill homes into `resources/<station>/skills` with a v3 sync-manifest (dry-run by default; `--populate` writes) |
 | `skills hydrate --station <id>` | | Restore the canonical corpus cache from a reviewed per-station snapshot (dry-run by default; `--apply` writes) |
 | `skills validate <name>` | | Check a skill's directory structure |
@@ -197,6 +220,23 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills mcp --register claude` | | Register the Skills MCP server in an agent config (also `codex`, `gemini`, `opencode`, `all`) |
 | `skills self-update` | | Update this package to the latest version |
 | `skills completion <shell>` | | Generate shell completions (bash, zsh, fish) |
+
+### Local environment assignments
+
+`skills env-check --set 'KEY=value'` writes one literal value to the current
+project's `.env`. Keys must match `[A-Za-z_][A-Za-z0-9_]*`. Empty values and `=`
+within a value are supported; output confirms the key and path without printing
+the value. Quote the shell argument when it contains shell metacharacters.
+
+The writer preserves unrelated lines, comments, line endings and existing file
+permissions. New files use mode `0600`. Symlinks and special files are rejected.
+Values containing control characters, newlines, all three quote delimiters, an
+odd trailing backslash, a backslash immediately before a final dollar, or a
+backslash together with both a single quote and a backtick are rejected because
+literal Bun dotenv serialization is not supported
+for those cases. Multiline or ambiguous existing assignments also
+require manual editing; refusal leaves the file unchanged. Literal round trips
+are tested with Bun 1.3.14 and 1.4.0.
 
 ### Common Options
 
@@ -255,6 +295,14 @@ Stable command shapes:
   served by the API and never ships in this package.
 - Config and schedules: `config * --json` and `schedule * --json` return
   machine-readable status objects.
+  `schedule run` exits 1 if any item fails, in human and JSON output. JSON
+  `results[].attempted` identifies items handed to the local executor; `ran`
+  counts those attempts, including failures. Missing skills, routing refusals,
+  and unsupported hosted scheduling leave that occurrence due and its history
+  unchanged. Local attempts record success/error and advance the schedule.
+  If history cannot be saved, the item reports `executionStatus` and
+  `historyError`; inspect its effects before retrying. Other due items still run.
+  No-due and `--dry-run` remain successful without consuming occurrences.
 - Storage: `storage status --json` returns local `.skills` paths and optional
   repo-native remote readiness; `storage sync-plan --json` returns a no-network
   snapshot plan.
@@ -313,6 +361,16 @@ skills show my-skill
 
 skills port ./existing-skill
 ```
+
+New and imported local skill names use hyphens: `MyHTTPTool` becomes
+`my-http-tool`, and `my_tool.v2` becomes `my-tool-v2`. Existing installed names
+and declared command names remain readable without renaming. Already joined
+lowercase words are not split automatically; supply `--name my-skill` when importing.
+An import updates name declarations in its copied files; original source files stay unchanged.
+
+Single-folder `port` / `add` reports validation after importing. If validation
+fails, both human and JSON output exit with status 1; the imported folder remains
+available for correction. Check `valid` and `issues` in JSON before using it.
 
 The scaffold includes `SKILL.md`, `skill.json`, `AGENTS.md`, `package.json`,
 `tsconfig.json`, and `src/index.ts`. `AGENTS.md` is written for coding agents:
@@ -600,7 +658,7 @@ skills/                      # Public skill contracts and local OSS skills
 |---|---|---|
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 56 | `tools/list` against a live `buildServer()` |
+| MCP tools | 59 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather
@@ -718,3 +776,67 @@ hand.
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE)
+
+### Account and workspace names on a compatible server
+
+`skills account update --display-name "Ana" --email you@example.com` and
+`skills workspace update --name "Studio" --email you@example.com` request a
+fresh verification email and prompt for the code without showing its digits.
+The current API selection still determines the server. These commands require
+that server to support the additive customer-name routes; they do not enable
+membership, billing or operator administration.
+
+For automation, first request a fresh code through `skills auth login --email you@example.com --json`,
+then pipe the code from your secure input source to the same command with
+`--code-stdin --json`. Do not put verification codes in command arguments or
+shell history. JSON/noninteractive updates require `--code-stdin`. Cancelling
+an interactive prompt exits with status130 before verification.
+
+`RemoteSkillsAuthClient.updateProfile(email, code, { displayName })` and
+`updateCurrentWorkspace(email, code, { name })` use a fresh session without
+replacing saved API keys or profile selection. `RemoteSkillsClient` exposes the
+same name operations for an explicitly supplied interactive session. Servers
+retain the final permission checks; ordinary API keys may be refused. MCP tools
+`update_account_profile` and `update_workspace_name` accept a name, email and
+fresh verification code, and return only the safe updated projection.
+
+## Admin user-list authority
+
+The `./admin-contract` user-list response retains a global identity whose default
+workspace membership is absent or revoked. Its required `role` is `null` in that
+case, and its `organizationId` remains the default workspace pointer. Null grants
+no workspace authority. Consumers must handle it explicitly; an organization
+filter lists active members of that workspace. Role assignment still requires a
+concrete role and targets the default membership; a missing default membership
+does not select a different workspace automatically. Active organization rosters
+and role-mutation responses continue to require non-null roles.
+
+## Current workspace roster on a compatible server
+
+`skills workspace members --email you@example.com` requests fresh email
+verification and reads one page of the current workspace roster. The selected
+server requires a current owner/admin session; API keys and support
+impersonation do not grant roster access. It never replaces saved credentials
+or changes the selected profile.
+
+For noninteractive use, request a code with the existing auth flow, then supply
+it on stdin (never as a command argument):
+
+```sh
+skills workspace members --email you@example.com --code-stdin --limit 25 --json
+```
+
+JSON includes `organizationId`, `members`, and required `nextCursor` (null on the
+last page). Pass a returned cursor unchanged with `--cursor` to read the next
+page; limits are 1–100 with server default 50. Timestamps retain the server's
+microsecond strings. Human output also includes a continuation cursor when one
+exists. Empty pages are distinct from denied, unsupported or malformed responses,
+which fail the command.
+
+SDK callers with an authorized customer session can use
+`RemoteSkillsClient.listWorkspaceMembers({ limit, cursor })`. For fresh email
+verification, use `RemoteSkillsAuthClient.listWorkspaceMembers(email, code,
+options)`. The MCP tool `list_workspace_members` takes `email`, `code`, and
+optional `limit`/`cursor` and calls the same fresh-auth client. These are read-only
+roster adapters; invitations, membership changes and workspace switching are
+separate server capabilities.

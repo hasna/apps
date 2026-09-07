@@ -207,7 +207,16 @@ const header =
   "// @generated from src/server/openapi.ts by scripts/generate-sdk.ts — DO NOT EDIT.\n" +
   "// Regenerate: bun run sdk:generate\n\n";
 
-const identityExport = 'export { IdentityError } from "../lib/identity.js";';
+// The hand-maintained tail of the generated file. Two rules keep the `./sdk`
+// bundle hosted-only and self-contained (hasna/apps#1720 validation):
+//   - IdentityError comes from the dependency-free `identity-error.ts`, never
+//     from `identity.ts` (which imports db.ts and with it `bun:sqlite`);
+//   - the resolver seam is `./resolve.ts`, the SDK's adapter onto the ONE
+//     @hasna/contracts client chain, so a consumer never writes a private copy.
+const identityExport = 'export { IdentityError } from "../lib/identity-error.js";';
+const resolverExport =
+  'export { ConversationsSdkResolutionError, createConversationsClient, resolveConversationsSdkTransport } from "./resolve.js";\n' +
+  'export type { ConversationsSdkTransport, ResolveConversationsSdkTransportOptions } from "./resolve.js";';
 
 export function generateSdkSource(spec: typeof openapiSpec = openapiSpec): {
   code: string;
@@ -228,7 +237,7 @@ export function generateSdkSource(spec: typeof openapiSpec = openapiSpec): {
     result.operations,
   ).trimEnd();
   return {
-    code: `${header}${generated}\n\n${identityExport}\n`,
+    code: `${header}${generated}\n\n${identityExport}\n${resolverExport}\n`,
     operations: result.operations.length,
     warnings: [...result.warnings],
   };

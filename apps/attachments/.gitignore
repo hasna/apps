@@ -4,7 +4,5 @@ dist/
 *.js.map
 .env
 .secrets/
-sdk/dist/
-sdk/node_modules/
 *.sqlite
 pnpm-lock.yaml

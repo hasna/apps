@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { openDatabase } from '../db/database.js'
@@ -7,7 +7,18 @@ import { createHandler } from '../server/serve.js'
 import { resolveEconomyCloudStorage } from './cloud-storage.js'
 import type { ActiveEconomyCloudStorage } from './cloud-storage.js'
 import type { SqliteAdapter as Database } from '../db/sqlite-adapter.js'
-import { syncAllToCloud, billingSyncToCloud } from './cloud-ingest.js'
+import { syncAllToCloud, billingSyncToCloud, getIngestCachePath } from './cloud-ingest.js'
+
+/** Recursively list every *.db / *.sqlite / *.sqlite3 file under a root. */
+function sqliteFilesUnder(dir: string): string[] {
+  const out: string[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...sqliteFilesUnder(full))
+    else if (/\.(?:db|sqlite3?)$/.test(entry.name)) out.push(full)
+  }
+  return out
+}
 
 /**
  * Regression guard for the port lane: provider/billing ingest must work on the
@@ -102,7 +113,7 @@ describe('cloud-client provider ingest (cloud-ingest port)', () => {
       fetchImpl: (input, init) => handler(new Request(String(input), init)),
     })
     root = mkdtempSync(join(tmpdir(), 'economy-cloud-ingest-'))
-    cachePath = join(root, 'ingest-cache.db')
+    cachePath = join(root, 'ingest-cache.json')
     // Short-circuit account resolution so ingest never calls the accounts API
     // (the same per-agent override production machines configure).
     process.env['ECONOMY_CLAUDE_ACCOUNT_KEY'] = 'claude:work'
@@ -158,6 +169,29 @@ describe('cloud-client provider ingest (cloud-ingest port)', () => {
 
     const count = serverDb.prepare(`SELECT COUNT(*) AS n FROM requests`).get() as { n: number }
     expect(count.n).toBe(2)
+
+    // The cross-run state is a JSON cache, never a SQLite file: a hosted sync
+    // leaves nothing matching *.db behind (hasna/apps#1720 (f)).
+    expect(existsSync(cachePath)).toBe(true)
+    expect(JSON.parse(readFileSync(cachePath, 'utf8'))).toMatchObject({ version: 1 })
+    expect(sqliteFilesUnder(root)).toEqual([])
+  })
+
+  it('treats a pre-existing empty or non-JSON cache file as an empty cache', async () => {
+    const projectsDir = join(root, 'projects')
+    mkdirSync(projectsDir, { recursive: true })
+    writeClaudeFixture(projectsDir)
+    // What an older station has at the override path: bytes that are not the
+    // JSON cache (an empty file, or a legacy SQLite header).
+    writeFileSync(cachePath, 'SQLite format 3\0not-a-json-cache')
+
+    const result = await withProviderFetchStub(
+      async () => { throw new Error('unexpected provider fetch during ingest') },
+      () => syncAllToCloud(cloud, { claude: true, projectsDir, cachePath }),
+    )
+
+    expect(result.posted).toBe(true)
+    expect(JSON.parse(readFileSync(cachePath, 'utf8'))).toMatchObject({ version: 1 })
   })
 
   it('picks up a new provider file on the next cloud sync', async () => {
@@ -227,5 +261,39 @@ describe('cloud-client provider ingest (cloud-ingest port)', () => {
     } finally {
       delete process.env['HASNAXYZ_ANTHROPIC_LIVE_ADMIN_API_KEY']
     }
+  })
+})
+
+describe('ingest cache location', () => {
+  const saved = {
+    cacheHome: process.env['HASNA_CACHE_HOME'],
+    explicit: process.env['HASNA_ECONOMY_INGEST_CACHE'],
+  }
+  const restore = (key: string, value: string | undefined) => {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
+  afterEach(() => {
+    restore('HASNA_CACHE_HOME', saved.cacheHome)
+    restore('HASNA_ECONOMY_INGEST_CACHE', saved.explicit)
+  })
+
+  it('defaults to a JSON file under the cache root — never a *.db, never the app home', () => {
+    const cacheHome = mkdtempSync(join(tmpdir(), 'economy-cache-home-'))
+    try {
+      delete process.env['HASNA_ECONOMY_INGEST_CACHE']
+      process.env['HASNA_CACHE_HOME'] = cacheHome
+      const path = getIngestCachePath()
+      expect(path).toBe(join(cacheHome, 'economy', 'ingest-cache.json'))
+      expect(path).not.toContain('.hasna')
+      expect(path.endsWith('.db')).toBe(false)
+    } finally {
+      rmSync(cacheHome, { recursive: true, force: true })
+    }
+  })
+
+  it('HASNA_ECONOMY_INGEST_CACHE names the file explicitly', () => {
+    process.env['HASNA_ECONOMY_INGEST_CACHE'] = join(tmpdir(), 'economy-explicit', 'ingest-cache.json')
+    expect(getIngestCachePath()).toBe(join(tmpdir(), 'economy-explicit', 'ingest-cache.json'))
   })
 })

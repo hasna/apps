@@ -619,7 +619,7 @@ describe("blocked state is visible in the always-on surface", () => {
       "struct MenuBarStatusLabel",
       "struct MenuBarStatusView",
     );
-    const popover = menuBarViewSource.slice(menuBarViewSource.indexOf("struct MenuBarStatusView"));
+    const popover = sliceBetween(menuBarViewSource,"struct MenuBarStatusView","struct AudioWaveform");
     expect(popover.length).toBeGreaterThan(0);
 
     // The always-visible menu-bar item renders exactly these two things.
@@ -636,11 +636,11 @@ describe("blocked state is visible in the always-on surface", () => {
     expect(sliceBetween(menuBarViewSource, "private var statusColor: Color {", "\n    }"))
       .toContain("presentation.isBlocked ? .orange : .accentColor");
 
-    // And in BOTH surfaces every rendered symbol/label argument is presentation-derived. The
-    // record button's own `systemImage:` is a different control and is state-driven by
-    // `isRecording`, so only `Image(systemName:)` and `.accessibilityLabel(...)` are constrained.
+    // The status glyph and its accessibility label must remain presentation-derived. The
+    // expanded recorder also has pause, microphone-meter and navigation controls with their
+    // own labels; those are not status glyphs and must retain descriptive control labels.
     let inspected = 0;
-    for (const [name, surface] of [["label", label], ["popover", popover]] as const) {
+    for (const [name, surface] of [["label", label]] as const) {
       for (const pattern of [/Image\(systemName:([^)]*)\)/g, /\.accessibilityLabel\(([^)]*)\)/g]) {
         for (const match of surface.matchAll(pattern)) {
           inspected += 1;
@@ -651,9 +651,8 @@ describe("blocked state is visible in the always-on surface", () => {
         }
       }
     }
-    // Guard the guard: a rename that emptied both sweeps would otherwise pass by inspecting
-    // nothing. Three today — the label's icon, the label's accessibility label, the popover's icon.
-    expect(inspected).toBeGreaterThanOrEqual(3);
+    // Guard the guard: both the status icon and its accessible label must actually exist.
+    expect(inspected).toBe(2);
   });
 });
 

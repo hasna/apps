@@ -9,7 +9,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { resolveApiKey } from "../config.js";
+import { resolveHooksServePublishKey } from "../lib/transport.js";
 
 const CLI = join(import.meta.dir, "index.tsx");
 const TEST_HOME = mkdtempSync(join(tmpdir(), "hooks-serve-flag-test-"));
@@ -70,18 +70,16 @@ describe("hooks serve --api-key flag removal (P1-8)", () => {
   });
 });
 
-describe("resolveApiKey env-only (P1-8)", () => {
-  test("reads HASNA_HOOKS_API_KEY and HOOKS_API_KEY", () => {
-    process.env.HASNA_HOOKS_API_KEY = "env-key-a";
-    expect(resolveApiKey()).toBe("env-key-a");
-    delete process.env.HASNA_HOOKS_API_KEY;
-    process.env.HOOKS_API_KEY = "env-key-b";
-    expect(resolveApiKey()).toBe("env-key-b");
+describe("publish key resolution — the @hasna/contracts chain, not env-only (P1-8, hasna/apps#1720)", () => {
+  test("HASNA_HOOKS_API_KEY resolves the publish key", () => {
+    expect(resolveHooksServePublishKey({ HOME: TEST_HOME, HASNA_HOOKS_API_KEY: "env-key-a" })).toBe("env-key-a");
   });
 
-  test("returns undefined when neither is set — no flag fallback exists", () => {
-    delete process.env.HASNA_HOOKS_API_KEY;
-    delete process.env.HOOKS_API_KEY;
-    expect(resolveApiKey()).toBeUndefined();
+  test("the unprefixed HOOKS_API_KEY alias is still read (silent resolver fallback)", () => {
+    expect(resolveHooksServePublishKey({ HOME: TEST_HOME, HOOKS_API_KEY: "env-key-b" })).toBe("env-key-b");
+  });
+
+  test("returns undefined when nothing resolves — no flag fallback exists", () => {
+    expect(resolveHooksServePublishKey({ HOME: TEST_HOME })).toBeUndefined();
   });
 });

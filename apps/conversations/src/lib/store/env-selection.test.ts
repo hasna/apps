@@ -33,11 +33,13 @@ describe("transport resolution — API pair presence", () => {
     expect(() => conversationsCloudEnv({})).toThrow(/HASNA_CONVERSATIONS_API_KEY/);
   });
 
-  test("(c) exactly one of the pair => throws naming the missing variable", () => {
+  test("(c) a URL without a key => throws naming the key tiers; a key alone => hosted via the gateway default", () => {
     expect(() => conversationsCloudEnv({ HASNA_CONVERSATIONS_API_URL: CLOUD_ENV.HASNA_CONVERSATIONS_API_URL }))
       .toThrow(/HASNA_CONVERSATIONS_API_KEY/);
-    expect(() => conversationsCloudEnv({ HASNA_CONVERSATIONS_API_KEY: CLOUD_ENV.HASNA_CONVERSATIONS_API_KEY }))
-      .toThrow(/HASNA_CONVERSATIONS_API_URL/);
+    // (Owner directive 2026-09-04, hasna/apps#1720): a resolved credential is
+    // enough — the authority defaults to the fleet gateway https://api.hasna.com.
+    const keyOnly = conversationsCloudEnv({ HASNA_CONVERSATIONS_API_KEY: CLOUD_ENV.HASNA_CONVERSATIONS_API_KEY });
+    expect(resolveConversationsCloud(keyOnly)!.baseUrl).toBe("https://api.hasna.com/conversations/v1");
   });
 
   test("a local DB path forces local without emitting anything else", () => {

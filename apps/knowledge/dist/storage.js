@@ -310,19 +310,19 @@ import {
 } from "@hasna/contracts/client/storage";
 import {
   createClientTransport,
-  CREDENTIAL_PROFILE_ENV_KEY,
-  credentialOverrideEnvKey,
-  credentialPointerEnvKey
+  CREDENTIAL_PROFILE_ENV_KEY as CREDENTIAL_PROFILE_ENV_KEY2,
+  credentialOverrideEnvKey as credentialOverrideEnvKey2,
+  credentialPointerEnvKey as credentialPointerEnvKey2
 } from "@hasna/contracts/client";
 
 // src/client-transport.ts
 import {
-  appConfigDiskValue,
-  ClientTransportConfigurationError,
+  CREDENTIAL_PROFILE_ENV_KEY,
   clientTransportEnvKeys,
   credentialDiskSources,
+  credentialOverrideEnvKey,
+  credentialPointerEnvKey,
   defaultFleetGatewayBaseUrl,
-  keychainConfigValue,
   resolveClientTransport
 } from "@hasna/contracts/client";
 
@@ -441,19 +441,20 @@ var KNOWLEDGE_API_URL_ENV = KNOWLEDGE_API_URL_ENV_KEYS[0];
 var KNOWLEDGE_API_KEY_ENV = KNOWLEDGE_API_KEY_ENV_KEYS[0];
 var KNOWLEDGE_DATABASE_URL_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_DEFAULT_API_URL = defaultFleetGatewayBaseUrl(KNOWLEDGE_APP_SLUG);
+var KNOWLEDGE_LOCAL_OPT_IN_ENV_KEYS = ["HASNA_KNOWLEDGE_LOCAL"];
+var KNOWLEDGE_LOCAL_OPT_IN_ENV = KNOWLEDGE_LOCAL_OPT_IN_ENV_KEYS[0];
 var RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS = [
   "HASNA_KNOWLEDGE_STORAGE_MODE",
   "HASNA_KNOWLEDGE_MODE",
   "KNOWLEDGE_STORAGE_MODE",
   "KNOWLEDGE_MODE"
 ];
-var RETIRED_KNOWLEDGE_LOCAL_ENV = "HASNA_KNOWLEDGE_LOCAL";
 
 class RetiredKnowledgeStorageSelectorError extends Error {
   envKey;
   code = "retired_knowledge_storage_selector";
   constructor(envKey) {
-    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients resolve their credential through @hasna/contracts \u2014 an explicit --api-key, ` + `${KNOWLEDGE_API_KEY_ENV}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV}_REF, the macOS Keychain ` + `item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key, ~/.hasna/${KNOWLEDGE_APP_SLUG}/config/credentials, ` + `then ${KNOWLEDGE_API_KEY_ENV} \u2014 and reach ${KNOWLEDGE_DEFAULT_API_URL} unless ${KNOWLEDGE_API_URL_ENV} ` + `(or the Keychain api-url item, or the credentials file) names another authority. ` + `With no credential and no authority anywhere, the on-box store applies. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
+    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients resolve their credential through @hasna/contracts \u2014 an explicit --api-key, ` + `${KNOWLEDGE_API_KEY_ENV}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV}_REF, the macOS Keychain ` + `item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key, ~/.hasna/${KNOWLEDGE_APP_SLUG}/config/credentials, ` + `then ${KNOWLEDGE_API_KEY_ENV} \u2014 and reach ${KNOWLEDGE_DEFAULT_API_URL} unless ${KNOWLEDGE_API_URL_ENV} ` + `(or the Keychain api-url item, or the credentials file) names another authority. ` + `With no credential and no ${KNOWLEDGE_LOCAL_OPT_IN_ENV} opt-in the client fails closed. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
     this.envKey = envKey;
     this.name = "RetiredKnowledgeStorageSelectorError";
   }
@@ -480,47 +481,67 @@ function credentialOptions(env, options) {
     keychain: options.keychain ?? knowledgeKeychainTierOptions(env)
   };
 }
-function configuredAuthoritySource(env, keychain) {
-  const envKey = ENV_KEYS.apiUrlKeys.find((key) => Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined);
-  if (envKey)
-    return envKey;
-  const keychainHit = keychainConfigValue(KNOWLEDGE_APP_SLUG, env, keychain);
-  if (keychainHit)
-    return keychainHit.source;
-  const diskHit = appConfigDiskValue(KNOWLEDGE_APP_SLUG, env, ENV_KEYS.apiUrlKeys);
-  return diskHit ? diskHit.path : null;
+function isKnowledgeLocalOptIn(env = process.env) {
+  return KNOWLEDGE_LOCAL_OPT_IN_ENV_KEYS.some((key) => envKeySet(env, key));
+}
+function knowledgeAuthorityEnvKeys() {
+  const keys = clientTransportEnvKeys(KNOWLEDGE_APP_SLUG);
+  return [
+    ...keys.apiUrlKeys,
+    ...keys.apiKeyKeys,
+    credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG),
+    credentialPointerEnvKey(KNOWLEDGE_APP_SLUG),
+    CREDENTIAL_PROFILE_ENV_KEY
+  ];
+}
+function envKeySet(env, key) {
+  return Object.prototype.hasOwnProperty.call(env, key) && (env[key] ?? "").trim() !== "";
+}
+function hasKnowledgeEnvAuthorityIntent(env = process.env) {
+  return knowledgeAuthorityEnvKeys().some((key) => envKeySet(env, key));
+}
+function selectsKnowledgeLocalStore(env = process.env) {
+  return !hasKnowledgeEnvAuthorityIntent(env) && isKnowledgeLocalOptIn(env);
 }
 var localModeAnnounced = false;
-var legacyOptInAnnounced = false;
 function resetKnowledgeLocalModeNotice() {
   localModeAnnounced = false;
-  legacyOptInAnnounced = false;
-}
-function announceRetiredLocalOptIn() {
-  if (legacyOptInAnnounced)
-    return;
-  legacyOptInAnnounced = true;
-  console.error(`knowledge: ${RETIRED_KNOWLEDGE_LOCAL_ENV} is set and IGNORED (retired). Routing follows the credential ` + `chain now: a credential from any tier selects the server API, and the on-box store applies when none ` + `resolves. Unset it; it is deleted in the next minor.`);
 }
 function announceLocalMode(env) {
   if (localModeAnnounced)
     return;
   localModeAnnounced = true;
   const candidates = credentialDiskSources(KNOWLEDGE_APP_SLUG, env);
-  console.error(`knowledge: no fleet credential resolved \u2014 using the on-box store (local mode). ` + `To use the fleet, put the key in the Keychain item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key` + `${candidates[0] ? ` or in ${candidates[0]}` : ""}, or set ${KNOWLEDGE_API_KEY_ENV}.`);
+  console.error(`knowledge: local mode \u2014 the explicit ${KNOWLEDGE_LOCAL_OPT_IN_ENV} opt-in selected the on-box store. ` + `To use the fleet instead, put the key in the Keychain item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key` + `${candidates[0] ? ` or in ${candidates[0]}` : ""}, or set ${KNOWLEDGE_API_KEY_ENV}, ` + `and unset ${KNOWLEDGE_LOCAL_OPT_IN_ENV}.`);
+}
+function knowledgeFailClosedMessage(original) {
+  return `knowledge: client credential resolution failed \u2014 ${original} ` + `There is no local fallback: the on-box store is opt-in only (${KNOWLEDGE_LOCAL_OPT_IN_ENV}=1) ` + "and disabled by default \u2014 failing closed instead of serving local data.";
 }
 function resolveKnowledgeClientTransport(env = process.env, options = {}) {
   assertNoRetiredKnowledgeStorageSelector(env);
   const keychain = options.keychain ?? knowledgeKeychainTierOptions(env);
-  const legacyLocalOptIn = Object.prototype.hasOwnProperty.call(env, RETIRED_KNOWLEDGE_LOCAL_ENV) && env[RETIRED_KNOWLEDGE_LOCAL_ENV] !== undefined;
-  if (legacyLocalOptIn)
-    announceRetiredLocalOptIn();
+  const localOptIn = isKnowledgeLocalOptIn(env);
   const base = {
     credential_file_candidates: Object.freeze(credentialDiskSources(KNOWLEDGE_APP_SLUG, env)),
     keychain_tier_enabled: keychainTierLive(env, keychain),
-    legacy_local_opt_in_present: legacyLocalOptIn,
+    local_opt_in_present: localOptIn,
     network_guard_active: isNetworkGuardActive(env)
   };
+  if (selectsKnowledgeLocalStore(env)) {
+    announceLocalMode(env);
+    return {
+      transport: "sqlite",
+      source: "local-opt-in",
+      base_url: null,
+      api_url_present: false,
+      api_url_source: null,
+      api_key_present: false,
+      api_key_source: null,
+      api_key_tier: null,
+      warning: null,
+      ...base
+    };
+  }
   try {
     const resolution = resolveClientTransport(KNOWLEDGE_APP_SLUG, env, {
       credentials: credentialOptions(env, { ...options, keychain })
@@ -538,23 +559,9 @@ function resolveKnowledgeClientTransport(env = process.env, options = {}) {
       ...base
     };
   } catch (error) {
-    if (!(error instanceof ClientTransportConfigurationError))
-      throw error;
-    if (configuredAuthoritySource(env, keychain))
-      throw error;
-    announceLocalMode(env);
-    return {
-      transport: "sqlite",
-      source: "local",
-      base_url: null,
-      api_url_present: false,
-      api_url_source: null,
-      api_key_present: false,
-      api_key_source: null,
-      api_key_tier: null,
-      warning: null,
-      ...base
-    };
+    throw new Error(knowledgeFailClosedMessage(error instanceof Error ? error.message : String(error)), {
+      cause: error
+    });
   }
 }
 function keychainTierLive(env, options) {
@@ -778,9 +785,9 @@ function guardedTransportEnv(env) {
   const guardedEnv = { ...env };
   delete guardedEnv.HOME;
   delete guardedEnv.USERPROFILE;
-  delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY];
-  delete guardedEnv[credentialOverrideEnvKey(KNOWLEDGE_APP_SLUG)];
-  delete guardedEnv[credentialPointerEnvKey(KNOWLEDGE_APP_SLUG)];
+  delete guardedEnv[CREDENTIAL_PROFILE_ENV_KEY2];
+  delete guardedEnv[credentialOverrideEnvKey2(KNOWLEDGE_APP_SLUG)];
+  delete guardedEnv[credentialPointerEnvKey2(KNOWLEDGE_APP_SLUG)];
   return guardedEnv;
 }
 function resolveKnowledgeHttpClient(env, options = {}) {

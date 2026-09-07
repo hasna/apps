@@ -165,8 +165,20 @@ export function resolveValidatorVersion(pinned: string | undefined, kitVersion: 
  * @hasna/contracts) against one member directory. Returns a verdict and the
  * raw output. Shared by the standard-adherence suite and the check-manifests
  * CI gate, so a member is validated by exactly the same invocation in both. */
+export function conformanceCommand(version: string): { executable: string; args: string[] } {
+  const root = path.join(APPS_DIR, "contracts");
+  const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+  // This producer repository must validate a candidate before publishing it.
+  // Use its canonical source CLI only for the exact in-tree version. Older
+  // pins, ranges and latest retain their independent registry resolution.
+  if (manifest.name === "@hasna/contracts" && version === manifest.version)
+    return { executable: "bun", args: [path.join(root, "src/cli/index.ts")] };
+  return { executable: "bunx", args: ["--bun", `@hasna/contracts@${version}`] };
+}
+
 export function runConformance(dir: string, version: string): { verdict: "ok" | "fail" | "cannot-run"; fails: string[]; raw: string } {
-  const res = spawnSync("bunx", ["--bun", `@hasna/contracts@${version}`, "repo-conformance", dir], {
+  const command = conformanceCommand(version);
+  const res = spawnSync(command.executable, [...command.args, "repo-conformance", dir], {
     cwd: REPO_ROOT,
     encoding: "utf8",
     timeout: 180_000,
@@ -333,7 +345,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "draw", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "emails", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "hooks", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "instructions", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "logs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "models", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "orgs", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
@@ -412,7 +423,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
   },
   {
     member: "instructions",
-    cause: "bins_match_package: package.json ships legacy alias bins configs/configs-mcp (fleet-compat, not contract-allowlisted — same class as the recorded economy hasna-events precedent); surface_matrix: missing sdk surface (no ./sdk export; SDK lane c7ce8b75); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required; credential_seam_compliance: src/db/database.ts reads HASNA_INSTRUCTIONS_API_KEY from the process environment. Manifest schema-valid at kit 0.11.1.",
+    cause: "bins_match_package: package.json ships legacy alias bins configs/configs-mcp (fleet-compat, not contract-allowlisted — same class as the recorded economy hasna-events precedent); storage_capabilities: pgTestGate required; published_artifact_gate: artifactScan.script required; credential_seam_compliance: src/db/database.ts reads HASNA_INSTRUCTIONS_API_KEY from the process environment. Manifest schema-valid at kit 0.11.1.",
     task: "todos c15cca18 (contracts task — instructions)",
   },
   {
@@ -454,7 +465,7 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
  * 0.5.2/0.5.2/0.11.1 while their manifests now pin 0.13.4, and datasets was
  * recorded without its caret). The entries themselves all still hold — each
  * is a member whose kit claim cannot be moved to its pin without other work:
- * datasets and mementos pin BELOW their kit claim (aligning would downgrade
+ * datasets pins BELOW its kit claim (aligning would downgrade
  * the claim; the pin is held back because contracts 0.11.1 dropped the
  * parseContract export the code imports), and files/todos/hooks/orgs carry
  * pre-backend-schema-era manifests whose shape the newer kit does not
@@ -463,7 +474,6 @@ export const CONTRACTS_EXCEPTIONS: Array<{ member: string; cause: string; task: 
 export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string; pinned: string }> = [
   { member: "files", kitVersion: "0.4.2", pinned: "0.14.0" },
   { member: "todos", kitVersion: "0.11.1", pinned: "0.14.0" },
-  { member: "mementos", kitVersion: "0.11.1", pinned: "0.10.6" },
   { member: "orgs", kitVersion: "0.10.6", pinned: "0.11.1" },
   { member: "hooks", kitVersion: "0.8.4", pinned: "0.14.0" },
   // Version wave 2026-08-24 (c4622d9094) pinned 26 members to contracts
@@ -472,7 +482,6 @@ export const KIT_VERSION_EXCEPTIONS: Array<{ member: string; kitVersion: string;
   // with the manifest rewrite its CONTRACTS_EXCEPTIONS remediation task owns.
   { member: "conversations", kitVersion: "0.13.4", pinned: "0.14.0" },
   { member: "dispatch", kitVersion: "0.11.1", pinned: "0.14.0" },
-  { member: "instructions", kitVersion: "0.13.1", pinned: "0.14.0" },
   // knowledge left this list on 2026-09-05 (hasna/apps#1720): adopting the
   // @hasna/contracts client credential seam moved its pin to 1.0.1 and its
   // manifest kitVersion with it, and the manifest still validates at that kit

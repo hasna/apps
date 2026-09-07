@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { useDefaultTestTimeout } from "../test-preload.js";
 import { RemoteSkillsClient } from "../lib/remote-client.js";
+import { buildCliFixture } from "./cli-build.fixture.js";
 
 useDefaultTestTimeout();
 const scratch = mkdtempSync(join(tmpdir(), "skills-public-account-"));
@@ -11,8 +12,7 @@ const binary = join(scratch, "skills.js");
 const guard = join(scratch, "network-guard.js");
 const runId = "00000000-0000-4000-8000-000000000001";
 beforeAll(async () => {
-  const build = await Bun.build({ entrypoints: [resolve(import.meta.dir, "index.tsx")], outdir: scratch, naming: "skills.js", target: "bun" });
-  expect(build.success).toBe(true);
+  await buildCliFixture(resolve(import.meta.dir, "index.tsx"), binary);
   writeFileSync(guard, `const original=globalThis.fetch;globalThis.fetch=(input,init)=>{const u=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url);if(u.protocol!=='data:'&&u.origin!==process.env.QA_ALLOWED_ORIGIN)throw Error('network denied');return original(input,init)};`);
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));

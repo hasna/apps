@@ -65,51 +65,35 @@ for (const token of forbidden) {
     fail(`backend.ts contains forbidden compatibility token ${JSON.stringify(token)}`);
   }
 }
-if (!backendCode.includes('SERVER_DATA_BACKENDS = ["sqlite", "postgresql"]')) {
-  fail("backend.ts does not declare the sqlite | postgresql backend enum");
+if (backendCode.includes("resolveStorageMode")) {
+  fail("backend.ts contains resolveStorageMode (kit 1.0.2 carries no mode vocabulary)");
 }
-if (backendSource.includes("assertNoLegacyStorageMode") || backendSource.includes("legacyModeKeys")) {
-  fail("backend.ts still carries the removed kit-level legacy-mode machinery");
-}
-if (backendSource.includes("STORAGE_MODE")) {
-  fail("backend.ts contains STORAGE_MODE (kit 0.13.3 carries no mode vocabulary)");
+if (backendCode.includes("STORAGE_MODE")) {
+  fail("backend.ts contains STORAGE_MODE (kit 1.0.2 carries no mode vocabulary)");
 }
 
-// Legacy STORAGE_MODE rejection moved to the app layer when the kit contract
-// evolved (kit 0.13.3 emits backend.ts with no mode vocabulary at all): the
-// app's runtime-config.ts hard-rejects HASNA_LOOPS_STORAGE_MODE. Assert the
-// doctrine where it lives now, and forbid STORAGE_MODE anywhere else in
-// runtime-config.ts.
+// Kit 1.0.2 declares PostgreSQL as the ONLY contract server backend
+// (SERVER_DATA_BACKENDS = ["postgresql"]): the strict HealthResponseSchema and
+// the server-backend resolver both know exactly one backend, and
+// resolveServerDataBackend fails closed when HASNA_LOOPS_DATABASE_URL is
+// absent. The app's local sqlite runtime is its own development posture,
+// reported on the /health wire envelope as `storage`.
+if (!backendCode.includes('SERVER_DATA_BACKENDS = ["postgresql"]')) {
+  fail("backend.ts does not declare the postgresql-only contract backend enum");
+}
+if (backendCode.includes("sqlite")) {
+  fail("backend.ts names sqlite; the kit 1.0.2 contract backend is postgresql only");
+}
+
+// The retired HASNA_LOOPS_STORAGE_MODE rejection was removed with the app's own
+// env chain (hasna/apps#1720): the shared @hasna/contracts/client resolver owns
+// the client connection, so no STORAGE_MODE vocabulary may appear anywhere in
+// loops source any more — including runtime-config.ts, which is a plain
+// env-presence report for server surfaces.
 const runtimeConfigSource = readFileSync(join(repoRoot, "src/lib/runtime-config.ts"), "utf8");
-if (!runtimeConfigSource.includes("assertNoRetiredStorageMode")) {
-  fail("runtime-config.ts does not reject the retired HASNA_LOOPS_STORAGE_MODE env");
-}
-if (!runtimeConfigSource.includes("is retired and must be removed")) {
-  fail("runtime-config.ts does not state the STORAGE_MODE removal guidance");
-}
 const runtimeConfigCode = codeOnly(runtimeConfigSource);
-const modeBlockStart = runtimeConfigCode.indexOf("const STORAGE_MODE_ENV_KEYS");
-if (modeBlockStart === -1) {
-  fail("runtime-config.ts does not define the retired STORAGE_MODE env-keys list");
-}
-const modeFnStart = runtimeConfigCode.indexOf("export function assertNoRetiredStorageMode");
-const modeBlockEnd = modeFnStart === -1 ? -1 : runtimeConfigCode.indexOf("\n}", modeFnStart);
-const rcLineStarts = [];
-{
-  let rcOffset = 0;
-  for (const line of runtimeConfigCode.split("\n")) {
-    rcLineStarts.push(rcOffset);
-    rcOffset += line.length + 1;
-  }
-}
-for (let index = 0; index < rcLineStarts.length; index += 1) {
-  const start = rcLineStarts[index];
-  const end = start + (index < rcLineStarts.length - 1 ? rcLineStarts[index + 1] - start : runtimeConfigCode.length - start);
-  const line = runtimeConfigCode.slice(start, end);
-  if (!line.includes("STORAGE_MODE")) continue;
-  if (start < modeBlockStart || start > modeBlockEnd) {
-    fail(`runtime-config.ts:${index + 1} carries STORAGE_MODE outside the retired-keys rejection list`);
-  }
+if (runtimeConfigCode.includes("STORAGE_MODE")) {
+  fail("runtime-config.ts still carries STORAGE_MODE vocabulary; the retired switch is fully removed");
 }
 for (const file of ["tls.ts", "query.ts", "pool.ts", "migrations.ts", "health.ts", "index.ts", "own.ts"]) {
   const source = readFileSync(join(kitDir, file), "utf8");

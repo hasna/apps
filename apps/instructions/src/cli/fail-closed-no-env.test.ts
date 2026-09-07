@@ -12,13 +12,31 @@ const API_URL_ENV = "HASNA_INSTRUCTIONS_API_URL";
 const API_KEY_ENV = "HASNA_INSTRUCTIONS_API_KEY";
 const LOCAL_OPT_IN_ENV = "HASNA_INSTRUCTIONS_LOCAL";
 
+/** Every name that can select a hosted transport, for a genuinely empty probe. */
+const AUTHORITY_SCRUB = [
+  API_URL_ENV,
+  API_KEY_ENV,
+  "INSTRUCTIONS_API_URL",
+  "INSTRUCTIONS_API_KEY",
+  "HASNA_INSTRUCTIONS_API_KEY_OVERRIDE",
+  "HASNA_INSTRUCTIONS_API_KEY_REF",
+  "HASNA_PROFILE",
+  "HASNA_INSTRUCTIONS_DB_PATH",
+  "HASNA_CONFIGS_HOME",
+  "HASNA_CONFIG_HOME",
+  "HASNA_DATA_HOME",
+  "HASNA_STATE_HOME",
+  "HASNA_CACHE_HOME",
+  LOCAL_OPT_IN_ENV,
+];
+
 /**
  * CLI-level fail-closed regression (owner directive 2026-09-04).
  *
- * A CLI run WITHOUT the fleet API env must exit non-zero with an actionable
- * error naming the required env — it must never silently open the on-box
- * SQLite store (~/.hasna/instructions/instructions.db) and exit 0. The local
- * store works only with the explicit opt-in HASNA_INSTRUCTIONS_LOCAL=1.
+ * A CLI run with NO hosted credential must exit non-zero with an actionable
+ * error naming the required configuration — it must never silently open the
+ * on-box SQLite store (~/.hasna/instructions/instructions.db) and exit 0. The
+ * local store works only with the explicit opt-in HASNA_INSTRUCTIONS_LOCAL=1.
  *
  * Every child env is scrubbed of the store-selecting variables (including the
  * local opt-in, which the test-runner preload pins for the local-mode suite)
@@ -26,17 +44,7 @@ const LOCAL_OPT_IN_ENV = "HASNA_INSTRUCTIONS_LOCAL";
  */
 function runCli(args: string[], env: Record<string, string | undefined> = {}) {
   const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
-  for (const key of [
-    API_URL_ENV,
-    API_KEY_ENV,
-    "HASNA_INSTRUCTIONS_DB_PATH",
-    "HASNA_CONFIGS_HOME",
-    "HASNA_CONFIG_HOME",
-    "HASNA_DATA_HOME",
-    "HASNA_STATE_HOME",
-    "HASNA_CACHE_HOME",
-    LOCAL_OPT_IN_ENV,
-  ]) {
+  for (const key of AUTHORITY_SCRUB) {
     delete childEnv[key];
   }
   for (const [key, value] of Object.entries(env)) {
@@ -53,12 +61,13 @@ function runCli(args: string[], env: Record<string, string | undefined> = {}) {
   });
 }
 
-describe("fail closed without the fleet API env", () => {
-  test("whoami exits non-zero naming the required env and creates no local db", () => {
+describe("fail closed without a hosted credential", () => {
+  test("whoami exits non-zero naming the required configuration and creates no local db", () => {
     const home = makeTempRoot("fc-instructions-noenv-");
     const result = runCli(["whoami"], { HOME: home });
     expect(result.status).not.toBe(0);
     const output = result.stdout + result.stderr;
+    expect(output).toContain("REMOTE_API_CONFIG_MISSING");
     expect(output).toContain(API_URL_ENV);
     expect(output).toContain(API_KEY_ENV);
     expect(output).toContain(LOCAL_OPT_IN_ENV);
@@ -67,7 +76,7 @@ describe("fail closed without the fleet API env", () => {
     expect(existsSync(join(home, ".hasna", "instructions"))).toBe(false);
   });
 
-  test("list exits non-zero naming the required env and creates no local db", () => {
+  test("list exits non-zero naming the required configuration and creates no local db", () => {
     const home = makeTempRoot("fc-instructions-noenv-");
     const result = runCli(["list"], { HOME: home });
     expect(result.status).not.toBe(0);
@@ -77,20 +86,24 @@ describe("fail closed without the fleet API env", () => {
     expect(existsSync(join(home, ".hasna", "instructions", "instructions.db"))).toBe(false);
   });
 
-  test("exactly one API var set still exits non-zero (no silent local drift)", () => {
+  test("an authority with no key still exits non-zero (no silent local drift)", () => {
     const home = makeTempRoot("fc-instructions-onevar-");
     const result = runCli(["list"], { HOME: home, [API_URL_ENV]: "https://instructions.hasna.xyz" });
     expect(result.status).not.toBe(0);
-    expect(result.stdout + result.stderr).toContain("requires BOTH");
-    expect(result.stdout + result.stderr).toContain(LOCAL_OPT_IN_ENV);
+    const output = result.stdout + result.stderr;
+    expect(output).toContain("REMOTE_API_KEY_MISSING");
+    expect(output).toContain(LOCAL_OPT_IN_ENV);
     expect(existsSync(join(home, ".hasna", "instructions", "instructions.db"))).toBe(false);
   });
 
-  test("explicit local opt-in still opens the local store and exits 0", () => {
+  test("explicit local opt-in still opens the local store, says so on stderr, and exits 0", () => {
     const home = makeTempRoot("fc-instructions-localopt-");
     const result = runCli(["whoami"], { HOME: home, [LOCAL_OPT_IN_ENV]: "1" });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(join(home, ".hasna", "instructions", "instructions.db"));
+    // Local mode must say "local" on stderr, once per process.
+    expect(result.stderr).toContain("local mode");
+    expect(result.stderr).toContain(LOCAL_OPT_IN_ENV);
     expect(existsSync(join(home, ".hasna", "instructions", "instructions.db"))).toBe(true);
   });
 

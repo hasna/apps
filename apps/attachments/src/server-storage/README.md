@@ -9,9 +9,12 @@ Public health errors are deliberately redacted.
 
 The owner-directed HTTPS/PostgreSQL boundary and independently reviewed Contracts
 7ab022d87b48fd15f0ce1831fc560e0651b8c232 informed this adaptation. No unpublished
-Contracts files or invented registry version are used. The existing published
-Contracts dependency remains for authentication, SDK generation and artifact scanning.
-Adoption of the released canonical shared kit is a separate, release-blocking step.
+Contracts files or invented registry version are used. The published Contracts
+dependency remains for authentication, SDK generation, artifact scanning and —
+since the 2026-09-04 credential-adoption ruling (hasna/apps#1720) — the client
+credential resolver, pinned exactly to published @hasna/contracts 1.0.2. This
+storage kit itself remains application-owned source: it is not an unmodified
+generated registry kit, and no unpublished Contracts source is copied or consumed.
 
 Independent review follow-up: the pool rejects duplicate/conflicting TLS query
 parameters and strips accepted TLS directives before pg reparses the DSN.

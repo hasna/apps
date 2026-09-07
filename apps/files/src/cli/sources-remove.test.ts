@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { filesLocalModeNotice } from "../lib/cloud-storage.js";
 
 const cliPath = join(process.cwd(), "src/cli/index.tsx");
 const denyNetworkPath = join(process.cwd(), "src/cli/test-fixtures/deny-network.ts");
@@ -44,7 +45,8 @@ describe("source removal CLI", () => {
 
     expect(result.exitCode).toBe(0);
     expect(stdout(result)).toContain(`Source ${sourceId} removed`);
-    expect(stderr(result)).toBe("");
+    // The local-opt-in notice is the ONE line a local run prints; nothing else.
+    expect(stderr(result)).toBe(`${filesLocalModeNotice()}\n`);
     expect(JSON.parse(stdout(run(["sources", "list", "--json"], env)))).toHaveLength(0);
   });
 
@@ -77,7 +79,7 @@ function cliEnv(): NodeJS.ProcessEnv {
     NO_COLOR: "1",
     // The local data plane now requires the explicit local opt-in; this env is
     // deliberately built from scratch (no inherited selectors), so name it here.
-    HASNA_FILES_LOCAL_MODE: "1",
+    HASNA_FILES_LOCAL: "1",
     HASNA_FILES_DATA_DIR: dataDir,
     HASNA_FILES_DB_PATH: join(testDir, "files.db"),
   };

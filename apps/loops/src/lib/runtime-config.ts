@@ -2,16 +2,17 @@
  * Runtime configuration for @hasna/loops.
  *
  * Deployment modes were removed: there is no `local | self_hosted | cloud`
- * axis, no mode enums, and no `HASNA_LOOPS_STORAGE_MODE`. The only technical
- * switches left are the server's data backend (`sqlite | postgresql`, selected
- * by `HASNA_LOOPS_DATABASE_URL`) and the client's connection
- * (`file | api`, selected by `HASNA_LOOPS_API_URL` + `HASNA_LOOPS_API_KEY`).
+ * axis, no mode enums, and no `HASNA_LOOPS_STORAGE_MODE` (the retired switch
+ * is not read anywhere in this package). The only technical switches left are
+ * the server's data backend (`sqlite | postgresql`, selected by
+ * `HASNA_LOOPS_DATABASE_URL`) and the client's connection, which the SHARED
+ * credential resolver decides (`@hasna/contracts` 1.0.2: env, Keychain,
+ * credential file; see `lib/cloud/resolve.ts`).
  *
  * The client connects to a local SQLite file or to the server HTTP API. It
  * never opens Postgres directly: `HASNA_LOOPS_DATABASE_URL` is server-only and
  * is never used to connect from the client — at most its *presence* is
- * reported. A retired `HASNA_LOOPS_STORAGE_MODE` env is rejected with a hard
- * error (closed matrix: old mode env is never honored).
+ * reported.
  */
 
 export type Env = Record<string, string | undefined>;
@@ -60,37 +61,17 @@ export const ROUTE_ADMISSION_GATES = [
   "max_per_profile",
 ] as const satisfies readonly LoopRouteAdmissionGate[];
 
-const STORAGE_MODE_ENV_KEYS = ["HASNA_LOOPS_STORAGE_MODE"] as const;
 const API_URL_ENV_KEYS = ["HASNA_LOOPS_API_URL"] as const;
 const API_KEY_ENV_KEYS = ["HASNA_LOOPS_API_KEY"] as const;
 const DATABASE_URL_ENV_KEYS = ["HASNA_LOOPS_DATABASE_URL"] as const;
 
-function envValue(env: Env, keys: readonly string[]): { key: string; value: string } | undefined {
+/** The first env key with a non-blank value among `keys`, or undefined. */
+export function envValue(env: Env, keys: readonly string[]): { key: string; value: string } | undefined {
   for (const key of keys) {
     const value = env[key]?.trim();
     if (value) return { key, value };
   }
   return undefined;
-}
-
-/**
- * Closed-matrix rejection of the retired mode env: a non-empty
- * HASNA_LOOPS_STORAGE_MODE is a hard error naming the variable as retired,
- * never honored. An empty/blank value counts as unset.
- *
- * Exported so the client store resolution path (getStore -> resolveCloudStorage)
- * rejects a leftover env as loudly as status/doctor/serve do, instead of
- * silently reading the wrong dataset.
- */
-export function assertNoRetiredStorageMode(env: Env): void {
-  const mode = envValue(env, STORAGE_MODE_ENV_KEYS);
-  if (mode) {
-    throw new Error(
-      `HASNA_LOOPS_STORAGE_MODE is retired and must be removed: deployment modes no longer exist ` +
-        `(found ${mode.key}="${mode.value}"). Configure the client connection with HASNA_LOOPS_API_URL and ` +
-        `HASNA_LOOPS_API_KEY, and server storage with HASNA_LOOPS_DATABASE_URL.`,
-    );
-  }
 }
 
 /**
@@ -101,9 +82,14 @@ export function assertNoRetiredStorageMode(env: Env): void {
  * naming the missing variable. Otherwise the connection is `file`. Server-side
  * storage is `postgresql` iff HASNA_LOOPS_DATABASE_URL is present; clients
  * never read the DSN value itself, only its presence.
+ *
+ * This is the env-PRESENCE report used by server surfaces (loops-serve, the
+ * API foundation, doctor). The client data path and the CLI `status` command
+ * resolve the connection through the shared credential resolver instead
+ * (lib/cloud/resolve.ts), so a Keychain or credential-file identity reports
+ * `api` even when no env variable is set.
  */
 export function resolveRuntimeConfig(env: Env = process.env): RuntimeConfig {
-  assertNoRetiredStorageMode(env);
   const apiUrl = envValue(env, API_URL_ENV_KEYS);
   const apiKey = envValue(env, API_KEY_ENV_KEYS);
   if (apiUrl && !apiKey) {
@@ -130,11 +116,10 @@ export function resolveRuntimeConfig(env: Env = process.env): RuntimeConfig {
 }
 
 /**
- * Successor to the pre-mode-removal `loopControlPlaneConfig`: presence booleans
- * for the control-plane env vars. The API key value is never returned.
+ * Presence booleans for the control-plane env vars. The API key value is never
+ * returned.
  */
 export function loopControlPlaneConfig(env: Env = process.env): LoopControlPlaneConfig {
-  assertNoRetiredStorageMode(env);
   const apiUrl = envValue(env, API_URL_ENV_KEYS);
   return {
     apiUrl: apiUrl?.value,
@@ -146,7 +131,6 @@ export function loopControlPlaneConfig(env: Env = process.env): LoopControlPlane
 
 /** Server-side storage backend selector for loops-serve. */
 export function runtimeStorage(env: Env = process.env): RuntimeStorage {
-  assertNoRetiredStorageMode(env);
   return envValue(env, DATABASE_URL_ENV_KEYS) ? "postgresql" : "sqlite";
 }
 
@@ -154,7 +138,6 @@ export function runtimeStorage(env: Env = process.env): RuntimeStorage {
 export type RuntimeStorageBackend = "sqlite" | "postgres";
 
 export function runtimeStorageBackend(env: Env = process.env): RuntimeStorageBackend {
-  assertNoRetiredStorageMode(env);
   return envValue(env, DATABASE_URL_ENV_KEYS) ? "postgres" : "sqlite";
 }
 

@@ -142,20 +142,29 @@ describe("store divergence — a half-configured cloud client refuses instead of
     expect(result.channels).toBeUndefined();
   });
 
-  test("an API key without an API URL likewise refuses", async () => {
-    const { exitCode, result } = await probe("count", "", {
+  test("an API key without an API URL resolves hosted via the fleet gateway default", async () => {
+    // (Owner directive 2026-09-04, hasna/apps#1720): a key from any tier is
+    // enough to reach the fleet — the authority defaults to
+    // https://api.hasna.com/conversations. No request is issued (resolve mode).
+    const { exitCode, result, stderr } = await probe("resolve", "", {
       HASNA_CONVERSATIONS_API_KEY: FAKE_KEY,
     });
 
-    expect(exitCode).not.toBe(0);
-    expect(result.refused).toBe(true);
-    expect(result.message).toContain("HASNA_CONVERSATIONS_API_URL");
-    expect(result.channels).toBeUndefined();
+    expect(exitCode, stderr).toBe(0);
+    expect(result.refused).toBe(false);
+    expect(result.transport).toBe("cloud-http");
+    expect(result.baseUrl).toBe("https://api.hasna.com/conversations/v1");
   });
 
   test("no credential value ever reaches the error message", async () => {
-    const { result } = await probe("count", "", { HASNA_CONVERSATIONS_API_KEY: FAKE_KEY });
+    // A refusal WITH a key value present: the invalid URL refuses, and the
+    // message must name the key's tier without echoing the value.
+    const { result } = await probe("count", "", {
+      HASNA_CONVERSATIONS_API_URL: "not a url",
+      HASNA_CONVERSATIONS_API_KEY: FAKE_KEY,
+    });
 
+    expect(result.refused).toBe(true);
     expect(String(result.message)).not.toContain(FAKE_KEY);
   });
 });

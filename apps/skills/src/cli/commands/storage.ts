@@ -17,6 +17,7 @@ export function registerStorage(parent: Command) {
 
   storage
     .command("status")
+    .allowExcessArguments(false)
     .option("--json", "Output as JSON", false)
     .description("Show local paths and optional remote storage readiness")
     .action((options: { json: boolean }) => {
@@ -35,6 +36,7 @@ export function registerStorage(parent: Command) {
 
   storage
     .command("sync-plan")
+    .allowExcessArguments(false)
     .option("--json", "Output as JSON", false)
     .option("--schema-sql", "Include PostgreSQL schema SQL", false)
     .description("Plan snapshot and artifact sync without network access")
@@ -74,6 +76,7 @@ export function registerStorage(parent: Command) {
 
   storage
     .command("migrate")
+    .allowExcessArguments(false)
     .option("--dry-run", "Show what would move without touching the layout", false)
     .option("--json", "Output as JSON", false)
     .description(

@@ -47,7 +47,7 @@ function createCommands(): Accessor<EmailsCommand[]> {
     },
     {
       id: "inboxes.open",
-      title: "Inboxes",
+      title: "Switch mailbox",
       category: "Mail",
       run: () => emails.actions.openDialog("address"),
     },
@@ -55,6 +55,7 @@ function createCommands(): Accessor<EmailsCommand[]> {
       id: "sources.open",
       title: "Sources",
       category: "Mail",
+      enabled: () => emails.state.sources.length > 1,
       run: () => emails.actions.openDialog("source"),
     },
     {
@@ -83,7 +84,7 @@ function createCommands(): Accessor<EmailsCommand[]> {
       id: "links.open",
       title: "Extract Links",
       category: "Mail",
-      enabled: () => !!emails.selectedMessage(),
+      enabled: () => emails.links().length > 0,
       run: () => emails.actions.openDialog("links"),
     },
     {
@@ -104,9 +105,11 @@ function createCommands(): Accessor<EmailsCommand[]> {
       id: "refresh.local",
       title: "Refresh",
       category: "Mail",
-      run: () => {
-        emails.actions.reload({ preserveSelection: true });
-        toast.show({ title: "Refreshed", message: "Local mailbox state reloaded.", tone: "success" });
+      run: async () => {
+        await emails.actions.reload({ preserveSelection: true });
+        toast.show(emails.state.mailboxError
+          ? { title: "Couldn't refresh", message: "Check your connection and try again.", tone: "error" }
+          : { title: "Refreshed", message: "Mail is up to date.", tone: "success" });
       },
     },
     // Pull Now was LOCAL S3->SQLite ingestion. The self-hosted seam exposes insert-only
@@ -153,12 +156,12 @@ export function CommandProvider(props: ParentProps) {
         if (emails.state.dialog || emails.state.compose) return;
         emails.state.route === "reader" ? emails.actions.backToList() : renderer.destroy();
       } },
-      { key: "up", desc: "Previous message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.selectOffset(-1) },
-      { key: "down", desc: "Next message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.selectOffset(1) },
-      { key: "right", desc: "Open message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.openMessage() },
-      { key: "enter", desc: "Open message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.openMessage() },
-      { key: "pageup", desc: "Previous page", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.page(-1) },
-      { key: "pagedown", desc: "Next page", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.actions.page(1) },
+      { key: "up", desc: "Previous message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.selectOffset(-1) },
+      { key: "down", desc: "Next message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.selectOffset(1) },
+      { key: "right", desc: "Open message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.openMessage() },
+      { key: "enter", desc: "Open message", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.openMessage() },
+      { key: "pageup", desc: "Previous page", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.page(-1) },
+      { key: "pagedown", desc: "Next page", group: "Navigation", cmd: () => emails.state.dialog === null && emails.state.compose === null && emails.state.route === "mailbox" && emails.actions.page(1) },
     ],
   }));
 
@@ -190,6 +193,7 @@ export function CommandProvider(props: ParentProps) {
       consume();
       return;
     }
+    if (emails.state.route !== "mailbox") return;
     if (key.name === "up") {
       emails.actions.selectOffset(-1);
       consume();

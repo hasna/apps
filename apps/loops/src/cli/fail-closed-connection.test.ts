@@ -73,12 +73,16 @@ describe("loops CLI fail-closed connection (owner ruling 2026-09-04)", () => {
     }
   });
 
-  test("connection=api without both API variables is a hard error", () => {
+  test("connection=api is retired: the shared resolver selects the hosted API", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-fail-closed-api-"));
     try {
       const result = runCli(["list"], { LOOPS_DATA_DIR: dataDir, [CONNECTION_KEY]: "api" });
       expect(result.status).not.toBe(0);
-      expect(output(result)).toContain(`${CONNECTION_KEY}=api requires both ${API_URL_KEY} and ${API_KEY_KEY}`);
+      expect(output(result)).toContain(`${CONNECTION_KEY}=api is retired`);
+      expect(output(result)).toContain(API_URL_KEY);
+      expect(output(result)).toContain(API_KEY_KEY);
+      // Fail closed BEFORE any store opens: the data dir must stay untouched.
+      expect(readdirSync(dataDir)).toEqual([]);
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

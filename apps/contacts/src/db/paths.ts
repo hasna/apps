@@ -7,28 +7,31 @@
  * `backup`/`init`) can reference the on-box paths without importing the SQLite
  * transport, keeping direct SQLite access confined to the LocalStore.
  *
- * Retained server/legacy helpers resolve through @hasna/paths `dataDir()` and
- * `stateDir()` — never a hardcoded `~/.hasna/contacts`. They do not migrate or
- * copy legacy data implicitly. Preservation is an explicit CLI operation.
+ * Retained server/legacy helpers resolve through the in-package `dataDir()`
+ * and `stateDir()` resolvers — never a hardcoded `~/.hasna/contacts`. They do
+ * not migrate or copy legacy data implicitly. Preservation is an explicit CLI
+ * operation.
  */
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 // --- Local path resolver -------------------------------------------------
 // @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
-// implementation preserves the resolver contract (XDG / macOS home layout
-// honoring HASNA_{CONFIG,DATA,STATE,CACHE}_HOME, with the same env-override
-// and home-override semantics the deleted package had).
+// implementation preserves the resolver contract for the two kinds this
+// package still uses (XDG / macOS home layout honoring HASNA_{DATA,STATE}_HOME,
+// with the same env-override and home-override semantics the deleted package
+// had). The retired `config` and `cache` kinds are deliberately NOT carried:
+// nothing here resolves them, and the retired `~/.config/hasna` shape must
+// not ship in the client bundle (hasna/apps#1720 — client credentials and
+// configuration come only from the @hasna/contracts chain).
 import { homedir as pathsResolverHomedir } from "node:os";
 import { join as pathsResolverJoin } from "node:path";
 
-export type PathKind = "config" | "data" | "state" | "cache";
+export type PathKind = "data" | "state";
 
 const PATHS_RESOLVER_KIND_ENV: Record<PathKind, string> = {
-  config: "HASNA_CONFIG_HOME",
   data: "HASNA_DATA_HOME",
   state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME",
 };
 
 export interface PathsResolverOptions {
@@ -69,24 +72,17 @@ function pathsResolverBaseDir(kind: PathKind, options: PathsResolverOptions): st
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
     switch (kind) {
-      case "config":
       case "data":
         return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
       case "state":
         return pathsResolverJoin(home, "Library", "Logs", "Hasna");
     }
   }
   switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
     case "data":
       return pathsResolverJoin(home, ".local", "share", "hasna");
     case "state":
       return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
   }
 }
 
@@ -112,8 +108,8 @@ function home(): string {
 }
 
 /**
- * The @hasna/paths data root for retained server/legacy utilities. It creates
- * only the requested target directory and never scans or adopts older homes.
+ * The data root for retained server/legacy utilities. It creates only the
+ * requested target directory and never scans or adopts older homes.
  */
 export function getDataDir(): string {
   const base = home();
@@ -123,7 +119,7 @@ export function getDataDir(): string {
 }
 
 /**
- * The @hasna/paths state root for retained server/legacy utilities.
+ * The state root for retained server/legacy utilities.
  */
 export function getStateDir(): string {
   const base = home();

@@ -93,13 +93,15 @@ export async function resolveConfiguredRunRouting(
   try {
     connection = await resolveSkillsConnection(env);
   } catch (error) {
-    // An authority with no credential. The shared ladder is right to throw — the
-    // alternative is running a server-owned skill locally — but a scheduled run
-    // reports per-skill results, so the refusal is carried as this resolver's own
-    // structured error rather than as an exception that aborts the whole batch.
-    // A local route is never produced here.
+    // The fail-closed refusal: no credential resolved and no authority is
+    // configured without the local opt-in. The shared ladder is right to throw —
+    // the alternative is running a server-owned skill locally, or running ANY
+    // skill while pretending an unconfigured machine chose local mode — but a
+    // scheduled run reports per-skill results, so the refusal is carried as this
+    // resolver's own structured error rather than as an exception that aborts
+    // the whole batch. A local route is never produced here.
     const isMissingCredential =
-      (error instanceof SkillsFleetCredentialError || (error as Error)?.name === "SkillsFleetCredentialError") &&
+      isSkillsFleetCredentialError(error) &&
       (error as SkillsFleetCredentialError).code === "MISSING_API_CREDENTIAL";
     // A malformed authority is a different fault and is not this resolver's to
     // reshape: it propagates.
@@ -107,8 +109,17 @@ export async function resolveConfiguredRunRouting(
     return {
       route: "error",
       code: "REMOTE_REQUIRES_CREDENTIAL",
-      error: `${skill.name} is a server-owned skill. ${(error as Error).message}`,
+      error: skill.serverOwned
+        ? `${skill.name} is a server-owned skill. ${(error as Error).message}`
+        : `${skill.name} cannot run: ${(error as Error).message}`,
     };
   }
   return resolveRunRouting(skill, connection?.apiKey, connection?.apiOrigin);
+}
+
+/** True for this package's own refusal, across bundle boundaries. */
+function isSkillsFleetCredentialError(error: unknown): boolean {
+  return (
+    (typeof error === "object" && error !== null && (error as { name?: unknown }).name === "SkillsFleetCredentialError")
+  );
 }

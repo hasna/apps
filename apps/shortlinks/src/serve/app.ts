@@ -8,7 +8,8 @@
  */
 
 import { Hono, type Context } from "hono";
-import { verifyApiKey, type ApiKeyVerifier, type KeyStatusResolver } from "@hasna/contracts/auth";
+import { verifyApiKey, type ApiKeyVerifier } from "@hasna/contracts/auth";
+import type { ShortlinksKeyStatusResolver } from "../client-types.js";
 import type { PoolQueryClient } from "../generated/storage-kit/query.js";
 import { checkHealth, checkReady } from "../generated/storage-kit/health.js";
 import { PgShortlinksStore } from "../pg-store.js";
@@ -25,7 +26,7 @@ export interface ServeAppDeps {
   backend: string;
   signingSecret: string;
   /** Lifecycle lookup for presented API keys (wire `store.keyStatus`). */
-  keyStatus?: KeyStatusResolver;
+  keyStatus?: ShortlinksKeyStatusResolver;
   audit?: (event: unknown) => void;
 }
 

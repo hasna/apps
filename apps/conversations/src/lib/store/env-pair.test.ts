@@ -14,13 +14,20 @@ describe("conversationsCloudEnv", () => {
     expect(resolveConversationsCloud(env)).not.toBeNull();
   });
 
-  test("half the API pair throws, naming the missing variable", () => {
+  test("a URL without a resolvable credential throws, naming the missing tier", () => {
     expect(() =>
       conversationsCloudEnv({ HASNA_CONVERSATIONS_API_URL: CLOUD_ENV.HASNA_CONVERSATIONS_API_URL }),
     ).toThrow(/HASNA_CONVERSATIONS_API_KEY/);
-    expect(() =>
-      conversationsCloudEnv({ HASNA_CONVERSATIONS_API_KEY: CLOUD_ENV.HASNA_CONVERSATIONS_API_KEY }),
-    ).toThrow(/HASNA_CONVERSATIONS_API_URL/);
+  });
+
+  test("a credential without a URL resolves hosted via the fleet gateway default", () => {
+    // (Owner directive 2026-09-04, hasna/apps#1720): URLs never need
+    // configuring. A key from any tier is enough to reach the fleet, so
+    // key-without-URL is a complete hosted configuration, not an error.
+    const env = conversationsCloudEnv({ HASNA_CONVERSATIONS_API_KEY: CLOUD_ENV.HASNA_CONVERSATIONS_API_KEY });
+    const client = resolveConversationsCloud(env);
+    expect(client).not.toBeNull();
+    expect(client!.baseUrl).toBe("https://api.hasna.com/conversations/v1");
   });
 
   test("local DB path overrides inherited API routing and strips the credentials", () => {

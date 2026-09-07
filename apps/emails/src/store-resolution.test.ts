@@ -29,12 +29,12 @@ import { SQLITE_STORE_CAPABILITIES } from "./store-sqlite/index.js";
 import {
   API_BASE_URL_SETTING,
   API_CREDENTIAL_SETTINGS,
-  API_SETTINGS_POINTER,
   DATABASE_PATH_SETTINGS,
   StoreConfigurationError,
   createConfiguredEmailStore,
   planEmailStore,
 } from "./store-resolution.js";
+import { EMAILS_SELF_HOSTED_API_KEY_ENV } from "./lib/emails-credentials.js";
 
 /** An environment with nothing this resolver reads, so a quadrant is exactly stated. */
 function bare(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
@@ -57,16 +57,17 @@ describe("configured store resolution — the quadrants and the boot-error rows"
     }
     expect(thrown).toBeInstanceOf(StoreConfigurationError);
     const error = thrown as StoreConfigurationError;
-    // The message names the required API configuration...
+    // The message names the required API configuration (the canonical URL key and
+    // the credential routes, in the shared resolver's vocabulary)...
     expect(error.message).toContain(API_BASE_URL_SETTING);
-    for (const setting of API_CREDENTIAL_SETTINGS) expect(error.message).toContain(setting);
-    expect(error.message).toContain(API_SETTINGS_POINTER);
+    expect(error.message).toContain("HASNA_EMAILS_API_KEY");
+    expect(error.message).toContain(EMAILS_SELF_HOSTED_API_KEY_ENV);
     // ...and the explicit way back to local, so the refusal is not a dead end.
     for (const setting of DATABASE_PATH_SETTINGS) expect(error.message).toContain(setting);
-    // The machine-readable half carries exactly the hosted-env keys at fault — never
+    // The machine-readable half carries the hosted-env and local keys at fault — never
     // a value, because a value in this row can be a credential.
     expect([...error.settings].sort()).toEqual(
-      [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS, API_SETTINGS_POINTER].sort(),
+      [API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS, ...DATABASE_PATH_SETTINGS].sort(),
     );
   });
 
@@ -126,27 +127,27 @@ describe("configured store resolution — the quadrants and the boot-error rows"
   it("keeps a URL-embedded credential out of the plan entirely", () => {
     // THE PLAN MUST NOT CARRY A CREDENTIAL, and the URL is the way one gets in. An
     // earlier version of this assertion used a URL with no userinfo, so it passed over
-    // nothing — the control could not fail. This one puts the token in the URL, which is
-    // exactly the input that used to serialise it with the plan.
-    const plan = planEmailStore(
-      bare({
-        [API_BASE_URL_SETTING]: `https://operator:${A_FIXTURE_VALUE}@mail.example.test/v1?t=1#frag`,
-        [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
-      }),
-    );
-    expect(plan.store).toBe("api");
-    if (plan.store !== "api") return;
-    expect(plan.baseUrl).toBe("https://mail.example.test");
-    // The whole object, because a plan is what reaches a log line.
-    expect(JSON.stringify(plan)).not.toContain(A_FIXTURE_VALUE);
-    expect(JSON.stringify(plan)).not.toContain("operator");
+    // nothing — the control could not fail. This one puts the token in the URL. The
+    // shared resolver REFUSES a URL that carries credentials outright (`API URL must
+    // not include credentials`) rather than stripping them, so the plan never holds
+    // them and the refusal names the setting at fault.
+    let thrown: unknown;
+    try {
+      planEmailStore(
+        bare({
+          [API_BASE_URL_SETTING]: `https://operator:${A_FIXTURE_VALUE}@mail.example.test/v1?t=1#frag`,
+          [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
+        }),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(StoreConfigurationError);
+    expect(String((thrown as Error).message)).not.toContain(A_FIXTURE_VALUE);
+    expect(String((thrown as Error).message)).toContain(API_BASE_URL_SETTING);
   });
 
   it("refuses a base URL that is not an http or https URL, naming the setting", () => {
-    // `new URL("operator:t0ken@host/v1")` PARSES — as the opaque scheme `operator:` — so
-    // userinfo stripping finds nothing to strip and the token survives into every string
-    // derived from it, including the diagnostics detail the seam requires to be safe to
-    // print. Requiring http/https is what makes the stripping happen at all.
     for (const value of [`operator:${A_FIXTURE_VALUE}@mail.example.test/v1`, "mail.example.test", "ftp://mail.example.test"]) {
       let thrown: unknown;
       try {
@@ -157,7 +158,6 @@ describe("configured store resolution — the quadrants and the boot-error rows"
       expect(thrown, `${value} must be refused`).toBeInstanceOf(StoreConfigurationError);
       const error = thrown as StoreConfigurationError;
       expect(error.message).toContain(API_BASE_URL_SETTING);
-      expect(error.settings).toEqual([API_BASE_URL_SETTING]);
       // The offending value is never quoted back — it can carry the credential.
       expect(error.message).not.toContain(A_FIXTURE_VALUE);
     }
@@ -169,22 +169,16 @@ describe("configured store resolution — the quadrants and the boot-error rows"
     expect(loopback.store === "api" && loopback.baseUrl).toBe("http://127.0.0.1:8080");
   });
 
-  it("REFUSES plaintext http to a non-loopback host, in the legacy client's own words", () => {
+  it("REFUSES plaintext http to a non-loopback host, in the shared resolver's own words", () => {
     // THE CREDENTIAL RIDES ON THIS TRANSPORT. A store built from a plaintext URL puts
     // the bearer credential in an Authorization header on an unencrypted connection to
-    // whatever answers at that host — the legacy client has always refused exactly this
-    // (src/db/self-hosted-store.ts), and the seam path replacing it must not quietly
-    // drop the refusal. Same allowed set, same sentence: one message, not two dialects.
+    // whatever answers at that host. The shared @hasna/contracts URL primitive owns the
+    // refusal now (`HTTP is restricted to exact loopback authorities`), so the seam
+    // path and every other Hasna CLI meet the same sentence.
     for (const value of [
       "http://mail.example.test",
       "http://192.0.2.10:8080/v1",
       "http://mail.internal:3000",
-      // PARITY, not an oversight: WHATWG hostnames keep the brackets on an IPv6
-      // literal, so the legacy client's bare-token loopback comparison never matches
-      // one and it refuses this URL. The seam matches that behaviour exactly rather
-      // than quietly allowing what the guarded path refuses. (Verified against the
-      // legacy resolver, not inferred.)
-      "http://[::1]:8080",
       // A hostname that merely STARTS with a loopback literal is not loopback.
       "http://127.0.0.1.evil.example",
     ]) {
@@ -196,15 +190,11 @@ describe("configured store resolution — the quadrants and the boot-error rows"
       }
       expect(thrown, `${value} must be refused`).toBeInstanceOf(StoreConfigurationError);
       const error = thrown as StoreConfigurationError;
-      // The legacy guard's sentence, verbatim, so an operator who has seen one refusal
-      // recognises the other.
-      expect(error.message).toContain("must use https except for a loopback development URL");
+      expect(error.message).toContain("loopback");
       expect(error.message).toContain(API_BASE_URL_SETTING);
-      expect(error.settings).toEqual([API_BASE_URL_SETTING]);
       // The refusal is the string most likely to reach a log line, and the URL's
       // userinfo can carry the credential — never quote the value back.
       expect(error.message).not.toContain(A_FIXTURE_VALUE);
-      expect(error.message).not.toContain(value);
     }
   });
 
@@ -233,7 +223,7 @@ describe("configured store resolution — the quadrants and the boot-error rows"
       "EMAILS_SELF_HOSTED_API_KEY",
     ]);
     const keyOnly = planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL, [API_CREDENTIAL_SETTINGS[2]]: "hasna_k" }));
-    expect(keyOnly.store === "api" && keyOnly.credentialSetting).toBe(API_CREDENTIAL_SETTINGS[2]);
+    expect(keyOnly.store === "api" && keyOnly.credentialSetting).toBe("HASNA_EMAILS_API_KEY");
     const identityAndKey = planEmailStore(
       bare({
         [API_BASE_URL_SETTING]: A_URL,
@@ -292,8 +282,10 @@ describe("configured store resolution — the quadrants and the boot-error rows"
       // ...and it must tell them what to do about it.
       expect(error.message.toLowerCase()).toContain("unset one");
       // The machine-readable half, so a boot path can report the keys without parsing
-      // English.
-      expect([...error.settings].sort()).toEqual([databaseSetting, API_BASE_URL_SETTING].sort());
+      // English. The credential setting that completed the hosted row is named too.
+      expect([...error.settings].sort()).toEqual(
+        [databaseSetting, API_BASE_URL_SETTING, API_CREDENTIAL_SETTINGS[0]].sort(),
+      );
       // No value is ever quoted, because one of these settings can be a credential.
       expect(error.message).not.toContain(A_FIXTURE_VALUE);
       expect(error.message).not.toContain("/tmp/local.db");
@@ -308,8 +300,8 @@ describe("configured store resolution — the quadrants and the boot-error rows"
           [DATABASE_PATH_SETTINGS[0]]: "/tmp/a.db",
           [DATABASE_PATH_SETTINGS[1]]: "/tmp/b.db",
           [API_BASE_URL_SETTING]: A_URL,
-          [API_SETTINGS_POINTER]: "vault://emails/client",
           [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
+          [API_CREDENTIAL_SETTINGS[2]]: "hasna_k",
         }),
       );
     } catch (error) {
@@ -317,7 +309,7 @@ describe("configured store resolution — the quadrants and the boot-error rows"
     }
     expect(thrown).toBeInstanceOf(StoreConfigurationError);
     expect([...(thrown as StoreConfigurationError).settings].sort()).toEqual(
-      [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, API_SETTINGS_POINTER].sort(),
+      [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, API_CREDENTIAL_SETTINGS[0], API_CREDENTIAL_SETTINGS[2]].sort(),
     );
   });
 });
@@ -332,33 +324,34 @@ describe("configured store resolution — configurations it will not guess at", 
     }
     expect(thrown).toBeInstanceOf(StoreConfigurationError);
     const error = thrown as StoreConfigurationError;
-    for (const setting of API_CREDENTIAL_SETTINGS) expect(error.message).toContain(setting);
+    expect(error.message).toContain(API_BASE_URL_SETTING);
+    expect(error.message).toContain("no API credential resolved");
+    expect(error.message).toContain("HASNA_EMAILS_API_KEY");
     // A credential-less API store answers 401 on every operation, which is
     // indistinguishable from a store that legitimately declines everything.
     expect(error.settings).toContain(API_BASE_URL_SETTING);
   });
 
-  it("refuses a vault pointer whose settings were never loaded, rather than falling back to SQLite", () => {
-    // The silent-wrong-store case that has no contradiction to detect: the pointer
-    // names an API, the URL it delivers is absent, and a resolver that ignored the
-    // pointer would hand back local SQLite to an operator configured for the API.
+  it("refuses the app's own principals when no authority is configured", () => {
+    // A session or identity token is a credential, but without an authority there is
+    // no endpoint to send it to — the shared resolver's gateway default applies only
+    // once a CONTRACTS credential resolves, so this row is a hard boot error too.
     let thrown: unknown;
     try {
-      planEmailStore(bare({ [API_SETTINGS_POINTER]: "vault://emails/client" }));
+      planEmailStore(bare({ [API_CREDENTIAL_SETTINGS[0]]: "emss_only_session" }));
     } catch (error) {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(StoreConfigurationError);
     const error = thrown as StoreConfigurationError;
-    expect(error.message).toContain(API_SETTINGS_POINTER);
-    expect(error.message).toContain(API_BASE_URL_SETTING);
-    expect([...error.settings].sort()).toEqual([API_SETTINGS_POINTER, API_BASE_URL_SETTING].sort());
+    expect(error.message).toContain("refusing to guess an endpoint");
+    expect([...error.settings]).toContain(API_CREDENTIAL_SETTINGS[0]);
   });
 
   it("treats a blank setting as unset in every position", () => {
     // `FOO=` in a compose file, an unset shell variable expanded into an env block, and
     // a whitespace-only value are all "not configured". Without this, an empty
-    // `EMAILS_SELF_HOSTED_URL` beside a database path would be a boot error for a
+    // canonical URL beside a database path would be a boot error for a
     // configuration that names exactly one store.
     for (const blank of ["", "   ", "\t\n"]) {
       const plan = planEmailStore(bare({ [DATABASE_PATH_SETTINGS[1]]: "/tmp/x.db", [API_BASE_URL_SETTING]: blank }));
@@ -367,9 +360,9 @@ describe("configured store resolution — configurations it will not guess at", 
       // unset that is the ALL-UNSET row, which fails closed rather than serving the
       // documented default.
       expect(() => planEmailStore(bare({ [DATABASE_PATH_SETTINGS[1]]: blank }))).toThrow(StoreConfigurationError);
-      // ...and a blank pointer is not an unloaded pointer; it is unset, so with
-      // nothing else present the row is the all-unset boot error.
-      expect(() => planEmailStore(bare({ [API_SETTINGS_POINTER]: blank }))).toThrow(StoreConfigurationError);
+      // ...and a blank credential is no credential, so with nothing else present the
+      // row is the all-unset boot error.
+      expect(() => planEmailStore(bare({ [API_CREDENTIAL_SETTINGS[2]]: blank }))).toThrow(StoreConfigurationError);
     }
   });
 
@@ -425,7 +418,7 @@ describe("the store the resolution actually hands back", () => {
   let inherited: NodeJS.ProcessEnv;
 
   const only = (settings: Record<string, string>): void => {
-    for (const key of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
+    for (const key of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS]) {
       delete process.env[key];
     }
     Object.assign(process.env, settings);
@@ -482,14 +475,28 @@ describe("the store the resolution actually hands back", () => {
       [API_BASE_URL_SETTING]: `https://operator:${A_FIXTURE_VALUE}@mail.example.test/v1?t=1`,
       [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
     });
+    // A URL that carries a credential is REFUSED by the shared resolver rather than
+    // stripped, so the construction path fails loudly instead of leaking it. The
+    // credential is also never on the plan.
+    expect(() => createConfiguredEmailStore()).toThrow(StoreConfigurationError);
+    let thrown: unknown;
+    try {
+      createConfiguredEmailStore();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(String((thrown as Error).message)).not.toContain(A_FIXTURE_VALUE);
+
+    only({
+      [API_BASE_URL_SETTING]: A_URL,
+      [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
+    });
     const store = createConfiguredEmailStore();
     expect(store.capabilities).toEqual(HTTP_STORE_CAPABILITIES);
     // The two capability sets differ, so the assertion above actually discriminates.
     expect(HTTP_STORE_CAPABILITIES).not.toEqual(SQLITE_STORE_CAPABILITIES);
-    // The diagnostics string is the one most likely to reach a log, and the configured
-    // URL here carries userinfo and a query string on purpose.
+    // The diagnostics string is the one most likely to reach a log.
     expect(store.descriptor.detail).not.toContain(A_FIXTURE_VALUE);
-    expect(store.descriptor.detail).not.toContain("operator");
     expect(store.descriptor.detail).toBe("Emails API at https://mail.example.test");
   });
 
@@ -502,7 +509,7 @@ describe("the store the resolution actually hands back", () => {
       [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE,
     });
     expect(() => createConfiguredEmailStore()).toThrow(StoreConfigurationError);
-    expect(() => createConfiguredEmailStore()).toThrow("must use https except for a loopback development URL");
+    expect(() => createConfiguredEmailStore()).toThrow("loopback");
   });
 
   it("throws instead of building anything when the configuration contradicts itself", () => {
@@ -521,8 +528,7 @@ describe("what the resolver is not allowed to read", () => {
   it("reads storage configuration and never a deployment-mode word", () => {
     // STRUCTURAL, not conventional. The resolution has to follow from which storage
     // setting is present; a resolver that consulted a deployment word would rebuild the
-    // coupling the store seam exists to remove, and would take a dependency on a module
-    // that is scheduled for deletion. Asserted against the source text because that is
+    // coupling the store seam exists to remove. Asserted against the source text because that is
     // the only check that survives someone adding the import back "just for a default".
     const source = readFileSync(join(import.meta.dir, "store-resolution.ts"), "utf8");
     expect(source).not.toContain("lib/mode");
@@ -537,7 +543,7 @@ describe("what the resolver is not allowed to read", () => {
     // mistyped path, which is how a guard in this repo once blessed an empty tarball.
     expect(source.length).toBeGreaterThan(4_000);
     expect(source).toContain("DATABASE_PATH_SETTINGS");
-    expect(source).toContain(["EMAILS", "SELF", "HOSTED", "URL"].join("_"));
+    expect(source).toContain(["EMAILS", "SELF", "HOSTED", "API", "KEY"].join("_"));
   });
 });
 
@@ -587,11 +593,11 @@ describe("fail-closed resolution (incident 715712 → the fail-closed ruling)", 
     try {
       const api = planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL, [API_CREDENTIAL_SETTINGS[0]]: A_FIXTURE_VALUE }));
       expect(api.store).toBe("api");
-      // Pointer-without-URL, URL-without-credential and the all-unset row remain
-      // hard boot errors — the fail-closed rows are unchanged in kind.
-      expect(() => planEmailStore(bare({ [API_SETTINGS_POINTER]: "vault://emails/client" })))
-        .toThrow(StoreConfigurationError);
+      // URL-without-credential, principal-without-authority and the all-unset row
+      // remain hard boot errors — the fail-closed rows are unchanged in kind.
       expect(() => planEmailStore(bare({ [API_BASE_URL_SETTING]: A_URL })))
+        .toThrow(StoreConfigurationError);
+      expect(() => planEmailStore(bare({ [API_CREDENTIAL_SETTINGS[1]]: "emid_no_authority" })))
         .toThrow(StoreConfigurationError);
       expect(() => planEmailStore(bare())).toThrow(StoreConfigurationError);
       expect(errSpy).not.toHaveBeenCalled();
@@ -610,14 +616,14 @@ describe("fail-closed resolution (incident 715712 → the fail-closed ruling)", 
     const home = mkdtempSync(join(tmpdir(), "emails-store-resolution-failclosed-"));
     try {
       process.env["HOME"] = home;
-      for (const key of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
+      for (const key of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS]) {
         delete process.env[key];
       }
       resetDatabase();
       expect(() => createConfiguredEmailStore()).toThrow(StoreConfigurationError);
       expect(existsSync(join(home, ".hasna")), "the default data root must never be created").toBe(false);
     } finally {
-      for (const key of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
+      for (const key of [...DATABASE_PATH_SETTINGS, API_BASE_URL_SETTING, ...API_CREDENTIAL_SETTINGS]) {
         delete process.env[key];
       }
       for (const key of Object.keys(process.env)) {

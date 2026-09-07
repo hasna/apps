@@ -37,25 +37,27 @@ The client (CLI, SDK, MCP) has exactly two connections:
 
 | Connection | Selection | Notes |
 | --- | --- | --- |
-| `file` | `HASNA_LOOPS_CONNECTION=file` (explicit opt-in) | The local SQLite file; authoritative local scheduling and daemon execution |
-| `api` | `HASNA_LOOPS_API_URL` plus `HASNA_LOOPS_API_KEY` | The control-plane HTTP API at `<API_URL>/v1` with a bearer key |
+| `file` | `HASNA_LOOPS_CONNECTION=file` (explicit opt-in) | The local SQLite file; authoritative local scheduling and daemon execution. Announces itself ("local mode") on stderr |
+| `api` | The shared credential resolver (`@hasna/contracts` 1.0.2): macOS Keychain items `hasna.credentials.loops.api-key` / `.api-url` (account `HASNA_STATION`, else short hostname, else `USER`), then `~/.hasna/loops/config/credentials` (0600; `HASNA_HOME` / `HASNA_CONFIG_HOME` relocate it, XDG is never consulted), then `HASNA_LOOPS_API_KEY` in the environment; authority defaults to the fleet gateway `https://api.hasna.com/loops` once a credential resolves | The control-plane HTTP API at `<authority>/v1` with a bearer key |
 
-No connection is a default. Setting both `HASNA_LOOPS_API_URL` and
-`HASNA_LOOPS_API_KEY` flips the client to the control-plane API; running
-against the on-box file store requires the explicit `HASNA_LOOPS_CONNECTION=file`
-opt-in (values `file` | `api`). An invocation with neither the API variables
-nor an explicit selection FAILS CLOSED: non-zero exit with an actionable error
-naming the required env — the client never silently serves the local SQLite
-file when the API env is missing. `HASNA_LOOPS_CONNECTION=file` alongside the
-API variables is a contradiction and is rejected, `HASNA_LOOPS_CONNECTION=api`
-still requires both API variables, and any other value is a hard error. There
-is no mode variable in this decision. A database URL never changes client
-authority: the standalone `loops` CLI never mutates a remote database by
-itself, and remote execution flows through the configured control-plane API
-and runner protocol.
+No connection is a default. A credential from any tier flips the client to the
+control-plane API; the on-box file store requires the explicit
+`HASNA_LOOPS_CONNECTION=file` opt-in. An invocation with no credential and no
+explicit selection FAILS CLOSED: non-zero exit with an actionable error naming
+what is missing — the client never silently serves the local SQLite file. A
+configured environment outranks the opt-in (and a half-configured one fails
+loudly instead of downgrading). The `HASNA_LOOPS_CONNECTION=api` value is
+retired — the resolver selects the hosted connection — and any other value is
+a hard error. There is no mode variable in this decision. A database URL never
+changes client authority: the standalone `loops` CLI never mutates a remote
+database by itself, and remote execution flows through the configured
+control-plane API and runner protocol.
 
 Tokens are represented only as presence signals in status output. URL
 credentials, query strings, and fragments are not returned in status output.
+The resolver re-reads the Keychain and the credential file on every call, so a
+rotation heals a long-lived MCP server or SDK client without a restart, and a
+station needs no inline env prefix.
 
 ## Status Report
 
@@ -227,9 +229,13 @@ status, and timestamp.
 
 ## Transition Note
 
-Reverting a flipped client is exactly unsetting `HASNA_LOOPS_API_URL` and
-`HASNA_LOOPS_API_KEY`. The former `HASNA_LOOPS_STORAGE_MODE` variable is
-deleted; there is no mode value to flip back.
+Reverting a flipped client is exactly removing the machine's loops credential
+(unset `HASNA_LOOPS_API_KEY`, delete the Keychain item
+`hasna.credentials.loops.api-key` and the credential file
+`~/.hasna/loops/config/credentials`); the local file connection remains
+available only through the explicit `HASNA_LOOPS_CONNECTION=file` opt-in. The
+former `HASNA_LOOPS_STORAGE_MODE` variable and the `HASNA_LOOPS_CONNECTION=api`
+value are deleted; there is no mode value to flip back.
 
 ## Machine Placement
 

@@ -43,23 +43,23 @@ export function registerDoctorCommand(program: Command): void {
       // existed, a command could read or write the production portfolio with
       // no surface anywhere saying so — which is how 230 rows reached it on
       // 2026-08-07 while the operator believed a local path was in effect.
-      // Reports the transport and the variable NAMES that drove it; never a
-      // credential value, and never a URL.
+      // Reports the transport, the variable NAMES that drove it, and the
+      // credential tier; never a credential value, and never a URL.
       section("Store");
       try {
-        const { getStore, explicitLocalPathVar } = await import("../../db/store.js");
-        const transport = (getStore() as unknown as { transport: string }).transport;
-        ok(
-          transport === "http"
-            ? "Resolved store: http — reads and writes go to the REMOTE portfolio"
-            : "Resolved store: local sqlite",
-        );
-        const pathVar = explicitLocalPathVar(process.env);
-        if (pathVar) ok(`Local path requested by ${pathVar}`);
+        const { getStoreResolution } = await import("../../db/store.js");
+        const resolution = getStoreResolution(process.env);
+        if (resolution.transport === "local") {
+          ok(`Resolved store: local sqlite${resolution.localPathVar ? ` (opted in via ${resolution.localPathVar})` : ""}`);
+        } else {
+          ok(`Resolved store: http — reads and writes go to the REMOTE portfolio`);
+          if (resolution.apiUrlSource) ok(`API URL from ${resolution.apiUrlSource}`);
+          if (resolution.apiKeySource) ok(`API key from ${resolution.apiKeySource} (tier: ${resolution.apiKeyTier})`);
+        }
       } catch (error) {
         fail(
           `Store not resolvable: ${error instanceof Error ? error.message.split(". ")[0] : String(error)}`,
-          "Pick one store: unset HASNA_DOMAINS_API_URL/API_KEY to use the local path, or unset the local path variable to use the hosted store",
+          "Set a hosted credential (HASNA_DOMAINS_API_KEY, or the Keychain item / credential file), or opt into the local store with a local path variable",
         );
       }
 

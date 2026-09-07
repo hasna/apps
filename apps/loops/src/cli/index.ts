@@ -64,9 +64,7 @@ import {
   validateLoopsMigrationBundle,
   type LoopsMigrationPlan,
 } from "../lib/migration.js";
-import { resolveRuntimeConfig } from "../lib/runtime-config.js";
-import { requireConfiguredConnection } from "../lib/cloud/resolve.js";
-import { buildStorageConnectionReport, storageConnectionReportLine, type StorageConnectionReport } from "../lib/runtime-status.js";
+import { buildStorageConnectionReport, resolvedClientRuntimeConfig, storageConnectionReportLine, type StorageConnectionReport } from "../lib/runtime-status.js";
 import {
   buildDuplicateOverlapReport,
   buildNameHygieneReport,
@@ -405,11 +403,11 @@ function printStorageConnectionReport(report: StorageConnectionReport, opts: { j
 
 function statusCommand() {
   return (opts: { json?: boolean } = {}) => {
-    // Fail closed when neither the hosted API env nor the explicit local opt-in
-    // is configured, so an unconfigured invocation exits non-zero with guidance
-    // instead of reporting a file connection that no data command would use.
-    requireConfiguredConnection("loops");
-    printStorageConnectionReport(buildStorageConnectionReport(resolveRuntimeConfig()), opts);
+    // The shared credential resolver decides the connection (env, Keychain,
+    // credential file, or the explicit HASNA_LOOPS_CONNECTION=file opt-in),
+    // so an unconfigured invocation exits non-zero with guidance instead of
+    // reporting a file connection that no data command would use.
+    printStorageConnectionReport(buildStorageConnectionReport(resolvedClientRuntimeConfig()), opts);
   };
 }
 

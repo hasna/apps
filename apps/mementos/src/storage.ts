@@ -6,7 +6,6 @@ import { Worker } from "node:worker_threads";
 import pg from "pg";
 import type { Pool, PoolClient } from "pg";
 import { resolveServerDataBackend, resolveDatabaseUrl, type ServerDataBackend } from "./generated/storage-kit/backend.js";
-import { assertNoLegacyStorageMode } from "./lib/retired-storage-mode.js";
 import { getDataRoot } from "./lib/paths.js";
 import { env } from "./lib/env.js";
 
@@ -74,6 +73,9 @@ export class SqliteAdapter implements DbAdapter {
 
   constructor(path: string) {
     this.db = new Database(path, { create: true });
+    // WAL setup can itself need a lock; apply the existing wait budget before
+    // that first operation, rather than after this constructor has returned.
+    this.db.exec("PRAGMA busy_timeout = 5000");
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
   }
@@ -797,7 +799,6 @@ export function getStorageBackendDatabaseUrl(env: NodeJS.ProcessEnv = process.en
 }
 
 export function getStorageConfig(): StorageConfig {
-  assertNoLegacyStorageMode();
   const fileConfig = readConfigFile();
 
   const merged: StorageConfig = {
@@ -996,7 +997,6 @@ export function getSafeStorageConfigSummary(
 }
 
 export function getStorageStatus(): NativeStorageStatus {
-  assertNoLegacyStorageMode();
   const config = getStorageConfig();
   const backend = getStorageBackend();
   const postgresRequested = backend === "postgresql";
@@ -1135,7 +1135,6 @@ function resolveConfiguredConnectionString(dbName: string): string {
 }
 
 export function getStorageConnectionString(dbName = "mementos"): string {
-  assertNoLegacyStorageMode();
   // Fail closed on clients: the raw RDS DSN is server-only (CLAUDE.md §2). A
   // client machine must use the HTTP API, never a Postgres DSN.
   if (!isServerContext()) {
@@ -1167,7 +1166,6 @@ export function getStorageConnectionString(dbName = "mementos"): string {
  * for the env/config form to resolve, so this adds no exfiltration surface.
  */
 export function getStorageConnectionStringForOperator(dbName = "mementos"): string {
-  assertNoLegacyStorageMode();
   return resolveConfiguredConnectionString(dbName);
 }
 

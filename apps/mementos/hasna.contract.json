@@ -4,8 +4,8 @@
   "name": "mementos",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.11.1",
-  "description": "Universal memory system for AI agents — CLI, MCP server, REST API, and TypeScript SDK over one SQLite or PostgreSQL store. Clients use local SQLite or the HTTP API selected by HASNA_MEMENTOS_API_URL; mementos-serve reads PostgreSQL selected by HASNA_MEMENTOS_DATABASE_URL. The data backend is the only runtime switch.",
+  "kitVersion": "1.0.2",
+  "description": "Universal memory system for AI agents — CLI, MCP server, REST API, and TypeScript SDK over one SQLite or PostgreSQL store. Hosted clients (CLI, MCP server, ./sdk) resolve their credential and authority through the @hasna/contracts client chain, fresh per call; the on-box SQLite store is reachable only by the explicit local opt-ins (HASNA_MEMENTOS_DB_PATH / HASNA_MEMENTOS_LOCAL). mementos-serve reads PostgreSQL selected by HASNA_MEMENTOS_DATABASE_URL. The data backend is the only runtime switch; retired storage-mode variables are inert.",
   "bins": [
     "mementos",
     "mementos-mcp",
@@ -21,9 +21,21 @@
       "status": "supported",
       "bin": "mementos-serve",
       "authMode": "api-key",
-      "health": { "method": "GET", "path": "/health", "public": true },
-      "readiness": { "method": "GET", "path": "/ready", "public": true },
-      "version": { "method": "GET", "path": "/version", "public": true },
+      "health": {
+        "method": "GET",
+        "path": "/health",
+        "public": true
+      },
+      "readiness": {
+        "method": "GET",
+        "path": "/ready",
+        "public": true
+      },
+      "version": {
+        "method": "GET",
+        "path": "/version",
+        "public": true
+      },
       "apiBasePath": "/v1",
       "openApiPath": "/v1/openapi.json"
     },

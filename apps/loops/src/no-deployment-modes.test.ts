@@ -13,24 +13,16 @@
  *     test below)
  *
  * Exemptions (documented classes; everything else is a violation):
- *   1. Retired-env rejection contract — src/lib/runtime-config.ts and
- *      src/lib/runtime-config.test.ts may name `HASNA_LOOPS_STORAGE_MODE`, its
- *      key-array identifier, its legacy values (`self_hosted`), and the phrase
- *      "storage mode", because the closed-matrix contract REQUIRES rejecting
- *      the retired variable by name (docs/UNIFIED_PRODUCT_CONTRACT.md §9: "any
- *      mode-shaped value is rejected before resource creation"). The value
- *      array `["local", "self_hosted", "cloud"]` in the rejection matrix test
- *      is the same class.
- *   2. Absence assertions — a code line asserting output does NOT contain a
+ *   1. Absence assertions — a code line asserting output does NOT contain a
  *      token (`.not.toContain(...)` / `.not.toMatch(...)` / `.not.toBe(...)` /
  *      `.not.toEqual(...)`) necessarily names the token; such lines are
  *      exempt (runtime-status.test.ts proves serialized output carries no
  *      deploymentMode/sourceOfTruth/self_hosted).
- *   3. Removal-documentation comments — comment text that documents the
+ *   2. Removal-documentation comments — comment text that documents the
  *      removal/absence of the vocabulary ("removed", "retired", "there is
  *      no ...", "no longer", "pre-mode-removal", ...) is exempt. Comments that
  *      merely describe old behavior WITHOUT removal language are violations.
- *   4. Push-manifest identifiers — `applySelfHostedPush`,
+ *   3. Push-manifest identifiers — `applySelfHostedPush`,
  *      `buildSelfHostedMigrationPlan`, `SelfHostedPlanOptions`,
  *      `planSelfHostedMigration`, `selfHostedControlPlaneSummary`,
  *      `selfHostedMigrationCommand`, and the `selfHosted` commander variable
@@ -39,12 +31,16 @@
  *      `open-loops.self-hosted-push-manifest/v1` is hyphenated and matches no
  *      rule; it is allowlisted below for documentation only.
  *
+ * The retired `HASNA_LOOPS_STORAGE_MODE` rejection contract was removed with
+ * the own env chain (hasna/apps#1720): the shared credential resolver owns the
+ * client connection and no source file names the retired variable any more —
+ * there is no rejection file exemption left.
+ *
  * Deliberate non-catches (documented decisions):
  *   - bare `local` / `cloud` values — ordinary English words, uncatchable;
  *     the mode surfaces around them are caught by the token rules
- *   - "deployment modes" / "storage modes" (plural) — the boundary-rejection
- *     error text in runtime-config.ts says "deployment modes no longer exist";
- *     the singular-space-form rules intentionally do not match the plural
+ *   - "deployment modes" / "storage modes" (plural) — the singular-space-form
+ *     rules intentionally do not match the plural
  *   - "self-hosted" (hyphen, plain English) — allowed in comments and prose
  *   - plain "mode" — execution modes, MCP transport modes, dry-run mode
  */
@@ -168,24 +164,6 @@ const SELF_HOSTED_IDENTIFIER_ALLOWLIST = new Set<string>([
   "selfHostedControlPlaneSummary",
   "selfHostedMigrationCommand",
   "selfHosted",
-]);
-
-/**
- * Retired-env rejection contract files: the closed-matrix rejection of the
- * deleted HASNA_LOOPS_STORAGE_MODE must name the variable, its key array, and
- * its legacy values to reject them. Exempt only these rules, only in these
- * files.
- */
-const RETIRED_ENV_REJECTION_FILES = new Set<string>([
-  "src/lib/runtime-config.ts",
-  "src/lib/runtime-config.test.ts",
-]);
-
-const RETIRED_ENV_REJECTION_RULES = new Set<string>([
-  "STORAGE_MODE env-key family",
-  "self_hosted legacy mode value",
-  "storage mode (space form)",
-  "MODE_ENV_KEYS mode-env key array",
 ]);
 
 /** Code line asserting a token's ABSENCE; naming the token is the point. */
@@ -355,7 +333,6 @@ interface Finding {
 function scanFile(relPath: string, absPath: string, findings: Finding[]): void {
   const text = readFileSync(absPath, "utf8");
   const lines = classifyFile(text);
-  const isRejectionFile = RETIRED_ENV_REJECTION_FILES.has(relPath);
 
   const codePerLine: string[] = [];
   const originalLineForCodeIndex: number[] = [];
@@ -381,7 +358,6 @@ function scanFile(relPath: string, absPath: string, findings: Finding[]): void {
     for (const m of code.matchAll(rule.pattern)) {
       const matched = m[0];
       if (rule.identifier && SELF_HOSTED_IDENTIFIER_ALLOWLIST.has(matched)) continue;
-      if (isRejectionFile && RETIRED_ENV_REJECTION_RULES.has(rule.name)) continue;
       if (lineIsAbsenceAssertion(lineNo)) continue;
       findings.push({ file: relPath, line: lineNo, rule: rule.name, match: matched });
     }
@@ -447,8 +423,7 @@ describe("deployment-mode removal ratchet", () => {
       "",
       ...renderFindings(findings),
       "",
-      "Exemptions: retired-env rejection contract files (see the exemption tables at the top), " +
-        "absence assertions, removal-documentation comments, push-manifest identifiers, and the " +
+      "Exemptions: absence assertions, removal-documentation comments, push-manifest identifiers, and the " +
         "wire-stable manifest schema id " + PUSH_MANIFEST_SCHEMA_ID + ".",
     ].join("\n");
     expect(findings, message).toHaveLength(0);

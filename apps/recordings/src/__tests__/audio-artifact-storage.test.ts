@@ -218,7 +218,7 @@ describe("LocalStore upload-at-creation wiring", () => {
   let tempDir: string;
   let originalDbPath: string | undefined;
   let originalAudioDir: string | undefined;
-  let originalClientStore: string | undefined;
+  let originalLocalOptIn: string | undefined;
 
   beforeEach(() => {
     resetDatabase();
@@ -227,17 +227,21 @@ describe("LocalStore upload-at-creation wiring", () => {
     tempDir = makeTempDir();
     originalDbPath = process.env.HASNA_RECORDINGS_DB_PATH;
     originalAudioDir = process.env.RECORDINGS_AUDIO_DIR;
-    originalClientStore = process.env.HASNA_RECORDINGS_CLIENT_STORE;
+    originalLocalOptIn = process.env.HASNA_RECORDINGS_LOCAL;
     process.env.HASNA_RECORDINGS_DB_PATH = join(tempDir, "test.db");
     process.env.RECORDINGS_AUDIO_DIR = join(tempDir, "audio");
     // The suite is hermetic by contract: the ambient hosted-store configuration
     // must not route these in-process calls to the hosted API, and the client
     // never falls back to the on-box store when no hosted env is configured —
-    // local mode is declared EXPLICITLY via the store override. Restored in
-    // afterEach.
+    // local mode is declared EXPLICITLY via the unhosted opt-in (answered
+    // before the resolver runs, so no Keychain or credential file is read).
+    // Restored in afterEach.
     delete process.env.HASNA_RECORDINGS_API_URL;
     delete process.env.HASNA_RECORDINGS_API_KEY;
-    process.env.HASNA_RECORDINGS_CLIENT_STORE = "sqlite";
+    delete process.env.HASNA_RECORDINGS_API_KEY_OVERRIDE;
+    delete process.env.HASNA_RECORDINGS_API_KEY_REF;
+    delete process.env.HASNA_PROFILE;
+    process.env.HASNA_RECORDINGS_LOCAL = "1";
   });
 
   afterEach(() => {
@@ -249,8 +253,8 @@ describe("LocalStore upload-at-creation wiring", () => {
     else process.env.HASNA_RECORDINGS_DB_PATH = originalDbPath;
     if (originalAudioDir === undefined) delete process.env.RECORDINGS_AUDIO_DIR;
     else process.env.RECORDINGS_AUDIO_DIR = originalAudioDir;
-    if (originalClientStore === undefined) delete process.env.HASNA_RECORDINGS_CLIENT_STORE;
-    else process.env.HASNA_RECORDINGS_CLIENT_STORE = originalClientStore;
+    if (originalLocalOptIn === undefined) delete process.env.HASNA_RECORDINGS_LOCAL;
+    else process.env.HASNA_RECORDINGS_LOCAL = originalLocalOptIn;
     if (existsSync(tempDir)) rmSync(tempDir, { recursive: true, force: true });
   });
 

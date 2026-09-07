@@ -14,33 +14,77 @@ npm install -g @hasna/contacts
 ## Configure the client
 
 Every CLI, MCP, and package data operation uses one authenticated HTTPS `/v1`
-authority. There is no built-in hosted URL and no local database fallback.
+authority resolved by the shared `@hasna/contracts` client chain
+(hasna/apps#1720), resolved fresh on every request. There is no local database
+fallback and no per-app env chain of its own.
+
+Once a contacts API key resolves from any tier, the authority defaults to the
+fleet gateway `https://api.hasna.com/contacts` — no URL configuration is
+needed on a station. The credential tiers, in order:
+
+1. explicit arguments / deliberate pointers — `HASNA_CONTACTS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_CONTACTS_API_KEY_REF` (secrets vault)
+2. macOS Keychain — `hasna.credentials.contacts.api-key` / `.api-url`, account `HASNA_STATION` → `hostname -s` → `$USER`
+3. disk — `~/.hasna/contacts/config/credentials` (owner-only 0400/0600, `HASNA_CONTACTS_API_KEY=…` or the `HASNA_CONTACTS_API_URL=…` alias)
+4. environment — `HASNA_CONTACTS_API_KEY`
+
+| Env var | Meaning |
+|---|---|
+| `HASNA_CONTACTS_API_URL` | Explicit API base URL (HTTPS; overrides the fleet gateway). Legacy alias: `CONTACTS_API_URL`. |
+| `HASNA_CONTACTS_API_KEY` | API key (env tier). Legacy alias: `CONTACTS_API_KEY`. |
+| `HASNA_CONTACTS_API_KEY_OVERRIDE` | Deliberate per-run override that outranks the Keychain and disk. |
+| `HASNA_CONTACTS_API_KEY_REF` | Secrets-vault pointer (`namespace/app/live/api_key`); terminal when unresolvable. |
+| `HASNA_PROFILE` | Selects which identity (`credentials-<profile>`) the disk tier reads. |
+| `HASNA_STATION` | Keychain account when set; else short hostname, then `$USER`. |
+| `HASNA_HOME` | Replaces `~` for the `~/.hasna/…` credential/disk root. |
+| `HASNA_CONFIG_HOME` | Replaces `~/.hasna/<app>/config` entirely. |
 
 ```bash
+# Fully explicit:
 export HASNA_CONTACTS_API_URL="https://contacts.example.com"
-# Provision the API key through the @hasna/contracts credential chain. For
-# example, put HASNA_CONTACTS_API_KEY in the shared fleet/config credential chain,
-# or configure HASNA_CONTACTS_API_KEY_REF for the secrets client.
+export HASNA_CONTACTS_API_KEY="…"     # or configure the Keychain/disk tiers
 contacts connection --json
 ```
 
-An absent or invalid URL/key fails closed. `HASNA_CONTACTS_STORAGE_MODE`,
-`CONTACTS_STORAGE_MODE`, contacts DB-path variables, and contacts database URLs
-are rejected in client processes. PostgreSQL URLs belong only to
-`contacts-serve` and the migration task.
+An absent URL and key fails closed: operations exit non-zero and never open a
+local store; `contacts connection` reports `transport: "unconfigured"`.
+`HASNA_CONTACTS_STORAGE_MODE`, `CONTACTS_STORAGE_MODE`, contacts DB-path
+variables, and contacts database URLs are rejected in client processes.
+PostgreSQL URLs belong only to `contacts-serve` and the migration task.
 
 ## CLI Usage
 
 ```bash
-contacts status            # CLI version, API endpoint, storage mode, record counts
+contacts status            # CLI version, resolved /v1 authority + sources, storage mode, record counts
 contacts status --json
 contacts --help
 ```
 
-`contacts status` answers even on a box without an API key: an unconfigured
-client reports storage `unconfigured` (a failed request on a configured box
-reports storage `error` with the failure message) instead of crashing, so
-agents can observe the configuration drift the command exists to expose.
+`contacts status` reports the authority the shared resolver actually decided
+(`api`, the `/v1` base URL) and where each half came from — `api_url_source`,
+`api_key_source`, `api_key_tier`: an env key name, a Keychain item reference,
+a credentials-file path, or `default` for the fleet gateway; never a value.
+It answers even on a box without an API key: an unconfigured client reports
+storage `unconfigured` with the resolver's `issue` (a failed request on a
+configured box reports storage `error` with the failure message) instead of
+crashing, so agents can observe the configuration drift the command exists to
+expose. `status` and `connection` are diagnostics and exit 0 with that report;
+every data verb fails closed (non-zero exit, no local store).
+
+## SDK
+
+```ts
+import { createContactsClient, ContactsV1Client } from "@hasna/contacts/sdk";
+
+// Through the fleet resolver — the same @hasna/contracts chain the CLI and MCP
+// server use: credential and authority resolved at construction, the key
+// re-resolved on every request, the authority pinned. Nothing resolving throws.
+const client = createContactsClient();
+const { contacts } = await client.listContacts();
+
+// Explicit pin: a caller-supplied baseUrl always requires a caller-supplied
+// apiKey — the SDK never attaches an ambient credential to it.
+const pinned = new ContactsV1Client({ baseUrl: "https://contacts.example.com", apiKey: "…" });
+```
 
 
 ## Audiences, consent, and suppression

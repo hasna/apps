@@ -97,7 +97,7 @@ describe("no private cloud package boundary", () => {
 
     // The one exported surface is the Store resolver.
     expect(storageEntrypoint).toContain("getStore");
-    expect(storageEntrypoint).toContain("resolveStorageClient");
+    expect(storageEntrypoint).toContain("resolveRecordingsTransport");
     expect(entrypoint).toContain("getStore");
     expect(entrypoint).not.toContain(["@hasna", "cloud"].join("/"));
 

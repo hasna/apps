@@ -12,7 +12,7 @@ import {
 } from "../../tui/data.js";
 import { MAILBOXES, useEmails } from "../context/emails-state.js";
 import { labelColor, selectedForeground, useTheme } from "../context/theme.js";
-import { Row, SectionHeader } from "../ui/primitives.js";
+import { Button, Row, SectionHeader } from "../ui/primitives.js";
 
 const SIDEBAR_WIDE = 34;
 const SYSTEM_LABEL_KEYS = new Set(["inbox", "sent", "spam", "trash", "unread", "starred", "archived", "draft", "drafts"]);
@@ -59,21 +59,29 @@ export function Sidebar() {
   return (
     <box width="100%" height="100%" flexDirection="column" backgroundColor={theme.backgroundPanel} paddingTop={1} paddingLeft={1} paddingRight={1}>
       <box
-        height={org() ? 3 : 2}
+        height={org() ? 2 : 1}
+        flexShrink={0}
         flexDirection="column"
         paddingLeft={1}
         onMouseUp={(event: MouseEvent) => {
+          if (event.button !== 0) return;
           event.stopPropagation();
           emails.actions.openDialog("address");
         }}
       >
-        <text fg={theme.text} attributes={TextAttributes.BOLD}>Emails</text>
-        <text fg={theme.textMuted}>{emails.selectedAddress().label}</text>
+        <box width="100%" flexDirection="row">
+          <text fg={theme.text} attributes={TextAttributes.BOLD} flexShrink={1} wrapMode="none">{emails.state.selectedAddressId === "all" ? "All mailboxes" : emails.selectedAddress().label}</text>
+          <text fg={theme.textMuted} flexShrink={0}> ▾</text>
+        </box>
         <Show when={org()}>
           <text fg={theme.textMuted}>{org()}</text>
         </Show>
       </box>
 
+      <box width="100%" marginTop={1} flexShrink={0}>
+        <Button label="+ Compose" tone="primary" onPress={() => emails.actions.startCompose("new")} />
+      </box>
+      <scrollbox flexGrow={1} minHeight={0} width="100%" scrollX={false} verticalScrollbarOptions={{ trackOptions: { backgroundColor: theme.backgroundElement, foregroundColor: theme.borderActive } }}>
       <SectionHeader label={open().mail ? "Mail" : "Mail +"} onPress={() => setOpen((value) => ({ ...value, mail: !value.mail }))} />
       <Show when={open().mail}>
         <For each={MAILBOXES}>
@@ -161,23 +169,17 @@ export function Sidebar() {
         <Row active={emails.state.dialog === "commands"} onPress={() => emails.actions.openDialog("commands")}>
           <text fg={emails.state.dialog === "commands" ? selectedForeground(theme, theme.primary) : theme.text}>Shortcuts</text>
         </Row>
-        <Row onPress={() => emails.actions.startCompose("new")}>
-          <text fg={theme.text}>Compose</text>
-        </Row>
-        <Row active={emails.state.dialog === "address"} onPress={() => emails.actions.openDialog("address")}>
-          <text fg={emails.state.dialog === "address" ? selectedForeground(theme, theme.primary) : theme.text}>All inboxes</text>
-        </Row>
         <Row active={emails.state.dialog === "domains"} onPress={() => emails.actions.openDialog("domains")}>
           <text fg={emails.state.dialog === "domains" ? selectedForeground(theme, theme.primary) : theme.text}>Domains</text>
         </Row>
-        <Row active={emails.state.dialog === "settings"} onPress={() => emails.actions.openDialog("settings")}>
-          <text fg={emails.state.dialog === "settings" ? selectedForeground(theme, theme.primary) : theme.text}>Settings</text>
-        </Row>
       </Show>
 
-      <box flexGrow={1} />
-      <box height={2} flexDirection="column" paddingLeft={1}>
-        <text fg={theme.textMuted}>{emails.state.loading ? "Loading" : "Ready"}</text>
+      </scrollbox>
+      <box height={2} flexShrink={0} flexDirection="column" paddingLeft={1}>
+        <box height={1} width="100%" flexDirection="row" justifyContent="space-between">
+          <Button label="Settings" onPress={() => emails.actions.openDialog("settings")} />
+          <text fg={theme.textMuted}>{emails.state.loading ? "Loading" : "Ready"}</text>
+        </box>
         <Show when={emails.state.lastError}>
           <text fg={theme.error}>{emails.state.lastError}</text>
         </Show>

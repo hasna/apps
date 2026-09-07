@@ -309,7 +309,7 @@ describe("loops-runner", () => {
     }
   });
 
-  test("fails closed for a partial API connection without a URL", () => {
+  test("an API key alone resolves the fleet gateway (no URL required)", () => {
     const previousApiUrl = process.env.HASNA_LOOPS_API_URL;
     const previousApiKey = process.env.HASNA_LOOPS_API_KEY;
     delete process.env.HASNA_LOOPS_API_URL;
@@ -318,9 +318,12 @@ describe("loops-runner", () => {
     try {
       const status = runnerStatus("machine-test");
 
-      expect(status.ok).toBe(false);
-      expect(status.storageConnection.connection).toBe("file");
-      expect(status.state).toBe("missing_api_url");
+      // The shared resolver defaults to https://api.hasna.com/loops once a
+      // credential has resolved, so a station needs no inline URL.
+      expect(status.ok).toBe(true);
+      expect(status.storageConnection.connection).toBe("api");
+      expect(status.storageConnection.apiUrl).toBe("https://api.hasna.com/loops");
+      expect(status.state).toBe("api_ready");
     } finally {
       if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
       else process.env.HASNA_LOOPS_API_URL = previousApiUrl;

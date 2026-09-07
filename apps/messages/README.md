@@ -47,9 +47,41 @@ configuration — never by a mode enum:
 - **PostgreSQL** when `HASNA_MESSAGES_DATABASE_URL` is set (the harness
   backend). Schema applied by `scripts/apply-postgres-migrations.mjs`.
 
-The client (CLI / MCP / SDK) talks to the server's HTTP API
-(`HASNA_MESSAGES_API_URL` + `HASNA_MESSAGES_API_KEY`) or to a local store —
-it never opens Postgres directly.
+The client (CLI / MCP / SDK) resolves its credential and its API authority
+through the shared `@hasna/contracts` chain and talks to the server's HTTP API
+or to a local store — it never opens Postgres directly.
+
+## Credentials (client surfaces)
+
+The CLI, the MCP server and the `./sdk` client all call the **one**
+`@hasna/contracts` client resolver, per request, fresh (hasna/apps#1720) — the
+same chain every hosted Hasna app uses. There is no per-app credential chain
+any more: no `~/.hasna/fleet-env`, no `~/.hasna/cloud`, no `~/.config/hasna`,
+no `HASNA_MESSAGES_LOCAL_MODE_ENV` switch, no deprecation notice. The ladder:
+
+| tier | source |
+|------|--------|
+| 1 | explicit argument — `--api-key` / `--profile` |
+| 2 | deliberate env pointer — `HASNA_MESSAGES_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_MESSAGES_API_KEY_REF` |
+| 3 | macOS Keychain — item `hasna.credentials.messages.api-key`, account `HASNA_STATION` → `hostname -s` → `$USER` |
+| 4 | disk, read at call time — `~/.hasna/messages/config/credentials` (owner-only 0400/0600) |
+| 5 | `HASNA_MESSAGES_API_KEY` — a legitimate tier, no notice |
+
+The authority follows the same ladder — `HASNA_MESSAGES_API_URL`, the Keychain
+`api-url` item, the credentials file — and **defaults to the fleet gateway
+`https://api.hasna.com/messages`** once a credential resolves: a key from any
+tier is a complete configuration, and a URL never needs configuring. The
+unprefixed `MESSAGES_API_URL` / `MESSAGES_API_KEY` spellings survive only as
+the shared resolver's silent alias, BELOW the canonical names.
+
+**Strict pair, fail loud.** The old loose pair — `HASNA_MESSAGES_API_URL`
+alone selected an unauthenticated http run — is gone. A configured authority
+with no resolvable key is a hard error: non-zero exit, no SQLite, no
+`messages-local-fallback` event, an error naming every tier consulted. The
+on-box SQLite store is reachable **only** under the explicit opt-in
+`HASNA_MESSAGES_LOCAL=1` (alias `MESSAGES_LOCAL=1`), it must not be combined
+with any configured authority/credential, and every local run prints one
+"local mode" line on stderr — an unhosted run is never silent.
 
 ## Server authentication
 
@@ -79,31 +111,23 @@ will name it as failing until an out-of-repo deploy carries this gate with
 working, not a broken check. Sequence and tracking: `tooling/fleet/README.md`
 (which links the infra-side issue) and hasna/apps#1768.
 
-**`HASNA_MESSAGES_API_KEY` is deprecated.** The single static string is still
-accepted for one more release so stations can rotate, and the server warns once
-when it authenticates a request. It cannot be scoped, expired or revoked, which
-is why messages could not have a fleet key at all until now.
+**`HASNA_MESSAGES_API_KEY` is deprecated as a SERVER credential.** For
+clients it is a legitimate tier 5 in the resolver chain above. As a server
+credential the single static string is still accepted for one more release so
+stations can rotate, and the server warns once when it authenticates a request.
+It cannot be scoped, expired or revoked, which is why messages could not have a
+fleet key at all until now.
 
 With neither a signing secret nor the static key configured, `messages-serve`
 runs in trusted-localhost mode with `/v1/*` open; a non-loopback bind in that
 state is refused at startup.
 
-## Modes (client surfaces)
-
-The client surfaces (CLI, MCP, SDK) connect to the fleet API when
-`HASNA_MESSAGES_API_URL` is set. They **never silently fall back** to the
-on-box SQLite store when it is missing: without the API env AND without the
-explicit local opt-in `HASNA_MESSAGES_LOCAL=1`, every command fails closed
-with a non-zero exit and an actionable error naming `HASNA_MESSAGES_API_URL`
-(no local database is created). Local mode is available only through that
-explicit opt-in, optionally with `HASNA_MESSAGES_SQLITE_PATH` naming the
-database file.
-
 ## Usage
 
 ```bash
-# Fleet API (HASNA_MESSAGES_API_URL + HASNA_MESSAGES_API_KEY; a station
-# wrapper that injects them makes every verb fleet-addressed):
+# Fleet API — no env needed on a station whose credential is in the Keychain
+# or ~/.hasna/messages/config/credentials: the fleet gateway
+# https://api.hasna.com/messages is the default authority:
 messages send --from augustus --to silvanus --content "hello"
 
 # Which API am I talking to? `status` prints the RESOLVED /v1 authority --
@@ -113,9 +137,9 @@ messages status
 #   API: https://api.hasna.com/messages/v1
 #   transport: http
 #   api key: present
-messages status --json   # app, version, transport, api_url, api_base, api_key_present
+messages status --json   # app, version, transport, api_url, api_base, api_key_present, api_url_source, api_key_source, api_key_tier
 
-# Local SQLite mode — explicit opt-in only:
+# Local SQLite mode — explicit opt-in only (prints one "local mode" stderr line):
 HASNA_MESSAGES_LOCAL=1 messages register --name augustus --display-name "CEO seat"
 HASNA_MESSAGES_LOCAL=1 messages send --from augustus --to silvanus --content "hello"
 HASNA_MESSAGES_LOCAL=1 messages threads --agent silvanus    # unread counts + closed state
@@ -127,7 +151,9 @@ HASNA_MESSAGES_LOCAL=1 messages close --id t_augustus__silvanus --agent silvanus
 HASNA_MESSAGES_LOCAL=1 messages reopen --id t_augustus__silvanus --agent silvanus  # reopen
 HASNA_MESSAGES_LOCAL=1 messages unread --agent silvanus     # unread threads + total
 
-# Against a running messages-serve (fleet-addressed via --url):
+# Against a running messages-serve: --url pins the authority (no ambient
+# credential is attached without --api-key — the authority pin pins the
+# credential with it, hasna/apps#1794):
 messages send --from augustus --to silvanus --content "hello" --url http://localhost:8081
 
 # Server (SQLite default, or PostgreSQL via HASNA_MESSAGES_DATABASE_URL):

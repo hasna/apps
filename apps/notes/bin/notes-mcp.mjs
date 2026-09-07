@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // @bun
-// Hasna Notes MCP server entry. The hosted/cloud MCP variant (which spoke to
-// the server through the removed sync client) is gone with the sync
-// machinery; this entry now always serves the local notes MCP server.
+// Hasna Notes MCP server entry. The MCP server is a stdio process speaking to
+// the authenticated HTTPS notes API; its credential is resolved through the
+// @hasna/contracts chain per request (hasna/apps#1720).
 await import("../mcp/notes-mcp.mjs");

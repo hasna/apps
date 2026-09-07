@@ -1,12 +1,11 @@
 node_modules/
+.bun/
 dist/
 .env
 *.db
 *.db-shm
 *.db-wal
 .takumi/
-sdk/node_modules/
-sdk/dist/
 menubar/.build/
 menubar/.swiftpm/
 Library/

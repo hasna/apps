@@ -554,25 +554,18 @@ describe("MementosClient", () => {
 // ============================================================================
 
 describe("MementosClient.fromEnv", () => {
-  it("uses MEMENTOS_URL env var when set", () => {
-    const orig = process.env["MEMENTOS_URL"];
-    process.env["MEMENTOS_URL"] = "http://custom-host:9999";
+  it("uses an explicit baseUrl override", () => {
     const { calls, fetch } = mockFetch([{ status: 200, body: { memories: [], count: 0 } }]);
-    const client = MementosClient.fromEnv({ fetch });
+    const client = MementosClient.fromEnv({ baseUrl: "http://custom-host:9999", fetch });
     client.listMemories();
     expect(calls[0]!.url).toStartWith("http://custom-host:9999");
-    process.env["MEMENTOS_URL"] = orig ?? "";
-    if (!orig) delete process.env["MEMENTOS_URL"];
   });
 
-  it("defaults to localhost:19428 when MEMENTOS_URL not set", () => {
-    const orig = process.env["MEMENTOS_URL"];
-    delete process.env["MEMENTOS_URL"];
+  it("defaults to localhost:19428 when no baseUrl is given", () => {
     const { calls, fetch } = mockFetch([{ status: 200, body: { memories: [], count: 0 } }]);
     const client = MementosClient.fromEnv({ fetch });
     client.listMemories();
     expect(calls[0]!.url).toStartWith("http://localhost:19428");
-    if (orig) process.env["MEMENTOS_URL"] = orig;
   });
 });
 

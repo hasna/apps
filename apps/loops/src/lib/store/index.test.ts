@@ -49,11 +49,9 @@ describe("getStore resolver", () => {
     );
     expect(() => isCloudStore({})).toThrow(/no loops client connection is configured/);
     // The failure happens before any store opens: no db is created anywhere.
-    expect(() => getStore({ HASNA_LOOPS_CONNECTION: "api" })).toThrow(
-      /HASNA_LOOPS_CONNECTION=api requires both HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY/,
-    );
+    expect(() => getStore({ HASNA_LOOPS_CONNECTION: "api" })).toThrow(/HASNA_LOOPS_CONNECTION=api is retired/);
     expect(() => getStore({ HASNA_LOOPS_CONNECTION: "sqlite" })).toThrow(
-      "HASNA_LOOPS_CONNECTION must be 'file' or 'api'; got \"sqlite\".",
+      "HASNA_LOOPS_CONNECTION must be 'file'; got \"sqlite\".",
     );
   });
 
@@ -67,14 +65,15 @@ describe("getStore resolver", () => {
     });
   });
 
-  test("rejects the file opt-in alongside API vars as a contradiction", () => {
-    expect(() =>
-      getStore({
-        HASNA_LOOPS_CONNECTION: "file",
-        HASNA_LOOPS_API_URL: "https://loops.example.test",
-        HASNA_LOOPS_API_KEY: "k",
-      }),
-    ).toThrow(/HASNA_LOOPS_CONNECTION=file conflicts with HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY/);
+  test("a configured environment outranks the file opt-in (no silent downgrade)", () => {
+    const store = getStore({
+      HASNA_LOOPS_CONNECTION: "file",
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY: "k",
+    });
+    expect(store).toBeInstanceOf(ApiStore);
+    expect(store.transport).toBe("api");
+    store.close();
   });
 
   test("returns ApiStore when both API vars are set", () => {
@@ -84,9 +83,16 @@ describe("getStore resolver", () => {
     expect(isCloudStore({ HASNA_LOOPS_API_URL: "https://loops.example.test", HASNA_LOOPS_API_KEY: "k" })).toBe(true);
   });
 
-  test("rejects partial remote configuration instead of opening LocalStore", () => {
+  test("an API key alone resolves the fleet gateway (no URL required)", () => {
+    const store = getStore({ HASNA_LOOPS_API_KEY: "k" });
+    expect(store).toBeInstanceOf(ApiStore);
+    expect((store as ApiStore).baseUrl).toBe("https://api.hasna.com/loops/v1");
+    store.close();
+  });
+
+  test("rejects a configured URL with no credential instead of opening LocalStore", () => {
     expect(() => getStore({ HASNA_LOOPS_API_URL: "https://loops.example.test" })).toThrow("requires both");
-    expect(() => getStore({ HASNA_LOOPS_API_KEY: "k" })).toThrow("requires both");
+    expect(() => getStore({ HASNA_LOOPS_API_URL: "https://loops.example.test" })).toThrow("HASNA_LOOPS_API_KEY");
   });
 });
 

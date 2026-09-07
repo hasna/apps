@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { getStore } from "../../store/index.js";
-import { ContactsClientConfigurationError } from "../../cloud/http-storage.js";
+import { ContactsClientConfigurationError, resolveContactsClientTransport } from "../../cloud/http-storage.js";
 import { importContacts } from "../../lib/import.js";
 import { exportContacts } from "../../lib/export.js";
 import type { CreateContactInput, Group } from "../../types/index.js";
@@ -28,12 +28,28 @@ program
   .description("Show CLI version, API endpoint, storage mode, and record counts")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
-    const baseUrl = process.env["HASNA_CONTACTS_API_URL"]?.trim();
-    const apiLine = baseUrl ? baseUrl : "(not configured — set HASNA_CONTACTS_API_URL plus a contacts API key)";
+    // The authority is whatever the shared @hasna/contracts chain resolves —
+    // HASNA_CONTACTS_API_URL, the Keychain api-url item, the credentials
+    // file, or the fleet gateway default — so status reports the RESOLVED
+    // /v1 base URL and WHERE each half came from (an env key name, a Keychain
+    // item reference, a file path; never a value). Reading the raw env
+    // variable here printed "(not configured)" beside live cloud counts on a
+    // Keychain-only station (hasna/apps#1720 validation).
+    let apiLine = "(not configured — set HASNA_CONTACTS_API_URL plus a contacts API key)";
+    let apiUrlSource: string | null = null;
+    let apiKeySource: string | null = null;
+    let apiKeyTier: string | null = null;
+    let issue: string | null = null;
     let counts: { contacts: number; companies: number } | undefined;
     let storage: string;
     let failure: string | undefined;
     try {
+      const resolution = resolveContactsClientTransport("contacts");
+      apiUrlSource = resolution.apiUrlSource;
+      apiKeySource = resolution.apiKeySource;
+      apiKeyTier = resolution.apiKeyTier;
+      issue = resolution.issue;
+      if (resolution.configured && resolution.baseUrl) apiLine = resolution.baseUrl;
       const store = getStore();
       const [contacts, companies] = await Promise.all([
         store.listContacts({ limit: 1 }),
@@ -59,7 +75,11 @@ program
       service: "contacts",
       version,
       api: apiLine,
+      api_url_source: apiUrlSource,
+      api_key_source: apiKeySource,
+      api_key_tier: apiKeyTier,
       storage,
+      ...(issue !== null ? { issue } : {}),
       ...(failure !== undefined ? { error: failure } : {}),
       ...(counts ? { counts } : {}),
     };
@@ -69,7 +89,10 @@ program
     }
     console.log(chalk.bold(`contacts v${version}`));
     console.log(`API:      ${apiLine}`);
+    if (apiUrlSource) console.log(`API URL source: ${apiUrlSource}`);
+    if (apiKeySource) console.log(`API key source: ${apiKeySource}${apiKeyTier ? ` (${apiKeyTier})` : ""}`);
     console.log(`Storage:  ${storage}`);
+    if (issue !== null) console.log(chalk.yellow(`Issue:    ${issue}`));
     if (failure !== undefined) console.log(chalk.red(`Error:    ${failure}`));
     if (counts) {
       console.log(`Contacts: ${counts.contacts}`);

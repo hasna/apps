@@ -1,7 +1,7 @@
 # Hasna Notes single-server model
 
 Multi-machine sync machinery was removed in 0.2.0. There is no sync daemon,
-scheduled convergence, machine manifest, sync-state file, or `/api/v1/sync`
+scheduled convergence, machine manifest, sync-state file, or `/v1/sync`
 endpoint.
 
 The current client model is intentionally smaller: the CLI, MCP server, and SDK

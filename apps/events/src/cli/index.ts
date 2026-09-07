@@ -6,6 +6,7 @@ import { EventsClient, JsonEventsStore, getEventsDataDir, getEventsStatus, sanit
 import { DurableEventsBroker } from "../durable.js";
 import { runDurableWorker } from "../durable-worker.js";
 import { parseFilterOptions } from "../filter-options.js";
+import { webhookTargetPolicyFromEnv } from "../cli-webhook-policy.js";
 
 interface ParsedArgs {
   json: boolean;
@@ -587,6 +588,7 @@ async function handleChannels(client: EventsClient, command: string | undefined,
       metadata: parseJsonOption(takeOption(args, "--metadata"), {}),
     }, { honorFilters });
     output(parsed, result, () => console.log(`${result.status}: ${result.channelId}`));
+    if (result.status === "failed") process.exitCode = 1;
     return;
   }
 
@@ -695,19 +697,6 @@ function severityOption(value: string | undefined) {
 function replaySummary(events: number, deliveries: number, nextCursor: string | undefined): string {
   const suffix = nextCursor ? `, next cursor: ${nextCursor}` : "";
   return `Replayed ${events} event(s), ${deliveries} delivery result(s)${suffix}`;
-}
-
-/**
- * The webhook-target SSRF guard default-denies private/special-use addresses.
- * `HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS` is the narrow administrator
- * allowlist (comma-separated hostnames or IP addresses) for intentional
- * private ingress such as a loopback receiver on the same machine.
- */
-function webhookTargetPolicyFromEnv(): { allowPrivateHosts: string[] } | undefined {
-  const value = process.env.HASNA_EVENTS_ALLOW_PRIVATE_WEBHOOK_TARGETS;
-  if (!value) return undefined;
-  const hosts = value.split(",").map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  return hosts.length > 0 ? { allowPrivateHosts: hosts } : undefined;
 }
 
 if (import.meta.main) {

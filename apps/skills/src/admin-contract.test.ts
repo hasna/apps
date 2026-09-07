@@ -10,7 +10,11 @@ import {
   SKILLS_ADMIN_ENV_URL,
   SKILLS_ADMIN_OPERATIONS,
   SkillsAdminGrantEntitlementRequestSchema,
+  SkillsAdminSetUserRoleRequestSchema,
   SkillsAdminStatusResponseSchema,
+  SkillsAdminListUsersResponseSchema,
+  SkillsAdminShowOrganizationResponseSchema,
+  SkillsAdminSetUserRoleResponseSchema,
 } from "./admin-contract";
 
 useDefaultTestTimeout();
@@ -57,6 +61,35 @@ describe("skills admin API contract", () => {
       expect(schema.safeParse({ suspended: accepted, reason: "contract test" }).success).toBeTrue();
       expect(schema.safeParse({ suspended: rejected, reason: "contract test" }).success).toBeFalse();
     }
+  });
+
+  test("accepts only declared administrative roles and no extra mutation fields", () => {
+    for (const role of ["owner", "admin", "member", "viewer"] as const) {
+      expect(SkillsAdminSetUserRoleRequestSchema.parse({ role })).toEqual({ role });
+    }
+    expect(SkillsAdminSetUserRoleRequestSchema.safeParse({ role: "superuser" }).success).toBeFalse();
+    expect(SkillsAdminSetUserRoleRequestSchema.safeParse({ role: "admin", suspended: true }).success).toBeFalse();
+  });
+
+  test("retains global identities with an explicit absent default membership role", () => {
+    const user = { id: "user-1", email: "reader@example.test", organizationId: "org-1", role: null, metadata: {}, createdAt: "2026-09-06T00:00:00Z" };
+    const list = (row: unknown) => SkillsAdminListUsersResponseSchema.safeParse({ users: [row], limit: 50, offset: 0 });
+    expect(list(user).success).toBeTrue();
+    expect(list({ ...user, role: "viewer" }).success).toBeTrue();
+    for (const role of [undefined, "superuser", 0]) expect(list({ ...user, role }).success).toBeFalse();
+    const { role: _role, ...missingRole } = user;
+    expect(list(missingRole).success).toBeFalse();
+  });
+
+  test("nullable list roles do not widen active organization members or role mutations", () => {
+    const user = { id: "user-1", email: "reader@example.test", role: "viewer", metadata: {}, createdAt: "2026-09-06T00:00:00Z" };
+    const organization = { id: "org-1", slug: "example", name: "Example", metadata: {}, createdAt: user.createdAt };
+    const show = (row: unknown) => SkillsAdminShowOrganizationResponseSchema.safeParse({ organization, users: [row], balance: null, subscription: null });
+    expect(show(user).success).toBeTrue();
+    expect(show({ ...user, role: null }).success).toBeFalse();
+    expect(SkillsAdminSetUserRoleRequestSchema.safeParse({ role: null }).success).toBeFalse();
+    expect(SkillsAdminSetUserRoleResponseSchema.safeParse({ ok: true, user: { ...user, role: null } }).success).toBeFalse();
+    expect(SkillsAdminSetUserRoleResponseSchema.safeParse({ ok: true, user }).success).toBeTrue();
   });
 
   test("response schemas tolerate additive fields but retain required fields", () => {

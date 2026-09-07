@@ -51,7 +51,7 @@ import {
   type ProjectContextRuntime,
 } from "../lib/project-context.js";
 import { getConfigsStatus } from "../status.js";
-import { resolveConfigStore, isApiTransport, formatCliError, type ConfigStore } from "../data/config-store.js";
+import { resolveConfigStore, formatCliError, type ConfigStore } from "../data/config-store.js";
 import {
   normalizeEndpointOrigin,
   PROVIDER_CONTEXT_DIR,
@@ -1042,12 +1042,16 @@ program
   .description("Show setup summary")
   .action(async () => {
     const store = resolveConfigStore();
-    const dbPath = isApiTransport()
-      ? `${process.env["HASNA_INSTRUCTIONS_API_URL"]}/v1`
-      : process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(getRawStoreRoot(), "instructions.db");
+    // The resolved authority for a hosted store (never an env read of our
+    // own — the shared resolver decided, and its message names the source);
+    // the local store reports its on-box SQLite path.
+    const dbPath =
+      store.mode === "api"
+        ? store.v1BaseUrl
+        : process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(getRawStoreRoot(), "instructions.db");
     const stats = await store.getConfigStats();
     console.log(chalk.bold("@hasna/instructions") + chalk.dim(" v" + pkg.version));
-    console.log(chalk.cyan(isApiTransport() ? "API:" : "DB:") + " " + dbPath);
+    console.log(chalk.cyan(store.mode === "api" ? "API:" : "DB:") + " " + dbPath);
     console.log(chalk.cyan("Total configs:") + " " + (stats["total"] || 0));
     console.log();
     console.log(chalk.bold("By category:"));
@@ -2176,10 +2180,11 @@ program
     for (const [key, count] of Object.entries(stats)) {
       if (count > 0) console.log(`  ${key.padEnd(18)} ${count}`);
     }
-    const location = isApiTransport()
-      ? `${process.env["HASNA_INSTRUCTIONS_API_URL"]}/v1`
-      : process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(getRawStoreRoot(), "instructions.db");
-    console.log(chalk.dim(`\n${isApiTransport() ? "API" : "DB"}: ${location}`));
+    const location =
+      store.mode === "api"
+        ? store.v1BaseUrl
+        : process.env["HASNA_INSTRUCTIONS_DB_PATH"] || join(getRawStoreRoot(), "instructions.db");
+    console.log(chalk.dim(`\n${store.mode === "api" ? "API" : "DB"}: ${location}`));
   });
 
 // ── status ────────────────────────────────────────────────────────────────────
@@ -2865,10 +2870,10 @@ registerEventsCommands(program, { source: "configs" });
 
 // Use parseAsync so async action rejections are awaited and routed through a
 // single top-level handler. With the synchronous `program.parse`, a rejected
-// async action (e.g. a revoked-API-key CloudHttpError on `list`/`add`) surfaced
-// as a raw unhandled-promise stack trace. formatCliError turns auth failures
-// into an actionable re-auth message; commands with their own try/catch still
-// handle and exit before reaching here.
+// async action (e.g. a revoked-key 401 from the shared transport on
+// `list`/`add`) surfaced as a raw unhandled-promise stack trace. formatCliError
+// turns auth failures into an actionable re-auth message; commands with their
+// own try/catch still handle and exit before reaching here.
 program.parseAsync(process.argv).catch((e) => {
   console.error(chalk.red(formatCliError(e)));
   process.exit(1);

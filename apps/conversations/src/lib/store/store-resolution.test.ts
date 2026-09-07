@@ -57,13 +57,16 @@ describe("store resolution — API expected but unbuildable must ERROR, not fall
   });
 
   // (a') The mirror case: a cloud credential present with no URL. The operator
-  // plainly intended the API; resolving to local is the same silent downgrade in
-  // the other direction.
-  test("API key set + API URL missing => throws naming the missing URL var", () => {
+  // plainly intended the API. Under the shared chain this is now a COMPLETE
+  // hosted configuration — a key from any tier reaches the fleet through the
+  // gateway default https://api.hasna.com/conversations (owner directive
+  // 2026-09-04, hasna/apps#1720) — so it resolves hosted, never to local.
+  test("API key set + API URL missing => resolves hosted via the fleet gateway", () => {
     const env = { [KEY_VAR]: FAKE_KEY };
 
-    expect(() => getStore(env)).toThrow(ConversationsStoreConfigError);
-    expect(() => getStore(env)).toThrow(new RegExp(URL_VAR));
+    const store = getStore(env);
+    expect(store.transport).toBe("cloud-http");
+    expect(cloudApiUrl(env)).toBe("https://api.hasna.com/conversations");
   });
 
   // (b) A cloud URL that cannot be parsed is not a reason to read local data.
@@ -199,7 +202,10 @@ describe("store resolution — a complete API configuration still routes to the 
 
 describe("store resolution — errors are actionable and leak nothing", () => {
   test("the error never contains the API key value", () => {
-    const env = { [KEY_VAR]: FAKE_KEY };
+    // A key-only environment no longer errors (the gateway default applies), so
+    // the leak property is asserted on an environment that DOES fail while a
+    // key value is present: an unparseable URL with the key set.
+    const env = { [URL_VAR]: "not a url", [KEY_VAR]: FAKE_KEY };
 
     let message = "";
     try {

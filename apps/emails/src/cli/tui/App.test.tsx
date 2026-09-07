@@ -5,9 +5,9 @@
 // (see src/test-support/v1-stub.ts). The manual "Pull" affordance was LOCAL
 // S3→SQLite ingestion and no longer exists in the self-hosted-only client, so the
 // former local-Pull tests are gone and the self-hosted case simply asserts Pull is
-// absent. Local TUI settings writes throw in self_hosted mode, so the old
-// setSetting() calls (and the autopull mock) are removed.
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+// absent. API-only view preferences live in the App session; priority rules
+// are persisted through the server. No local settings store is used.
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { testRender, useRenderer, type TestRendererSetup } from "@opentui/solid";
@@ -23,6 +23,8 @@ import { toggleRead, type TuiMessage } from "./data.js";
 import { App } from "../tui-solid/App.js";
 import { resolveAddressChoice } from "../tui-solid/context/emails-state.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
+import { resolveMailDataSource } from "../../lib/mail-data-source.js";
+import { TextRenderable, TextTableRenderable, type Renderable, type TextChunk } from "@opentui/core";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {
@@ -101,6 +103,7 @@ function seedMessage(
   to = "ops@example.com",
   labels: string[] = [],
   attachments: Array<{ filename: string; content_type: string; size: number; local_path?: string; s3_url?: string }> = [],
+  content?: { text?: string; html?: string },
 ) {
   return storeInboundEmail({
     provider_id: providerId,
@@ -109,8 +112,8 @@ function seedMessage(
     to_addresses: [to],
     cc_addresses: [],
     subject,
-    text_body: `# ${subject}\n\nbody for ${subject}\n\nhttps://example.com/${encodeURIComponent(subject)}`,
-    html_body: null,
+    text_body: content?.text ?? `# ${subject}\n\nbody for ${subject}\n\nhttps://example.com/${encodeURIComponent(subject)}`,
+    html_body: content?.html ?? null,
     attachments: attachments.map(({ filename, content_type, size }) => ({ filename, content_type, size })),
     attachment_paths: attachments.flatMap((attachment) => attachment.local_path || attachment.s3_url ? [{
       filename: attachment.filename,
@@ -186,6 +189,308 @@ async function typeText(value: string) {
 }
 
 describe("Emails Solid TUI", () => {
+  it("shows a useful empty inbox without message actions or unavailable pagination", async () => {
+    await renderApp();
+    await setup?.waitForFrame((value) => value.includes("Your inbox is clear"));
+    expect(frame()).toContain("Check for new mail");
+    expect(frame()).not.toContain("Previous page");
+    expect(frame()).not.toContain("Next page");
+    expect(frame()).not.toContain("Subject / preview");
+    expect(frame()).not.toContain("Newest first");
+    expect(frame()).not.toMatch(/\bOpen\b/);
+    expect(frame()).not.toMatch(/\bLabel\b/);
+    await clickText("Check for new mail");
+    expect(frame()).toContain("Your inbox is clear");
+    await clickText("Compose");
+    expect(frame()).toContain("Markdown enabled");
+  });
+
+  it("closes settings with Ctrl+C, then exits when no dialog is open", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await key("c", { ctrl: true });
+    expect(setup?.renderer.isDestroyed).toBe(false);
+    expect(frame()).not.toContain("Preferences");
+    await clickText("Compose");
+    await key("c", { ctrl: true });
+    expect(frame()).not.toContain("Markdown enabled");
+    expect(setup?.renderer.isDestroyed).toBe(false);
+    setup?.mockInput.pressKey("c", { ctrl: true });
+    await Bun.sleep(0);
+    expect(setup?.renderer.isDestroyed).toBe(true);
+  });
+
+  it("distinguishes empty searches and clears the filters from the empty state", async () => {
+    seedMessage("Find this message");
+    await renderApp();
+    await key("f", { ctrl: true });
+    await typeText("no-matching-message");
+    await key("enter");
+    expect(frame()).toContain("No matching messages");
+    expect(frame()).toContain("Clear filters");
+    expect(frame()).not.toMatch(/\bOpen\b/);
+    await clickText("Clear filters");
+    expect(frame()).toContain("Find this message");
+    expect(frame()).toMatch(/\bOpen\b/);
+    expect(frame()).not.toContain("Next page");
+  });
+
+  it("applies settings with mouse and keyboard, preserves them when reopened, and expands mail on request", async () => {
+    seedMessage("Reader preferences", undefined, undefined, [], [], { text: "Hello\n\n```sh\ncd settings-demo\n```\n\n> Previous conversation" });
+    await renderApp();
+    await clickText("Settings");
+    expect(frame()).toContain("General");
+    expect(frame()).toContain("Appearance");
+    expect(frame()).toContain("Reading");
+    expect(frame()).not.toContain("Auto-pull");
+    await clickText("Appearance");
+    expect(frame()).toContain("Color scheme");
+    await clickText("Color scheme");
+    expect(frame()).toContain("Dark");
+    await clickText("Reading");
+    await clickText("Expand code blocks");
+    await key("down");
+    await key("enter");
+    expect(frame()).not.toContain("Off");
+    await key("escape");
+    await clickText("Settings");
+    await clickText("Reading");
+    expect(frame()).not.toContain("Off");
+    setup?.resize(80, 24);
+    await flush();
+    expect(frame()).toContain("Expand code blocks");
+    expect(frame()).toContain("Close");
+    await key("escape");
+    setup?.resize(120, 33);
+    await flush();
+    await key("enter");
+    expect(frame()).toContain("cd settings-demo");
+    expect(frame()).toContain("Previous conversation");
+    expect(frame()).not.toContain("self_hosted API-only mode");
+  });
+
+  it("shows recoverable connection errors instead of an empty mailbox or message actions", async () => {
+    const ds = resolveMailDataSource();
+    const list = spyOn(ds, "listMailbox").mockRejectedValue(new Error("Connection unavailable"));
+    try {
+      await renderApp();
+      expect(frame()).toContain("Couldn't load your mail");
+      expect(frame()).not.toContain("Your inbox is clear");
+      expect(frame()).not.toMatch(/\bOpen\b/);
+      await key("r", { ctrl: true });
+      expect(frame()).toContain("Couldn't refresh");
+      list.mockRestore();
+      await clickText("Try again");
+      expect(frame()).toContain("Your inbox is clear");
+    } finally { list.mockRestore(); }
+  });
+
+  it("lets the reader retry a failed body load without exposing message actions", async () => {
+    seedMessage("Retry reading");
+    const body = spyOn(resolveMailDataSource(), "getMessageBody").mockRejectedValue(new Error("Connection unavailable"));
+    try {
+      await renderApp();
+      await key("enter");
+      expect(frame()).toContain("Couldn't open this message");
+      expect(frame()).toContain("Back to inbox");
+      expect(frame()).not.toMatch(/\bReply\b/);
+      expect(frame()).not.toMatch(/\bRaw\b/);
+      body.mockRestore();
+      await clickText("Try again");
+      expect(frame()).toContain("body for Retry reading");
+      expect(frame()).toContain("Reply");
+    } finally { body.mockRestore(); }
+  });
+
+  it("shows a message-not-found screen with a working way back", async () => {
+    seedMessage("Missing message");
+    const body = spyOn(resolveMailDataSource(), "getMessageBody").mockResolvedValue(null);
+    try {
+      await renderApp();
+      await key("enter");
+      expect(frame()).toContain("Message not found");
+      expect(frame()).not.toMatch(/\bReply\b/);
+      await clickText("Back to inbox");
+      expect(frame()).toContain("Subject / preview");
+    } finally { body.mockRestore(); }
+  });
+
+  it("saves and removes priority rules through the settings page", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Priority Inbox");
+    await typeText("important@example.com");
+    await key("enter");
+    expect((await stub.list("priority-sender-rules")).map((rule) => rule.value)).toContain("important@example.com");
+    await clickText("Remove");
+    expect(await stub.list("priority-sender-rules")).toHaveLength(0);
+    await key("escape");
+    expect(frame()).not.toContain("Preferences");
+  });
+
+  it("switches from the mailbox title, scopes messages, and returns from a reader to All mailboxes", async () => {
+    const billing = createAddress({ provider_id: providerId, email: "billing@example.com" });
+    markVerified(billing.id);
+    seedMessage("Operations update", undefined, "ops@example.com");
+    seedMessage("Billing update", undefined, "billing@example.com");
+    await renderApp();
+    await clickText("All mailboxes ▾");
+    await typeText("ops@example.com");
+    await key("enter");
+    expect(frame()).toContain("ops@example.com ▾");
+    expect(frame()).toContain("Operations update");
+    expect(frame()).not.toContain("Billing update");
+    await clickText("Operations update");
+    await key("enter");
+    expect(frame()).toContain("From:");
+    await clickText("ops@example.com ▾");
+    await key("enter");
+    expect(frame()).toContain("ops@example.com ▾");
+    await clickText("ops@example.com ▾");
+    await clickText("All mailboxes", 0);
+    expect(frame()).toContain("All mailboxes ▾");
+    expect(frame()).toContain("Billing update");
+    expect(frame()).not.toContain("No message selected");
+  });
+
+  it("renders rich mail and toggles code and reply history with mouse and keyboard", async () => {
+    seedMessage("Rich mail", undefined, undefined, [], [], {
+      text: "# Release notes\n\n**Ready** and `inline`\n\n```sh\ncd project\n  bun test\n```\n\n> Earlier message text\n",
+    });
+    await renderApp();
+    await clickText("Rich mail");
+    await key("enter");
+    expect(frame()).toContain("Release notes");
+    expect(frame()).not.toContain("**Ready**");
+    expect(frame()).toContain("Ready and inline");
+    expect(frame()).toContain("Code · sh");
+    expect(frame()).not.toContain("cd project");
+    expect(frame()).not.toContain("Earlier message text");
+    await clickText("Code · sh");
+    expect(frame()).toContain("cd project");
+    const codeSpan = setup?.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("cd project"));
+    expect(codeSpan).toBeDefined();
+    expect(codeSpan!.fg.equals(codeSpan!.bg)).toBe(false);
+    await key("enter");
+    expect(frame()).not.toContain("cd project");
+    await key("tab");
+    await key("enter");
+    expect(frame()).toContain("Earlier message text");
+    await clickText("Quoted message");
+    expect(frame()).not.toContain("Earlier message text");
+  });
+
+  it("scrolls the entire reader with keys, preserving the selected message and reflowing after resize", async () => {
+    seedMessage("Long message", "2026-01-02T10:00:00.000Z", undefined, [], [], {
+      text: Array.from({ length: 220 }, (_, i) => `Paragraph ${i}. This sentence wraps within the message pane.`).join("\n\n"),
+    });
+    seedMessage("Other message", "2026-01-01T10:00:00.000Z");
+    await renderApp();
+    await clickText("Long message");
+    await key("enter");
+    expect(frame()).toContain("Paragraph 0.");
+    await key("pagedown");
+    expect(frame()).not.toContain("Paragraph 0.");
+    expect(frame()).toContain("Long message");
+    await key("down");
+    expect(frame()).toContain("Long message");
+    setup?.mockInput.pressKey("\x1b[F");
+    await flush();
+    expect(frame()).toContain("Paragraph 219.");
+    setup?.resize(80, 24);
+    await flush();
+    setup?.mockInput.pressKey("\x1b[H");
+    await flush();
+    expect(frame()).toContain("Paragraph 0.");
+    expect(frame()).toContain("message pane.");
+    await key("escape");
+    expect(frame()).toContain("Other message");
+  });
+
+  it("keeps expanded content open while refreshing the mailbox", async () => {
+    seedMessage("Refresh reading", undefined, undefined, [], [], { text: "Intro\n\n```sh\ncd keep-reading\n```" });
+    await renderApp();
+    await key("enter");
+    await clickText("Code · sh");
+    expect(frame()).toContain("cd keep-reading");
+    await key("r", { ctrl: true });
+    await Bun.sleep(80);
+    await flush();
+    expect(frame()).toContain("cd keep-reading");
+  });
+
+  it("renders an HTML email as rich text with a real table and trimmed Gmail history", async () => {
+    seedMessage("HTML update", undefined, undefined, [], [], { html: '<h1>Deployment report</h1><p><b>Ready</b> for <a href="https://example.com/review">review</a>.</p><div style="display:none">invisible preview</div><table><tr><th>Service</th><th>Status</th></tr><tr><td>API</td><td>Healthy</td></tr></table><div class="gmail_quote"><p>Previous deployment report</p></div>' });
+    await renderApp();
+    await clickText("HTML update");
+    await key("enter");
+    expect(frame()).toContain("Deployment report");
+    expect(frame()).toContain("Ready for review.");
+    expect(frame()).toContain("Service");
+    expect(frame()).toContain("Healthy");
+    expect(frame()).not.toContain("<table>");
+    expect(frame()).not.toContain("invisible preview");
+    expect(frame()).not.toContain("Previous deployment report");
+    await clickText("Quoted message");
+    expect(frame()).toContain("Previous deployment report");
+  });
+
+  it("allows only web and mail links in native message chunks, including tables and images", async () => {
+    seedMessage("Untrusted links", undefined, undefined, [], [], { text: [
+      "[Safe prose](https://example.com/prose) [Bad prose](file:///tmp/prose.txt)",
+      "| Action |\n| --- |\n| [Safe table](https://example.com/table) |\n| [Email](mailto:help@example.com) |\n| [Bad table](file:///tmp/test.txt) |\n| [App](custom-app://open) |\n| ![Unsafe image](file:///tmp/image.png) |\n| [Reference][bad] |",
+      "![Standalone image](custom-app://image)",
+      "<a href=\"file:///tmp/raw.txt\">Raw HTML</a>",
+      "[bad]: javascript:alert(1)",
+    ].join("\n\n") });
+    await renderApp();
+    await key("enter");
+    await flush();
+    const chunks: TextChunk[] = [];
+    const collect = (node: Renderable) => {
+      if (node instanceof TextTableRenderable) chunks.push(...node.content.flat(2).filter((chunk): chunk is TextChunk => !!chunk));
+      if (node instanceof TextRenderable) chunks.push(...node.chunks);
+      for (const child of node.getChildren()) collect(child);
+    };
+    collect(setup!.renderer.root);
+    const urls = [...new Set(chunks.flatMap((chunk) => chunk.link ? [chunk.link.url] : []))].sort();
+    expect(urls).toEqual(["https://example.com/prose", "https://example.com/table", "mailto:help@example.com"]);
+    expect(chunks.map((chunk) => chunk.text).join(" ")).toContain("Bad table");
+  });
+
+  it("refreshes replies in the selected thread without collapsing its expanded code", async () => {
+    seedMessage("Refresh thread", "2026-01-01T10:00:00.000Z", undefined, [], [], { text: "Earlier reply" });
+    seedMessage("Re: Refresh thread", "2026-01-02T10:00:00.000Z", undefined, [], [], { text: "Intro\n\n```sh\ncd keep-thread-open\n```" });
+    await renderApp();
+    await clickText("Re: Refresh");
+    await key("enter");
+    await clickText("Code · sh");
+    expect(frame()).toContain("cd keep-thread-open");
+    seedMessage("Re: Re: Refresh thread", "2026-01-03T10:00:00.000Z", undefined, [], [], { text: "New reply after refresh" });
+    bustScanCache();
+    await key("r", { ctrl: true });
+    await Bun.sleep(100);
+    await flush();
+    expect(frame()).toContain("cd keep-thread-open");
+    await clickText("Sender Re: Re: Refresh");
+    expect(frame()).toContain("New reply after refresh");
+  });
+
+  it("collapses older thread messages while keeping the selected message open", async () => {
+    seedMessage("Thread story", "2026-01-01T10:00:00.000Z", undefined, [], [], { text: "Earlier thread body" });
+    seedMessage("Re: Thread story", "2026-01-02T10:00:00.000Z", undefined, [], [], { text: "Latest thread body" });
+    await renderApp();
+    await clickText("Re: Thread");
+    await key("enter");
+    await setup?.waitForFrame((value) => value.includes("Latest thread body"));
+    expect(frame()).not.toContain("Earlier thread body");
+    await clickText("Sender Thread story");
+    expect(frame()).toContain("Earlier thread body");
+    await clickText("Sender Thread story");
+    expect(frame()).not.toContain("Earlier thread body");
+  });
+
+
   it("resolves a searched-for inbox to its real address, never falling back to All inboxes", () => {
     // Regression: the picker caps the address list (200). An address found by TYPING in the
     // search box but sitting beyond that cap used to make reload() fall back to list[0] =
@@ -218,7 +523,7 @@ describe("Emails Solid TUI", () => {
       await setup?.flush();
     }
 
-    expect(frame()).toContain("Emails");
+    expect(frame()).toContain("All mailboxes ▾");
     expect(frame()).toContain("Mail");
     expect(frame()).toContain("Labels");
     expect(frame()).toContain("Actions");
@@ -392,8 +697,8 @@ describe("Emails Solid TUI", () => {
     await renderApp();
     expect(frame()).not.toContain("Profiles");
 
-    await clickText("All inboxes");
-    expect(frame()).toContain("Inboxes");
+    await clickText("All mailboxes ▾");
+    expect(frame()).toContain("Mailboxes");
     expect(frame()).toContain("ops@example.com");
     // The picker detail is a short receive-status token ("ready" for a verified
     // address); the provider now lives in the Domains view.
@@ -428,26 +733,16 @@ describe("Emails Solid TUI", () => {
 
     await clickText("Settings");
     expect(frame()).toContain("Settings");
-    expect(frame()).toContain("Sync");
-    expect(frame()).toContain("Defaults");
-    expect(frame()).toContain("Display");
-
-    await clickText("Sync");
-    expect(frame()).toContain("Settings / Sync");
-    expect(frame()).toContain("Auto-pull inbound");
-    await key("escape");
-
-    await clickText("Defaults");
-    expect(frame()).toContain("Settings / Defaults");
-    expect(frame()).toContain("Default folder");
-    expect(frame()).toContain("Default inbox");
-    expect(frame()).toContain("Default From");
-    await key("escape");
-
-    await clickText("Display");
-    expect(frame()).toContain("Settings / Display");
+    expect(frame()).toContain("General");
+    expect(frame()).toContain("Refresh automatically");
+    expect(frame()).toContain("Current mailbox");
+    await clickText("Appearance");
     expect(frame()).toContain("Dim read messages");
-    expect(frame()).toContain("Theme");
+    expect(frame()).toContain("Color scheme");
+    await clickText("Shortcuts");
+    expect(frame()).toContain("Ctrl+F");
+    await key("escape");
+    expect(frame()).not.toContain("Preferences");
   });
 
   it("opens links, raw, and labels dialogs from the reader", async () => {

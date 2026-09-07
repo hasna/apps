@@ -1238,13 +1238,26 @@ switch (command) {
   }
 
   case "status": {
-    const status = await getSecretReferenceStatus();
+    // Same fail-closed shape as every data verb (see store()): a missing
+    // credential is ONE actionable line on stderr and exit 1 — never an
+    // uncaught throw whose first stderr line is a bundle snippet.
+    let status: Awaited<ReturnType<typeof getSecretReferenceStatus>>;
+    try {
+      status = await getSecretReferenceStatus();
+    } catch (e: any) {
+      console.error(e?.message ?? String(e));
+      process.exit(1);
+    }
     if ("json" in flags) {
       await writeStdout(JSON.stringify(status, null, 2) + "\n");
     } else {
       console.log(`secrets ${status.package.version}`);
       console.log(`mode: ${status.mode}`);
       console.log(`location: ${status.location}`);
+      if (status.transport) {
+        console.log(`api url source: ${status.transport.api_url_source ?? "default"}`);
+        console.log(`api key source: ${status.transport.api_key_source ?? "none"} (${status.transport.api_key_tier})`);
+      }
       console.log(`secrets: ${status.counts.secrets}`);
       console.log(`users: ${status.counts.users}`);
       console.log("values: not included");

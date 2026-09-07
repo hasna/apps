@@ -6,7 +6,7 @@
 // @hasna/contracts/auth (ApiKeyStore): keys are minted and verified with the
 // signing secret HASNA_NOTES_API_SIGNING_KEY (documented fallbacks
 // API_KEY_SIGNING_SECRET, HASNA_API_SIGNING_KEY) as `hasna_notes_` tokens.
-// The wire dialect (Bearer authorization, /api/v1 paths, JSON shapes) is
+// The wire dialect (Bearer authorization, /v1 paths, JSON shapes) is
 // identical on both backends — clients receive the key from the server and
 // never parse its format.
 //

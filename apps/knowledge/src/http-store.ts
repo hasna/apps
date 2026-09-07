@@ -412,9 +412,10 @@ function isNotFound(error: unknown): boolean {
 /**
  * Resolve the HTTP knowledge store from the environment. A credential from any
  * tier of the shared @hasna/contracts chain selects HTTP (against the fleet
- * gateway unless an authority is configured); with nothing configured anywhere
- * the caller uses the on-box db.json store. A configured authority whose
- * credential does not resolve throws rather than falling back.
+ * gateway unless an authority is configured); the caller uses the on-box
+ * db.json store only when the explicit `HASNA_KNOWLEDGE_LOCAL=1` opt-in (or an
+ * explicit store path) selected local mode. With no credential and no opt-in
+ * this THROWS — hosted fails closed, with no fallback onto the on-box store.
  */
 export function resolveKnowledgeHttpStore(env: NodeJS.ProcessEnv = process.env): KnowledgeHttpStore | null {
   const client = resolveKnowledgeHttpClient(env);

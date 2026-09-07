@@ -6,10 +6,9 @@
 //                          @hasna/contracts/client/storage seam, not a vendored copy)
 //
 // `resolveProjectStore()` routes on the CREDENTIAL AND THE AUTHORITY ONLY —
-// there is no mode switch, no `*_STORAGE_MODE`, and no local-registry opt-in
-// (owner rulings 2026-09-04, hasna/apps#1720/#1668/#1690). The whole decision
-// is the @hasna/contracts client resolver's five-tier ladder, resolved fresh on
-// every call:
+// there is no mode switch and no `*_STORAGE_MODE` (owner rulings 2026-09-04,
+// hasna/apps#1720/#1668/#1690). The whole decision is the @hasna/contracts
+// client resolver's five-tier ladder, resolved fresh on every call:
 //
 //   1. an explicit argument            — a caller-supplied key
 //   2. a deliberate env pointer        — HASNA_PROJECTS_API_KEY_OVERRIDE,
@@ -28,16 +27,21 @@
 // names remain accepted by the seam as a documented silent alias; the canonical
 // HASNA_PROJECTS_* names always work and win.
 //
-// THE TWO OUTCOMES:
+// THE THREE OUTCOMES, AND NO OTHERS:
 //   - Anything selects the hosted service (a credential from any tier, or an
 //     authority declared anywhere) -> the HTTP store. A declared authority with
 //     NO resolvable credential FAILS LOUD: the caller exits non-zero with the
 //     seam's message naming every place it looked. There is no silent local
 //     fallback and no local-fallback event.
-//   - NOTHING configures the fleet at all — no URL in the env, the Keychain or
-//     the credentials file, and no credential from any tier -> unhosted OSS
-//     mode on the on-box SQLite registry, which projects supports by design.
-//     It says so on stderr, once, in one line; it is never silent.
+//   - The operator explicitly opts in (`HASNA_PROJECTS_LOCAL=1`, alias
+//     `PROJECTS_LOCAL`) with no env-declared authority or credential -> the
+//     on-box SQLite registry, by design. It says "local" on stderr, once, in
+//     one line; it is never silent. The opt-in is answered BEFORE the resolver
+//     runs, so an opt-in run cannot reach the Keychain or a credentials file.
+//   - NOTHING configures the fleet and there is no opt-in -> FAIL CLOSED with
+//     the seam's error, a non-zero exit, no SQLite opened. This is the whole
+//     point of the 2026-09-04 ruling: a silent station must not quietly serve
+//     a local dataset that looks like the hosted one.
 //
 // Every registry command/tool/method calls the same Store methods. Machine-local
 // runtime side effects (tmux, git, directory creation, rendering) are NOT
@@ -117,7 +121,7 @@ import {
   credentialDiskSources,
   type CredentialChainOptions,
 } from "@hasna/contracts/client";
-import { unconfiguredForHostedUse } from "../lib/client-configuration.js";
+import { selectsProjectsLocalStore } from "../lib/local-opt-in.js";
 import type { HasnaHttpTransport, HasnaRequestOptions, QueryParams } from "@hasna/contracts/client";
 import { getDbPath } from "../db/database.js";
 import { basename } from "node:path";
@@ -1815,29 +1819,29 @@ export interface ResolveProjectStoreOptions {
   producerVerifierNow?: () => string;
   /** Tier-1/Tier-3 controls handed to the shared resolver (a key, a profile, a fake Keychain runner). */
   credentials?: CredentialChainOptions;
-  /** Where the one-line unhosted-mode notice goes. Defaults to stderr. */
+  /** Where the one-line local-mode notice goes. Defaults to stderr. */
   notify?: (line: string) => void;
 }
 
 /** One line, once per process, naming every place the resolver looked. */
-let announcedUnhostedMode = false;
+let announcedLocalMode = false;
 
-function announceUnhostedMode(env: Env, notify: (line: string) => void): void {
-  if (announcedUnhostedMode) return;
-  announcedUnhostedMode = true;
+function announceLocalMode(env: Env, notify: (line: string) => void): void {
+  if (announcedLocalMode) return;
+  announcedLocalMode = true;
   const keys = clientTransportEnvKeys(APP);
   const diskPaths = credentialDiskSources(APP, env);
   const disk = diskPaths.length > 0 ? diskPaths.join(" or ") : "no credentials file (no HOME)";
   notify(
-    `projects: local mode — nothing configures the hosted registry ` +
-    `(no ${keys.apiUrlKeys[0]}, no Keychain item hasna.credentials.${APP}.api-key, no ${disk}, ` +
-    `no ${keys.apiKeyKeys[0]}); reading and writing the on-box SQLite registry at ${getDbPath()}.`,
+    `projects: local mode — HASNA_PROJECTS_LOCAL is set, so this run reads and writes the on-box ` +
+    `SQLite registry at ${getDbPath()} instead of the hosted fleet. Unset it and provide a ` +
+    `credential (${keys.apiKeyKeys[0]}, the Keychain item hasna.credentials.${APP}.api-key, or ${disk}) to run hosted.`,
   );
 }
 
-/** Test seam: forget that the unhosted-mode line was already printed. */
-export function __resetUnhostedModeNotice(): void {
-  announcedUnhostedMode = false;
+/** Test seam: forget that the local-mode line was already printed. */
+export function __resetLocalModeNotice(): void {
+  announcedLocalMode = false;
 }
 
 /**
@@ -1845,16 +1849,20 @@ export function __resetUnhostedModeNotice(): void {
  *
  * ROUTES ON URL + KEY ONLY (owner rulings 2026-09-04, hasna/apps#1720): the
  * shared @hasna/contracts resolver decides, there is no mode switch, and there
- * is no local-registry opt-in. A credential from any tier — argument, env
+ * is no implicit local fallback. A credential from any tier — argument, env
  * pointer, Keychain, `~/.hasna/projects/config/credentials`, or a plain
  * `HASNA_PROJECTS_API_KEY` — selects the hosted store against the configured
  * authority or, by default, `https://api.hasna.com/projects`.
  *
  * A station that declares an authority but resolves no credential FAILS LOUD:
  * the seam's error propagates, the caller exits non-zero, no local store is
- * opened and no local-fallback event is written. Only a completely silent
- * environment reaches the on-box registry — the unhosted OSS mode projects
- * supports by design — and it says so in one line on stderr.
+ * opened and no local-fallback event is written. A station that configures
+ * NOTHING at all fails the same way UNLESS the operator opted in explicitly
+ * with `HASNA_PROJECTS_LOCAL=1` (alias `PROJECTS_LOCAL`) — the one deliberate
+ * route to the on-box registry, which says "local" in one line on stderr. The
+ * opt-in is answered BEFORE the resolver runs, so it never touches the
+ * Keychain or a credentials file, and any env-declared authority or credential
+ * outranks it (a half-configured opt-in run still fails loud, never local).
  */
 export function resolveProjectStore(
   env: Env = process.env,
@@ -1867,44 +1875,41 @@ export function resolveProjectStore(
     && options.credentials === undefined
     && options.notify === undefined;
   if (cacheable && cached) return cached;
-  // Only the RESOLUTION is guarded. A failure building the store around a
-  // successfully resolved client is a defect, not a configuration question, and
-  // must not be caught here.
-  let resolved: ReturnType<typeof resolveStorageClient> | null = null;
-  try {
-    resolved = resolveStorageClient(APP, env, {
-      fetchImpl,
-      ...(options.credentials ? { credentials: options.credentials } : {}),
-    });
-  } catch (error) {
-    // The seam refused to build a client. That is the LOUD outcome unless the
-    // environment configures nothing at all, in which case this app's unhosted
-    // OSS mode is the deliberate answer — never a rescue for a broken or
-    // half-configured hosted setup, and never silent.
-    if (!unconfiguredForHostedUse(APP, env, options.credentials)) throw error;
-    announceUnhostedMode(env, options.notify ?? ((line: string) => console.error(line)));
-  }
-  if (resolved) {
-    const httpStore: ProjectStore = new ApiProjectStore({
-      ...resolved.client,
-      transport: enrichSeamTransport(resolved.client.transport),
-    });
-    if (cacheable) cached = httpStore;
-    return httpStore;
-  }
-  const localStore: ProjectStore = new LocalProjectStore(
-    createProductionProjectResourceLinkProducerEvidenceVerifier({
-      authorities: productionProjectRegistrationAuthorities({
-        ...options.producerAuthorityOptions,
-        env: options.producerAuthorityOptions?.env ?? env,
-        fetch: options.producerAuthorityOptions?.fetch
-          ?? fetchImpl as typeof globalThis.fetch | undefined,
+  if (selectsProjectsLocalStore(env)) {
+    // The deliberate unhosted opt-in, answered without consulting the resolver:
+    // a scrubbed environment physically cannot reach the Keychain or a
+    // credentials file through this branch, and the run announces itself.
+    const localStore: ProjectStore = new LocalProjectStore(
+      createProductionProjectResourceLinkProducerEvidenceVerifier({
+        authorities: productionProjectRegistrationAuthorities({
+          ...options.producerAuthorityOptions,
+          env: options.producerAuthorityOptions?.env ?? env,
+          fetch: options.producerAuthorityOptions?.fetch
+            ?? fetchImpl as typeof globalThis.fetch | undefined,
+        }),
+        now: options.producerVerifierNow,
       }),
-      now: options.producerVerifierNow,
-    }),
-  );
-  if (cacheable) cached = localStore;
-  return localStore;
+    );
+    if (cacheable) cached = localStore;
+    announceLocalMode(env, options.notify ?? ((line: string) => console.error(line)));
+    return localStore;
+  }
+  // NOTHING is rescued here. The seam's refusal to build an authenticated
+  // client IS the fail-closed outcome — hosted with no credential means a
+  // non-zero exit and no SQLite, with no local-fallback event. (This was the
+  // class bug in 1.1.0: the resolver error was caught and, when the
+  // environment configured "nothing at all", rerouted to the on-box registry
+  // without an opt-in.)
+  const resolved = resolveStorageClient(APP, env, {
+    fetchImpl,
+    ...(options.credentials ? { credentials: options.credentials } : {}),
+  });
+  const httpStore: ProjectStore = new ApiProjectStore({
+    ...resolved.client,
+    transport: enrichSeamTransport(resolved.client.transport),
+  });
+  if (cacheable) cached = httpStore;
+  return httpStore;
 }
 
 /** Test/di seam: clear the process-env cached store. */

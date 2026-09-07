@@ -1,42 +1,23 @@
 // THE CLIENT DATA-SOURCE MODE, mapped from the storage plan and from nothing else.
 //
 // The store seam (src/store-resolution.ts) decides which store this process reads
-// and writes: a configured API origin plus a credential resolves to the HTTP API
-// client, a configured database path resolves to local SQLite, and every other row
-// — both configured, a pointer without its payload, an API URL without a
-// credential, or nothing at all — is a boot error in the seam's own words
-// (`StoreConfigurationError`, fail-closed ruling 2026-09-04). This module maps
-// that plan onto the two-arm "client mode" value the repository families that are
-// NOT yet collapsed onto the store seam still route on: `local` for the SQLite
-// plan, `self_hosted` for the API plan.
+// and writes: the HTTP API client when the shared @hasna/contracts resolver
+// (src/lib/emails-credentials.ts) produces a hosted authority plus a credential, and
+// the local SQLite database only when a database path is configured explicitly
+// (HASNA_EMAILS_DB_PATH / EMAILS_DB_PATH). Every other row — both configured, an
+// authority without a credential, or nothing at all — is a boot error in the
+// seam's own words (`StoreConfigurationError`, fail-closed ruling 2026-09-04).
+// This module maps that plan onto the two-arm "client mode" value the repository
+// families that are NOT yet collapsed onto the store seam still route on:
+// `local` for the SQLite plan, `self_hosted` for the API plan.
 //
 // THE DEPLOYMENT WORD IS NOT READ HERE, AND NOTHING ELSE READS IT EITHER. The
 // variables that used to declare the mode were removed with the mode axis
-// (hasna/apps#1566); the only module that may spell them is
-// ./retired-deployment-mode.ts, whose guards run FIRST in every resolution below,
-// so a process that still carries one refuses to start and names the variable
-// rather than watching it do nothing. Keep this file free of those spellings —
-// the axis ratchet (src/mode-axis-ratchet.test.ts) and the issue's acceptance
-// grep both enforce it.
-//
-// WHY THE MODE VALUE SURVIVES AS A STRING AT ALL: the two value tokens (`local`,
-// `self_hosted`) remain the machine contract of the JSON status payload and of the
-// not-yet-collapsed arm routing, so they are not renamed here. What is gone is the
-// operator-facing vocabulary: no variable, no config key, no "set it to this"
-// instruction. The values are produced from the storage plan and consumed by the
-// arms; nothing an operator types selects one. When the last two-arm family is
-// collapsed onto the store seam, this module, the mode value and the ratchet are
-// deleted together — a rename cannot do that job, which is why `twoArmFamilies`
-// measures file structure and not identifiers.
+// (hasna/apps#1566, #1720); there is no guard module left to spell them. Keep
+// this file free of those spellings.
 
 import { planEmailStore } from "../store-resolution.js";
-import { readConfigFile } from "./config.js";
 import { loadEmailsClientEnvSecret } from "./client-env.js";
-import {
-  assertNoLegacyHostedEnvironment,
-  assertNoRetiredModeConfigKeys,
-  assertNoRetiredModeVariables,
-} from "./retired-deployment-mode.js";
 
 /**
  * Which of the two client data sources this process's storage configuration
@@ -91,27 +72,18 @@ function resolution(mode: ClientMode, source: ClientModeSource): ClientModeResol
 
 /**
  * Resolve which client data source this process's configuration selects,
- * WITHOUT loading any client-env vault entry or requiring a credential.
+ * WITHOUT requiring a credential or a hosted authority.
  *
- * Fail-closed in the seam's own words: an API URL without a credential, a vault
- * pointer whose payload has not been loaded, a both-configured environment, or
- * nothing configured at all each throw the same typed `StoreConfigurationError`
- * that `planEmailStore` throws — there is deliberately no default row here, and
- * no mode-vocabulary message of this module's own. Callers that cannot reach the
- * API without their credential should use `resolveClientMode` instead, which
- * delivers the pointer first; callers that only need to know which arm a store
- * resolves to should read the plan directly (src/store-resolution.ts).
+ * Fail-closed in the seam's own words: an API authority without a credential,
+ * a both-configured environment, or nothing configured at all each throw the
+ * same typed `StoreConfigurationError` that `planEmailStore` throws — there is
+ * deliberately no default row here, and no mode-vocabulary message of this
+ * module's own. Callers that cannot reach the API without their credential
+ * should use `resolveClientMode` instead; callers that only need to know which
+ * arm a store resolves to should read the plan directly
+ * (src/store-resolution.ts).
  */
 export function resolveClientModeSelection(env: NodeJS.ProcessEnv = process.env): ClientModeResolution {
-  // The retired deployment-mode contract is refused before anything is resolved,
-  // so a carried-forward variable fails here regardless of the storage settings.
-  assertNoRetiredModeVariables(env);
-  assertNoLegacyHostedEnvironment(env);
-  // The config file used to accept a mode key; a stale key must fail the same
-  // way. `readConfigFile` never creates the data root, so a fresh home stays
-  // untouched (the all-unset row below must leave no footprint).
-  assertNoRetiredModeConfigKeys(readConfigFile());
-
   const plan = planEmailStore(env);
   return plan.store === "api"
     ? resolution("self_hosted", {
@@ -131,13 +103,12 @@ export function resolveClientModeSelection(env: NodeJS.ProcessEnv = process.env)
 /**
  * Resolve one client data-source mode for the whole process.
  *
- * Delivers a configured client-env vault pointer into the environment FIRST (the
- * pointer is the API configuration's delivery mechanism — loading it is what
- * turns a pointer-only environment into one the store plan can decide), then
- * resolves the mode exactly as `resolveClientModeSelection` does. Local storage
- * is reachable only through an explicit configured database path; nothing
- * configured fails closed instead of defaulting (fail-closed ruling,
- * 2026-09-04, incident 715712).
+ * Delivers the app's own principals (session/identity tokens) from a configured
+ * EMAILS_CLIENT_ENV_SECRET vault pointer into the environment FIRST — a live
+ * session is a credential the API arm can use — then resolves the mode exactly
+ * as `resolveClientModeSelection` does. Local storage is reachable only through
+ * an explicit configured database path; nothing configured fails closed instead
+ * of defaulting (fail-closed ruling, 2026-09-04, incident 715712).
  */
 export function resolveClientMode(env: NodeJS.ProcessEnv = process.env): ClientModeResolution {
   loadEmailsClientEnvSecret(env);

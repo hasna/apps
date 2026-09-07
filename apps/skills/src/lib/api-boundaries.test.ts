@@ -65,6 +65,7 @@ describe("API-first boundary contract", () => {
     const originalSkillsApiUrl = process.env.SKILLS_API_URL;
     const originalSkillsApiKey = process.env.SKILLS_API_KEY;
     const originalSkillApiKey = process.env.SKILL_API_KEY;
+    const originalSkillsLocal = process.env.HASNA_SKILLS_LOCAL;
 
     afterEach(() => {
       if (originalSkillsApiUrl === undefined) delete process.env.SKILLS_API_URL;
@@ -73,9 +74,14 @@ describe("API-first boundary contract", () => {
       else process.env.SKILLS_API_KEY = originalSkillsApiKey;
       if (originalSkillApiKey === undefined) delete process.env.SKILL_API_KEY;
       else process.env.SKILL_API_KEY = originalSkillApiKey;
+      if (originalSkillsLocal === undefined) delete process.env.HASNA_SKILLS_LOCAL;
+      else process.env.HASNA_SKILLS_LOCAL = originalSkillsLocal;
     });
 
     test("an unconfigured install keeps the exact local registry — byte for byte", async () => {
+      // The local opt-in is the ambient spelling of "runs on this machine"
+      // (fail-closed ruling): without it the same call refuses instead.
+      process.env.HASNA_SKILLS_LOCAL = "1";
       delete process.env.SKILLS_API_URL;
       delete process.env.SKILLS_API_KEY;
       const merged = await mergeRemoteRegistry(LOCAL_ONLY_FIXTURE, {

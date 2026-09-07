@@ -2,7 +2,11 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { getDb } from "../db/index.ts";
-import { resolveServerDataBackend } from "../generated/storage-kit/backend.ts";
+import {
+  resolveServerDataBackend,
+  serverDataBackendEnvKeys,
+} from "../generated/storage-kit/backend.ts";
+import { isLogsLocalOptIn } from "../store/index.ts";
 import { getBrowserScript } from "../lib/browser-script.ts";
 import { getHealth } from "../lib/health.ts";
 import { resolvePublicOrigin } from "./request-origin.ts";
@@ -49,12 +53,47 @@ if (hasOption(["--local-open"])) process.env.HASNA_LOGS_LOCAL_OPEN = "1";
 const PORT = Number(
   portArg ?? process.env.LOGS_PORT ?? process.env.PORT ?? 3460,
 );
-// The serve selects its backend from the environment: HASNA_LOGS_DATABASE_URL
-// (or LOGS_DATABASE_URL) present -> a stateless API in front of PostgreSQL —
-// no SQLite, no scheduler, API-key auth. Otherwise it serves the local SQLite
-// database.
-const databaseBackend =
-  resolveServerDataBackend("logs", process.env).backend === "postgresql";
+// The serve selects its backend from the environment, exactly like the client
+// store resolver (owner ruling 2026-09-04, hasna/apps#1720): a configured
+// HASNA_LOGS_DATABASE_URL (or LOGS_DATABASE_URL alias) selects the stateless
+// API in front of PostgreSQL — no SQLite, no scheduler, API-key auth — and the
+// vendored storage kit validates it fail-closed. Without a database URL the
+// serve NEVER silently opens the local SQLite database: it serves the on-box
+// store only under the explicit opt-in HASNA_LOGS_LOCAL=1 (alias LOGS_LOCAL=1)
+// and says so once on stderr, and fails loud otherwise.
+let localServeAnnounced = false;
+
+function selectPostgresBackend(): boolean {
+  const urlKeys = serverDataBackendEnvKeys("logs").databaseUrlKeys;
+  const declared = urlKeys.filter(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(process.env, key) &&
+      process.env[key] !== undefined,
+  );
+  if (declared.length > 0) {
+    // The kit validates the URL (blank / malformed / conflicting fail loud).
+    return resolveServerDataBackend("logs", process.env).backend === "postgresql";
+  }
+  if (isLogsLocalOptIn(process.env)) {
+    // Explicit local opt-in: the on-box SQLite collector. Announce once so a
+    // "local" run is never silent.
+    if (!localServeAnnounced) {
+      localServeAnnounced = true;
+      process.stderr.write(
+        "logs-serve: local mode — no HASNA_LOGS_DATABASE_URL configured; serving the on-box SQLite " +
+          "store (explicit HASNA_LOGS_LOCAL=1 opt-in). To run the PostgreSQL-backed fleet API, set " +
+          "HASNA_LOGS_DATABASE_URL.\n",
+      );
+    }
+    return false;
+  }
+  throw new Error(
+    "@hasna/logs serve requires a hosted backend: set HASNA_LOGS_DATABASE_URL (PostgreSQL) or run the " +
+      "on-box SQLite collector in explicit local mode with HASNA_LOGS_LOCAL=1 (alias LOGS_LOCAL=1).",
+  );
+}
+
+const databaseBackend = selectPostgresBackend();
 
 function buildLocalServe() {
   const db = getDb();

@@ -252,7 +252,8 @@ describe("sender filter is never silent", () => {
     expect(res.exitCode).toBe(0);
     expect(JSON.parse(res.stdout).count).toBe(1);
     expect(JSON.parse(res.stdout).detail).toBe("preview");
-    expect(res.stderr).toBe("");
+    // Local mode announces itself once on stderr (hasna/apps#1720).
+    expect(res.stderr).toContain("LOCAL mode");
   });
 
   test("export: csv format discloses an empty export too", () => {

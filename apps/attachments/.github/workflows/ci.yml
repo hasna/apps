@@ -21,7 +21,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Repository conformance
-        run: bunx @hasna/contracts@0.8.2 repo-conformance .
+        run: bunx @hasna/contracts@1.0.2 repo-conformance .
 
       # App-owned PG adapter provenance is tested; shared kit adoption remains release-blocked.
       - name: PostgreSQL adapter boundary

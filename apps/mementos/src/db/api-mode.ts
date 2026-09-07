@@ -1,29 +1,68 @@
 // ============================================================================
-// API-key HTTPS client routing (self-hosted cloud, NO DSN on clients).
+// Authenticated HTTPS client transport (self-hosted cloud, NO DSN on clients).
 //
 // Mission constraint (project CLAUDE.md, NON-NEGOTIABLE): fleet clients must
 // reach the self-hosted cloud store over HTTPS with a bearer API key —
-// `Authorization: Bearer <key>` against `https://<app>.hasna.xyz/v1`. The raw
-// RDS DSN is NEVER distributed to client machines. This module is the sanctioned
-// client transport: it turns the core memory operations (create/get/list/
-// update/delete/search) into authed HTTP calls against the cloud server, which
-// runs the exact same domain logic against cloud Postgres.
+// `Authorization: Bearer <key>` against the resolved /v1 authority. The raw
+// RDS DSN is NEVER distributed to client machines. This module is the
+// sanctioned client transport: it turns the core memory operations
+// (create/get/list/update/delete/search) into authed HTTP calls against the
+// cloud server, which runs the exact same domain logic against cloud Postgres.
+//
+// CREDENTIALS ARE NOT RESOLVED HERE ANY MORE. Since the 2026-09-04 adoption
+// ruling (hasna/apps#1720) every hosted Hasna CLI resolves its credential and
+// its service authority through the ONE resolver in `@hasna/contracts/client`,
+// so this module contributes no tier of its own. The chain, resolved fresh on
+// every request:
+//
+//   1. an explicit argument      — `credentials.apiKey` / `credentials.profile`
+//   2. a deliberate env pointer  — `HASNA_MEMENTOS_API_KEY_OVERRIDE`,
+//                                  `HASNA_PROFILE`, `HASNA_MEMENTOS_API_KEY_REF`
+//   3. the macOS Keychain        — generic-password `hasna.credentials.mementos.api-key`,
+//                                  account `HASNA_STATION` → `hostname -s` → `USER`
+//   4. disk                      — `~/.hasna/mementos/config/credentials`,
+//                                  owner-only 0400/0600 (`HASNA_HOME` /
+//                                  `HASNA_CONFIG_HOME` move the root)
+//   5. `HASNA_MEMENTOS_API_KEY`  — a legitimate tier below disk, no deprecation
+//                                  notice
+//
+// and the authority follows `HASNA_MEMENTOS_API_URL`, the Keychain `api-url`
+// item, the credentials file, and finally defaults to the fleet gateway
+// `https://api.hasna.com/mementos` (the client appends `/v1`). The legacy
+// unprefixed `MEMENTOS_*` spellings survive only as the resolver's silent
+// alias fallback for one release; every message here names the canonical
+// `HASNA_MEMENTOS_*` names.
+//
+// Retired locations — `~/.hasna/fleet-env/`, `~/.hasna/cloud/`,
+// `~/.config/hasna/` and `$XDG_CONFIG_HOME` — are inputs nowhere, and no
+// `*_MODE` / `*_STORAGE_MODE` variable is read: the transport is decided by
+// what RESOLVES, never by a mode word (the storage-mode ratchet that used to
+// turn those variables into errors was removed with the adoption; the
+// variables are inert, and the test harnesses delete them so no fixture can
+// depend on a stale fragment).
 //
 // Activation is fail-safe and reversible:
-//   - API mode is ON  when BOTH `HASNA_MEMENTOS_API_URL` and
-//     `HASNA_MEMENTOS_API_KEY` are set (aliases `MEMENTOS_API_URL` /
-//     `MEMENTOS_API_KEY` accepted) AND no DATABASE_URL is present.
-//   - API mode is OFF when NEITHER is set → pure local SQLite, the documented
-//     single-operator default.
-//   - Exactly ONE of them set is an ERROR, never a fall-back. Until 2026-07-30
-//     this case silently resolved to local SQLite, and that fall-back was
-//     documented here as intended behaviour. It was the defect: an operator whose
-//     API key failed to load got a different, usually stale, dataset with no error
-//     and no flag, which from the caller's side is indistinguishable from a store
-//     that is working. See `assertUnambiguousStoreEnv` for the precedence table.
-//   - If a DATABASE_URL is set, API mode refuses to engage (a DSN on a client
-//     is forbidden; the operator must remove it). This keeps the two transports
-//     mutually exclusive and never silently mixes them.
+//   - API mode is ON when the resolver finds a credential (and the authority
+//     with it — the fleet gateway when nothing configures a URL).
+//   - API mode is OFF when the operator deliberately selected the on-box
+//     store: `HASNA_MEMENTOS_DB_PATH` / `MEMENTOS_DB_PATH` (an explicit file,
+//     precedence 1) or `HASNA_MEMENTOS_LOCAL=1` (alias `MEMENTOS_LOCAL=1`),
+//     answered WITHOUT the resolver so no Keychain item or credential file is
+//     read for a local run.
+//   - A client DSN (`HASNA_MEMENTOS_DATABASE_URL`) still disables API mode: a
+//     DSN on a client is forbidden, and the two transports never mix.
+//   - A half configuration is an ERROR, never a fall-back: an API URL with no
+//     resolvable credential is refused, never silently downgraded to the
+//     on-box store. (Until 2026-07-30 this silently resolved to local SQLite,
+//     and that fall-back was documented as intended — the defect: an operator
+//     whose API key failed to load got a different, usually stale, dataset
+//     with no error and no flag.)
+//
+// FAIL CLOSED (owner ruling 2026-09-04). Hosted with no credential anywhere —
+// no env key, no Keychain item, no credentials file — exits non-zero with one
+// clear line naming every tier consulted; there is no SQLite fallback and no
+// `*-local-fallback` event. The on-box SQLite store is reachable ONLY through
+// the deliberate opt-ins listed above (see `assertClientStoreConfigured`).
 //
 // Transport: a synchronous HTTP request via `Bun.spawnSync(["curl", …])`. The
 // domain functions in this codebase are synchronous, so the client transport
@@ -39,26 +78,48 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { assertNoLegacyStorageMode } from "../lib/retired-storage-mode.js";
-import { resolveMementosApiBase } from "../sdk/index.js";
+import {
+  clientTransportEnvKeys,
+  resolveClientTransport,
+  resolveCredential,
+  toV1BaseUrl,
+  ClientTransportConfigurationError,
+  type ClientTransportResolution,
+  type ResolvedCredential,
+} from "@hasna/contracts/client";
+import {
+  MEMENTOS_DB_PATH_ENV_KEYS,
+  MEMENTOS_LOCAL_OPT_IN_ENV_KEYS,
+  hasExplicitLocalDbPath,
+  mementosResolverInputs,
+  selectsMementosLocalStore,
+} from "../lib/local-opt-in.js";
 
 export interface ApiConfig {
-  baseUrl: string; // normalized, includes the /v1 (or /api) prefix, no trailing slash
+  baseUrl: string; // normalized, includes the /v1 prefix, no trailing slash
   apiKey: string;
 }
 
-// The env keys that select the transport, exported so callers can enumerate
-// them instead of copying them. Their mere PRESENCE moves the store off local
-// SQLite (see {@link isApiMode}), so anything that must guarantee a local store
-// — notably the subprocess test harnesses — has to neutralize exactly this set.
-// A hand-maintained copy of the list in a harness is the failure mode this
-// guards: it silently stops covering the resolver the moment a key is added
-// here. Keep the lists adjacent to the code that reads them.
-export const API_URL_ENV_KEYS = ["HASNA_MEMENTOS_API_URL", "MEMENTOS_API_URL"] as const;
-export const API_KEY_ENV_KEYS = ["HASNA_MEMENTOS_API_KEY", "MEMENTOS_API_KEY"] as const;
+/** Tier-1 credential inputs (explicit key/profile, keychain runner for tests). */
+export interface MementosClientResolveOptions {
+  credentials?: import("@hasna/contracts/client").CredentialChainOptions;
+}
+
+/** The env keys that select the API transport, resolver-derived, canonical first. */
+export const API_URL_ENV_KEYS: readonly [string, string] = clientTransportEnvKeys("mementos")
+  .apiUrlKeys as [string, string];
+export const API_KEY_ENV_KEYS: readonly [string, string] = clientTransportEnvKeys("mementos")
+  .apiKeyKeys as [string, string];
+
+/** The env keys that select the server postgresql backend (and disable client API mode). */
 export const DATABASE_URL_ENV_KEYS = ["HASNA_MEMENTOS_DATABASE_URL", "MEMENTOS_DATABASE_URL"] as const;
 
-function firstEnv(keys: readonly string[], env: NodeJS.ProcessEnv = process.env): string | undefined {
+/** The explicit local SQLite path — the precedence-1 local opt-in. */
+export const DB_PATH_ENV_KEYS = MEMENTOS_DB_PATH_ENV_KEYS;
+
+type Env = Record<string, string | undefined>;
+
+function firstEnv(keys: readonly string[], env: Env = process.env): string | undefined {
   for (const k of keys) {
     const v = env[k]?.trim();
     if (v) return v;
@@ -67,28 +128,48 @@ function firstEnv(keys: readonly string[], env: NodeJS.ProcessEnv = process.env)
 }
 
 /** The env key that supplied a value, or `null`. Never returns the value. */
-function firstEnvKey(keys: readonly string[], env: NodeJS.ProcessEnv = process.env): string | null {
+function firstEnvKey(keys: readonly string[], env: Env = process.env): string | null {
   for (const k of keys) {
     if (env[k]?.trim()) return k;
   }
   return null;
 }
 
-function hasDatabaseUrl(env: NodeJS.ProcessEnv = process.env): boolean {
+function hasDatabaseUrl(env: Env = process.env): boolean {
   return Boolean(firstEnv(DATABASE_URL_ENV_KEYS, env));
 }
 
 /**
  * Which env keys currently select API mode, by name only — never the values.
  * Used by the operator-facing mode report so a human can see *why* the client
- * is pointed at the cloud without reading source or echoing a credential.
+ * is pointed at the cloud without reading source or echoing a credential. The
+ * API key is read from the resolver's own key list, so a tier that moves
+ * cannot drift out of this report.
  */
-export function getApiModeEnvSources(): { urlKey: string | null; keyKey: string | null; databaseUrlKey: string | null } {
+export function getApiModeEnvSources(env: Env = process.env): {
+  urlKey: string | null;
+  keyKey: string | null;
+  databaseUrlKey: string | null;
+} {
   return {
-    urlKey: firstEnvKey(API_URL_ENV_KEYS),
-    keyKey: firstEnvKey(API_KEY_ENV_KEYS),
-    databaseUrlKey: firstEnvKey(DATABASE_URL_ENV_KEYS),
+    urlKey: firstEnvKey(API_URL_ENV_KEYS, env),
+    keyKey: firstEnvKey(API_KEY_ENV_KEYS, env),
+    databaseUrlKey: firstEnvKey(DATABASE_URL_ENV_KEYS, env),
   };
+}
+
+/**
+ * The shared resolver closes the userinfo/query/fragment classes, but its URL
+ * parser reports a BARE trailing `?` or `#` as an empty search/hash — the
+ * exact hasna/apps#1601 concatenation defect class
+ * (`…/mementos/v1?/memories`). The raw text is what the route is built from,
+ * so the resolved authority is checked for the delimiters here too.
+ */
+function assertCleanResolvedBase(baseUrl: string): string {
+  if (/[?#]/.test(baseUrl)) {
+    throw new Error("mementos base URL must not contain userinfo, query, or fragment data");
+  }
+  return baseUrl;
 }
 
 /**
@@ -101,18 +182,31 @@ export function getApiModeEnvSources(): { urlKey: string | null; keyKey: string 
  * merely outranked, which points them at a credential problem they do not have.
  *
  * Never returns a credential value — the endpoint is not secret, the key is
- * reported only as a boolean.
+ * reported only as a boolean. `apiKeyPresent` is answered through the resolver
+ * chain (any tier: env, Keychain, credentials file), because the Keychain and
+ * disk tiers are ambient and an env-only read would report "absent" on the
+ * very stations the resolver serves most.
+ *
+ * A malformed configured base THROWS (fail closed: a misconfigured endpoint
+ * must fail closed, exactly like a half-configured credential pair does), with
+ * the resolver's own message and never the raw value.
  */
-export function getConfiguredApiEnv(): {
+export function getConfiguredApiEnv(env: Env = process.env): {
   baseUrl: string | null;
   apiKeyPresent: boolean;
   dbPathKey: string | null;
 } {
-  const rawBase = firstEnv(API_URL_ENV_KEYS);
+  const rawBase = firstEnv(API_URL_ENV_KEYS, env);
+  let baseUrl: string | null = null;
+  if (rawBase) {
+    const normalized = toV1BaseUrl(rawBase);
+    assertCleanResolvedBase(normalized);
+    baseUrl = normalized;
+  }
   return {
-    baseUrl: rawBase ? normalizeBase(rawBase) : null,
-    apiKeyPresent: Boolean(firstEnvKey(API_KEY_ENV_KEYS)),
-    dbPathKey: firstEnvKey(DB_PATH_ENV_KEYS),
+    baseUrl,
+    apiKeyPresent: resolveCredential("mementos", env, mementosResolverInputs(env).credentials) !== null,
+    dbPathKey: firstEnvKey(DB_PATH_ENV_KEYS, env),
   };
 }
 
@@ -163,40 +257,13 @@ function assertRequestAllowedUnderTest(baseUrl: string): void {
       "from the SHARED PRODUCTION memory store, where test fixtures are indistinguishable from real " +
       "memories.\n" +
       `  host           : ${host || "(unparseable base URL)"}\n` +
-      `  how this happens: a selector set at module scope (after the bun test preload ran), or \`bun test\` ` +
+      "  how this happens: a selector set at module scope (after the bun test preload ran), or `bun test` " +
       "invoked from a directory with no bunfig.toml so the preload never loaded.\n" +
       "  fix            : build the child/process env via src/test-support/store-isolation.ts, or point the " +
       "suite at a loopback stub.\n" +
       `  override       : set ${ALLOW_REMOTE_API_IN_TESTS_ENV}=1 only for a test that must reach a remote endpoint.`,
   );
 }
-
-/**
- * Normalize a configured base URL to always carry a `/v1` (or `/api`) prefix.
- *
- * Delegates to the SDK resolver so the CLI transport and `@hasna/mementos/sdk`
- * cannot drift apart. That matters for more than tidiness: this function used
- * to be a bare string concatenation with NO validation, so a base carrying a
- * query, fragment, userinfo or a non-http(s) scheme was pasted straight into
- * the request URL — `https://api.hasna.com/mementos?debug=1` became
- * `https://api.hasna.com/mementos?debug=1/v1/memories`, where the intended
- * path is silently query data and the request lands on the wrong route, and
- * `https://user:pass@…` carried operator credentials into every printed
- * endpoint line. The SDK half was hardened in hasna/apps#1763; this is the
- * same defect on the path the `mementos` CLI actually takes (hasna/apps#1601).
- *
- * Invalid input now throws rather than resolving to a wrong-but-plausible URL:
- * a misconfigured endpoint must fail closed, exactly like a half-configured
- * credential pair does in {@link assertUnambiguousStoreEnv}.
- */
-function normalizeBase(raw: string): string {
-  const { baseUrl, prefix } = resolveMementosApiBase(raw);
-  return `${baseUrl}${prefix}`;
-}
-
-/** Resolve the API client config from env, or `null` when not configured. */
-/** The env keys that explicitly select the local SQLite store. */
-export const DB_PATH_ENV_KEYS = ["HASNA_MEMENTOS_DB_PATH", "MEMENTOS_DB_PATH"] as const;
 
 /** Raised when the environment does not unambiguously select one store. */
 export class MementosStoreConfigError extends Error {
@@ -205,6 +272,153 @@ export class MementosStoreConfigError extends Error {
     super(message);
     this.name = "MementosStoreConfigError";
   }
+}
+
+/**
+ * Wrap every @hasna/contracts refusal in the client's own store-config error,
+ * carrying the resolver's message (which names every tier it consulted — and
+ * never a credential value) behind the stable `MEMENTOS_STORE_CONFIG` code
+ * callers match on. The opt-in hint is appended so every refusal names the way
+ * into the on-box store.
+ */
+function toStoreConfigError(error: unknown): MementosStoreConfigError {
+  const message = error instanceof Error ? error.message : String(error);
+  return new MementosStoreConfigError(
+    `${message} Local SQLite is opt-in only (${DB_PATH_ENV_KEYS[0]}, or ${MEMENTOS_LOCAL_OPT_IN_ENV_KEYS[0]} = 1) and is disabled by default — failing closed`,
+  );
+}
+
+/**
+ * Resolve the API client configuration through the @hasna/contracts chain, or
+ * return `null` when the environment selects the on-box store or configures
+ * nothing at all.
+ *
+ * EVERY CALL RESOLVES FRESH: the Keychain and the credentials file are
+ * re-read per request, so a key rotation heals a long-lived shell or MCP
+ * server without a restart. Deliberately a single pass down the chain (one
+ * credential resolution, once), with the resolved value handed back to the
+ * transport as its tier-1 argument so the authority pass never re-reads the
+ * tiers — and so the key that validated the authority is the key the request
+ * sends (no TOCTOU between two reads).
+ *
+ * Refusals — a URL without a credential, blank or disagreeing aliases, an
+ * unusable credential file, an invalid authority — THROW as
+ * {@link MementosStoreConfigError}. Only "nothing configured anywhere" (no
+ * env pointer, no Keychain item, no credentials file) returns null, and the
+ * fail-closed gate {@link assertClientStoreConfigured} refuses THAT at every
+ * store entry point: a null here is never permission to open the on-box
+ * default file.
+ */
+export function getApiConfig(
+  env: Env = process.env,
+  options: MementosClientResolveOptions = {},
+): ApiConfig | null {
+  if (hasDatabaseUrl(env)) return null; // a client DSN disables API mode (unchanged)
+  if (selectsMementosLocalStore(env)) return null; // explicit local opt-in, answered WITHOUT the resolver
+
+  const inputs = mementosResolverInputs(env, options.credentials);
+  let credential: ResolvedCredential | null;
+  try {
+    credential = resolveCredential("mementos", inputs.env, inputs.credentials);
+  } catch (error) {
+    throw toStoreConfigError(error);
+  }
+
+  let resolution: ClientTransportResolution;
+  try {
+    resolution = resolveClientTransport("mementos", inputs.env, {
+      credentials: credential ? { ...inputs.credentials, apiKey: credential.apiKey } : inputs.credentials,
+    });
+  } catch (error) {
+    if (
+      error instanceof ClientTransportConfigurationError &&
+      credential === null &&
+      /is not set and no API key could be resolved/.test(error.message)
+    ) {
+      // Genuinely nothing configured anywhere: no URL, no key, no Keychain
+      // item, no credentials file. The fail-closed gate owns this refusal.
+      return null;
+    }
+    throw toStoreConfigError(error);
+  }
+
+  return { baseUrl: assertCleanResolvedBase(resolution.baseUrl), apiKey: credential!.apiKey };
+}
+
+/**
+ * True when the client should route memory operations to the cloud API.
+ * Fail-closed against a client-side DSN: if DATABASE_URL is present, API mode
+ * refuses to engage so the two transports never mix.
+ */
+export function isApiMode(): boolean {
+  if (hasDatabaseUrl()) return false;
+  return getApiConfig() !== null;
+}
+
+/** WHERE the API transport came from, for operator reports. Never a value. */
+export interface ResolvedApiModeReport {
+  /** The resolved `<origin>/v1` authority this client would send to. */
+  baseUrl: string;
+  /** An env key NAME, a Keychain item reference, a file PATH, or `"default"`. */
+  apiUrlSource: string | null;
+  /** An env key NAME, a Keychain item reference, or a file PATH. Never a value. */
+  apiKeySource: string | null;
+  /** The tier of the credential chain that supplied the key. */
+  apiKeyTier: string | null;
+}
+
+/**
+ * Resolve WHERE the client transport came from, without exposing the key.
+ *
+ * One pass down the @hasna/contracts chain, used by the operator-facing mode
+ * report (`storage mode`) so a human can see *why* the client is pointed at
+ * the cloud — an env key name, a Keychain item reference, a credentials-file
+ * path, or the fleet gateway default. `null` when the environment selects the
+ * on-box store or configures nothing at all; refusals throw exactly as
+ * {@link getApiConfig} does.
+ */
+export function getResolvedApiModeReport(
+  env: Env = process.env,
+  options: MementosClientResolveOptions = {},
+): ResolvedApiModeReport | null {
+  if (hasDatabaseUrl(env)) return null;
+  if (selectsMementosLocalStore(env)) return null;
+
+  const inputs = mementosResolverInputs(env, options.credentials);
+  let credential: ResolvedCredential | null;
+  try {
+    credential = resolveCredential("mementos", inputs.env, inputs.credentials);
+  } catch (error) {
+    throw toStoreConfigError(error);
+  }
+  if (!credential) {
+    try {
+      resolveClientTransport("mementos", inputs.env, { credentials: inputs.credentials });
+    } catch (error) {
+      if (
+        error instanceof ClientTransportConfigurationError &&
+        /is not set and no API key could be resolved/.test(error.message)
+      ) {
+        return null;
+      }
+      throw toStoreConfigError(error);
+    }
+    return null;
+  }
+  const resolution = resolveClientTransport("mementos", inputs.env, {
+    credentials: { ...inputs.credentials, apiKey: credential.apiKey },
+  });
+  assertCleanResolvedBase(resolution.baseUrl);
+  return {
+    baseUrl: resolution.baseUrl,
+    apiUrlSource: resolution.apiUrlSource,
+    // The TRUE tier, not the tier-1 spelling the transport was handed: passing
+    // the value down as an argument makes the transport report "explicit apiKey
+    // argument", which would erase the Keychain/disk/env origin an operator
+    // needs in a diagnostic. `credential.source` is that origin, never a value.
+    apiKeySource: credential.source,
+    apiKeyTier: credential.tier,
+  };
 }
 
 /**
@@ -219,68 +433,46 @@ export class MementosStoreConfigError extends Error {
  * THIS FUNCTION ONLY ASSERTS. It returns `void`, so it cannot select anything —
  * the precedence table below describes the RESOLVER, which is `getApiConfig()`
  * immediately after it, and each early `return` here only suppresses the
- * ambiguity error for a case that is already unambiguous. Steps 1 and 2 are
- * therefore implemented in `getApiConfig()` and `isApiMode()` respectively, and
- * the table is documented here because this is where the error text lives.
- *
- * Keeping the table honest about that is not cosmetic. Until 2026-08-03 step 1
- * was implemented NOWHERE: the `return` below reads as a selection, and an
- * operator who read it concluded that a scratch DB_PATH made them safe while a
- * fully-configured environment still routed every read and write to the shared
- * production store.
+ * ambiguity error for a case that is already unambiguous. The SELECTION is
+ * implemented in `getApiConfig()` / `isApiMode()`; the table is documented here
+ * because this is where the error text lives.
  *
  * Precedence, highest first:
- *  0. A retired storage-mode variable (HASNA_MEMENTOS_STORAGE_MODE or any of
- *     its aliases) throws via `assertNoLegacyStorageMode`, even when blank.
- *     Deployment modes no longer exist; a stale variable is an error, never a
- *     selector. ENFORCED HERE, before anything else.
  *  1. An explicit SQLite path (`HASNA_MEMENTOS_DB_PATH` / `MEMENTOS_DB_PATH`) is
- *     the narrowest, most specific signal and selects LOCAL, so local dev,
- *     tooling and import/export keep working when a stray credential is exported
- *     globally. ENFORCED in `getApiConfig()`, which returns null for it.
- *  2. A client DSN present disables API mode. ENFORCED in `isApiMode()`. A DSN
- *     on a client is forbidden and is tracked separately in database.ts.
- *  3. Both API URL and API key present -> API mode.
- *  4. Exactly ONE of them present -> ERROR naming the missing variable.
- *  5. Neither present -> no transport selected. This used to resolve to LOCAL
- *     (the "documented single-operator default"); since the 2026-09-04 fail-closed
- *     ruling a client that needs the store REFUSES instead — an explicit
- *     DB_PATH (step 1) is now the only way into the on-box SQLite store, and
- *     `assertClientStoreConfigured()` (below) enforces that at every entry point
- *     that would otherwise open the default local file.
+ *     the narrowest, most specific signal and selects LOCAL before the resolver
+ *     is even consulted, so local dev, tooling and import/export keep working
+ *     when a credential is exported globally. (`MEMENTOS_DB_PATH`'s precedence
+ *     over a COMPLETE API pair is the package's documented precedence-1 rule
+ *     since 2026-08-03.)
+ *  2. A client DSN present disables API mode. A DSN on a client is forbidden
+ *     and is tracked separately in database.ts.
+ *  3. The @hasna/contracts resolve — everything else. A URL without a
+ *     resolvable credential, a blank or disagreeing pair, an unusable
+ *     credential file, or an invalid authority THROWS here; a credential with
+ *     no URL resolves to the fleet gateway (complete configuration).
+ *  4. Nothing configured anywhere -> no transport selected. This used to
+ *     resolve to LOCAL (the "documented single-operator default"); since the
+ *     2026-09-04 fail-closed ruling a client that needs the store REFUSES
+ *     instead — an explicit opt-in (`HASNA_MEMENTOS_DB_PATH` or
+ *     `HASNA_MEMENTOS_LOCAL=1`) is now the only way into the on-box SQLite
+ *     store, and `assertClientStoreConfigured()` (below) enforces that at
+ *     every entry point that would otherwise open the default local file.
  *
- * Never reads, logs, or embeds a credential value — only variable NAMES.
+ * Never reads, logs, or embeds a credential value — only variable NAMES and
+ * tier descriptions.
  */
-export function assertUnambiguousStoreEnv(env: NodeJS.ProcessEnv = process.env): void {
-  // 0. The fail-loud ratchet: a retired storage-mode variable is an error,
-  //    never a hint. This must run BEFORE everything else so a stale variable
-  //    does not get rescued by a DB path, a DSN, or a complete API pair.
-  assertNoLegacyStorageMode(env);
+export function assertUnambiguousStoreEnv(
+  env: Env = process.env,
+  options: MementosClientResolveOptions = {},
+): void {
   // 1. Explicit local path: unambiguous, so there is no error to raise. The
   // SELECTION itself happens in getApiConfig(); this return only skips the
-  // half-configured check below, which would otherwise fire on a stray API URL.
-  if (firstEnvKey(DB_PATH_ENV_KEYS, env)) return;
+  // refusal checks below, which would otherwise fire on a stray API URL.
+  if (hasExplicitLocalDbPath(env)) return;
   if (hasDatabaseUrl(env)) return; // 2. unchanged DSN behaviour
-
-  const urlKey = firstEnvKey(API_URL_ENV_KEYS, env);
-  const keyKey = firstEnvKey(API_KEY_ENV_KEYS, env);
-
-  if (urlKey && !keyKey) {
-    throw new MementosStoreConfigError(
-      `${urlKey} points at the cloud memory store but ${API_KEY_ENV_KEYS[0]} is not set. ` +
-        `Refusing to serve the on-box SQLite store in its place, because it holds a different ` +
-        `dataset. Set ${API_KEY_ENV_KEYS[0]} to reach the cloud store. If you meant to use the ` +
-        `on-box SQLite store, unset ${urlKey} or set ${DB_PATH_ENV_KEYS[0]} explicitly.`,
-    );
-  }
-  if (keyKey && !urlKey) {
-    throw new MementosStoreConfigError(
-      `${keyKey} is set but ${API_URL_ENV_KEYS[0]} is not, so the cloud memory store cannot be ` +
-        `reached. Refusing to serve the on-box SQLite store in its place, because it holds a ` +
-        `different dataset. Set ${API_URL_ENV_KEYS[0]} to reach the cloud store. If you meant to ` +
-        `use the on-box SQLite store, unset ${keyKey} or set ${DB_PATH_ENV_KEYS[0]} explicitly.`,
-    );
-  }
+  // 3. Everything else is the resolver's call; getApiConfig() throws on any
+  // refusal and the gate below refuses the nothing-configured case.
+  getApiConfig(env, options);
 }
 
 /**
@@ -289,80 +481,60 @@ export function assertUnambiguousStoreEnv(env: NodeJS.ProcessEnv = process.env):
  * The transport rules above answer "which store is configured?" and treat
  * "none" as a question, not an answer: `isApiMode()` returns false and
  * `getApiConfig()` returns null, and every domain call site reads that as
- * "open the local store". That was the defect: a fleet CLI run WITHOUT its API
- * env (`HASNA_MEMENTOS_API_URL` + `HASNA_MEMENTOS_API_KEY`, aliases
- * `MEMENTOS_API_URL` / `MEMENTOS_API_KEY`) silently opened the default on-box
- * SQLite store (~/.hasna/mementos/mementos.db), served it as if it were the
- * memory store, and exited 0 — a false green against a different dataset.
+ * "open the local store". That was the defect: a fleet CLI run WITHOUT a
+ * credential silently opened the default on-box SQLite store
+ * (~/.hasna/mementos/mementos.db), served it as if it were the memory store,
+ * and exited 0 — a false green against a different dataset.
  *
  * This function is the guard every store-access entry point calls BEFORE it
  * may open the default local file (CLI command startup, `getDatabase()`
  * default-path fallthrough, ...). It throws unless one of these is true:
  *
- *   - the retired storage-mode ratchet / half-an-API-pair errors above apply
- *     first (assertUnambiguousStoreEnv), or
  *   - an explicit SQLite path is set (`HASNA_MEMENTOS_DB_PATH` /
  *     `MEMENTOS_DB_PATH`) — the documented EXPLICIT LOCAL OPT-IN, or
+ *   - the deliberate flag opt-in (`HASNA_MEMENTOS_LOCAL=1` / `MEMENTOS_LOCAL=1`)
+ *     with no authority or credential configured — answered BEFORE the
+ *     resolver runs, so a local run reads no Keychain item and no credential
+ *     file, or
  *   - a client DSN is present (its own server-only guard already fails closed
  *     in getDatabase; the DSN tier is untouched here), or
- *   - BOTH API URL and API key are present (fleet API mode).
+ *   - the @hasna/contracts chain resolves a credential (fleet API mode —
+ *     authority included, defaulting to the fleet gateway).
  *
- * Anything else — no API env, no opt-in — is a REFUSAL, never a local default.
- * Never reads, logs, or embeds a credential value — only variable NAMES.
+ * Anything else — no credential, no opt-in — is a REFUSAL, never a local
+ * default. Never reads, logs, or embeds a credential value — only variable
+ * NAMES and tier descriptions.
  */
-export function assertClientStoreConfigured(env: NodeJS.ProcessEnv = process.env): void {
-  // Retired storage-mode vars, an explicit local path, a DSN, and a half API
-  // pair are all handled by the ambiguity resolver (steps 0–2 return early,
-  // step 4 throws). Only the unconfigured case reaches the refusal below.
-  assertUnambiguousStoreEnv(env);
-  if (firstEnvKey(DB_PATH_ENV_KEYS, env)) return; // explicit local opt-in
-  if (hasDatabaseUrl(env)) return; // client DSN — fails closed in its own guard
-  if (firstEnv(API_URL_ENV_KEYS, env) && firstEnv(API_KEY_ENV_KEYS, env)) return; // fleet API mode
+export function assertClientStoreConfigured(
+  env: Env = process.env,
+  options: MementosClientResolveOptions = {},
+): void {
+  // 1. Explicit local opt-ins — an explicit SQLite path, or the deliberate
+  // flag with nothing configured — are answered WITHOUT the resolver, so a
+  // local run reads no Keychain item and no credential file.
+  if (selectsMementosLocalStore(env)) return;
+  // 2. A client DSN present — its own server-only guard already fails closed
+  // in getDatabase; the DSN tier is untouched here.
+  if (hasDatabaseUrl(env)) return;
+  // 3. Everything else is the resolver's call: a chain that resolves a
+  // credential (env, Keychain, credentials file) is configured; every refusal
+  // (a URL without a credential, blank or disagreeing aliases, an unusable
+  // credential file, an invalid authority) throws here; and a chain that
+  // resolves NOTHING is the refusal below — never a local default.
+  const config = getApiConfig(env, options);
+  if (config !== null) return; // fleet API mode — credential + authority resolved
   throw new MementosStoreConfigError(
     "mementos is not configured to reach any memory store, and will NOT fall back to the " +
-      "on-box SQLite store (~/.hasna/mementos/mementos.db). Set " +
-      `${API_URL_ENV_KEYS[0]} and ${API_KEY_ENV_KEYS[0]} (aliases ` +
-      `${API_URL_ENV_KEYS[1]} and ${API_KEY_ENV_KEYS[1]} are accepted) to use the fleet memory ` +
+      "on-box SQLite store (~/.hasna/mementos/mementos.db). " +
+      "No credential could be resolved from the Keychain item hasna.credentials.mementos.api-key " +
+      "(macOS only), ~/.hasna/mementos/config/credentials, or " +
+      `${API_KEY_ENV_KEYS[0]}; the authority would be the fleet gateway ${"https://api.hasna.com/mementos"} ` +
+      `(or ${API_URL_ENV_KEYS[0]} if set). ` +
+      `Set ${API_URL_ENV_KEYS[0]} and ${API_KEY_ENV_KEYS[0]} (the resolver also accepts the legacy ` +
+      `${API_URL_ENV_KEYS[1]} / ${API_KEY_ENV_KEYS[1]} aliases for one release) to use the fleet memory ` +
       `API, or opt into an explicit local SQLite file with ${DB_PATH_ENV_KEYS[0]} / ` +
-      `${DB_PATH_ENV_KEYS[1]}.`,
+      `${DB_PATH_ENV_KEYS[1]} (or ${MEMENTOS_LOCAL_OPT_IN_ENV_KEYS[0]}=1).`,
   );
-}
-
-export function getApiConfig(): ApiConfig | null {
-  assertUnambiguousStoreEnv();
-
-  // Precedence 1, ACTUALLY APPLIED. Until 2026-08-03 this rule existed only in
-  // the docstring on assertUnambiguousStoreEnv: that function returns `void`, so
-  // its `if (firstEnvKey(DB_PATH_ENV_KEYS)) return;` exits the ERROR CHECK and
-  // selects nothing. An explicit local path therefore suppressed the
-  // half-configured error but did NOT stop a fully-configured environment from
-  // routing to the cloud — so an operator who set a scratch DB_PATH by hand,
-  // read the precedence table, and concluded they were isolated was still
-  // reading and writing the shared production store, silently and successfully.
-  //
-  // The guard lives HERE rather than in isApiMode() on purpose. getApiConfig()
-  // is the single chokepoint every cloud read and write funnels through
-  // (apiRequestRaw calls it and cannot build a request without it), whereas
-  // isApiMode() is a mode check that 30+ domain call sites must each remember to
-  // consult. This file already made exactly that call once, for the same reason
-  // — see assertRequestAllowedUnderTest, which was placed in the transport
-  // rather than at process start because a check one layer up left gaps.
-  if (firstEnvKey(DB_PATH_ENV_KEYS)) return null;
-
-  const rawBase = firstEnv(API_URL_ENV_KEYS);
-  const apiKey = firstEnv(API_KEY_ENV_KEYS);
-  if (!rawBase || !apiKey) return null;
-  return { baseUrl: normalizeBase(rawBase), apiKey };
-}
-
-/**
- * True when the client should route memory operations to the cloud API.
- * Fail-closed against a client-side DSN: if DATABASE_URL is present, API mode
- * refuses to engage so the two transports never mix.
- */
-export function isApiMode(): boolean {
-  if (hasDatabaseUrl()) return false;
-  return getApiConfig() !== null;
 }
 
 export class ApiRequestError extends Error {
@@ -388,10 +560,15 @@ const DEFAULT_TIMEOUT_S = "45";
  * body. The bearer key is fed to curl on stdin (`-H @-`) so it never appears in
  * argv or the environment. The body (if any) is written to a private 0600 temp
  * file and passed as `--data-binary @file` so it never appears in argv either.
+ *
+ * The credential and authority are resolved FRESH for every request — through
+ * the @hasna/contracts chain, Keychain and credentials file included — so a
+ * rotation heals a long-lived shell or MCP server without a restart (owner
+ * ruling 2026-09-04, hasna/apps#1720).
  */
 function apiRequestRaw(method: string, path: string, body?: unknown): RawResponse {
   const cfg = getApiConfig();
-  if (!cfg) throw new Error("api-mode: not configured (HASNA_MEMENTOS_API_URL / HASNA_MEMENTOS_API_KEY)");
+  if (!cfg) throw new Error("api-mode: not configured (no Hasna mementos credential resolved)");
 
   // Fail closed before anything leaves the process. See the function's comment
   // for the two preload bypasses this exists to catch.

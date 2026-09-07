@@ -28,4 +28,25 @@ describe("public ContactsV1Client configuration", () => {
       key: "test-key",
     }]);
   });
+
+  test("never attaches an ambient fleet key when baseUrl is explicit and apiKey is absent", async () => {
+    // #1794: an explicit authority with NO apiKey must fail at construction and
+    // never fall back to the ambient HASNA_CONTACTS_API_KEY env variable.
+    const ambientKey = process.env.HASNA_CONTACTS_API_KEY;
+    process.env.HASNA_CONTACTS_API_KEY = "ambient-fleet-key";
+    const fetched: Array<{ url: string; key: string | null }> = [];
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      fetched.push({ url: String(input), key: new Headers(init?.headers).get("x-api-key") });
+      return Response.json({ contacts: [], count: 0 });
+    }) as typeof fetch;
+    try {
+      expect(() => new ContactsV1Client({ baseUrl: "https://contacts.example.invalid" })).toThrow(/requires an API key/);
+      expect(fetched).toEqual([]);
+    } finally {
+      globalThis.fetch = previousFetch;
+      if (ambientKey === undefined) delete process.env.HASNA_CONTACTS_API_KEY;
+      else process.env.HASNA_CONTACTS_API_KEY = ambientKey;
+    }
+  });
 });

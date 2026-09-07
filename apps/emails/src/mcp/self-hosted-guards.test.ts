@@ -205,7 +205,7 @@ describe("MCP self_hosted guards", () => {
     const result = await callTool("pull_events", {});
     expect(result.isError).toBe(true);
     expect(resultText(result)).toContain("ingestion belongs to that service");
-    expect(resultText(result)).toContain("Unset EMAILS_SELF_HOSTED_URL");
+    expect(resultText(result)).toContain("Unset HASNA_EMAILS_API_URL");
   });
 
   it("MEASURES delivery statistics over /v1 instead of refusing them", async () => {

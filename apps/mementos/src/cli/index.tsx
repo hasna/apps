@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { assertClientStoreConfigured } from "../db/api-mode.js";
+import { announceMementosLocalMode } from "../lib/local-opt-in.js";
 import { getDatabase } from "../db/database.js";
 import { getPrimaryMachineStartupWarning } from "../db/machines.js";
 import { skipsStartupDbAccess } from "./startup-side-effects.js";
@@ -86,6 +87,11 @@ program.hook("preAction", (_thisCommand, actionCommand) => {
   // store the environment selects.
   try {
     assertClientStoreConfigured();
+    // LOCAL MODE MUST SAY SO (owner ruling 2026-09-04, fail-closed wave): a
+    // run that deliberately serves the on-box store prints one "local" line on
+    // stderr so it can never be mistaken for a hosted run. Announced after the
+    // gate passed, once per process.
+    announceMementosLocalMode();
   } catch (error) {
     console.error(chalk.red(error instanceof Error ? error.message : String(error)));
     process.exit(1);

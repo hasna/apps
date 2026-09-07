@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolveRuntimeConfig } from "./runtime-config.js";
 import {
   buildStorageConnectionReport,
+  resolvedClientRuntimeConfig,
   schedulerStateForConnection,
   storageConnectionReportLine,
 } from "./runtime-status.js";
@@ -143,5 +147,54 @@ describe("storage/connection report contract", () => {
     );
     expect(warned).toContain("storage=postgresql connection=file");
     expect(warned).toContain("warnings=[");
+  });
+});
+
+describe("resolved transport report (shared resolver is the authority)", () => {
+  test("reports api when a credential resolves from the credential FILE while env is silent", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-status-disk-"));
+    try {
+      const file = join(root, ".hasna", "loops", "config", "credentials");
+      mkdirSync(join(root, ".hasna", "loops", "config"), { recursive: true });
+      writeFileSync(file, "HASNA_LOOPS_API_KEY=fixture-disk-key\n", { mode: 0o600 });
+
+      const config = resolvedClientRuntimeConfig({ HOME: root });
+      expect(config.connection).toBe("api");
+      expect(config.apiKeyPresent).toBe(true);
+      // The report never carries the value, and the fleet gateway default is
+      // the authority for a credential that names no URL.
+      const report = buildStorageConnectionReport(config);
+      expect(report.apiUrl).toBe("https://api.hasna.com/loops");
+      expect(JSON.stringify(report)).not.toContain("fixture-disk-key");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reports the file opt-in as the explicit local connection even when a disk credential exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-status-optin-"));
+    try {
+      const file = join(root, ".hasna", "loops", "config", "credentials");
+      mkdirSync(join(root, ".hasna", "loops", "config"), { recursive: true });
+      writeFileSync(file, "HASNA_LOOPS_API_KEY=fixture-disk-key\n", { mode: 0o600 });
+
+      const config = resolvedClientRuntimeConfig({ HOME: root, HASNA_LOOPS_CONNECTION: "file" });
+      expect(config.connection).toBe("file");
+      expect(config.apiKeyPresent).toBe(false);
+      expect(config.apiUrlPresent).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("env URL + key resolve to the scrubbed explicit authority", () => {
+    const config = resolvedClientRuntimeConfig({
+      HASNA_LOOPS_API_URL: "https://loops.example.test",
+      HASNA_LOOPS_API_KEY: "do-not-print-this-token",
+    });
+    const report = buildStorageConnectionReport(config);
+    expect(report.connection).toBe("api");
+    expect(report.apiUrl).toBe("https://loops.example.test");
+    expect(JSON.stringify(report)).not.toContain("do-not-print-this-token");
   });
 });

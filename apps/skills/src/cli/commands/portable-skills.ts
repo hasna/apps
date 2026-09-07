@@ -72,16 +72,18 @@ export function registerPortableSkillCommands(parent: Command) {
         clearRegistryCache();
         const validation = validatePortableSkillDirectory(result.name, result.path);
         const payload = { ...result, valid: validation.valid, issues: validation.issues, warnings: validation.warnings };
+        if (!validation.valid) process.exitCode = 1;
         if (options.json) {
           console.log(JSON.stringify(payload, null, 2));
           return;
         }
-        console.log(chalk.green(`✓ Ported portable skill '${result.name}'`));
+        console.log(validation.valid
+          ? chalk.green(`✓ Ported portable skill '${result.name}'`)
+          : chalk.yellow(`Validation failed for imported files '${result.name}'; correct the folder before using it.`));
         console.log(chalk.dim(`  Path: ${result.path}`));
         console.log(chalk.dim(`  Valid: ${validation.valid ? "yes" : "no"}`));
         if (!validation.valid) {
           for (const issue of validation.issues) console.log(chalk.red(`  • ${issue.message}`));
-          process.exitCode = 1;
         }
       } catch (error) {
         writePortableError(error, options.json);

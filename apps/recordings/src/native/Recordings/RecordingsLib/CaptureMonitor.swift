@@ -32,6 +32,12 @@ final class CaptureMonitor: @unchecked Sendable {
     }
 }
 
+public enum RecentPasteDeliveryStatus: String, Codable, Sendable {
+    case confirmed
+    case unconfirmed
+    case notDelivered
+}
+
 public struct RecentPaste: Identifiable, Sendable {
     public let id = UUID()
     public let text: String
@@ -41,4 +47,19 @@ public struct RecentPaste: Identifiable, Sendable {
     public let timestamp = Date()
     public let status: String
     public let verified: Bool
+    public let captureID: String?
+    public let deliveryStatus: RecentPasteDeliveryStatus
+
+    public init(text: String, bundleIdentifier: String?, appName: String, location: String,
+                status: String, verified: Bool, captureID: String? = nil,
+                deliveryStatus: RecentPasteDeliveryStatus? = nil) {
+        self.text = text
+        self.bundleIdentifier = bundleIdentifier
+        self.appName = appName
+        self.location = location
+        self.status = status
+        self.verified = verified
+        self.captureID = captureID
+        self.deliveryStatus = deliveryStatus ?? (verified ? .confirmed : .unconfirmed)
+    }
 }

@@ -3,7 +3,7 @@
   "name": "emails",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.13.4",
+  "kitVersion": "1.0.2",
   "description": "Emails stores in the local SQLite file by default, or in operator-owned PostgreSQL when EMAILS_DATABASE_URL is set. Provider credentials stay with the operator.",
   "bins": [
     "emails",

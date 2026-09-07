@@ -14,6 +14,7 @@ import { runHealthCheck } from "../cli/commands/health-check.js";
 import { completeTaskWithFiles } from "../cli/commands/complete-task.js";
 import { linkAttachmentToTask } from "../cli/commands/link-task.js";
 import { resolveStore } from "../core/store.js";
+import { resolveAttachmentsTransport } from "../core/client-config.js";
 import { getConfig, parseExpiryStrict } from "../core/config.js";
 
 // ---------------------------------------------------------------------------
@@ -1221,6 +1222,20 @@ async function main(): Promise<void> {
   if (hasFlag("--version", "-V")) {
     process.stdout.write(`${getMcpVersion()}\n`);
     return;
+  }
+
+  // FAIL-CLOSED at STARTUP (#1720 acceptance (c), mirrors mementos #1868):
+  // attachments is remote-only, so a server with no resolvable fleet
+  // credential has nothing to serve. Resolve through the shared chain once
+  // here — with the LIVE process.env so the ambient Keychain and disk tiers
+  // run — and exit 1 naming the credential sources before either transport
+  // opens. Tools still resolve per call; this only refuses to serve a session
+  // that every call would reject. Nothing is created under the app home.
+  try {
+    resolveAttachmentsTransport(process.env);
+  } catch (error) {
+    process.stderr.write(`[attachments-mcp] ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
   }
 
   if (isStdioMode()) {

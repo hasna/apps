@@ -32,9 +32,12 @@ const localDb = (): ReturnType<typeof openDatabase> => {
 }
 
 // Every DATA tool routes through the Store. `getStore()` returns an ApiStore
-// (self_hosted/cloud HTTP /v1) when HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY
-// are set, else a LocalStore over the on-box SQLite — one interface, no per-tool
-// branching, so the MCP shares the same fleet state as the CLI.
+// (shared HTTP /v1 at the @hasna/contracts-resolved authority) when a credential
+// resolves from the chain — Keychain, ~/.hasna/economy/config/credentials,
+// HASNA_ECONOMY_API_KEY, default fleet gateway — else a LocalStore over the
+// on-box SQLite via the explicit HASNA_ECONOMY_LOCAL=1 opt-in; nothing
+// configured FAILS CLOSED. One interface, no per-tool branching, so the MCP
+// shares the same fleet state as the CLI.
 const store = getStore()
 
 // The MCP SDK's tool-registration generics are expensive enough to make
@@ -577,7 +580,7 @@ server.tool(
     if (isCloudStore()) {
       const cloud = economyCloudStorage()
       if (!cloud.active) {
-        return text('cloud mode: sync transport unavailable (set HASNA_ECONOMY_API_URL and HASNA_ECONOMY_API_KEY)')
+        return text('cloud mode: sync transport unavailable (no credential resolved; set HASNA_ECONOMY_API_KEY or write ~/.hasna/economy/config/credentials)')
       }
       const result = await syncAllToCloud(cloud, opts)
       if (json) return text(JSON.stringify(result, null, 2))
@@ -842,12 +845,13 @@ server.tool(
 )
 
 // register_agent, heartbeat, set_focus, and list_agents are the canonical
-// agent-lifecycle tools (persistent SQLite-backed registry) — implemented
-// locally in ./agent-registry.ts since the @hasna/agent-registry package was
-// deleted (hasna/apps#1529) rather than a hand-rolled in-memory Map. economy's
-// own send_feedback (below)
-// routes through the Store (local feedback table or POST /v1/feedback) so it
-// carries the category enum and never bypasses the cloud in self_hosted mode.
+// agent-lifecycle tools — implemented locally in ./agent-registry.ts since the
+// @hasna/agent-registry package was deleted (hasna/apps#1529). The registry
+// store is resolved on first tool use, never here: a hosted client keeps it in
+// memory (no SQLite under the app home), the explicit local opt-in persists it
+// as agent-registry.db beside the local store. economy's own send_feedback
+// (below) routes through the Store (local feedback table or POST /v1/feedback)
+// so it carries the category enum and never bypasses the cloud in hosted mode.
 registerAgentTools(server, { service: 'economy' })
 
 server.tool(

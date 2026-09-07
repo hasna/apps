@@ -112,6 +112,8 @@ registerPublish(program);
 
 const { registerAuth } = await import("./commands/auth.js");
 registerAuth(program);
+const { registerCustomerProfileCommands } = await import("./commands/customer-profile.js");
+registerCustomerProfileCommands(program);
 
 const { registerFeedback } = await import("./commands/feedback.js");
 registerFeedback(program);

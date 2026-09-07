@@ -18,18 +18,25 @@ describe("recordings MCP HTTP transport", () => {
 
   const savedApiUrl = process.env.HASNA_RECORDINGS_API_URL;
   const savedApiKey = process.env.HASNA_RECORDINGS_API_KEY;
-  const savedClientStore = process.env.HASNA_RECORDINGS_CLIENT_STORE;
+  const savedApiKeyOverride = process.env.HASNA_RECORDINGS_API_KEY_OVERRIDE;
+  const savedApiKeyRef = process.env.HASNA_RECORDINGS_API_KEY_REF;
+  const savedProfile = process.env.HASNA_PROFILE;
+  const savedLocal = process.env.HASNA_RECORDINGS_LOCAL;
 
   beforeAll(() => {
     // The suite is hermetic by contract: a publisher's ambient hosted-store
     // configuration must not route these in-process tool calls to the hosted
     // API. The suite seeds and inspects the LOCAL database directly, so local
-    // mode is declared EXPLICITLY via the store override — the client never
-    // falls back to the on-box file when no hosted env is configured. Both
-    // restored in afterAll.
+    // mode is declared EXPLICITLY via the unhosted opt-in — the client never
+    // falls back to the on-box file when no hosted env is configured, and the
+    // opt-in is answered before the resolver runs, so neither the Keychain nor
+    // any credential file can be consulted. All restored in afterAll.
     delete process.env.HASNA_RECORDINGS_API_URL;
     delete process.env.HASNA_RECORDINGS_API_KEY;
-    process.env.HASNA_RECORDINGS_CLIENT_STORE = "sqlite";
+    delete process.env.HASNA_RECORDINGS_API_KEY_OVERRIDE;
+    delete process.env.HASNA_RECORDINGS_API_KEY_REF;
+    delete process.env.HASNA_PROFILE;
+    process.env.HASNA_RECORDINGS_LOCAL = "1";
     httpServer = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -52,8 +59,15 @@ describe("recordings MCP HTTP transport", () => {
     else process.env.HASNA_RECORDINGS_API_URL = savedApiUrl;
     if (savedApiKey === undefined) delete process.env.HASNA_RECORDINGS_API_KEY;
     else process.env.HASNA_RECORDINGS_API_KEY = savedApiKey;
-    if (savedClientStore === undefined) delete process.env.HASNA_RECORDINGS_CLIENT_STORE;
-    else process.env.HASNA_RECORDINGS_CLIENT_STORE = savedClientStore;
+    if (savedApiKeyOverride === undefined) delete process.env.HASNA_RECORDINGS_API_KEY_OVERRIDE;
+    else process.env.HASNA_RECORDINGS_API_KEY_OVERRIDE = savedApiKeyOverride;
+    if (savedApiKeyRef === undefined) delete process.env.HASNA_RECORDINGS_API_KEY_REF;
+    else process.env.HASNA_RECORDINGS_API_KEY_REF = savedApiKeyRef;
+    if (savedProfile === undefined) delete process.env.HASNA_PROFILE;
+    else process.env.HASNA_PROFILE = savedProfile;
+    if (savedLocal === undefined) delete process.env.HASNA_RECORDINGS_LOCAL;
+    else process.env.HASNA_RECORDINGS_LOCAL = savedLocal;
+    __resetStore();
     httpServer.stop();
   });
 

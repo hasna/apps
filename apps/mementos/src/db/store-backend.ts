@@ -5,15 +5,18 @@
 // from the environment alone:
 //
 //   - the CLIENT transport (`isApiMode()`, src/db/api-mode.ts) — local SQLite
-//     or the HTTP API, selected by the API URL + key pair; an incomplete pair
-//     throws naming the missing variable.
+//     or the HTTP API, decided by the @hasna/contracts credential chain (env
+//     key, macOS Keychain, or `~/.hasna/mementos/config/credentials`) against
+//     the deliberate local opt-ins (`HASNA_MEMENTOS_DB_PATH` /
+//     `HASNA_MEMENTOS_LOCAL`); a half configuration throws naming the missing
+//     variable.
 //   - the SERVER backend (`getStorageBackend()`, src/storage.ts) — sqlite or
 //     postgresql, selected by HASNA_MEMENTOS_DATABASE_URL presence. The
 //     DIRECT Postgres path is server-only.
 //
 // There are no deployment modes (owner directive 2026-07-29; knowledge
-// k_ms5wv466_u0jidq). Any retired storage-mode variable throws via the
-// fail-loud ratchet before a backend is resolved.
+// k_ms5wv466_u0jidq); the retired storage-mode variables are inert and nothing
+// reads them.
 //
 // On a client, `isApiMode()` wins: the memory paths route to HTTP before
 // `getDatabase()` is ever consulted, so the server backend can report `sqlite`
@@ -28,7 +31,13 @@
 // ============================================================================
 
 import { getDbPath } from "./database.js";
-import { getApiConfig, getApiModeEnvSources, getConfiguredApiEnv, isApiMode } from "./api-mode.js";
+import {
+  getApiConfig,
+  getApiModeEnvSources,
+  getConfiguredApiEnv,
+  getResolvedApiModeReport,
+  isApiMode,
+} from "./api-mode.js";
 import { getStorageBackend } from "../storage.js";
 
 /**
@@ -78,6 +87,9 @@ export function resolveStoreBackend(): StoreBackendReport {
   const apiConfig = getApiConfig();
   const serverBackend = getStorageBackend();
   const sources = getApiModeEnvSources();
+  // One resolver pass for the SOURCES (never the key value): which tier
+  // selected the cloud transport, for the operator-facing `selected_by`.
+  const resolved = apiMode ? getResolvedApiModeReport() : null;
 
   // Since precedence 1 landed (2026-08-03), getApiConfig() returns null whenever
   // an explicit DB_PATH is set — including when a perfectly good API url+key are
@@ -97,8 +109,13 @@ export function resolveStoreBackend(): StoreBackendReport {
 
   let selectedBy = "default";
   if (apiMode) {
-    // Presence of BOTH keys is the selector, so name both.
-    selectedBy = `${sources.urlKey} + ${sources.keyKey} (presence)`;
+    // Name where the transport came from — resolver sources, never values: the
+    // fleets of env keys are listed for the env-configured shape (the operator
+    // needs to see their exact names), and the Keychain item / credentials-file
+    // path / fleet gateway for the ambient tiers.
+    selectedBy = resolved
+      ? `${resolved.apiUrlSource ?? "default"} + ${resolved.apiKeySource ?? resolved.apiKeyTier ?? "?"} (resolved via @hasna/contracts)`
+      : `${sources.urlKey} + ${sources.keyKey} (presence)`;
   } else if (backend === "local-sqlite" && configured.dbPathKey) {
     // Precedence 1. Worth naming even when nothing was outranked: "default" for
     // an explicitly pinned path is how an operator ends up believing the pin did

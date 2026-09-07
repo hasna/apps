@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 import { parseArgs } from "node:util";
 import { join } from "node:path";
-import { Store } from "./store";
-import { createHandler } from "./service";
+import { startServer } from "./server";
 import { VERSION, Fault } from "./domain";
 export async function main(args = process.argv.slice(2)) {
   const {values} = parseArgs({args, options: {
@@ -17,11 +16,11 @@ export async function main(args = process.argv.slice(2)) {
   const apiKey = process.env.HASNA_SWITCHER_API_KEY ?? "";
   if (apiKey.length < 24) throw new Fault(500, "auth_config", "Set HASNA_SWITCHER_API_KEY to a random token of at least 24 characters.");
   if (values.sqlite && values["data-dir"]) throw new Fault(400, "storage_config", "Choose --sqlite or --data-dir.");
-  const store = await Store.open({databaseUrl: process.env.HASNA_SWITCHER_DATABASE_URL, sqlitePath: values.sqlite ?? (values["data-dir"] ? join(values["data-dir"], "switcher.db") : process.env.HASNA_SWITCHER_SQLITE_PATH)});
-  const server = Bun.serve({hostname: values.host ?? "127.0.0.1", port, maxRequestBodySize: 1024 * 1024, idleTimeout: 60, fetch: createHandler(store, apiKey)});
-  console.log(JSON.stringify({event: "listening", version: VERSION, url: server.url.href, storage: store.engine}));
-  let stopping = false;
-  const stop = async () => { if (stopping) return; stopping = true; await server.stop(); await store.close(); };
+  const server = await startServer({apiKey, hostname: values.host ?? "127.0.0.1", port,
+    databaseUrl: process.env.HASNA_SWITCHER_DATABASE_URL,
+    sqlitePath: values.sqlite ?? (values["data-dir"] ? join(values["data-dir"], "switcher.db") : process.env.HASNA_SWITCHER_SQLITE_PATH)});
+  console.log(JSON.stringify({event: "listening", version: VERSION, url: server.url, storage: server.storage}));
+  const stop = () => { void server.close().catch(() => { console.error("Server shutdown failed."); process.exitCode = 1; }); };
   process.once("SIGTERM", stop); process.once("SIGINT", stop);
 }
 if (import.meta.main) main().catch(error => { console.error(JSON.stringify({error: error instanceof Fault ? error.message : "Server startup failed; check configuration."})); process.exitCode = 1; });

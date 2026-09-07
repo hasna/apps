@@ -4,10 +4,54 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-05T15:00:05.316596+00:00"
-status: "released"
+updated_at: "2026-09-07T05:34:56.280279+00:00"
+status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+# Completed model-policy release: 0.1.3
+
+Switcher **0.1.3 is published, installed and live-tested**. [PR #1877](https://github.com/hasna/apps/pull/1877) merged reviewed source `13b629927bbdf84254ae42e6e03bb69f75794903` as `77164e16126d49503cb4aff2a96fb493bf3cf2bf` after all nine required checks passed. npm published at `2026-09-07T05:26:05.569Z` with SHA-1 `44d296e0e8ee1b2ec3b312e517c69b1cb3cbf678`. All **60 installed package files** match the reviewed archive. The normal `switcher`, `switcher-serve` and `switcher-mcp` commands report 0.1.3; the previous install and quarantine policy are preserved.
+
+Every managed launch automatically supplies model guidance and pins verified native child/utility slots. A per-launch authenticated loopback gateway keeps the real provider credential in the launcher and enforces exact approved model IDs. The default permitted set contains the selected main model; explicit role assignments, allowed alternatives, aliases and ordered transient fallbacks are available. The complete compatible catalog remains visible, while model use follows the policy. See [automatic model guidance](docs/MODEL-POLICY.md) for supported native roles and boundaries.
+
+A dry-run of the following installed-CLI launch passed with the station’s existing credential binding, saved profile and three discovered DeepSeek IDs:
+
+```sh
+switcher launch claude --provider deepseek --model deepseek-v4-flash
+```
+
+The installed release passed **14 direct native paths and both Ori paths**, each with a fresh task and a resumed process after proof-file deletion. Aider verified its native file-context/edit/history interface. An additional actual Claude custom agent declared as `opus` returned its read proof through DeepSeek, while the parent made no direct Read call. All accepted runs retained policy-version-1 routing evidence with zero dropped events and no foreign-model resolution. Prompt compliance remains probabilistic; the managed gateway supplies the enforceable model boundary.
+
+The published source passed **215 package tests / 2,091 assertions**, **147 root tests / 560 assertions**, **43 affected builds**, real PostgreSQL/native opt-ins and generated/type/manifest/secret/artifact/frozen-lock checks. Registry-installed Node 26.8.1 and Bun 1.3.14 CLI/API/SDK/server/standalone MCP tests passed. No Hasna MCP server was registered. Both host storage backends passed 0.1.2→0.1.3→0.1.2→0.1.3; old launchers are rejected by the upgraded API and historical runs receive no fabricated model-policy evidence.
+
+The exact candidate archive separately passed four Linux container scenarios and fourteen API starts on SQLite/PostgreSQL 17, including recreation, rollback and reupgrade. Container routing records were synthetic storage inputs, not observed provider inference. Its 55 copied runtime files matched the archive; owned container resources were removed. The candidate image was `sha256:1a11fd00abed8c1124970e2c41de5f42010f5b63e28351d02b719a6fccbc5ae1`.
+
+The [evidence index](docs/verification-evidence.json) retains independent reviews, actual registry receipts, candidate-only checks and prior release identities. Local evidence lives under `~/Workspace/scratch/universal-harness-switcher`. The original user `switcher-deepseek` tmux session remains preserved.
+
+Worktree owner: `codex-fixer`, task `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Evidence branch: `codex/fixer/2026-09-07-switcher-model-policy-evidence`, based on merged `77164e16126d49503cb4aff2a96fb493bf3cf2bf`, in the owned `worktrees/model-policy` directory. This follow-up changes only files excluded from the published package. Final documentation CI/merge and terminal task status are tracked in task `61cf6e30-abe9-4fbc-a840-fb0cf8827896`.
+
+# Previous delivery: 0.1.2
+
+Switcher **0.1.2 is published and installed**. [PR #1836](https://github.com/hasna/apps/pull/1836) merged reviewed source `61c0ca1b241043567bd7349a2810012db9c41b46` as `24681fa7552584c39c6bbcf7107faa6dd2f885e3` after all nine checks passed (the optional external review was skipped). npm publication at `2026-09-06T16:47:17.965Z` has SHA-1 `3952926c933700c8e5a56130bc3cb3c56bb01969`. All **50 installed package files** match the reviewed archive. The normal station `switcher`, `switcher-serve` and `switcher-mcp` commands resolve to 0.1.2; the previous installation and quarantine policy are preserved.
+
+The normal station home now has reference-only bindings for the approved DeepSeek, OpenRouter and Gemini vault entries. Plain Claude/DeepSeek and Grok/DeepSeek launch dry-runs passed with three discovered models and no home override or external API supervisor. The exact previously tested Grok 1.0.13 binary was placed on the normal PATH; the four required native executables and Ori resolve there. Other native adapters retain explicit installation/executable prerequisites. This station readiness check made no new paid calls.
+
+The release includes **14 native adapters, two optional Ori paths and 24 provider presets**, an HTTP API and typed `./sdk`, and SQLite/PostgreSQL self-hosting. It adds the missing adapters, corrects routing/argument authority and cleanup, preserves Gemini generation methods, bounds catalog retries, sanitizes reflected operator credentials in remote SDK errors, and supplies native installation guidance. Native harness installation and an approved provider credential remain prerequisites; Switcher owns provider/profile creation, automatic discovery and the local API lifecycle.
+
+The published source passed **167 package tests / 1,799 assertions**, including real PostgreSQL and installed native opt-ins, **147 root tests / 560 assertions**, **43 affected builds**, frozen locks and generated/artifact/manifest/secret guards. Registry-installed Node 26.8.1 and Bun 1.3.14 CLI/API/SDK/server/standalone MCP checks pass. No Hasna MCP server was registered. The exact runtime bytes also passed both Compose storage backends, persistence, 0.1.1→0.1.2→0.1.1→0.1.2 and container recreation. Old 0.1.1 clients read preserved data but reject unsupported new harness writes and generation-method updates.
+
+Registry live acceptance and native catalog observations are recorded in [COMPATIBILITY.md](COMPATIBILITY.md). The [evidence index](docs/verification-evidence.json) distinguishes published bytes from historical candidates and provider access limits. Evidence files live under `~/Workspace/scratch/universal-harness-switcher`; these are local provenance locators, not files included in the npm archive. The user's original `switcher-deepseek` session on `deepseek.sock` remains preserved.
+
+The rejected archive `453bc3d6180a523286ab10f0a0154316cbf75672` was never published. Its SDK error reflection finding was corrected and independently rechecked before this release. Earlier baseline and 0.1.1 reports retain their original artifact identities; their provider observations are not relabeled as 0.1.2 registry tests.
+
+Worktree owner: `codex-fixer`, task `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/complete-adapters`. Final evidence branch: `codex/fixer/2026-09-06-switcher-release-evidence`, based on fetched merge `24681fa7552584c39c6bbcf7107faa6dd2f885e3`. Implementation branch `codex/fixer/2026-09-06-switcher-expanded-adapters` is merged and preserved. The canonical checkout and other agents' worktrees remain untouched.
+
+The Changesets release-plan API applied only `switcher-expanded-adapters`: 0.1.1→0.1.2. Its required package-to-bump front matter is the machine-format metadata exception; `release-candidate/expanded-scoped-release-plan.json` records the exact plan. Unrelated changesets were not applied. This documentation follow-up changes files excluded by the package's `files` allowlist; published runtime bytes remain immutable.
+
+All 14 native adapters and both Ori paths passed the installed registry task/resume matrix. Remaining closure work is independent final evidence review and the documentation PR CI/merge, followed by the task/goal completion record. [TODOS.md](TODOS.md) retains stable IDs and separates completed implementation, external account/deployment prerequisites and optional product extensions. Missing provider access does not count as a passing live test. Native subscription/OAuth pooling, Bedrock/Vertex native cloud identity, cross-protocol translation and remote execution workers are explicit extensions, not silently supplied by compatible gateways.
+
+# Original product plan and 0.1.0 provenance
 
 # Product and acceptance
 
@@ -76,7 +120,7 @@ Model selection inside the harness must affect the model sent upstream on subseq
 | --- | --- | --- |
 | Claude Code | Anthropic Messages via supported base URL/auth/model environment and launch settings. Preserve permissions. | Explicit `modelPicker` launch settings on supported versions; discovery alone filters IDs and can expose only a curated subset. |
 | Codex | Responses-compatible custom provider using per-launch config. Preserve user home, approvals and sandbox. | Version-compatible startup `model_catalog_json`, or proven native catalog discovery. Include correct limits/reasoning metadata. |
-| Grok Build | Official 1.0.13 binary. A per-launch authenticated loopback bridge uses supported remote catalog and API-key probe endpoints; forwards Messages, Responses or Chat unchanged. Native home and policies are preserved. | Remote entries carry readable provider aliases, exact upstream model IDs and backend metadata; credentials stay out of the native catalog cache. Resume is rejected until bridge resume is supported. |
+| Grok Build | Official 1.0.13 binary. A per-launch authenticated loopback bridge uses supported remote catalog and API-key probe endpoints; forwards Messages, Responses or Chat unchanged. Native home and policies are preserved. | Remote entries carry readable provider aliases, exact upstream model IDs and backend metadata; credentials stay out of the native catalog cache. Fresh-process resume uses a new authenticated bridge and retains the selected profile model. Use `-- --resume SESSION_ID -p PROMPT` for headless continuation; interactive resume accepts typed input after loading but rejects an inline positional prompt. |
 | OpenCode 2 | First-class `opencode2` executable and version-specific provider config; separate from legacy OpenCode. | Populate provider `models` configuration with exact IDs, limits and capabilities. Use private/standalone execution where necessary to avoid cross-session provider contamination. |
 
 Native picker integration is not proof of tool use, streaming or context correctness. Anthropic explicitly does not support non-Claude models behind Claude Code gateways; report these combinations as experimental. Unknown/signed reasoning state must not be blindly replayed across providers. Preserve native resume where supported and reject unsupported resume combinations clearly.
@@ -130,7 +174,7 @@ Live verification uses a task-owned tmux session and scratch directory, loopback
 
 Run package typecheck/tests/build/contract checks and repository-required gates. Perform independent review against the exact implementation commit. Ship via branch and pull request; run staged secret scans before commits/pushes. Announce package/version in the required publishing channel, publish with npm from the package directory using protected token injection, verify registry version plus timestamp and test the exact registry artifact. Respect the global-install quarantine.
 
-## Ownership and current state
+## Original 0.1.0 delivery record
 
 - Owner: parent Codex task `01a07181-ca8d-70c1-99a2-b276dc5770f3`.
 - Base commit: `c6a9fcf5a4825a9e49bab7b3ae688040726fcd61`.
@@ -142,3 +186,14 @@ Run package typecheck/tests/build/contract checks and repository-required gates.
 - The exact registry release passed Node SDK/CLI/server/MCP smoke, all four native harness read-only tool loops on SQLite, and PostgreSQL with a second model. See `RELEASE.md` for evidence and limitations.
 - Tracking task: `e0be8c8c-9588-4b7b-9996-382f113736e3`.
 - Build, PR merge, publication and registry live acceptance are complete. Task/goal closure follows final evidence delivery. Optional product extensions and maintenance follow-ups remain explicit in `TODOS.md`.
+
+## Completed 0.1.1 release verification
+
+The reviewed 0.1.1 archive now passes installed OpenCode tool/resume and interactive full DeepSeek picker checks, exact Codex provider-catalog matching, Node/Bun public surface checks, and both container storage profiles with upgrade/rollback/re-upgrade preservation. PR #1810 subsequently passed CI, merged and published 0.1.1 at 2026-09-06T13:22:44.352Z. Registry identity and all seven installed live paths passed. This is the completed 0.1.1 record; the expanded 0.1.2 release is tracked above and below.
+
+
+## Historical, superseded 0.1.2 candidate checkpoint
+
+Before the SDK error-reflection finding, source `ef217dd749c4628bead0df43c4a83b3dc8d11468` produced the 49-file candidate `453bc3d6180a523286ab10f0a0154316cbf75672`. Its then-recorded checks were 152 package tests / 1,584 assertions, baseline native tasks/resume and Gemini's 54-model catalog with 40 eligible native IDs. Those observations remain historical evidence only. The archive was rejected and never published.
+
+Reviewed source `61c0ca1b` and archive `3952926c` supersede that checkpoint. Their completed PR merge, publication, installed-registry acceptance and remaining documentation closure are recorded in Current delivery above. No earlier publication instruction in a historical snapshot authorizes republishing a rejected archive.

@@ -168,7 +168,9 @@ export {
   SKILLS_API_URL_ENV,
   SKILLS_API_URL_ENV_KEYS,
   SKILLS_APP,
+  SKILLS_LOCAL_OPT_IN_ENV_KEYS,
   configuredSkillsApiUrl,
+  isSkillsLocalOptIn,
   noticeLocalSkillsMode,
   normalizeSkillsApiOrigin,
   requireSkillsApiKey,
@@ -177,6 +179,7 @@ export {
   resolveSkillsApiKey,
   resolveSkillsApiOrigin,
   resolveSkillsFleet,
+  selectsSkillsLocalMode,
   skillsCredentialFilePath,
   skillsCredentialFiles,
   skillsCredentialOrReason,
@@ -192,6 +195,7 @@ export {
   createRemoteSkillsClient,
   RemoteRouteUnsupportedError,
   RemoteRequestError,
+  RemoteCapabilityUnavailableError,
   type RemotePin,
   type RemoteSkillSummary,
   type UpdatedSincePage,
@@ -469,3 +473,5 @@ export {
 export { RemoteCreditApprovalError, type RemoteRunApproval, type RemoteRunQuote, type RemoteCreditPack } from "./lib/remote-account.js";
 
 export { RemoteSkillsAuthClient, HostedApiError } from "./lib/remote-auth.js";
+export type { RemoteWorkspaceMember, RemoteWorkspaceMembersPage, RemoteWorkspaceMembersOptions } from "./lib/remote-workspace.js";
+export type { RemoteCustomerRole, RemoteCustomerProfile, RemoteCurrentWorkspace, UpdateRemoteProfile, UpdateRemoteWorkspace } from "./lib/remote-profile.js";

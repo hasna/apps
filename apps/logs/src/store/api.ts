@@ -6,9 +6,10 @@
  * The transport behind the hosted API: identical client code for every hosted
  * deployment; only the resolved URL/key differ (that distinction is server-side
  * tenancy, never a client branch). Every call goes to the app's configured
- * hosted HTTP API (the resolved HASNA_LOGS_API_URL, e.g.
- * `https://logs.your-deployment.example/v1/...`) with the bearer key managed
- * inside the @hasna/contracts transport.
+ * hosted HTTP API (the authority resolved by @hasna/contracts — keychain item,
+ * credential file, or `HASNA_LOGS_API_URL`, with the fleet gateway
+ * `https://api.hasna.com/logs` as the default) with the bearer key managed
+ * inside the @hasna/contracts transport, refreshed per request.
  *
  * The hosted tier is a first-class shared backend: it persists and serves the
  * full data plane over `/v1` — logs, projects, pages, scan jobs, the events
@@ -21,8 +22,6 @@
  * SAFETY: never logs, returns, or embeds the API key. The key lives only inside
  * the HTTP transport created by @hasna/contracts.
  */
-import { HasnaHttpError } from "@hasna/contracts/client";
-import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 import type { AlertRule } from "../lib/alerts.ts";
 import {
   ApiRunSink,
@@ -85,6 +84,7 @@ import type {
   PushEventOptions,
   Store,
 } from "./types.ts";
+import type { LogsStorageClientLike } from "./client-types.ts";
 
 /** Cloud resource paths served under `/v1`. */
 const LOGS = "logs";
@@ -167,11 +167,11 @@ export interface ApiStoreOptions {
 
 /** HTTP-backed {@link Store} for the hosted API. */
 export class ApiStore implements Store {
-  private readonly client: HasnaStorageClient;
+  private readonly client: LogsStorageClientLike;
   private readonly scanExecutor: ApiRunScan;
 
   constructor(
-    client: HasnaStorageClient,
+    client: LogsStorageClientLike,
     options: ApiStoreOptions = {},
   ) {
     this.client = client;
@@ -464,7 +464,7 @@ export class ApiStore implements Store {
     if (args.last_event_id) {
       anchor = await this.getEvent(args.last_event_id, false).catch((error) => {
         // A missing anchor is an overflow (never replay history), not a crash.
-        if (error instanceof HasnaHttpError && error.status === 404) return null;
+        if (isNotFoundError(error)) return null;
         throw error;
       });
       if (!anchor) {
@@ -674,7 +674,7 @@ export class ApiStore implements Store {
     try {
       return await this.client.get<ScanJob>("jobs", id);
     } catch (error) {
-      if (error instanceof HasnaHttpError && error.status === 404) return null;
+      if (isNotFoundError(error)) return null;
       throw error;
     }
   }
@@ -961,6 +961,22 @@ export class ApiStore implements Store {
       },
     );
   }
+}
+
+/**
+ * Shape match, never instanceof: `@hasna/contracts` builds its `./client` and
+ * `./client/storage` bundles as separate module instances (each carrying its
+ * own copy of the error class — the projects seam documents the same rule),
+ * so a cross-subpath `instanceof HasnaHttpError` is false even for the same
+ * published version. The error CLASS sets `name` in its constructor, which is
+ * stable across the copies; match on that and on the status shape.
+ */
+function isNotFoundError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.name === "HasnaHttpError" &&
+    (error as { status?: unknown }).status === 404
+  );
 }
 
 /** Serialize an {@link EventCatalogQuery} into flat query params (arrays joined). */

@@ -271,12 +271,12 @@ function createPgPool(options) {
 
 // src/client-transport.ts
 import {
-  appConfigDiskValue,
-  ClientTransportConfigurationError,
+  CREDENTIAL_PROFILE_ENV_KEY,
   clientTransportEnvKeys,
   credentialDiskSources,
+  credentialOverrideEnvKey,
+  credentialPointerEnvKey,
   defaultFleetGatewayBaseUrl,
-  keychainConfigValue,
   resolveClientTransport
 } from "@hasna/contracts/client";
 
@@ -292,17 +292,20 @@ var KNOWLEDGE_API_URL_ENV = KNOWLEDGE_API_URL_ENV_KEYS[0];
 var KNOWLEDGE_API_KEY_ENV = KNOWLEDGE_API_KEY_ENV_KEYS[0];
 var KNOWLEDGE_DATABASE_URL_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_DEFAULT_API_URL = defaultFleetGatewayBaseUrl(KNOWLEDGE_APP_SLUG);
+var KNOWLEDGE_LOCAL_OPT_IN_ENV_KEYS = ["HASNA_KNOWLEDGE_LOCAL"];
+var KNOWLEDGE_LOCAL_OPT_IN_ENV = KNOWLEDGE_LOCAL_OPT_IN_ENV_KEYS[0];
 var RETIRED_KNOWLEDGE_SELECTOR_ENV_KEYS = [
   "HASNA_KNOWLEDGE_STORAGE_MODE",
   "HASNA_KNOWLEDGE_MODE",
   "KNOWLEDGE_STORAGE_MODE",
   "KNOWLEDGE_MODE"
 ];
+
 class RetiredKnowledgeStorageSelectorError extends Error {
   envKey;
   code = "retired_knowledge_storage_selector";
   constructor(envKey) {
-    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients resolve their credential through @hasna/contracts \u2014 an explicit --api-key, ` + `${KNOWLEDGE_API_KEY_ENV}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV}_REF, the macOS Keychain ` + `item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key, ~/.hasna/${KNOWLEDGE_APP_SLUG}/config/credentials, ` + `then ${KNOWLEDGE_API_KEY_ENV} \u2014 and reach ${KNOWLEDGE_DEFAULT_API_URL} unless ${KNOWLEDGE_API_URL_ENV} ` + `(or the Keychain api-url item, or the credentials file) names another authority. ` + `With no credential and no authority anywhere, the on-box store applies. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
+    super(`knowledge: ${envKey} was retired and must be unset. ` + `Clients resolve their credential through @hasna/contracts \u2014 an explicit --api-key, ` + `${KNOWLEDGE_API_KEY_ENV}_OVERRIDE / HASNA_PROFILE / ${KNOWLEDGE_API_KEY_ENV}_REF, the macOS Keychain ` + `item hasna.credentials.${KNOWLEDGE_APP_SLUG}.api-key, ~/.hasna/${KNOWLEDGE_APP_SLUG}/config/credentials, ` + `then ${KNOWLEDGE_API_KEY_ENV} \u2014 and reach ${KNOWLEDGE_DEFAULT_API_URL} unless ${KNOWLEDGE_API_URL_ENV} ` + `(or the Keychain api-url item, or the credentials file) names another authority. ` + `With no credential and no ${KNOWLEDGE_LOCAL_OPT_IN_ENV} opt-in the client fails closed. ` + `Servers select PostgreSQL with ${KNOWLEDGE_DATABASE_URL_ENV}.`);
     this.envKey = envKey;
     this.name = "RetiredKnowledgeStorageSelectorError";
   }

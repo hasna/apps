@@ -241,6 +241,7 @@ describe("CLI import export and env checks", () => {
       const tmpDir = mkdtempSync(require("path").join(tmpdir(), "cli-exports-download-"));
       const artifactId = "artifact-1";
       const server = Bun.serve({
+        hostname: "127.0.0.1",
         port: 0,
         fetch(req) {
           const url = new URL(req.url);
@@ -300,6 +301,7 @@ describe("CLI import export and env checks", () => {
       const tmpDir = mkdtempSync(path.join(tmpdir(), "cli-blog-exports-download-"));
       const artifactId = "artifact-blog-manifest";
       const server = Bun.serve({
+        hostname: "127.0.0.1",
         port: 0,
         fetch(req) {
           const url = new URL(req.url);

@@ -33,6 +33,7 @@
 // reintroduce exactly that failure under a different name.
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { HERMETIC_STATION } from "../../test/hermetic.js";
 import {
   ALLOW_CLOUD_IN_TESTS_ENV_KEY,
   ConversationsCloudInTestError,
@@ -91,11 +92,16 @@ const STORE_SELECTING_KEYS: readonly string[] = [
  * it. Both derive their key list from the same exports, so the two cannot drift.
  */
 function withOnlyStoreEnv<T>(fn: () => T, only: Record<string, string> = {}): T {
-  const names = [...new Set([...STORE_SELECTING_KEYS, ...Object.keys(only)])];
+  // The Keychain account is pinned to a station no real item uses: on a fleet
+  // workstation the shared chain reads the operator's REAL api-key / api-url
+  // items above the env tier, and a synthetic URL beside a real api-url item
+  // is a "different authorities" refusal — not the case being asserted.
+  const pinned: Record<string, string> = { HASNA_STATION: HERMETIC_STATION, ...only };
+  const names = [...new Set([...STORE_SELECTING_KEYS, ...Object.keys(pinned)])];
   const saved = new Map(names.map((n) => [n, process.env[n]]));
   try {
     for (const n of names) delete process.env[n];
-    for (const [k, v] of Object.entries(only)) process.env[k] = v;
+    for (const [k, v] of Object.entries(pinned)) process.env[k] = v;
     return fn();
   } finally {
     for (const [n, v] of saved) {
@@ -220,9 +226,11 @@ describe("detectTestRuntime", () => {
 });
 
 describe("isLoopbackApiUrl", () => {
-  test("covers the whole 127.0.0.0/8 range this repo's suites actually bind", () => {
-    // poll.test.ts uses 127.0.0.9 and channel.test.ts uses 127.0.0.1; a guard
-    // that only knew 127.0.0.1 would refuse a legitimate local fixture.
+  test("isLoopbackApiUrl covers every loopback shape the suites or the resolver can reach", () => {
+    // 127.0.0.1 is the exact-loopback authority the shared @hasna/contracts
+    // resolver accepts for http; the /8 coverage here is defence in depth for
+    // any future widening of that rule. Either way the guard must never refuse
+    // a legitimate loopback fixture.
     expect(isLoopbackApiUrl("http://127.0.0.1:9/v1")).toBe(true);
     expect(isLoopbackApiUrl("http://127.0.0.9:9/v1")).toBe(true);
     expect(isLoopbackApiUrl("http://localhost:3000/v1")).toBe(true);
@@ -365,7 +373,7 @@ describe("the guard stays silent where it must — known-negative cases", () => 
         const store = getStore();
         expect(store.transport).toBe("cloud-http");
       },
-      { [URL_VAR]: "http://127.0.0.9:9/v1" },
+      { [URL_VAR]: "http://127.0.0.1:9/v1" },
     );
   });
 
@@ -454,6 +462,8 @@ try {
       for (const key of STORE_SELECTING_KEYS) delete childEnv[key];
       childEnv[URL_VAR] = PROD_URL;
       childEnv[KEY_VAR] = FAKE_KEY;
+      // Same pin as the in-process cases: the station Keychain must not answer.
+      childEnv.HASNA_STATION = HERMETIC_STATION;
       delete childEnv.NODE_ENV;
 
       const run = async (argv: string[]) => {

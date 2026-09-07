@@ -199,8 +199,10 @@ export function resolveAuthPosture(input: AuthPostureInput): AuthPosture {
           `Fix ONE of the following, then restart:`,
           `  1. Do not serve the local plane here: unset ${SERVE_AUTH_ENV_VARS[0]}.`,
           `     /v1 keeps working and /mcp is simply not served (posture local-plane-disabled).`,
-          `  2. Put /mcp on the SAME store: set HASNA_CALENDAR_API_URL and HASNA_CALENDAR_API_KEY so`,
-          `     getStore() routes through the /v1 API instead of on-box SQLite.`,
+          `  2. Put /mcp on the SAME store: resolve a Calendar client credential (set HASNA_CALENDAR_API_URL`,
+          `     and HASNA_CALENDAR_API_KEY, or use the Keychain item hasna.credentials.calendar.api-key / the`,
+          `     ~/.hasna/calendar/config/credentials file) so getStore() routes through the /v1 API instead of`,
+          `     on-box SQLite.`,
         ].join("\n"),
       );
     }

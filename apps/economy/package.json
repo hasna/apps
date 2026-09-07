@@ -75,7 +75,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@hasna/contracts": "0.13.4",
+    "@hasna/contracts": "1.0.2",
     "@hasna/events": "^0.1.16",
     "@hasna/projects": "1.0.0",
     "@modelcontextprotocol/sdk": "^1.12.1",

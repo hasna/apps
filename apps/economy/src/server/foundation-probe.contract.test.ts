@@ -63,9 +63,17 @@ describe('foundation probes speak the 0.9.0 backend vocabulary', () => {
     saved.clear()
   })
 
-  it('GET /health matches the contract HealthResponseSchema exactly', async () => {
+  it('GET /health matches the contract HealthResponseSchema exactly for a postgresql backend', async () => {
+    // @hasna/contracts 1.0.2 narrowed `ServerDataBackendSchema` to
+    // `z.literal("postgresql")`: SQLite is legacy import input, never a LIVE
+    // backend, so the health conformance gate only speaks the authoritative
+    // arm. The runtime still reports its real backend honestly (see the sqlite
+    // case below); this case wires the postgresql arm and asserts the exact
+    // schema instrument the `health_shape` conformance gate runs.
+    process.env['HASNA_ECONOMY_DATABASE_URL'] = 'postgresql://synthetic-user:synthetic-pass@127.0.0.1:5432/economy'
     const { status, data } = await probe(handler, '/health')
     expect(status).toBe(200)
+    expect((data as Record<string, unknown>)['backend']).toBe('postgresql')
 
     const parsed = HealthResponseSchema.safeParse(data)
     // Surface the offending keys when this fails; a bare `false` is unactionable.

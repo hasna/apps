@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1
+
+### Patch Changes
+
+- Align the exact `@hasna/contracts` pin with the 1.0.2 optional secrets peer release.
+
 ## 1.1.0
 
 ### Minor Changes

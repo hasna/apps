@@ -6,14 +6,20 @@ import { closeDb, getDb } from "./db.js";
 import { exportMessages, getMessageById, searchMessages, sendMessage } from "./messages.js";
 import { redactMessagesById } from "./admin-redaction.js";
 import { clearStoreEnv, pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
+import { HERMETIC_STATION } from "../test/hermetic.js";
 
 const TEST_ROOT = join(tmpdir(), `conversations-redaction-test-${Date.now()}`);
 const TEST_DB = join(TEST_ROOT, "messages.db");
 const ATTACHMENTS_DIR = join(TEST_ROOT, "attachments");
+// The cloud-guard case below exports a synthetic API pair; on a fleet
+// workstation the shared chain would read the station's REAL Keychain items
+// above it and refuse on the authority disagreement instead of on the guard.
+const SAVED_STATION = process.env.HASNA_STATION;
 
 beforeEach(() => {
   pinStoreToDb(TEST_DB);
   process.env.CONVERSATIONS_ATTACHMENTS_DIR = ATTACHMENTS_DIR;
+  process.env.HASNA_STATION = HERMETIC_STATION;
   mkdirSync(TEST_ROOT, { recursive: true });
   closeDb();
 });
@@ -22,6 +28,8 @@ afterEach(() => {
   closeDb();
   restoreStoreEnv();
   delete process.env.CONVERSATIONS_ATTACHMENTS_DIR;
+  if (SAVED_STATION === undefined) delete process.env.HASNA_STATION;
+  else process.env.HASNA_STATION = SAVED_STATION;
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(`${TEST_DB}-wal`); } catch {}
   try { unlinkSync(`${TEST_DB}-shm`); } catch {}

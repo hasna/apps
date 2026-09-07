@@ -6,12 +6,15 @@
 //
 //   • LocalStore — on-box SQLite. Opens the local db lazily and delegates to the
 //     query/upsert/delete helpers in ../../db/database.ts.
-//   • ApiStore   — the self_hosted/cloud HTTP API at `<API_URL>/v1` with a bearer
-//     key. Delegates to the vendored @hasna/contracts storage client.
+//   • ApiStore   — the shared HTTP API at the @hasna/contracts-resolved
+//     `<origin>/v1` with a bearer key. Delegates to the contracts storage client.
 //
-// `getStore()` resolves which transport to use from the client-flip env
-// (HASNA_ECONOMY_API_URL + HASNA_ECONOMY_API_KEY). Retired storage-mode
-// variables (HASNA_ECONOMY_STORAGE_MODE and friends) are a hard error, never a
+// `getStore()` resolves which transport to use through the one storage seam
+// (`src/lib/cloud-storage.ts`): a credential resolves from the @hasna/contracts
+// chain (Keychain, ~/.hasna/economy/config/credentials, HASNA_ECONOMY_API_KEY,
+// default fleet gateway https://api.hasna.com/economy), the explicit local
+// opt-in HASNA_ECONOMY_LOCAL=1 serves the on-box store, and nothing configured
+// fails closed. Retired storage-mode variables are a hard error, never a
 // selector. Callers NEVER branch on mode themselves and NEVER touch sqlite or
 // fetch directly — that was the split-brain bug this module eliminates.
 //
@@ -808,11 +811,12 @@ export class ApiStore implements EconomyStore {
 
 /**
  * Resolve the active {@link EconomyStore} for the current environment. Returns an
- * {@link ApiStore} when the client-flip contract (HASNA_ECONOMY_API_URL +
- * HASNA_ECONOMY_API_KEY) resolves to cloud-http, else a {@link LocalStore}; a
- * retired `HASNA_ECONOMY_STORAGE_MODE`-family variable is a hard error. Throws
- * if the API is configured but misconfigured (so callers can never silently
- * read the wrong dataset).
+ * {@link ApiStore} when the @hasna/contracts resolver produces an authenticated
+ * cloud-http client, else a {@link LocalStore} when the explicit local opt-in
+ * applies; a retired `HASNA_ECONOMY_STORAGE_MODE`-family variable is a hard
+ * error, and NO credential + no opt-in FAILS CLOSED. Throws if the API is
+ * configured but misconfigured (so callers can never silently read the wrong
+ * dataset).
  */
 export function getStore(env: NodeJS.ProcessEnv = process.env): EconomyStore {
   const cloud = economyCloudStorage(env)

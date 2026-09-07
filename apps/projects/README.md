@@ -394,6 +394,26 @@ The unprefixed `PROJECTS_API_URL` / `PROJECTS_API_KEY` names are still accepted
 as a silent alias for one release; the canonical `HASNA_PROJECTS_*` names always
 work and win when both are set.
 
+### Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `HASNA_PROJECTS_API_KEY` | Tier-5 credential (process env); below disk on purpose |
+| `HASNA_PROJECTS_API_URL` | Authority override; default is the fleet gateway |
+| `HASNA_PROJECTS_API_KEY_OVERRIDE` | Tier-2 deliberate override; never resolved around |
+| `HASNA_PROJECTS_API_KEY_REF` | Tier-2.5 secrets-vault pointer (an item KEY, never a value) |
+| `HASNA_PROFILE` | Tier-2 profile selector on the disk credential tiers |
+| `HASNA_STATION` | Keychain account; else `hostname -s`, else `USER` |
+| `HASNA_HOME` | Replaces the `~/.hasna` root (disk tier and local store) |
+| `HASNA_CONFIG_HOME` | Replaces the config root (`<root>/projects/credentials`) |
+| `HASNA_PROJECTS_LOCAL` / `PROJECTS_LOCAL` | **Explicit opt-in** to the on-box SQLite registry; must be set with no env-declared authority or credential, prints "local" on stderr |
+| `HASNA_PROJECTS_DB_PATH` | Local registry path (default `~/.hasna/projects/projects.db`) |
+| `HASNA_PROJECTS_HOME` | Primary workspace store and per-project runtime data root |
+
+`XDG_CONFIG_HOME` is never read, and the retired locations
+`~/.hasna/fleet-env/`, `~/.hasna/cloud/`, `~/.config/hasna/` and any
+`*-cloud.env` are not inputs.
+
 ```bash
 # Nothing else is needed — the gateway is the default authority.
 export HASNA_PROJECTS_API_KEY="<API key with projects:read and projects:write>"
@@ -407,10 +427,10 @@ install -m 600 /dev/null ~/.hasna/projects/config/credentials
 printf 'HASNA_PROJECTS_API_KEY=%s\n' '<key>' > ~/.hasna/projects/config/credentials
 ```
 
-### Hosted or unhosted — routed on URL and key only
+### Hosted, local, or failed closed — routed on URL and key only
 
-There is no mode switch. No `*_STORAGE_MODE`, no `HASNA_PROJECTS_LOCAL_REGISTRY`,
-no flag, no blank API URL.
+There is no `*_STORAGE_MODE` switch, no flag, no blank API URL, and no implicit
+local fallback.
 
 - **A credential resolves** → hosted. Every registry command goes to
   `<authority>/v1` with the key as a bearer token. The client carries only the
@@ -419,10 +439,17 @@ no flag, no blank API URL.
 - **An authority is declared but no credential resolves** → the command FAILS
   LOUD: non-zero exit, an error naming every place the resolver looked, no local
   SQLite store opened and no local-fallback event.
-- **Nothing configures the fleet at all** → unhosted OSS mode on the on-box
-  SQLite registry (`HASNA_PROJECTS_DB_PATH`, else `~/.hasna/projects/projects.db`),
-  which Projects supports by design. It is never silent: exactly one line goes to
-  stderr saying it is local and naming the database it opened.
+- **Nothing configures the fleet and there is no opt-in** → the command FAILS
+  the same way. A silent station must not quietly serve a local dataset that
+  looks like the hosted one (owner ruling 2026-09-04, hasna/apps#1720).
+- **Local mode — only by explicit opt-in.** Set `HASNA_PROJECTS_LOCAL=1`
+  (alias `PROJECTS_LOCAL`) with no authority and no credential declared in the
+  environment: the on-box SQLite registry (`HASNA_PROJECTS_DB_PATH`, else
+  `~/.hasna/projects/projects.db`) serves the run, and exactly one line on
+  stderr says it is local. The opt-in is answered before the resolver runs, so
+  it never touches the Keychain or a credentials file; any env-declared
+  authority or credential outranks it, and a half-configured opt-in run (URL
+  set, no key) still fails loud.
 
 The hosted connection moves the global project registry only. Machine-local side
 effects (tmux sessions, git operations, directory creation, rendering) and
