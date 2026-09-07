@@ -7,8 +7,13 @@
  * the early exits: the messages-mcp fail-closed gate (no credential resolves,
  * no HASNA_MESSAGES_LOCAL opt-in -> exit non-zero naming the required env)
  * runs before the stdio connect, never before --version/--help. The spawn
- * environment is hermetic: a fake HOME, so the machine's credential stores
- * can never satisfy the gate.
+ * environment is hermetic against every ambient credential tier: a fake HOME
+ * (the disk tier reads ~/.hasna/messages/config/credentials under it), no
+ * fleet env variable of any spelling, and HASNA_STATION pinned to a sentinel
+ * account so the macOS Keychain tier (hasna.credentials.messages.api-key,
+ * account HASNA_STATION -> hostname -s -> USER) misses on a provisioned
+ * station. Without the sentinel the fail-closed test was a false red on any
+ * Mac that holds the real station key in its login keychain.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -28,17 +33,25 @@ async function readStream(stream: ReadableStream<Uint8Array> | null): Promise<st
   return new Response(stream).text();
 }
 
-/** Hermetic spawn env: fake HOME, no fleet credential variables of any spelling. */
+/** Keychain account that holds no `hasna.credentials.messages.api-key` item anywhere. */
+const NO_SUCH_STATION = "messages-early-args-no-such-station";
+
+/**
+ * Hermetic spawn env: fake HOME (applied after the copy, so the inherited HOME
+ * can never win), HASNA_STATION pinned to a sentinel account, no fleet
+ * credential variables of any spelling.
+ */
 function hermeticEnv(env: Record<string, string> = {}): Record<string, string> {
-  const out: Record<string, string> = { HOME: fakeHome };
+  const out: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
+    if (key === "HOME" || key === "USERPROFILE" || key === "HASNA_STATION") continue;
     if (key.startsWith("HASNA_MESSAGES_") || key.startsWith("MESSAGES_")) continue;
     if (key === "HASNA_PROFILE" || key === "HASNA_HOME" || key === "HASNA_CONFIG_HOME") continue;
     if (key === "CONVERSATIONS_AGENT_ID") continue;
     out[key] = value;
   }
-  return { ...out, ...env };
+  return { ...out, HOME: fakeHome, HASNA_STATION: NO_SUCH_STATION, ...env };
 }
 
 async function runEntry(entry: string, args: string[], env: Record<string, string> = {}): Promise<{ stdout: string; stderr: string; exitCode: number | null; timedOut: boolean }> {

@@ -29,6 +29,15 @@ unset HASNA_TODOS_API_URL
 unset TODOS_API_URL
 unset HASNA_SESSIONS_API_URL SESSIONS_API_URL HASNA_SESSIONS_API_KEY SESSIONS_API_KEY
 
+# The shared credential chain has an AMBIENT macOS Keychain tier keyed by
+# HASNA_STATION (else `hostname -s`). On a station that holds real fleet items
+# (hasna.credentials.<app>.api-key / .api-url) that tier resolves inside unit
+# tests that never set a key, so a fixture URL and the Keychain URL "select
+# different service authorities" and dozens of tests fail for environmental
+# reasons. Pin the account to a sentinel that owns no Keychain items so the
+# suite is hermetic everywhere (#1720 validation).
+export HASNA_STATION=attachments-hermetic-test
+
 PASS=0
 FAIL=0
 EXIT_CODE=0
@@ -46,7 +55,7 @@ if [[ "$1" == "--coverage" ]]; then
 fi
 
 TEST_FILES=()
-while IFS= read -r file; do TEST_FILES+=("$file"); done < <(find src sdk scripts -type f -name "*.test.ts" | sort)
+while IFS= read -r file; do TEST_FILES+=("$file"); done < <(find src scripts -type f -name "*.test.ts" | sort)
 
 for file in "${TEST_FILES[@]}"; do
   if bun test $COVERAGE_FLAG "$file" 2>&1; then

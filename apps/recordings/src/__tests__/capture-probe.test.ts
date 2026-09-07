@@ -474,7 +474,7 @@ describe("probeMicrophoneCapture", () => {
     expect(result.message).toMatch(/could not run/);
   });
 
-  test("names the responsible process, not HasnaRecordings.app, when a capture is silent", () => {
+  test("names the responsible process, not Hasna Recordings.app, when a capture is silent", () => {
     const dir = makeTempDir();
     const executable = makeRecorderStub(
       dir,
@@ -485,12 +485,12 @@ describe("probeMicrophoneCapture", () => {
 
     expect(result.ok).toBe(false);
     // A CLI probe exercises the terminal's (or sshd's) grant. Telling the reader
-    // to fix HasnaRecordings.app on the strength of this sends them to a pane that
+    // to fix Hasna Recordings.app on the strength of this sends them to a pane that
     // will not change the outcome. Asserted against a literal, not against
     // captureProbeSubject() — comparing production output to production output
     // passes no matter what either one says.
     expect(result.message).toContain("attributed to");
-    expect(result.message).not.toContain("Grant Microphone to HasnaRecordings.app");
+    expect(result.message).not.toContain("Grant Microphone to Hasna Recordings.app");
   });
 
   test("leaves no probe artifacts behind in the temp dir", () => {
@@ -525,7 +525,7 @@ describe("captureProbeSubject", () => {
     expect(subject.headless).toBe(true);
     expect(subject.subject_known).toBe(true);
     expect(subject.subject).toContain("sshd");
-    expect(subject.subject).toContain("not HasnaRecordings.app");
+    expect(subject.subject).toContain("not Hasna Recordings.app");
     expect(subject.note).toContain("NOTHING");
   });
 
@@ -536,7 +536,7 @@ describe("captureProbeSubject", () => {
     const subject = captureProbeSubject({ TMUX: "/tmp/tmux-501/default,123,0" }, darwin);
 
     expect(subject.subject).toContain("tmux server");
-    expect(subject.subject).toContain("not HasnaRecordings.app");
+    expect(subject.subject).toContain("not Hasna Recordings.app");
     expect(subject.note).toContain("inconclusive");
     // Must NOT claim a terminal application it cannot see.
     expect(subject.subject).not.toContain("terminal application");
@@ -557,7 +557,7 @@ describe("captureProbeSubject", () => {
     expect(subject.headless).toBe(false);
     expect(subject.subject_known).toBe(true);
     expect(subject.subject).toContain("ghostty");
-    expect(subject.subject).toContain("not HasnaRecordings.app");
+    expect(subject.subject).toContain("not Hasna Recordings.app");
     expect(subject.note).toContain("does not");
   });
 
@@ -625,7 +625,7 @@ describe("classifyPermissionState", () => {
 
 describe("microphoneGrantInstruction", () => {
   /** A bundle skeleton — the instruction resolves paths that exist on disk. */
-  function makeBundle(dir: string, name = "HasnaRecordings.app"): string {
+  function makeBundle(dir: string, name = "Hasna Recordings.app"): string {
     const bundle = join(dir, name);
     mkdirSync(join(bundle, "Contents", "MacOS"), { recursive: true });
     return bundle;
@@ -689,7 +689,7 @@ describe("microphoneGrantInstruction", () => {
   test("warns when several bundles could receive the grant", () => {
     const dir = makeTempDir();
     const canonical = makeBundle(dir);
-    const legacy = makeBundle(dir, "HasnaRecordings.app.legacy");
+    const legacy = makeBundle(dir, "Hasna Recordings.app.legacy");
 
     const instruction = microphoneGrantInstruction({
       installedAppPath: canonical,
@@ -705,7 +705,7 @@ describe("microphoneGrantInstruction", () => {
     const bundle = makeBundle(dir);
 
     const instruction = microphoneGrantInstruction({
-      installedAppPath: join(dir, "Applications", "HasnaRecordings.app"),
+      installedAppPath: join(dir, "Applications", "Hasna Recordings.app"),
       otherAppPaths: [bundle],
     });
 
@@ -717,7 +717,7 @@ describe("microphoneGrantInstruction", () => {
     const dir = makeTempDir();
 
     const instruction = microphoneGrantInstruction({
-      installedAppPath: join(dir, "HasnaRecordings.app"),
+      installedAppPath: join(dir, "Hasna Recordings.app"),
     });
 
     expect(instruction.bundle_path).toBeNull();

@@ -151,7 +151,13 @@ COMPILED_ARM64="$COMPILE_DIR/recordings.arm64"
 COMPILED_X86_64="$COMPILE_DIR/recordings.x86_64"
 "$MKDIR_EXECUTABLE" -p "$BUILD_HOME" "$BUN_CACHE" "$STAGED_ROOT" "$COMPILE_DIR"
 "$CP_EXECUTABLE" "$ROOT/package.json" "$ROOT/bun.lock" "$ROOT/bunfig.toml" "$ROOT/tsconfig.json" "$STAGED_ROOT/"
-"$CP_EXECUTABLE" -R "$ROOT/src" "$STAGED_ROOT/src"
+"$MKDIR_EXECUTABLE" -p "$STAGED_ROOT/src"
+# The CLI has no Swift inputs. Walking src/native also walks SwiftPM's live
+# .build cache, whose temporary files can disappear during a native build.
+for source_entry in "$ROOT/src/"*; do
+  [ "$source_entry" != "$ROOT/src/native" ] || continue
+  "$CP_EXECUTABLE" -R "$source_entry" "$STAGED_ROOT/src/"
+done
 if [ -d "$ROOT/migrations" ]; then
   "$CP_EXECUTABLE" -R "$ROOT/migrations" "$STAGED_ROOT/migrations"
 fi

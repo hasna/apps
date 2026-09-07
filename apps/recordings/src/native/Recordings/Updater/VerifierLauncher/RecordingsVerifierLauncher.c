@@ -729,7 +729,7 @@ int recordings_copy_canonical_application_tree(
         if (entry == NULL) break;
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
         visible_entries += 1;
-        if (strcmp(entry->d_name, "HasnaRecordings.app") != 0) only_application = false;
+        if (strcmp(entry->d_name, "Hasna Recordings.app") != 0) only_application = false;
     }
     int status = errno;
     closedir(directory);
@@ -739,7 +739,7 @@ int recordings_copy_canonical_application_tree(
     status = copy_directory_at(
         verifier_output_directory_descriptor,
         root_candidate_directory_descriptor,
-        "HasnaRecordings.app",
+        "Hasna Recordings.app",
         verifier_user_id,
         &budget
     );

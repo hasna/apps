@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { getPackageVersion } from "../lib/package-version.js";
@@ -109,8 +111,17 @@ describe("instructions-mcp answers --version/--help before any bind (row 7e5f8f3
     // HASNA_INSTRUCTIONS_LOCAL=1 the MCP bin must exit non-zero naming the
     // required configuration — never silently serve the on-box SQLite store.
     // The child env is scrubbed so the runner-level test pins cannot mask the
-    // refusal.
-    const result = await runMcp([], {}, [
+    // refusal, and the two AMBIENT resolver tiers are pointed away from the
+    // runner's real stores: HASNA_STATION names a Keychain account that holds
+    // no hasna.credentials.instructions.api-key item, and HASNA_HOME moves the
+    // ~/.hasna/instructions/config/credentials tier into a fresh empty dir.
+    // Without both, a Keychain-configured station (the fleet's macOS
+    // stations) resolves a real credential and the probe passes/fails for the
+    // wrong reason (#1720 validation, P2).
+    const hermeticHome = mkdtempSync(join(tmpdir(), "instructions-mcp-fail-closed-"));
+    let result: RunResult;
+    try {
+      result = await runMcp([], { HASNA_STATION: "no-such-station", HASNA_HOME: hermeticHome }, [
       "HASNA_INSTRUCTIONS_API_URL",
       "HASNA_INSTRUCTIONS_API_KEY",
       "INSTRUCTIONS_API_URL",
@@ -119,9 +130,16 @@ describe("instructions-mcp answers --version/--help before any bind (row 7e5f8f3
       "HASNA_INSTRUCTIONS_API_KEY_REF",
       "HASNA_PROFILE",
       "HASNA_INSTRUCTIONS_DB_PATH",
-      "HASNA_CONFIGS_HOME",
-      "HASNA_INSTRUCTIONS_LOCAL",
-    ]);
+        "HASNA_CONFIGS_HOME",
+        "HASNA_INSTRUCTIONS_LOCAL",
+      ]);
+    } finally {
+      // Nothing may have been created under the hermetic home: a fail-closed
+      // start opens no local store (#1720 acceptance (f)).
+      const created = existsSync(join(hermeticHome, "instructions")) ? readdirSync(join(hermeticHome, "instructions")) : [];
+      expect(created).toEqual([]);
+      rmSync(hermeticHome, { recursive: true, force: true });
+    }
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(1);
     const output = result.stdout + result.stderr;

@@ -345,7 +345,9 @@ export async function getMergedSkill(
   if (resolved.kind === "tombstone") return resolved.payload;
   if (resolved.kind === "published") return publishedPayload(resolved.record);
   const bundled = getServerSkill(slug);
-  return bundled ? (bundled as unknown as Record<string, unknown>) : null;
+  // This is an explicit absence statement about this organization's published
+  // row, not an inference a client should make from catalogue provenance.
+  return bundled ? { ...bundled, publicationState: "catalogue-only", revisionId: null } : null;
 }
 
 /**

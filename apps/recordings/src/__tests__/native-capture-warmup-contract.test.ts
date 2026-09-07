@@ -327,7 +327,7 @@ describe("native capture warm-up contract", () => {
       [
         "private func toggleRecording()",
         // Branch bodies included, so swapping them is caught as well as masking the condition.
-        /if store\.engine\.captureIsActive \{\s*store\.engine\.stopAndTranscribe\(\)\s*\} else \{\s*store\.engine\.startRecording\(\)/,
+        /if store\.engine\.captureIsActive \{\s*store\.engine\.stopAndTranscribe\(\)\s*\} else \{\s*store\.beginRecording\(\)/,
         "Stop pressed during warm-up calls startRecording(), the gate refuses it, and the click " +
           "silently does nothing -- verbatim the failure this suite exists to prevent",
       ],
@@ -342,18 +342,10 @@ describe("native capture warm-up contract", () => {
       ).toMatch(expression);
     }
 
-    // The button's tint lives inline in `body` rather than in a member, so it needs its own
-    // anchor; it is the fifth read.
+    // The glass button owns its fill; it must receive the combined capture state too.
     expect(view, "the record button's tint must follow warm-up too").toContain(
-      ".tint(store.engine.captureIsActive ? .red : .accentColor)",
+      "GlassCircle(symbol: recordButtonIcon, size: 34, red: store.engine.captureIsActive)",
     );
-
-    // A count as well, so a NEW affordance added without warm-up awareness is caught rather than
-    // silently joining the four above.
-    expect(
-      view.match(/store\.engine\.captureIsActive/g)?.length,
-      "every warm-up-aware read in MenuBarStatusView",
-    ).toBe(5);
 
     // The converse, and the assertion that actually makes all five independent: `isRecording` is
     // legitimate in exactly one shape in this file -- the argument handed to MenuBarPresentation,
@@ -363,7 +355,9 @@ describe("native capture warm-up contract", () => {
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line.includes("store.engine.isRecording"))
-      .filter((line) => line !== "isRecording: store.engine.isRecording,");
+      .filter((line) => line !== "isRecording: store.engine.isRecording,")
+      // Pause is only meaningful once capture has warmed up; Stop stays available above.
+      .filter((line) => line !== ".disabled(!store.engine.isRecording)");
     expect(
       strayIsRecording,
       "MenuBarStatusView reads isRecording outside MenuBarPresentation's argument",

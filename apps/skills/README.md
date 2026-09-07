@@ -221,6 +221,13 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills self-update` | | Update this package to the latest version |
 | `skills completion <shell>` | | Generate shell completions (bash, zsh, fish) |
 
+`self-update` asks the same Bun executable for its global bin directory after a
+successful installation. It reports success only when the `skills` command on
+your PATH resolves to that installed command and exits successfully with one
+semantic version. If discovery or verification fails, it exits nonzero and
+explains that installation may already have completed. It does not automatically
+reinstall or change your PATH.
+
 ### Local environment assignments
 
 `skills env-check --set 'KEY=value'` writes one literal value to the current
@@ -303,6 +310,11 @@ Stable command shapes:
   If history cannot be saved, the item reports `executionStatus` and
   `historyError`; inspect its effects before retrying. Other due items still run.
   No-due and `--dry-run` remain successful without consuming occurrences.
+  With `schedule run --json`, child stdout and stderr stream to stderr while
+  stdout contains only the command's JSON result. Human-mode child output is
+  unchanged. Programmatic `runSkill` callers can select `stdio: "stderr"` to
+  stream both child output channels to stderr without buffering; the existing
+  default/inherit and pipe modes retain their behavior.
 - Storage: `storage status --json` returns local `.skills` paths and optional
   repo-native remote readiness; `storage sync-plan --json` returns a no-network
   snapshot plan.
@@ -658,7 +670,7 @@ skills/                      # Public skill contracts and local OSS skills
 |---|---|---|
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 59 | `tools/list` against a live `buildServer()` |
+| MCP tools | 61 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather
@@ -837,6 +849,39 @@ SDK callers with an authorized customer session can use
 `RemoteSkillsClient.listWorkspaceMembers({ limit, cursor })`. For fresh email
 verification, use `RemoteSkillsAuthClient.listWorkspaceMembers(email, code,
 options)`. The MCP tool `list_workspace_members` takes `email`, `code`, and
-optional `limit`/`cursor` and calls the same fresh-auth client. These are read-only
-roster adapters; invitations, membership changes and workspace switching are
-separate server capabilities.
+optional `limit`/`cursor` and calls the same fresh-auth client.
+
+## Change a current workspace membership
+
+On a compatible server, use the exact `membershipId` and role from the roster:
+
+```sh
+skills workspace member role <membership-id> --role viewer --expected-role member --email you@example.com --code-stdin --json
+skills workspace member remove <membership-id> --expected-role viewer --email you@example.com --code-stdin --json
+```
+
+Both commands use fresh verification and leave saved credentials and profiles
+unchanged. Without `--code-stdin`, an interactive terminal requests and prompts
+for a new code. JSON and noninteractive calls require a previously requested
+code on stdin. The server enforces current owner/admin policy. Owners can change
+roles while retaining an owner; admins can manage another member/viewer within
+those two roles. Self-removal is unavailable.
+
+`RemoteSkillsClient.setWorkspaceMemberRole(membershipId, { role, expectedRole })`
+and `.removeWorkspaceMember(membershipId, { expectedRole })` accept an explicit
+customer session. The corresponding `RemoteSkillsAuthClient` methods take
+`email, code` before those arguments and obtain an ephemeral session. MCP tools
+`set_workspace_member_role` and `remove_workspace_member` use the same client,
+with required `membershipId`, `expectedRole`, `email`, `code`, and `role` for a
+role change. API keys and support impersonation do not grant this authority.
+
+A role result contains `{ organizationId, member, changed }`; removal contains
+`{ organizationId, membershipId, removed: true, alreadyRemoved }`. Exact server
+timestamps remain strings. An authorized already-applied role returns
+`changed: false`; retrying removal of the same tombstone returns
+`alreadyRemoved: true`. A later replacement membership has a different ID.
+Stale expected-role conflicts require a roster refresh before another action.
+The client never refreshes, changes the precondition, or retries automatically.
+Known refusals expose a fixed message and code through `RemoteWorkspaceMemberError`;
+unsupported routes remain errors. Invitations, workspace switching and leaving
+your own workspace are separate capabilities.

@@ -58,6 +58,17 @@ describe('canonical Notes client transport', () => {
     });
   });
 
+  test('api_url_present reports a configured authority, never a copy of the key flag', () => {
+    // Key only: the fleet gateway default applies — no authority was
+    // configured, and the report says so (it used to mirror api_key_present).
+    const defaulted = resolveNotesClientTransport({ [NOTES_API_KEY_ENV]: 'secret' });
+    expect(defaulted.apiUrlSource).toBe('default');
+    expect(defaulted.source).toBe('default');
+    expect(defaulted.api_url_present).toBe(false);
+    expect(defaulted.api_key_present).toBe(true);
+    expect(defaulted.baseUrl).toBe('https://api.hasna.com/notes/v1');
+  });
+
   test('missing, partial, and blank configuration fails closed', () => {
     for (const env of [
       {},

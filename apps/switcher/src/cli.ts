@@ -28,8 +28,8 @@ const HELP = `switcher — launch a coding harness with a provider and its model
                           [--ori-executable PATH] [--state-dir DIR]
                           [--timeout SECONDS] -- [native harness arguments]
   switcher runs list|get [ID]
-  switcher credentials bind PRESET --vault-key KEY --vault-url URL
-                            [--vault-cli PATH] [--vault-account ACCOUNT]
+  switcher credentials bind PRESET --vault-key KEY [--vault-url URL]
+                            [--vault-cli PATH] [--vault-account ACCOUNT | --vault-operator env]
   switcher credentials bind PRESET --keychain-service SERVICE --keychain-account ACCOUNT
   switcher credentials list|check|remove [PRESET_OR_REFERENCE]
   switcher doctor
@@ -38,12 +38,14 @@ HARNESS: claude, codex, grok, opencode, opencode2, pi, omp, dsh, cline, hermes, 
 PROTOCOL: anthropic-messages, openai-responses, openai-chat, gemini-generate-content
 Without remote API configuration, the CLI owns a local authenticated API and
 stores data in ~/.hasna/switcher (override HASNA_SWITCHER_HOME).
-Set HASNA_SWITCHER_API_URL + HASNA_SWITCHER_API_KEY for a remote API.
+Remote API URL/key resolve through @hasna/contracts: overrides, Keychain,
+~/.hasna/switcher/config/credentials, then environment. A key alone uses the gateway.
 A configured remote API never falls back to local data.
 Provider credential references must start SWITCHER_PROVIDER_.
 Credential bindings contain references only. Custom destinations require --origin URL.
-Vault bindings use the installed secrets CLI; --vault-account reads its operator
-from macOS Keychain, otherwise HASNA_SECRETS_API_KEY must be injected per process.
+Vault bindings use the installed secrets CLI and its canonical Contracts URL/key
+by default. --vault-account pins a Keychain account; --vault-operator env requires
+per-process HASNA_SECRETS_API_KEY. Explicit operators also require --vault-url.
   --file accepts a JSON object including id; raw credentials are never accepted.
 Fireworks discovery requires --catalog-account-id (or an explicit --catalog-url).
 --json outputs machine-readable records (also the default for data commands).
@@ -80,7 +82,7 @@ export async function main(args = process.argv.slice(2)) {
     harness:{type:"string"},model:{type:"string"},search:{type:"string"},limit:{type:"string"},offset:{type:"string"},
     "model-policy-file":{type:"string"},"role-model":{type:"string",multiple:true},
     refresh:{type:"boolean"},backend:{type:"string"},cwd:{type:"string"},executable:{type:"string"},"ori-executable":{type:"string"},"state-dir":{type:"string"},timeout:{type:"string"},
-    "vault-key":{type:"string"},"vault-url":{type:"string"},"vault-cli":{type:"string"},"vault-account":{type:"string"},
+    "vault-key":{type:"string"},"vault-url":{type:"string"},"vault-cli":{type:"string"},"vault-account":{type:"string"},"vault-operator":{type:"string"},
     "keychain-service":{type:"string"},"keychain-account":{type:"string"},origin:{type:"string",multiple:true},
   }});
   if (values.help || !positionals.length) { console.log(HELP); return; }
@@ -90,7 +92,7 @@ export async function main(args = process.argv.slice(2)) {
     throw new Error("Unknown command. Run switcher --help.");
   const providerFlags = ["url", "protocol", "preset", "credential-env", "auth-style", "catalog-url", "catalog-format", "catalog-auth-style", "catalog-credential-env", "catalog-account-id", "models-path"] as const;
   const provided = (names: readonly (keyof typeof values)[]) => names.some(name => values[name] !== undefined);
-  const credentialFlags = ["vault-key","vault-url","vault-cli","vault-account","keychain-service","keychain-account","origin"] as const;
+  const credentialFlags = ["vault-key","vault-url","vault-cli","vault-account","vault-operator","keychain-service","keychain-account","origin"] as const;
   const credentials = new CredentialResolver();
   if (command === "credentials") {
     const bindingFlags = [...credentialFlags,"credential-env"] as const;
@@ -101,12 +103,14 @@ export async function main(args = process.argv.slice(2)) {
     if (action === "remove" && id) { output(await credentials.bindings.remove(credentialReference(id))); return; }
     if (action === "check" && id) { output(await credentials.check(credentialReference(id))); return; }
     if (action !== "bind" || !id) throw new Fault(400,"invalid_request","Use credentials bind PRESET, list, check PRESET_OR_REFERENCE, or remove PRESET_OR_REFERENCE.");
-    const hasVault = provided(["vault-key","vault-url","vault-cli","vault-account"]);
+    const hasVault = provided(["vault-key","vault-url","vault-cli","vault-account","vault-operator"]);
     const hasKeychain = provided(["keychain-service","keychain-account"]);
     if (hasVault === hasKeychain) throw new Fault(400,"conflicting_options","Choose one credential source: vault or Keychain.");
+    if (values["vault-operator"] !== undefined && !["contracts","env"].includes(values["vault-operator"])) throw new Fault(400,"invalid_request","Use --vault-operator contracts or env.");
+    if (values["vault-account"] !== undefined && values["vault-operator"] !== undefined) throw new Fault(400,"conflicting_options","Use either --vault-account or --vault-operator.");
     const source = hasVault ? {
       kind:"vault",key:values["vault-key"],url:values["vault-url"],executable:values["vault-cli"] ?? Bun.which("secrets"),
-      operator:values["vault-account"] ? {kind:"keychain",account:values["vault-account"]} : {kind:"env"},
+      operator:values["vault-account"] !== undefined ? {kind:"keychain",account:values["vault-account"]} : {kind:values["vault-operator"] ?? "contracts"},
     } : {kind:"keychain",service:values["keychain-service"],account:values["keychain-account"]};
     output(await credentials.bindings.bind(parse(credentialBindingSchema,{schema:1,...bindingTarget(id,values["credential-env"],values.origin),source})));
     return;

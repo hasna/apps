@@ -13,7 +13,7 @@ const scratch = process.env.SWITCHER_TEST_ROOT ?? join(homedir(), "Workspace/scr
 async function directory() { await mkdir(scratch, {recursive:true}); return mkdtemp(join(scratch, "cli-runtime-")); }
 async function command(home: string, args: string[], extra: NodeJS.ProcessEnv = {}) {
   const child = Bun.spawn([process.execPath, cli, ...args], {cwd: home, env: {
-    PATH: process.env.PATH, HOME: process.env.HOME, USER: process.env.USER, HASNA_SWITCHER_HOME: join(home, "data"), ...extra,
+    PATH: process.env.PATH, HOME: home, USER: "fixture", HASNA_STATION: "switcher-runtime-fixture", HASNA_SWITCHER_HOME: join(home, "data"), ...extra,
   }, stdout: "pipe", stderr: "pipe", stdin: "ignore"});
   const timer = setTimeout(() => child.kill("SIGKILL"), 20_000);
   try {
@@ -230,10 +230,10 @@ test("remote configuration never creates local data, including missing keys and 
   const offline = Bun.serve({hostname:"127.0.0.1",port:0,fetch:()=>new Response()});
   const url = offline.url.href; await offline.stop(true);
   try {
-    for (const env of [{HASNA_SWITCHER_API_URL:url},{HASNA_SWITCHER_API_KEY:"fixture-operator-key-that-is-not-real"},{HASNA_SWITCHER_API_URL:url,HASNA_SWITCHER_API_KEY:"fixture-operator-key-that-is-not-real"}]) {
+    for (const env of [{HASNA_SWITCHER_API_URL:url},{HASNA_SWITCHER_API_URL:url,HASNA_SWITCHER_API_KEY:"fixture-operator-key-that-is-not-real"}]) {
       const result = await command(dir,["providers","list"],env);
       expect(result.code).toBe(1); expect(result.stderr).not.toContain("fixture-operator-key-that-is-not-real");
-      expect(await readdir(dir)).toEqual([]);
+      expect((await readdir(dir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]); // Bun caches under Library on macOS and .bun on Linux; app data must remain absent.
     }
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
@@ -279,7 +279,7 @@ test.skipIf(!process.env.SWITCHER_TEST_DATABASE_URL)("CLI-owned PostgreSQL API p
     const read = await command(dir,["providers","get","pg-deepseek"],env);
     expect(read.code,read.stderr).toBe(0);
     expect(JSON.parse(read.stdout).catalogBaseUrl).toBe("https://api.deepseek.com");
-    expect(await readdir(dir)).toEqual([]);
+    expect((await readdir(dir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]); // Bun caches under Library on macOS and .bun on Linux; app data must remain absent.
     const runtime = await openCliRuntime(env);
     try { expect((await runtime.client.health()).backend).toBe("postgresql"); expect((await runtime.client.listProviders()).total).toBe(1); }
     finally { await runtime.close(); }
@@ -301,7 +301,7 @@ test("CLI remote mode writes to the chosen API and leaves local data absent", as
       expect(result.code,result.stderr).toBe(0);
       const client = new SwitcherClient({baseUrl:service.url,apiKey:"fixture-remote-operator-token-not-real"});
       expect((await client.getProvider("remote-provider")).baseUrl).toBe("https://openrouter.ai/api/v1");
-      expect(await readdir(remoteDir)).toEqual([]);
+      expect((await readdir(remoteDir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]);
     } finally { await service.close(); }
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
@@ -316,6 +316,6 @@ test("CLI rejects conflicting file and saved-profile overrides before opening an
     }
     const result = await command(dir,["providers","add","fixture","--file","absent.json","--url","https://other.example"]);
     expect(result.code).toBe(1); expect(JSON.parse(result.stderr).error.code).toBe("conflicting_options");
-    expect(await readdir(dir)).toEqual([]);
+    expect((await readdir(dir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]); // Bun caches under Library on macOS and .bun on Linux; app data must remain absent.
   } finally { await rm(dir,{recursive:true,force:true}); }
 });

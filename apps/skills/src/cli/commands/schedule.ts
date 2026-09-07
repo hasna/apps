@@ -161,7 +161,7 @@ export function registerSchedule(parent: Command) {
       for (const s of due) {
         const result: ScheduledRunResult = { name: s.name, skill: s.skill, status: "error", attempted: false };
         try {
-          const execute = await prepareScheduledSkill(s.skill, s.args ?? []);
+          const execute = await prepareScheduledSkill(s.skill, s.args ?? [], options.json);
           result.attempted = true;
           const execution = await execute();
           result.status = "success";
@@ -222,7 +222,7 @@ export function registerSchedule(parent: Command) {
     });
 }
 
-async function prepareScheduledSkill(skillName: string, args: string[]) {
+async function prepareScheduledSkill(skillName: string, args: string[], json: boolean) {
   const { getSkill } = await import("../../lib/registry.js");
   const skill = getSkill(skillName);
   if (!skill) throw new Error(`Skill '${skillName}' not found`);
@@ -247,7 +247,7 @@ async function prepareScheduledSkill(skillName: string, args: string[]) {
 
   const { runSkill } = await import("../../lib/skillinfo.js");
   return async () => {
-    const result = await runSkill(skill.name, args);
+    const result = await runSkill(skill.name, args, json ? { stdio: "stderr" } : {});
     if (result.exitCode !== 0) {
       throw new Error(result.error || result.stderr || `Skill '${skill.name}' exited with ${result.exitCode}`);
     }

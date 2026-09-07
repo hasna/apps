@@ -4,10 +4,61 @@ title: "Switcher adapter coverage and acceptance matrix"
 type: "verification-matrix"
 owner: "codex-fixer"
 created_at: "2026-09-06T06:41:25.915207+00:00"
-updated_at: "2026-09-06T17:11:49.882018+00:00"
+updated_at: "2026-09-07T05:34:56.280279+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
+
+# Current registry acceptance: 0.1.3
+
+Switcher **0.1.3 is published, installed and live-tested**. [PR #1877](https://github.com/hasna/apps/pull/1877) merged reviewed source `13b629927bbdf84254ae42e6e03bb69f75794903` as `77164e16126d49503cb4aff2a96fb493bf3cf2bf` after all nine required checks passed. npm published at `2026-09-07T05:26:05.569Z` with SHA-1 `44d296e0e8ee1b2ec3b312e517c69b1cb3cbf678`. All **60 installed package files** match the reviewed archive. The normal `switcher`, `switcher-serve` and `switcher-mcp` commands report 0.1.3; the previous install and quarantine policy are preserved.
+
+Every managed launch automatically supplies model guidance and pins verified native child/utility slots. A per-launch authenticated loopback gateway keeps the real provider credential in the launcher and enforces exact approved model IDs. The default permitted set contains the selected main model; explicit role assignments, allowed alternatives, aliases and ordered transient fallbacks are available. The complete compatible catalog remains visible, while model use follows the policy. See [automatic model guidance](docs/MODEL-POLICY.md) for supported native roles and boundaries.
+
+A dry-run of the following installed-CLI launch passed with the station’s existing credential binding, saved profile and three discovered DeepSeek IDs:
+
+```sh
+switcher launch claude --provider deepseek --model deepseek-v4-flash
+```
+
+The installed release passed **14 direct native paths and both Ori paths**, each with a fresh task and a resumed process after proof-file deletion. Aider verified its native file-context/edit/history interface. An additional actual Claude custom agent declared as `opus` returned its read proof through DeepSeek, while the parent made no direct Read call. All accepted runs retained policy-version-1 routing evidence with zero dropped events and no foreign-model resolution. Prompt compliance remains probabilistic; the managed gateway supplies the enforceable model boundary.
+
+The published source passed **215 package tests / 2,091 assertions**, **147 root tests / 560 assertions**, **43 affected builds**, real PostgreSQL/native opt-ins and generated/type/manifest/secret/artifact/frozen-lock checks. Registry-installed Node 26.8.1 and Bun 1.3.14 CLI/API/SDK/server/standalone MCP tests passed. No Hasna MCP server was registered. Both host storage backends passed 0.1.2→0.1.3→0.1.2→0.1.3; old launchers are rejected by the upgraded API and historical runs receive no fabricated model-policy evidence.
+
+The exact candidate archive separately passed four Linux container scenarios and fourteen API starts on SQLite/PostgreSQL 17, including recreation, rollback and reupgrade. Container routing records were synthetic storage inputs, not observed provider inference. Its 55 copied runtime files matched the archive; owned container resources were removed. The candidate image was `sha256:1a11fd00abed8c1124970e2c41de5f42010f5b63e28351d02b719a6fccbc5ae1`.
+
+The [evidence index](docs/verification-evidence.json) retains independent reviews, actual registry receipts, candidate-only checks and prior release identities. Local evidence lives under `~/Workspace/scratch/universal-harness-switcher`. The original user `switcher-deepseek` tmux session remains preserved.
+
+## Installed live matrix — 0.1.3
+
+M = Anthropic Messages; R = OpenAI Responses; C = OpenAI Chat Completions; G = Gemini generateContent. These are the finite tested model/provider combinations.
+
+| Harness / native version | Backend | Provider / selected model | Wire | Registry result |
+| --- | --- | --- | --- | --- |
+| Claude Code 2.1.263 | Direct | DeepSeek / deepseek-v4-flash | M | Fresh + deleted-file resume pass |
+| Codex 0.153.4 | Direct | OpenRouter / anthropic/claude-haiku-4.5 | R | Fresh + deleted-file resume pass |
+| Grok Build 1.0.13 | Direct | DeepSeek / deepseek-v4-flash | M | Fresh + deleted-file resume pass |
+| OpenCode 2 beta-19157 | Direct | DeepSeek / deepseek-v4-flash | M | Fresh + deleted-file resume pass |
+| Pi 0.85.1 | Direct | DeepSeek / deepseek-v4-flash | C | Fresh + deleted-file resume pass |
+| OMP 18.1.11 | Direct | DeepSeek / deepseek-v4-flash | C | Fresh + deleted-file resume pass |
+| DeepSeek Harness 0.1.2-rc.1 | ACP | DeepSeek / deepseek-v4-flash | M | Fresh + deleted-file resume pass |
+| Cline 3.0.61 | ACP | DeepSeek / deepseek-v4-flash | M | Fresh + deleted-file resume pass |
+| Hermes 0.21.0 | Direct | DeepSeek / deepseek-v4-flash | C | Fresh + deleted-file resume pass |
+| Prime Agent 0.9.2 | Direct | DeepSeek / deepseek-v4-flash | C | Fresh + deleted-file resume pass |
+| Legacy OpenCode 1.18.29 | Direct | DeepSeek / deepseek-v4-flash | C | Fresh + deleted-file resume pass |
+| Kilo 7.5.15 | Direct | DeepSeek / deepseek-v4-flash | C | Fresh + deleted-file resume pass |
+| Gemini CLI 0.58.0 | Direct | Gemini / gemini-3.1-flash-lite | G | Fresh + deleted-file resume pass |
+| Aider 0.86.2 | Direct | DeepSeek / deepseek-v4-flash | C | Target edit + deleted-file history recall pass |
+| Codex 0.153.4 | Ori 0.12.1 | OpenRouter / anthropic/claude-haiku-4.5 | R | Fresh + deleted-file resume pass |
+| Grok Build 1.0.13 | Ori 0.12.1 | OpenRouter / anthropic/claude-haiku-4.5 | C | Fresh + deleted-file resume pass |
+
+The first registry attempt stopped at credential binding because the installed Secrets executable had group/public write permission. Only its mode was restored to 0755; bytes and credentials were unchanged. The failed preflight receipts are preserved. The successful matrix used the ordinary installed CLI. Native answer formatting is recorded separately from proof-token correctness; scoped read-only searches before the successful read are accepted.
+
+The accepted registry runs include one Hermes HTTP 400 and one Grok direct HTTP 400, plus six cancelled Grok requests. These remain explicit diagnostics rather than successful provider responses; all main task and resume assertions passed. Hermes auxiliary title generation can reject DeepSeek Chat JSON-schema output. Provider-reported model IDs and native usage counters are not an attestation of provider internals or billing. Controlled native fixtures additionally prove distinct child-model selection and exactly one guidance block for Claude, Codex and OpenCode 2.
+
+The gateway enforces managed inference routes, including supported count/compaction operations. It does not sandbox arbitrary shell tools, user extensions, unmanaged clients or provider-side routing. Catalog visibility does not grant permission to every listed model; add intended alternatives to the policy or relaunch with the desired model. Previously recorded visual-picker observations below remain dated 0.1.2 evidence; they are not relabeled as new visual inspection.
+
+# Historical acceptance: 0.1.2
 
 Switcher **0.1.2 is published, installed and live-tested**. [PR #1836](https://github.com/hasna/apps/pull/1836) merged reviewed source `61c0ca1b241043567bd7349a2810012db9c41b46` as `24681fa7552584c39c6bbcf7107faa6dd2f885e3` after all nine checks passed; the optional external review was skipped. npm publication at `2026-09-06T16:47:17.965Z` has SHA-1 `3952926c933700c8e5a56130bc3cb3c56bb01969`. All 50 installed package files match. Normal station commands report 0.1.2; ordinary npm resolution uses Contracts 1.0.2 without its optional Secrets/Events/Paths chain. The previous installation and quarantine policy remain intact.
 

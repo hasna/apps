@@ -19,9 +19,9 @@ const SWIFT_TESTS = "src/native/Recordings/RecordingsTests";
 const HOME_RESOLVING_TYPES = [
   // `RecordingEngine` and `VoiceShortcuts` take the home itself; `ProjectStore` predates the
   // seam and takes the resolved file instead (`init(filePath:)`, ProjectStore.swift:148).
-  { type: "RecordingEngine", injector: "homePath:" },
-  { type: "VoiceShortcuts", injector: "homePath:" },
-  { type: "ProjectStore", injector: "filePath:" },
+  { type: "RecordingEngine", injectors: ["homePath:", "configuration:"] },
+  { type: "VoiceShortcuts", injectors: ["homePath:"] },
+  { type: "ProjectStore", injectors: ["filePath:"] },
 ] as const;
 
 describe("native test log isolation contract", () => {
@@ -29,13 +29,14 @@ describe("native test log isolation contract", () => {
     const engine = readFileSync(ENGINE, "utf8");
 
     expect(engine).toContain("let home: String");
-    expect(engine).toContain(
-      "public init(homePath: String = FileManager.default.homeDirectoryForCurrentUser.path)",
-    );
+    expect(engine).toMatch(/public convenience init\(homePath: String = FileManager\.default\.homeDirectoryForCurrentUser\.path, installsGlobalHandlers: Bool = true\)/);
+    expect(engine).toContain("home = homePath");
 
-    // Exactly one derivation of the real home — the init default. A second one would be a
-    // path that ignores the injected home and reaches the operator's files anyway.
-    const derivations = engine.match(/homeDirectoryForCurrentUser/g) ?? [];
+    // Only the legacy init default derives a storage home. Comparing the injected home
+    // with the live home to retain legacy preference behavior does not derive storage.
+    const derivations = engine.split("\n").filter((line) =>
+      line.includes("homeDirectoryForCurrentUser") && !line.includes("home =="),
+    );
     expect(derivations).toHaveLength(1);
   });
 
@@ -62,7 +63,7 @@ describe("native test log isolation contract", () => {
     // engines in six places across four files, and this test is worthless if the glob or
     // the path ever stops resolving.
     expect(sites.length).toBeGreaterThanOrEqual(6);
-    expect(sites.filter((site) => !site.includes("homePath:"))).toEqual([]);
+    expect(sites.filter((site) => !site.includes("homePath:") && !site.includes("configuration:"))).toEqual([]);
   });
 
   test("voice shortcuts persist under an injected home, derived from the real home once", () => {
@@ -86,10 +87,10 @@ describe("native test log isolation contract", () => {
     for (const file of files) {
       const lines = readFileSync(`${SWIFT_TESTS}/${file}`, "utf8").split("\n");
       lines.forEach((line, index) => {
-        for (const { type, injector } of HOME_RESOLVING_TYPES) {
+        for (const { type, injectors } of HOME_RESOLVING_TYPES) {
           if (!line.includes(`${type}(`)) continue;
-          if (line.includes(injector)) continue;
-          offenders.push(`${file}:${index + 1} ${type} built without ${injector} — ${line.trim()}`);
+          if (injectors.some((injector) => line.includes(injector))) continue;
+          offenders.push(`${file}:${index + 1} ${type} built without ${injectors.join(" or ")} — ${line.trim()}`);
         }
       });
     }

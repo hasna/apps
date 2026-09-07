@@ -26,7 +26,7 @@ const backends = await resolveStoreBackends();
 const memory = backends.find((backend) => backend.name === "memory");
 if (!memory) throw new Error("memory store backend unavailable");
 
-const TOKEN = "sk_test_pull_org";
+const TOKEN = crypto.randomUUID();
 const PRINCIPAL = {
   orgId: "org_pull",
   orgSlug: "org-pull",
@@ -39,13 +39,19 @@ const PRINCIPAL = {
 const SKILL_MD =
   "---\nname: pulled-team-runbook\ndescription: The team deploy runbook\nkind: instruction\ncategory: Development Tools\ntags:\n  - ops\n---\n\n# Pulled Team Runbook\n\nStep one. Step two.\n";
 
-async function startInstance() {
+async function startInstance(port = 0) {
   const fixture = await memory!.create([{ token: TOKEN, principal: PRINCIPAL }]);
   const fetch = await createSkillsFetchHandler({
     store: fixture.store,
     config: { inlineWorker: false, allowEphemeralStore: fixture.allowEphemeralStore },
   });
-  const server = Bun.serve({ port: 0, fetch });
+  let server: Bun.Server<undefined>;
+  try {
+    server = Bun.serve({ hostname: "127.0.0.1", port, fetch });
+  } catch (error) {
+    await fixture.close();
+    throw error;
+  }
   return {
     client: new RemoteSkillsClient(TOKEN, `http://127.0.0.1:${server.port}`),
     async stop() {
@@ -103,6 +109,31 @@ async function mcpListSkillsText(baseUrl: string): Promise<string> {
 }
 
 describe("skills pull (end to end)", () => {
+  test("instance fixture refuses an occupied IPv4 port before returning a client", async () => {
+    let requests = 0;
+    const occupied = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+      requests++;
+      return Response.json([]);
+    } });
+    let instance: Awaited<ReturnType<typeof startInstance>> | undefined;
+    let failure: unknown;
+    try {
+      try {
+        instance = await startInstance(occupied.port);
+        // A mismatched listener must not return a client for the occupied server.
+        await instance.client.listSkills();
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ code: "EADDRINUSE" });
+      expect(instance).toBeUndefined();
+      expect(requests).toBe(0);
+    } finally {
+      await instance?.stop();
+      occupied.stop(true);
+    }
+  });
+
   test("publishing then pulling surfaces the skill on both the CLI registry and MCP list_skills", async () => {
     const instance = await startInstance();
     try {

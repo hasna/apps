@@ -33,25 +33,32 @@ public enum RecordingsCLI {
               command.argumentsPrefix.isEmpty else {
             throw Failure(message: "Packaged companion resolver did not select the embedded helper")
         }
-        let versionOutput = CLIRunner.run(["--version"], home: home)
+        // The resolver smoke checks a throwaway local store, never the owner's API.
+        let probeEnvironment = [
+            "HOME": home,
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "HASNA_RECORDINGS_CLIENT_STORE": "sqlite",
+            "HASNA_RECORDINGS_DB_PATH": "\(home)/recordings.db",
+        ]
+        let versionOutput = CLIRunner.run(["--version"], home: home, environment: probeEnvironment)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let error = CLIRunner.parseError(versionOutput) { throw Failure(message: error) }
         let expectedVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         guard !versionOutput.isEmpty, versionOutput == expectedVersion else {
             throw Failure(message: "Packaged companion version does not match the app")
         }
-        let project = try registerProject(
-            name: "Activated Helper Contract",
-            path: "recordings-app://install/activated-helper-contract",
-            description: "Installed app resolver verification",
-            home: home
-        )
+        let project = try decode(CanonicalProject.self, from: CLIRunner.run([
+            "--json", "project", "register", "--name", "Activated Helper Contract",
+            "--path", "recordings-app://install/activated-helper-contract",
+            "--description", "Installed app resolver verification",
+        ], home: home, environment: probeEnvironment))
         guard project.name == "Activated Helper Contract" else {
             throw Failure(message: "Packaged companion project capability failed")
         }
         let saved = CLIRunner.run(
             ["--json", "save-text", "Activated helper contract", "--source", "native_install_contract", "--post-processing", "off"],
-            home: home
+            home: home,
+            environment: probeEnvironment
         )
         struct SavedRecording: Decodable { let raw_text: String }
         let recording = try decode(SavedRecording.self, from: saved)
@@ -115,7 +122,7 @@ public enum RecordingsCLI {
 
     public static func delete(id: String, home: String = defaultHome) throws {
         let output = CLIRunner.run(["delete", id], home: home)
-        if let err = CLIRunner.parseError(output) { throw Failure(message: err) }
+        if let err = CLIRunner.parseError(output, serviceAPI: true) { throw Failure(message: err) }
     }
 
     public struct CanonicalProject: Codable, Sendable {
@@ -141,7 +148,7 @@ public enum RecordingsCLI {
 
     private static func runDecoding<T: Decodable>(_ type: T.Type, _ args: [String], home: String) throws -> T {
         let output = CLIRunner.run(args, home: home)
-        if let err = CLIRunner.parseError(output) { throw Failure(message: err) }
+        if let err = CLIRunner.parseError(output, serviceAPI: true) { throw Failure(message: err) }
         return try decode(type, from: output)
     }
 
