@@ -24444,6 +24444,112 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "GET",
+    "operationId": "getProviderHealth",
+    "path": "/v1/providers/{id}/health",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "provider_id",
+        "checked",
+        "status",
+        "message"
+      ],
+      "properties": {
+        "provider_id": {
+          "type": "string"
+        },
+        "checked": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderHealth",
+    "path": "/v1/providers/{id}/health",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderHealth",
+    "path": "/v1/providers/{id}/health",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderHealth",
+    "path": "/v1/providers/{id}/health",
+    "status": 404,
+    "schema": null
+  },
+  {
+    "method": "GET",
+    "operationId": "getProviderHealth",
+    "path": "/v1/providers/{id}/health",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
     "operationId": "listResourceProvisioning",
     "path": "/v1/provisioning",
     "status": 200,

@@ -27,6 +27,7 @@ export interface SelfHostedSender {
   readonly region?: string;
   verifyDomain?(domain: string): Promise<{ verifiedForSending?: boolean; dkim: import("../../types/index.js").DnsStatus; spf: import("../../types/index.js").DnsStatus; dmarc: import("../../types/index.js").DnsStatus }>;
   checkInboundDomain?(domain: string, bucket: string): Promise<{ ready: boolean; reason: string }>;
+  probe?(signal: AbortSignal): Promise<{ sendingEnabled?: boolean; productionAccessEnabled?: boolean }>;
   send(input: SendEmailOptions): Promise<string>;
 }
 
@@ -199,6 +200,21 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
       ? SES_CREDENTIAL_SOURCE_LABEL[resolveSesCredentials(provider).source]
       : "api_key",
     region: provider.region ?? undefined,
+    probe: async (signal) => {
+      if (raw === "ses") {
+        const { SESv2Client, GetAccountCommand } = await import("@aws-sdk/client-sesv2");
+        const credentials = resolveSesCredentials(provider).credentials;
+        const client = new SESv2Client({ region: provider.region ?? undefined, ...(credentials ? { credentials } : {}) });
+        try {
+          const account = await client.send(new GetAccountCommand({}), { abortSignal: signal });
+          return { sendingEnabled: account.SendingEnabled, productionAccessEnabled: account.ProductionAccessEnabled };
+        } finally { client.destroy(); }
+      }
+      const response = await fetch("https://api.resend.com/domains", { headers: { Authorization: `Bearer ${provider.api_key!}` }, signal });
+      if (!response.ok) throw new Error("Resend credential probe failed");
+      await response.body?.cancel();
+      return {};
+    },
     verifyDomain: async (domain) => {
       if (raw === "ses") {
         const { SESv2Client, GetEmailIdentityCommand } = await import("@aws-sdk/client-sesv2");

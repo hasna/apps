@@ -49,11 +49,11 @@ export async function runDomainOperation(
   let updated = await store.updateDomain(domain.id, {
     verified,
     ...(options.providerId ? { provider: providerId } : {}),
-    ...(operation === "enable-outbound" ? { status: "active" } : {}),
+    ...(operation === "enable-outbound" ? { status: "active" } : operation === "enable-inbound" && !["active", "verified", "ready", "outbound_disabled"].includes(domain.status) ? { status: "inbound_ready" } : {}),
   });
-  if (operation === "enable-outbound") updated = await store.applyDomainProvisioning(domain.id, { provisioning_status: "verified", last_error: null });
-  if (operation === "enable-inbound" && !["ready", "active", "verified"].includes(domain.provisioning_status ?? "")) {
-    updated = await store.applyDomainProvisioning(domain.id, { provisioning_status: "inbound_ready", last_error: null });
+  if (operation === "enable-outbound") updated = await store.applyDomainProvisioning(domain.id, { provisioning_status: ["inbound_ready", "verified_inbound_ready"].includes(domain.provisioning_status ?? "") ? "verified_inbound_ready" : "verified", last_error: null });
+  if (operation === "enable-inbound") {
+    updated = await store.applyDomainProvisioning(domain.id, { provisioning_status: ["ready", "active", "verified", "verified_inbound_ready"].includes(domain.provisioning_status ?? "") ? "verified_inbound_ready" : "inbound_ready", last_error: null });
   }
   return { domain: updated, dns, ...(inbound ? { inbound } : {}), ...(operation === "enable-outbound" ? { outbound_enabled: true } : {}) };
 }

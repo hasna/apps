@@ -1628,6 +1628,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Read server binding metadata or probe provider credentials */
+    async getProviderHealth(id: string, query?: { "live"?: boolean }, init?: RequestInit): Promise<{ "provider_id": string; "checked": boolean; "status": string; "message": string }> {
+      return this.request("GET", `/v1/providers/${encodeURIComponent(String(id))}/health`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** List tenant-scoped provisioning */
     async listResourceProvisioning(query?: { "limit"?: number; "offset"?: number; "entity_type"?: string | null; "entity_id"?: string | null; "to_state"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "entity_type": string | null; "entity_id": string | null; "from_state": string | null; "to_state": string | null; "detail_json": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
       return this.request("GET", `/v1/provisioning`, {

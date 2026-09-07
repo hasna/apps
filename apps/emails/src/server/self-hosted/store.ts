@@ -2414,14 +2414,14 @@ export class TenantScopedStore {
       `WITH route_claim AS (
          INSERT INTO inbound_domain_routes (domain, tenant_id)
          SELECT $2, $7::uuid
-          WHERE $5::boolean = true AND $3::text IN ('active','verified','ready','inbound_ready')
+          WHERE $5::boolean = true AND $3::text IN ('active','verified','ready','inbound_ready','outbound_disabled')
          ON CONFLICT (domain) DO UPDATE SET domain = EXCLUDED.domain
            WHERE inbound_domain_routes.tenant_id = EXCLUDED.tenant_id
          RETURNING domain
        )
        INSERT INTO domains (id, domain, status, provider, verified, notes, tenant_id)
        SELECT $1, $2, $3, $4, $5, $6, $7::uuid
-        WHERE NOT ($5::boolean = true AND $3::text IN ('active','verified','ready','inbound_ready'))
+        WHERE NOT ($5::boolean = true AND $3::text IN ('active','verified','ready','inbound_ready','outbound_disabled'))
            OR EXISTS (SELECT 1 FROM route_claim)
        RETURNING *`,
       [id, domain, status, input.provider ?? null, verified, input.notes ?? null, this.tenantId],
@@ -2446,14 +2446,14 @@ export class TenantScopedStore {
        ), route_claim AS (
          INSERT INTO inbound_domain_routes (domain, tenant_id)
          SELECT domain, tenant_id FROM target
-          WHERE next_verified = true AND next_status IN ('active','verified','ready','inbound_ready')
+          WHERE next_verified = true AND next_status IN ('active','verified','ready','inbound_ready','outbound_disabled')
          ON CONFLICT (domain) DO UPDATE SET domain = EXCLUDED.domain
            WHERE inbound_domain_routes.tenant_id = EXCLUDED.tenant_id
          RETURNING domain
        ), route_release AS (
          DELETE FROM inbound_domain_routes r USING target t
           WHERE r.domain = t.domain AND r.tenant_id = t.tenant_id
-            AND NOT (t.next_verified = true AND t.next_status IN ('active','verified','ready','inbound_ready'))
+            AND NOT (t.next_verified = true AND t.next_status IN ('active','verified','ready','inbound_ready','outbound_disabled'))
          RETURNING r.domain
        ), updated AS (
          UPDATE domains d SET
@@ -2464,7 +2464,7 @@ export class TenantScopedStore {
            updated_at = now()
           FROM target t
           WHERE d.id = t.id AND d.tenant_id = t.tenant_id
-            AND (NOT (t.next_verified = true AND t.next_status IN ('active','verified','ready','inbound_ready'))
+            AND (NOT (t.next_verified = true AND t.next_status IN ('active','verified','ready','inbound_ready','outbound_disabled'))
                  OR EXISTS (SELECT 1 FROM route_claim))
           RETURNING d.*
        )
@@ -2472,7 +2472,7 @@ export class TenantScopedStore {
          (SELECT to_jsonb(updated) FROM updated) AS record,
          EXISTS (
            SELECT 1 FROM target
-            WHERE next_verified = true AND next_status IN ('active','verified','ready','inbound_ready')
+            WHERE next_verified = true AND next_status IN ('active','verified','ready','inbound_ready','outbound_disabled')
               AND NOT EXISTS (SELECT 1 FROM route_claim)
          ) AS route_conflict`,
       [
@@ -4525,7 +4525,7 @@ export class TenantScopedStore {
     }
     const addressReady = ["ready", "active", "verified"].includes(address.provisioning_status ?? "");
     const domainReady = address.domain_verified === true && ["active", "verified", "ready"].includes(address.domain_status ?? "");
-    const domainProvisioned = ["ready", "active", "verified"].includes(address.domain_provisioning_status ?? "");
+    const domainProvisioned = ["ready", "active", "verified", "verified_inbound_ready"].includes(address.domain_provisioning_status ?? "");
     if (!addressReady && !domainReady && !domainProvisioned) {
       return { allowed: false, code: "sender_not_ready", message: "sender domain is not ready for outbound mail", status: 403 };
     }

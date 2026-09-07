@@ -1,3 +1,4 @@
+import { readProviderHealth } from "./provider-health.js";
 import { runDomainOperation, DomainOperationError, type DomainOperation } from "./domain-operations.js";
 // HTTP request handler for the Emails self-hosted service.
 //
@@ -2517,6 +2518,15 @@ export async function handleSelfHostedRequest(
         return response;
       }, limit);
       return json(200, result);
+    }
+
+    const providerHealth = path.match(/^\/v1\/providers\/([^/]+)\/health$/);
+    if (providerHealth) {
+      if (method !== "GET") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, read);
+      if (!auth.ok) return auth.response;
+      const result = await readProviderHealth(auth.store, auth.ctx.tenantId, decodeURIComponent(providerHealth[1]!), url.searchParams.get("live") === "true", deps.resolveSender);
+      return result ? json(200, result) : json(404, { error: "Provider not found in this tenant." });
     }
 
     const domainOperation = path.match(/^\/v1\/domains\/([^/]+)\/(verify|enable-outbound|disable-outbound|enable-inbound)$/);

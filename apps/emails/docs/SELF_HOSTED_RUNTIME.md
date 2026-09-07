@@ -290,6 +290,29 @@ observation nor a provider transport error is reported as successful DNS proof.
 Enabling inbound requires the server ingest bucket/queue configuration, regional
 SES MX, and an enabled SES receipt action delivering to that bucket. It does not
 modify DNS, receipt rules, or S3 notifications and does not prove end-to-end queue
-delivery. Existing outbound provisioning state is preserved; a fresh inbound-only
-state is recorded as `inbound_ready`. Full DNS provisioning/connect/setup remains
+delivery. Both directions survive lifecycle ordering: an inbound-only state is
+`inbound_ready`, and verified sending plus inbound readiness is
+`verified_inbound_ready`. Disabling outbound preserves the inbound tenant route. Full DNS provisioning/connect/setup remains
 separate from these readiness operations. Readiness checks cannot be forced off.
+
+
+### Provider health command coverage
+
+| Command | Server operation | Deployment prerequisite |
+| --- | --- | --- |
+| `provider status`, `provider check` | `GET /v1/providers/{id}/health?live=true` for every registered provider | API with this route; explicit tenant/provider sender bindings |
+| `doctor --live` | Same server credential probes | Same; absent bindings are unknown/unconfigured, not invalid client credentials |
+| Domain status | Read tenant registry readiness | Existing domains API |
+| Domain verify / outbound enable | Bound SES identity or Resend verification API | Tenant provider binding with domain-read permissions |
+| Domain inbound enable | Provider verification, regional MX and active SES receipt/S3 route checks | Server ingest config and existing receiving infrastructure |
+
+The provider health endpoint without `live=true` only reports binding metadata.
+Live SES checks call `GetAccount` using server credentials and report sending and
+production-access flags. Resend checks read the domain list; the binding needs
+permission to read domains. Failure means the read-only probe failed, not proof
+that the key itself is invalid. Provider error payloads and secret values are
+never returned. Probes abort after five seconds; the CLI bounds its transport too.
+An older API produces an explicit update error. No provider registration or mail
+send occurs during health checks. Inactive and unsupported/unbound registry rows
+remain visible. DNS provisioning, purchase, and inbox end-to-end delivery are not
+claimed by these checks.

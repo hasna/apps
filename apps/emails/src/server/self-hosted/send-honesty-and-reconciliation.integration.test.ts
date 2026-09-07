@@ -667,6 +667,7 @@ describe.skipIf(!pgClient)("domain lifecycle API policy", () => {
     const disabled = await call(deps, "POST", route + "disable-outbound", { token: tenant.token, body: {} });
     expect(disabled.status).toBe(200);
     expect(disabled.body.domain.status).toBe("outbound_disabled");
+    expect(await pgClient!.get("SELECT tenant_id FROM inbound_domain_routes WHERE domain = $1", ["lifecycle.example"])).toMatchObject({ tenant_id: tenant.tenantId });
     const sendBody = { from: "sender@lifecycle.example", to: ["target@external.example"], subject: "fixture", idempotency_key: crypto.randomUUID() };
     expect((await call(deps, "POST", "/v1/messages/send", { token: tenant.token, body: sendBody })).status).toBe(403);
     expect(sends).toBe(0);
@@ -678,5 +679,45 @@ describe.skipIf(!pgClient)("domain lifecycle API policy", () => {
     expect(sent.status).toBe(202);
     expect(sent.body.sent).toBe(true);
     expect(sends).toBe(1);
+  });
+});
+
+describe.skipIf(!pgClient)("provider health API", () => {
+  it("probes tenant-bound server credentials and never probes another tenant's provider", async () => {
+    let calls = 0;
+    const deps = makeDeps({ provider: "ses", send: async () => { throw new Error("never send"); } });
+    const owner = await makeTenant("provider-health-owner");
+    const other = await makeTenant("provider-health-other");
+    const provider = await call(deps, "POST", "/v1/providers", { token: owner.token, body: { name: "health", type: "ses", active: true } });
+    const path = `/v1/providers/${provider.body.id}/health`;
+    expect((await call(deps, "GET", path + "?live=true", { token: owner.token })).body.status).toBe("unconfigured");
+    deps.resolveSender = (tid, pid) => tid === owner.tenantId && pid === provider.body.id ? { provider: "ses", credentialSource: "deployment_role", send: async () => "never", probe: async () => { calls++; return { sendingEnabled: true, productionAccessEnabled: false }; } } : null;
+    expect((await call(deps, "GET", path, { token: owner.token })).body.status).toBe("configured");
+    expect(calls).toBe(0);
+    expect((await call(deps, "GET", path + "?live=true", { token: other.token })).status).toBe(404);
+    expect(calls).toBe(0);
+    const result = await call(deps, "GET", path + "?live=true", { token: owner.token });
+    expect(result.body).toMatchObject({ status: "healthy", checked: true, productionAccessEnabled: false });
+    expect(calls).toBe(1);
+    expect((await call(deps, "GET", path + "?live=true")).status).toBe(401);
+  });
+});
+
+
+describe.skipIf(!pgClient)("inbound readiness survives lifecycle ordering", () => {
+  it("claims a pending domain and preserves both readiness directions across toggles", async () => {
+    const { runDomainOperation } = await import("./domain-operations.js");
+    const deps = makeDeps({ provider: "ses", send: async () => "never" });
+    const owner = await makeTenant("domain-inbound-order");
+    const provider = await call(deps, "POST", "/v1/providers", { token: owner.token, body: { name: "inbound", type: "ses", active: true } });
+    const dom = await call(deps, "POST", "/v1/domains", { token: owner.token, body: { domain: "inbound-order.example", provider: provider.body.id, status: "pending", verified: false } });
+    const store = deps.store.forTenant(owner.tenantId);
+    const opts = { resolveSender: () => ({ provider: "ses" as const, region: "us-east-1", send: async () => "never", verifyDomain: async () => ({ dkim: "verified" as const, spf: "verified" as const, dmarc: "pending" as const }), checkInboundDomain: async () => ({ ready: true, reason: "fixture" }) }), env: { EMAILS_INGEST_S3_BUCKET: "fixture", EMAILS_INGEST_QUEUE_URL: "fixture" }, mx: async () => [{ exchange: "inbound-smtp.us-east-1.amazonaws.com", priority: 10 }] };
+    await runDomainOperation(store, owner.tenantId, dom.body.domain.id, "enable-inbound", opts);
+    expect(await pgClient!.get("SELECT tenant_id FROM inbound_domain_routes WHERE domain = $1", ["inbound-order.example"])).toMatchObject({ tenant_id: owner.tenantId });
+    expect((await runDomainOperation(store, owner.tenantId, dom.body.domain.id, "enable-outbound", opts)).domain?.provisioning_status).toBe("verified_inbound_ready");
+    expect((await runDomainOperation(store, owner.tenantId, dom.body.domain.id, "enable-inbound", opts)).domain?.provisioning_status).toBe("verified_inbound_ready");
+    await runDomainOperation(store, owner.tenantId, dom.body.domain.id, "disable-outbound", opts);
+    expect(await pgClient!.get("SELECT tenant_id FROM inbound_domain_routes WHERE domain = $1", ["inbound-order.example"])).toMatchObject({ tenant_id: owner.tenantId });
   });
 });

@@ -51,7 +51,7 @@ async function runProviderCommandExpectingExit(args: string[]) {
 }
 
 beforeAll(async () => {
-  stub = await startV1Stub();
+  stub = await startV1Stub({ openapi: true });
 });
 afterAll(() => stub.stop());
 beforeEach(async () => {
@@ -68,7 +68,7 @@ describe("provider check command", () => {
     const result = await runProviderCommand(["provider", "check"]);
 
     expect(result.out).toContain("No providers configured.");
-    expect(result.out).toContain("emails provider add --type ses");
+    expect(result.data).toEqual([]);
   });
 });
 

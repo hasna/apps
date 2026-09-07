@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
-import { assertProviderCredentialsStorable, createProvider, listProviders, listProviderSummaries, deleteProvider, getProvider, getProviderWithCredentials, resolveProviderId, updateProvider } from "../../db/providers.js";
+import { assertProviderCredentialsStorable, createProvider, listProviderSummaries, deleteProvider, getProvider, getProviderWithCredentials, resolveProviderId, updateProvider } from "../../db/providers.js";
 import { getDatabase } from "../../db/database.js";
 import {
   providerSecretsKeyStatus,
@@ -332,79 +332,13 @@ export function registerProviderCommands(program: Command, output: (data: unknow
       }
     });
 
-  providerCmd
-    .command("status")
-    .description("Health check active supported providers")
-    .action(async () => {
-      try {
-        const { checkAllProviders, formatProviderHealth } = await import("../../lib/health.js");
-        const results = await checkAllProviders();
-        if (results.length === 0) {
-          output([], chalk.dim("No active supported providers. Add one with 'emails provider add'"));
-          return;
-        }
-        const lines: string[] = [chalk.bold("\nProvider Health:\n")];
-        for (const h of results) {
-          lines.push(formatProviderHealth(h));
-          lines.push("");
-        }
-        output(results, lines.join("\n"));
-      } catch (e) {
-        handleError(e);
-      }
-    });
-
-  providerCmd
-    .command("check")
-    .description("Verify supported providers are healthy")
-    .action(async () => {
-      try {
-        const providers = listProviders();
-        if (providers.length === 0) {
-          console.log(chalk.dim("No providers configured."));
-          console.log(chalk.bold("\nQuick setup:"));
-          console.log(chalk.dim("  SES:    emails provider add --type ses --name \"My SES\" --region us-east-1 --access-key ... --secret-key ..."));
-          console.log(chalk.dim("  Resend: emails provider add --type resend --name \"My Resend\" --api-key re_..."));
-          console.log(chalk.dim("  Sandbox: emails provider add --type sandbox --name \"Local Sandbox\""));
-          return;
-        }
-
-        console.log(chalk.bold(`\nChecking ${providers.length} provider(s)...\n`));
-        for (const p of providers) {
-          const executable = getProviderWithCredentials(p.id) ?? p;
-          const icon = p.active ? "" : chalk.dim("[inactive] ");
-          process.stdout.write(`  ${icon}${chalk.cyan(p.name)} (${p.type}) ... `);
-          if (p.type === "ses") {
-            if (!executable.access_key || !executable.secret_key) {
-              console.log(chalk.yellow("⚠ missing credentials"));
-            } else {
-              try {
-                const adapter = getAdapter(executable);
-                await adapter.listDomains();
-                console.log(chalk.green("✓ connected"));
-              } catch (e) {
-                console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`));
-              }
-            }
-          } else if (p.type === "resend") {
-            if (!executable.api_key) {
-              console.log(chalk.yellow("⚠ missing API key"));
-            } else {
-              try {
-                const adapter = getAdapter(executable);
-                await adapter.listDomains();
-                console.log(chalk.green("✓ connected"));
-              } catch (e) {
-                console.log(chalk.red(`✗ ${e instanceof Error ? e.message : String(e)}`));
-              }
-            }
-          } else {
-            console.log(chalk.dim("sandbox (no auth needed)"));
-          }
-        }
-        console.log();
-      } catch (e) {
-        handleError(e);
-      }
-    });
+  const healthAction = async () => {
+    try {
+      const { listServerProviderHealth, formatServerProviderHealth } = await import("../../lib/provider-server-health.js");
+      const results = await listServerProviderHealth(true);
+      output(results, results.length ? results.map(formatServerProviderHealth).join("\n\n") : "No providers configured.");
+    } catch (error) { handleError(error); }
+  };
+  providerCmd.command("status").description("Probe server provider credentials and sending readiness").action(healthAction);
+  providerCmd.command("check").description("Probe server provider credentials and sending readiness").action(healthAction);
 }
