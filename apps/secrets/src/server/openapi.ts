@@ -203,6 +203,16 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
           responses: okResponse(),
         },
       },
+      "/v1/secrets/prune-expired": {
+        post: {
+          operationId: "pruneExpiredSecrets",
+          summary: "Atomically prune expired secrets for the authenticated tenant",
+          description: "Requires secrets:write. Uses server time; concurrent renewals are rechecked under the delete row lock. Audit records commit with deletions.",
+          responses: {
+            "200": { description: "Committed pruning count", content: { "application/json": { schema: { type: "object", required: ["pruned"], properties: { pruned: { type: "integer", minimum: 0 } } } } } },
+          },
+        },
+      },
       "/v1/secrets/get": {
         get: {
           operationId: "getSecret",

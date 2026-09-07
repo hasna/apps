@@ -79,10 +79,10 @@ Commands:
   users register <id> <name> [--type human|agent]
   users delete <id>
 
-  encrypt-vault               encrypt all plaintext secrets in the vault
-  key                         show master key status
-  key init                    generate master key if missing
-  key path                    show master key file path
+  encrypt-vault               ensure plaintext in the ACTIVE vault is encrypted (hosted: server-side at-rest state)
+  key                         show master key status (hosted: server-owned encryption)
+  key init                    generate master key if missing (hosted: reports server-owned, creates nothing)
+  key path                    show master key file path (hosted: the API authority that owns encryption)
 
   aws configure               interactive AWS setup
   aws push [key]              push secret(s) to AWS Secrets Manager [--dry-run|--plan]
@@ -286,6 +286,13 @@ Credentials (five tiers, resolved fresh on every call by @hasna/contracts)
   The retired fleet-env, cloud and XDG credential locations are never read, and
   no *_MODE / *_STORAGE_MODE variable selects anything.
 
+  Maintenance commands run against the ACTIVE vault in BOTH transports. "key"
+  and "encrypt-vault" manage the on-box master key and plaintext rows in local
+  mode; in hosted mode the vault owns encryption at rest (server-side master
+  key), so they report that state — "key init" creates nothing, "encrypt-vault"
+  confirms every stored value is already encrypted — and "gc" prunes expired
+  rows through the active transport instead of being a silent no-op.
+
 Safety
   NO command prints a secret value to stdout without an explicit --show or
   --plaintext flag. get is redacted by default: it refuses captured (non-TTY)
@@ -408,6 +415,50 @@ function formatVaultItem(item: VaultItemMetadata): string {
   const subtitle = item.subtitle ? ` - ${item.subtitle}` : "";
   const favorite = item.favorite ? " *" : "";
   return `${item.id} [${item.kind}]${favorite} ${item.title}${subtitle}${domains}`;
+}
+
+/**
+ * Hosted-transport answers for the `key` command family. The hosted vault owns
+ * encryption at rest (server-side master key; cloud-crypto), so every subcommand
+ * reports that state and exits 0: `key init` never manufactures local key
+ * material a hosted run does not read, `key path` names the authority where the
+ * master key actually lives, and `key kms` describes the deployment-owned
+ * envelope. No subcommand is transport-blocked.
+ */
+function printHostedKeyState(sub: string | undefined, location: string): void {
+  switch (sub) {
+    case "init":
+      console.log(
+        "✓ Nothing to initialize — encryption at rest is owned by the hosted vault (server-side master key); " +
+          "no local key material is written.",
+      );
+      break;
+    case "path":
+      // The master key lives inside the hosted vault, not on this machine: the
+      // API authority is the path to the encryption owner (same resolution as
+      // `secrets path`).
+      console.log(location);
+      break;
+    case "exists":
+      // No local key file exists or is read in a hosted run.
+      console.log("no");
+      break;
+    case "kms":
+      console.log("KMS envelope encryption is managed by the hosted deployment.");
+      console.log(
+        "The hosted vault encrypts every value at rest with its server-side master key; " +
+          "client-side `key kms setup` does not apply.",
+      );
+      break;
+    default:
+      console.log("Mode:       api (hosted vault)");
+      console.log("Encryption: server-owned — every stored value is encrypted at rest with the hosted vault's master key");
+      console.log(`Location:   ${location}`);
+      console.log(`\nCommands:`);
+      console.log(`  secrets key init       Report the hosted vault's at-rest encryption (nothing to initialize)`);
+      console.log(`  secrets key path       Show the authority where the hosted vault encrypts (API location)`);
+      console.log(`  secrets key kms        Show hosted KMS envelope state (configured by the deployment)`);
+  }
 }
 
 function parseAwsOptions(flags: Record<string, string>) {
@@ -1654,7 +1705,10 @@ switch (command) {
   }
 
   case "encrypt-vault": {
-    // Migrate all plaintext secrets to encrypted (local vault maintenance).
+    // Encrypt any plaintext rows in the ACTIVE vault. Local: re-encrypts
+    // plaintext with the local master key. Hosted: the server already encrypts
+    // every value at rest on write, so the store reports the at-rest state
+    // (0 migrated, N already encrypted). Works in both transports.
     try {
       const { migrated, alreadyEncrypted } = await store().encryptVault();
       console.log(`✓ Encrypted ${migrated} secret(s). ${alreadyEncrypted} already encrypted.`);
@@ -1666,14 +1720,17 @@ switch (command) {
   }
 
   case "key": {
-    // The `key` family (init, kms setup, status) manages the LOCAL encryption
-    // master key. In api mode the server owns encryption at rest, so these are
-    // meaningless and must not create a local key file. Guard like encrypt-vault.
-    if (store().mode === "api") {
-      console.error("`secrets key` is a local-vault operation; in api mode the server owns encryption at rest.");
-      process.exit(1);
-    }
+    // The `key` family manages encryption master-key material for the ACTIVE
+    // vault — it is not transport-gated. Local: the on-box vault.key (file or
+    // KMS envelope) is managed as before. Api: the hosted vault owns encryption
+    // at rest (server-side master key) and no local key material is ever read,
+    // so the commands report that state and exit 0 — they must not create a
+    // local key file a hosted run never reads, and never refuse to run.
     const [sub] = positional;
+    if (store().mode === "api") {
+      printHostedKeyState(sub, store().describe().location);
+      break;
+    }
     const { statSync } = await import("fs");
 
     if (sub === "kms") {

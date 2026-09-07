@@ -11,7 +11,7 @@ export async function setTenantContext(db: TypedQueryClient, tenantId: string): 
   await db.execute("SELECT set_config('app.secrets_tenant_id',$1,true)", [tenantId]);
 }
 const OPERATIONS = new Set([
- "setSecret","getSecret","deleteSecret","listSecretMetadata","searchSecretMetadata",
+ "setSecret","getSecret","deleteSecret","pruneExpired","listSecretMetadata","searchSecretMetadata",
  "listVersions","checkVersion","restoreVersion","pruneVersionHistory","runVersionBackfill",
  "setVaultItem","getVaultItem","deleteVaultItem","listVaultItemMetadata","searchVaultItemMetadata",
  "registerUser","listUsers","deleteUser","getAuditLog","addFeedback",

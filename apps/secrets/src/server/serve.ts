@@ -194,6 +194,11 @@ export function createHandler(deps: ServeDeps): (req: Request) => Promise<Respon
         const ok = await store.deleteSecret(key, a.actor, a.tenantId);
         return json({ deleted: ok }, ok ? 200 : 404);
       }
+      if (path === "/v1/secrets/prune-expired" && method === "POST") {
+        const a = await auth(req, WRITE);
+        if (!a.ok) return a.res;
+        return json({ pruned: await a.store.pruneExpired(a.actor, a.tenantId) });
+      }
       if (path === "/v1/secrets/get" && method === "GET") {
         const a = await auth(req, READ);
         if (!a.ok) return a.res;

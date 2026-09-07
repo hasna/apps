@@ -518,6 +518,18 @@ export class CloudSecretsStore {
     return true;
   }
 
+  /** Invoked through tenantStore so deletion and audit records commit together. */
+  async pruneExpired(actor: string, tenantId: string): Promise<number> {
+    const tenant = requireTenantId(tenantId);
+    // Re-evaluate expiry in the DELETE itself. A concurrent renewal that commits
+    // while PostgreSQL waits for its row lock must survive garbage collection.
+    const rows = await this.db.many<{ key: string }>(
+      "DELETE FROM secrets WHERE expires_at::timestamptz < statement_timestamp() RETURNING key",
+    );
+    for (const row of rows) await this.audit("delete", row.key, actor, tenant);
+    return rows.length;
+  }
+
   async listSecretMetadata(namespace?: string): Promise<SecretMetadata[]> {
     if (!namespace) {
       const rows = await this.db.many<SecretRow>(

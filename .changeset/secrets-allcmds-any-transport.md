@@ -1,0 +1,5 @@
+---
+"@hasna/secrets": patch
+---
+
+Every command works in every transport (storage-mode axis retired; hasna/apps#1720). `key` / `key init` / `key path` / `key exists` / `key kms` no longer refuse to run against the hosted API: they report the hosted vault's server-owned at-rest encryption and create no local key material. `encrypt-vault` verifies and reports the hosted at-rest state instead of throwing, and `gc` prunes expired secrets through whichever transport is active instead of being a silent no-op. The container/dev-stack env no longer sets the retired `HASNA_APP_MODE` / `HASNA_SECRETS_STORAGE_MODE` variables (the server refuses to boot with them); the deploy manifest declares api-key auth for the CLI/MCP surfaces; the live-PostgreSQL proof gate (`bun run test:pg`) now passes (UUID tenant probe).

@@ -280,6 +280,11 @@ export class SecretsClient {
       });
     }
 
+    /** Atomically prune expired secrets in the authenticated tenant. */
+    async pruneExpiredSecrets(init?: RequestInit): Promise<{ pruned: number }> {
+      return this.request("POST", "/secrets/prune-expired", { body: {}, init });
+    }
+
     /** Get a secret value by key */
     async getSecret(query?: { "key": string }, init?: RequestInit): Promise<Secret> {
       return this.request("GET", `/secrets/get`, {

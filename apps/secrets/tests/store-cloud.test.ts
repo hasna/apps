@@ -172,13 +172,27 @@ describe("ApiStore route mapping", () => {
     expect(calls.some((c) => c[0] === "POST" && c[1] === "/feedback")).toBe(true);
   });
 
-  it("encryptVault throws in api mode (server owns encryption)", async () => {
-    const store = new ApiStore(fakeClient({}).client);
-    await expect(store.encryptVault()).rejects.toThrow(/api mode/);
+  it("encryptVault reports the hosted at-rest state (nothing to migrate — every value is encrypted on write)", async () => {
+    const store = new ApiStore(fakeClient({
+      "GET /secrets": {
+        secrets: [
+          { key: "a/b", type: "other", created_at: "t", updated_at: "t" },
+          { key: "c/d", type: "api_key", created_at: "t", updated_at: "t" },
+        ],
+      },
+    }).client);
+    const result = await store.encryptVault();
+    expect(result).toEqual({ migrated: 0, alreadyEncrypted: 2 });
   });
 
-  it("pruneExpired is a no-op in api mode", async () => {
-    expect(await new ApiStore(fakeClient({}).client).pruneExpired()).toBe(0);
+  it("pruneExpired uses the atomic server operation and validates its receipt", async () => {
+    const { client, calls } = fakeClient({ "POST /secrets/prune-expired": { pruned: 2 } });
+    expect(await new ApiStore(client).pruneExpired()).toBe(2);
+    expect(calls.map(c => c.slice(0, 2))).toEqual([["POST", "/secrets/prune-expired"]]);
+    for (const receipt of [{}, { pruned: -1 }, { pruned: "2" }, { pruned: 0.5 }]) {
+      const store = new ApiStore(fakeClient({ "POST /secrets/prune-expired": receipt }).client);
+      await expect(store.pruneExpired()).rejects.toThrow("Invalid expired-secret pruning receipt");
+    }
   });
 
   it("versioning: listVersions reads { versions }, checkVersion reads { check }, restoreVersion POSTs /secrets/restore", async () => {
