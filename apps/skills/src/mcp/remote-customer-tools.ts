@@ -3,10 +3,29 @@ import { z } from "zod";
 import { RemoteSkillsAuthClient } from "../lib/remote-auth.js";
 import { getApiUrl } from "../lib/auth-store.js";
 import { REMOTE_CUSTOMER_OPERATIONS } from "../lib/remote-customer-operations.js";
-import { createRemoteSkillsClient, RemoteCapabilityUnavailableError, type RemoteSkillsClient } from "../lib/remote-client.js";
+import { createRemoteSkillsClient, RemoteCapabilityUnavailableError, RemoteWorkspaceMemberError, type RemoteSkillsClient } from "../lib/remote-client.js";
 import { mcpError, mcpJson } from "./helpers.js";
 
 export function registerRemoteCustomerTools(server: McpServer) {
+  const memberRole = z.enum(["owner", "admin", "member", "viewer"]);
+  const memberInput = { membershipId: z.string().regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/),
+    expectedRole: memberRole, email: z.string().email(), code: z.string().regex(/^\d{6}$/) };
+  server.registerTool("set_workspace_member_role", {
+    title: "Set Current Workspace Member Role",
+    description: "Change exactly this membership incarnation with its observed expectedRole and fresh verification. The server enforces owner/admin policy. No automatic refresh or retry; saved credentials stay unchanged.",
+    inputSchema: z.object({ ...memberInput, role: memberRole }).strict(),
+  }, async ({ membershipId, role, expectedRole, email, code }) => {
+    try { return mcpJson(await new RemoteSkillsAuthClient(getApiUrl("Set workspace member role")).setWorkspaceMemberRole(email, code, membershipId, { role, expectedRole })); }
+    catch (error) { return memberError(error); }
+  });
+  server.registerTool("remove_workspace_member", {
+    title: "Remove Current Workspace Member",
+    description: "Remove exactly this membership incarnation using its observed expectedRole and fresh verification. Self-removal is unavailable. A retry cannot remove a later replacement membership; saved credentials stay unchanged.",
+    inputSchema: z.object(memberInput).strict(),
+  }, async ({ membershipId, expectedRole, email, code }) => {
+    try { return mcpJson(await new RemoteSkillsAuthClient(getApiUrl("Remove workspace member")).removeWorkspaceMember(email, code, membershipId, { expectedRole })); }
+    catch (error) { return memberError(error); }
+  });
   server.registerTool("list_workspace_members", {
     title: "List Current Workspace Members",
     description: "Read one roster page on the selected Skills server using fresh owner/admin email verification. Saved credentials are unchanged. This does not invite, change or switch members/workspaces.",
@@ -76,6 +95,11 @@ export function registerRemoteCustomerTools(server: McpServer) {
     const { bytes, ...metadata } = artifact;
     return { ...metadata, base64: Buffer.from(bytes).toString("base64") };
   }));
+}
+
+function memberError(error: unknown) {
+  return error instanceof RemoteWorkspaceMemberError ? mcpError(error.code, error.message)
+    : mcpError("WORKSPACE_MEMBER_FAILED", "Unable to manage workspace member. Check the selected server and fresh verification, then refresh the roster before another action.");
 }
 
 async function callRemote(action: (client: RemoteSkillsClient) => Promise<unknown>) {

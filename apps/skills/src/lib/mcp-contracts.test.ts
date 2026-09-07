@@ -17,6 +17,21 @@ useDefaultTestTimeout();
 const fixturePath = join(import.meta.dir, "fixtures", "mcp-contract-manifest-basic.v1.json");
 
 describe("MCP contract manifest", () => {
+  test("member mutation contracts require the observed role and expose only explicit result fields", () => {
+    const byName = new Map(listMcpToolContracts().map(tool => [tool.name, tool]));
+    const role = byName.get("set_workspace_member_role")!, removal = byName.get("remove_workspace_member")!;
+    expect(role.inputSchema.required).toEqual(["membershipId", "role", "expectedRole", "email", "code"]);
+    expect(removal.inputSchema.required).toEqual(["membershipId", "expectedRole", "email", "code"]);
+    for (const contract of [role, removal]) {
+      expect(contract.inputSchema.additionalProperties).toBe(false);
+      expect(contract.inputSchema.properties).not.toHaveProperty("organizationId");
+      expect(contract.inputSchema.properties?.expectedRole?.enum).toEqual(["owner", "admin", "member", "viewer"]);
+    }
+    expect(role.outputSchema.required).toEqual(["organizationId", "member", "changed"]);
+    expect(role.outputSchema.properties?.changed?.type).toBe("boolean");
+    expect(removal.outputSchema.required).toEqual(["organizationId", "membershipId", "removed", "alreadyRemoved"]);
+    expect(removal.outputSchema.properties?.removed?.const).toBe(true);
+  });
   test("matches the stable compatibility fixture", () => {
     const manifest = createMcpContractManifest();
     const fixture = JSON.parse(readFileSync(fixturePath, "utf8"));

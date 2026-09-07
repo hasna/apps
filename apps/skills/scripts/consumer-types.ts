@@ -97,6 +97,37 @@ const roundedRosterTimestamp: Date = rosterMember.createdAt;
 const alwaysRosterCursor: string = roster.nextCursor;
 // @ts-expect-error Auth metadata is not part of the safe member projection.
 rosterMember.otpCodeHash;
+client.setWorkspaceMemberRole(rosterMember.membershipId, { role: "viewer", expectedRole: "member" });
+auth.setWorkspaceMemberRole("owner@example.test", "000000", rosterMember.membershipId, { role: "admin", expectedRole: "member" });
+client.removeWorkspaceMember(rosterMember.membershipId, { expectedRole: "viewer" });
+auth.removeWorkspaceMember("owner@example.test", "000000", rosterMember.membershipId, { expectedRole: "member" });
+declare const roleResult: Awaited<ReturnType<typeof client.setWorkspaceMemberRole>>;
+declare const removeResult: Awaited<ReturnType<typeof auth.removeWorkspaceMember>>;
+const typedRoleResult: import("@hasna/skills/sdk").RemoteWorkspaceMemberRoleResult = roleResult;
+const typedRemoval: import("@hasna/skills").RemoteWorkspaceMemberRemovalResult = removeResult;
+const changedMember: import("@hasna/skills").RemoteWorkspaceMember = roleResult.member;
+const roleChanged: boolean = roleResult.changed;
+const removedMembership: true = removeResult.removed;
+const alreadyRemoved: boolean = removeResult.alreadyRemoved;
+declare const memberError: import("@hasna/skills/sdk").RemoteWorkspaceMemberError;
+const memberRequestError: RemoteRequestError = memberError;
+const memberErrorCode: import("@hasna/skills").RemoteWorkspaceMemberErrorCode = memberError.code;
+// @ts-expect-error A role change requires the observed concurrency precondition.
+client.setWorkspaceMemberRole(rosterMember.membershipId, { role: "viewer" });
+// @ts-expect-error Removal requires the observed role.
+auth.removeWorkspaceMember("owner@example.test", "000000", rosterMember.membershipId, {});
+// @ts-expect-error A caller cannot select another workspace through this mutation.
+client.removeWorkspaceMember(rosterMember.membershipId, { expectedRole: "member", organizationId: "other" });
+// @ts-expect-error Roles remain the documented union, not arbitrary strings.
+auth.setWorkspaceMemberRole("owner@example.test", "000000", rosterMember.membershipId, { role: "superuser", expectedRole: "member" });
+// @ts-expect-error Results preserve concrete booleans and cannot degrade to any.
+const numericChanged: number = roleResult.changed;
+// @ts-expect-error Removal is a positive literal, never an assumed false success.
+const removalFalse: false = removeResult.removed;
+// @ts-expect-error Exact server timestamps remain strings.
+const roundedMemberTimestamp: Date = roleResult.member.createdAt;
+// @ts-expect-error Membership refusal codes do not contain arbitrary server strings.
+const arbitraryMemberCode: "ARBITRARY_SERVER_CODE" = memberError.code;
 const unavailable = new RemoteCapabilityUnavailableError();
 const rootError: RemoteCapabilityUnavailableError = new RootCapabilityError();
 const requestError: RemoteRequestError = unavailable;
