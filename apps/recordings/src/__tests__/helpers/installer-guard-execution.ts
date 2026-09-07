@@ -237,7 +237,7 @@ export function runInstallerToIdentityGuard(
     const home = join(root, "home");
     const packageRoot = join(root, "pkg");
     const scripts = join(packageRoot, "scripts");
-    const candidateSource = join(root, "candidate", "HasnaRecordings.app");
+    const candidateSource = join(root, "candidate", "Hasna Recordings.app");
     for (const directory of [bin, logs, work, home, join(scripts, "policy")]) {
       mkdirSync(directory, { recursive: true });
     }
@@ -254,7 +254,7 @@ export function runInstallerToIdentityGuard(
     // The stubs discriminate installed-vs-candidate by comparing against this exact path, so it
     // is named once and handed to them rather than each stub re-deriving it from an installer
     // internal.
-    const installedApp = join(home, "Applications", "HasnaRecordings.app");
+    const installedApp = join(home, "Applications", "Hasna Recordings.app");
     createApp(installedApp, "installed");
 
     for (const [relativePath, mode] of [
@@ -418,8 +418,8 @@ export function runInstallerToIdentityGuard(
       "  *\" manifest-get \"*\"--field minimum_macos\"*) printf '26.0\\n' ;;",
       "  *\" manifest-get \"*\"--field architectures\"*) printf 'arm64\\n' ;;",
       // The authenticated bundle name drives the install target (fleet naming rule: the
-      // bar variant installs as HasnaRecordings.app); the fixture is a full build.
-      "  *\" manifest-get \"*\"--field bundle_name\"*) printf 'HasnaRecordings.app\\n' ;;",
+      // bar variant installs as Hasna Recordings.app); the fixture is a full build.
+      "  *\" manifest-get \"*\"--field bundle_name\"*) printf 'Hasna Recordings.app\\n' ;;",
       "  *\" tree-digest \"*) printf '%s\\n' \"$RECORDINGS_FIXTURE_TREE_DIGEST\" ;;",
       '  *" extract-verified-archive "*)',
       '    staging_target=""',
@@ -428,7 +428,7 @@ export function runInstallerToIdentityGuard(
       "      shift",
       "    done",
       '    [ -n "$staging_target" ] || exit 1',
-      '    cp -R "$RECORDINGS_FIXTURE_CANDIDATE_SOURCE" "$staging_target/HasnaRecordings.app"',
+      '    cp -R "$RECORDINGS_FIXTURE_CANDIDATE_SOURCE" "$staging_target/Hasna Recordings.app"',
       "    ;;",
       // Subcommands the installer invokes before or just after the guard whose EFFECT this run
       // does not depend on: each verifies, fsyncs, or journals something the fixture has already

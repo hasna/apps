@@ -7,7 +7,7 @@ import {
   TCC_DATABASE_UNREADABLE_STATE,
 } from "../lib/macos-bundle.js";
 
-/// Bundle identifier TCC keys every HasnaRecordings.app grant to. Single source for the
+/// Bundle identifier TCC keys every Hasna Recordings.app grant to. Single source for the
 /// permission lookups, the reset path, and the reported status object.
 ///
 /// Re-exported rather than defined here so this module keeps the import path the review ruling
@@ -426,7 +426,7 @@ export function classifyTccGrantDurability(options: {
 /// A CLI process inherits the *terminal's* Accessibility grant, never the app's: run from
 /// Ghostty, `AXIsProcessTrusted()` answers for `com.mitchellh.ghostty` (which is itself
 /// granted on station03), so a permission report that does not name its subject will read
-/// "granted" while `HasnaRecordings.app` is denied. Every reported state here is a property of
+/// "granted" while `Hasna Recordings.app` is denied. Every reported state here is a property of
 /// the bundle below and of nothing else.
 export function describeTccAuthorizationSubject(appPath: string | null): string {
   if (!appPath) {

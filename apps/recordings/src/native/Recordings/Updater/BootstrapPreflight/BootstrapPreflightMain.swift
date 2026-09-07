@@ -51,7 +51,7 @@ enum RecordingsBootstrapPreflight {
         let manifest = try JSONDecoder().decode(ReleaseManifest.self, from: manifestData)
         try validateManifest(manifest, payload: payload)
 
-        let app = arguments.payloadRoot + "/Applications/HasnaRecordings.app"
+        let app = arguments.payloadRoot + "/Applications/Hasna Recordings.app"
         let client = app + "/" + RecordingsUpdateConstants.updateClientRelativePath
         let broker = arguments.payloadRoot + "/Library/PrivilegedHelperTools/com.hasna.recordings.updater"
         let artifactVerifier = arguments.payloadRoot

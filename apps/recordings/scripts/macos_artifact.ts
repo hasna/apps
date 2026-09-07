@@ -183,7 +183,7 @@ export type BuildProvenance = {
 
 export type MacOSArtifactManifest = BuildProvenance & {
   artifact_type: "recordings-macos-app";
-  /// The top-level bundle directory name inside the artifact (HasnaRecordings.app for
+  /// The top-level bundle directory name inside the artifact (Hasna Recordings.app for
   /// both the full app and the bar variant per the fleet naming rule).
   bundle_name: string;
   app_sha256: string;
@@ -843,6 +843,7 @@ function manifestVariant(manifest: MacOSArtifactManifest): ArtifactVariant {
 }
 
 function manifestBundleName(manifest: MacOSArtifactManifest): string {
+  // Manifests predating explicit bundle names describe the original unspaced bundle.
   return manifest.bundle_name ?? "HasnaRecordings.app";
 }
 
@@ -1094,23 +1095,23 @@ function assertCanonicalZipEntries(entries: Array<{ name: string; isDirectory: b
     const components = logicalPath.split("/");
     if (
       !logicalPath ||
-      components[0] !== "HasnaRecordings.app" ||
+      components[0] !== "Hasna Recordings.app" ||
       components.some((component) => !component || component === "." || component === "..")
     ) {
-      throw new Error("release ZIP contains an entry outside the canonical HasnaRecordings.app tree");
+      throw new Error("release ZIP contains an entry outside the canonical Hasna Recordings.app tree");
     }
     const collisionKey = canonicalZipCollisionKey(logicalPath);
     if (logicalPaths.has(collisionKey)) {
       throw new Error("release ZIP contains duplicate, file/directory, case-fold, or Unicode-colliding entries");
     }
     logicalPaths.set(collisionKey, { name: logicalPath, isDirectory: entry.isDirectory });
-    if (logicalPath === "HasnaRecordings.app") {
-      if (!entry.isDirectory) throw new Error("release ZIP HasnaRecordings.app root is not a directory entry");
+    if (logicalPath === "Hasna Recordings.app") {
+      if (!entry.isDirectory) throw new Error("release ZIP Hasna Recordings.app root is not a directory entry");
       rootDirectoryCount += 1;
     }
   }
   if (rootDirectoryCount !== 1) {
-      throw new Error("release ZIP must contain exactly one canonical HasnaRecordings.app root entry");
+      throw new Error("release ZIP must contain exactly one canonical Hasna Recordings.app root entry");
   }
   for (const { name } of logicalPaths.values()) {
     const components = name.split("/");
@@ -1426,7 +1427,7 @@ export function withPrivatelyExtractedArchiveApp<T>(
   operation: (appPath: string) => T,
   platformArchiveTool = "/usr/bin/ditto",
   expectedArchiveSha256?: string,
-  expectedBundleName = "HasnaRecordings.app",
+  expectedBundleName = "Hasna Recordings.app",
 ): T {
   const privateRoot = mkdtempSync(join(tmpdir(), "recordings-artifact-extract-"));
   chmodSync(privateRoot, 0o700);
@@ -1751,8 +1752,8 @@ export function assertManifestShape(manifest: MacOSArtifactManifest): void {
     manifest.container?.type !== "zip" ||
     JSON.stringify(manifest.container.install_locations) !== JSON.stringify(
       artifactPolicy === "release"
-        ? ["/Applications/HasnaRecordings.app"]
-        : ["~/Applications/HasnaRecordings.app"],
+        ? ["/Applications/Hasna Recordings.app"]
+        : ["~/Applications/Hasna Recordings.app"],
     )
   ) {
     throw new Error("manifest has an unexpected container install policy");
@@ -2516,7 +2517,7 @@ export function assertVersionTransition(
   assertManifestShape(manifest);
   if (compareVersions(manifest.bundle_version, installedVersion) < 0) {
     throw new Error(
-      `refusing to downgrade HasnaRecordings.app from ${installedVersion} to ${manifest.bundle_version}`,
+      `refusing to downgrade Hasna Recordings.app from ${installedVersion} to ${manifest.bundle_version}`,
     );
   }
   if (compareVersions(manifest.bundle_version, installedVersion) === 0) {
@@ -2981,7 +2982,7 @@ function readJournal(path: string): InstallJournal {
   if (resolve(path) !== resolve(join(expectedParent, ".Recordings-install-transaction.json"))) {
     throw new Error("install transaction journal is outside the expected app parent");
   }
-  if (resolve(journal.app_destination) !== resolve(join(expectedParent, "HasnaRecordings.app"))) {
+  if (!["Hasna Recordings.app", "HasnaRecordings.app"].some((name) => resolve(journal.app_destination) === resolve(join(expectedParent, name)))) {
     throw new Error("install transaction journal has an unexpected app destination");
   }
   const expectedDataDir = resolve(join(dirname(expectedParent), ".hasna", "recordings"));
@@ -2999,9 +3000,12 @@ function readJournal(path: string): InstallJournal {
     return (
       resolved === resolve(journal.app_destination) ||
       resolved === resolve(join(journal.data_dir, "Recordings.app")) ||
+      resolved === resolve(join(journal.data_dir, "Hasna Recordings.app")) ||
       resolved === resolve(join(journal.data_dir, "HasnaRecordings.app")) ||
+      resolved === resolve(join(journal.app_parent, "HasnaRecordings.app")) ||
       resolved.startsWith(`${resolve(journal.app_parent)}/Recordings.app.`) ||
-      resolved.startsWith(`${resolve(journal.app_parent)}/HasnaRecordings.app.`)
+      resolved.startsWith(`${resolve(journal.app_parent)}/HasnaRecordings.app.`) ||
+      resolved.startsWith(`${resolve(journal.app_parent)}/Hasna Recordings.app.`)
     );
   };
   if (!journal.originals.every((entry) => allowedOriginal(entry.path))) {
@@ -3939,7 +3943,7 @@ function openRecoveryCapabilities(
   const homePath = resolve(dirname(appParent));
   if (
     basename(appParent) !== "Applications" ||
-    resolve(journal.app_destination) !== resolve(join(appParent, "HasnaRecordings.app")) ||
+    !["Hasna Recordings.app", "HasnaRecordings.app"].some((name) => resolve(journal.app_destination) === resolve(join(appParent, name))) ||
     resolve(journal.data_dir) !== resolve(join(homePath, ".hasna", "recordings")) ||
     dirname(resolve(journal.transaction_dir)) !== appParent
   ) {
@@ -4573,16 +4577,16 @@ function originalDestinationCapability(
   }
   if (
     dirname(resolved) === resolve(journal.data_dir) &&
-    (basename(resolved) === "Recordings.app" || basename(resolved) === "HasnaRecordings.app")
+    ["Recordings.app", "Hasna Recordings.app", "HasnaRecordings.app"].includes(basename(resolved))
   ) {
     // Install site inside the state data directory: the legacy pre-rename
-    // Recordings.app and the renamed HasnaRecordings.app are both recognized and
+    // Recordings.app and the renamed Hasna Recordings.app are both recognized and
     // preserved, never treated as the canonical Applications destination.
     return { parent: capabilities.data, leaf: basename(resolved) };
   }
   if (
     dirname(resolved) === resolve(journal.app_parent) &&
-    /^(?:Hasna)?Recordings\.app\.[A-Za-z0-9._-]+$/.test(basename(resolved))
+    (basename(resolved) === "HasnaRecordings.app" || /^(?:Hasna ?)?Recordings\.app\.[A-Za-z0-9._-]+$/.test(basename(resolved)))
   ) {
     return { parent: capabilities.applications, leaf: basename(resolved) };
   }

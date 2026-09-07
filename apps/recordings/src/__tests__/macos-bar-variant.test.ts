@@ -16,10 +16,10 @@
 // 4. Developer ID signing support — signing identity from env, discovery fallback via
 //    `security find-identity -v -p codesigning`, fail loudly when a Developer ID is
 //    requested but none exists.
-// 5. Naming — the bar artifact is HasnaRecordings.app per the fleet rule (knowledge
+// 5. Naming — the bar artifact is Hasna Recordings.app per the fleet rule (knowledge
 //    k_msxd5rz3_jfvl3i): bundle id stays com.hasna.recordings (TCC keys on it), display
 //    name "Hasna Recordings"; the 'bar' is a variant, never a separately named app (no
-//    HasnaRecordingsBar.app / RecordingsBar.app).
+//    Hasna RecordingsBar.app / RecordingsBar.app).
 //
 // Pure source assertions run on every platform; fixture runs are gated to non-Darwin hosts
 // (the build.sh/installer fixture seams are deliberately closed on real Darwin hosts) and the
@@ -208,11 +208,11 @@ function runSwiftOnHost(variant: "full" | "bar"): { exitCode: number | null; arg
 let dockerBash43Available: boolean | null = null;
 function hasDockerBash43(): boolean {
   if (dockerBash43Available !== null) return dockerBash43Available;
-  const probe = Bun.spawnSync(
+  const probe = Bun.which("docker") ? Bun.spawnSync(
     ["docker", "run", "--rm", "bash:4.3", "bash", "-c", "true"],
     { timeout: 120000 },
-  );
-  dockerBash43Available = probe.exitCode === 0;
+  ) : null;
+  dockerBash43Available = probe?.exitCode === 0;
   if (!dockerBash43Available) {
     console.warn(
       "macos-bar-variant: docker bash:4.3 image unavailable; the pre-4.4 empty-array proof is skipped",
@@ -325,7 +325,7 @@ describe("variant wiring and release rejection (P1 #3)", () => {
   });
 
   test("bar builds name artifacts per the bundle rule and forward the variant to smoke and finalize", () => {
-    // Artifact basenames follow the bundle naming rule (HasnaRecordings-<v>-... for bar);
+    // Artifact basenames follow the bundle naming rule (Hasna Recordings-<v>-... for bar);
     // the variant lives in the manifest, never as a -bar filename suffix.
     expect(buildScript).toContain('ARTIFACT_BASENAME="${APP_BASENAME}-${VERSION}-macos-${APPROVED_TARGET}-local-only"');
     expect(buildScript).toContain('ARTIFACT_BASENAME="${APP_BASENAME}-${VERSION}-macos-${RELEASE_SUBTYPE}"');
@@ -537,18 +537,18 @@ describe("Developer ID signing support", () => {
 });
 
 describe("artifact naming per the fleet rule", () => {
-  test("the bar artifact is HasnaRecordings.app with the display name 'Hasna Recordings'", () => {
+  test("the bar artifact is Hasna Recordings.app with the display name 'Hasna Recordings'", () => {
     // Fleet naming rule (knowledge k_msxd5rz3_jfvl3i): Hasna<Name>.app with 'Hasna' at the
-    // beginning. Both variants (full and bar) build as HasnaRecordings.app; the rename of
+    // beginning. Both variants (full and bar) build as Hasna Recordings.app; the rename of
     // the full app was the rule's recorded follow-up decision and is now executed.
-    expect(buildScript).toContain('APP_BUNDLE_NAME="HasnaRecordings.app"');
+    expect(buildScript).toContain('APP_BUNDLE_NAME="Hasna Recordings.app"');
     expect(buildScript).not.toContain('APP_BUNDLE_NAME="Recordings.app"');
     expect(buildScript).toContain("Set :CFBundleDisplayName Hasna Recordings");
     // The bundle identifier TCC keys on stays com.hasna.recordings.
     expect(infoPlist).toContain("<string>com.hasna.recordings</string>");
-    // The bar is a variant of HasnaRecordings.app, never a separately named app.
+    // The bar is a variant of Hasna Recordings.app, never a separately named app.
     for (const source of [buildScript, smokeScript, installScript, artifactTool]) {
-      expect(source).not.toContain("HasnaRecordingsBar");
+      expect(source).not.toContain("Hasna RecordingsBar");
       expect(source).not.toContain("RecordingsBar.app");
     }
   });
@@ -557,10 +557,10 @@ describe("artifact naming per the fleet rule", () => {
     expect(artifactTool).toContain("bundle_name: string;");
     expect(artifactTool).toContain('field === "bundle_name"');
     // Pre-variant manifests are full builds by definition; the canonical name is
-    // HasnaRecordings.app for both variants.
+    // Hasna Recordings.app for both variants.
     expect(artifactTool).toContain('manifest.bundle_name ?? "HasnaRecordings.app"');
     // The installer reads the authenticated manifest's bundle name and derives the
-    // install target from it, so a HasnaRecordings.app artifact lands under its own
+    // install target from it, so a Hasna Recordings.app artifact lands under its own
     // name regardless of variant.
     expect(installScript).toContain('AUTHENTICATED_BUNDLE_NAME="$("$BUN_EXECUTABLE" "$ARTIFACT_TOOL" manifest-get');
     expect(installScript).toContain('STAGED_APP="${STAGING_DIR}/${MANIFEST_BUNDLE_NAME}"');
