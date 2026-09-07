@@ -36,8 +36,12 @@ release and never outrank the canonical `HASNA_LOGS_*` pair. Retired inputs
 
 **Hosted mode fails loud.** A data-plane command with no resolvable credential
 exits non-zero with one actionable line — no SQLite fallback, no local-fallback
-event. The on-box SQLite store (`~/.hasna/logs/logs.db`) is reachable only
-through the explicit opt-in:
+event. A deliberate tier that cannot be honoured (`HASNA_PROFILE` naming a
+profile with no key, or a `HASNA_LOGS_API_KEY_REF` vault pointer this process
+cannot complete) is refused the same way, never resolved around — and
+`logs-mcp` refuses it at startup, before `initialize` is answered. The on-box
+SQLite store (`~/.hasna/logs/logs.db`) is reachable only through the explicit
+opt-in:
 
 ```bash
 export HASNA_LOGS_LOCAL=1   # alias: LOGS_LOCAL=1

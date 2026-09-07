@@ -182,6 +182,58 @@ describe("logs-mcp fails closed without a fleet credential", () => {
   });
 });
 
+describe("a deliberate credential tier that cannot be honoured refuses before serving", () => {
+  // Both tiers are DELIBERATE: they name WHICH identity to use, so the resolver
+  // never falls through around them (hasna/apps#1720 validation, round 2).
+  // Before this round the profile refusal was thrown from the module's top
+  // level — first stderr line a Bun source frame — and a vault pointer started
+  // the server and refused per tool call instead of at the gate.
+  test("HASNA_PROFILE naming a profile with no key: exit non-zero, remedy first, initialize unanswered", () => {
+    const r = tempRoots("neg-profile");
+    const result = spawnMcp(
+      ["--stdio"],
+      hermeticEnv(r, { HASNA_PROFILE: "no-such-profile" }),
+      `${INITIALIZE_REQUEST}\n`,
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toBe("");
+    const firstLine = result.stderr.split("\n")[0] ?? "";
+    expect(firstLine).toMatch(/Profile 'no-such-profile'/);
+    expect(firstLine).toMatch(/HASNA_PROFILE/);
+    expect(firstLine).toMatch(/HASNA_LOGS_API_KEY/);
+    expect(result.stderr).not.toMatch(/\n\s+at /);
+    expect(result.stderr).not.toMatch(/^\s*\d+ \|/m);
+    expect(allDbFiles(r)).toEqual([]);
+    expect(existsSync(r.dataDir)).toBe(false);
+    expect(existsSync(join(r.hasnaHome, "logs"))).toBe(false);
+    expect(existsSync(join(r.home, ".hasna"))).toBe(false);
+  });
+
+  test("HASNA_LOGS_API_KEY_REF naming a vault item this process cannot complete: exit non-zero before initialize, TERMINAL first", () => {
+    const r = tempRoots("neg-pointer");
+    const result = spawnMcp(
+      ["--stdio"],
+      hermeticEnv(r, { HASNA_LOGS_API_KEY_REF: "no/such/vault/item" }),
+      `${INITIALIZE_REQUEST}\n`,
+    );
+
+    expect(result.status).not.toBe(0);
+    // The gate completed the pointer once and refused: initialize never answered.
+    expect(result.stdout).toBe("");
+    const firstLine = result.stderr.split("\n")[0] ?? "";
+    expect(firstLine).toMatch(/HASNA_LOGS_API_KEY_REF/);
+    expect(firstLine).toMatch(/no\/such\/vault\/item/);
+    expect(firstLine).toMatch(/TERMINAL/);
+    expect(result.stderr).not.toMatch(/\n\s+at /);
+    expect(result.stderr).not.toMatch(/^\s*\d+ \|/m);
+    expect(allDbFiles(r)).toEqual([]);
+    expect(existsSync(r.dataDir)).toBe(false);
+    expect(existsSync(join(r.hasnaHome, "logs"))).toBe(false);
+    expect(existsSync(join(r.home, ".hasna"))).toBe(false);
+  });
+});
+
 describe("hosted logs-mcp opens no local SQLite", () => {
   test("agent tools run on a per-process in-memory registry; no agent-registry.db anywhere", async () => {
     const r = tempRoots("hosted");
