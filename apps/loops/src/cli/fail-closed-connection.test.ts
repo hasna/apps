@@ -14,7 +14,10 @@ const CONNECTION_KEY = "HASNA_LOOPS_CONNECTION";
 /**
  * Spawn env with the loops connection variables fully removed/blanked, so a
  * developer's own HASNA_LOOPS_API_URL/KEY/CONNECTION can never leak into the
- * fail-closed assertions. `extra` re-adds specific variables per test.
+ * fail-closed assertions. HOME and the HASNA relocation roots are isolated to
+ * a scratch dir so the shared resolver's DISK tier (the canonical station
+ * credentials file at ~/.hasna/loops/config/credentials) is never consulted.
+ * `extra` re-adds specific variables per test.
  */
 function connectionEnv(extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};
@@ -28,6 +31,11 @@ function connectionEnv(extra: Record<string, string> = {}): Record<string, strin
     [API_URL_KEY]: "",
     [API_KEY_KEY]: "",
     [CONNECTION_KEY]: "",
+    HOME: mkdtempSync(join(tmpdir(), "loops-fail-closed-home-")),
+    HASNA_HOME: "",
+    HASNA_CONFIG_HOME: "",
+    HASNA_STATE_HOME: "",
+    HASNA_CACHE_HOME: "",
     ...extra,
   };
 }

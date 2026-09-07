@@ -6,7 +6,7 @@ import { createLoopsApiServer } from "../../api/index.js";
 import { createSqliteLoopStorage } from "../storage/sqlite.js";
 import { createHasnaStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
 import { createHasnaHttpTransport, HasnaHttpError } from "@hasna/contracts/client";
-import { ApiStore, CloudUnsupportedError, getStore, isCloudStore, LocalStore } from "./index.js";
+import { ApiStore, getStore, isCloudStore, LocalStore } from "./index.js";
 import { Store } from "../store.js";
 import type { CreateLoopInput, CreateWorkflowInput } from "../../types.js";
 
@@ -545,10 +545,40 @@ describe("ApiStore end-to-end against the real /v1 server", () => {
     ]);
   });
 
-  test("unsupported mutations fail loudly instead of silently hitting local sqlite", async () => {
-    const store = apiStoreForServer(1);
-    await expect(store.cancelWorkflowRun("wr_x")).rejects.toBeInstanceOf(CloudUnsupportedError);
-    await expect(store.requeueWorkflowWorkItem("wi_x")).rejects.toBeInstanceOf(CloudUnsupportedError);
+  test("workflows cancel and routes requeue route over the hosted API (no transport gate)", async () => {
+    const requested: Array<{ path: string; body?: unknown }> = [];
+    const transport = {
+      post: async (path: string, body?: unknown) => {
+        requested.push({ path, body });
+        if (path.endsWith("/cancel")) {
+          return { workflowRun: { id: "wr_x", status: "cancelled" } };
+        }
+        if (path.endsWith("/requeue")) {
+          return { workItem: { id: "wi_x", status: "queued" } };
+        }
+        throw new Error(`unexpected post: ${path}`);
+      },
+    } as unknown as HasnaStorageClient["transport"];
+    const store = new ApiStore({ transport } as HasnaStorageClient, "https://loops.example.test/v1");
+
+    const cancelled = await store.cancelWorkflowRun("wr_x", "operator veto");
+    expect(cancelled.id).toBe("wr_x");
+    expect(cancelled.status).toBe("cancelled");
+    await expect(store.cancelWorkflowRun("wr_x")).resolves.toBeDefined();
+
+    const requeued = await store.requeueWorkflowWorkItem("wi_x", {
+      reason: "operator requeue",
+      resetAttempts: false,
+    });
+    expect(requeued.id).toBe("wi_x");
+    await expect(store.requeueWorkflowWorkItem("wi_x")).resolves.toBeDefined();
+
+    expect(requested).toEqual([
+      { path: "/workflow-runs/wr_x/cancel", body: { reason: "operator veto" } },
+      { path: "/workflow-runs/wr_x/cancel", body: { reason: "cancelled by user" } },
+      { path: "/work-items/wi_x/requeue", body: { reason: "operator requeue", resetAttempts: false } },
+      { path: "/work-items/wi_x/requeue", body: {} },
+    ]);
   });
 
   test("fails closed when a remote workflow event has malformed base fields", async () => {

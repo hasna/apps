@@ -2762,6 +2762,106 @@
         ]
       }
     },
+    "/v1/workflow-runs/{id}/cancel": {
+      "post": {
+        "operationId": "workflowRunsCancel",
+        "summary": "workflowRuns.cancel",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cancelled workflow run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidJsonResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Workflow run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Supplied request body is not JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsupportedMediaTypeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Cancel request body is not a closed reason-only object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidWorkflowCancelBodyResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workflowRuns.cancel",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/v1/work-items/{id}": {
       "get": {
         "operationId": "workItemsGet",
@@ -2795,6 +2895,109 @@
           "service"
         ],
         "x-risk": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/work-items/{id}/requeue": {
+      "post": {
+        "operationId": "workItemsRequeue",
+        "summary": "workItems.requeue",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  },
+                  "resetAttempts": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Requeued work item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidJsonResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Work item not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Supplied request body is not JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsupportedMediaTypeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Requeue request body is not a closed reason/resetAttempts object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvalidWorkItemRequeueBodyResponse"
+                }
+              }
+            }
+          }
+        },
+        "x-authorization-operation": "workItems.requeue",
+        "x-required-scopes": [
+          "loops:write"
+        ],
+        "x-tenant-roles": [
+          "admin",
+          "operator",
+          "service"
+        ],
+        "x-token-kinds": [
+          "api_key",
+          "service"
+        ],
+        "x-risk": "write",
         "parameters": [
           {
             "name": "id",
@@ -6725,6 +6928,42 @@
             "type": "integer"
           }
         }
+      },
+      "InvalidWorkflowCancelBodyResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "invalid_workflow_cancel_body"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "InvalidWorkItemRequeueBodyResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "invalid_work_item_requeue_body"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
       }
     },
     "securitySchemes": {

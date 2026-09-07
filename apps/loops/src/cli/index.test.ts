@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -68,12 +68,21 @@ function cliSpawnOptions(
     // exercise the fail-closed path pass HASNA_LOOPS_CONNECTION explicitly
     // (e.g. "") so the opt-in is not re-added.
     HASNA_LOOPS_CONNECTION: "",
+    // Blanked relocation roots: the shared resolver reads the credential file
+    // at ~/.hasna/<app>/config/credentials (HASNA_HOME / HASNA_CONFIG_HOME
+    // relocate it), so a spawn must never see a station's real credentials
+    // file behind its scratch HOME.
+    HASNA_HOME: "",
+    HASNA_CONFIG_HOME: "",
+    HASNA_STATE_HOME: "",
+    HASNA_CACHE_HOME: "",
     LOOPS_MACHINE_ID: "cli-test-machine",
   };
   const autoSourceTaskEnv = maybeAutoSourceTaskEnv(dataDir, args, env);
   const merged = {
     ...process.env,
     ...isolatedEnv,
+    HOME: dataDir,
     ...env,
     ...autoSourceTaskEnv,
     LOOPS_DATA_DIR: dataDir,
@@ -289,29 +298,29 @@ function authProfilesOf(workflow: { steps: TestWorkflowStep[] }): string[] {
 
 
 describe("loops CLI machine assignment", () => {
-  // @hasna/machines was deleted (owner directive, 2026-09-03); the routing
-  // consumer is no longer installable, so every --machine pin fails loudly
-  // with the unavailable error and stores nothing.
-  test("create with --machine fails loudly and stores nothing (machines deleted)", () => {
+  // @hasna/machines was deleted (owner directive, 2026-09-03); the pin surface
+  // was removed with the subsystem, so `--machine` is an unknown option and no
+  // pin is ever stored.
+  test("create rejects the removed --machine option and stores nothing", () => {
     const dataDir = freshDataDir("loops-cli-machine-pin-");
     const create = runCli(
       dataDir,
       ["--json", "create", "command", "pinned", "--at", futureAt(), "--cmd", "true", "--machine", "cli-pin-test-machine"],
     );
     expect(create.status).not.toBe(0);
-    expect(create.stderr + create.stdout).toContain("@hasna/machines has been deleted");
+    expect(create.stderr + create.stdout).toContain("unknown option '--machine'");
     const listed = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout) as Array<{ name: string }>;
     expect(listed.map((loop) => loop.name)).not.toContain("pinned");
   });
 
-  test("create with an unresolvable --machine fails loudly and stores nothing", () => {
+  test("create with an unresolvable --machine rejects the removed option and stores nothing", () => {
     const dataDir = freshDataDir("loops-cli-machine-bad-");
     const create = runCli(
       dataDir,
       ["--json", "create", "command", "never-stored", "--at", futureAt(), "--cmd", "true", "--machine", "cli-no-such-machine-zz9"],
     );
     expect(create.status).not.toBe(0);
-    expect(create.stderr + create.stdout).toContain("@hasna/machines has been deleted");
+    expect(create.stderr + create.stdout).toContain("unknown option '--machine'");
     const listed = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout) as Array<{ name: string }>;
     expect(listed.map((loop) => loop.name)).not.toContain("never-stored");
   });
@@ -767,6 +776,72 @@ describe("loops CLI", () => {
     expect(human.status).toBe(0);
     expect(human.stdout).toContain("storage=sqlite connection=api");
     expect(human.stdout).not.toContain("do-not-print-this-cloud-token");
+  });
+
+  test("resolves the hosted connection from the credentials file at ~/.hasna/loops/config/credentials", () => {
+    // The shared credential resolver's disk tier is
+    // <HASNA_HOME|~/.hasna>/loops/config/credentials (0600, KEY=VALUE lines;
+    // HASNA_HOME / HASNA_CONFIG_HOME relocate it). A station needs no inline
+    // env prefix: with a clean environment, `loops status` must resolve the
+    // hosted connection purely from the file.
+    const root = mkdtempSync(join(tmpdir(), "loops-cli-disk-tier-"));
+    const home = join(root, "home");
+    const cfgRoot = join(root, "cfg");
+    // <HASNA_CONFIG_HOME>/<app>/credentials (the config-root layout omits the
+    // `config` segment that the <HASNA_HOME|~/.hasna>/<app>/config/credentials
+    // home layout carries).
+    const cfg = join(cfgRoot, "loops");
+    mkdirSync(cfg, { recursive: true });
+    writeFileSync(join(cfg, "credentials"), [
+      "HASNA_LOOPS_API_URL=https://loops.example.test",
+      "HASNA_LOOPS_API_KEY=disk-tier-secret-key",
+      "",
+    ].join("\n"), { mode: 0o600 });
+
+    const env: Record<string, string> = {
+      PATH: process.env.PATH ?? "",
+      USER: process.env.USER ?? "test",
+      HOME: home,
+      HASNA_HOME: join(root, "hasna-home"),
+      HASNA_CONFIG_HOME: cfgRoot,
+    };
+    const status = spawnSync(process.execPath, [cliPath, "--json", "status"], { encoding: "utf8", env });
+    expect(status.status).toBe(0);
+    expect(status.stdout).toContain("connection");
+    const value = JSON.parse(status.stdout) as { storage: string; connection: string; apiUrl: string; apiKeyPresent: boolean };
+    expect(value).toMatchObject({
+      storage: "sqlite",
+      connection: "api",
+      apiUrl: "https://loops.example.test",
+      apiKeyPresent: true,
+    });
+    // The credential never surfaces anywhere.
+    expect(status.stdout).not.toContain("disk-tier-secret-key");
+    expect(status.stderr ?? "").not.toContain("disk-tier-secret-key");
+  });
+
+  test("resolves the hosted connection from this station's canonical credentials file (env -i style)", () => {
+    // Station doctrine: the credential lives at ~/.hasna/loops/config/credentials
+    // (0600, HASNA_LOOPS_API_URL= / HASNA_LOOPS_API_KEY= lines), and the
+    // resolver must pick it up with NO sourced environment.
+    const canonical = join(homedir(), ".hasna", "loops", "config", "credentials");
+    if (!existsSync(canonical)) {
+      console.warn(`skipping station credentials-file resolution test: ${canonical} does not exist on this machine`);
+      return;
+    }
+    const text = readFileSync(canonical, "utf8");
+    const hasUrl = /^HASNA_LOOPS_API_URL=.*$/m.test(text);
+    const hasKey = /^HASNA_LOOPS_API_KEY=.*$/m.test(text);
+    expect(hasUrl && hasKey, `${canonical} must carry HASNA_LOOPS_API_URL and HASNA_LOOPS_API_KEY lines (env-file format)`).toBe(true);
+    const env: Record<string, string> = {
+      PATH: process.env.PATH ?? "",
+      USER: process.env.USER ?? "test",
+      HOME: homedir(),
+    };
+    const status = spawnSync(process.execPath, [cliPath, "--json", "status"], { encoding: "utf8", env });
+    expect(status.status).toBe(0);
+    const value = JSON.parse(status.stdout) as { connection: string };
+    expect(value.connection).toBe("api");
   });
 
   test("exports and imports id-preserving migration bundles idempotently", () => {
@@ -2034,14 +2109,14 @@ describe("loops CLI", () => {
     });
   });
 
-  test("create command with a machine pin fails loudly (machines deleted)", () => {
-    // @hasna/machines was deleted (owner directive, 2026-09-03); machine-pinned
-    // creates fail loudly and store nothing instead of persisting an
-    // unclaimable NULL pin (same contract as the pinned-name case above).
+  test("create command rejects the removed --machine option (machines deleted)", () => {
+    // @hasna/machines was deleted (owner directive, 2026-09-03); the pin
+    // surface was removed with the subsystem, so `--machine` is unknown and
+    // nothing is stored (same removal contract as the other machine tests).
     const dataDir = freshDataDir("loops-cli-machine-");
     const create = runCli(dataDir, ["--json", "create", "command", "machine-local", "--at", futureAt(), "--cmd", "true", "--machine", "local"]);
     expect(create.status).not.toBe(0);
-    expect(create.stderr + create.stdout).toContain("@hasna/machines has been deleted");
+    expect(create.stderr + create.stdout).toContain("unknown option '--machine'");
 
     const listed = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout) as Array<{ name: string }>;
     expect(listed.map((loop) => loop.name)).not.toContain("machine-local");
@@ -2632,18 +2707,24 @@ describe("loops CLI", () => {
     expect(JSON.parse(workflow.stdout).target.preflight).toEqual({ beforeRun: true });
   });
 
-  test("machines commands report OpenMachines topology unavailable (machines deleted)", () => {
-    // @hasna/machines was deleted (owner directive, 2026-09-03); the routing
-    // consumer is no longer installable, so the topology commands fail loudly
-    // instead of silently reporting an empty fleet.
+  test("the machines command family was removed with @hasna/machines (deleted)", () => {
+    // @hasna/machines was deleted (owner directive, 2026-09-03); the CLI
+    // surfaced `machines list`/`machines show` until those commands themselves
+    // started failing at runtime with the deletion error. They are removed
+    // with the deleted subsystem: the help surface no longer registers them
+    // and create paths no longer accept a machine pin.
     const dataDir = freshDataDir("loops-cli-machines-");
-    const list = runCli(dataDir, ["--json", "machines", "list"]);
-    expect(list.status).not.toBe(0);
-    expect(list.stderr + list.stdout).toContain("@hasna/machines has been deleted");
+    const list = runCli(dataDir, ["machines", "list"]);
+    expect(list.status).toBe(1);
+    expect(list.stderr + list.stdout).toContain("unknown command");
 
-    const show = runCli(dataDir, ["--json", "machines", "show", "local"]);
-    expect(show.status).not.toBe(0);
-    expect(show.stderr + show.stdout).toContain("@hasna/machines has been deleted");
+    const help = runCli(dataDir, ["--help"]);
+    expect(help.status).toBe(0);
+    expect(help.stdout).not.toContain("machines");
+
+    const create = runCli(dataDir, ["create", "command", "no-machine", "--cmd", "echo hi", "--machine", "spark01", "--every", "1h"]);
+    expect(create.status).toBe(1);
+    expect(create.stderr).toContain("unknown option");
   });
 
   test("doctor exits non-zero when an active loop cannot preflight", () => {
@@ -6877,7 +6958,9 @@ describe("loops CLI", () => {
         "oss",
       ],
       undefined,
-      { PATH: "/usr/bin:/bin" },
+      // The oss policy's canonical project path is HOME-relative; keep the
+      // ambient HOME for this assertion while the connection stays isolated.
+      { PATH: "/usr/bin:/bin", HOME: process.env.HOME ?? homedir() },
     );
     expect(scheduled.status).toBe(0);
     const scheduledValue = JSON.parse(scheduled.stdout);
@@ -10738,41 +10821,75 @@ describe("loops CLI", () => {
   });
 });
 
-describe("local-only guards under a cloud-flipped client", () => {
-  // With both API vars set the client resolves to the hosted /v1 transport, so
-  // any command that can only act on this machine's local sqlite runtime must
-  // fail loudly instead of silently reading/writing the on-box island (the
-  // split-brain we forbid). No HTTP is issued: the guard fires before any call.
+describe("machine-local commands run on the local runtime under a cloud-flipped client", () => {
+  // With both API vars set the client resolves to the hosted /v1 transport.
+  // Data commands route to the hosted API, but machine-local runtime commands
+  // (daemon lifecycle, scheduler tick, expectations, hygiene, route admission,
+  // ui) always act on THIS machine's runtime — the storage-mode axis is
+  // retired, so no command is transport-gated. Each spawn announces the local
+  // runtime scope once on stderr instead of refusing.
   const CLOUD_ENV = {
     HASNA_LOOPS_API_URL: "https://loops.example.test",
     HASNA_LOOPS_API_KEY: "do-not-print-this-key",
   } as const;
   const FLIP_MESSAGE = "not available while flipped to the hosted Loops API";
 
-  test("route admission, drain, live UI, and tick fail loudly when flipped", () => {
-    const dataDir = freshDataDir("loops-cli-cloud-guard-");
-    for (const args of [
-      ["routes", "create", "todos-task"],
-      ["routes", "drain", "todos-task"],
-      ["events", "handle", "todos-task"],
-      ["events", "drain", "todos-task"],
-      ["ui"],
-      ["tick"],
-    ]) {
+  test("machine-local runtime commands execute (not refuse) when the client is flipped", () => {
+    const dataDir = freshDataDir("loops-cli-cloud-runtime-");
+    const clean = (args: string[], expectStatus: number) => {
       const result = runCli(dataDir, args, undefined, CLOUD_ENV);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(FLIP_MESSAGE);
-      // The bearer key must never leak into output while the guard rejects.
+      expect(result.status, `${JSON.stringify(args)} -> exit ${result.status} stderr=${JSON.stringify(result.stderr.slice(0, 400))}`).toBe(expectStatus);
+      // The retired flip guard must never fire, and the bearer key must never
+      // leak into output.
+      expect(result.stderr).not.toContain(FLIP_MESSAGE);
       expect(result.stdout).not.toContain("do-not-print-this-key");
       expect(result.stderr).not.toContain("do-not-print-this-key");
+      return result;
+    };
+    // Commands that complete on a fresh local runtime.
+    for (const args of [
+      ["tick"],
+      ["expectations"],
+      ["hygiene", "duplicates"],
+      ["hygiene", "scripts"],
+      ["daemon", "status"],
+      ["daemon", "logs", "-n", "5"],
+    ]) {
+      const result = clean(args, 0);
+      // The local-runtime scope note is announced when the client is flipped.
+      expect(result.stderr).toContain("local runtime store");
     }
+    // route admission needs event input, so it fails on INPUT, never on the
+    // retired transport gate; drains preview (dry-run) and succeed without
+    // touching a source queue.
+    for (const args of [
+      ["routes", "create", "todos-task"],
+      ["events", "handle", "todos-task"],
+      ["events", "handle", "generic"],
+    ]) {
+      const result = clean(args, 1);
+      expect(result.stderr).not.toContain(FLIP_MESSAGE);
+    }
+    for (const args of [
+      ["routes", "drain", "todos-task", "--dry-run"],
+    ]) {
+      const result = clean(args, 0);
+      expect(result.stderr).not.toContain(FLIP_MESSAGE);
+    }
+    // The live table is an interactive TTY surface; without a TTY it says so
+    // instead of refusing on transport.
+    const ui = clean(["ui"], 1);
+    expect(ui.stderr).toContain("TTY");
+    // Hosted-mutating commands traverse the server verdict, never a client gate.
+    const cancel = clean(["workflows", "cancel", "nonexistent-wr"], 1);
+    expect(cancel.stderr).not.toContain("not supported over the control-plane Loops API");
   });
 
   test("run-now routes to the hosted API when flipped instead of refusing as local-only (1fb09589)", () => {
     // run-now is connection-aware: flipped to the hosted API it schedules the
-    // loop through the control plane, never the local sqlite island. Against an
-    // unreachable control plane it fails closed with a hosted-route error — NOT
-    // the local-only refusal — and never leaks the bearer key.
+    // loop through the control plane. Against an unreachable control plane it
+    // fails closed with a hosted-route error — never a transport gate — and
+    // never leaks the bearer key.
     const dataDir = freshDataDir("loops-cli-cloud-run-now-");
     const result = runCli(dataDir, ["--json", "run-now", "anything"], undefined, CLOUD_ENV);
     expect(result.status).toBe(1);
@@ -10781,10 +10898,10 @@ describe("local-only guards under a cloud-flipped client", () => {
     expect(result.stderr).not.toContain("do-not-print-this-key");
   });
 
-  test("route preview (dry-run) is store-free, so it is NOT blocked when flipped", () => {
+  test("route preview (dry-run) stays input-driven under a cloud-flipped client", () => {
     const dataDir = freshDataDir("loops-cli-cloud-guard-preview-");
-    // Preview never opens the Store, so the local-only guard must not fire; it may
-    // still fail for missing event input, but not with the flip message.
+    // Preview never opens the Store; it fails on missing event input, not on
+    // the retired transport gate.
     const result = runCli(dataDir, ["routes", "preview", "todos-task"], undefined, CLOUD_ENV);
     expect(result.stderr).not.toContain(FLIP_MESSAGE);
   });

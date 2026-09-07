@@ -537,7 +537,7 @@ export function registerBundleCommands(
   });
   bundle
     .command("materialize [names...]")
-    .description("write bundle directories from control-plane rows; local only, never uploads")
+    .description("write bundle directories from control-plane rows; machine-local dirs, never uploads")
     .option("--all", "every loop the key can see")
     .option("--limit <n>", "cap for --all")
     .option("--dry-run", "report what would be written")

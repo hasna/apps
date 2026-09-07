@@ -576,6 +576,219 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("operator workflow cancel is a first-class /v1 operation (CLI workflows cancel routes here)", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    try {
+      const workflow = await storage.createWorkflow({
+        name: "operator-cancel",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const workflowRun = await storage.createWorkflowRun({ workflow });
+      await storage.startWorkflowStepRun(workflowRun.id, "worker");
+
+      const cancel = () => fetch(apiUrl(server, `/v1/workflow-runs/${workflowRun.id}/cancel`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ reason: "operator veto" }),
+      });
+      const first = await cancel();
+      expect(first.status).toBe(200);
+      expect(await first.json()).toMatchObject({
+        ok: true,
+        workflowRun: { id: workflowRun.id, status: "cancelled" },
+      });
+      expect(await storage.getWorkflowStepRun(workflowRun.id, "worker")).toMatchObject({
+        status: "cancelled",
+      });
+      expect((await storage.listWorkflowEvents(workflowRun.id)).some((event) => event.eventType === "cancelled")).toBe(true);
+
+      // Idempotent on a terminal run: the server returns the run unchanged.
+      const second = await cancel();
+      expect(second.status).toBe(200);
+      expect(await second.json()).toMatchObject({ ok: true, workflowRun: { id: workflowRun.id, status: "cancelled" } });
+
+      for (const invalidBody of [
+        null,
+        [],
+        "reason",
+        42,
+        { reason: 42 },
+        { reason: null },
+        { reason: "allowed", extra: true },
+      ]) {
+        const invalid = await fetch(apiUrl(server, `/v1/workflow-runs/${workflowRun.id}/cancel`), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify(invalidBody),
+        });
+        expect(invalid.status).toBe(422);
+        expect(await invalid.json()).toEqual({ ok: false, error: "invalid_workflow_cancel_body" });
+      }
+
+      const invalidJson = await fetch(apiUrl(server, `/v1/workflow-runs/${workflowRun.id}/cancel`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: "{",
+      });
+      expect(invalidJson.status).toBe(400);
+      expect(await invalidJson.json()).toEqual({ ok: false, error: "invalid_json" });
+
+      const missingContentType = await fetch(apiUrl(server, `/v1/workflow-runs/${workflowRun.id}/cancel`), {
+        method: "POST",
+        body: "{}",
+      });
+      expect(missingContentType.status).toBe(415);
+
+      const missing = await fetch(apiUrl(server, "/v1/workflow-runs/missing/cancel"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: "{}",
+      });
+      expect(missing.status).toBe(404);
+      expect(await missing.json()).toEqual({ ok: false, error: "workflow_run_not_found" });
+
+      // The CLI's hosted surface is the generated SDK client.
+      const freshRun = await storage.createWorkflowRun({ workflow });
+      await storage.startWorkflowStepRun(freshRun.id, "worker");
+      const client = new HttpLoopsClient({ baseUrl: apiUrl(server, "") });
+      await expect(client.workflowRunsCancel(freshRun.id, { reason: "via sdk" })).resolves.toMatchObject({
+        ok: true,
+        workflowRun: { id: freshRun.id, status: "cancelled" },
+      });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
+  test("work-item requeue is a first-class /v1 operation (CLI routes requeue routes here)", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = createTestServer(mod, { host: "127.0.0.1", port: 0, storage });
+    try {
+      const workflow = await storage.createWorkflow({
+        name: "requeue-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const invocation = await storage.createWorkflowInvocation({
+        workflowId: workflow.id,
+        sourceRef: { kind: "todos-task", id: "task-requeue-1" },
+        subjectRef: { kind: "todos-task", id: "task-requeue-1" },
+        intent: "route",
+      });
+      const item = await storage.upsertWorkflowWorkItem({
+        routeKey: "requeue-test",
+        idempotencyKey: "requeue-test-ik",
+        invocationId: invocation.id,
+        sourceType: "todos-task",
+        sourceRef: "task-requeue-1",
+        subjectRef: "subject-requeue-1",
+        projectKey: "project-requeue",
+        projectGroup: "group-requeue",
+      });
+      const loop = await storage.createLoop({
+        name: "requeue-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00.000Z" },
+        target: { type: "workflow", workflowId: workflow.id },
+        maxAttempts: 1,
+        retryDelayMs: 1_000,
+        leaseMs: 60_000,
+      });
+      const claim = await storage.claimRun(loop, "2026-01-01T00:00:00.000Z", "requeue-runner", new Date("2026-01-01T00:00:00.000Z"));
+      expect(claim).not.toBeNull();
+      await storage.admitWorkflowWorkItem(item.id, { workflowId: workflow.id, loopId: loop.id });
+      const workflowRun = await storage.createWorkflowRun({ workflow, loop, loopRun: claim!.run, workItemId: item.id });
+      await storage.startWorkflowStepRun(workflowRun.id, "worker");
+      await storage.finalizeWorkflowRun(workflowRun.id, "failed", { error: "requeue-me" });
+      const failedItem = await storage.getWorkflowWorkItem(item.id);
+      expect(failedItem?.status).toBe("failed");
+
+      const requeue = await fetch(apiUrl(server, `/v1/work-items/${item.id}/requeue`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ reason: "operator requeue", resetAttempts: false }),
+      });
+      expect(requeue.status).toBe(200);
+      expect(await requeue.json()).toMatchObject({
+        ok: true,
+        workItem: { id: item.id, status: "queued" },
+      });
+      const requeued = await storage.getWorkflowWorkItem(item.id);
+      expect(requeued?.lastReason).toBe("operator requeue");
+
+      // A queued item is not requeueable: a clean conflict verdict, never a 500.
+      const conflict = await fetch(apiUrl(server, `/v1/work-items/${item.id}/requeue`), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ reason: "again" }),
+      });
+      expect(conflict.status).toBe(409);
+      expect(await conflict.json()).toEqual({ ok: false, error: "work_item_not_requeueable" });
+
+      // Drive a SECOND terminal item so no-body and SDK paths stay happy.
+      const failItem = async (): Promise<{ itemId: string }> => {
+        const secondWorkflowRun = await storage.createWorkflowRun({ workflow, loop, loopRun: claim!.run, workItemId: item.id });
+        await storage.startWorkflowStepRun(secondWorkflowRun.id, "worker");
+        await storage.finalizeWorkflowRun(secondWorkflowRun.id, "failed", { error: "requeue-me-again" });
+        return { itemId: item.id };
+      };
+      // Re-admit the same item for a second run failed into a fresh terminal state.
+      await storage.admitWorkflowWorkItem(item.id, { workflowId: workflow.id, loopId: loop.id });
+      await failItem();
+      const secondFailed = await storage.getWorkflowWorkItem(item.id);
+      expect(secondFailed?.status).toBe("failed");
+
+      const noBody = await fetch(apiUrl(server, `/v1/work-items/${item.id}/requeue`), {
+        method: "POST",
+        headers: jsonHeaders,
+      });
+      expect(noBody.status).toBe(200);
+      expect(await noBody.json()).toMatchObject({ ok: true, workItem: { id: item.id, status: "queued" } });
+
+      for (const invalidBody of [
+        null,
+        [],
+        "reason",
+        42,
+        { reason: 42 },
+        { resetAttempts: "yes" },
+        { extra: true },
+      ]) {
+        const invalid = await fetch(apiUrl(server, `/v1/work-items/${item.id}/requeue`), {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify(invalidBody),
+        });
+        expect(invalid.status).toBe(422);
+        expect(await invalid.json()).toEqual({ ok: false, error: "invalid_work_item_requeue_body" });
+      }
+
+      const missing = await fetch(apiUrl(server, "/v1/work-items/missing/requeue"), {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ reason: "x" }),
+      });
+      expect(missing.status).toBe(404);
+      expect(await missing.json()).toEqual({ ok: false, error: "work_item_not_found" });
+
+      // The CLI's hosted surface is the generated SDK client.
+      await storage.admitWorkflowWorkItem(item.id, { workflowId: workflow.id, loopId: loop.id });
+      const sdkRun = await storage.createWorkflowRun({ workflow, loop, loopRun: claim!.run, workItemId: item.id });
+      await storage.startWorkflowStepRun(sdkRun.id, "worker");
+      await storage.finalizeWorkflowRun(sdkRun.id, "failed", { error: "requeue-me-via-sdk" });
+      const client = new HttpLoopsClient({ baseUrl: apiUrl(server, "") });
+      await expect(client.workItemsRequeue(item.id, { reason: "via sdk" })).resolves.toMatchObject({
+        ok: true,
+        workItem: { id: item.id, status: "queued" },
+      });
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("status command JSON uses the service envelope", () => {
     // The retired mode env key is built from two literals so the contiguous
     // token never appears in this file: the mode-removal ratchet exempts only

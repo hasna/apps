@@ -27,6 +27,12 @@ async function runCli(
     HASNA_LOOPS_API_URL: "",
     HASNA_LOOPS_API_KEY: "",
     HASNA_LOOPS_CONNECTION: "",
+    // Blanked relocation roots so a spawn never sees a station's real
+    // credentials file behind its scratch HOME.
+    HASNA_HOME: "",
+    HASNA_CONFIG_HOME: "",
+    HASNA_STATE_HOME: "",
+    HASNA_CACHE_HOME: "",
     LOOPS_DATA_DIR: dataDir,
     ...env,
   };
@@ -380,8 +386,12 @@ describe("CLI P1 safety regressions", () => {
     }
   });
 
-  test("hosted daemon stop, install, and logs fail before local side effects", async () => {
-    const root = mkdtempSync(join(tmpdir(), "loops-cli-hosted-daemon-guard-"));
+  test("hosted client daemon lifecycle commands run on the machine-local runtime", async () => {
+    // Daemon stop/install/logs are machine-local runtime operations: they run
+    // under EVERY client connection (the storage-mode axis is retired). The
+    // client data connection resolves to the hosted API here, so each invocation
+    // announces its local runtime scope instead of refusing.
+    const root = mkdtempSync(join(tmpdir(), "loops-cli-hosted-daemon-runtime-"));
     const dataDir = join(root, "data");
     const home = join(root, "home");
     const binDir = join(root, "bin");
@@ -394,7 +404,7 @@ describe("CLI P1 safety regressions", () => {
     mkdirSync(dataDir, { recursive: true });
     mkdirSync(binDir, { recursive: true });
     writeFileSync(pidPath, "999999999");
-    writeFileSync(logPath, "LOCAL_DAEMON_LOG_MUST_NOT_BE_READ\n");
+    writeFileSync(logPath, "LOCAL_DAEMON_LOG_IS_READ\n");
     for (const command of ["systemctl", "launchctl"]) {
       const path = join(binDir, command);
       writeFileSync(path, "#!/bin/sh\nprintf called >> \"$LOOPS_TEST_ENABLE_MARKER\"\nexit 0\n");
@@ -410,21 +420,31 @@ describe("CLI P1 safety regressions", () => {
     };
 
     try {
+      // stop: the stale pid (999999999) is reaped from the local pid file.
       const stop = await runCli(dataDir, ["daemon", "stop"], env);
-      const install = await runCli(dataDir, ["daemon", "install", "--enable"], env);
-      const logs = await runCli(dataDir, ["daemon", "logs"], env);
+      expect(stop.status).toBe(0);
+      expect(stop.stderr).not.toContain(FLIP_MESSAGE);
+      expect(existsSync(pidPath)).toBe(false);
 
+      // install: writes the unit and enables it on this machine.
+      const install = await runCli(dataDir, ["daemon", "install", "--enable"], env);
+      expect(install.status).toBe(0);
+      expect(install.stderr).not.toContain(FLIP_MESSAGE);
+      expect(existsSync(servicePath)).toBe(true);
+      expect(existsSync(enableMarker)).toBe(true);
+
+      // logs: the local daemon log is tailed.
+      const logs = await runCli(dataDir, ["daemon", "logs"], env);
+      expect(logs.status).toBe(0);
+      expect(logs.stderr).not.toContain(FLIP_MESSAGE);
+      expect(logs.stdout).toContain("LOCAL_DAEMON_LOG_IS_READ");
+
+      // The bearer key never leaks into output on any of these paths.
       for (const result of [stop, install, logs]) {
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain(FLIP_MESSAGE);
         expect(result.stdout).not.toContain("test-hosted-key");
         expect(result.stderr).not.toContain("test-hosted-key");
+        expect(result.stderr).toContain("local runtime store");
       }
-      expect(existsSync(pidPath)).toBe(true);
-      expect(readFileSync(pidPath, "utf8")).toBe("999999999");
-      expect(existsSync(servicePath)).toBe(false);
-      expect(existsSync(enableMarker)).toBe(false);
-      expect(logs.stdout).not.toContain("LOCAL_DAEMON_LOG_MUST_NOT_BE_READ");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -12,7 +12,7 @@
  *             ├── manifest.json       digests           0600  REQUIRED
  *             ├── scripts/            executables       0700  optional
  *             ├── README.md           notes             0600  optional
- *             └── .loops-bundle.json  pull marker (local only)
+ *             └── .loops-bundle.json  pull marker (machine-local)
  *
  * `loops/` is a sub-layer, not the app root: an app folder is an index, not a
  * dump, and bundles never sit directly at `~/.hasna/loops/<name>/` where they

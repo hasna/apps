@@ -20,6 +20,13 @@ function cleanEnv(overrides: Record<string, string>): Record<string, string> {
     // Blanked so a developer's own connection selection never leaks in; local
     // (no API env) spawns get the explicit file opt-in re-added below.
     HASNA_LOOPS_CONNECTION: "",
+    // Blanked relocation roots: the shared resolver reads the credential file
+    // at ~/.hasna/<app>/config/credentials, so a spawn must never see a
+    // station's real credentials file behind its scratch HOME.
+    HASNA_HOME: "",
+    HASNA_CONFIG_HOME: "",
+    HASNA_STATE_HOME: "",
+    HASNA_CACHE_HOME: "",
     ...overrides,
   };
   if (!merged.HASNA_LOOPS_CONNECTION?.trim() && !merged.HASNA_LOOPS_API_URL?.trim() && !merged.HASNA_LOOPS_API_KEY?.trim()) {
@@ -58,7 +65,7 @@ async function connectMcp(
     // stdio integration tests must explicitly opt into the stdio transport.
     args: ["run", "src/mcp/index.ts", "--stdio"],
     cwd: process.cwd(),
-    env: cleanEnv({ LOOPS_DATA_DIR: dataDir, MCP_STDIO: "1", ...env }),
+    env: cleanEnv({ HOME: dataDir, LOOPS_DATA_DIR: dataDir, MCP_STDIO: "1", ...env }),
     stderr: "pipe",
   });
   const client = new Client({ name: "open-loops-mcp-test", version: "0.0.0" });
@@ -701,43 +708,35 @@ describe("Loops MCP server", () => {
     }
   });
 
-  test("loops_create_command with a machine pin fails loudly and stores nothing (machines deleted)", async () => {
+  test("loops_create_command accepts no machine pin (machines deleted): the loop is created unpinned", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-mcp-machine-"));
     roots.push(root);
     const { client, transport } = await connectMcp(root, { LOOPS_MCP_ALLOW_MUTATIONS: "true" });
     try {
-      // @hasna/machines was deleted (owner directive, 2026-09-03); the routing
-      // consumer is no longer installable, so every machine pin fails loudly
-      // rather than persist a NULL pin that leaves the loop claimable by any
-      // fleet runner.
+      // @hasna/machines was deleted (owner directive, 2026-09-03); the pin
+      // surface was removed with the subsystem, so a create never persists a
+      // claimable-or-unclaimable pin — the loop is created without one.
       const created = await client.callTool({
         name: "loops_create_command",
         arguments: {
           name: "mcp-pinned",
           command: "true",
           schedule: { type: "once", at: "2026-01-02T00:00:00Z" },
-          machine: "mcp-pin-test-machine",
         },
       });
-      expect(created.isError).toBe(true);
-      expect(JSON.stringify(created.content)).toContain("@hasna/machines has been deleted");
-      expect(withLoopDataDir(root, () => new Store().findLoopByName("mcp-pinned"))).toBeUndefined();
+      expect(created.isError).not.toBe(true);
+      expect(withLoopDataDir(root, () => new Store().findLoopByName("mcp-pinned"))?.machine).toBeUndefined();
     } finally {
       await client.close();
       await transport.close();
     }
   });
 
-  test("loops_create_workflow with a machine pin fails loudly and stores nothing (machines deleted)", async () => {
-    // Twin of the loops_create_command machine-pin regression: the workflow
-    // create shares commonCreateInput (and therefore resolveLoopMachine), so
-    // the same fail-closed contract must hold — with @hasna/machines deleted
-    // (owner directive, 2026-09-03) every pin fails the create loudly and
-    // stores nothing.
+  test("loops_create_workflow accepts no machine pin (machines deleted): the loop is created unpinned", async () => {
+    // Twin of the loops_create_command test: the workflow create shares
+    // commonCreateInput, which no longer resolves machine pins (owner
+    // directive, 2026-09-03).
     const root = mkdtempSync(join(tmpdir(), "loops-mcp-workflow-machine-"));
-    // Seed the workflow the create resolves, in the same store the MCP process
-    // opens (requireWorkflow runs before the machine resolution, so an absent
-    // workflow would error as WORKFLOW_NOT_FOUND and never reach the pin path).
     const workflowId = withLoopDataDir(root, () => {
       const store = new Store();
       try {
@@ -751,22 +750,16 @@ describe("Loops MCP server", () => {
     });
     const { client, transport } = await connectMcp(root, { LOOPS_MCP_ALLOW_MUTATIONS: "true" });
     try {
-      // @hasna/machines was deleted (owner directive, 2026-09-03); the
-      // routing consumer is no longer installable, so every machine pin
-      // fails loudly rather than persist a NULL pin that leaves the loop
-      // claimable by any fleet runner.
       const created = await client.callTool({
           name: "loops_create_workflow",
           arguments: {
             name: "mcp-pinned-workflow-loop",
             workflow: workflowId,
             schedule: { type: "once", at: "2026-01-02T00:00:00Z" },
-            machine: "mcp-pin-workflow-machine",
           },
         });
-        expect(created.isError).toBe(true);
-        expect(JSON.stringify(created.content)).toContain("@hasna/machines has been deleted");
-        expect(withLoopDataDir(root, () => new Store().findLoopByName("mcp-pinned-workflow-loop"))).toBeUndefined();
+        expect(created.isError).not.toBe(true);
+        expect(withLoopDataDir(root, () => new Store().findLoopByName("mcp-pinned-workflow-loop"))?.machine).toBeUndefined();
     } finally {
       await client.close();
       await transport.close();
@@ -872,11 +865,12 @@ describe("Loops MCP server", () => {
     }
   });
 
-  test("cloud-flipped MCP fails diagnose/health loudly instead of reading the local island", async () => {
+  test("cloud-flipped MCP runs diagnose/health on the machine-local runtime", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-mcp-cloud-guard-"));
     roots.push(root);
-    // Seed a LOCAL loop so a silent local read would (wrongly) succeed. The guard
-    // must fire before any local access, so this loop must never surface.
+    // Seed a LOCAL loop: machine-local runtime tools read this machine's store
+    // under EVERY client connection (the storage-mode axis is retired), so the
+    // seeded loop now surfaces with a scope note instead of a refusal.
     withLoopDataDir(root, () => {
       const store = new Store();
       try {
@@ -898,11 +892,10 @@ describe("Loops MCP server", () => {
       for (const name of ["loops_diagnose", "loops_health", "loops_health_scan"] as const) {
         const args = name === "loops_diagnose" ? { idOrName: "local-only-loop" } : {};
         const result = await client.callTool({ name, arguments: args });
-        expect(result.isError).toBe(true);
+        expect(result.isError).not.toBe(true);
         const text = JSON.stringify(result.content);
-        expect(text).toContain("not available while flipped");
-        // It must NOT have silently returned the seeded local loop.
-        expect(text).not.toContain("local-only-loop");
+        // The machine-local runtime store is read under a cloud-flipped client.
+        expect(text).toContain("local-only-loop");
       }
     } finally {
       await client.close();

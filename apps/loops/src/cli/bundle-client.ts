@@ -72,9 +72,9 @@ export interface BundleApiClient {
  * Build the client, or refuse.
  *
  * Bundles are a control-plane feature: versions are allocated by the server and
- * objects live in the artifact store. There is no local-only mode for `push`,
- * `pull`, `versions` or `pin`, so missing credentials are EX_CONFIG (78) rather
- * than a silent fall back to something that would appear to work.
+ * objects live in the artifact store. `push`, `pull`, `versions` and `pin`
+ * require a control-plane credential; missing credentials are EX_CONFIG (78)
+ * rather than a silent fall back to something that would appear to work.
  */
 export function createBundleApiClient(env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch): BundleApiClient {
   let baseUrl: string;

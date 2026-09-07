@@ -19,7 +19,6 @@ import { publicCommandDescriptor } from "../lib/command-target.js";
 import { buildHealthReport, buildHealthScan, classifyRunFailure, expectationForLoop } from "../lib/health.js";
 import { nowIso } from "../lib/ids.js";
 import { LOOP_LABEL_MAX_COUNT, mergeLoopLabels, normalizeLoopLabels, removeLoopLabels } from "../lib/labels.js";
-import { resolveLoopMachine } from "../lib/machines.js";
 import { dataDir } from "../lib/paths.js";
 import { initialNextRun } from "../lib/recurrence.js";
 import { runLoopNow } from "../lib/scheduler.js";
@@ -159,7 +158,6 @@ const createLoopCommonSchema = {
   leaseMs: z.number().int().positive().optional().describe("Run lease in milliseconds before an unresponsive runner is considered dead."),
   expiresAt: z.string().optional().describe("Date/time after which the loop expires and stops scheduling."),
   expiresAfterRuns: z.number().int().positive().optional().describe("Expire the loop after this many consecutive successful runs. Independent of expiresAt; a failed run resets the streak, skipped runs are neutral."),
-  machine: z.string().min(1).optional().describe("OpenMachines machine id to pin this loop to. Resolved through the local machines topology; an unresolvable machine fails the create instead of persisting an unbound loop."),
 };
 
 export interface LoopsMcpToolMetadata {
@@ -268,18 +266,22 @@ async function withStore<T>(fn: (store: LoopStore) => T | Promise<T>): Promise<T
 }
 
 /**
- * Guard for the on-box diagnostic/runtime tools (doctor, health, daemon status,
- * per-loop diagnose, run-now scheduling). These read this machine's daemon and
- * sqlite runtime and are meaningless — and would silently hit the local island —
- * when the process is flipped to the hosted API. Fail loudly instead, then run
- * against a scoped local {@link Store} (opened and closed here). Mirrors the
- * CLI's `assertLocalOnlyCommand` + `new Store()` pattern.
+ * Machine-local runtime tools (doctor, health, daemon status, per-loop
+ * diagnose, health scan) read this machine's daemon and sqlite runtime. The
+ * storage-mode axis is retired, so they are not gated by the client
+ * connection: they always open the scoped local {@link Store} (opened and
+ * closed here) and, when the client data connection resolves to the hosted
+ * API, say so once so the surfaced runtime state is never mistaken for
+ * control-plane state.
  */
+let localRuntimeScopeAnnounced = false;
+
 async function withLocalStore<T>(operation: string, fn: (store: Store) => T | Promise<T>): Promise<T> {
-  if (isCloudStore()) {
-    throw new Error(
-      `'${operation}' inspects this machine's local Loops runtime and is not available while flipped to the hosted Loops API. ` +
-        `Set HASNA_LOOPS_CONNECTION=file to explicitly select the local file store and run it here.`,
+  if (!localRuntimeScopeAnnounced && isCloudStore()) {
+    localRuntimeScopeAnnounced = true;
+    console.error(
+      `note: '${operation}' operates on this machine's local runtime store (daemon, schedules, runs, sqlite); ` +
+        `the client data connection is the hosted Loops API (see 'loops status').`,
     );
   }
   const store = new Store();
@@ -390,7 +392,6 @@ function commonCreateInput(input: {
   leaseMs?: number;
   expiresAt?: string;
   expiresAfterRuns?: number;
-  machine?: string;
 }): CreateLoopInput {
   const name = nonEmpty(input.name, "name");
   const schedule = normalizeSchedule(input.schedule);
@@ -408,10 +409,8 @@ function commonCreateInput(input: {
     leaseMs: input.leaseMs,
     expiresAt: input.expiresAt ? normalizeDate(input.expiresAt, "expiresAt") : undefined,
     expiresAfterRuns: input.expiresAfterRuns,
-    // Fail closed, mirroring the CLI: a requested machine must resolve through
-    // the machines topology, or the create throws instead of persisting a
-    // machine-less loop that any fleet runner could claim.
-    machine: input.machine !== undefined ? resolveLoopMachine(input.machine) : undefined,
+    // Machine pins were removed with @hasna/machines (owner directive,
+    // 2026-09-03): the CLI and MCP create surfaces no longer accept a pin.
   };
 }
 

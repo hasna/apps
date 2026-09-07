@@ -239,22 +239,13 @@ value are deleted; there is no mode value to flip back.
 
 ## Machine Placement
 
-A loop can eventually target:
-
-- one specific machine,
-- a machine pool selected by capability labels,
-- or multiple machines intentionally.
-
-Single-run loops need a lease so only one runner executes each scheduled slot.
-Multi-machine loops must record per-machine run evidence so duplicate work is
-distinguishable from intentional fan-out.
-
-This is separate from existing local OpenMachines dispatch. On the file
-connection, `loops-daemon` can still dispatch a loop target to a configured
-remote machine through the existing OpenMachines transport. On the API
-connection, machine execution is runner-pull: `loops-runner` claims work from
-the control plane. Operators should not treat local remote dispatch as a
-control-plane connection.
+`@hasna/machines` was deleted (owner directive, 2026-09-03): machine-pinned
+loops and remote OpenMachines dispatch are no longer supported, and the CLI
+(`--machine`, `loops machines *`) and MCP create surfaces were removed with
+the subsystem. Every scheduled loop executes on the machine whose
+`loops-daemon` (file connection) or `loops-runner` (control-plane claim)
+picks it up. Running loops still need a lease so only one runner executes
+each scheduled slot; run evidence remains per recorded run.
 
 ## Follow-Up Work
 

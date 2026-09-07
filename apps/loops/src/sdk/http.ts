@@ -149,6 +149,10 @@ export interface BundleSummary { "bundleName": string; "loopId": string; "loopNa
 
 export interface BundleListResponse { "ok": boolean; "bundles": Array<BundleSummary>; "total"?: number }
 
+export interface InvalidWorkflowCancelBodyResponse { "ok": boolean; "error": string }
+
+export interface InvalidWorkItemRequeueBodyResponse { "ok": boolean; "error": string }
+
 export interface LoopsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;
@@ -837,6 +841,15 @@ export class LoopsClient {
       });
     }
 
+    /** workItems.requeue */
+    async workItemsRequeue(id: string, body?: { "reason"?: string; "resetAttempts"?: boolean }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/work-items/${encodeURIComponent(String(id))}/requeue`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** workflowRuns.list */
     async workflowRunsList(init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/workflow-runs`, {
@@ -850,6 +863,15 @@ export class LoopsClient {
     async workflowRunsGet(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
       return this.request("GET", `/v1/workflow-runs/${encodeURIComponent(String(id))}`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** workflowRuns.cancel */
+    async workflowRunsCancel(id: string, body?: { "reason"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
+      return this.request("POST", `/v1/workflow-runs/${encodeURIComponent(String(id))}/cancel`, {
+        body,
         query: undefined,
         init,
       });

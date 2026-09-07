@@ -15,9 +15,8 @@
 // HASNA_LOOPS_CONNECTION=file local opt-in) via `resolveCloudStorage`.
 // WITHOUT either, resolution FAILS CLOSED with an actionable error naming the
 // required env — the client never silently serves the on-box SQLite file at
-// exit 0. Callers NEVER branch on connection themselves and NEVER touch
-// sqlite or fetch directly — that per-command dual path was the split-brain
-// bug this module eliminates.
+// exit 0. Every data command routes through here, so there is no per-command
+// transport branch and no way to touch a store the invocation did not select.
 //
 // Both the file connection and the API connection are the SAME client code
 // (ApiStore/LocalStore behind one LoopStore surface); only the URL and key
@@ -103,24 +102,6 @@ function stuckRunSnapshotId(candidate: ExpiredRunLeaseCandidate): string {
       candidate.updatedAt,
     ]))
     .digest("hex")}`;
-}
-
-/**
- * Thrown when a command routed through the API store hits an operation that
- * the control-plane `/v1` API does not yet expose. Failing loudly here is
- * deliberate: the alternative (silently reading/writing the on-box sqlite
- * island while the machine is connected to a control plane) is exactly the
- * split-brain bug we are removing.
- */
-export class CloudUnsupportedError extends Error {
-  constructor(operation: string) {
-    super(
-      `operation not supported over the control-plane Loops API: ${operation}. ` +
-        `Run it on a machine whose client explicitly selects the local file connection ` +
-        `(set HASNA_LOOPS_CONNECTION=file to use the local file store).`,
-    );
-    this.name = "CloudUnsupportedError";
-  }
 }
 
 /**
@@ -234,12 +215,11 @@ export class LocalStore implements LoopStore {
 
   /**
    * The underlying on-box sqlite {@link Store}. Exposed ONLY for genuinely
-   * local-runtime operations that cannot route over HTTP — the scheduler
-   * (tick/run-now inline execution), migration import/export, and local
-   * diagnostics (doctor/health/daemon status). Callers must gate on
-   * `transport === "file"` first; the hosted ApiStore has no `raw` store, so
-   * these operations fail loudly on the API connection instead of touching an
-   * island.
+   * machine-local runtime operations that cannot route over HTTP — the
+   * scheduler (tick/run-now inline execution), migration import/export, and
+   * local diagnostics (doctor/health/daemon status). Machine-local commands
+   * open it regardless of the client data connection; the hosted ApiStore has
+   * no `raw` store.
    */
   get raw(): Store {
     return this.store;
@@ -779,10 +759,9 @@ export class ApiStore implements LoopStore {
       recoveredSteps: pickArray<WorkflowStepRun>(raw, "recoveredSteps"),
     };
   }
-  async cancelWorkflowRun(_workflowRunId: string, _reason?: string): Promise<WorkflowRun> {
-    // Not yet exposed by the hosted storage contract; fail loudly rather than
-    // silently mutate the on-box island while flipped to cloud.
-    throw new CloudUnsupportedError("workflows cancel");
+  async cancelWorkflowRun(workflowRunId: string, reason = "cancelled by user"): Promise<WorkflowRun> {
+    const raw = await this.t.post(`/workflow-runs/${encodeURIComponent(workflowRunId)}/cancel`, { reason });
+    return pickObject<WorkflowRun>(raw, "workflowRun")!;
   }
 
   // ── Route work items / invocations ────────────────────────────────────────────
@@ -797,10 +776,12 @@ export class ApiStore implements LoopStore {
       return undefined;
     }
   }
-  async requeueWorkflowWorkItem(_id: string, _patch: { reason?: string; resetAttempts?: boolean } = {}): Promise<WorkflowWorkItem> {
-    // Not yet exposed by the hosted storage contract; fail loudly rather than
-    // silently mutate the on-box island while flipped to cloud.
-    throw new CloudUnsupportedError("routes requeue");
+  async requeueWorkflowWorkItem(id: string, patch: { reason?: string; resetAttempts?: boolean } = {}): Promise<WorkflowWorkItem> {
+    const raw = await this.t.post(`/work-items/${encodeURIComponent(id)}/requeue`, {
+      ...(patch.reason === undefined ? {} : { reason: patch.reason }),
+      ...(patch.resetAttempts === undefined ? {} : { resetAttempts: patch.resetAttempts }),
+    });
+    return pickObject<WorkflowWorkItem>(raw, "workItem")!;
   }
   async listWorkflowInvocations(opts: Parameters<LoopStore["listWorkflowInvocations"]>[0] = {}): Promise<WorkflowInvocation[]> {
     const raw = await this.t.get("/invocations", { query: clean({ ...opts }) });

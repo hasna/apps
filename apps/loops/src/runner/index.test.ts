@@ -30,6 +30,31 @@ function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>,
   });
 }
 
+/**
+ * The shared resolver's disk tier (the canonical station credentials file at
+ * ~/.hasna/loops/config/credentials) is consulted THROUGH process.env. Tests
+ * that assert on `runnerStatus` connection states must relocate it to a
+ * scratch root so the machine's real credential never decides the state.
+ */
+function withCredentialTierIsolation<T>(fn: () => T): T {
+  const previous: Record<string, string | undefined> = {};
+  for (const key of ["HASNA_HOME", "HASNA_CONFIG_HOME", "HASNA_STATE_HOME", "HASNA_CACHE_HOME"]) {
+    previous[key] = process.env[key];
+  }
+  process.env.HASNA_HOME = join(mkdtempSync(join(tmpdir(), "loops-runner-hasna-home-")), "hasna");
+  process.env.HASNA_CONFIG_HOME = mkdtempSync(join(tmpdir(), "loops-runner-cfg-home-"));
+  process.env.HASNA_STATE_HOME = "";
+  process.env.HASNA_CACHE_HOME = "";
+  try {
+    return fn();
+  } finally {
+    for (const key of Object.keys(previous)) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key] as string;
+    }
+  }
+}
+
 describe("loops-runner", () => {
   test("command failures surface a message with URL userinfo redacted", () => {
     const logged: string[] = [];
@@ -249,7 +274,7 @@ describe("loops-runner", () => {
     delete process.env.HASNA_LOOPS_API_URL;
     delete process.env.HASNA_LOOPS_API_KEY;
     try {
-      const status = runnerStatus();
+      const status = withCredentialTierIsolation(() => runnerStatus());
       expect(status.ok).toBe(true);
       expect(status.service).toBe("loops-runner");
       expect(status.storageConnection.connection).toBe("file");
@@ -295,7 +320,7 @@ describe("loops-runner", () => {
     process.env.HASNA_LOOPS_API_KEY = "token" + "-present";
 
     try {
-      const status = runnerStatus("machine-test");
+      const status = withCredentialTierIsolation(() => runnerStatus("machine-test"));
 
       expect(status.ok).toBe(true);
       expect(status.storageConnection.connection).toBe("api");
@@ -875,7 +900,7 @@ describe("runner env-file integration", () => {
     );
     try {
       applyRunnerEnvFile();
-      const status = runnerStatus();
+      const status = withCredentialTierIsolation(() => runnerStatus());
       expect(status.ok).toBe(true);
       expect(status.state).toBe("api_ready");
       expect(status.machineId).toBe("station01");

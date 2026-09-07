@@ -3523,6 +3523,97 @@ export class PostgresLoopStorage implements LoopStorageContract {
     });
   }
 
+  /**
+   * Cancel a workflow run: mark the run (and any pending/running steps)
+   * cancelled, cancel its route work item, and append the lifecycle event.
+   * Mirrors the sqlite Store's `cancelWorkflowRun` on Postgres with tenant
+   * scoping and the same terminal-status guard. Transports are one surface:
+   * the CLI `workflows cancel` routes here over the hosted /v1 API and to the
+   * local store on the file connection.
+   */
+  async cancelWorkflowRun(...args: M<"cancelWorkflowRun">["args"]): Promise<M<"cancelWorkflowRun">["result"]> {
+    const [workflowRunId, reason = "cancelled by user"] = args as [string, string?];
+    const scrubbedReason = scrubbedOrNull(reason) ?? "";
+    return this.client.transaction(async (c) => {
+      const now = nowIso();
+      const currentRun = await this.lockWorkflowRun(c, workflowRunId);
+      const res = await c.query(
+        `UPDATE workflow_runs
+         SET status='cancelled', finished_at=$2, error=$3, updated_at=$2
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$1
+           AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')`,
+        [workflowRunId, now, scrubbedReason],
+      );
+      const changed = res.rowCount === 1;
+      if (changed) {
+        await c.query(
+          `UPDATE workflow_step_runs
+           SET status='cancelled', finished_at=$2, pid=NULL, error=$3, updated_at=$2
+           WHERE tenant_id = open_loops_current_tenant_id() AND workflow_run_id=$1 AND status IN ('pending', 'running')`,
+          [workflowRunId, now, scrubbedReason],
+        );
+        await this.setWorkflowWorkItemsForWorkflowRun(c, workflowRunId, "cancelled", scrubbedReason, now);
+        await this.appendWorkflowEventWithClient(c, workflowRunId, "cancelled", undefined, { reason: scrubbedReason });
+        await this.maybeArchiveGeneratedRouteWorkflow(c, {
+          workflowId: currentRun.workflow_id,
+          loopId: currentRun.loop_id ?? undefined,
+          loopRunId: currentRun.loop_run_id ?? undefined,
+          workItemId: currentRun.work_item_id ?? undefined,
+          workflowRunId,
+          workflowRunStatus: "cancelled",
+          updated: now,
+        });
+      }
+      const run = await c.get<WorkflowRunRow>(
+        "SELECT * FROM workflow_runs WHERE tenant_id = open_loops_current_tenant_id() AND id = $1",
+        [workflowRunId],
+      );
+      if (!run) throw new Error(`workflow run not found after cancel: ${workflowRunId}`);
+      return rowToWorkflowRun(run);
+    });
+  }
+
+  /**
+   * Requeue a terminal route work item for the next task/event delivery:
+   * reset its dispatch state and clear the claim lease, preserving the id and
+   * the reason history. Mirrors the sqlite Store's `requeueWorkflowWorkItem`
+   * on Postgres with tenant scoping; `--keep-attempts` preserves the redispatch
+   * attempt count exactly like the local path.
+   */
+  async requeueWorkflowWorkItem(...args: M<"requeueWorkflowWorkItem">["args"]): Promise<M<"requeueWorkflowWorkItem">["result"]> {
+    const [id, patch = {}] = args as [string, { reason?: string; resetAttempts?: boolean }?];
+    const requeueableStatuses: WorkflowWorkItemStatus[] = ["succeeded", "failed", "dead_letter", "cancelled"];
+    const reason = patch.reason?.trim() || "requeued";
+    const now = nowIso();
+    const resetAttempts = patch.resetAttempts !== false;
+    return this.client.transaction(async (c) => {
+      const current = await c.get<WorkflowWorkItemRow>(
+        "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+        [id],
+      );
+      if (!current) throw new Error(`workflow work item not found: ${id}`);
+      if (!requeueableStatuses.includes(current.status as WorkflowWorkItemStatus)) {
+        throw new Error(`workflow work item is not requeueable: ${id} status=${current.status}`);
+      }
+      const res = await c.query(
+        `UPDATE workflow_work_items
+         SET status='queued', workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+          ${resetAttempts ? "attempts=0, gate_deaths=0," : ""}
+          next_attempt_at=NULL, lease_expires_at=NULL, last_reason=$2, updated_at=$3
+         WHERE tenant_id = open_loops_current_tenant_id() AND id=$1
+           AND status IN ('succeeded', 'failed', 'dead_letter', 'cancelled')`,
+        [id, reason, now],
+      );
+      const item = await c.get<WorkflowWorkItemRow>(
+        "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
+        [id],
+      );
+      if (!item) throw new Error(`workflow work item not found after requeue: ${id}`);
+      if (res.rowCount !== 1) throw new Error(`workflow work item was not requeued: ${id} status=${item.status}`);
+      return rowToWorkflowWorkItem(item);
+    });
+  }
+
   async finalizeWorkflowStepRun(...args: M<"finalizeWorkflowStepRun">["args"]): Promise<M<"finalizeWorkflowStepRun">["result"]> {
     const [workflowRunId, stepId, patch, opts = {}] = args;
     const finishedAt = patch.finishedAt ?? nowIso();

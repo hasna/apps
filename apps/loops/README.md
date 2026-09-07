@@ -48,6 +48,16 @@ credential resolves. The file connection is an EXPLICIT opt-in only
 configured environment outranks the opt-in. The retired `HASNA_LOOPS_CONNECTION=api`
 value and the former `HASNA_LOOPS_STORAGE_MODE` variable are not read at all.
 
+No command is gated by the connection. Data commands route through the
+selected transport; machine-local runtime commands (daemon lifecycle, `tick`,
+`expectations`, `hygiene *`, route admission/drain, `workflows run` and the
+`workflows migrate-*` migrations, `gc`, `ui`, and the daemon/doctor/todos
+parts of `health scan`) always act on THIS machine's runtime — its daemon,
+its scheduler store, and its sqlite file — under every client connection, and
+announce `scope=machine-local runtime store` on stderr when the client data
+connection is the hosted API so local-runtime output is never mistaken for
+control-plane state.
+
 The public `@hasna/loops` package owns the local runtime, the Postgres storage
 adapter, the control-plane API contract, tenant authentication and
 authorization, runner contract, SDK, MCP server, and CLI. Account provisioning

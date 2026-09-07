@@ -968,6 +968,13 @@ async function handleWorkflowRunsRequest(ctx: V1RequestContext, segments: string
       recoveredSteps: recovered.recoveredSteps.map((step) => publicWorkflowStepRun(step)),
     });
   }
+  if (segments.length === 2 && segments[1] === "cancel" && ctx.request.method === "POST") {
+    const run = await storage.getWorkflowRun(id);
+    if (!run) return fail("workflow_run_not_found", 404);
+    const body = await readWorkflowCancelBody(ctx.request, ctx.bodyLimitBytes);
+    const cancelled = await storage.cancelWorkflowRun(id, body.reason ?? "cancelled by user");
+    return ok({ workflowRun: publicWorkflowRun(cancelled) });
+  }
   if (segments.length === 2 && segments[1] === "steps" && ctx.request.method === "GET") {
     const steps = await storage.listWorkflowStepRuns(id);
     return ok({ steps: steps.map((step) => publicWorkflowStepRun(step)) });
@@ -1003,6 +1010,20 @@ async function handleWorkItemsRequest(ctx: V1RequestContext, segments: string[])
     const item = await storage.getWorkflowWorkItem(id);
     if (!item) return fail("work_item_not_found", 404);
     return ok({ workItem: publicWorkflowWorkItem(item) });
+  }
+  if (segments.length === 2 && segments[1] === "requeue" && ctx.request.method === "POST") {
+    const item = await storage.getWorkflowWorkItem(id);
+    if (!item) return fail("work_item_not_found", 404);
+    const body = await readWorkItemRequeueBody(ctx.request, ctx.bodyLimitBytes);
+    try {
+      const requeued = await storage.requeueWorkflowWorkItem(id, body);
+      return ok({ workItem: publicWorkflowWorkItem(requeued) });
+    } catch (error) {
+      if (error instanceof Error && /not requeueable/.test(error.message)) {
+        return fail("work_item_not_requeueable", 409);
+      }
+      throw error;
+    }
   }
   return fail("not_found", 404);
 }
@@ -2261,6 +2282,48 @@ async function readWorkflowRecoveryBody(
     throw apiError("invalid_workflow_recovery_body", 422);
   }
   return record.reason === undefined ? {} : { reason: record.reason };
+}
+
+async function readWorkflowCancelBody(
+  request: Request,
+  limitBytes: number,
+): Promise<{ reason?: string }> {
+  if (request.body === null) return {};
+  const body = await readJsonBody<unknown>(request, limitBytes);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw apiError("invalid_workflow_cancel_body", 422);
+  }
+  const record = body as Record<string, unknown>;
+  if (
+    Object.keys(record).some((key) => key !== "reason") ||
+    (record.reason !== undefined && typeof record.reason !== "string")
+  ) {
+    throw apiError("invalid_workflow_cancel_body", 422);
+  }
+  return record.reason === undefined ? {} : { reason: record.reason };
+}
+
+async function readWorkItemRequeueBody(
+  request: Request,
+  limitBytes: number,
+): Promise<{ reason?: string; resetAttempts?: boolean }> {
+  if (request.body === null) return {};
+  const body = await readJsonBody<unknown>(request, limitBytes);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw apiError("invalid_work_item_requeue_body", 422);
+  }
+  const record = body as Record<string, unknown>;
+  if (
+    Object.keys(record).some((key) => key !== "reason" && key !== "resetAttempts") ||
+    (record.reason !== undefined && typeof record.reason !== "string") ||
+    (record.resetAttempts !== undefined && typeof record.resetAttempts !== "boolean")
+  ) {
+    throw apiError("invalid_work_item_requeue_body", 422);
+  }
+  return {
+    ...(record.reason === undefined ? {} : { reason: record.reason }),
+    ...(record.resetAttempts === undefined ? {} : { resetAttempts: record.resetAttempts }),
+  };
 }
 
 function isJsonContentType(contentType: string): boolean {

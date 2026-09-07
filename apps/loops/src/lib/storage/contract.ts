@@ -68,6 +68,8 @@ export type LoopStorageMethodName =
   | "markWorkflowStepPid"
   | "recordWorkflowStepProgress"
   | "recoverWorkflowRun"
+  | "cancelWorkflowRun"
+  | "requeueWorkflowWorkItem"
   | "finalizeWorkflowStepRun"
   | "skipWorkflowStepRun"
   | "finalizeWorkflowRun"
@@ -171,6 +173,8 @@ export interface LoopStorageContract extends Record<LoopStorageMethodName, (...a
   markWorkflowStepPid: AsyncStoreMethod<"markWorkflowStepPid">;
   recordWorkflowStepProgress: AsyncStoreMethod<"recordWorkflowStepProgress">;
   recoverWorkflowRun: AsyncStoreMethod<"recoverWorkflowRun">;
+  cancelWorkflowRun: AsyncStoreMethod<"cancelWorkflowRun">;
+  requeueWorkflowWorkItem: AsyncStoreMethod<"requeueWorkflowWorkItem">;
   finalizeWorkflowStepRun: AsyncStoreMethod<"finalizeWorkflowStepRun">;
   skipWorkflowStepRun: AsyncStoreMethod<"skipWorkflowStepRun">;
   finalizeWorkflowRun: AsyncStoreMethod<"finalizeWorkflowRun">;

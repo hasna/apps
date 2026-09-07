@@ -41,7 +41,7 @@ import { classifyLoopExecutionStaleness } from "../lib/execution-staleness.js";
 import { publicCommandDescriptor } from "../lib/command-target.js";
 import { initialNextRun, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
-import { CloudUnsupportedError, getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
+import { getStore, isCloudStore, type LoopStore } from "../lib/store/index.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
@@ -49,7 +49,7 @@ import { runDaemon, startDaemon, stripAnsi } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
-import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports } from "../lib/health.js";
+import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports, type HealthScanFinding, type LoopsHealthScan } from "../lib/health.js";
 import { buildHostedDoctorReport, buildHostedHealthReport, buildHostedHealthScan } from "../lib/hosted-diagnostics.js";
 import { isPrivateOperationEventType } from "../lib/operation-contract.js";
 import type { LoopMutationEnvelope } from "../lib/operation-contract.js";
@@ -71,7 +71,6 @@ import {
   buildScriptInventoryReport,
   buildStuckRunReport,
 } from "../lib/hygiene.js";
-import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
 import {
   getLoopTemplate,
@@ -122,6 +121,7 @@ import {
   validateRoutePolicy,
   workflowBodyFromFile,
   workflowSpecForPreflight,
+  type RouteTaskSpec,
   type TodosDrainOptions,
   type TodosTaskRouteOptions,
 } from "../lib/route/index.js";
@@ -299,20 +299,32 @@ async function listAllLoops(
 }
 
 /**
- * Guard for the on-box execution/maintenance commands (daemon lifecycle, WAL
- * checkpoint + backup rotation, tick, local migrations). These act on this
- * machine's runtime and sqlite file, so they are meaningless — and would
- * silently hit the local island — when the client is flipped to the hosted API.
- * Fail loudly instead. (`run-now` is NOT local-only: it routes through the
- * hosted endpoint and schedules the loop for a bound runner.)
+ * Machine-local runtime commands (daemon lifecycle, scheduler tick, local
+ * execution, hygiene, expectations, route admission/drain, gc, ui) always act
+ * on THIS machine's runtime: its daemon, its scheduler store, and its sqlite
+ * file. The storage-mode axis is retired (owner directive 2026-08-15) — there
+ * is no "mode" to flip, so no command is gated by the client connection.
+ * When the client data connection resolves to the hosted API, these commands
+ * keep running against the local runtime and say so once per process, so a
+ * hosted-connected operator never mistakes local-runtime output for control
+ * plane state. (`run-now` is NOT machine-local: it routes through the
+ * connected store — the hosted endpoint schedules, the file store executes.)
  */
-function assertLocalOnlyCommand(command: string): void {
-  if (isCloudStore()) {
-    throw new ValidationError(
-      `'loops ${command}' operates on this machine's local runtime and is not available while flipped to the hosted Loops API. ` +
-        `Set HASNA_LOOPS_CONNECTION=file to explicitly use the local file store and run it here.`,
-    );
-  }
+let localRuntimeScopeAnnounced = false;
+
+function announceLocalRuntimeScope(command: string): void {
+  if (!isCloudStore() || localRuntimeScopeAnnounced) return;
+  localRuntimeScopeAnnounced = true;
+  console.error(
+    `note: 'loops ${command}' operates on this machine's local runtime store (daemon, schedules, runs, sqlite); ` +
+      `the client data connection is the hosted Loops API (see 'loops status').`,
+  );
+}
+
+/** Open the on-box runtime store for a machine-local command. */
+function localRuntimeStore(command: string): Store {
+  announceLocalRuntimeScope(command);
+  return new Store();
 }
 
 /** `123456` -> `2m3s`, so an operator reads an unclaimed slot without doing arithmetic. */
@@ -629,7 +641,6 @@ function baseCreateInput(name: string, opts: LoopCreateOptions, target: LoopTarg
     schedule,
     target,
     goal: goalFromOpts(opts),
-    machine: typeof opts.machine === "string" ? resolveLoopMachine(opts.machine) : undefined,
     ...policy,
     expiresAt: typeof opts.expiresAt === "string" ? new Date(opts.expiresAt).toISOString() : undefined,
     expiresAfterRuns: positiveInteger(
@@ -664,10 +675,6 @@ function addAccountOptions(command: Command): Command {
   return command
     .option("--account <profile>", "OpenAccounts profile name for this target")
     .option("--account-tool <tool>", "OpenAccounts tool id; defaults from provider for agents");
-}
-
-function addMachineOptions(command: Command): Command {
-  return command.option("--machine <id>", "OpenMachines machine id to assign this loop to");
 }
 
 function addGoalOptions(command: Command): Command {
@@ -796,8 +803,7 @@ const create = program.command("create").description("create loops");
 
 addGoalOptions(
   addAccountOptions(
-    addMachineOptions(
-      addLabelOptions(addScheduleOptions(
+    addLabelOptions(addScheduleOptions(
       create
         .command("command <name>")
         .description("create a deterministic shell command loop")
@@ -807,7 +813,7 @@ addGoalOptions(
         .option("--no-shell", "execute without a shell")
         .option("--preflight-each-run", "check target executables/accounts before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),
-      )),
+      ),
     ),
   ),
 ).action(runAction(async (name, opts) => {
@@ -822,7 +828,7 @@ addGoalOptions(
   };
   const input = baseCreateInput(name, opts, target);
   const preflight = opts.preflight
-    ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "command" }, { loopName: name }, { machine: input.machine })
+    ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "command" }, { loopName: name }, {})
     : undefined;
   await withStore(async (store) => {
     const loop = await store.createLoop(input);
@@ -832,8 +838,7 @@ addGoalOptions(
 
 addGoalOptions(
   addAccountOptions(
-    addMachineOptions(
-      addLabelOptions(addScheduleOptions(
+    addLabelOptions(addScheduleOptions(
       create
         .command("agent <name>")
         .description("create a headless coding-agent loop")
@@ -858,7 +863,7 @@ addGoalOptions(
         .option("--config-isolation <mode>", "safe or none", "safe")
         .option("--preflight-each-run", "check provider/account readiness before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),
-      )),
+      ),
     ),
   ),
 ).action(runAction(async (name, opts) => {
@@ -893,7 +898,7 @@ addGoalOptions(
   }, { name, type: "agent", provider }, { baseDir: process.cwd() });
   const input = baseCreateInput(name, opts, target);
   const preflight = opts.preflight
-    ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, { machine: input.machine })
+    ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, {})
     : undefined;
   await withStore(async (store) => {
     const loop = await store.createLoop(input);
@@ -902,8 +907,7 @@ addGoalOptions(
 }));
 
 addGoalOptions(
-  addMachineOptions(
-    addLabelOptions(addScheduleOptions(
+  addLabelOptions(addScheduleOptions(
     create
       .command("workflow <name>")
       .description("schedule a stored workflow")
@@ -911,8 +915,7 @@ addGoalOptions(
       .option("--timeout <duration>", "workflow run timeout; use none/unlimited for no workflow-level timeout")
       .option("--preflight-each-run", "check workflow steps before every scheduled run")
       .option("--preflight", "check workflow step executables/accounts before storing the loop"),
-    )),
-  ),
+  )),
 ).action(runAction((name, opts) => withStore(async (store) => {
   const workflow = await store.requireWorkflow(opts.workflow);
   const target: LoopTarget = {
@@ -923,7 +926,7 @@ addGoalOptions(
   };
   const input = baseCreateInput(name, opts, target);
   const preflight = opts.preflight
-    ? preflightStoredWorkflow(workflow, { name, type: "workflow", workflow: workflow.name }, { machine: input.machine })
+    ? preflightStoredWorkflow(workflow, { name, type: "workflow", workflow: workflow.name }, {})
     : undefined;
   const loop = await store.createLoop(input);
   printCreatedLoop(loop, `created workflow loop ${loop.id} (${loop.name}) workflow=${workflow.name} next=${loop.nextRunAt}`, preflight);
@@ -936,8 +939,6 @@ const templates = program.command("templates").alias("template").description("re
 const routes = program.command("routes").alias("route").description("create, inspect, and drain workflow invocation/admission routes");
 
 const events = program.command("events").description("(deprecated) Hasna event envelope aliases for 'routes create' and 'routes drain'");
-
-const machines = program.command("machines").description("inspect OpenMachines topology for loop assignment");
 
 const goal = program.command("goal").description("inspect goal runs");
 
@@ -1414,13 +1415,12 @@ routePolicies
   }));
 
 async function handleRouteEvent(kind: string, opts: TodosTaskRouteOptions): Promise<void> {
-  // Route admission writes invocations, work items, and loops through the local
-  // sqlite Store in one transaction and gates on this machine's live concurrency
-  // (countRunningWorkflowStepsByAuthProfile). It has no hosted /v1 equivalent, so
-  // when the client is flipped to the cloud API a real (non-dry-run) create would
-  // silently write to the on-box island — the split-brain we forbid. A dry-run
-  // preview never touches the store, so it stays available on every connection.
-  if (!opts.dryRun) assertLocalOnlyCommand("routes create");
+  // Route admission writes invocations, work items, and loops through the
+  // local sqlite Store in one transaction and gates on this machine's live
+  // concurrency (countRunningWorkflowStepsByAuthProfile). This is a
+  // machine-local runtime operation, so it runs identically on every client
+  // connection; a dry-run preview never touches the store.
+  if (!opts.dryRun) announceLocalRuntimeScope("routes create");
   const event = await readEventEnvelopeInput(opts);
   const result = routeEventByKind(kind, event, opts);
   print(result.value, result.human);
@@ -1439,10 +1439,10 @@ async function handleRouteEvent(kind: string, opts: TodosTaskRouteOptions): Prom
 }
 
 function handleRouteDrain(kind: string, opts: TodosDrainOptions): void {
-  // Draining a source queue admits work through the same local-only Store
-  // transaction path as `routes create`, so it is a local-runtime command: fail
-  // loudly rather than write the on-box island while flipped to the hosted API.
-  assertLocalOnlyCommand("routes drain");
+  // Draining a source queue admits work through the same machine-local Store
+  // transaction path as `routes create`, so it runs on this machine's runtime
+  // under every client connection.
+  announceLocalRuntimeScope("routes drain");
   if (kind !== "todos-task") throw new ValidationError("route drain currently supports kind todos-task");
   const expandedOpts = applyRoutePolicyToDrainOptions(opts, { requireExplicitSafety: true });
   const result = drainTodosTaskRoutes(expandedOpts);
@@ -1591,25 +1591,6 @@ goal
   .description("(deprecated: merged into 'goal show') show goal status for a goal, goal event, loop run, or workflow run")
   .action(runAction(showGoal));
 
-machines
-  .command("list")
-  .alias("ls")
-  .description("list known machines")
-  .action(runAction(() => {
-    const values = listOpenMachines();
-    if (isJson()) print(values);
-    else {
-      for (const machine of values) {
-        const route = machine.local ? "local" : machine.route ?? "-";
-        console.log(`${machine.id.padEnd(12)}  ${route.padEnd(10)}  workspace=${machine.workspacePath ?? "-"}  host=${machine.hostname ?? "-"}`);
-      }
-    }
-  }));
-
-machines.command("show <id>").description("resolve a machine assignment").action(runAction((id) => {
-  print(resolveLoopMachine(id));
-}));
-
 workflows
   .command("validate <file>")
   .description("validate a workflow JSON file without storing or running it")
@@ -1700,8 +1681,7 @@ workflows
   .description("execute a stored workflow once now")
   .option("--show-output", "show step stdout/stderr")
   .action(runAction(async (idOrName, opts) => {
-    assertLocalOnlyCommand("workflows run");
-    const store = new Store();
+    const store = localRuntimeStore("workflows run");
     try {
       const workflow = store.requireWorkflow(idOrName);
       const result = await executeWorkflow(store, workflow);
@@ -1789,8 +1769,7 @@ workflows
   .option("--apply", "create new workflow specs or update direct agent targets for eligible loops")
   .option("--archive-old", "archive old workflow specs after retargeting when no active loops still reference them")
   .action(runAction((opts) => {
-    assertLocalOnlyCommand("workflows migrate-agent-timeouts");
-    const store = new Store();
+    const store = localRuntimeStore("workflows migrate-agent-timeouts");
     try {
       const timeoutMs = timeoutDuration(opts.timeout, "--timeout") ?? null;
       const candidateLoops = opts.loop
@@ -1924,8 +1903,7 @@ workflows
   .option("--apply", "create new workflow specs and retarget eligible loops")
   .option("--archive-old", "archive old workflow specs after retargeting when no active loops still reference them")
   .action(runAction((opts) => {
-    assertLocalOnlyCommand("workflows migrate-goal-wrappers");
-    const store = new Store();
+    const store = localRuntimeStore("workflows migrate-goal-wrappers");
     try {
       const candidateLoops = opts.loop
         ? [store.requireUniqueLoop(opts.loop)]
@@ -2059,10 +2037,9 @@ program
   .option("--refresh <duration>", "refresh interval", "2s")
   .action(runAction(async (opts: { refresh?: string }) => {
     // The live table reads this machine's local sqlite runtime directly (active
-    // loops, running runs, local counts via countRuns) on a refresh loop; it has
-    // no hosted /v1 equivalent, so it would show the on-box island's rows while
-    // flipped to the cloud API. Fail loudly instead of rendering the wrong store.
-    assertLocalOnlyCommand("ui");
+    // loops, running runs, local counts via countRuns) on a refresh loop; it is
+    // a machine-local runtime command that runs under every client connection.
+    announceLocalRuntimeScope("ui");
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       console.error("Loops UI requires a TTY terminal.");
       console.error("Use `loops list`, `loops runs`, or `loops daemon status` non-interactively.");
@@ -2221,8 +2198,7 @@ program
   .description("evaluate deterministic loop expectations without mutating external task systems")
   .option("--limit <n>", "maximum loops to inspect when no loop is specified", "200")
   .action(runAction((idOrName, opts) => {
-    assertLocalOnlyCommand("expectations");
-    const store = new Store();
+    const store = localRuntimeStore("expectations");
     try {
       const loops = idOrName ? [store.requireLoop(idOrName)] : store.listLoops({ limit: positiveInteger(opts.limit, "--limit") ?? 200 });
       const values = loops.map((loop) => expectationForLoop(store, loop));
@@ -2238,6 +2214,41 @@ program
       store.close();
     }
   }));
+
+function healthScanTaskFromFinding(finding: HealthScanFinding, scan: LoopsHealthScan | { reports?: { dir?: string; markdown?: string } }): RouteTaskSpec {
+  const task = finding.recommendedTask!;
+  const description = [
+    task.description,
+    scan.reports ? `Report: ${scan.reports.markdown}` : undefined,
+  ].filter(Boolean).join("\n\n");
+  return {
+    title: task.title,
+    description,
+    priority: task.priority,
+    tags: task.tags,
+    fingerprint: task.dedupeKey,
+    extra: {
+      kind: finding.kind,
+      severity: finding.severity,
+      classification: finding.classification,
+    },
+    metadata: {
+      source: "openloops.health.scan",
+      kind: finding.kind,
+      severity: finding.severity,
+      loop_id: finding.loop?.id,
+      loop_name: finding.loop?.name,
+      loop_status: finding.loop?.status,
+      run_id: finding.run?.id,
+      classification: finding.classification,
+      fingerprint: task.dedupeKey,
+      cwd: finding.route?.cwd,
+      provider: finding.route?.provider,
+      report_dir: scan.reports?.dir,
+      no_tmux_dispatch: true,
+    },
+  };
+}
 
 const health = program
   .command("health")
@@ -2288,14 +2299,43 @@ health
   .option("--route-project-path <path>", "fallback project path for --auto-route when the finding has no cwd")
   .option("-j, --json", "print JSON for this command")
   .action(runAction(async (opts) => {
+    const machineLocal = Boolean(opts.startDaemon || opts.daemon || opts.doctor || opts.upsertTodos);
+    if (machineLocal) announceLocalRuntimeScope("health scan");
     if (isCloudStore()) {
-      if (opts.startDaemon || opts.daemon || opts.doctor || opts.upsertTodos) {
-        throw new CloudUnsupportedError(
-          "hosted health scan only supports read-only hosted checks; daemon, doctor, and todos routing remain machine-local",
-        );
-      }
+      // Hosted scan: the data checks read the control plane, while the
+      // --daemon/--doctor/--upsert-todos parts are machine-local runtime
+      // operations that run on this machine regardless of the client
+      // connection. Both run in one command, each labelled with its scope.
       const store = getStore();
       try {
+        const runtime: Record<string, unknown> = {};
+        if (opts.daemon || opts.startDaemon) {
+          const local = localRuntimeStore("health scan");
+          try {
+            runtime.daemon = daemonStatus(local);
+            if (opts.startDaemon && !(runtime.daemon as { running?: boolean }).running) {
+              const result = await startDaemon({ cliEntry: process.argv[1] ?? "loops" });
+              runtime.selfHeal = {
+                attempted: true,
+                ok: Boolean(result.started || result.alreadyRunning),
+                reason: (runtime.daemon as { stale?: boolean }).stale
+                  ? "daemon pid file was stale"
+                  : "daemon was not running",
+              };
+              runtime.daemon = daemonStatus(local);
+            }
+          } finally {
+            local.close();
+          }
+        }
+        if (opts.doctor) {
+          const local = localRuntimeStore("health scan");
+          try {
+            runtime.doctor = runDoctor(local);
+          } finally {
+            local.close();
+          }
+        }
         const hosted = await buildHostedHealthScan(store, {
           includeStatuses: parseLoopStatuses(opts.include, "--include"),
           limit: positiveInteger(opts.limit, "--limit") ?? 200,
@@ -2305,14 +2345,59 @@ health
             ? positiveDuration(opts.staleRunningAfter, "--stale-running-after")
             : undefined,
         });
-        const scan = writeHealthScanReports(hosted.scan, { reportDir: opts.reportDir ?? opts.evidenceDir });
-        const output = { ...scan, backend: hosted.backend, unchecked: hosted.unchecked };
+        let scan = writeHealthScanReports(hosted.scan, { reportDir: opts.reportDir ?? opts.evidenceDir });
+        const runtimeScope = machineLocal ? { scope: "machine-local runtime store" } : {};
+        const output: Record<string, unknown> = {
+          ...scan,
+          backend: hosted.backend,
+          unchecked: hosted.unchecked,
+          ...(opts.daemon || opts.doctor || opts.startDaemon ? { runtime: { ...runtimeScope, ...runtime } } : {}),
+        };
+        if (opts.upsertTodos) {
+          const result = upsertRouteTasks({
+            project: opts.project,
+            taskList: {
+              slug: opts.taskList,
+              name: "Loop Error Self Heal",
+              description: "Deduped Loops health scan findings for daemon, doctor, preflight, latest-run, and stale-running issues.",
+            },
+            cursorKey: routeCursorKey(
+              "health",
+              ["scan", opts.project, opts.taskList, parseLoopStatuses(opts.include, "--include").join(","), opts.limit, Boolean(opts.doctor), Boolean(opts.daemon)],
+              { autoRoute: Boolean(opts.autoRoute), routeProjectPath: opts.routeProjectPath },
+            ),
+            maxActions: positiveInteger(opts.maxActions, "--max-actions") ?? 5,
+            dryRun: Boolean(opts.dryRun),
+            autoRoute: Boolean(opts.autoRoute),
+            routeProjectPath: opts.routeProjectPath,
+            source: "openloops.health.scan",
+            evidence: { kind: "health-scan-route-tasks", dir: opts.evidenceDir ?? opts.reportDir },
+            summary: {
+              status: scan.status,
+              inspected: scan.counts.loops,
+              findings: scan.counts.findings,
+              reportDir: scan.reports?.dir,
+            },
+            tasks: scan.findings
+              .filter((finding) => finding.recommendedTask)
+              .map((finding) => healthScanTaskFromFinding(finding, scan)),
+          });
+          scan = { ...scan, todos: result.output };
+          output.todos = result.output;
+          if (!result.ok) process.exitCode = 1;
+        }
         if (opts.json || isJson()) console.log(JSON.stringify(compactHealthScanOutput(output), null, 2));
         else {
+          const todosEntry = output.todos as { actions?: unknown } | undefined;
+          const actions = Array.isArray(todosEntry?.actions) ? todosEntry.actions as Array<Record<string, unknown>> : [];
+          const runtimeBits = opts.daemon || opts.startDaemon
+            ? ` daemon=${(runtime.daemon as { running?: boolean } | undefined)?.running ? "running" : "not-running"} doctor=${opts.doctor ? "included" : "skipped"}`
+            : "";
           console.log(
             `health_scan backend=hosted status=${scan.status} loops=${scan.counts.loops} findings=${scan.counts.findings} ` +
               `reported=${scan.counts.reportedFindings} truncated=${scan.counts.truncatedFindings} ` +
-              `latest=${scan.counts.latestRunFindings} stale_running=${scan.counts.staleRunning}`,
+              `latest=${scan.counts.latestRunFindings} stale_running=${scan.counts.staleRunning}` +
+              `${runtimeBits} todos_actions=${actions.length}`,
           );
           for (const finding of scan.findings) {
             console.log(`${finding.severity} ${finding.kind} ${finding.fingerprint} ${finding.loop?.name ?? ""} ${finding.message}`);
@@ -2325,8 +2410,7 @@ health
       }
       return;
     }
-    assertLocalOnlyCommand("health scan");
-    const store = new Store();
+    const store = localRuntimeStore("health scan");
     try {
       const includeStatuses = parseLoopStatuses(opts.include, "--include");
       let daemon = (opts.daemon || opts.startDaemon) ? daemonStatus(store) : undefined;
@@ -2370,40 +2454,7 @@ health
       if (opts.upsertTodos) {
         const tasks = scan.findings
           .filter((finding) => finding.recommendedTask)
-          .map((finding) => {
-            const task = finding.recommendedTask!;
-            const description = [
-              task.description,
-              scan.reports ? `Report: ${scan.reports.markdown}` : undefined,
-            ].filter(Boolean).join("\n\n");
-            return {
-              title: task.title,
-              description,
-              priority: task.priority,
-              tags: task.tags,
-              fingerprint: task.dedupeKey,
-              extra: {
-                kind: finding.kind,
-                severity: finding.severity,
-                classification: finding.classification,
-              },
-              metadata: {
-                source: "openloops.health.scan",
-                kind: finding.kind,
-                severity: finding.severity,
-                loop_id: finding.loop?.id,
-                loop_name: finding.loop?.name,
-                loop_status: finding.loop?.status,
-                run_id: finding.run?.id,
-                classification: finding.classification,
-                fingerprint: task.dedupeKey,
-                cwd: finding.route?.cwd,
-                provider: finding.route?.provider,
-                report_dir: scan.reports?.dir,
-                no_tmux_dispatch: true,
-              },
-            };
-          });
+          .map((finding) => healthScanTaskFromFinding(finding, scan));
         const result = upsertRouteTasks({
           project: opts.project,
           taskList: {
@@ -2468,8 +2519,7 @@ health
   .option("--evidence-dir <path>", "write the route result JSON to this directory")
   .option("--dry-run", "print intended task upserts without mutating todos")
   .action(runAction((opts) => {
-    assertLocalOnlyCommand("health route-tasks");
-    const store = new Store();
+    const store = localRuntimeStore("health route-tasks");
     try {
       const report = buildHealthReport(store, { limit: positiveInteger(opts.limit, "--limit") ?? 200, includeInactive: Boolean(opts.includeInactive) });
       const failures = report.expectations.filter((entry) => !entry.ok && entry.recommendedTask);
@@ -2537,8 +2587,7 @@ hygiene
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
   .action(runAction((opts) => {
-    assertLocalOnlyCommand("hygiene names");
-    const store = new Store();
+    const store = localRuntimeStore("hygiene names");
     try {
       const report = buildNameHygieneReport(store, {
         apply: false,
@@ -2579,8 +2628,7 @@ hygiene
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
   .action(runAction((opts) => {
-    assertLocalOnlyCommand("hygiene duplicates");
-    const store = new Store();
+    const store = localRuntimeStore("hygiene duplicates");
     try {
       const report = buildDuplicateOverlapReport(store, {
         includeInactive: Boolean(opts.includeInactive),
@@ -2606,8 +2654,7 @@ hygiene
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
   .action(runAction((opts) => {
-    assertLocalOnlyCommand("hygiene scripts");
-    const store = new Store();
+    const store = localRuntimeStore("hygiene scripts");
     try {
       const report = buildScriptInventoryReport(store, {
         scriptsDir: opts.scriptsDir,
@@ -2640,8 +2687,7 @@ hygiene
   .option("--evidence-dir <path>", "write the route result JSON to this directory")
   .option("--dry-run", "print intended task upserts without mutating todos")
   .action(runAction((opts) => {
-    assertLocalOnlyCommand("hygiene route-tasks");
-    const store = new Store();
+    const store = localRuntimeStore("hygiene route-tasks");
     try {
       const checks = parseHygieneChecks(opts.checks);
       const route = buildHygieneRouteTasks(store, {
@@ -3043,8 +3089,7 @@ program
   }));
 
 program.command("tick").description("run one scheduler tick").action(runAction(async () => {
-  assertLocalOnlyCommand("tick");
-  const store = new Store();
+  const store = localRuntimeStore("tick");
   try {
     const result = await tick({ store, runnerId: `manual-tick:${process.pid}` });
     print(result, `completed=${result.completed.length} skipped=${result.skipped.length} recovered=${result.recovered.length}`);
@@ -3116,10 +3161,11 @@ program
   .option("--dry-run", "preview deletions without changing anything (default)")
   .option("--apply", "actually delete history, prune backups, checkpoint, and remove stray files")
   .action(runAction((opts) => {
-    // gc rotates the on-box sqlite backups + WAL and prunes local temp files, so
-    // it is a local-runtime maintenance command. (History pruning of the shared
-    // store is available via the hosted control plane, not this on-box command.)
-    assertLocalOnlyCommand("gc");
+    // gc rotates the on-box sqlite backups + WAL, prunes local history, and
+    // removes stray local temp files: a machine-local runtime maintenance
+    // command that runs under every client connection. (History pruning of the
+    // shared store is available via the hosted control plane's history/prune.)
+    announceLocalRuntimeScope("gc");
     if (opts.dryRun && opts.apply) throw new ValidationError("choose either --dry-run or --apply, not both");
     const dryRun = !opts.apply;
     const maxAgeDays = nonNegativeInteger(opts.maxAgeDays, "--max-age-days");
@@ -3187,25 +3233,25 @@ daemon
   .description("run the scheduler daemon in the foreground")
   .option("--interval-ms <ms>", "tick interval", (value) => Number(value))
   .action(runAction(async (opts) => {
-    assertLocalOnlyCommand("daemon run");
+    announceLocalRuntimeScope("daemon run");
     return runDaemon({ intervalMs: opts.intervalMs });
   }));
 
 daemon.command("start").description("start the daemon in the background").action(runAction(async () => {
-  assertLocalOnlyCommand("daemon start");
+  announceLocalRuntimeScope("daemon start");
   const result = await startDaemon({ cliEntry: process.argv[1] ?? "loops" });
   print(result, result.alreadyRunning ? `already running pid=${result.pid}` : result.started ? `started pid=${result.pid}` : "failed to start");
 }));
 
 daemon.command("stop").description("stop the background daemon").action(runAction(async () => {
-  assertLocalOnlyCommand("daemon stop");
+  announceLocalRuntimeScope("daemon stop");
   const result = await stopDaemon();
   print(result, result.stopped ? `stopped pid=${result.pid}` : "not running");
 }));
 
 daemon.command("status").description("show daemon lease/heartbeat status").action(runAction(() => {
-  assertLocalOnlyCommand("daemon status");
-  const store = new Store();
+  announceLocalRuntimeScope("daemon status");
+  const store = localRuntimeStore("daemon status");
   try {
     print(daemonStatus(store));
   } finally {
@@ -3218,7 +3264,7 @@ daemon
   .description("write a systemd user service or launchd plist")
   .option("--enable", "also enable/start the user service when supported")
   .action(runAction((opts) => {
-    assertLocalOnlyCommand("daemon install");
+    announceLocalRuntimeScope("daemon install");
     const result = installStartup(process.argv[1] ?? "loops");
     if (opts.enable) result.enableResults = enableStartup(result);
     const enableText = result.enableResults
@@ -3235,7 +3281,7 @@ daemon
   // otherwise reject it as an unknown option.
   .option("--tail <n>", "alias for --lines")
   .action(runAction((opts) => {
-    assertLocalOnlyCommand("daemon logs");
+    announceLocalRuntimeScope("daemon logs");
     const path = daemonLogPath();
     if (!existsSync(path)) {
       if (isJson()) console.log(JSON.stringify({ path, lines: [] }, null, 2));

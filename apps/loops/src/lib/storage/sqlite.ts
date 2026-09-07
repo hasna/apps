@@ -87,6 +87,8 @@ export class SqliteLoopStorage implements LoopStorageContract {
   markWorkflowStepPid(...args: StoreMethod<"markWorkflowStepPid">["args"]) { return this.call("markWorkflowStepPid", ...args); }
   recordWorkflowStepProgress(...args: StoreMethod<"recordWorkflowStepProgress">["args"]) { return this.call("recordWorkflowStepProgress", ...args); }
   recoverWorkflowRun(...args: StoreMethod<"recoverWorkflowRun">["args"]) { return this.call("recoverWorkflowRun", ...args); }
+  cancelWorkflowRun(...args: StoreMethod<"cancelWorkflowRun">["args"]) { return this.call("cancelWorkflowRun", ...args); }
+  requeueWorkflowWorkItem(...args: StoreMethod<"requeueWorkflowWorkItem">["args"]) { return this.call("requeueWorkflowWorkItem", ...args); }
   finalizeWorkflowStepRun(...args: StoreMethod<"finalizeWorkflowStepRun">["args"]) { return this.call("finalizeWorkflowStepRun", ...args); }
   skipWorkflowStepRun(...args: StoreMethod<"skipWorkflowStepRun">["args"]) { return this.call("skipWorkflowStepRun", ...args); }
   finalizeWorkflowRun(...args: StoreMethod<"finalizeWorkflowRun">["args"]) { return this.call("finalizeWorkflowRun", ...args); }
