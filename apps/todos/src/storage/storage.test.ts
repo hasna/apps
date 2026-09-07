@@ -1263,8 +1263,8 @@ describe("storage adapter contracts", () => {
   test("maps the Postgres concurrent task-list unique violation to a stable conflict", async () => {
     const postgres = createMemoryPostgresClient();
     let inserted = false;
-    const adapter = createPostgresTodosStorageAdapter({
-      client: {
+    const fixtureClient: TodosPostgresQueryClient = {
+        async transaction<T>(fn: (client: TodosPostgresQueryClient) => Promise<T>): Promise<T> { return fn(fixtureClient); },
         async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
           if (sql.includes("INSERT INTO todos_sync_records") && values?.[1] === "task_lists") {
             if (inserted) {
@@ -1278,17 +1278,20 @@ describe("storage adapter contracts", () => {
           }
           return postgres.client.query<T>(sql, values);
         },
-      },
+      };
+    const adapter = createPostgresTodosStorageAdapter({
+      client: fixtureClient,
     });
-    await adapter.taskLists.create({ name: "Inbox", slug: "inbox", project_id: "project-1" });
+    const project = await adapter.projects.create({name:"Scoped fixture",path:"/scoped-fixture"});
+    await adapter.taskLists.create({ name: "Inbox", slug: "inbox", project_id: project.id });
 
-    await expect(adapter.taskLists.create({ name: "Duplicate", slug: "inbox", project_id: "project-1" }))
+    await expect(adapter.taskLists.create({ name: "Duplicate", slug: "inbox", project_id: project.id }))
       .rejects.toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT" });
   });
 
   test("does not map non-unique Bun Postgres server errors to a slug conflict", async () => {
-    const adapter = createPostgresTodosStorageAdapter({
-      client: {
+    const fixtureClient: TodosPostgresQueryClient = {
+        async transaction<T>(fn: (client: TodosPostgresQueryClient) => Promise<T>): Promise<T> { return fn(fixtureClient); },
         async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
           if (sql.includes("INSERT INTO todos_sync_records") && values?.[1] === "projects") {
             throw Object.assign(new Error("foreign key violation"), {
@@ -1298,7 +1301,9 @@ describe("storage adapter contracts", () => {
           }
           return { rows: [] as T[] };
         },
-      },
+      };
+    const adapter = createPostgresTodosStorageAdapter({
+      client: fixtureClient,
     });
 
     await expect(adapter.projects.create({ name: "Unrelated", path: "/tmp/unrelated" }))
@@ -1368,8 +1373,9 @@ describe("storage adapter contracts", () => {
 
     const missing = await adapter.taskLists.create({ name: "Missing Scope", slug: "missing-scope" });
     const standalone = await adapter.taskLists.create({ name: "Null Scope", slug: "null-scope", project_id: null } as never);
-    const scoped = await adapter.taskLists.create({ name: "String Scope", slug: "string-scope", project_id: "project-1" });
-    expect([missing.project_id, standalone.project_id, scoped.project_id]).toEqual([null, null, "project-1"]);
+    const scopeProject = await adapter.projects.create({name:"Scope fixture",path:"/scope-fixture"});
+    const scoped = await adapter.taskLists.create({ name: "String Scope", slug: "string-scope", project_id: scopeProject.id });
+    expect([missing.project_id, standalone.project_id, scoped.project_id]).toEqual([null, null, scopeProject.id]);
 
     const syncCalls: Array<readonly unknown[] | undefined> = [];
     const syncStore = createPostgresTodosSyncStore({
@@ -1422,8 +1428,8 @@ describe("storage adapter contracts", () => {
       .rejects.toMatchObject({ code: "TASK_LIST_SLUG_CONFLICT" });
 
     let projectWrites = 0;
-    const concurrent = createPostgresTodosStorageAdapter({
-      client: {
+    const fixtureClient: TodosPostgresQueryClient = {
+        async transaction<T>(fn: (client: TodosPostgresQueryClient) => Promise<T>): Promise<T> { return fn(fixtureClient); },
         async query<T = Record<string, unknown>>(sql: string, values?: readonly unknown[]) {
           if (sql.includes("INSERT INTO todos_sync_records") && values?.[1] === "projects") {
             projectWrites += 1;
@@ -1439,7 +1445,9 @@ describe("storage adapter contracts", () => {
           }
           return postgres.client.query<T>(sql, values);
         },
-      },
+      };
+    const concurrent = createPostgresTodosStorageAdapter({
+      client: fixtureClient,
     });
     await concurrent.projects.create({ name: "Shared", path: "/tmp/shared-a" });
     await expect(concurrent.projects.create({ name: "Shared", path: "/tmp/shared-b" }))
@@ -3525,6 +3533,11 @@ function createMemoryPostgresClient(options: { rejectWritesForObjectType?: strin
     },
     async query<T = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
       calls.push({ sql, values });
+
+      if (sql.includes("object_type='projects'") && sql.includes("object_id=$2") && (sql.includes("FOR KEY SHARE") || sql.includes("SELECT deleted_at"))) {
+        const row = rows.get(recordKey(values[0], "projects", values[1]));
+        return { rows: (!row || (sql.includes("FOR KEY SHARE") && row.deletedAt) ? [] : [{ object_id: row.objectId, deleted_at: row.deletedAt }]) as T[] };
+      }
 
       if (sql.includes("todos:complete-task-atomic")) {
         const [service, taskId, agentId, completedAt, hasEvidence, rawEvidence, hasConfidence, confidence, operationTimestamp, lockExpiryCutoff] = values;

@@ -2862,7 +2862,7 @@ describe("cloud task-list, filter, and force-unlock parity", () => {
   });
 
   test("task-list resolution fails explicitly for missing and ambiguous references", async () => {
-    installFetch(() => ({
+    installFetch((call) => call.url.includes("/projects/") ? ({body:{project:{id:"project-1",name:"Fixture project",path:"/fixture/project"}}}) : ({
       body: {
         task_lists: [
           { id: "aaaaaaaa-1111-4111-8111-111111111111", project_id: "project-1", slug: "shared", name: "Shared A" },

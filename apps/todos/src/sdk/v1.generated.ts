@@ -12,7 +12,7 @@ export interface Machine { "id": string; "name": string; "hostname": string; "pl
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "created_by"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "locked_by"?: string | null; "locked_at"?: string | null; "created_at"?: string; "updated_at"?: string }
 
-export interface Project { "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "parent_id"?: string | null; "created_at"?: string; "updated_at"?: string }
+export interface Project { "status"?: "active" | "completed" | "on_hold" | "archived"; "short_id"?: string | null; "metadata"?: Record<string, unknown>; "id"?: string; "name"?: string; "path"?: string; "description"?: string | null; "task_list_id"?: string | null; "task_prefix"?: string | null; "task_counter"?: number; "parent_id"?: string | null; "created_at"?: string; "updated_at"?: string }
 
 export interface TaskManifestBounds { "tasks": number; "dependencies": number; "comments": number; "verifications": number; "effects": number; "metadata_fields": number; "effect_payload_fields": number; "request_bytes": number; "response_bytes": number }
 
@@ -124,9 +124,9 @@ export interface FailTaskInput { "agent_id"?: string; "reason"?: string; "retry"
 
 export interface TaskFailureResult { "task": Task; "retryTask"?: Task }
 
-export interface CreateProjectInput { "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string; "parent_id"?: string }
+export interface CreateProjectInput { "status"?: "active" | "completed" | "on_hold" | "archived"; "short_id"?: string | null; "metadata"?: Record<string, unknown>; "name": string; "path": string; "description"?: string; "task_list_id"?: string; "task_prefix"?: string; "parent_id"?: string }
 
-export interface UpdateProjectInput { "name"?: string; "path"?: string; "description"?: string | null; "parent_id"?: string | null }
+export interface UpdateProjectInput { "status"?: "active" | "completed" | "on_hold" | "archived"; "short_id"?: string | null; "metadata"?: Record<string, unknown>; "name"?: string; "path"?: string; "description"?: string | null; "parent_id"?: string | null }
 
 export interface RenameProjectInput { "new_slug": string; "name"?: string }
 
@@ -517,6 +517,15 @@ export class TodosV1Client {
     /** Update a project */
     async updateProject(id: string, body: UpdateProjectInput, init?: RequestInit): Promise<{ "project"?: Project }> {
       return this.request("PATCH", `/v1/projects/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete project identity and atomically detach linked records without deleting their content */
+    async deleteProjectPreserving(id: string, body: { "force"?: boolean; "require_completed_tasks"?: boolean }, init?: RequestInit): Promise<{ "schema_version": 1; "project_id": string; "deleted": boolean; "preserved_tasks": number; "preserved_plans": number; "detached_task_lists": number; "detached_child_projects": number }> {
+      return this.request("POST", `/v1/projects/${encodeURIComponent(String(id))}/delete-preserving`, {
         body,
         query: undefined,
         init,
