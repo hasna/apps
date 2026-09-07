@@ -1,5 +1,100 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- 00118b3: Resolve credentials through the `@hasna/contracts` 1.0.2 client chain (hasna/apps#1720).
+
+  The CLI, the MCP server and the `./sdk` store surface no longer carry a
+  credential chain of their own. All three route through the one resolver in
+  `@hasna/contracts` (bumped from 0.13.4 to the exact 1.0.2), which reads, per
+  call: an explicit `--api-key`/`--profile`, then `HASNA_ECONOMY_API_KEY_OVERRIDE`
+  / `HASNA_PROFILE` / `HASNA_ECONOMY_API_KEY_REF`, then the macOS Keychain item
+  `hasna.credentials.economy.api-key`, then `~/.hasna/economy/config/credentials`
+  (0600, `HASNA_ECONOMY_API_KEY=…`), then `HASNA_ECONOMY_API_KEY`. The authority
+  follows the same ladder — `HASNA_ECONOMY_API_URL`, the Keychain `api-url` item,
+  the credentials file — and now DEFAULTS to the fleet gateway
+  `https://api.hasna.com/economy` once a credential resolves, so a key alone is a
+  complete configuration. A long-lived MCP server re-resolves the credential on
+  every request, so a rotation heals without a restart.
+
+  What this removes:
+
+  - The app's own legacy env chain: the unprefixed serve token `ECONOMY_API_TOKEN`
+    (canonical `HASNA_ECONOMY_API_TOKEN` remains) and `ECONOMY_MACHINE_ID`
+    (canonical `HASNA_ECONOMY_MACHINE_ID`).
+  - Retired `*_MODE` / `*_STORAGE_MODE` switches stay a hard error, and the
+    DEPRECATED notice is gone: `HASNA_ECONOMY_API_KEY` is a legitimate resolver
+    tier, it just sits below the Keychain and the credentials file.
+  - Nothing reads `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna` or
+    `$XDG_CONFIG_HOME` — the resolver never consults those locations.
+
+  What this keeps and adds:
+
+  - Fail loud (owner directive 2026-09-04): hosted with no credential = non-zero
+    exit, no SQLite file, no `economy-local-fallback` event, and an error naming
+    every tier consulted. Local mode is served only by the explicit opt-in
+    `HASNA_ECONOMY_LOCAL=1` (alias `ECONOMY_LOCAL=1` for one release), which
+    yields to every hosted signal and now prints one `economy: local mode …` line
+    on stderr.
+  - `economy transport` (new CLI command): reports the resolved transport and the
+    credential SOURCE — `/v1` authority, `api_url_source`, `api_key_source`,
+    `api_key_tier` — never the key value; `--json` for the full report. It is the
+    one surface that reports a refusal instead of throwing.
+  - The `./sdk` store surface (`getStore`) is unchanged in shape, and it is the
+    ONLY SDK: the Store takes no `baseUrl`, so the package can never attach an
+    ambient fleet key to a caller-supplied one (hasna/apps#1794) — the authority
+    and the credential both come from the resolver, per call.
+  - `@hasna/contracts` stays a runtime dependency (economy builds with
+    `--packages external`), so the published declarations importing its types
+    resolve for consumers. The `/v1/machines` and `/v1/fleet` surfaces are
+    unchanged and keep working against the resolved authority.
+
+### Patch Changes
+
+- 361d51b: Fail-closed / resolver validation fixes for the hosted-by-default client
+  (hasna/apps#1720, validation round 1).
+
+  - **MCP: no SQLite under the app home in hosted mode.** `economy-mcp` opened
+    the agent-lifecycle registry (`agent-registry.db` plus its WAL/SHM sidecars)
+    at startup — in hosted mode too, before any tool was called. The registry
+    store is now resolved on first tool use, and a hosted client keeps it in
+    memory for the life of the process; only the explicit `HASNA_ECONOMY_LOCAL=1`
+    opt-in persists `agent-registry.db` beside the local store
+    (`HASNA_AGENT_REGISTRY_DB_PATH` still names a file explicitly in either lane).
+  - **MCP: the fail-closed diagnostic is the first stderr line**
+    (`MCP server error: Economy fails closed …`, naming the Keychain item, the
+    credentials file and `HASNA_ECONOMY_API_KEY`) instead of Bun's code frame.
+  - **`economy transport` exits 1 when no credential resolves.** The report is
+    still printed (`--json` included), so the diagnostic stays readable while a
+    script can no longer take a refusal for a hosted transport.
+  - **`economy-otel` follows the storage seam.** With a resolved credential the
+    sidecar forwards the request/session rows of every accepted payload to the
+    shared API's `/v1/ingest` (the response gains `forwarded`; nothing is written
+    under `~/.hasna/economy`); under `HASNA_ECONOMY_LOCAL=1` it writes the
+    on-box store and announces local mode on stderr; with neither it fails
+    closed before binding. `economy-otel` stays undeclared in
+    `hasna.contract.json` because `-otel` is outside the contract kit's bin
+    allowlist.
+  - **Hosted `economy sync` keeps its mtime cache as a JSON file under the cache
+    root** (`HASNA_CACHE_HOME`, else `~/Library/Caches/Hasna/economy` on macOS /
+    `~/.cache/hasna/economy` elsewhere; `HASNA_ECONOMY_INGEST_CACHE` overrides)
+    instead of `~/.hasna/economy/ingest-cache.db`. An older cache file is simply
+    not read — one re-read, absorbed by the server's idempotent upserts — and can
+    be deleted.
+  - **Manifest:** the CLI and MCP surfaces declare `authMode: api-key`
+    (credential via the `@hasna/contracts` chain) and the SDK surface
+    `exportSubpath: ./sdk`.
+  - **No `-sdk` split package.** The unpublished in-tree `@hasna/economy-sdk`
+    (`sdk/`) is removed: the SDK is the `./sdk` export of this one package — the
+    Store abstraction, which takes no `baseUrl` and therefore never attaches an
+    ambient fleet key to a caller-supplied one (hasna/apps#1794).
+  - Test hygiene: `src/mcp/http.test.ts` restores the local opt-in it pins, so
+    the #1788 ambient-gate test passes in the full suite; new spawned-bin tests
+    cover the MCP hosted / fail-closed arms, the three `economy-otel` lanes and
+    the `economy transport` exit codes.
+
 ## 0.3.28
 
 ### Patch Changes

@@ -15,13 +15,14 @@ import { processText, needsEnhancement, resolveTranscriberModel } from "../lib/e
 import type { Recording, RecordingFilter } from "../types/index.js";
 import { VERSION } from "../version.js";
 import { currentMachineId } from "../lib/machine.js";
+import { selectsRecordingsLocalStore } from "../lib/local-opt-in.js";
+import { getRecordingsTransportStatus } from "../http/client.js";
 
 // ── Initialize ──────────────────────────────────────────────────────────────
 // Config is loaded eagerly for the transcription/enhancement tools. Storage is
 // resolved lazily per call via `getStore()` so cloud mode never opens SQLite.
 
 const config = loadConfig();
-ensureDataDir(config);
 
 function runtimeConfig(): typeof config {
   return {
@@ -913,6 +914,32 @@ async function main(): Promise<void> {
     printHelp();
     return;
   }
+
+  // Fail closed at STARTUP, before any transport connects and before any store
+  // is resolved. On a host whose environment resolves no Hasna credential the
+  // server must refuse to run at all — one REMOTE_API_* line on stderr, exit 1,
+  // no listener, no answer to `initialize` — rather than serve the on-box file
+  // or half-start. The opt-in below is answered WITHOUT consulting the Keychain
+  // or any credential file, so a scrubbed host that asked for local mode still
+  // starts. Tool calls keep resolving fresh through `getStore()`.
+  const transportStatus = getRecordingsTransportStatus();
+  if (!transportStatus.ok) {
+    const issue = transportStatus.issues[0] ?? "REMOTE_API_CONFIG_MISSING";
+    console.error(`ERROR: ${issue}`);
+    process.exit(1);
+  }
+  if (selectsRecordingsLocalStore(process.env)) {
+    console.error(
+      "recordings: LOCAL mode — HASNA_RECORDINGS_LOCAL is set and nothing configures an authority; " +
+        "reading and writing the on-box SQLite store, not the hosted fleet. " +
+        "Set HASNA_RECORDINGS_API_KEY, add the Keychain item hasna.credentials.recordings.api-key, " +
+        "or write ~/.hasna/recordings/config/credentials to go hosted."
+    );
+    // A failed-closed hosted server must not create local store directories as
+    // a startup side effect; only an opted-in local server may touch them.
+    ensureDataDir(config);
+  }
+
   if (isStdioMode(args)) {
     const transport = new StdioServerTransport();
     await buildServer().connect(transport);

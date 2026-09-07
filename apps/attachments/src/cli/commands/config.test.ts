@@ -4,9 +4,17 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { configCommand } from "./config";
 import { setConfigPath, setConfig, getConfig } from "../../core/config";
+const savedHome = process.env.HASNA_HOME;
 let dir: string;
-beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "attachments-config-")); setConfigPath(join(dir, "config.json")); });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "attachments-config-"));
+  setConfigPath(join(dir, "config.json"));
+  // Hermetic: the shared seam's disk tier anchors here, so a station's real
+  // ~/.hasna/attachments/config/credentials cannot satisfy the 'config test'
+  // fail-closed probe (or flip any resolver decision) during the suite.
+  process.env.HASNA_HOME = dir;
+});
+afterEach(() => { process.env.HASNA_HOME = savedHome; rmSync(dir, { recursive: true, force: true }); });
 async function run(args: string[]) { let output = ""; const spy = spyOn(process.stdout, "write").mockImplementation(c => { output += String(c); return true; }); try { const cmd = configCommand().exitOverride(); for (const sub of cmd.commands) sub.exitOverride(); await cmd.parseAsync(args, { from: "user" }); return output; } finally { spy.mockRestore(); } }
 test("show reports preferences without creating state or leaking historical S3 credentials", async () => {
  expect(await run(["show"])).toContain("defaults"); expect(existsSync(join(dir, "config.json"))).toBe(false);

@@ -54,7 +54,10 @@ the canonical `HASNA_CALENDAR_*` names always win.
 Absent, partial, blank, malformed and conflicting configuration FAILS LOUD:
 hosted with no credential is a non-zero exit with an actionable error naming
 every tier consulted — there is no SQLite fallback, no local-store default and
-no `*-local-fallback` event. Retired placement selectors
+no `*-local-fallback` event. The MCP server applies the same refusal AT
+STARTUP: `calendar-mcp` exits non-zero before its stdio or `--http` transport
+connects instead of answering `initialize` with nothing configured. Retired
+placement selectors
 (`*_MODE`, `*_STORAGE_MODE`, `*_BACKEND`, `*_LOCAL`, `*_SELF_HOSTED`,
 `*_CLOUD`) are rejected, and the retired locations
 (`~/.hasna/fleet-env`, the old cloud folder, `~/.config/hasna` with
@@ -284,6 +287,15 @@ Start the stdio MCP server:
 ```sh
 calendar-mcp
 ```
+
+`calendar-mcp` is a domain client: it resolves the SAME `@hasna/contracts`
+chain as the CLI and the SDK, and refuses to start when nothing resolves —
+exit 1 with `calendar-mcp: refusing to start — …` as the first stderr line
+(naming the Keychain item, the credentials file and the canonical env vars,
+never a value) before any stdio connect or `--http` bind, so `initialize` is
+answered by nobody and no socket is bound. `--help` / `--version` still answer
+without a credential. Every tool call re-resolves the chain per request, so a
+rotated key heals without restarting the server.
 
 Example MCP client configuration:
 

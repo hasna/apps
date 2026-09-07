@@ -30,6 +30,30 @@ function createRunnerServer(storage: ReturnType<typeof createSqliteLoopStorage>,
   });
 }
 
+// Ambient credential isolation. The store resolver's DISK tier
+// (`~/.hasna/loops/config/credentials`) outranks the env tier, so on a
+// provisioned station `runnerStatus()` resolves the operator's REAL
+// credential and the fixture authority below is refused as written for a
+// different one (or the "file" arm is overridden by the disk credential)
+// while CI stays green. Anchoring every home-layout root at a scratch dir —
+// no credentials file can exist there — makes the disk tier consult nothing,
+// identically on both kinds of machine.
+const HOME_ROOT_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"] as const;
+
+function withScratchHome(root: string, fn: () => void): void {
+  const saved = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
+  try {
+    for (const name of HOME_ROOT_KEYS) process.env[name] = root;
+    fn();
+  } finally {
+    for (const name of HOME_ROOT_KEYS) {
+      const value = saved.get(name);
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 describe("loops-runner", () => {
   test("command failures surface a message with URL userinfo redacted", () => {
     const logged: string[] = [];
@@ -248,17 +272,21 @@ describe("loops-runner", () => {
     const previousApiKey = process.env.HASNA_LOOPS_API_KEY;
     delete process.env.HASNA_LOOPS_API_URL;
     delete process.env.HASNA_LOOPS_API_KEY;
+    const scratch = mkdtempSync(join(tmpdir(), "loops-runner-home-"));
     try {
-      const status = runnerStatus();
-      expect(status.ok).toBe(true);
-      expect(status.service).toBe("loops-runner");
-      expect(status.storageConnection.connection).toBe("file");
-      expect(status.state).toBe("file_authoritative");
+      withScratchHome(scratch, () => {
+        const status = runnerStatus();
+        expect(status.ok).toBe(true);
+        expect(status.service).toBe("loops-runner");
+        expect(status.storageConnection.connection).toBe("file");
+        expect(status.state).toBe("file_authoritative");
+      });
     } finally {
       if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
       else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
       if (previousApiKey === undefined) delete process.env.HASNA_LOOPS_API_KEY;
       else process.env.HASNA_LOOPS_API_KEY = previousApiKey;
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
@@ -293,19 +321,22 @@ describe("loops-runner", () => {
     const previousApiKey = process.env.HASNA_LOOPS_API_KEY;
     process.env.HASNA_LOOPS_API_URL = "https://loops.example.test";
     process.env.HASNA_LOOPS_API_KEY = "token" + "-present";
-
+    const scratch = mkdtempSync(join(tmpdir(), "loops-runner-home-"));
     try {
-      const status = runnerStatus("machine-test");
+      withScratchHome(scratch, () => {
+        const status = runnerStatus("machine-test");
 
-      expect(status.ok).toBe(true);
-      expect(status.storageConnection.connection).toBe("api");
-      expect(status.storageConnection.apiUrl).toBe("https://loops.example.test");
-      expect(status.state).toBe("api_ready");
+        expect(status.ok).toBe(true);
+        expect(status.storageConnection.connection).toBe("api");
+        expect(status.storageConnection.apiUrl).toBe("https://loops.example.test");
+        expect(status.state).toBe("api_ready");
+      });
     } finally {
       if (previousApiUrl === undefined) delete process.env.HASNA_LOOPS_API_URL;
       else process.env.HASNA_LOOPS_API_URL = previousApiUrl;
       if (previousApiKey === undefined) delete process.env.HASNA_LOOPS_API_KEY;
       else process.env.HASNA_LOOPS_API_KEY = previousApiKey;
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
@@ -847,6 +878,14 @@ describe("runner env-file integration", () => {
     for (const key of RUNNER_ENV_KEYS) previousKeys[key] = process.env[key];
     process.env.LOOPS_DATA_DIR = dataDir;
     for (const key of RUNNER_ENV_KEYS) delete process.env[key];
+    // Ambient credential isolation: the runner.env fixture supplies the
+    // connection, and a provisioned station's real
+    // ~/.hasna/loops/config/credentials would outrank it and refuse the
+    // fixture authority. Anchoring the home-layout roots at the data dir (no
+    // credentials file can exist there) keeps the disk tier inert on both
+    // kinds of machine.
+    const savedHomeRoots = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
+    for (const name of HOME_ROOT_KEYS) process.env[name] = dataDir;
     mkdirSync(dataDir, { recursive: true });
     const path = join(dataDir, "runner.env");
     writeFileSync(path, contents, { mode: 0o600 });
@@ -857,6 +896,11 @@ describe("runner env-file integration", () => {
       for (const key of RUNNER_ENV_KEYS) {
         if (previousKeys[key] === undefined) delete process.env[key];
         else process.env[key] = previousKeys[key] as string;
+      }
+      for (const name of HOME_ROOT_KEYS) {
+        const value = savedHomeRoots.get(name);
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
       }
       rmSync(dataDir, { recursive: true, force: true });
     };

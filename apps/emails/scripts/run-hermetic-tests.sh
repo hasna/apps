@@ -13,7 +13,12 @@ case "$mode" in
     ;;
 esac
 
-mapfile -d '' -t test_files < <(
+# NUL-delimited discovery read with `read -d ''` rather than `mapfile`, so the
+# gate also runs under the bash 3.2 that macOS ships (release review, #1720).
+test_files=()
+while IFS= read -r -d '' test_file; do
+  test_files+=("$test_file")
+done < <(
   find . \
     \( -path './.git' -o -path './node_modules' -o -path './dist' \) -prune -o \
     -type f \( \

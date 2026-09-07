@@ -1,3 +1,4 @@
+import { assertApiClientStorage } from "../lib/client-storage-policy.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerWarmingTools } from "./tools/warming.js";
 import { registerProviderTools } from "./tools/providers.js";
@@ -16,6 +17,7 @@ import pkg from "../../package.json" with { type: "json" };
 export { DEFAULT_MCP_HTTP_PORT, MCP_NAME };
 
 export function buildServer(): McpServer {
+  assertApiClientStorage();
   const server = new McpServer({
     name: MCP_NAME,
     version: pkg.version,

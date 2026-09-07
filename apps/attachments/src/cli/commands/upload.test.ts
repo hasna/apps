@@ -1,9 +1,10 @@
-import { describe, it, expect, mock, beforeEach, spyOn, afterAll } from "bun:test";
+import { describe, it, expect, mock, beforeEach, spyOn, beforeAll, afterAll } from "bun:test";
 import { Command } from "commander";
 import * as configModule from "../../core/config";
 import * as childProcess from "child_process";
 import { tmpdir } from "os";
-import { unlinkSync, writeFileSync } from "fs";
+import { join } from "path";
+import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "fs";
 
 // ---------------------------------------------------------------------------
 // Mock core/upload and core/config before importing the command
@@ -91,7 +92,23 @@ mock.module("../../core/store", () => ({ ...actualStore, resolveStore: (env = pr
 const { registerUpload } = await import("./upload");
 
 // Restore all mocks after this file's tests complete so they don't leak into other test files
-afterAll(() => mock.restore());
+const savedResolverHome = process.env.HASNA_HOME;
+let scratchResolverHome: string;
+beforeAll(() => {
+  // Hermetic: the cloud-mode test exercises the REAL resolver (production
+  // resolveStore), so its disk tier must anchor to a scratch root — a
+  // station's real ~/.hasna/attachments/config/credentials would otherwise
+  // conflict with the fixture URL and flunk the test on machines that hold
+  // fleet credentials.
+  scratchResolverHome = mkdtempSync(join(tmpdir(), "attachments-upload-resolver-"));
+  process.env.HASNA_HOME = scratchResolverHome;
+});
+afterAll(() => {
+  if (savedResolverHome === undefined) delete process.env.HASNA_HOME;
+  else process.env.HASNA_HOME = savedResolverHome;
+  try { rmSync(scratchResolverHome, { recursive: true, force: true }); } catch {}
+  mock.restore();
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

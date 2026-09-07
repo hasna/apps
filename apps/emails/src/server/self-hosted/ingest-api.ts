@@ -55,7 +55,8 @@ function notifications(body: string, depth = 0): InboundNotification[] {
   if (!note?.objectKey) throw new Error("Notification has no object key");
   return [note];
 }
-export async function executeIngestBatch(store: EmailsSelfHostedStore, scoped: TenantScopedStore, tenantId: string, operation: "sync-s3" | "watch", input: IngestApiInput, env: NodeJS.ProcessEnv, cloudFactory: IngestCloudFactory = createIngestCloud) {
+export async function executeIngestBatch(store: EmailsSelfHostedStore, scoped: TenantScopedStore, tenantId: string, operation: "sync-s3" | "watch", input: IngestApiInput, env: NodeJS.ProcessEnv, cloudFactory: IngestCloudFactory = createIngestCloud, parentSignal?: AbortSignal) {
+  parentSignal?.throwIfAborted();
   if (input.profile !== undefined) throw new IngestApiError("AWS profiles are server-owned. Configure the API service credentials; client --profile is not supported.");
   if (operation === "sync-s3" && (input.all_buckets || input.queue_url !== undefined)) throw new IngestApiError("Queue options are only supported by watch.");
   if (operation === "watch" && input.cursor !== undefined) throw new IngestApiError("S3 continuation cursors are not queue watch options.");
@@ -89,7 +90,9 @@ export async function executeIngestBatch(store: EmailsSelfHostedStore, scoped: T
     });
   }
   // One shared deadline keeps multi-source requests below the client timeout.
-  const signal = AbortSignal.timeout(25000);
+  const deadline = AbortSignal.timeout(25000);
+  const signal = parentSignal ? AbortSignal.any([deadline, parentSignal]) : deadline;
+  signal.throwIfAborted();
   const results = await Promise.all(selected.map(async binding => {
     const cloud = cloudFactory(binding, signal);
     const counts = { scanned: 0, ingested: 0, duplicate: 0, error: 0, notifications: 0, acknowledged: 0 };
@@ -107,6 +110,7 @@ export async function executeIngestBatch(store: EmailsSelfHostedStore, scoped: T
     let cursor: string | null = operation === "sync-s3" ? input.cursor ?? null : null;
     let queue: { visible: number | null; in_flight: number | null } | null = null;
     async function ingest(note: InboundNotification) {
+      signal.throwIfAborted();
       if (!note.objectKey?.startsWith(prefix) || (note.bucket !== undefined && note.bucket !== binding.bucket) || (note.recipients !== undefined && (!Array.isArray(note.recipients) || note.recipients.some(value => typeof value !== "string")))) { counts.error++; return false; }
       counts.scanned++;
       const result = await ingestS3Object(deps, binding.bucket, note.objectKey, { recipients: note.recipients, timestamp: note.timestamp });
@@ -134,6 +138,7 @@ export async function executeIngestBatch(store: EmailsSelfHostedStore, scoped: T
         }
         queue = await cloud.queueState();
       }
+      signal.throwIfAborted();
       if (counts.error === 0) await scoped.updateResource(resourceSpecForPath("sources")!, binding.source_id, { last_synced_at: new Date().toISOString() });
     } catch { counts.error++; }
     finally { cloud.close(); }

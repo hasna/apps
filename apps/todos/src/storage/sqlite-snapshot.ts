@@ -1,3 +1,4 @@
+import { planMachineImport, validateMachines } from "./machine-registry.js";
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getDatabase } from "../db/database.js";
 import { listAgents } from "../db/agents.js";
@@ -90,6 +91,7 @@ export function exportSqliteTodosStorageSnapshot(db?: Database): TodosStorageSna
   return {
     exportedAt: new Date().toISOString(),
     source: "sqlite",
+    machines: exportSqliteMachines(d),
     tasks: listTasks({ include_archived: true }, d),
     projects: listProjects(d),
     projectMachinePaths: listProjectMachinePaths(d),
@@ -115,6 +117,8 @@ export function importSqliteTodosStorageSnapshot(
     skipped: 0,
     errors: [],
   };
+  if ((snapshot.tombstones ?? []).some(row => (row.object_type as string) === "machines")) { result.errors.push("Machine tombstones require explicit registry lifecycle operations"); return result; }
+  try { if (snapshot.machines !== undefined) validateMachines(snapshot.machines); } catch (e) { result.errors.push(e instanceof Error ? e.message : String(e)); return result; }
   result.errors.push(...validateSnapshotRoutingRecords(snapshot.projects, snapshot.taskLists));
   if (result.errors.length === 0) {
     const existingProjects = d.query("SELECT id, task_list_id FROM projects").all() as Array<{ id: string; task_list_id: string | null }>;
@@ -135,6 +139,16 @@ export function importSqliteTodosStorageSnapshot(
   const auditImport = preflightAuditHistoryImport(d, snapshot.auditHistory, snapshot.tombstones ?? []);
   result.errors.push(...auditImport.errors);
   if (result.errors.length > 0) return result;
+  if (snapshot.machines?.length) {
+    try {
+      d.transaction(() => {
+        const plan = planMachineImport(exportSqliteMachines(d), snapshot.machines);
+        for (const row of plan.rows) d.run("INSERT INTO machines (id,name,hostname,platform,last_seen_at,metadata,created_at,ssh_address,is_primary,archived_at) VALUES (?,?,?,?,?,?,?,?,?,?)", [row.id,row.name,row.hostname,row.platform,row.last_seen_at,JSON.stringify(row.metadata),row.created_at,row.ssh_address,Number(row.is_primary),row.archived_at]);
+        result.inserted += plan.rows.length;
+        result.skipped += plan.skipped;
+      })();
+    } catch (error) { result.errors.push(error instanceof Error ? error.message : String(error)); return result; }
+  }
   result.skipped += auditImport.identicalReplayCount;
 
   const applyRows = (
@@ -426,4 +440,15 @@ function clockColumnsForTable(table: string): string[] {
   if (table === "task_templates") return ["created_at"];
   if (table === "task_history") return ["created_at"];
   return ["updated_at", "created_at"];
+}
+
+/** Never discard malformed metadata during migration; the ordinary display mapper is intentionally forgiving. */
+export function exportSqliteMachines(db: Database): import("../types/index.js").Machine[] {
+  const columns = ["id", "name", "hostname", "platform", "last_seen_at", "metadata", "created_at", "ssh_address", "is_primary", "archived_at"];
+  const observed = (db.query("PRAGMA table_info(machines)").all() as Array<{name: string}>).map(row => row.name);
+  if (observed.length !== columns.length || observed.some(name => !columns.includes(name))) throw new Error("Machine SQLite schema differs from the lossless migration contract; preserve the source and upgrade the migrator");
+  return validateMachines((db.query("SELECT * FROM machines ORDER BY id").all() as Array<Record<string, unknown>>).map(row => {
+    if (row.is_primary !== 0 && row.is_primary !== 1) throw new Error("Machine is_primary must be the raw SQLite integer 0 or 1; migration refused");
+    return { ...row, is_primary: row.is_primary === 1, metadata: JSON.parse(String(row.metadata)) };
+  }));
 }

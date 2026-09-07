@@ -14,6 +14,7 @@ import pkg from "../../package.json" with { type: "json" };
 
 import { buildServer } from "./server.js";
 import { isMcpStdioMode, parseMcpHttpPort, startSkillsMcpHttpServer } from "./http.js";
+import { isSkillsFleetCredentialError, resolveSkillsFleet } from "../lib/fleet-credentials.js";
 
 const args = process.argv.slice(2);
 
@@ -41,6 +42,31 @@ if (args.includes("--version") || args.includes("-V")) {
 }
 
 /**
+ * FAIL CLOSED AT STARTUP (owner ruling 2026-09-04, hasna/apps#1720; #1720
+ * validation, round 1): the MCP process resolves the fleet ladder BEFORE it
+ * connects any transport. With no credential, no authority and no
+ * `HASNA_SKILLS_LOCAL=1` opt-in it exits 1 with the ladder's one line on
+ * stderr — before `initialize` is answered, before an HTTP port is bound —
+ * mirroring the CLI, which exits 1 on the same machine. Serving the bundled
+ * catalog to an agent host that registered `skills-mcp` on a station without
+ * its credential is the false green the ruling removed. The explicit local
+ * opt-in starts the server and announces local mode once on stderr; a
+ * credential (or a vault pointer the tools complete per call) starts it hosted.
+ *
+ * Every data tool still runs the same gate per call (lib/read-access.ts), so a
+ * credential that disappears mid-process is refused by the next call too.
+ */
+export function assertSkillsMcpConfigured(env: Record<string, string | undefined> = process.env): void {
+  try {
+    resolveSkillsFleet(env);
+  } catch (error) {
+    if (!isSkillsFleetCredentialError(error)) throw error;
+    console.error(error.message);
+    process.exit(1);
+  }
+}
+
+/**
  * Start the Skills MCP server on stdio (newline-delimited JSON-RPC).
  *
  * Exported so the `skills mcp` CLI subcommand can start the server directly:
@@ -50,6 +76,7 @@ if (args.includes("--version") || args.includes("-V")) {
  * stdio server (BUG e3997558).
  */
 export async function startMcpStdio(): Promise<void> {
+  assertSkillsMcpConfigured();
   const server = buildServer();
   await server.connect(new StdioServerTransport());
 }
@@ -60,6 +87,7 @@ async function main() {
     return;
   }
   // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  assertSkillsMcpConfigured();
   const port = parseMcpHttpPort(args);
   await startSkillsMcpHttpServer({ port, hostname: "127.0.0.1" });
 }

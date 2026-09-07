@@ -397,6 +397,16 @@ const REGISTRY_ENV_KEYS = [
   "PROJECTS_API_KEY",
   "HASNA_PROJECTS_DB_PATH",
   "HASNA_WORKSPACES_DB_PATH",
+  // Ambient credential roots. The transport tests pin a fixture authority in
+  // the env tier, and the shared resolver's disk tier (~/.hasna/projects/
+  // config/credentials) outranks it — on a station with a real credential
+  // file the resolution refuses as "different service authorities" before
+  // the fixture fetch stub can be reached. Captured here so the tests can
+  // point every home-layout root at the scratch dir, where no credentials
+  // file can exist, and restored exactly afterwards.
+  "HOME",
+  "HASNA_HOME",
+  "HASNA_CONFIG_HOME",
 ] as const;
 
 function captureRegistryEnv(): Record<string, string | undefined> {
@@ -463,6 +473,14 @@ describe("project reports server registry transport", () => {
       process.env["HASNA_PROJECTS_API_URL"] = "https://projects.test.invalid";
       process.env["HASNA_PROJECTS_API_KEY"] = "test-registry-key";
       delete process.env["HASNA_WORKSPACES_DB_PATH"];
+      // Hermetic disk tier: the fixture authority above must be the ONLY one
+      // the shared resolver sees. Anchoring the home-layout roots at the
+      // scratch dir (no credentials file can exist there) keeps a provisioned
+      // station's real ~/.hasna/projects/config/credentials from being
+      // refused as a different authority instead of reaching the stub.
+      process.env["HOME"] = root;
+      process.env["HASNA_HOME"] = root;
+      process.env["HASNA_CONFIG_HOME"] = root;
 
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
         const href = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;

@@ -501,11 +501,22 @@ Keychain nor any credential file. `RECORDINGS_API_KEY` remains the OpenAI
 transcription-key override only — it is carved out of the resolver
 environment and never selects or fails client transport.
 
+The same gate runs before anything else connects: `recordings-mcp` refuses to
+answer `initialize` (exit 1, first stderr line `ERROR: REMOTE_API_…`) when no
+credential resolves and no opt-in is set, and `recordings check` renders
+`✗ Active store: none — fail-closed (REMOTE_API_…); <db path> is present but
+NOT opened` (or `absent`) and exits non-zero instead of displaying the on-box
+file as the live store. With the opt-in set, `recordings-mcp` prints one
+`recordings: LOCAL mode` line on stderr before serving the on-box store.
+
 Native Settings saves new OpenAI transcription keys in macOS Keychain under
 service `hasna.credentials.openai.api-key`, account `openai/api_key`. Finder
 launches read that entry and pass it to the embedded helper in memory. Use
 `RECORDINGS_OPENAI_API_KEY` for an explicit provider-key override, separate
-from the Hasna service credential.
+from the Hasna service credential. The CLI no longer walks
+`~/.secrets/**/*.env` for the OpenAI key (retired in the #1720 validation
+wave): the declared stores are the env vars above, the config file, and the
+macOS Keychain entry.
 
 
 ```bash
