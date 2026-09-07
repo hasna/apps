@@ -240,6 +240,7 @@ const V1_STUB_RESOURCE_DEFAULTS: Record<string, Record<string, unknown>> = {
     status: "pending",
   },
   aliases: { target_address: "", protected: false },
+  feedback: { message: "", email: null, category: "general", status: "saved" },
   forwarding: { mode: "app-copy", enabled: true },
   warming: { target_daily_volume: 0, status: "active" },
   triage: { priority: 3, confidence: 0, triaged_at: NOW_DEFAULT },

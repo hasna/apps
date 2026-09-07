@@ -49,7 +49,13 @@ export function cliEquivalentForTool(name: string, input: unknown): string {
   const source = arg(input, "source_id", "source");
 
   const map: Record<string, () => string> = {
-    prepare_inbox: () => `emails address provision ${email ?? "<email>"}${provider ? ` --provider ${provider}` : " --provider <provider>"} --json`,
+    prepare_inbox: () => {
+      const options = input as Record<string, unknown> | undefined;
+      const preparing = options?.create_missing || ["receive_strategy", "forward_to", "owner", "administrator"].some(key => options?.[key] !== undefined);
+      return preparing
+        ? `emails address provision ${email ?? "<email>"}${provider ? ` --provider ${provider}` : " --provider <provider>"}${flag(input, "receive_strategy", "receive")}${flag(input, "forward_to")}${flag(input, "owner")}${flag(input, "administrator")} --json`
+        : `emails address owner ${email ?? "<email>"} --json`;
+    },
     get_email_status: () => "emails status --json",
     get_agent_context: () => "emails agent context --json",
     get_next_action: () => "emails status --json",
@@ -239,6 +245,17 @@ function normalizeResult(toolName: string, input: unknown, result: ToolResult): 
   const cliEquivalent = cliEquivalentForTool(toolName, input);
   if (result.isError) {
     const text = result.content?.find((item) => item.type === "text")?.text ?? "Tool failed";
+    if (toolName === "batch_send") {
+      try {
+        const batch = JSON.parse(text) as Record<string, unknown>;
+        if (typeof batch.batch_id === "string" && Array.isArray(batch.receipts) && Array.isArray(batch.errors)) {
+          return { ...result, content: [{ type: "text", text: JSON.stringify(redactSecrets({ ...batch,
+            error: { code: "batch_incomplete", message: "Inspect per-recipient receipts before retrying this batch.", retryable: false },
+            cli_equivalent: cliEquivalent,
+          }), null, 2) }] };
+        }
+      } catch { /* Ordinary validation failures use the common error envelope. */ }
+    }
     return structuredError(toolName, input, text);
   }
 

@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
+import { installMcpToolContracts } from "../contracts.js";
 import { registerMiscOpsTools } from "./misc-ops.js";
 let stub: V1Stub;
 const provider = "00000000-0000-4000-8000-000000000077";
@@ -13,6 +14,7 @@ afterEach(() => stub.clearEnv());
 afterAll(() => stub.stop());
 async function batch(overrides: Record<string, unknown> = {}) {
   const server = new McpServer({ name: "batch-test", version: "1" });
+  installMcpToolContracts(server);
   registerMiscOpsTools(server);
   const tools = (server as unknown as { _registeredTools: Record<string, { handler(input: unknown): Promise<{ isError?: boolean; content: Array<{ text: string }> }> }> })._registeredTools;
   const result = await tools.batch_send!.handler({ recipients: [{ email: "one@example.test", vars: { name: "Ada" } }, { email: "two@example.test", vars: { name: "Lin" } }], template_name: "welcome", from_address: "ops@example.test", provider_id: provider, ...overrides });
@@ -46,6 +48,7 @@ test("MCP batch returns partial failures and honors the explicit suppression ove
   expect(partial.result.isError).toBe(true);
   expect(partial.body).toMatchObject({ total: 2, sent: 1, failed: 1 });
   expect(partial.body.receipts).toHaveLength(1);
+  expect(partial.body.error).toMatchObject({code:"batch_incomplete",retryable:false});
   expect(partial.body.errors).toHaveLength(1);
   const forced = await batch({ force: true });
   expect(forced.result.isError).not.toBe(true);
