@@ -4,7 +4,7 @@ export interface ProviderSecretStatus {
   source:string; complete:true; checked:boolean; activeKeyId:string|null; availableKeyIds:string[]; referencedKeyIds:string[]; managed_envelopes:number;
   capabilities:{status:boolean;rewrap:boolean;rotate_root:boolean;revoke_root:boolean}; lifecycle_requirement:string;
   default_sender:{type:string;credential_source:string;externally_managed:boolean}|null;
-  providers:Array<{provider_id:string;name:string;type:string;active:boolean;configured:boolean;credential_source:string;externally_managed:boolean}>;
+  providers:Array<{provider_id:string;name:string;type:string;active:boolean;configured:boolean;credential_source:string;externally_managed:boolean;revision?:number}>;
 }
 export type ProviderSecretOperation="rewrap"|"rotate-root"|"revoke-root";
 export async function providerSecretApi(path:string,body?:unknown,options:{baseUrl?:string;credentials?:string[];fetchImpl?:typeof fetch}={}):Promise<Record<string,unknown>> {
@@ -41,7 +41,7 @@ async function managedRequest<T>(operation:(client:import("../selfhost.js").Emai
     catch(error){
       if(error instanceof ApiError&&error.status===401&&index<credentials.length-1)continue;
       if(error instanceof ApiError&&(error.status===404||error.status===405))throw Error("Credential operation or tenant resource unavailable; verify the ID and update the Emails API if this operation is unsupported.");
-      if(error instanceof ApiError&&[400,409,503].includes(error.status)){
+      if(error instanceof ApiError&&[400,409,422,503].includes(error.status)){
         const detail=error.body&&typeof error.body==="object"?(error.body as Record<string,unknown>).error:undefined;
         throw Error(typeof detail==="string"&&detail.length<=1024?detail:`Provider credential operation failed (HTTP ${error.status}); inspect job or credential status before retrying.`);
       }
@@ -68,5 +68,12 @@ export async function installApiProviderCredentials(id:string,credentials:unknow
   const validated=validateManagedProviderCredentials(credentials);
   const receipt=await managedRequest(client=>client.installProviderCredentials(id,{credentials:validated,expected_revision:revision}));
   if(receipt.status!=="complete"||receipt.checked!==false||!Number.isSafeInteger(receipt.revision))throw Error("The API did not confirm credential installation; inspect provider secret status before retrying.");
+  return receipt;
+}
+
+export async function writeApiManagedProvider(id:string,body:Parameters<import("../selfhost.js").EmailsSelfHostClient["writeManagedProvider"]>[1]){
+  const status=await fetchProviderSecretStatus();requireProviderSecretOperation(status,"rewrap");
+  const receipt=await managedRequest(client=>client.writeManagedProvider(id,body));
+  if(receipt.status!=="complete"||typeof receipt.checked!=="boolean"||!Number.isSafeInteger(receipt.revision)||(!body.skip_validation&&!receipt.checked))throw Error(`Provider write was not confirmed; inspect provider ${id} before retrying.`);
   return receipt;
 }

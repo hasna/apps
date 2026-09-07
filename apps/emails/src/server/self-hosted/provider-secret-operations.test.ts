@@ -73,13 +73,15 @@ test("fresh CLI uses generated API lifecycle operations and reports pending jobs
   f.deps.verifier=verifyApiKey({app:"emails",signingSecret,keyStatus:async()=>"active"});
   f.deps.managedProviderSecrets=()=>f.backend;
   f.backend.metadata=async()=>({roots:[],envelopes:[]});
+  let registered:Record<string,unknown>|null=null;
   const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch:async req=>{
-    if(new URL(req.url).pathname==="/v1/providers/secrets/status")return Response.json({source:"server_managed_and_references",complete:true,checked:false,activeKeyId:null,availableKeyIds:[],referencedKeyIds:[],managed_envelopes:0,capabilities:{status:true,rewrap:true,rotate_root:true,revoke_root:true},lifecycle_requirement:"managed fixture",default_sender:null,providers:[]});
+    if(new URL(req.url).pathname==="/v1/providers/secrets/status")return Response.json({source:"server_managed_and_references",complete:true,checked:false,activeKeyId:null,availableKeyIds:[],referencedKeyIds:[],managed_envelopes:0,capabilities:{status:true,rewrap:true,rotate_root:true,revoke_root:true},lifecycle_requirement:"managed fixture",default_sender:null,providers:registered?[{provider_id:registered.id,credential_source:"managed_envelope",revision:registered.revision}]:[]});
+    if(registered&&new URL(req.url).pathname===`/v1/providers/${registered.id}`&&req.method==="GET")return Response.json(registered);
     return (await handleSelfHostedRequest(f.deps,req))??new Response(null,{status:404});
   }});
   const env=Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith("EMAILS_")&&!key.startsWith("HASNA_EMAILS_")));
   Object.assign(env,{HOME:home,HASNA_EMAILS_HOME:home,EMAILS_HOME:home,HASNA_EMAILS_API_URL:server.url.origin,HASNA_EMAILS_API_KEY:mintApiKey({app:"emails",scopes:["emails:*"],signingSecret}).token,EMAILS_CLIENT_ENV_LOADED:"1",NO_COLOR:"1"});
-  async function cli(args:string[]){const child=Bun.spawn({cmd:[process.execPath,"--no-env-file","src/cli/index.tsx","--json","provider","secrets",...args],env,stdout:"pipe",stderr:"pipe"});const [code,out,error]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);return{code,out,error};}
+  async function cli(args:string[],secrets=true){const child=Bun.spawn({cmd:[process.execPath,"--no-env-file","src/cli/index.tsx","--json","provider",...(secrets?["secrets"]:[]),...args],env,stdout:"pipe",stderr:"pipe"});const [code,out,error]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);return{code,out,error};}
   try{
     const key=crypto.randomUUID(),completed=await cli(["rotate-root","--idempotency-key",key]);
     expect(completed.code).toBe(0);expect(JSON.parse(completed.out).status).toBe("complete");
@@ -87,6 +89,10 @@ test("fresh CLI uses generated API lifecycle operations and reports pending jobs
     f.backend.advance=async()=>f.job as Awaited<ReturnType<ManagedProviderSecrets["advance"]>>;
     const pending=await cli(["job",f.job.id,"--advance"]);expect(pending.code).not.toBe(0);expect(pending.out+pending.error).toContain(f.job.id);
     const before=f.calls.length;expect((await cli(["rotate-root"])).code).not.toBe(0);expect(f.calls.length).toBe(before);
+    f.backend.install=async(id,input,revision,actor,options)=>{f.calls.push(["install",id,input,revision,actor,options]);registered={id,tenant_id:DEFAULT_TENANT_ID,name:options?.metadata?.name??"Fixture",type:"ses",region:"eu-west-1",active:true,created_at:new Date().toISOString(),updated_at:new Date().toISOString(),revision:(revision??0)+1};return{provider_id:id,revision:(revision??0)+1,root_id:f.job.root_id};};
+    const providerId=crypto.randomUUID();
+    const created=await cli(["add","--name","Fixture","--type","ses","--region","eu-west-1","--access-key","synthetic-access","--secret-key","synthetic-secret","--id",providerId],false);expect(created.code).toBe(0);expect(JSON.parse(created.out)).toMatchObject({provider_id:providerId,checked:true,revision:1});expect(created.out+created.error).not.toContain("synthetic-secret");
+    const updated=await cli(["update",providerId,"--secret-key","synthetic-updated","--skip-validation"],false);expect(updated.error).toBe("");expect(updated.code).toBe(0);expect(JSON.parse(updated.out)).toMatchObject({revision:2,checked:false});const last=f.calls.filter(call=>call[0]==="install").at(-1)!;expect(last[2]).toEqual({secret_key:"synthetic-updated"});expect(last[3]).toBe(1);expect(last[5]).toMatchObject({partial:true});expect(last[5]).not.toHaveProperty("validate");
     await expect(access(join(home,"emails.db"))).rejects.toThrow();
   }finally{server.stop(true);await rm(home,{recursive:true,force:true});}
 },20000);

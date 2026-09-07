@@ -38,7 +38,7 @@ export const OPTIONAL_SKIPS = Object.freeze({
   "idp.integration.test.ts": "live @hasna/tenants JWKS endpoint > serves a JWKS the authenticator accepts, and refuses our locally-signed token (typed unknown_kid)",
 });
 
-// Executed-case floors from the registration census (218 cases, including the
+// Executed-case floors from the registration census (219 cases, including the
 // two named optional checks). The multi-tenancy floor is the suite's own 34
 // tenancy and outbound-enforcement cases as merged onto origin/main; the
 // counts here are re-derived from the actual suites whenever main moves them.
@@ -49,7 +49,7 @@ export const MINIMUM_PASS_COUNTS = Object.freeze({
   "forwarding.integration.test.ts": 5,
   "idp.integration.test.ts": 8,
   "inbox-perf.integration.test.ts": 7,
-  "managed-provider-secrets.integration.test.ts": 5,
+  "managed-provider-secrets.integration.test.ts": 6,
   "message-id-resolution.integration.test.ts": 5,
   "multi-tenancy.integration.test.ts": 34,
   "postgres.integration.test.ts": 22,

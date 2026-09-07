@@ -85,6 +85,13 @@ The direct API uses operator-authorized `PUT /v1/providers/{id}/credentials`,
 `POST /v1/providers/secrets/{rewrap,rotate-root,revoke-root}`, and
 `GET /v1/providers/secrets/jobs/{id}` / `POST .../{id}/advance`. All results are
 secret-free. Externally managed credentials are never silently imported or
-rotated. The original provider add/update credential flags still require a
-separate integration with this install workflow; do not report those flags as
-closed by the root lifecycle implementation.
+rotated. The existing `provider add --api-key` / `--access-key --secret-key` flags and
+`provider update` credential flags use an atomic server metadata/envelope write.
+Validation runs on the server before commit unless `--skip-validation` is given;
+a failed validation rolls back metadata and credentials together. Partial SES
+key updates merge with the prior encrypted server credentials and use the current
+revision as a compare-and-swap fence. Metadata-only registration makes no
+credential validity claim. Add accepts `--id <uuid>` so an uncertain create can be
+inspected and retried without inventing a new provider identity. Managed sender
+instances expose only their numeric credential revision for tenant/provider
+scoped stale-binding checks; they never expose a secret fingerprint.

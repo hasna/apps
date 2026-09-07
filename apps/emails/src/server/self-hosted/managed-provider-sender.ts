@@ -28,6 +28,6 @@ export function buildManagedSenderResolver(
       config.EMAILS_SES_ACCESS_KEY_ID = credentials.access_key;
       config.EMAILS_SES_SECRET_ACCESS_KEY = credentials.secret_key;
     }
-    return { ...build(config), credentialSource: "managed_envelope" };
+    return { ...build(config), credentialSource: "managed_envelope", credentialRevision: material.revision };
   };
 }

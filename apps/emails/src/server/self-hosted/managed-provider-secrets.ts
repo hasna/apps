@@ -5,6 +5,12 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 interface RootRow {id:string;wrapped_root:string|null;state:"active"|"available"|"revoked";revoke_after?:string|Date|null}
 interface EnvelopeRow {provider_active?:boolean;provider_region?:string|null;provider_type?:string;provider_id:string;root_id:string;revision:number;payload:SealedBytes;wrapped_dek:SealedBytes}
 export interface ProviderSecretJob {id:string;operation:"rewrap"|"rotate-root"|"revoke-root";status:"pending"|"complete";root_id:string;processed:number;remaining:number}
+export interface ManagedProviderWriteOptions {
+ create?:boolean;
+ metadata?:{name?:string;type?:"ses"|"resend";region?:string|null};
+ partial?:boolean;
+ validate?:(credentials:ManagedProviderCredentials,region:string|null,signal:AbortSignal)=>Promise<void>;
+}
 export class ManagedProviderSecretError extends Error {constructor(message:string,readonly status=409){super(message);}}
 /** Tenant-scoped, transactional envelope lifecycle. KMS never receives provider payloads. */
 export class ManagedProviderSecrets {
@@ -35,16 +41,35 @@ export class ManagedProviderSecrets {
   const key=await this.kms.decrypt(Buffer.from(row.wrapped_root,"base64"),this.context(id),signal);
   if(key.length!==32){key.fill(0);throw new ManagedProviderSecretError("KMS did not return a usable tenant root",503);}return key;
  }
- async install(provider:string,input:unknown,expectedRevision:number|null,actor:string):Promise<{provider_id:string;revision:number;root_id:string}>{
+ async install(provider:string,input:unknown,expectedRevision:number|null,actor:string,options:ManagedProviderWriteOptions={}):Promise<{provider_id:string;revision:number;root_id:string}>{
   this.validateActor(actor);
   if(expectedRevision!==null&&(!Number.isInteger(expectedRevision)||expectedRevision<1))throw new ManagedProviderSecretError("Expected credential revision must be null or a positive integer",400);
-  const credentials=validateManagedProviderCredentials(input);
+  let credentials=options.partial?undefined:validateManagedProviderCredentials(input);
   return this.transaction(async(tx,signal)=>{
    let root=await this.state(tx);
-   const registered=await tx.get<{type:string;active:boolean}>("SELECT type,active FROM self_hosted_providers WHERE tenant_id=$1 AND id=$2 FOR SHARE",[this.tenant,provider]);
-   if(!registered||!registered.active||registered.type!==credentials.type)throw new ManagedProviderSecretError("Active provider is not registered with this type in the tenant",404);
+   if(options.create){
+    const m=options.metadata!;
+    await tx.execute("INSERT INTO self_hosted_providers(id,tenant_id,name,type,region,active) VALUES($1,$2,$3,$4,$5,true)",[provider,this.tenant,m.name,m.type,m.region??null]);
+   }
+   const registered=await tx.get<{type:string;active:boolean;region:string|null}>("SELECT type,active,region FROM self_hosted_providers WHERE tenant_id=$1 AND id=$2 FOR UPDATE",[this.tenant,provider]);
+   if(!registered||!registered.active||(credentials&&registered.type!==credentials.type))throw new ManagedProviderSecretError("Active provider is not registered with this type in the tenant",404);
    const prior=await tx.get<EnvelopeRow>("SELECT * FROM provider_credential_envelopes WHERE tenant_id=$1 AND provider_id=$2 FOR UPDATE",[this.tenant,provider]);
    if((prior?.revision??null)!==expectedRevision)throw new ManagedProviderSecretError("Provider credential revision changed; read status before updating");
+   if(options.partial){
+    let previous:ManagedProviderCredentials|undefined;
+    if(prior)previous=await this.openEnvelope(tx,prior,signal);
+    try{credentials=validateManagedProviderCredentials({...previous,...input as object,type:registered.type});}
+    catch{throw new ManagedProviderSecretError("Supply complete credentials when no managed envelope exists, or a valid credential update",400);}
+   }
+   const metadata=options.metadata;
+   const region=metadata&&"region" in metadata?metadata.region??null:registered.region;
+   if(credentials!.type==="ses"&&(!region||! /^[a-z]{2}(?:-[a-z]+)+-\d+$/.test(region)))throw new ManagedProviderSecretError("A valid registered SES region is required",400);
+   if(credentials!.type==="resend"&&metadata?.region)throw new ManagedProviderSecretError("Resend providers do not use an SES region",400);
+   if(options.validate)await options.validate(credentials!,region,signal);
+   if(metadata&&!options.create){
+    await tx.execute("UPDATE self_hosted_providers SET name=COALESCE($3,name),region=$4,updated_at=now() WHERE tenant_id=$1 AND id=$2",[this.tenant,provider,metadata.name??null,region]);
+   }
+
    root??=await this.createRoot(tx,signal);
    const revision=(prior?.revision??0)+1,rootKey=await this.rootKey(tx,root,signal),dek=randomBytes(32),plaintext=Buffer.from(JSON.stringify(credentials));
    try{
@@ -54,6 +79,11 @@ export class ManagedProviderSecrets {
     return{provider_id:provider,revision,root_id:root};
    }finally{plaintext.fill(0);dek.fill(0);rootKey.fill(0);}
   });
+ }
+ private async openEnvelope(tx:TypedQueryClient,row:EnvelopeRow,signal:AbortSignal):Promise<ManagedProviderCredentials>{
+  const root=await this.rootKey(tx,row.root_id,signal);let dek:Buffer|undefined,plain:Buffer|undefined;
+  try{dek=openProviderBytes(row.wrapped_dek,root,providerSecretAad(this.tenant,row.provider_id,row.revision,"dek"));plain=openProviderBytes(row.payload,dek,providerSecretAad(this.tenant,row.provider_id,row.revision,"payload"));return validateManagedProviderCredentials(JSON.parse(plain.toString()));}
+  finally{root.fill(0);dek?.fill(0);plain?.fill(0);}
  }
  async read(provider:string):Promise<{credentials:ManagedProviderCredentials;revision:number;region:string|null}|null>{
   return this.transaction(async(tx,signal)=>{

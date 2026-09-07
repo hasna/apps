@@ -1772,6 +1772,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Atomically write provider metadata and encrypted credentials after server validation */
+    async writeManagedProvider(id: string, body: { "create"?: boolean; "name"?: string; "type"?: "ses" | "resend"; "region"?: string | null; "skip_validation"?: boolean; "expected_revision": number | null; "credentials": { "api_key"?: string; "access_key"?: string; "secret_key"?: string } }, init?: RequestInit): Promise<{ "provider_id": string; "revision": number; "root_id": string; "status": "complete"; "checked": boolean }> {
+      return this.request("PUT", `/v1/providers/${encodeURIComponent(String(id))}/managed`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Reconcile known tenant provider message delivery observations */
     async syncProviderDelivery(id: string, body: { "after"?: string; "limit"?: number }, init?: RequestInit): Promise<{ "provider_id": string; "complete": boolean; "checked": number; "synced": number; "failures": Array<Record<string, unknown>> }> {
       return this.request("POST", `/v1/providers/${encodeURIComponent(String(id))}/sync`, {

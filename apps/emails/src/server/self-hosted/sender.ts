@@ -28,6 +28,8 @@ export interface SelfHostedSender {
   readonly provider: SelfHostedSendProvider;
   readonly credentialSource?: SelfHostedSenderCredentialSource;
   readonly region?: string;
+  /** Tenant/provider envelope generation, never credential material. */
+  readonly credentialRevision?: number;
   verifyDomain?(domain: string): Promise<{ verifiedForSending?: boolean; dkim: import("../../types/index.js").DnsStatus; spf: import("../../types/index.js").DnsStatus; dmarc: import("../../types/index.js").DnsStatus }>;
   checkInboundDomain?(domain: string, bucket: string, mailbox?: string): Promise<{ ready: boolean; reason: string; objectKeyPrefix?: string; topicArn?: string }>;
   checkInboundQueue?(topicArn: string, queueUrl: string): Promise<{ ready: boolean; reason: string }>;

@@ -26265,6 +26265,196 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "PUT",
+    "operationId": "writeManagedProvider",
+    "path": "/v1/providers/{id}/managed",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "provider_id",
+        "revision",
+        "root_id",
+        "status",
+        "checked"
+      ],
+      "properties": {
+        "provider_id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "root_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "complete"
+          ]
+        },
+        "checked": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "writeManagedProvider",
+    "path": "/v1/providers/{id}/managed",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "writeManagedProvider",
+    "path": "/v1/providers/{id}/managed",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "writeManagedProvider",
+    "path": "/v1/providers/{id}/managed",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "writeManagedProvider",
+    "path": "/v1/providers/{id}/managed",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "writeManagedProvider",
+    "path": "/v1/providers/{id}/managed",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "writeManagedProvider",
+    "path": "/v1/providers/{id}/managed",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "writeManagedProvider",
+    "path": "/v1/providers/{id}/managed",
+    "status": 422,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "writeManagedProvider",
+    "path": "/v1/providers/{id}/managed",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "writeManagedProvider",
+    "path": "/v1/providers/{id}/managed",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
     "method": "POST",
     "operationId": "syncProviderDelivery",
     "path": "/v1/providers/{id}/sync",

@@ -1,3 +1,4 @@
+import { writeManagedProvider, type ManagedCredentialValidator } from "./managed-provider-write.js";
 import { runProviderSecretOperation } from "./provider-secret-operations.js";
 import { ManagedProviderSecretError } from "./managed-provider-secrets.js";
 import { ManagedSenderUnavailableError } from "./managed-provider-sender.js";
@@ -198,6 +199,7 @@ export interface SelfHostedServiceDeps {
   resolveSender?: SenderResolver;
   /** Metadata-only reference resolver; never decrypts managed envelopes. */
   resolveExternalSender?: SenderResolver;
+  validateManagedCredentials?: ManagedCredentialValidator;
   ingestCloud?: IngestCloudFactory;
   realtimeSetupCloud?: RealtimeSetupCloudFactory;
   migrations: readonly Migration[];
@@ -2791,9 +2793,10 @@ export async function handleSelfHostedRequest(
     const secretLifecycle = path.match(/^\/v1\/providers\/secrets\/(rewrap|rotate-root|revoke-root)$/);
     const secretJob = path.match(/^\/v1\/providers\/secrets\/jobs\/([^/]+)(\/advance)?$/);
     const credentialInstall = path.match(/^\/v1\/providers\/([^/]+)\/credentials$/);
-    if (secretLifecycle || secretJob || credentialInstall) {
+    const managedProviderWrite = path.match(/^\/v1\/providers\/([^/]+)\/managed$/);
+    if (secretLifecycle || secretJob || credentialInstall || managedProviderWrite) {
       const isRead = !!secretJob && !secretJob[2];
-      const expectedMethod = isRead ? "GET" : credentialInstall ? "PUT" : "POST";
+      const expectedMethod = isRead ? "GET" : (credentialInstall || managedProviderWrite) ? "PUT" : "POST";
       if (method !== expectedMethod) return json(405, { error: "method not allowed" });
       const auth = await authenticate(deps, req, url, isRead ? read : write);
       if (!auth.ok) return auth.response;
@@ -2801,13 +2804,15 @@ export async function handleSelfHostedRequest(
       if (denied) return denied;
       const backend = deps.managedProviderSecrets?.(auth.ctx.tenantId);
       if (!backend || backend.configured === false) return json(503, { error: "Managed provider credentials require deployment KMS configuration.", reason: "provider_credential_backend_unconfigured" });
-      const operation = credentialInstall ? "install" : secretJob ? (isRead ? "job" : "advance") : secretLifecycle![1] as "rewrap" | "rotate-root" | "revoke-root";
+      const operation = (credentialInstall || managedProviderWrite) ? "install" : secretJob ? (isRead ? "job" : "advance") : secretLifecycle![1] as "rewrap" | "rotate-root" | "revoke-root";
       const id = credentialInstall?.[1] ?? secretJob?.[1];
       try {
+        if (managedProviderWrite) return json(200, await writeManagedProvider(backend, decodeURIComponent(managedProviderWrite[1]!), await readJsonBody(req), auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator", deps.validateManagedCredentials));
         const receipt = await runProviderSecretOperation(backend, operation, isRead ? {} : await readJsonBody(req), auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator", id ? decodeURIComponent(id) : undefined);
         return json("status" in receipt && receipt.status === "pending" ? 202 : 200, receipt);
       } catch (error) {
         if (error instanceof ManagedProviderSecretError) return json(error.status, { error: error.message });
+        if (error && typeof error === "object" && "code" in error && error.code === "23505") return json(409, {error:"Provider ID already exists; inspect its credential status before retrying."});
         return json(503, { error: "Provider credential operation could not be confirmed. Retry with the same idempotency key or inspect the job and credential status.", reason: "provider_credential_operation_unavailable" });
       }
     }

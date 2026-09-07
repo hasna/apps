@@ -19,6 +19,8 @@ it("uses fresh tenant provider material for each operation without ambient crede
   revision++;
   const second = await resolve("tenant-two", "provider-two");
   expect(first?.credentialSource).toBe("managed_envelope");
+  expect(first?.credentialRevision).toBe(1);
+  expect(second?.credentialRevision).toBe(2);
   expect(configs.map(config => config.RESEND_API_KEY)).toEqual(["synthetic-1", "synthetic-2"]);
   expect(Object.keys(configs[0]!).sort()).toEqual(["EMAILS_SEND_PROVIDER", "RESEND_API_KEY"]);
   expect(reads).toEqual([["tenant-one", "provider-one"], ["tenant-two", "provider-two"]]);
