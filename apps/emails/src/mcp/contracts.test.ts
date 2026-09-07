@@ -307,12 +307,11 @@ describe("MCP CLI equivalents", () => {
     // classification path below is the only one there is and this case no longer depends on
     // how the process was configured. `src/db/aliases.test.ts` pins the message itself.
     //
-    // The build still needs SOME resolved deployment: buildServer() registers against the
-    // store and refuses when nothing is configured (fail-closed ruling, 2026-09-04), so the
-    // case selects the explicit local database — the classification it exercises is the
-    // same on every row, which is the independence the paragraph above asserts.
-    const savedDbPath = process.env["EMAILS_DB_PATH"];
-    process.env["EMAILS_DB_PATH"] = ":memory:";
+    // Register against a real API fixture. Invalid arguments still fail before
+    // any mail operation; no explicit SQLite configuration is needed.
+    const { startV1Stub } = await import("../test-support/v1-stub.js");
+    const api = await startV1Stub();
+    api.applyEnv();
     try {
       const { buildServer } = await import("./server.js");
       const server = buildServer() as unknown as {
@@ -331,8 +330,8 @@ describe("MCP CLI equivalents", () => {
       expect(payload.error.fix_commands).not.toContain("emails domain list --json");
       expect(payload.error.fix_commands).not.toContain("emails domain add --help");
     } finally {
-      if (savedDbPath === undefined) delete process.env["EMAILS_DB_PATH"];
-      else process.env["EMAILS_DB_PATH"] = savedDbPath;
+      api.clearEnv();
+      api.stop();
     }
   });
 
