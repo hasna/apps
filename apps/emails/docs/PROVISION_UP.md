@@ -51,7 +51,13 @@ provider outcome before any resend. The next probe does not start after an
 unconfirmed send. No database transaction remains open during provider calls.
 
 `retry` rechecks DNS/address readiness from the saved inputs and retains previous
-errors, child receipts and send identities. If several runs match a domain, supply
+errors, child receipts and send identities. Even previously ready child jobs must
+pass current receiver checks. A nonsecret provider generation checkpoint prevents
+combining proofs from different credential generations across steps. Changed
+credentials block progress until explicit retry rechecks DNS and every address;
+prior generation references remain in the receipt. External server credential
+bindings also require retry after a service restart. Managed credential rewrapping
+that leaves the credential revision unchanged does not invalidate evidence. If several runs match a domain, supply
 `--job`. A current worker's lease prevents retry from taking over its work.
 Completed runs remain completed; an explicit new run is required for new probes.
 
@@ -63,7 +69,7 @@ runs require `retry`. Its provider selector is an exact registered provider ID;
 optional bucket/MX flags filter the previously saved intent. A mismatch advances
 nothing. `--once`, `--interval` and `--max-ticks` bound the client loop. Interrupts
 stop subsequent ticks; a server step already accepted retains its durable lease
-and checkpoint. SES send/readiness calls use a finite abort deadline, and each
+and checkpoint. SES send/readiness and S3 polling calls share the step abort deadline, and each
 step has finite request and recipient budgets.
 
 API routes are `POST /v1/provision/up`, `POST /v1/provision/tick`,

@@ -136,6 +136,10 @@ export class ProvisionUpJobs {
         "This worker no longer owns the provisioning lease.",
       );
   }
+  async assertCurrentInTransaction(tx: TypedQueryClient, job: ProvisionUpJob) {
+    await this.lock(tx, job);
+    await this.references(tx, job.input);
+  }
   async assertCurrent(job: ProvisionUpJob) {
     await this.transaction(async (tx) => {
       await this.lock(tx, job);
@@ -146,10 +150,14 @@ export class ProvisionUpJobs {
     job: ProvisionUpJob,
     receipt: ProvisionUpReceipt,
     status: ProvisionUpJob["status"],
+    beforeCommit?: (tx: TypedQueryClient) => Promise<void>,
   ): Promise<ProvisionUpJob> {
     return this.transaction(async (tx) => {
       await this.lock(tx, job);
-      if (status !== "blocked") await this.references(tx, job.input);
+      if (status !== "blocked") {
+        await this.references(tx, job.input);
+        await beforeCommit?.(tx);
+      }
       return tx.one<ProvisionUpJob>(
         `UPDATE provisioning_jobs SET receipt=$3::jsonb,status=$4,lease=CASE WHEN $4='processing' THEN lease ELSE NULL END,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING ${columns}`,
         [this.tenant, job.id, JSON.stringify(receipt), status],
@@ -185,6 +193,7 @@ export class ProvisionUpJobs {
       const receipt = structuredClone(
         job.receipt ?? newProvisionUpReceipt(job.input, job.id),
       );
+      receipt.binding_generation = null;
       receipt.phase = "dns";
       receipt.address_cursor = 0;
       receipt.next_attempt_ms = 0;

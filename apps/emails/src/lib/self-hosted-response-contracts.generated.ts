@@ -30389,6 +30389,16 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
                     "complete"
                   ]
                 },
+                "binding_generation": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "binding_history": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "address_cursor": {
                   "type": "integer"
                 },
@@ -30960,6 +30970,16 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
                     "complete"
                   ]
                 },
+                "binding_generation": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "binding_history": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
                 "address_cursor": {
                   "type": "integer"
                 },
@@ -31492,6 +31512,16 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
                     "roundtrip",
                     "complete"
                   ]
+                },
+                "binding_generation": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "binding_history": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "address_cursor": {
                   "type": "integer"
@@ -32064,6 +32094,16 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
                       "complete"
                     ]
                   },
+                  "binding_generation": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "binding_history": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
                   "address_cursor": {
                     "type": "integer"
                   },
@@ -32633,6 +32673,16 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
                     "roundtrip",
                     "complete"
                   ]
+                },
+                "binding_generation": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "binding_history": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 "address_cursor": {
                   "type": "integer"

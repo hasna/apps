@@ -19,8 +19,10 @@ import { resourceSpecForPath } from "./resources.js";
 import type { TenantScopedStore } from "./store.js";
 import type { SelfHostedServiceDeps } from "./service.js";
 import type { SelfHostedSender } from "./sender.js";
+import type { TypedQueryClient } from "../../storage-kit/index.js";
 import type { IngestBatchReport } from "../../lib/inbox-ingest-api.js";
 
+const externalBindingGenerations = new WeakMap<object, string>();
 export const publicProvisionUpJob = (job: ProvisionUpJob) => ({
   id: job.id,
   status: job.status,
@@ -47,6 +49,7 @@ export interface ProvisionUpApiContext {
     path: string,
     body?: Record<string, unknown>,
     boundSender?: SelfHostedSender,
+    signal?: AbortSignal,
   ): Promise<Response>;
 }
 export async function provisionUpApi(
@@ -63,29 +66,128 @@ export async function provisionUpApi(
     if (!saved) throw new ProvisionUpError("Provisioning run not found.", 404);
     const signal = AbortSignal.timeout(105000);
     const sender = await deps.resolveSender?.(tenant, saved.input.provider_id);
+    let activeClaim: ProvisionUpJob | undefined;
+    const metadata:
+      | {
+          provider: string;
+          region?: string;
+          credentialSource?: string;
+          credentialRevision?: number;
+        }
+      | undefined = sender
+      ? {
+          provider: sender.provider,
+          region: sender.region,
+          credentialSource: (sender as { credentialSource?: string })
+            .credentialSource,
+          credentialRevision: (sender as { credentialRevision?: number })
+            .credentialRevision,
+        }
+      : undefined;
+    const generation = () => {
+      if (!sender || !metadata)
+        throw new ProvisionUpError("No provider binding is configured.");
+      if (metadata.credentialSource === "managed_envelope") {
+        if (
+          !Number.isSafeInteger(metadata.credentialRevision) ||
+          metadata.credentialRevision! < 1
+        )
+          throw new ProvisionUpError(
+            "The managed credential revision is unavailable.",
+          );
+        return upHash([
+          tenant,
+          saved.input.provider_id,
+          metadata.provider,
+          metadata.region,
+          metadata.credentialSource,
+          metadata.credentialRevision,
+        ]);
+      }
+      let id = externalBindingGenerations.get(sender);
+      if (!id) {
+        id = crypto.randomUUID();
+        externalBindingGenerations.set(sender, id);
+      }
+      return upHash([tenant, saved.input.provider_id, id]);
+    };
+    const bindingCurrent = async (
+      input = saved.input,
+      claim?: ProvisionUpJob,
+    ) => {
+      if (claim) activeClaim = claim;
+      if (activeClaim) await jobs.assertCurrent(activeClaim);
+      signal.throwIfAborted();
+      const binding = resolveDnsBinding(
+        env,
+        tenant,
+        input.provider_id,
+        input.domain,
+      );
+      if (upHash(binding) !== upHash(input.dns_binding))
+        throw new ProvisionUpError("The saved DNS binding changed.");
+      const current = await deps.resolveSender?.(tenant, input.provider_id);
+      if (!sender || !sameDomainDnsSender(sender, current))
+        throw new ProvisionUpError(
+          "The mail provider binding changed during this step.",
+        );
+      signal.throwIfAborted();
+    };
+    // Caller already holds the provider row lock; never resolve credentials or call KMS here.
+    const bindingMetadataCurrent = async (tx: TypedQueryClient) => {
+      signal.throwIfAborted();
+      if (
+        upHash(
+          resolveDnsBinding(
+            env,
+            tenant,
+            saved.input.provider_id,
+            saved.input.domain,
+          ),
+        ) !== upHash(saved.input.dns_binding)
+      )
+        throw new ProvisionUpError("The saved DNS binding changed.");
+      const table = await tx.one<{ present: boolean }>(
+        "SELECT to_regclass('provider_credential_envelopes') IS NOT NULL AS present",
+      );
+      const envelope = table.present
+        ? await tx.get<{ revision: number }>(
+            "SELECT revision FROM provider_credential_envelopes WHERE tenant_id=$1 AND provider_id=$2",
+            [tenant, saved.input.provider_id],
+          )
+        : null;
+      if (
+        metadata?.credentialSource === "managed_envelope"
+          ? envelope?.revision !== metadata.credentialRevision
+          : envelope !== null
+      )
+        throw new ProvisionUpError(
+          "The credential generation changed before the provisioning checkpoint.",
+        );
+    };
     const boundSender: SelfHostedSender | undefined = sender
       ? {
           ...sender,
-          send: (value) => {
-            signal.throwIfAborted();
+          send: async (value) => {
+            await bindingCurrent();
             return sender.send(value, signal);
           },
           ...(sender.verifyDomain
             ? {
-                verifyDomain: (domain: string) => {
-                  signal.throwIfAborted();
+                verifyDomain: async (domain: string) => {
+                  await bindingCurrent();
                   return sender.verifyDomain!(domain, signal);
                 },
               }
             : {}),
           ...(sender.checkInboundDomain
             ? {
-                checkInboundDomain: (
+                checkInboundDomain: async (
                   domain: string,
                   bucket: string,
                   mailbox?: string,
                 ) => {
-                  signal.throwIfAborted();
+                  await bindingCurrent();
                   return sender.checkInboundDomain!(
                     domain,
                     bucket,
@@ -97,8 +199,8 @@ export async function provisionUpApi(
             : {}),
           ...(sender.checkInboundQueue
             ? {
-                checkInboundQueue: (topic: string, queue: string) => {
-                  signal.throwIfAborted();
+                checkInboundQueue: async (topic: string, queue: string) => {
+                  await bindingCurrent();
                   return sender.checkInboundQueue!(topic, queue, signal);
                 },
               }
@@ -122,27 +224,24 @@ export async function provisionUpApi(
           (init?.method && init.method !== "GET")
         )
           throw new ProvisionUpError("Unexpected receipt request.");
-        return ctx.request(parsed.pathname + parsed.search);
+        return ctx.request(
+          parsed.pathname + parsed.search,
+          undefined,
+          undefined,
+          signal,
+        );
       },
     });
     return advanceProvisionUp(id, {
-      store: jobs,
-      guard: async (input) => {
-        signal.throwIfAborted();
-        const binding = resolveDnsBinding(
-          env,
-          tenant,
-          input.provider_id,
-          input.domain,
-        );
-        if (upHash(binding) !== upHash(input.dns_binding))
-          throw new ProvisionUpError("The saved DNS binding changed.");
-        const current = await deps.resolveSender?.(tenant, input.provider_id);
-        if (!sender || !sameDomainDnsSender(sender, current))
-          throw new ProvisionUpError(
-            "The mail provider binding changed during this step.",
-          );
+      store: {
+        claim: jobs.claim.bind(jobs),
+        get: jobs.get.bind(jobs),
+        assertCurrent: jobs.assertCurrent.bind(jobs),
+        save: (claim, receipt, status) =>
+          jobs.save(claim, receipt, status, bindingMetadataCurrent),
       },
+      guard: bindingCurrent,
+      bindingGeneration: async () => generation(),
       dns: (input) =>
         publishDomainDns(
           store,
@@ -164,6 +263,16 @@ export async function provisionUpApi(
         const child = await store.startProvisioningJob(refs.input, key, actor);
         return runAddressProvisioningJob(store, tenant, child.id, {
           resolveSender: () => boundSender ?? null,
+          recheckReady: true,
+          beforeComplete: () => bindingCurrent(),
+          beforeCommit: async (tx) => {
+            // Provider row is already locked. Inspect revision metadata without KMS or provider I/O.
+            signal.throwIfAborted();
+            if (!activeClaim)
+              throw new ProvisionUpError("Missing parent provisioning claim.");
+            await jobs.assertCurrentInTransaction(tx, activeClaim);
+            await bindingMetadataCurrent(tx);
+          },
           env,
           mx: deps.provisioning?.resolveMx,
         });
@@ -180,6 +289,7 @@ export async function provisionUpApi(
             idempotency_key: item.send_key,
           },
           boundSender,
+          signal,
         ),
       read: (item) =>
         reader.verificationCandidates(item.to, {
@@ -193,13 +303,18 @@ export async function provisionUpApi(
               input: BoundProvisionUpInput,
               cursor?: string | null,
             ) => {
-              const response = await ctx.request("/v1/inbox/sync-s3", {
-                provider_id: input.provider_id,
-                limit: 10,
-                ...(input.source_id ? { source_id: input.source_id } : {}),
-                ...(input.bucket ? { bucket: input.bucket } : {}),
-                ...(cursor ? { cursor } : {}),
-              });
+              const response = await ctx.request(
+                "/v1/inbox/sync-s3",
+                {
+                  provider_id: input.provider_id,
+                  limit: 10,
+                  ...(input.source_id ? { source_id: input.source_id } : {}),
+                  ...(input.bucket ? { bucket: input.bucket } : {}),
+                  ...(cursor ? { cursor } : {}),
+                },
+                undefined,
+                signal,
+              );
               const report = (await response.json()) as IngestBatchReport;
               if (
                 !response.ok ||

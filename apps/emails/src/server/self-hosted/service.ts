@@ -1147,12 +1147,12 @@ export async function handleSelfHostedRequest(
         const body = method === "POST" ? await readJsonBody(req) : {};
         return json(200, await provisionUpApi(path, method, body, { deps, store: auth.store, tenant: auth.ctx.tenantId,
           actor: auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator",
-          request: async (internalPath, payload, boundSender) => {
+          request: async (internalPath, payload, boundSender, signal) => {
             const allowed = internalPath === "/v1/messages/send" || internalPath === "/v1/inbox/sync-s3" || /^\/v1\/messages(?:\?|\/)/.test(internalPath);
             if (!allowed) throw new ProvisionUpError("Unexpected provisioning subrequest.");
             const headers = new Headers(req.headers); headers.delete("Content-Length"); headers.set("Content-Type", "application/json");
             const internalDeps = boundSender ? { ...deps, resolveSender: (tenant: string, provider: string) => tenant === auth.ctx.tenantId && provider === payload?.provider_id ? boundSender : null } : deps;
-            const response = await handleSelfHostedRequest(internalDeps, new Request(new URL(internalPath, req.url), { method: payload ? "POST" : "GET", headers, ...(payload ? { body: JSON.stringify(payload) } : {}) }), context);
+            const response = await handleSelfHostedRequest(internalDeps, new Request(new URL(internalPath, req.url), { method: payload ? "POST" : "GET", headers, signal, ...(payload ? { body: JSON.stringify(payload) } : {}) }), context);
             if (!response) throw new ProvisionUpError("Provisioning subrequest unavailable.", 503);
             return response;
           }
@@ -2888,7 +2888,7 @@ export async function handleSelfHostedRequest(
       const body = await readJsonBody(req);
       const stringFields = ["source_id", "bucket", "prefix", "region", "provider_id", "queue_url", "profile", "cursor"];
       if (Object.keys(body).some(key => ![...stringFields, "force", "all_buckets", "limit"].includes(key)) || stringFields.some(key => body[key] !== undefined && (typeof body[key] !== "string" || !(body[key] as string).trim())) || ["force", "all_buckets"].some(key => body[key] !== undefined && typeof body[key] !== "boolean")) return json(400, { error: "Invalid ingest operation options" });
-      try { return await withRuntimeLog(auth.store, ingestOperation[1] === "watch" ? "inbound" : "sync", ingestOperation[1] === "watch" ? "watch" : "sync_s3", async () => json(200, await executeIngestBatch(deps.store, auth.store, auth.ctx.tenantId, ingestOperation[1] as "sync-s3" | "watch", body as IngestApiInput, deps.env ?? process.env, deps.ingestCloud))); }
+      try { return await withRuntimeLog(auth.store, ingestOperation[1] === "watch" ? "inbound" : "sync", ingestOperation[1] === "watch" ? "watch" : "sync_s3", async () => json(200, await executeIngestBatch(deps.store, auth.store, auth.ctx.tenantId, ingestOperation[1] as "sync-s3" | "watch", body as IngestApiInput, deps.env ?? process.env, deps.ingestCloud, req.signal))); }
       catch (error) { if (error instanceof IngestApiError) return json(error.status, { error: error.message }); throw error; }
     }
 

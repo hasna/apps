@@ -2365,11 +2365,12 @@ export class TenantScopedStore {
       id,
     );
   }
-  claimProvisioningJob(id: string) {
+  claimProvisioningJob(id: string, recheckReady = false) {
     return addressProvisioningStore.claimProvisioningJob(
       this.client,
       this.tenantId,
       id,
+      recheckReady,
     );
   }
   blockProvisioningJob(job: ProvisioningJob, receipt: ProvisioningReceipt) {
@@ -2384,6 +2385,7 @@ export class TenantScopedStore {
     job: ProvisioningJob,
     refs: AddressProvisioningRefs,
     receipt: ProvisioningReceipt,
+    beforeCommit?: (tx: TypedQueryClient) => Promise<void>,
   ) {
     if (!this.atomicClient)
       throw new Error("Address provisioning requires a transactional store");
@@ -2398,6 +2400,7 @@ export class TenantScopedStore {
         job,
         refs,
         receipt,
+        beforeCommit,
       );
     });
   }

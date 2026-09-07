@@ -33,6 +33,8 @@ export interface BoundProvisionUpInput extends ProvisionUpInput {
 }
 export interface ProvisionUpReceipt {
   phase: "dns" | "addresses" | "roundtrip" | "complete";
+  binding_generation?: string | null;
+  binding_history?: string[];
   address_cursor: number;
   dns: DomainDnsResult | null;
   addresses: Record<
@@ -83,7 +85,11 @@ export interface ProvisionUpDeps {
       status: ProvisionUpJob["status"],
     ): Promise<ProvisionUpJob>;
   };
-  guard?: (input: BoundProvisionUpInput) => Promise<void>;
+  guard?: (
+    input: BoundProvisionUpInput,
+    claim: ProvisionUpJob,
+  ) => Promise<void>;
+  bindingGeneration?: () => Promise<string>;
   dns(input: BoundProvisionUpInput): Promise<DomainDnsResult>;
   address(
     input: BoundProvisionUpInput,
@@ -91,9 +97,7 @@ export interface ProvisionUpDeps {
     key: string,
   ): Promise<ProvisionUpReceipt["addresses"][string]>;
   send(item: RoundtripItem, input: BoundProvisionUpInput): Promise<Response>;
-  read(
-    item: RoundtripItem,
-  ): Promise<
+  read(item: RoundtripItem): Promise<
     Array<{
       id: string;
       from_address: string;
@@ -269,13 +273,14 @@ export async function advanceProvisionUp(
   const now = deps.now ?? Date.now;
   const guard = async () => {
     await deps.store.assertCurrent(claim);
-    await deps.guard?.(claim.input);
+    await deps.guard?.(claim.input, claim);
   };
   const save = (status: ProvisionUpJob["status"], delay = 0) => {
     receipt.next_attempt_ms = now() + delay;
     return deps.store.save(claim, receipt, status);
   };
   const block = (code: string) => {
+    receipt.complete = false;
     receipt.errors = [
       ...receipt.errors.slice(-19),
       { code, at: new Date(now()).toISOString() },
@@ -284,6 +289,22 @@ export async function advanceProvisionUp(
   };
   try {
     await guard();
+    if (deps.bindingGeneration) {
+      const generation = await deps.bindingGeneration();
+      if (
+        receipt.binding_generation &&
+        receipt.binding_generation !== generation
+      )
+        return block("provider_binding_changed");
+      if (!receipt.binding_generation) {
+        receipt.binding_generation = generation;
+        receipt.binding_history = [
+          ...(receipt.binding_history ?? []).slice(-19),
+          generation,
+        ];
+        await save("processing");
+      }
+    }
     if (receipt.phase === "dns") {
       receipt.dns = await deps.dns(claim.input);
       await guard();
@@ -293,9 +314,9 @@ export async function advanceProvisionUp(
         !receipt.dns.job.dns_published ||
         !receipt.dns.job.verified_for_sending
       )
-        return save("pending", 30000);
+        return await save("pending", 30000);
       receipt.phase = "addresses";
-      return save("pending");
+      return await save("pending");
     }
     if (receipt.phase === "addresses") {
       const local = claim.input.addresses[receipt.address_cursor];
@@ -308,7 +329,7 @@ export async function advanceProvisionUp(
         if (address.status !== "ready" || !address.receipt?.ready)
           return block("address_not_ready");
         receipt.address_cursor++;
-        return save("pending");
+        return await save("pending");
       }
       receipt.phase = "roundtrip";
     }
@@ -318,7 +339,7 @@ export async function advanceProvisionUp(
         receipt.phase = "complete";
         receipt.complete = true;
         receipt.delivery_tested = items.length > 0;
-        return save("ready");
+        return await save("ready");
       }
       if (!receipt.roundtrip.preflight) {
         await deps.read(items[0]!);
@@ -329,7 +350,7 @@ export async function advanceProvisionUp(
           );
         await guard();
         receipt.roundtrip.preflight = true;
-        return save("pending");
+        return await save("pending");
       }
       const item = items.find((row) =>
         ["not_attempted", "uncertain", "failed"].includes(row.state),
@@ -358,7 +379,7 @@ export async function advanceProvisionUp(
         item.outbound_id = body.message.id;
         item.replayed = body.idempotent_replay === true;
         delete item.error;
-        return save("pending", 1100);
+        return await save("pending", 1100);
       }
       if (receipt.roundtrip.poll_pass >= 60) return block("receipt_timeout");
       if (receipt.roundtrip.poll_cursor === 0 && deps.sync)
@@ -387,7 +408,10 @@ export async function advanceProvisionUp(
         receipt.roundtrip.poll_cursor = 0;
         receipt.roundtrip.poll_pass++;
       }
-      return save("pending", receipt.roundtrip.poll_cursor === 0 ? 10000 : 0);
+      return await save(
+        "pending",
+        receipt.roundtrip.poll_cursor === 0 ? 10000 : 0,
+      );
     }
     return block("invalid_phase");
   } catch {

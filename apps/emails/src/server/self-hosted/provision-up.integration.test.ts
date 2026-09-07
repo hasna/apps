@@ -56,6 +56,8 @@ beforeAll(async () => {
 }, 60000);
 beforeEach(async () => {
   if (!url) return;
+  base = new EmailsSelfHostedStore(client);
+  store = base.forTenant(tenant);
   await client.execute(
     "TRUNCATE self_hosted_providers,domains,addresses,owners,provisioning_jobs,provisioning_events,address_ownership_events,messages CASCADE; DELETE FROM inbound_domain_routes; UPDATE tenants SET status='active'",
   );
@@ -138,7 +140,8 @@ beforeEach(async () => {
     send: async (message, signal) => {
       expect(signal).toBeInstanceOf(AbortSignal);
       sendCalls++;
-      if (uncertain) throw new DOMException("fixture deadline interrupted", "AbortError");
+      if (uncertain)
+        throw new DOMException("fixture deadline interrupted", "AbortError");
       await store.createMessage({
         direction: "inbound",
         from_addr: message.from,
@@ -453,5 +456,126 @@ pgtest(
       again.receipt.roundtrip.items.map((row: any) => row.send_key),
     ).toEqual(keys);
     expect(sendCalls).toBe(1);
+  },
+);
+pgtest(
+  "provider rotation during queue evidence cannot promote a ready child",
+  async () => {
+    const job = await start();
+    await drive(job.id, 1);
+    const original = sender;
+    original.checkInboundQueue = async () => {
+      sender = { ...original };
+      return { ready: true, reason: "old account evidence" };
+    };
+    const blocked = await drive(job.id, 1);
+    expect(blocked.status).toBe("blocked");
+    expect(
+      await client.one("SELECT count(*)::int AS n FROM addresses"),
+    ).toEqual({ n: 0 });
+    expect(
+      await client.one(
+        "SELECT count(*)::int AS n FROM provisioning_jobs WHERE kind='address' AND status='ready'",
+      ),
+    ).toEqual({ n: 0 });
+  },
+);
+pgtest(
+  "retry revalidates previously ready address children before accepting new account evidence",
+  async () => {
+    uncertain = true;
+    const job = await start(1);
+    await drive(job.id);
+    let queueChecks = 0;
+    sender = {
+      ...sender,
+      checkInboundQueue: async () => {
+        queueChecks++;
+        return { ready: false, reason: "new account has no queue route" };
+      },
+    };
+    await api("/v1/provision/retry", { domain: input.domain, job_id: job.id });
+    const blocked = await drive(job.id);
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.receipt.phase).toBe("addresses");
+    expect(blocked.receipt.address_cursor).toBe(0);
+    expect(queueChecks).toBe(1);
+    expect(sendCalls).toBe(1);
+  },
+);
+pgtest(
+  "rotation after the send checkpoint is fenced immediately before provider I/O",
+  async () => {
+    const job = await start(1);
+    await drive(job.id, 4); // DNS, both addresses, preflight
+    const originalForTenant = base.forTenant.bind(base);
+    base.forTenant = ((tenantId: string) => {
+      const scoped = originalForTenant(tenantId);
+      const original = scoped.claimSendIntent.bind(scoped);
+      scoped.claimSendIntent = (async (
+        ...args: Parameters<typeof original>
+      ) => {
+        const result = await original(...args);
+        sender = { ...sender };
+        return result;
+      }) as typeof scoped.claimSendIntent;
+      return scoped;
+    }) as typeof base.forTenant;
+    const blocked = await drive(job.id, 1);
+    expect(blocked.status).toBe("blocked");
+    expect(sendCalls).toBe(0);
+  },
+);
+
+pgtest(
+  "provider generation drift between steps blocks old address proofs until explicit retry",
+  async () => {
+    const job = await start();
+    const addressesReady = await drive(job.id, 3);
+    expect(addressesReady.receipt.address_cursor).toBe(2);
+    sender = { ...sender };
+    const blocked = await drive(job.id, 1);
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.receipt.errors.at(-1).code).toBe("provider_binding_changed");
+    const history = blocked.receipt.binding_history;
+    await api("/v1/provision/retry", { domain: input.domain, job_id: job.id });
+    const ready = await drive(job.id);
+    expect(ready.status).toBe("ready");
+    expect(ready.receipt.binding_history).toHaveLength(2);
+    expect(ready.receipt.binding_history[0]).toBe(history[0]);
+  },
+);
+
+pgtest(
+  "a binding change after the final async guard prevents the ready checkpoint",
+  async () => {
+    const job = await start();
+    await drive(job.id, 3);
+    const originalForTenant = base.forTenant.bind(base);
+    base.forTenant = ((tenantId: string) => {
+      const scoped = originalForTenant(tenantId);
+      const factory = scoped.provisionUpJobs.bind(scoped);
+      scoped.provisionUpJobs = () => {
+        const jobs = factory(),
+          save = jobs.save.bind(jobs);
+        jobs.save = async (...args: Parameters<typeof save>) => {
+          if (args[2] === "ready")
+            deps.env!.EMAILS_DNS_BINDINGS = JSON.stringify([
+              { ...input.dns_binding, token_env: "CHANGED_FIXTURE_DNS_TOKEN" },
+            ]);
+          return save(...args);
+        };
+        return jobs;
+      };
+      return scoped;
+    }) as typeof base.forTenant;
+    const blocked = await drive(job.id, 1);
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.receipt.complete).toBe(false);
+    expect(
+      await client.one(
+        "SELECT count(*)::int AS n FROM provisioning_jobs WHERE kind='provision_up' AND status='ready'",
+      ),
+    ).toEqual({ n: 0 });
   },
 );

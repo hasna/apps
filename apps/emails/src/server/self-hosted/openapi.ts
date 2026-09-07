@@ -5084,6 +5084,8 @@ const provisionUpJobSchema = {
           type: "string",
           enum: ["dns", "addresses", "roundtrip", "complete"],
         },
+        binding_generation: { type: "string", nullable: true },
+        binding_history: { type: "array", items: { type: "string" } },
         address_cursor: { type: "integer" },
         dns: { ...domainDnsResultSchema, nullable: true },
         addresses: {
