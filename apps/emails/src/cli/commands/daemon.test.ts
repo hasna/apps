@@ -10,7 +10,15 @@ const managed = (key: string) => key === "HOME" || key.startsWith("EMAILS_") || 
 beforeAll(() => { server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => { const url = new URL(request.url); if (mode === "legacy") return Response.json({ error: "not found" }, { status: 404 }); if (url.pathname === "/v1/workers") return Response.json({ items: mode === "empty" ? [] : [worker], complete: true }); const body = await request.json() as { action: string; request_id: string }; return Response.json({ restart: { id: body.request_id, worker_id: worker.id, status: mode === "pending" ? "draining" : "complete", old_generation: 1, new_generation: mode === "pending" ? null : 2 } }, { status: mode === "pending" ? 202 : 200 }); } }); });
 afterAll(() => server.stop(true));
 beforeEach(() => { prior = Object.fromEntries(Object.entries(process.env).filter(([key]) => managed(key))); for (const key of Object.keys(process.env)) if (managed(key)) delete process.env[key]; home = mkdtempSync(join(tmpdir(), "emails-daemon-unit-")); Object.assign(process.env, { HOME: home, EMAILS_HOME: home, HASNA_EMAILS_HOME: home, EMAILS_SELF_HOSTED_URL: server.url.origin, EMAILS_SELF_HOSTED_API_KEY: crypto.randomUUID(), EMAILS_CLIENT_ENV_LOADED: "1" }); mode = "complete"; });
-afterEach(() => { for (const key of Object.keys(process.env)) if (managed(key)) delete process.env[key]; Object.assign(process.env, prior); rmSync(home, { recursive: true, force: true }); process.exitCode = 0; });
+afterEach(() => {
+  // Restore each inherited value; remove only keys absent before this test.
+  for (const key of new Set([...Object.keys(process.env).filter(managed), ...Object.keys(prior)])) {
+    if (prior[key] === undefined) delete process.env[key];
+    else process.env[key] = prior[key];
+  }
+  rmSync(home, { recursive: true, force: true });
+  process.exitCode = 0;
+});
 async function runDaemon(args: string[]) { const program = new Command(); program.exitOverride(); let data: unknown; const out: string[] = []; registerDaemonCommands(program, (payload, formatted) => { data = payload; out.push(formatted); }); await program.parseAsync(["node", "emails", ...args]); return { data, output: out.join("\n") }; }
 describe("daemon status and restart use actual worker evidence", () => {
   it("reports registered generation and lease facts", async () => { const result = await runDaemon(["daemon", "status"]); expect(result.data).toMatchObject({ items: [{ generation: 1, lease_fresh: true }] }); expect(result.output).toContain("generation 1"); });

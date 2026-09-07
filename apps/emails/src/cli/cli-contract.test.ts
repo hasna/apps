@@ -277,10 +277,10 @@ describe("fail-closed without API configuration (fail-closed ruling, 2026-09-04)
     // incident this contract exists to prevent.
     expect(result.exitCode, "the CLI must fail closed rather than exit 0").not.toBe(0);
     const stderr = stderrText(result);
-    // Actionable: names the API origin the operator has to configure...
-    expect(stderr).toContain("EMAILS_SELF_HOSTED_URL");
-    // ...and the explicit database path that opts into local storage.
-    expect(stderr).toContain("HASNA_EMAILS_DB_PATH");
+    // Actionable account setup, without recommending a rejected client database.
+    expect(stderr).toContain("HASNA_EMAILS_API_URL");
+    expect(stderr).toContain("HASNA_EMAILS_API_KEY");
+    expect(stderr).not.toContain("To use the local database instead");
     // The fallback shape is gone: no fallback event line, and no local database.
     expect(`${stdoutText(result)}\n${stderr}`).not.toContain("emails-local-fallback");
     expect(existsSync(join(homePath, ".hasna")), "no local data root may be created").toBe(false);
