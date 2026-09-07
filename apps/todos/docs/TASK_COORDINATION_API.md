@@ -1,0 +1,9 @@
+# Shared task coordination
+
+With saved account API credentials, these existing MCP tools now operate on the shared authority: `lock_task`, `unlock_task`, `check_task_lock`, `prioritize_task`, `add_task_dependency`, `remove_task_dependency`, and `get_task_dependencies`. Task short references resolve through the API. No local SQLite lookup or fallback is used on this path.
+
+Lock conflicts return an error receipt. Omitting `agent_id` on `unlock_task` requests force release and requires the server's existing `todos:*` scope; naming another agent does not bypass server authorization. Lock status uses the shared task timestamps and the package's existing 30-minute lease duration. Priority changes pass an explicit version (or the version just read from the API), preserving optimistic concurrency conflicts.
+
+Dependency reads retain recursive upstream/downstream semantics and blocked markers. Missing or unreadable related tasks fail visibly. Walks exceeding 1,000 unique task rows or 100 levels fail instead of showing a truncated graph as complete. The graph reflects multiple reads rather than a transactional snapshot. Empty or mismatched API write receipts are not accepted as successful mutations; after such an ambiguous response, inspect the authority before retrying. Re-removing an absent edge reports that nothing was removed.
+
+The API endpoints already exist, so this patch adds no database migration. Unsupported endpoints still fail without writing a local database. Explicit storage-library and opted-in local fixtures retain their existing behavior. This closes only the seven named tools; the remaining local-only CLI/MCP inventory still needs conversion before retiring any database. It does not establish multi-tenant isolation for pre-existing task adapters; the deployment-corpus limitation documented in `MACHINE_REGISTRY_MIGRATION.md` remains.
