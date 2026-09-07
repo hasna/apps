@@ -1,5 +1,6 @@
 import {readProviderSecretStatus} from "./provider-secret-status.js";
 import { importSmtpMessage, smtpImportCapability, SmtpImportError, SMTP_IMPORT_JSON_BYTES } from "./smtp-import.js";
+import { relayWebhook, resolveWebhookRelay, providerWebhookRequest, WebhookRelayError, type WebhookRelayDeps } from "./webhook-relay.js";
 import { setupBoundRealtime, type RealtimeSetupCloudFactory, type RealtimeSetupInput } from "./realtime-setup.js";
 import { normalizeDomainConnect, connectDomain, DomainConnectError } from "./domain-connect.js";
 import { executeIngestBatch, IngestApiError, type IngestApiInput, type IngestCloudFactory } from "./ingest-api.js";
@@ -183,6 +184,7 @@ async function readinessCheck(deps: SelfHostedServiceDeps): Promise<ReadyResult>
 
 export interface SelfHostedServiceDeps {
   tracking?: TrackingConfig;
+  webhookRelay?: WebhookRelayDeps;
   provisioning?: { resolveMx?: typeof import("node:dns/promises").resolveMx };
   client: TypedQueryClient;
   store: EmailsSelfHostedStore;
@@ -2717,6 +2719,23 @@ export async function handleSelfHostedRequest(
         const result = await importSmtpMessage(deps.store, auth.store, auth.ctx.tenantId, await readJsonBody(req, SMTP_IMPORT_JSON_BYTES));
         return json(result.duplicate ? 200 : 201, result);
       } catch (error) { if (error instanceof SmtpImportError) return json(error.status, { error: error.message }); throw error; }
+    }
+
+    const relayMatch = path.match(/^\/v1\/webhooks\/relay(?:\/(ses|resend))?$/);
+    if (relayMatch) {
+      if (method !== (relayMatch[1] ? "POST" : "GET")) return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "relaying provider webhooks");
+      if (denied) return denied;
+      const selector = url.searchParams.has("provider_id") ? url.searchParams.get("provider_id") : undefined;
+      try {
+        if (!relayMatch[1]) return json(200, (await resolveWebhookRelay(auth.store, auth.ctx.tenantId, selector, deps.env ?? process.env)).capability);
+        return await relayWebhook(deps.store, auth.store, auth.ctx.tenantId, selector, relayMatch[1], providerWebhookRequest(req.url, await readJsonBody(req, 2 * 1048576)), deps.env ?? process.env, deps.webhookRelay);
+      } catch (error) {
+        if (error instanceof WebhookRelayError) return json(error.status, { error: error.message });
+        return json(503, { error: "Webhook relay did not confirm durable completion; retry the original event." });
+      }
     }
 
     if (path === "/v1/inbox/setup-realtime") {

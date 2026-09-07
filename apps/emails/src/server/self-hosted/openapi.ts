@@ -3455,6 +3455,17 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         ]),
       },
     },
+    "/v1/webhooks/relay": { get: {
+      operationId: "getWebhookRelayCapability", summary: "Check a tenant-bound server-verified webhook relay before opening a local listener",
+      parameters: [{ name: "provider_id", in: "query", required: false, schema: { type: "string" } }],
+      responses: { "200": jsonResponse("Provider relay capability without credentials", { type: "object", required: ["available", "signature_verification", "durable_receipts", "provider_id", "type", "max_webhook_bytes"], properties: { available: { type: "boolean" }, signature_verification: { type: "boolean" }, durable_receipts: { type: "boolean" }, provider_id: { type: "string" }, type: { type: "string", enum: ["ses", "resend"] }, max_webhook_bytes: { type: "integer" } } }), "400": errorResponse("Invalid selector"), "403": errorResponse("Operator required"), "404": errorResponse("No selected provider binding"), "409": errorResponse("Invalid provider/source registry binding"), "503": errorResponse("Server verification configuration missing") },
+    } },
+    ...Object.fromEntries(["ses", "resend"].map(type => [`/v1/webhooks/relay/${type}`, { post: {
+      operationId: type === "ses" ? "relaySesWebhook" : "relayResendWebhook", summary: "Relay exact signed provider bytes with tenant/operator authorization; acknowledgment requires durable completion",
+      parameters: [{ name: "provider_id", in: "query", required: false, schema: { type: "string" } }],
+      requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["raw_body_base64", "signature_headers"], properties: { raw_body_base64: { type: "string", description: "Canonical base64 of the original signed provider bytes, at most 1 MiB decoded", maxLength: 1398104 }, signature_headers: { type: "object", additionalProperties: { type: "string" }, description: "Original lowercase Svix/SNS signature headers and optional content-type only" } } } } } },
+      responses: { "200": jsonResponse("Verified durable completion or replay", { type: "object", required: ["ok", "completed", "provider_id"], properties: { ok: { type: "boolean" }, completed: { type: "boolean" }, provider_id: { type: "string" } }, additionalProperties: true }), ...Object.fromEntries(["400", "401", "403", "404", "409", "413", "422", "502", "503"].map(status => [status, errorResponse("Webhook verification, binding, content or durable completion failed")])) },
+    } } ])),
     "/v1/inbox/setup-realtime": { post: {
       operationId: "setupInboxRealtime", summary: "Configure and read back a tenant-bound SES/SNS/SQS notification path (operator only)", tags: ["inbox"],
       requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["domain"], additionalProperties: false, properties: { domain: { type: "string" }, source_id: { type: "string" }, rule_set: { type: "string" }, rule_name: { type: "string" }, region: { type: "string" }, profile: { type: "string", description: "Rejected: cloud credentials belong to the API server" } } } } } },

@@ -577,3 +577,39 @@ describe.skipIf(!pgClient)("cross-tenant isolation of the receivers", () => {
     expect(await count("webhook_receipts", tenantB)).toBe(0);
   });
 });
+
+describe.skipIf(!pgClient)("authenticated relay persistence", () => {
+  it("concurrent inbound receipts preserve the first message, edits and deletion", async () => {
+    const tenant = await makeRoutedTenant("relay-inbound", "relay-inbound.test");
+    const store = new EmailsSelfHostedStore(pgClient!).forTenant(tenant);
+    const provider = await store.createResource(resourceSpecForPath("providers")!, { name: "relay-provider", type: "resend" });
+    const providerId = String(provider.id), namespace = `relay:resend:${providerId}`;
+    const input = { from_addr: "sender@example.net", to_addrs: ["inbox@relay-inbound.test"], provider_id: providerId, source_id: "relay-source", status: "received", direction: "inbound" as const, body_html: "<p>full</p>", attachments: [{ filename: "fixture.txt", size: 3, content_type: "text/plain", content_base64: "YWJj" }] };
+    const replies = await Promise.all(Array.from({ length: 8 }, () => store.createRelayInbound(namespace, "event", input)));
+    expect(new Set(replies.map(reply => reply.id)).size).toBe(1);
+    expect(await count("messages", tenant)).toBe(1); expect(await count("webhook_receipts", tenant)).toBe(1);
+    const id = replies[0]!.id;
+    expect((await store.getMessage(id))!.attachments).toMatchObject([{ content_available: true }]);
+    expect(await pgClient!.one("SELECT attachments->0->>'content_base64' AS content FROM messages WHERE id=$1", [id])).toEqual({ content: "YWJj" });
+    await pgClient!.execute("UPDATE messages SET body_html='User edited' WHERE id=$1", [id]);
+    await store.createRelayInbound(namespace, "event", input);
+    expect((await store.getMessage(id))!.body_html).toBe("User edited");
+    await pgClient!.execute("DELETE FROM messages WHERE id=$1", [id]);
+    expect(await store.createRelayInbound(namespace, "event", input)).toMatchObject({ id });
+    expect(await count("messages", tenant)).toBe(0);
+    await expect(store.createRelayInbound(namespace, "broken", { ...input, received_at: "invalid" })).rejects.toThrow();
+    expect(await store.findRelayReceipt(namespace, "broken")).toBeNull();
+  });
+  it("delivery receipts require the exact tenant/provider message and record once atomically", async () => {
+    const tenant = await makeRoutedTenant("relay-delivery", "relay-delivery.test");
+    const store = new EmailsSelfHostedStore(pgClient!).forTenant(tenant);
+    const provider = await store.createResource(resourceSpecForPath("providers")!, { name: "delivery-provider", type: "resend" });
+    const id = String(provider.id), namespace = `relay:resend:${id}`;
+    const message = await store.createMessage({ from_addr: "sender@relay-delivery.test", to_addrs: ["recipient@example.com"], direction: "outbound", provider_id: id, provider_message_id: "upstream", status: "sent", send_state: "sent" });
+    const event = { email_id: null, type: "delivered", recipient: "recipient@example.com", metadata: {}, occurred_at: new Date().toISOString() };
+    await expect(store.createRelayDelivery(namespace, "event", "foreign-provider", "upstream", event)).rejects.toThrow("selected tenant/provider");
+    const replies = await Promise.all(Array.from({ length: 8 }, () => store.createRelayDelivery(namespace, "event", id, "upstream", event)));
+    expect(new Set(replies.map(reply => reply.id)).size).toBe(1); expect(await count("events", tenant)).toBe(1); expect(await count("webhook_receipts", tenant)).toBe(1);
+    const row = await pgClient!.one("SELECT email_id,provider_id FROM events WHERE id=$1", [replies[0]!.id]); expect(row).toEqual({ email_id: message.id, provider_id: id });
+  });
+});

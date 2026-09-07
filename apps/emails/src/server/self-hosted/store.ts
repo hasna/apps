@@ -2425,6 +2425,50 @@ export class TenantScopedStore {
    * the same transaction. A receipt can therefore never acknowledge a missing
    * event, and a committed event can never be left without its receipt.
    */
+  private async lockRelayRecipients(tx: TypedQueryClient, addresses: string[]): Promise<void> {
+    const domains = [...new Set(addresses.map(address => address.slice(address.lastIndexOf("@") + 1).toLowerCase()))];
+    const routes = await tx.many<{ tenant_id: string }>(`SELECT r.tenant_id FROM inbound_domain_routes r JOIN tenants t ON t.id=r.tenant_id WHERE r.domain=ANY($1::text[]) AND t.status='active' FOR SHARE OF r,t`, [domains]);
+    if (!domains.length || routes.length !== domains.length || routes.some(route => route.tenant_id !== this.tenantId)) throw new Error("Webhook recipient routing changed before durable acceptance");
+  }
+  async findRelayReceipt(provider: string, eventId: string): Promise<{ resourceId: string | null } | null> {
+    const row = await this.client.get<{ resource_id: string | null }>(`SELECT resource_id FROM webhook_receipts WHERE tenant_id=$1 AND provider=$2 AND event_id=$3`, [this.tenantId, provider, eventId]);
+    return row ? { resourceId: row.resource_id } : null;
+  }
+  async recordRelayReceipt(provider: string, eventId: string, resourceId: string | null): Promise<void> {
+    await this.client.execute(`INSERT INTO webhook_receipts(id,tenant_id,provider,event_id,resource_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,provider,event_id) DO NOTHING`, [randomUUID(), this.tenantId, provider, eventId, resourceId]);
+  }
+  /** First provider copy is immutable; receipt survives a user deleting the message. */
+  async createRelayInbound(provider: string, eventId: string, input: MessageInput): Promise<{ id: string; receiptRecorded: true }> {
+    if (!this.atomicClient || !input.source_id || !input.provider_id) throw new Error("Webhook import requires transactional provider provenance");
+    return this.atomicClient.transaction(async tx => {
+      await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+      await tx.execute(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`webhook:${this.tenantId}:${provider}:${eventId}`]);
+      const receipt = await tx.get<{ resource_id: string }>(`SELECT resource_id FROM webhook_receipts WHERE tenant_id=$1 AND provider=$2 AND event_id=$3`, [this.tenantId, provider, eventId]);
+      if (receipt?.resource_id) return { id: receipt.resource_id, receiptRecorded: true as const };
+      await this.lockRelayRecipients(tx, input.to_addrs);
+      const providerRow = await tx.get(`SELECT id FROM self_hosted_providers WHERE tenant_id=$1 AND id=$2 FOR SHARE`, [this.tenantId, input.provider_id]);
+      if (!providerRow) throw new Error("Webhook provider changed before durable acceptance");
+      const params = messageInsertParams(input);
+      const inserted = await tx.get<{ id: string }>(`INSERT INTO messages(${MESSAGE_INSERT_COLS},tenant_id) VALUES(${MESSAGE_INSERT_VALUES},$25) ON CONFLICT(tenant_id,source_id) WHERE source_id IS NOT NULL DO NOTHING RETURNING id`, [...params, this.tenantId]);
+      const message = inserted ?? await tx.one<{ id: string }>(`SELECT id FROM messages WHERE tenant_id=$1 AND source_id=$2 AND provider_id=$3`, [this.tenantId, input.source_id, input.provider_id]);
+      await tx.execute(`INSERT INTO webhook_receipts(id,tenant_id,provider,event_id,resource_id) VALUES($1,$2,$3,$4,$5)`, [randomUUID(), this.tenantId, provider, eventId, message.id]);
+      return { id: message.id, receiptRecorded: true as const };
+    });
+  }
+  async createRelayDelivery(provider: string, eventId: string, providerId: string, upstreamId: string, input: WebhookDeliveryEventInput): Promise<{ id: string; receiptRecorded: true }> {
+    if (!this.atomicClient) throw new Error("Webhook delivery requires a transactional store");
+    return this.atomicClient.transaction(async tx => {
+      await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+      const message = await tx.get<{ id: string }>(`SELECT id FROM messages WHERE tenant_id=$1 AND provider_id=$2 AND provider_message_id=$3 AND direction='outbound' FOR SHARE`, [this.tenantId, providerId, upstreamId]);
+      if (!message) throw new Error("Webhook delivery has no message in the selected tenant/provider");
+      const identity = `${provider}:${eventId}`;
+      const inserted = await tx.get<{ id: string }>(`INSERT INTO events(id,tenant_id,email_id,provider_id,provider_event_id,type,recipient,metadata,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9) ON CONFLICT(tenant_id,provider_event_id) WHERE provider_event_id IS NOT NULL DO NOTHING RETURNING id`, [randomUUID(), this.tenantId, message.id, providerId, identity, input.type, input.recipient, JSON.stringify(input.metadata), input.occurred_at]);
+      const event = inserted ?? await tx.one<{ id: string }>(`SELECT id FROM events WHERE tenant_id=$1 AND provider_event_id=$2`, [this.tenantId, identity]);
+      await tx.execute(`INSERT INTO webhook_receipts(id,tenant_id,provider,event_id,resource_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT(tenant_id,provider,event_id) DO NOTHING`, [randomUUID(), this.tenantId, provider, eventId, event.id]);
+      return { id: event.id, receiptRecorded: true as const };
+    });
+  }
+
   async createWebhookDeliveryEvent(
     provider: string,
     eventId: string,

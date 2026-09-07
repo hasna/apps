@@ -41840,6 +41840,526 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "GET",
+    "operationId": "getWebhookRelayCapability",
+    "path": "/v1/webhooks/relay",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "available",
+        "signature_verification",
+        "durable_receipts",
+        "provider_id",
+        "type",
+        "max_webhook_bytes"
+      ],
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "signature_verification": {
+          "type": "boolean"
+        },
+        "durable_receipts": {
+          "type": "boolean"
+        },
+        "provider_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "ses",
+            "resend"
+          ]
+        },
+        "max_webhook_bytes": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getWebhookRelayCapability",
+    "path": "/v1/webhooks/relay",
+    "status": 400,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getWebhookRelayCapability",
+    "path": "/v1/webhooks/relay",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getWebhookRelayCapability",
+    "path": "/v1/webhooks/relay",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getWebhookRelayCapability",
+    "path": "/v1/webhooks/relay",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getWebhookRelayCapability",
+    "path": "/v1/webhooks/relay",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getWebhookRelayCapability",
+    "path": "/v1/webhooks/relay",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getWebhookRelayCapability",
+    "path": "/v1/webhooks/relay",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "ok",
+        "completed",
+        "provider_id"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "provider_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 422,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 502,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relayResendWebhook",
+    "path": "/v1/webhooks/relay/resend",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "ok",
+        "completed",
+        "provider_id"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "provider_id": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 422,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 502,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "relaySesWebhook",
+    "path": "/v1/webhooks/relay/ses",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
     "method": "POST",
     "operationId": "receiveResendInboundWebhook",
     "path": "/v1/webhooks/resend-inbound",

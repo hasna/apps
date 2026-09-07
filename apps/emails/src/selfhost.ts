@@ -2526,6 +2526,33 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Check a tenant-bound server-verified webhook relay before opening a local listener */
+    async getWebhookRelayCapability(query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "available": boolean; "signature_verification": boolean; "durable_receipts": boolean; "provider_id": string; "type": "ses" | "resend"; "max_webhook_bytes": number }> {
+      return this.request("GET", `/v1/webhooks/relay`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Relay exact signed provider bytes with tenant/operator authorization; acknowledgment requires durable completion */
+    async relayResendWebhook(body: { "raw_body_base64": string; "signature_headers": Record<string, string> }, query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "ok": boolean; "completed": boolean; "provider_id": string }> {
+      return this.request("POST", `/v1/webhooks/relay/resend`, {
+        body,
+        query,
+        init,
+      });
+    }
+
+    /** Relay exact signed provider bytes with tenant/operator authorization; acknowledgment requires durable completion */
+    async relaySesWebhook(body: { "raw_body_base64": string; "signature_headers": Record<string, string> }, query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "ok": boolean; "completed": boolean; "provider_id": string }> {
+      return this.request("POST", `/v1/webhooks/relay/ses`, {
+        body,
+        query,
+        init,
+      });
+    }
+
     /** Receive a Resend webhook for inbound mail and delivery outcomes */
     async receiveResendInboundWebhook(body: ResendWebhookEvent, init?: RequestInit): Promise<WebhookReceipt> {
       return this.request("POST", `/v1/webhooks/resend-inbound`, {

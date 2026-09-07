@@ -78,11 +78,7 @@ interface SelfHostedEmailDetail extends SelfHostedEmailSummary {
 // The webhook listener still requires a service ingestion operation. Test sends
 // compose through the same authenticated send API as ordinary mail; export reads
 // through the configured message/event repositories.
-function serverOnly(command: string): never {
-  throw new Error(
-    `${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
-  );
-}
+
 
 function parseReplyPage(opts: ReplyPageOpts): { limit: number; offset: number } {
   return {
@@ -721,7 +717,16 @@ export function registerEmailLogCommands(program: Command, output: (data: unknow
     .description("Start webhook listener server")
     .option("--port <port>", "Port to listen on", "9877")
     .option("--provider <id>", "Provider ID to associate events with")
-    .action(async () => {
-      try { serverOnly("emails webhook listen"); } catch (e) { handleError(e); }
+    .action(async (opts: { port: string; provider?: string }) => {
+      try {
+        if (!/^\d+$/.test(opts.port)) throw new Error("Webhook port must be an integer between 0 and 65535.");
+        const { startApiWebhookListener } = await import("../../lib/webhook-api.js");
+        const listener = await startApiWebhookListener(Number(opts.port), opts.provider);
+        output({ listening: true, host: "127.0.0.1", port: listener.port, provider_id: listener.provider_id, type: listener.type, foreground: true }, `Webhook relay listening on http://127.0.0.1:${listener.port}/webhook/${listener.type}. Provider signatures are verified by the Emails API. Press Ctrl-C to stop.`);
+        await new Promise<void>(resolve => {
+          const stop = () => { process.off("SIGINT", stop); process.off("SIGTERM", stop); void listener.stop().finally(resolve); };
+          process.once("SIGINT", stop); process.once("SIGTERM", stop);
+        });
+      } catch (e) { handleError(e); }
     });
 }

@@ -440,11 +440,11 @@ describe("email thread / conversation / replies — routes to /v1", () => {
   });
 });
 
-describe("server-only commands block in the self-hosted client", () => {
+describe("webhook listener API capability preflight", () => {
   const cases: Array<{ args: string[]; message: string }> = [
     {
       args: ["webhook", "listen", "--port", "19877"],
-      message: "emails webhook listen is not available in the self-hosted client; it runs on the self-hosted server.",
+      message: "The API must configure an authorized provider webhook binding before a listener can start.",
     },
   ];
 

@@ -545,6 +545,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
     // Webhook idempotency ledger (local table `webhook_receipts`). Append-only;
     // the client dedupes by (provider, event_id) via a bounded list scan.
     path: "webhook-receipts",
+    writeRequiresOperator: true,
     table: "webhook_receipts",
     orderBy: "completed_at DESC",
     filters: ["provider", "event_id"],
