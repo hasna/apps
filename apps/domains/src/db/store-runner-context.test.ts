@@ -75,7 +75,16 @@ function runUnprotected(extra: Record<string, string>): ProbeResult {
 
 describe("store resolution outside a test run (plain bun subprocess)", () => {
   test("CONTROL: cloud env with no local path resolves http outside a test run", () => {
-    expect(runUnprotected({}).outcome).toBe("http");
+    // The child gets a scratch HOME: on a host with the canonical
+    // ~/.hasna/domains/config/credentials file, the fixture env URL would clash
+    // with the file's real authority and correctly refuse — so the control must
+    // isolate from the host layout to assert the pure env-driven outcome.
+    const home = mkdtempSync(join(tmpdir(), "domains-guard-"));
+    try {
+      expect(runUnprotected({ HOME: home }).outcome).toBe("http");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test("BUG PINNED: DOMAINS_DB_PATH + cloud env must NOT resolve cloud or local — it is a loud conflict", () => {

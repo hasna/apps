@@ -12,6 +12,20 @@ function parseSedoLimit(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
+/**
+ * Run one Sedo action and turn failures into a single clean error line
+ * instead of an unhandled rejection (missing API credentials are the common
+ * case and must read as a configuration error, not a crash).
+ */
+async function sedoAction(action: () => Promise<void>): Promise<void> {
+  try {
+    await action();
+  } catch (error: unknown) {
+    printErrorLine(`Sedo: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
 export function registerSedoCommand(program: Command): void {
   const sedo = program
     .command("sedo")
@@ -27,33 +41,35 @@ export function registerSedoCommand(program: Command): void {
     .option("--max-price <n>", "Maximum price")
     .option("--json", "Output as JSON", false)
     .action(async (keyword, opts) => {
-      const { searchSedoDomains } = await import("../../lib/sedo.js");
-      const limit = parseSedoLimit(opts.limit, opts.json ? 50 : 20);
+      await sedoAction(async () => {
+        const { searchSedoDomains } = await import("../../lib/sedo.js");
+        const limit = parseSedoLimit(opts.limit, opts.json ? 50 : 20);
 
-      const result = await searchSedoDomains(keyword, {
-        tld: opts.tld,
-        limit,
-        minPrice: opts.minPrice ? parseInt(opts.minPrice) : undefined,
-        maxPrice: opts.maxPrice ? parseInt(opts.maxPrice) : undefined,
+        const result = await searchSedoDomains(keyword, {
+          tld: opts.tld,
+          limit,
+          minPrice: opts.minPrice ? parseInt(opts.minPrice) : undefined,
+          maxPrice: opts.maxPrice ? parseInt(opts.maxPrice) : undefined,
+        });
+
+        if (opts.json) {
+          printLine(JSON.stringify(result, null, 2));
+        } else {
+          if (result.domains.length === 0) {
+            printLine(`No domains found for "${keyword}".`);
+            return;
+          }
+          printLine(`Sedo marketplace — "${keyword}" (${result.total} total):`);
+          for (const d of result.domains) {
+            const price = d.price
+              ? ` — ${d.price.toLocaleString()} ${d.currency || ""}`.trimEnd()
+              : " — make offer";
+            const premium = d.isPremium ? " [PREMIUM]" : "";
+            printLine(`  ${d.domain}${price}${premium}`);
+          }
+          printLine(`\nShowing ${result.domains.length}/${result.total} marketplace result(s). Use --limit <n> for more or --json for full fields.`);
+        }
       });
-
-      if (opts.json) {
-        printLine(JSON.stringify(result, null, 2));
-      } else {
-        if (result.domains.length === 0) {
-          printLine(`No domains found for "${keyword}".`);
-          return;
-        }
-        printLine(`Sedo marketplace — "${keyword}" (${result.total} total):`);
-        for (const d of result.domains) {
-          const price = d.price
-            ? ` — ${d.price.toLocaleString()} ${d.currency || ""}`.trimEnd()
-            : " — make offer";
-          const premium = d.isPremium ? " [PREMIUM]" : "";
-          printLine(`  ${d.domain}${price}${premium}`);
-        }
-        printLine(`\nShowing ${result.domains.length}/${result.total} marketplace result(s). Use --limit <n> for more or --json for full fields.`);
-      }
     });
 
   sedo
@@ -62,19 +78,21 @@ export function registerSedoCommand(program: Command): void {
     .argument("<domains...>", "Domain names to check")
     .option("--json", "Output as JSON", false)
     .action(async (domains, opts) => {
-      const { checkSedoStatus } = await import("../../lib/sedo.js");
+      await sedoAction(async () => {
+        const { checkSedoStatus } = await import("../../lib/sedo.js");
 
-      const results = await checkSedoStatus(domains);
+        const results = await checkSedoStatus(domains);
 
-      if (opts.json) {
-        printLine(JSON.stringify(results, null, 2));
-      } else {
-        for (const r of results) {
-          const listed = r.listed ? "listed" : "not listed";
-          const sale = r.forSale ? ` for sale (${r.price || "?"} ${r.currency || ""})` : "";
-          printLine(`  ${r.domain}: ${listed}${sale}`);
+        if (opts.json) {
+          printLine(JSON.stringify(results, null, 2));
+        } else {
+          for (const r of results) {
+            const listed = r.listed ? "listed" : "not listed";
+            const sale = r.forSale ? ` for sale (${r.price || "?"} ${r.currency || ""})` : "";
+            printLine(`  ${r.domain}: ${listed}${sale}`);
+          }
         }
-      }
+      });
     });
 
   sedo
@@ -84,26 +102,28 @@ export function registerSedoCommand(program: Command): void {
     .option("--all", "Show all loaded portfolio domains")
     .option("--json", "Output as JSON", false)
     .action(async (opts: { limit?: string; all?: boolean; json?: boolean }) => {
-      const { listSedoPortfolio } = await import("../../lib/sedo.js");
-      const limit = parseSedoLimit(opts.limit, opts.json || opts.all ? 100 : 20);
+      await sedoAction(async () => {
+        const { listSedoPortfolio } = await import("../../lib/sedo.js");
+        const limit = parseSedoLimit(opts.limit, opts.json || opts.all ? 100 : 20);
 
-      const domains = await listSedoPortfolio({ limit });
+        const domains = await listSedoPortfolio({ limit });
 
-      if (opts.json) {
-        printLine(JSON.stringify(domains, null, 2));
-      } else {
-        if (domains.length === 0) {
-          printLine("No domains in your Sedo portfolio.");
-          return;
+        if (opts.json) {
+          printLine(JSON.stringify(domains, null, 2));
+        } else {
+          if (domains.length === 0) {
+            printLine("No domains in your Sedo portfolio.");
+            return;
+          }
+          const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
+          printLine(`Sedo Portfolio:`);
+          for (const d of page.items) {
+            const sale = d.forSale ? `[for sale ${d.price || "?"} ${d.currency || ""}]` : "";
+            printLine(`  ${d.domain} ${sale}`);
+          }
+          printLine(`\n${compactHint(page, "domain(s)", "Use --limit <n> for more or --json for full marketplace fields.", { paging: "limit" })}`);
         }
-        const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
-        printLine(`Sedo Portfolio:`);
-        for (const d of page.items) {
-          const sale = d.forSale ? `[for sale ${d.price || "?"} ${d.currency || ""}]` : "";
-          printLine(`  ${d.domain} ${sale}`);
-        }
-        printLine(`\n${compactHint(page, "domain(s)", "Use --limit <n> for more or --json for full marketplace fields.", { paging: "limit" })}`);
-      }
+      });
     });
 
   sedo
@@ -117,22 +137,24 @@ export function registerSedoCommand(program: Command): void {
     .option("--buy-now-price <n>", "Buy-it-now price")
     .option("--json", "Output as JSON", false)
     .action(async (domain, opts) => {
-      const { addDomainToSedo } = await import("../../lib/sedo.js");
+      await sedoAction(async () => {
+        const { addDomainToSedo } = await import("../../lib/sedo.js");
 
-      const result = await addDomainToSedo({
-        domain,
-        price: opts.price ? parseInt(opts.price) : undefined,
-        currency: opts.currency,
-        forSale: opts.forSale,
-        parkingEnabled: opts.parking,
-        buyNowPrice: opts.buyNowPrice ? parseInt(opts.buyNowPrice) : undefined,
+        const result = await addDomainToSedo({
+          domain,
+          price: opts.price ? parseInt(opts.price) : undefined,
+          currency: opts.currency,
+          forSale: opts.forSale,
+          parkingEnabled: opts.parking,
+          buyNowPrice: opts.buyNowPrice ? parseInt(opts.buyNowPrice) : undefined,
+        });
+
+        if (opts.json) {
+          printLine(JSON.stringify(result, null, 2));
+        } else {
+          printLine(`Added ${domain} to Sedo marketplace`);
+        }
       });
-
-      if (opts.json) {
-        printLine(JSON.stringify(result, null, 2));
-      } else {
-        printLine(`Added ${domain} to Sedo marketplace`);
-      }
     });
 
   sedo
@@ -144,20 +166,22 @@ export function registerSedoCommand(program: Command): void {
     .option("--buy-now-price <n>", "New buy-it-now price")
     .option("--json", "Output as JSON", false)
     .action(async (domain, opts) => {
-      const { editDomainOnSedo } = await import("../../lib/sedo.js");
+      await sedoAction(async () => {
+        const { editDomainOnSedo } = await import("../../lib/sedo.js");
 
-      const result = await editDomainOnSedo({
-        domain,
-        price: opts.price ? parseInt(opts.price) : undefined,
-        currency: opts.currency,
-        buyNowPrice: opts.buyNowPrice ? parseInt(opts.buyNowPrice) : undefined,
+        const result = await editDomainOnSedo({
+          domain,
+          price: opts.price ? parseInt(opts.price) : undefined,
+          currency: opts.currency,
+          buyNowPrice: opts.buyNowPrice ? parseInt(opts.buyNowPrice) : undefined,
+        });
+
+        if (opts.json) {
+          printLine(JSON.stringify(result, null, 2));
+        } else {
+          printLine(`Updated ${domain} on Sedo`);
+        }
       });
-
-      if (opts.json) {
-        printLine(JSON.stringify(result, null, 2));
-      } else {
-        printLine(`Updated ${domain} on Sedo`);
-      }
     });
 
   sedo
@@ -165,14 +189,16 @@ export function registerSedoCommand(program: Command): void {
     .description("Remove a domain from Sedo marketplace")
     .argument("<domain>", "Domain name to remove")
     .action(async (domain) => {
-      const { removeDomainFromSedo } = await import("../../lib/sedo.js");
-      const removed = await removeDomainFromSedo(domain);
-      if (removed) {
-        printLine(`Removed ${domain} from Sedo marketplace`);
-      } else {
-        printErrorLine(`Failed to remove ${domain} from Sedo`);
-        process.exit(1);
-      }
+      await sedoAction(async () => {
+        const { removeDomainFromSedo } = await import("../../lib/sedo.js");
+        const removed = await removeDomainFromSedo(domain);
+        if (removed) {
+          printLine(`Removed ${domain} from Sedo marketplace`);
+        } else {
+          printErrorLine(`Failed to remove ${domain} from Sedo`);
+          process.exit(1);
+        }
+      });
     });
 
   sedo
@@ -181,21 +207,23 @@ export function registerSedoCommand(program: Command): void {
     .argument("<domains...>", "Domain names to check")
     .option("--json", "Output as JSON", false)
     .action(async (domains, opts) => {
-      const { checkSedoBlacklist } = await import("../../lib/sedo.js");
-      const results = await checkSedoBlacklist(domains);
+      await sedoAction(async () => {
+        const { checkSedoBlacklist } = await import("../../lib/sedo.js");
+        const results = await checkSedoBlacklist(domains);
 
-      if (opts.json) {
-        printLine(JSON.stringify(results, null, 2));
-      } else {
-        for (const r of results) {
-          printLine(`  ${r.domain}: ${r.blacklisted ? "BLACKLISTED" : "clean"}`);
+        if (opts.json) {
+          printLine(JSON.stringify(results, null, 2));
+        } else {
+          for (const r of results) {
+            printLine(`  ${r.domain}: ${r.blacklisted ? "BLACKLISTED" : "clean"}`);
+          }
         }
-      }
+      });
     });
 
   sedo
     .command("buy")
-    .description("Record a Sedo domain purchase in the local DB")
+    .description("Record a Sedo domain purchase in the portfolio")
     .argument("<domain>", "Domain name purchased")
     .requiredOption("--price <n>", "Purchase price")
     .option("--order-id <id>", "Sedo order or transaction ID")
@@ -204,12 +232,17 @@ export function registerSedoCommand(program: Command): void {
       const { recordSedoPurchase } = await import("../../lib/sedo.js");
 
       const price = parseInt(opts.price);
-      const created = recordSedoPurchase(domain, price, opts.orderId);
+      try {
+        const created = await recordSedoPurchase(domain, price, opts.orderId);
 
-      if (opts.json) {
-        printLine(JSON.stringify(created, null, 2));
-      } else {
-        printLine(`Recorded Sedo purchase: ${domain} for $${price}`);
+        if (opts.json) {
+          printLine(JSON.stringify(created, null, 2));
+        } else {
+          printLine(`Recorded Sedo purchase: ${domain} for $${price}`);
+        }
+      } catch (error: unknown) {
+        printErrorLine(`Sedo purchase failed: ${error instanceof Error ? error.message : String(error)}`);
+        process.exit(1);
       }
     });
 }

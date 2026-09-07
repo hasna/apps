@@ -66,9 +66,12 @@ export function registerDoctorCommand(program: Command): void {
       section("Database");
       try {
         const count = await countDomains();
-        ok(`Local DB accessible (${count} domain${count !== 1 ? "s" : ""})`);
+        ok(`Portfolio accessible (${count} domain${count !== 1 ? "s" : ""})`);
       } catch {
-        fail("Local DB not accessible", "Check DOMAINS_DB_PATH, DOMAINS_DIR, or the default local data directory");
+        fail(
+          "Portfolio not accessible",
+          "Check HASNA_DOMAINS_API_KEY / HASNA_DOMAINS_API_URL (or the Keychain item / credential file), or the local store opt-in DOMAINS_DB_PATH / DOMAINS_DIR",
+        );
       }
 
       section("Config");

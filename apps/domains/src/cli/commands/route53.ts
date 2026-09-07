@@ -433,7 +433,7 @@ export function registerRoute53Commands(program: Command): void {
 
   r53
     .command("sync")
-    .description("Sync Route 53 registered domains to local database")
+    .description("Sync Route 53 registered domains to the portfolio")
     .action(async () => {
       try {
         const provider = createRoute53Provider();
@@ -539,9 +539,9 @@ export function registerRoute53Commands(program: Command): void {
             (setup.nsUpdated ? ` — registry NS repointed to this zone` : ``),
         );
 
-        // 4. Add to local DB
-        printLine(`[4/4] Adding to local database...`);
-        createDomain({
+        // 4. Add to portfolio
+        printLine(`[4/4] Adding to portfolio...`);
+        await createDomain({
           name: domain,
           registrar: "AWS Route 53",
           status: "active",

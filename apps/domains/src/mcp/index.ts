@@ -1007,7 +1007,7 @@ server.registerTool(
   "sync_namecheap",
   {
     title: "Sync Namecheap Domains",
-    description: "Sync all domains from Namecheap account to local database. Requires NAMECHEAP_API_KEY, NAMECHEAP_USERNAME, and NAMECHEAP_CLIENT_IP env vars.",
+    description: "Sync all domains from Namecheap account to the portfolio. Requires NAMECHEAP_API_KEY, NAMECHEAP_USERNAME, and NAMECHEAP_CLIENT_IP env vars.",
     inputSchema: {
       verbose: z.boolean().optional().describe("Return full sync details including provider-specific arrays."),
     },
@@ -1080,7 +1080,7 @@ server.registerTool(
   "sync_godaddy",
   {
     title: "Sync GoDaddy Domains",
-    description: "Sync all domains from GoDaddy account to local database. Requires GODADDY_API_KEY and GODADDY_API_SECRET env vars.",
+    description: "Sync all domains from GoDaddy account to the portfolio. Requires GODADDY_API_KEY and GODADDY_API_SECRET env vars.",
     inputSchema: {
       verbose: z.boolean().optional().describe("Return full sync details including provider-specific arrays."),
     },
@@ -1130,7 +1130,7 @@ server.registerTool(
   "sync_all_providers",
   {
     title: "Sync All Providers",
-    description: "Sync domains from all configured domain inventory providers (Route 53, Cloudflare zones, Namecheap, GoDaddy, Brandsight) to local database.",
+    description: "Sync domains from all configured domain inventory providers (Route 53, Cloudflare zones, Namecheap, GoDaddy, Brandsight) to the portfolio.",
     inputSchema: {
       verbose: z.boolean().optional().describe("Return full sync details for each provider."),
     },
@@ -1762,7 +1762,7 @@ server.registerTool(
   "sync_route53",
   {
     title: "Sync Route 53",
-    description: "Sync domains registered in AWS Route 53 to the local database.",
+    description: "Sync domains registered in AWS Route 53 to the portfolio.",
     inputSchema: {
       verbose: z.boolean().optional().describe("Return full sync details including provider-specific arrays."),
     },

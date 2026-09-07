@@ -11,7 +11,7 @@
  * under a scratch $HOME.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -113,6 +113,44 @@ describe("fail closed without a resolvable credential", () => {
       expect(result.stderr).not.toContain("fails closed");
       expect(result.stderr).not.toContain("LOCAL mode");
       expect(existsSync(join(home, ".hasna", "domains"))).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("credentials FILE tier (fake HOME, no env vars) resolves hosted — never a local fallback", () => {
+    // The canonical station layout: ~/.hasna/domains/config/credentials with
+    // URL+key lines and owner-only permissions, and NOTHING set in the env.
+    // The resolver's disk tier must find it through the real CLI subprocess.
+    const home = mkdtempSync(join(tmpdir(), "domains-fail-closed-file-"));
+    try {
+      const configDir = join(home, ".hasna", "domains", "config");
+      mkdirSync(configDir, { recursive: true });
+      const credPath = join(configDir, "credentials");
+      writeFileSync(
+        credPath,
+        "HASNA_DOMAINS_API_URL=https://domains.example.invalid\nHASNA_DOMAINS_API_KEY=not-a-real-key-fixture-only\n",
+        "utf-8",
+      );
+      chmodSync(credPath, 0o600);
+
+      const env: Record<string, string> = {
+        PATH: process.env["PATH"] ?? "",
+        HOME: home,
+        FORCE_COLOR: "0",
+        NO_COLOR: "1",
+      };
+      const result = runCli(["domain", "list"], env);
+
+      // A credential resolved from the file, so the run went hosted: the
+      // failure is the dead network request, not "fails closed", and there is
+      // no silent local store and no default local database anywhere.
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout).not.toContain("No domains found.");
+      expect(result.stderr).not.toContain("no API key could be resolved");
+      expect(result.stderr).not.toContain("fails closed");
+      expect(result.stderr).not.toContain("LOCAL mode");
+      expect(existsSync(join(home, ".hasna", "domains", "domains.db"))).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
