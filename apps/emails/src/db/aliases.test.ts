@@ -1455,7 +1455,7 @@ describe("the collapsed module", () => {
   it("leaves every consumer importing the facade rather than a deleted arm", () => {
     const shippedConsumers = [
       ["cli", "commands", "alias.ts"],
-      ["cli", "commands", "domain.ts"],
+      ["lib", "domain-registration-api.ts"],
       ["mcp", "tools", "domains-impl.ts"],
       ["lib", "delivery-doctor.ts"],
     ];
