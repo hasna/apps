@@ -3,30 +3,19 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDatabase } from "../db/database.js";
+import { resolveTelephonyClientTransport } from "./client-transport.js";
 import { resetStore } from "./store/index.js";
 import { dispatchWebhook } from "./webhooks.js";
+import { isolateStoreEnv, snapshotStoreEnv } from "../../tests/support/hermetic-store-env.js";
 
-const cloudEnvNames = [
-  "HASNA_TELEPHONY_STORAGE_MODE",
-  "HASNA_TELEPHONY_MODE",
-  "HASNA_TELEPHONY_API_URL",
-  "HASNA_TELEPHONY_API_KEY",
-  "TELEPHONY_API_URL",
-  "TELEPHONY_API_KEY",
-  "HASNA_TELEPHONY_DB_PATH",
-] as const;
-const originalEnv = new Map(cloudEnvNames.map((name) => [name, process.env[name]]));
+// Every credential tier, the DB path and the data home are snapshotted once and
+// restored after each test; the tests below point them at a temporary root so
+// the machine's Keychain item or credentials file can never outrank the env
+// key handed to the loopback stub (hasna/apps#1720).
+const restoreEnv = snapshotStoreEnv();
 const apiKeyEnvName = ["HASNA", "TELEPHONY", "API", "KEY"].join("_");
 
 let tempRoot: string | undefined;
-
-function restoreEnv(): void {
-  for (const name of cloudEnvNames) {
-    const value = originalEnv.get(name);
-    if (value === undefined) delete process.env[name];
-    else process.env[name] = value;
-  }
-}
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   const start = Date.now();
@@ -36,12 +25,9 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void
   }
 }
 
-function clearEnv(): void {
-  for (const name of cloudEnvNames) delete process.env[name];
-}
-
 beforeEach(() => {
-  clearEnv();
+  tempRoot = mkdtempSync(join(tmpdir(), "telephony-webhook-dispatch-test-"));
+  isolateStoreEnv(tempRoot);
 });
 
 afterEach(() => {
@@ -102,11 +88,12 @@ describe("dispatchWebhook", () => {
     });
 
     try {
-      tempRoot = mkdtempSync(join(tmpdir(), "telephony-webhook-dispatch-test-"));
-      process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
       process.env.HASNA_TELEPHONY_API_URL = `http://127.0.0.1:${cloud.port}`;
       process.env[apiKeyEnvName] = ["synthetic", "api", "key"].join("-");
       resetStore();
+      // The synthetic env key is the credential the stub receives — not a
+      // station key from a higher tier.
+      expect(resolveTelephonyClientTransport(process.env).report.apiKeySource).toBe(apiKeyEnvName);
 
       await dispatchWebhook("sms.inbound", { id: "msg-1" });
       await waitFor(() => targetHits === 1);

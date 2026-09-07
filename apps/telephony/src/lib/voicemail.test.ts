@@ -10,6 +10,7 @@ import { MediaStorage, type S3ClientLike } from "./media-storage.js";
 import { handleVoicemailRecording } from "./voicemail.js";
 import { getVoicemail } from "../db/voicemails.js";
 import { createCall } from "../db/calls.js";
+import { optInLocalStore, snapshotStoreEnv } from "../../tests/support/hermetic-store-env.js";
 
 /**
  * In-memory bucket standing in for the AWS client (the artifact-kit injection
@@ -36,12 +37,12 @@ function recordingFixture(): { bytes: Uint8Array; digest: string } {
 describe("handleVoicemailRecording media copy", () => {
   it("copies the provider recording into the bucket and stores object_key + sha256 on the row", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "telephony-voicemail-media-test-"));
-    process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
-    process.env.HASNA_DATA_HOME = join(tempRoot, "data");
+    const restoreEnv = snapshotStoreEnv();
     // handleVoicemailRecording persists through the store, whose resolver
     // fails closed without the API env — select local mode EXPLICITLY
-    // (HASNA_TELEPHONY_LOCAL=1), like the other store-backed telephony tests.
-    process.env.HASNA_TELEPHONY_LOCAL = "1";
+    // (HASNA_TELEPHONY_LOCAL=1) on an environment where no credential tier
+    // can outrank the opt-in, and prove the LocalStore took (hasna/apps#1720).
+    optInLocalStore(tempRoot);
     const s3 = new InMemoryS3();
     const { bytes, digest } = recordingFixture();
     const originalFetch = globalThis.fetch;
@@ -75,18 +76,15 @@ describe("handleVoicemailRecording media copy", () => {
       globalThis.fetch = originalFetch;
       resetStore();
       closeDatabase();
+      restoreEnv();
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
   it("soft-fails: a failed upload still creates the row with object_key null", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "telephony-voicemail-media-test-"));
-    process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
-    process.env.HASNA_DATA_HOME = join(tempRoot, "data");
-    // handleVoicemailRecording persists through the store, whose resolver
-    // fails closed without the API env — select local mode EXPLICITLY
-    // (HASNA_TELEPHONY_LOCAL=1), like the other store-backed telephony tests.
-    process.env.HASNA_TELEPHONY_LOCAL = "1";
+    const restoreEnv = snapshotStoreEnv();
+    optInLocalStore(tempRoot);
     const s3 = new InMemoryS3();
     s3.failUploads = true;
     const originalFetch = globalThis.fetch;
@@ -115,18 +113,15 @@ describe("handleVoicemailRecording media copy", () => {
       globalThis.fetch = originalFetch;
       resetStore();
       closeDatabase();
+      restoreEnv();
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
   it("creates the row without copy fields when no bucket is configured", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "telephony-voicemail-media-test-"));
-    process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
-    process.env.HASNA_DATA_HOME = join(tempRoot, "data");
-    // handleVoicemailRecording persists through the store, whose resolver
-    // fails closed without the API env — select local mode EXPLICITLY
-    // (HASNA_TELEPHONY_LOCAL=1), like the other store-backed telephony tests.
-    process.env.HASNA_TELEPHONY_LOCAL = "1";
+    const restoreEnv = snapshotStoreEnv();
+    optInLocalStore(tempRoot);
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () =>
       new Response(new TextEncoder().encode("bytes"), { status: 200, headers: { "content-type": "audio/mpeg" } });
@@ -146,6 +141,7 @@ describe("handleVoicemailRecording media copy", () => {
       globalThis.fetch = originalFetch;
       resetStore();
       closeDatabase();
+      restoreEnv();
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
