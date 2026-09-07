@@ -3,20 +3,18 @@
 // RFC 8058 List-Unsubscribe headers and without tracking, then printed a green
 // checkmark and exited 0. A parsed-and-ignored option is a false capability.
 //
-// Options must reach a capable API or fail before sending. Local unsubscribe
-// adapters remain covered; tracking is provided only through the server API.
+// Options must reach a capable API or fail before sending. Successful sends
+// pass the received payload through the real adapter with a captured transport.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
-import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
-import { createProvider } from "../../db/providers.local.js";
-import { listSandboxEmails } from "../../db/sandbox.js";
 import { resetMailDataSource } from "../../lib/mail-data-source.js";
-import {
-  API_BASE_URL_SETTING,
-  API_CREDENTIAL_SETTINGS,
-  API_SETTINGS_POINTER,
-  DATABASE_PATH_SETTINGS,
-} from "../../store-resolution.js";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ResendAdapter } from "../../providers/resend.js";
+import type { Provider, SendEmailOptions } from "../../types/index.js";
+import { emailsSelfHostedOpenApi } from "../../server/self-hosted/openapi.js";
+import { buildPrepublishTestEnv } from "../../../scripts/prepublish-local-test.mjs";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 import { registerSendCommands } from "./send.js";
 
@@ -71,58 +69,79 @@ async function runSend(args: string[]): Promise<RunResult> {
   return { consoleOutput: consoleLines.join("\n"), errorOutput: errorLines.join("\n"), exited };
 }
 
-// ---- local: --unsubscribe-url threads to the provider ------------------------
-
-describe("emails send --unsubscribe-url (local)", () => {
-  let providerId: string;
-
-  beforeEach(() => {
-    captureInheritedProcessEnv();
-    for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
-      delete process.env[setting];
-    }
-    for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-    process.env["EMAILS_DB_PATH"] = ":memory:";
-    resetDatabase();
-    resetMailDataSource();
-    providerId = createProvider({ name: "sandbox", type: "sandbox", active: true }).id;
+// The CLI talks to an authenticated capable API fixture. Its provider adapter
+// is real; only the instance's final SDK transport is captured, with no cloud I/O.
+describe("emails send --unsubscribe-url through a capable API", () => {
+  let stub: V1Stub;
+  let server: ReturnType<typeof Bun.serve>;
+  let home: string;
+  const captured: Array<{ headers?: Record<string, string> }> = [];
+  beforeAll(async () => {
+    stub = await startV1Stub({ openapi: true });
+    const adapter = new ResendAdapter({ id: "fixture-provider", api_key: crypto.randomUUID() } as Provider);
+    (adapter as unknown as { client: unknown }).client = { emails: { send: async (input: { headers?: Record<string, string> }) => {
+      captured.push(input);
+      return { data: { id: `captured-${captured.length}` }, error: null };
+    } } };
+    server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async request => {
+      if (request.headers.get("authorization") !== `Bearer ${stub.apiKey}`) return new Response("unauthorized", { status: 401 });
+      const path = new URL(request.url).pathname;
+      if (path === "/v1/openapi.json") return Response.json(emailsSelfHostedOpenApi);
+      if (path === "/v1/messages/send" && request.method === "POST") {
+        const input = await request.clone().json() as SendEmailOptions;
+        await adapter.sendEmail(input);
+      }
+      return fetch(new Request(`${stub.baseUrl}${path}${new URL(request.url).search}`, request));
+    } });
   });
-
-  afterEach(() => {
-    closeDatabase();
-    resetMailDataSource();
-    restoreInheritedProcessEnv();
+  afterAll(() => { server?.stop(true); stub?.stop(); });
+  beforeEach(async () => {
+    await stub.reset(); captured.length = 0;
+    home = mkdtempSync(join(tmpdir(), "emails-unsubscribe-api-"));
+    mkdirSync(join(home, "tmp"), { mode: 0o700 });
   });
+  afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+  async function runCapableSend(args: string[]): Promise<RunResult> {
+    const child = Bun.spawn({ cmd: [process.execPath, "src/cli/index.tsx", ...args],
+      env: { ...buildPrepublishTestEnv(process.env, home), HASNA_STATION: `unsubscribe-${crypto.randomUUID()}`,
+        HASNA_EMAILS_API_URL: server.url.origin, HASNA_EMAILS_API_KEY: stub.apiKey },
+      stdout: "pipe", stderr: "pipe" });
+    const timer = setTimeout(() => child.kill(), 15000);
+    try {
+      const [code, consoleOutput, errorOutput] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(readdirSync(home, { recursive: true }).filter(name => /\.(?:db|sqlite)(?:-|$)/.test(String(name)))).toEqual([]);
+      return { consoleOutput, errorOutput, exited: code !== 0 };
+    } finally { clearTimeout(timer); }
+  }
 
   it("delivers the RFC 8058 one-click headers with the message", async () => {
-    const result = await runSend([
+    const result = await runCapableSend([
       "send", "--from", "agent@acme.com", "--to", "dest@ext.com", "--subject", "Hi", "--body", "x",
-      "--provider", providerId, "--unsubscribe-url", "https://acme.com/unsub",
+      "--unsubscribe-url", "https://acme.com/unsub",
     ]);
-
+    expect(result.errorOutput).toBe("");
     expect(result.exited).toBe(false);
     expect(result.consoleOutput).toContain("Email sent to dest@ext.com");
-
-    const captured = await listSandboxEmails(providerId, 10, 0);
+    expect(await stub.list("messages")).toHaveLength(1);
     expect(captured).toHaveLength(1);
-    // The sandbox provider captures the effective wire headers. Silent dropping
-    // of the flag left this map EMPTY while the operator relied on one-click
-    // unsubscribe for bulk-mail compliance.
-    expect(captured[0]!.headers["List-Unsubscribe"]).toBe("<https://acme.com/unsub>");
-    expect(captured[0]!.headers["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
-  });
+    expect(captured[0]).toMatchObject({ from: "agent@acme.com", to: ["dest@ext.com"], subject: "Hi", text: "x" });
+    expect(captured[0]!.headers?.["List-Unsubscribe"]).toBe("<https://acme.com/unsub>");
+    expect(captured[0]!.headers?.["List-Unsubscribe-Post"]).toBe("List-Unsubscribe=One-Click");
+  }, 20000);
 
   it("sends without the headers when the flag is not passed", async () => {
-    const result = await runSend([
+    const result = await runCapableSend([
       "send", "--from", "agent@acme.com", "--to", "dest@ext.com", "--subject", "Hi", "--body", "x",
-      "--provider", providerId,
     ]);
-
+    expect(result.errorOutput).toBe("");
     expect(result.exited).toBe(false);
-    const captured = await listSandboxEmails(providerId, 10, 0);
+    expect(await stub.list("messages")).toHaveLength(1);
     expect(captured).toHaveLength(1);
-    expect(captured[0]!.headers["List-Unsubscribe"]).toBeUndefined();
-  });
+    expect(captured[0]).toMatchObject({ from: "agent@acme.com", to: ["dest@ext.com"], subject: "Hi", text: "x" });
+    expect(captured[0]!.headers?.["List-Unsubscribe"]).toBeUndefined();
+    expect(captured[0]!.headers?.["List-Unsubscribe-Post"]).toBeUndefined();
+  }, 20000);
 });
 
 // ---- against the serve API: --unsubscribe-url is refused, not dropped --------
