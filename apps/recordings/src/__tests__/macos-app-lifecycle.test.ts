@@ -20,7 +20,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { prepareSignedBuildFixture, configureSignedBuildFixture } from "./helpers/signed-build-fixture";
 import { signingFixtureCommand } from "./helpers/signing-fixture";
 import { ensureNativeFsGuardAddon } from "./helpers/native-fs-guard";
@@ -83,6 +83,24 @@ function writeExecutable(path: string, contents: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, contents);
   chmodSync(path, 0o755);
+}
+
+// Count-prefixed NUL records preserve every argv element, including empty
+// values and paths containing spaces/newlines. Human-readable "$*" is lossy.
+function readFixtureArgv(path: string): string[][] {
+  const text = readFileSync(path, "utf8");
+  if (!text.endsWith("\0")) throw new Error("Incomplete fixture argv record");
+  const fields = text.slice(0, -1).split("\0");
+  const invocations: string[][] = [];
+  for (let cursor = 0; cursor < fields.length;) {
+    const header = fields[cursor++]!;
+    if (!/^[1-9][0-9]*$/.test(header)) throw new Error("Invalid fixture argv count");
+    const count = Number(header);
+    if (!Number.isSafeInteger(count) || count > fields.length - cursor) throw new Error("Incomplete fixture argv record");
+    invocations.push(fields.slice(cursor, cursor + count));
+    cursor += count;
+  }
+  return invocations;
 }
 
 function createFifo(path: string): void {
@@ -312,6 +330,7 @@ fi
     `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$MARKER_DIRECTORY/bun.log"
+printf '%s\\0' "$#" "$@" >> "$MARKER_DIRECTORY/bun-argv.nul"
 case "$*" in
   *" journal-write "*"--phase processes-stopped"*)
     "$REAL_BUN" "$@"
@@ -772,6 +791,31 @@ async function runTailscaleLocalInstaller(
 }
 
 describe("macOS finalized artifact installer", () => {
+  test("fixture preserves complete manifest argv under a nested temporary root", () => {
+    const fixture = createInstallerFixture();
+    const snapshot = join(fixture.root, "recordings-install.fixture", basename(fixture.manifest));
+    const first = ["fixture-artifact-tool.ts", "verify-archive", "--archive", fixture.artifact,
+      "--manifest", snapshot, "--manifest-sha256", "a".repeat(64), "--team-id", "EXAMPLE123",
+      "--fixture-empty", "", "--fixture-special", "space 'quote'\nsecond line"];
+    const second = ["fixture-artifact-tool.ts", "verify-app", "--manifest", snapshot];
+    for (const args of [first, second]) {
+      const result = Bun.spawnSync([join(fixture.bin, "bun"), ...args], {
+        env: { HOME: fixture.home, PATH: `${fixture.bin}:/usr/bin:/bin`, MARKER_DIRECTORY: fixture.markers },
+        cwd: fixture.root, stdout: "pipe", stderr: "pipe", timeout: 2500,
+      });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+    }
+    const log = join(fixture.markers, "bun-argv.nul");
+    expect(readFixtureArgv(log)).toEqual([first, second]);
+    expect(readFixtureArgv(log)[0]![5]).toBe(snapshot);
+    // A truncated or malformed receipt must fail, never silently certify a
+    // partial manifest path or fewer verification calls.
+    writeFileSync(log, "2\0one\0");
+    expect(() => readFixtureArgv(log)).toThrow("Incomplete");
+    writeFileSync(log, "invalid\0one\0");
+    expect(() => readFixtureArgv(log)).toThrow("Invalid");
+  });
+
   testOnNonDarwin("rejects non-macOS invocation before inspecting artifact paths", async () => {
     const fixture = createInstallerFixture();
     writeExecutable(join(fixture.bin, "uname"), "#!/usr/bin/env bash\nprintf 'Linux\\n'\n");
@@ -1036,28 +1080,26 @@ describe("macOS finalized artifact installer", () => {
     const result = await runInstaller(fixture);
     expect(result.exitCode, result.stderr).toBe(0);
 
-    const bunLog = readFileSync(join(fixture.markers, "bun.log"), "utf8").trim().split("\n");
-    const manifestConsumers = bunLog.filter((line) =>
-      [
-        " verify-archive ",
-        " extract-verified-archive ",
-        " verify-app ",
-        " verify-active ",
-        " assert-transition ",
-        " manifest-get ",
-      ].some((command) => line.includes(command))
-    );
-    const manifestPaths = manifestConsumers.map((line) => {
-      const match = line.match(/--manifest ([^ ]+)/);
-      expect(match, line).not.toBeNull();
-      return match?.[1] ?? "";
+    const invocations = readFixtureArgv(join(fixture.markers, "bun-argv.nul"));
+    const manifestConsumers = invocations.filter((args) => ["verify-archive", "extract-verified-archive",
+      "verify-app", "verify-active", "assert-transition", "manifest-get"].includes(args[1]!));
+    const manifestPaths = manifestConsumers.map((args) => {
+      expect(args.filter(value => value === "--manifest")).toHaveLength(1);
+      const path = args[args.indexOf("--manifest") + 1]!;
+      expect(path).toBe(resolve(path));
+      expect(basename(path)).toBe(basename(fixture.manifest));
+      // The fixture redirects mktemp into its private root. This proves the
+      // entire snapshot path, independently of the runner's TMPDIR spelling.
+      expect(dirname(dirname(path))).toBe(fixture.root);
+      expect(basename(dirname(path))).toMatch(/^recordings-install\.[A-Za-z0-9]+$/);
+      return path;
     });
     expect(manifestPaths.length).toBeGreaterThan(3);
     expect(new Set(manifestPaths).size).toBe(1);
     expect(manifestPaths[0]).not.toBe(fixture.manifest);
-    expect(manifestPaths[0]).toContain("/tmp/recordings-install.");
-    for (const line of manifestConsumers) {
-      expect(line).toContain(`--manifest-sha256 ${manifestDigest}`);
+    for (const args of manifestConsumers) {
+      expect(args.filter(value => value === "--manifest-sha256")).toHaveLength(1);
+      expect(args[args.indexOf("--manifest-sha256") + 1]).toBe(manifestDigest);
     }
 
     const installer = readFileSync(

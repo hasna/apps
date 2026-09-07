@@ -148,8 +148,8 @@ fi
 exec /usr/bin/ls "$@"
 `,
   );
-  // The fixture intentionally fails at the first artifact-tool call, after
-  // lock + marker acquisition but before any app or state snapshot mutation.
+  // Fail at the first post-acquisition artifact-tool call (state-tree
+  // verification), before any app or state snapshot mutation.
   writeExecutable(
     join(bin, "bun"),
     `#!/usr/bin/env bash
@@ -157,6 +157,10 @@ case "$*" in
   *" native-fs-guard-check") exit 0 ;;
   *" fsync-tree "*|*" fsync-directory "*) exec "$REAL_BUN" "$@" ;;
 esac
+printf '%s\\n' "$*" >> "$HOME/../artifact-verification.log"
+if [ -d "$HOME/Applications/.Recordings-install-lock" ] && [ -d "$HOME/.hasna/.recordings-install-maintenance" ]; then
+  printf 'coordination-held\\n' >> "$HOME/../artifact-verification.log"
+fi
 exit 79
 `,
   );
@@ -320,6 +324,24 @@ console.log(JSON.stringify({ blocked, storeMode: apiStore.mode, storeCount: agen
 });
 
 describe("installer maintenance marker", () => {
+  test("Linux artifact failure fixture records the exact verification call", async () => {
+    const fixture = createEarlyInstallerFixture();
+    // Exercise the actual Linux stub on every platform, without changing the
+    // process platform or launching the installer through an unsupported seam.
+    const child = Bun.spawn(confinedShellCommand(fixture.root, [join(fixture.bin, "bun"),
+      "fixture-artifact-tool.ts", "verify-archive", "--archive", fixture.artifact, "--manifest", fixture.manifest,
+    ], maintenanceTools), {
+      env: installerEnvironment(fixture), cwd: fixture.root, detached: true, stdout: "ignore", stderr: "pipe",
+    });
+    const timer = setTimeout(() => { if (child.exitCode === null) { try { process.kill(-child.pid, "SIGKILL"); } catch {} } }, 15000);
+    installerChildren.push({ child, timer });
+    const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+    expect(code, stderr).toBe(79);
+    expect(readFileSync(join(fixture.root, "artifact-verification.log"), "utf8")).toContain(" verify-archive ");
+    expect(existsSync(join(fixture.home, "Applications"))).toBeFalse();
+    expect(existsSync(join(fixture.home, ".hasna"))).toBeFalse();
+  });
+
   test("rejects an expected-hostname mismatch before lock or state mutation", async () => {
     const fixture = createEarlyInstallerFixture();
     const result = await runEarlyInstaller(fixture, ["--expected-hostname", "fixture-wrong-host"]);
@@ -334,8 +356,13 @@ describe("installer maintenance marker", () => {
     const result = await runEarlyInstaller(fixture, ["--expected-hostname", fixture.target]);
     expect(result.exitCode, result.stderr).toBe(79);
     expect(existsSync(join(fixture.root, "artifact-verification.log"))).toBeTrue();
+    const verification = readFileSync(join(fixture.root, "artifact-verification.log"), "utf8");
+    expect(verification).toContain(` verify-filesystem-tree --path ${join(fixture.home, ".hasna", "recordings")} --uid `);
+    expect(verification).toContain("coordination-held\n");
     expect(existsSync(fixture.marker)).toBeFalse();
     expect(existsSync(fixture.lock)).toBeFalse();
+    expect(existsSync(join(fixture.home, "Applications", "Hasna Recordings.app"))).toBeFalse();
+    expect(readdirSync(join(fixture.home, ".hasna", "recordings"))).toEqual([]);
   });
 
   testOnNonDarwin("leaves the marker after a crash and the next lock owner safely reclaims it", async () => {

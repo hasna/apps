@@ -38,6 +38,9 @@ case "$*" in
   *" fsync-tree "*|*" fsync-directory "*) exit 0;;
 esac
 printf '%s\\n' "$*" >> ${quote(join(root, "artifact-verification.log"))}
+if [ -d "$HOME/Applications/.Recordings-install-lock" ] && [ -d "$HOME/.hasna/.recordings-install-maintenance" ]; then
+  printf 'coordination-held\\n' >> ${quote(join(root, "artifact-verification.log"))}
+fi
 exit 79`);
   let script = readFileSync(join(scripts, "install_macos_app.sh"), "utf8");
   if (process.platform === "darwin") script = adaptShellFixtureTools(script, "test_fault_hooks_enabled() {", tools);
