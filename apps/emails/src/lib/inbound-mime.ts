@@ -22,6 +22,7 @@ function loadMailparser(): Promise<MailparserSdk> {
 }
 
 export interface InboundAttachmentMeta {
+  content_id?: string;
   filename: string;
   content_type: string;
   size: number;
@@ -100,6 +101,7 @@ export async function parseInboundMime(raw: string | Buffer | Uint8Array): Promi
   const headers = flattenHeaders(parsed.headers);
   const attachments: InboundAttachmentMeta[] = (parsed.attachments ?? []).map((a) => ({
     filename: a.filename ?? "attachment",
+    ...(a.contentId ? { content_id: a.contentId.replace(/[<>]/g, "") } : {}),
     content_type: a.contentType ?? "application/octet-stream",
     size: typeof a.size === "number" ? a.size : 0,
     content_base64: Buffer.from(a.content).toString("base64"),

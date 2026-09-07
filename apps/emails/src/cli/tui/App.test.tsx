@@ -414,6 +414,7 @@ describe("Emails Solid TUI", () => {
     await clickText("All mailboxes ▾");
     await typeText("ops@example.com");
     await key("enter");
+    await setup?.waitForFrame(value => value.includes("ops@example.com ▾") && value.includes("Operations update") && !value.includes("Billing update"));
     expect(frame()).toContain("ops@example.com ▾");
     expect(frame()).toContain("Operations update");
     expect(frame()).not.toContain("Billing update");
@@ -425,6 +426,7 @@ describe("Emails Solid TUI", () => {
     expect(frame()).toContain("ops@example.com ▾");
     await clickText("ops@example.com ▾");
     await clickText("All mailboxes", 0);
+    await setup?.waitForFrame(value => value.includes("All mailboxes ▾") && value.includes("Billing update"));
     expect(frame()).toContain("All mailboxes ▾");
     expect(frame()).toContain("Billing update");
     expect(frame()).not.toContain("No message selected");

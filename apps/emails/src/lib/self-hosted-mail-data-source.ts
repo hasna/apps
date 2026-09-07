@@ -855,6 +855,7 @@ function v1AttachmentMetadata(m: V1Message): AttachmentPath[] {
     const record = attachmentRecord(attachment);
     return {
       filename: String(record?.filename || `attachment-${index + 1}`),
+      ...(typeof record?.content_id === "string" ? { content_id: record.content_id } : {}),
       content_type: String(record?.content_type || "application/octet-stream"),
       size: Number(record?.size ?? 0) || 0,
       // A malformed array element is an explicit non-downloadable placeholder,

@@ -198,6 +198,7 @@ function v1AttachmentInfos(row: Record<string, unknown>): AttachmentInfo[] {
     const o = cobj(attachment);
     return {
       filename: cstr(o["filename"]) || `attachment-${index + 1}`,
+      ...(typeof o["content_id"] === "string" ? { content_id: o["content_id"] as string } : {}),
       content_type: cstr(o["content_type"]) || "application/octet-stream",
       size: cnum(o["size"]),
     };

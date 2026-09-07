@@ -88,9 +88,9 @@ export function Disclosure(props: ParentProps<{ label: string; detail?: string; 
           toggle();
         }}
       >
-        <text fg={active() ? theme.primary : theme.textMuted} attributes={TextAttributes.BOLD} wrapMode="none" flexShrink={0}>{open() ? "▾ " : "▸ "}</text>
-        <text fg={theme.text} wrapMode="none" flexGrow={1} flexShrink={1}>{safeMailText(props.label)}</text>
-        <Show when={props.detail}><text fg={theme.textMuted} wrapMode="none" flexShrink={0}>{props.detail}</text></Show>
+        <text selectable={false} fg={active() ? theme.primary : theme.textMuted} attributes={TextAttributes.BOLD} wrapMode="none" flexShrink={0}>{open() ? "▾ " : "▸ "}</text>
+        <text selectable={false} fg={theme.text} wrapMode="none" flexGrow={1} flexShrink={1}>{safeMailText(props.label)}</text>
+        <Show when={props.detail}><text selectable={false} fg={theme.textMuted} wrapMode="none" flexShrink={0}>{props.detail}</text></Show>
       </box>
       <Show when={open()}>
         <box flexDirection="column" width="100%" flexShrink={0} paddingTop={1} paddingLeft={1}>

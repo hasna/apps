@@ -1,3 +1,4 @@
+import { MessageImages } from "./message-images.js";
 import { For, Show } from "solid-js";
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import { useEmails } from "../context/emails-state.js";
@@ -41,6 +42,7 @@ export function ReaderRoute() {
                       <Show when={body().is_priority}><text fg={theme.warning}>★ Priority sender</text></Show>
                     </box>
                     <MessageContent text={body().text} html={body().html} />
+                    <MessageImages text={body().text} html={body().html} messageId={emails.selectedMessage()?.id} attachments={body().attachments} />
                   </>
                 }>
                   <For each={emails.conversation()}>
@@ -52,6 +54,7 @@ export function ReaderRoute() {
                           <text fg={theme.textMuted} wrapMode="word">To: {safeMailText(entry.body?.to ?? "")}</text>
                         </box>
                         <MessageContent text={entry.body?.text} html={entry.body?.html} />
+                        <MessageImages text={entry.body?.text} html={entry.body?.html} messageId={entry.item.id} attachments={entry.body?.attachments} />
                       </Disclosure>
                     )}
                   </For>
