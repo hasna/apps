@@ -5,6 +5,9 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { registerRemoteCustomerTools } from "./remote-customer-tools.js";
 import { saveAuthConfig, getIdentityFilePath, getAuthFilePath } from "../lib/auth-store.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 test("MCP invocation captures named profile through concurrent fresh sign-in and refuses stale authority safely", async () => {
   const home=mkdtempSync(join(tmpdir(), "skills-mcp-context-"));

@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { getAuthFilePath } from "../lib/auth-store.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 const entry = resolve(import.meta.dir, "index.tsx");
 test("real CLI discovers safely, enrolls B and keeps the next fresh-auth mutation on B", async () => {

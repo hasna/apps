@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { saveAuthConfig, getAuthFilePath, getIdentityFilePath } from "./auth-store.js";
 import { captureProfileWorkspace, prepareWorkspaceEnrollment } from "./workspace-profile.js";
 import { resolveSkillsConnection } from "./fleet-credentials.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 async function fixture(run: (f: any) => Promise<void>) {
   const home = mkdtempSync(join(tmpdir(), "skills-workspace-profile-"));
