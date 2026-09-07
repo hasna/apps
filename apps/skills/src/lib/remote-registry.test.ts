@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildSkillsApiUrl,
   getConfiguredApiUrl,
@@ -14,6 +17,40 @@ import { SkillsFleetCredentialError } from "./fleet-credentials.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+
+// Ambient credential isolation. These cases drive the shared resolver through
+// the LIVE process.env (they set SKILLS_API_URL / SKILLS_API_KEY and call the
+// registry functions bare), and the resolver's DISK tier
+// (~/.hasna/skills/config/credentials) outranks the env tier: on a
+// provisioned station the operator's REAL credential is refused against the
+// fixture authority ("The selected Skills API does not match this
+// credential's instance") instead of the no-credential behavior under test
+// (green on CI, red on the station). Anchoring every home-layout root at the
+// file's scratch dir — no credentials file can exist there — makes the disk
+// tier consult nothing, identically on both kinds of machine.
+const HOME_ROOT_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"] as const;
+const scratchHome = mkdtempSync(join(tmpdir(), "skills-registry-home-"));
+// Saved once at load: this package's test script does not run --isolate, so
+// every file in the suite shares ONE process and an anchored root that is not
+// put back would redirect a later file's disk-tier resolution (e.g.
+// registry-reconcile's fixture home) and break it.
+const savedHomeRoots = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
+
+beforeEach(() => {
+  for (const name of HOME_ROOT_KEYS) process.env[name] = scratchHome;
+});
+
+afterEach(() => {
+  for (const name of HOME_ROOT_KEYS) {
+    const value = savedHomeRoots.get(name);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
+});
+
+afterAll(() => {
+  rmSync(scratchHome, { recursive: true, force: true });
+});
 
 describe("remote registry", () => {
   const originalSkillsApiUrl = process.env.SKILLS_API_URL;
