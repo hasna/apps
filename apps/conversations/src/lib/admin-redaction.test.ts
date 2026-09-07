@@ -80,6 +80,17 @@ describe("redactMessagesById", () => {
     clearStoreEnv();
     process.env.HASNA_CONVERSATIONS_API_URL = "https://conversations.example.invalid";
     process.env.HASNA_CONVERSATIONS_API_KEY = ["fixture", "not", "a", "credential"].join("-");
+    // Ambient credential isolation: the shared resolver's DISK tier
+    // (~/.hasna/conversations/config/credentials) outranks the env tier, so
+    // on a provisioned station the fixture URL above is REFUSED as written
+    // for a different authority before isCloudStore() can answer (green on
+    // CI, red on the station). Anchor the home-layout roots at the test root
+    // — no credentials file can exist there — so the disk tier consults
+    // nothing on both kinds of machine.
+    const savedHomeRoots = new Map(
+      ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"].map((name) => [name, process.env[name]]),
+    );
+    for (const name of savedHomeRoots.keys()) process.env[name] = TEST_ROOT;
     try {
       expect(() => redactMessagesById({
         ids: [msg.id],
@@ -88,6 +99,10 @@ describe("redactMessagesById", () => {
       })).toThrow("flipped to the HTTP API");
     } finally {
       pinStoreToDb(TEST_DB);
+      for (const [name, value] of savedHomeRoots) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
     }
   });
 
