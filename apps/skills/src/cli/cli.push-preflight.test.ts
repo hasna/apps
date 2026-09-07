@@ -6,6 +6,9 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildCliFixture } from "./cli-build.fixture.js";
+import { useDefaultTestTimeout } from "../test-preload.js";
+
+useDefaultTestTimeout();
 
 const scratch = mkdtempSync(join(tmpdir(), "skills-push-preflight-"));
 const installed = process.env.SKILLS_PUSH_PREFLIGHT_TEST_PACKAGE;
@@ -51,8 +54,9 @@ test("the actual child reader stops and joins output exceeding its 30KB shared c
 }, 15_000);
 
 const refusals = ["500", "403", "401", "generic404", "wrong-domain404", "405", "204", "invalid-json", "null", "array",
-  "missing-revision", "empty-revision", "blank-revision", "trimmed-revision", "numeric-revision", "control-revision", "unicode-revision", "wrong-slug", "missing-slug", "transport"] as const;
-type Mode = typeof refusals[number] | "current" | "domain404" | "nested-domain404" | "bump" | "bump-conflict";
+  "missing-revision", "empty-revision", "blank-revision", "trimmed-revision", "numeric-revision", "control-revision", "unicode-revision", "wrong-slug", "missing-slug", "transport",
+  "catalogue-missing-revision", "catalogue-nonnull-revision", "catalogue-wrong-name", "catalogue-wrong-slug", "catalogue-missing-name", "catalogue-null-name"] as const;
+type Mode = typeof refusals[number] | "current" | "domain404" | "nested-domain404" | "bump" | "bump-conflict" | "catalogue" | "catalogue-slug";
 async function fixture(mode: Mode, action: (invoke: (human?: boolean, force?: boolean) => Promise<{ stdout: string; stderr: string; exitCode: number }>, calls: Array<{ method: string; path: string; ifMatch: string | null; version?: string }>) => Promise<void>) {
   const root = mkdtempSync(join(scratch, "owned-")), home = join(root, "home"), project = join(root, "project"), data = join(root, "data"), corpus = join(data, "skills"), skill = join(corpus, "preflight-owned");
   for (const path of [home, project, skill, join(root, "tmp"), join(root, "empty-path"), join(root, "empty-source")]) mkdirSync(path, { recursive: true });
@@ -79,6 +83,16 @@ async function fixture(mode: Mode, action: (invoke: (human?: boolean, force?: bo
       else if (mode === "missing-revision") body = { slug: "preflight-owned" };
       else if (mode === "missing-slug") body = { revisionId: revision };
       else if (mode === "wrong-slug") body = { slug: "unrelated", revisionId: revision };
+      else if (mode.startsWith("catalogue")) {
+        body = { name: "preflight-owned", publicationState: "catalogue-only", revisionId: null,
+          ...(mode === "catalogue-slug" ? { slug: "preflight-owned" } : {}),
+          ...(mode === "catalogue-missing-revision" ? { revisionId: undefined } : {}),
+          ...(mode === "catalogue-nonnull-revision" ? { slug: "preflight-owned", revisionId: revision } : {}),
+          ...(mode === "catalogue-wrong-name" ? { name: "unrelated" } : {}),
+          ...(mode === "catalogue-wrong-slug" ? { slug: "unrelated" } : {}),
+          ...(mode === "catalogue-missing-name" ? { name: undefined } : {}),
+          ...(mode === "catalogue-null-name" ? { name: null } : {}) };
+      }
       else if (mode.endsWith("-revision")) body = { slug: "preflight-owned", revisionId: ({ "empty-revision": "", "blank-revision": " \t", "trimmed-revision": " revision ", "numeric-revision": 12, "control-revision": "bad\r\nheader", "unicode-revision": "rev-林" } as Record<string, unknown>)[mode] };
       response.writeHead(status, { "content-type": "application/json" }); response.end(status === 204 ? undefined : mode === "invalid-json" ? `{${canary}` : JSON.stringify(body)); return;
     }
@@ -135,11 +149,11 @@ for (const mode of ["500", "generic404", "missing-revision"] as const) test(`hum
   const result = await invoke(true); expect(result.exitCode).toBe(1); expect(result.stdout).toBe(""); expect(result.stderr).toContain("Publishing was refused because");
   expect(calls.map(call => call.method)).toEqual(["GET"]);
 }), 15_000);
-for (const mode of ["current", "domain404", "nested-domain404", "bump", "bump-conflict"] as const) test(`actual push preserves proven ${mode} revision semantics`, () => fixture(mode, async (invoke, calls) => {
+for (const mode of ["current", "domain404", "nested-domain404", "bump", "bump-conflict", "catalogue", "catalogue-slug"] as const) test(`actual push preserves proven ${mode} revision semantics`, () => fixture(mode, async (invoke, calls) => {
   const result = await invoke(), conflict = mode === "bump-conflict"; expect(result.exitCode).toBe(conflict ? 1 : 0); expect(result.stderr).toBe("");
   const value = JSON.parse(result.stdout);
   if (conflict) expect(value.error).toContain("NEWER revision"); else { expect(value.published).toBe(true); expect(value.version).toBe(mode === "bump" ? "1.2.4" : "1.2.3"); }
-  const ifMatch = mode.includes("404") ? null : "original-revision_A.1";
+  const ifMatch = mode.includes("404") || mode.startsWith("catalogue") ? null : "original-revision_A.1";
   expect(calls).toEqual([{ method: "GET", path: "/prefix/api/v1/skills/preflight-owned", ifMatch: null },
     { method: "POST", path: "/prefix/api/v1/skills", ifMatch, version: "1.2.3" },
     ...(mode.startsWith("bump") ? [{ method: "POST", path: "/prefix/api/v1/skills", ifMatch, version: "1.2.4" }] : [])]);

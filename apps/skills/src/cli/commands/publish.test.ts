@@ -10,7 +10,7 @@ import { describe, expect, test } from "bun:test";
 import { useDefaultTestTimeout } from "../../test-preload.js";
 
 useDefaultTestTimeout();
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { RemoteSkillsClient } from "../../lib/remote-client.js";
@@ -18,6 +18,7 @@ import { computeContentHash } from "../../lib/skill-hash.js";
 import { unpackSkillBundle } from "../../lib/skill-bundle.js";
 import { createSkillsFetchHandler } from "../../server/app.js";
 import { MemorySkillsStore } from "../../server/store.js";
+import { hashApiKey } from "../../server/auth.js";
 import { PushSkillError, pushSkill } from "./publish.js";
 
 const pushAuth = "test-push-token";
@@ -72,22 +73,104 @@ function makeCorpus(skills: Record<string, Record<string, string>>): string {
   return root;
 }
 
-async function withServer(fn: (ctx: { baseUrl: string; store: MemorySkillsStore }) => Promise<void>, port = 0): Promise<void> {
+type RequestTrace = { method: string; path: string; ifMatch: string | null; status: number };
+async function withServer(fn: (ctx: { baseUrl: string; store: MemorySkillsStore; requests: RequestTrace[] }) => Promise<void>, port = 0): Promise<void> {
   const store = new MemorySkillsStore();
   await store.ensureBootstrapApiKey(pushAuth, PRINCIPAL);
   await store.ensureBootstrapApiKey("test-other-token", OTHER);
   const fetchHandler = await createSkillsFetchHandler({ store, config: { inlineWorker: false, allowEphemeralStore: true } });
   // Match the IPv4 client authority. On macOS a default localhost listener may
   // bind IPv6 while this port is already occupied by a different IPv4 service.
-  const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: fetchHandler });
+  const requests: RequestTrace[] = [];
+  const server = Bun.serve({ hostname: "127.0.0.1", port, async fetch(request) {
+    const response = await fetchHandler(request);
+    requests.push({ method: request.method, path: new URL(request.url).pathname, ifMatch: request.headers.get("if-match"), status: response.status });
+    return response;
+  } });
   try {
-    await fn({ baseUrl: `http://127.0.0.1:${server.port}`, store });
+    await fn({ baseUrl: `http://127.0.0.1:${server.port}`, store, requests });
   } finally {
     server.stop(true);
   }
 }
 
+function catalogueCorpus(slug: string, flavor: string): string {
+  const files = Object.fromEntries(Object.entries(VALID_SKILL).map(([path, bytes]) =>
+    [path, bytes.replaceAll("release-notes", slug).replace("Drafts release notes.", flavor)]));
+  const root = makeCorpus({ [slug]: files }), skillDir = join(root, slug), manifestPath = join(skillDir, "skill.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  manifest.provenance.content_hash = computeContentHash(skillDir);
+  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  return root;
+}
+
 describe("skills push", () => {
+  test("explicit catalogue-only authority permits an initial override and remains organization scoped", async () => {
+    await withServer(async ({ baseUrl, store, requests }) => {
+      const client = new RemoteSkillsClient(pushAuth, baseUrl);
+      const principal = await store.authenticateApiKeyHash(hashApiKey(pushAuth));
+      expect(principal).not.toBeNull();
+      const bundled = (await client.listSkills()).find(row => !row.bundleSha256 && typeof row.name === "string");
+      expect(bundled).toBeDefined(); const slug = bundled!.name as string;
+      const root = catalogueCorpus(slug, "Owned catalogue override");
+      try {
+        expect(await store.getSkill(principal!, slug)).toBeNull();
+        const observed = await client.getSkillStatus(slug);
+        expect(observed.status).toBe(200); expect(observed.body).toMatchObject({ name: slug, publicationState: "catalogue-only", revisionId: null });
+        const start = requests.length, result = await pushSkill(slug, { rootDir: root, client });
+        expect(result.published).toBe(true);
+        expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 200 },
+          { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 }]);
+        const published = await client.getSkillStatus(slug);
+        expect(published.body).toMatchObject({ slug, bundleSha256: result.sha256 });
+        expect((published.body as Record<string, unknown>).revisionId).toMatch(/^[a-f0-9]{64}$/);
+        expect((published.body as Record<string, unknown>).publicationState).not.toBe("catalogue-only");
+        const other = await new RemoteSkillsClient("test-other-token", baseUrl).getSkillStatus(slug);
+        expect(other.body).toMatchObject({ name: slug, publicationState: "catalogue-only", revisionId: null });
+        const otherPrincipal = await store.authenticateApiKeyHash(hashApiKey("test-other-token"));
+        expect(otherPrincipal).not.toBeNull(); expect(await store.getSkill(otherPrincipal!, slug)).toBeNull();
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    });
+  });
+
+  test("publication after a catalogue-only read refuses the stale upload without overwriting the winner", async () => {
+    await withServer(async ({ baseUrl, store, requests }) => {
+      const client = new RemoteSkillsClient(pushAuth, baseUrl);
+      const principal = await store.authenticateApiKeyHash(hashApiKey(pushAuth));
+      expect(principal).not.toBeNull();
+      const bundled = (await client.listSkills()).find(row => !row.bundleSha256 && typeof row.name === "string");
+      expect(bundled).toBeDefined(); const slug = bundled!.name as string;
+      const local = catalogueCorpus(slug, "Owned losing edit"), competing = catalogueCorpus(slug, "Owned winning edit");
+      let winner: Awaited<ReturnType<MemorySkillsStore["getSkill"]>>, intercepted = 0;
+      let winnerVersions: Awaited<ReturnType<MemorySkillsStore["listSkillVersions"]>> = [];
+      class RacingClient extends RemoteSkillsClient {
+        override async getSkillStatus(requested: string) {
+          const observation = await super.getSkillStatus(requested);
+          expect(requested).toBe(slug); expect(observation.body).toMatchObject({ publicationState: "catalogue-only", revisionId: null }); intercepted++;
+          // The real first GET has completed. Commit another real HTTP publication
+          // before releasing this exact observation to the losing push.
+          await pushSkill(slug, { rootDir: competing, client });
+          winner = structuredClone(await store.getSkill(principal!, slug));
+          winnerVersions = structuredClone(await store.listSkillVersions(principal!, slug));
+          return observation;
+        }
+      }
+      try {
+        const start = requests.length;
+        await expect(pushSkill(slug, { rootDir: local, client: new RacingClient(pushAuth, baseUrl) })).rejects.toThrow("NEWER revision");
+        expect(intercepted).toBe(1);
+        expect(requests.slice(start)).toEqual([{ method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 200 },
+          { method: "GET", path: `/api/v1/skills/${slug}`, ifMatch: null, status: 200 },
+          { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 201 },
+          { method: "POST", path: "/api/v1/skills", ifMatch: null, status: 409 }]);
+        expect(winner!).not.toBeNull(); expect(winner!.skillMd).toContain("Owned winning edit");
+        expect(await store.getSkill(principal!, slug)).toEqual(winner!);
+        expect(winnerVersions).toHaveLength(1);
+        expect(await store.listSkillVersions(principal!, slug)).toEqual(winnerVersions);
+      } finally { rmSync(local, { recursive: true, force: true }); rmSync(competing, { recursive: true, force: true }); }
+    });
+  });
+
   test("the HTTP fixture refuses an occupied IPv4 port before calling its client", async () => {
     let requests = 0, called = false, failure: unknown;
     const occupied = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() { requests++; return new Response("Owned unrelated listener"); } });

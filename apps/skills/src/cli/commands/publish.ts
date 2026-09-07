@@ -271,6 +271,13 @@ async function readPublishRevision(client: RemoteSkillsClient, slug: string): Pr
     );
   }
   const revision = record?.revisionId;
+  if (record?.publicationState === "catalogue-only") {
+    if (record.name === slug && (record.slug === undefined || record.slug === slug) && revision === null) return undefined;
+    throw new PushSkillError(
+      "Publishing was refused because the catalogue-only response had contradictory identity or revision state.",
+      ["Check the configured instance and server compatibility. No upload was attempted."],
+    );
+  }
   // Do not trim, coerce or silently omit an unusable precondition. HTTP field
   // values must be safe bytes; this opaque revision is sent exactly as observed.
   if (record?.slug !== slug || typeof revision !== "string" || revision.length === 0
