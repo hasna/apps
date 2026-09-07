@@ -16480,6 +16480,177 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "POST",
+    "operationId": "setupInboxRealtime",
+    "path": "/v1/inbox/setup-realtime",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "ok",
+        "verified",
+        "source_id",
+        "changed",
+        "worker_started",
+        "delivery_tested"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "worker_started": {
+          "type": "boolean"
+        },
+        "delivery_tested": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupInboxRealtime",
+    "path": "/v1/inbox/setup-realtime",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupInboxRealtime",
+    "path": "/v1/inbox/setup-realtime",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupInboxRealtime",
+    "path": "/v1/inbox/setup-realtime",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupInboxRealtime",
+    "path": "/v1/inbox/setup-realtime",
+    "status": 409,
+    "schema": null
+  },
+  {
+    "method": "POST",
+    "operationId": "setupInboxRealtime",
+    "path": "/v1/inbox/setup-realtime",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupInboxRealtime",
+    "path": "/v1/inbox/setup-realtime",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupInboxRealtime",
+    "path": "/v1/inbox/setup-realtime",
+    "status": 502,
+    "schema": null
+  },
+  {
+    "method": "POST",
+    "operationId": "setupInboxRealtime",
+    "path": "/v1/inbox/setup-realtime",
+    "status": 503,
+    "schema": null
+  },
+  {
+    "method": "POST",
     "operationId": "syncInboxS3",
     "path": "/v1/inbox/sync-s3",
     "status": 200,

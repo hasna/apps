@@ -1736,7 +1736,6 @@ describe("inbox unread-count --by-address", () => {
 
 describe("server-only ingestion/diagnostic subcommands", () => {
   const cases: Array<{ label: string; args: string[]; command: string }> = [
-    { label: "setup-realtime", args: ["inbox", "setup-realtime", "example.com"], command: "emails inbox setup-realtime" },
     { label: "listen", args: ["inbox", "listen", "--port", "2526"], command: "emails inbox listen" },
   ];
 

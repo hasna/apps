@@ -1,3 +1,4 @@
+import { setupBoundRealtime, type RealtimeSetupCloudFactory, type RealtimeSetupInput } from "./realtime-setup.js";
 import { executeIngestBatch, IngestApiError, type IngestApiInput, type IngestCloudFactory } from "./ingest-api.js";
 import { normalizeAddressProvisioning, planAddressProvisioning, runAddressProvisioningJob, AddressProvisioningError, type ProvisioningJob } from "./address-provisioning.js";
 import { syncProviderDelivery, ProviderSyncError } from "./provider-sync.js";
@@ -184,6 +185,7 @@ export interface SelfHostedServiceDeps {
   sender: SelfHostedSender;
   resolveSender?: SenderResolver;
   ingestCloud?: IngestCloudFactory;
+  realtimeSetupCloud?: RealtimeSetupCloudFactory;
   migrations: readonly Migration[];
   version: string;
   // ---- multi-tenancy + auth (WI-2) ----
@@ -2626,6 +2628,18 @@ export async function handleSelfHostedRequest(
       const { runSequenceBatch } = await import("./sequence-worker.js");
       const sequenceResult = sequenceLimit === 0 ? { sequences: { attempted: 0, sent: 0, failed: 0, pending: 0, skipped: 0 }, sequence_items: [] } : await runSequenceBatch(auth.store.sequenceWorker(), send, sequenceLimit);
       return json(200, { ...result, ...sequenceResult, sequence_execution: sequenceLimit === 0 ? "not_requested" : "executed" });
+    }
+
+    if (path === "/v1/inbox/setup-realtime") {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "configuring realtime ingestion");
+      if (denied) return denied;
+      try {
+        const result = await setupBoundRealtime(auth.store, auth.ctx.tenantId, await readJsonBody(req) as unknown as RealtimeSetupInput, deps.env ?? process.env, deps.realtimeSetupCloud);
+        return json(result.ok ? 200 : 502, result);
+      } catch (error) { if (error instanceof IngestApiError) return json(error.status, { error: error.message }); throw error; }
     }
 
     const ingestOperation = path.match(/^\/v1\/inbox\/(sync-s3|watch)$/);

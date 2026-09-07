@@ -4,7 +4,7 @@ import { resourceSpecForPath } from "./resources.js";
 import type { EmailsSelfHostedStore, TenantScopedStore } from "./store.js";
 
 export class IngestApiError extends Error { constructor(message: string, readonly status = 400) { super(message); } }
-export interface IngestBinding { tenant_id: string; source_id: string; bucket: string; prefix: string; region: string; domain: string; queue_url?: string; provider_id?: string }
+export interface IngestBinding { tenant_id: string; source_id: string; bucket: string; prefix: string; region: string; domain: string; queue_url?: string; provider_id?: string; topic_arn?: string; rule_set?: string; rule_name?: string }
 export interface IngestCloud {
   list(prefix: string, cursor: string | undefined, limit: number): Promise<{ keys: string[]; next?: string }>;
   fetch(key: string): Promise<Buffer>;
@@ -22,12 +22,14 @@ export function ingestBindings(env: NodeJS.ProcessEnv): IngestBinding[] {
   if (!Array.isArray(raw)) throw new IngestApiError("EMAILS_INGEST_BINDINGS must be a JSON array.", 503);
   const bindings: IngestBinding[] = [];
   for (const row of raw) {
-    if (!row || typeof row !== "object" || Object.keys(row).some(key => !["tenant_id", "source_id", "bucket", "prefix", "region", "domain", "queue_url", "provider_id"].includes(key)) || ["tenant_id", "source_id", "bucket", "prefix", "region", "domain"].some(key => typeof row[key] !== "string" || !row[key].trim())) throw new IngestApiError("Server ingest binding fields are invalid.", 503);
+    if (!row || typeof row !== "object" || Object.keys(row).some(key => !["tenant_id", "source_id", "bucket", "prefix", "region", "domain", "queue_url", "provider_id", "topic_arn", "rule_set", "rule_name"].includes(key)) || ["tenant_id", "source_id", "bucket", "prefix", "region", "domain"].some(key => typeof row[key] !== "string" || !row[key].trim())) throw new IngestApiError("Server ingest binding fields are invalid.", 503);
     try { parseInboundPrefixDomainMap(JSON.stringify({ [row.prefix]: row.domain })); } catch { throw new IngestApiError("Server ingest prefix or domain is invalid.", 503); }
     if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(row.bucket) || !/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(row.region)) throw new IngestApiError("Server ingest bucket or region is invalid.", 503);
     if (row.provider_id !== undefined && (typeof row.provider_id !== "string" || !row.provider_id.trim())) throw new IngestApiError("Server ingest provider binding is invalid.", 503);
     if (row.queue_url !== undefined && (typeof row.queue_url !== "string" || !/^https:\/\/sqs\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?\/\d{12}\/[^/?#]+$/.test(row.queue_url))) throw new IngestApiError("Server ingest queue URL is invalid.", 503);
-    if (bindings.some(item => (item.tenant_id === row.tenant_id && item.source_id === row.source_id) || (item.bucket === row.bucket && (item.prefix.startsWith(row.prefix) || row.prefix.startsWith(item.prefix))) || (row.queue_url && item.queue_url === row.queue_url))) throw new IngestApiError("Server ingest bindings overlap or share a queue.", 503);
+    for (const field of ["rule_set", "rule_name"]) if (row[field] !== undefined && (typeof row[field] !== "string" || !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/.test(row[field]))) throw new IngestApiError("Server receipt rule binding is invalid.", 503);
+    if (row.topic_arn !== undefined && (typeof row.topic_arn !== "string" || !/^arn:aws(?:-cn|-us-gov)?:sns:[a-z0-9-]+:\d{12}:[A-Za-z0-9_-]+$/.test(row.topic_arn))) throw new IngestApiError("Server SNS topic binding is invalid.", 503);
+    if (bindings.some(item => (item.tenant_id === row.tenant_id && item.source_id === row.source_id) || (item.bucket === row.bucket && (item.prefix.startsWith(row.prefix) || row.prefix.startsWith(item.prefix))) || (row.queue_url && item.queue_url === row.queue_url) || (row.topic_arn && item.topic_arn === row.topic_arn))) throw new IngestApiError("Server ingest bindings overlap or share a queue.", 503);
     bindings.push(row as IngestBinding);
   }
   return bindings;

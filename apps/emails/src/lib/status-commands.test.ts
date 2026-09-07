@@ -8,7 +8,7 @@ describe("command suggestion availability", () => {
       "emails stats --json", "emails analytics", "emails batch", "emails test", "emails monitor",
       "emails provider sync", "emails pull", "emails doctor delivery ops@example.com",
       "emails inbox explain ops@example.com", "emails inbox open abc", "emails inbox realtime-status",
-      "emails inbox sync-s3 --source source", "emails inbox watch --all-buckets",
+      "emails inbox setup-realtime example.com --source source", "emails inbox sync-s3 --source source", "emails inbox watch --all-buckets",
       "emails inbox clear --provider p1 --limit 10", "emails inbox unread-count --by-address",
       "emails schedule run", "emails scheduler", "emails provision status",
       "emails domain status example.com", "emails domain verify example.com",
@@ -22,7 +22,7 @@ describe("command suggestion availability", () => {
   });
 
   it("continues suppressing the actual unimplemented API listener and setup paths", () => {
-    for (const command of ["emails inbox setup-realtime", "emails inbox listen --port 2525", "emails webhook listen"])
+    for (const command of ["emails inbox listen --port 2525", "emails webhook listen"])
       expect(isCommandAvailableInMode(command, "self_hosted"), command).toBe(false);
   });
 

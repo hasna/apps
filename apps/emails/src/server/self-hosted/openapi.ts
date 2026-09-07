@@ -3440,6 +3440,11 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         responses: { "200": { content: { "application/json": { schema: deleteReceiptSchema } } } },
       },
     },
+    "/v1/inbox/setup-realtime": { post: {
+      operationId: "setupInboxRealtime", summary: "Configure and read back a tenant-bound SES/SNS/SQS notification path (operator only)", tags: ["inbox"],
+      requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["domain"], additionalProperties: false, properties: { domain: { type: "string" }, source_id: { type: "string" }, rule_set: { type: "string" }, rule_name: { type: "string" }, region: { type: "string" }, profile: { type: "string", description: "Rejected: cloud credentials belong to the API server" } } } } } },
+      responses: { "200": { description: "Notification wiring verified; no worker started and no delivery test sent", content: { "application/json": { schema: { type: "object", required: ["ok", "verified", "source_id", "changed", "worker_started", "delivery_tested"], properties: { ok: { type: "boolean" }, verified: { type: "boolean" }, source_id: { type: "string" }, changed: { type: "array", items: { type: "string" } }, worker_started: { type: "boolean" }, delivery_tested: { type: "boolean" } }, additionalProperties: true } } } }, "400": { description: "Invalid selectors" }, "403": { description: "Operator required" }, "409": { description: "Conflicting cloud topology" }, "502": { description: "Partial operation or readback failure; inspect changed steps" }, "503": { description: "Server binding missing setup fields" } },
+    } },
     "/v1/inbox/sync-s3": { post: {
       operationId: "syncInboxS3", summary: "Run a bounded server-bound tenant ingestion batch",
       requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: {

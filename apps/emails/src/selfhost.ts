@@ -1139,6 +1139,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Configure and read back a tenant-bound SES/SNS/SQS notification path (operator only) */
+    async setupInboxRealtime(body: { "domain": string; "source_id"?: string; "rule_set"?: string; "rule_name"?: string; "region"?: string; "profile"?: string }, init?: RequestInit): Promise<{ "ok": boolean; "verified": boolean; "source_id": string; "changed": Array<string>; "worker_started": boolean; "delivery_tested": boolean }> {
+      return this.request("POST", `/v1/inbox/setup-realtime`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Run a bounded server-bound tenant ingestion batch */
     async syncInboxS3(body: { "source_id"?: string; "bucket"?: string; "prefix"?: string; "region"?: string; "provider_id"?: string; "queue_url"?: string; "profile"?: string; "cursor"?: string; "force"?: boolean; "all_buckets"?: boolean; "limit"?: number }, init?: RequestInit): Promise<{ "ok": boolean; "sources": Array<Record<string, unknown>> }> {
       return this.request("POST", `/v1/inbox/sync-s3`, {

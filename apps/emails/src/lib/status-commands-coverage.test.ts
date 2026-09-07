@@ -133,7 +133,7 @@ describe("refusal registry covers every CLI refusal call site", () => {
   it("declares what the scan cannot see", () => {
     const inbox = readFileSync(join(COMMANDS_DIR, "inbox.remote.ts"), "utf8");
     // Real refusals in the file, invisible because the literal omits the `emails ` prefix.
-    for (const operation of ["setup-realtime", "listen"]) {
+    for (const operation of ["listen"]) {
       expect(inbox).toContain(`serverOnly("${operation}")`);
       expect(refusals.map((r) => r.command)).not.toContain(`emails inbox ${operation}`);
       expect(isCommandAvailableInMode(`emails inbox ${operation}`, "self_hosted")).toBe(false);
@@ -143,6 +143,8 @@ describe("refusal registry covers every CLI refusal call site", () => {
       expect(inbox).toContain(`.action(ingestAction("${operation}"))`);
       expect(isCommandAvailableInMode(`emails inbox ${operation}`, "self_hosted")).toBe(true);
     }
+    expect(inbox).not.toContain('serverOnly("setup-realtime")');
+    expect(isCommandAvailableInMode("emails inbox setup-realtime example.com", "self_hosted")).toBe(true);
     // `inbox unread-count --by-address` USED to be a flag-conditional refusal here;
     // it is now served by the /v1 endpoint, so the refusal literal must be gone and
     // the flag form must never appear on any refusal-derived suggestion list.
@@ -160,7 +162,10 @@ describe("refusal registry covers every CLI refusal call site", () => {
     const shared = refusals.filter((r) => r.shared).map((r) => r.command);
     expect(shared).not.toContain("emails domain status");
     expect(shared).not.toContain("emails domain verify");
-    expect(shared).toContain("emails address provision");
+    expect(shared).not.toContain("emails address provision");
+    expect(shared).toContain("emails provision domain");
+    expect(isCommandAvailableInMode("emails address provision ops@example.com", "self_hosted")).toBe(true);
+    expect(isCommandAvailableInMode("emails provision address ops@example.com", "self_hosted")).toBe(true);
   });
 
   it("no longer counts the DNS commands that were wired to their libraries", () => {

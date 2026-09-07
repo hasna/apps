@@ -413,3 +413,34 @@ for a unique bucket/prefix updates that source without replacing its ID.
 disables watch while retaining manual recovery. `inbox source retire ID` retires
 the API source and preserves its metadata and mail. Registry lifecycle settings
 are distinct from worker health or verified cloud configuration.
+
+
+### Configure bound realtime notification wiring
+
+`emails inbox setup-realtime <domain> --source <source-id>` calls the operator-only
+`POST /v1/inbox/setup-realtime` API. Add `topic_arn`, `rule_set` and `rule_name`
+to the existing `EMAILS_INGEST_BINDINGS` entry, alongside its dedicated `queue_url`.
+The queue and SNS topic must already exist in the same AWS account, region and
+partition. The domain and active S3 source must belong to the authenticated tenant.
+Legacy `--rule-set`, `--rule` and `--region` values validate that binding;
+`--profile` cannot select machine-local cloud credentials.
+
+The operation validates the active SES rule set and action ordering, bound S3
+bucket/prefix, recipient scope, topic/queue identities and exclusive queue
+subscription before configuring anything. It preserves unrelated policy grants
+and receipt actions, refuses conflicting topics, filters and Deny policies, adds
+source-scoped SNS/SQS grants and raw delivery, and reads the configuration back.
+No queue messages are read or acknowledged and no test mail is sent by setup.
+
+`verified: true` means the exact notification configuration was read back.
+It does not establish delivery, worker liveness, AWS organizational-policy/KMS
+permissions, or an operational mailbox. Use `emails inbox watch --source <id>`
+to poll; setup never starts a watcher. A failure returns the stage, confirmed
+`changed` steps and `attempted` steps, with `changes_may_have_applied` when an AWS
+mutation could have landed despite a missing acknowledgement. Inspect those
+resources and retry the same binding. AWS policy updates are read-modify-write;
+avoid concurrent external policy/rule editors during setup.
+
+AWS contracts: [SES receiving permissions](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-permissions.html),
+[SNS to SQS subscriptions](https://docs.aws.amazon.com/sns/latest/dg/subscribe-sqs-queue-to-sns-topic.html),
+and [raw delivery](https://docs.aws.amazon.com/sns/latest/dg/sns-large-payload-raw-message-delivery.html).

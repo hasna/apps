@@ -1103,14 +1103,21 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
   // ─── REAL-TIME INBOUND ────────────────────────────────────────────────────
   inboxCmd
     .command("setup-realtime <domain>")
-    .description("Wire SES→SNS→SQS so inbound mail auto-syncs (no manual sync-s3)")
+    .description("Configure and verify the bound SES→SNS→SQS notification path through the API")
     .option("-j, --json", "Print JSON output", false)
-    .option("--rule-set <name>", "SES receipt rule set name", "emails-inbound")
+    .option("--rule-set <name>", "Validate the server-bound SES receipt rule set")
     .option("--rule <name>", "SES receipt rule name (defaults to inbound-<domain>)")
     .option("--region <region>", "AWS region (defaults to config inbound_s3_region)")
     .option("--profile <profile>", "AWS profile")
-    .action(() => {
-      try { serverOnly("setup-realtime"); } catch (e) { handleError(e); }
+    .option("--source <id>", "Registered server-bound S3 source")
+    .action(async (domain: string, opts: { source?: string; ruleSet?: string; rule?: string; region?: string; profile?: string }) => {
+      try {
+        const { setupInboxRealtime } = await import("../../lib/realtime-setup-api.js");
+        if (!domain.trim() || Object.values(opts).some(value => typeof value === "string" && !value.trim())) throw new Error("Realtime setup selectors must not be blank.");
+        const result = await setupInboxRealtime({ domain, ...(opts.source !== undefined ? { source_id: opts.source } : {}), ...(opts.ruleSet !== undefined ? { rule_set: opts.ruleSet } : {}), ...(opts.rule !== undefined ? { rule_name: opts.rule } : {}), ...(opts.region !== undefined ? { region: opts.region } : {}), ...(opts.profile !== undefined ? { profile: opts.profile } : {}) });
+        output(result, result.ok ? `Realtime notification configuration verified for ${domain}.\nRun emails inbox watch --source ${result.source_id} to poll the API. No worker was started or delivery test sent.` : `Realtime setup did not verify (${result.stage}). Confirmed steps: ${(result.changed as string[]).join(", ") || "none confirmed"}. Cloud changes may have applied despite a missing acknowledgement. Inspect the bound cloud configuration and retry.`);
+        if (!result.ok) process.exitCode = 1;
+      } catch (error) { handleError(error); }
     });
 
   inboxCmd
