@@ -3095,13 +3095,15 @@ export interface CloudLockResult {
 export async function cloudLockTask(client: HasnaStorageClient, id: string, agentId: string): Promise<CloudLockResult> {
   if (!agentId.trim()) throw new Error("agent_id must not be blank");
   const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/lock`, { agent_id: agentId });
-  if (raw && typeof raw === "object" && "result" in (raw as Record<string, unknown>)) {
-    const result = (raw as { result: CloudLockResult }).result;
-    if (!result || typeof result.success !== "boolean") throw new Error("REMOTE_API_INCOMPATIBLE: task lock receipt is missing a boolean success; inspect before retrying");
-    return result;
+  const result = (raw && typeof raw === "object" && "result" in raw ? raw.result : raw) as CloudLockResult | null;
+  if (!result || typeof result.success !== "boolean") throw new Error("REMOTE_API_INCOMPATIBLE: task lock receipt is missing a boolean success; inspect before retrying");
+  if (result.success && (
+    result.locked_by !== agentId || typeof result.locked_at !== "string" || !Number.isFinite(Date.parse(result.locked_at)) ||
+    (result.expires_at !== undefined && (typeof result.expires_at !== "string" || !Number.isFinite(Date.parse(result.expires_at)) || Date.parse(result.expires_at) <= Date.parse(result.locked_at)))
+  )) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: task lock receipt does not confirm the requested owner and valid lease; inspect before retrying");
   }
-  if (!raw || typeof (raw as CloudLockResult).success !== "boolean") throw new Error("REMOTE_API_INCOMPATIBLE: task lock receipt is missing a boolean success; inspect before retrying");
-  return raw as CloudLockResult;
+  return result;
 }
 
 /** Release a lock on a cloud task (`POST /v1/tasks/:id/unlock`). */

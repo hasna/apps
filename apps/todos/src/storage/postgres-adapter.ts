@@ -341,6 +341,17 @@ class PostgresJsonRecordStore {
     return context?.requestId ?? this.sourceMachineId ?? null;
   }
 
+  /** Serialize graph validation and writes with task deletion on one connection. */
+  async withDependencyGraphTransaction<T>(fn: (store: PostgresJsonRecordStore) => Promise<T>): Promise<T> {
+    await this.ensureSchema();
+    return this.withTaskParentIntegrityTransaction(async client => {
+      const scoped = new PostgresJsonRecordStore({ ...this.options, client });
+      // Schema was ensured before BEGIN; do not run DDL inside this transaction.
+      scoped.schemaReady = Promise.resolve();
+      return fn(scoped);
+    });
+  }
+
   async ensureSchema(): Promise<void> {
     if (!this.schemaReady) {
       this.schemaReady = (async () => {
@@ -2633,38 +2644,42 @@ async function addDependency(
   store: PostgresJsonRecordStore,
   context?: TodosStorageContext,
 ): Promise<TaskDependency> {
-  if (taskId === dependsOn) throw new Error("A task cannot depend on itself");
-  if (!(await store.get<Task>("tasks", taskId))) throw new Error(`Task not found: ${taskId}`);
-  if (!(await store.get<Task>("tasks", dependsOn))) throw new Error(`Task not found: ${dependsOn}`);
-  // Cycle guard: adding taskId->dependsOn creates a cycle if dependsOn can already
-  // reach taskId through the existing edges. BFS over the current dependency set.
-  const edges = await store.list<TaskDependency & { id?: string }>("dependencies");
-  const adjacency = new Map<string, string[]>();
-  for (const edge of edges) {
-    if (!adjacency.has(edge.task_id)) adjacency.set(edge.task_id, []);
-    adjacency.get(edge.task_id)!.push(edge.depends_on);
-  }
-  const queue = [dependsOn];
-  const seen = new Set<string>();
-  while (queue.length) {
-    const node = queue.shift()!;
-    if (node === taskId) throw new Error(`Adding dependency ${taskId} -> ${dependsOn} would create a cycle`);
-    if (seen.has(node)) continue;
-    seen.add(node);
-    for (const next of adjacency.get(node) ?? []) queue.push(next);
-  }
-  const timestamp = new Date().toISOString();
-  const record = { id: dependencyId(taskId, dependsOn), task_id: taskId, depends_on: dependsOn, created_at: timestamp, updated_at: timestamp };
-  await store.upsert("dependencies", record, context);
-  return { task_id: taskId, depends_on: dependsOn };
+  return store.withDependencyGraphTransaction(async store => {
+    if (taskId === dependsOn) throw new Error("A task cannot depend on itself");
+    if (!(await store.get<Task>("tasks", taskId))) throw new Error(`Task not found: ${taskId}`);
+    if (!(await store.get<Task>("tasks", dependsOn))) throw new Error(`Task not found: ${dependsOn}`);
+    // Cycle guard: adding taskId->dependsOn creates a cycle if dependsOn can already
+    // reach taskId through the existing edges. BFS over the current dependency set.
+    const edges = await store.list<TaskDependency & { id?: string }>("dependencies");
+    const adjacency = new Map<string, string[]>();
+    for (const edge of edges) {
+      if (!adjacency.has(edge.task_id)) adjacency.set(edge.task_id, []);
+      adjacency.get(edge.task_id)!.push(edge.depends_on);
+    }
+    const queue = [dependsOn];
+    const seen = new Set<string>();
+    while (queue.length) {
+      const node = queue.shift()!;
+      if (node === taskId) throw new Error(`Adding dependency ${taskId} -> ${dependsOn} would create a cycle`);
+      if (seen.has(node)) continue;
+      seen.add(node);
+      for (const next of adjacency.get(node) ?? []) queue.push(next);
+    }
+    const timestamp = new Date().toISOString();
+    const record = { id: dependencyId(taskId, dependsOn), task_id: taskId, depends_on: dependsOn, created_at: timestamp, updated_at: timestamp };
+    await store.upsert("dependencies", record, context);
+    return { task_id: taskId, depends_on: dependsOn };
+  });
 }
 
 /** Remove a dependency edge. Returns false when the edge did not exist. */
 async function removeDependency(taskId: string, dependsOn: string, store: PostgresJsonRecordStore): Promise<boolean> {
-  const existing = await store.get<unknown>("dependencies", dependencyId(taskId, dependsOn));
-  if (!existing) return false;
-  await store.delete("dependencies", dependencyId(taskId, dependsOn));
-  return true;
+  return store.withDependencyGraphTransaction(async store => {
+    const existing = await store.get<unknown>("dependencies", dependencyId(taskId, dependsOn));
+    if (!existing) return false;
+    await store.delete("dependencies", dependencyId(taskId, dependsOn));
+    return true;
+  });
 }
 
 /**
@@ -3646,4 +3661,3 @@ async function retryOnTransientPostgresError<T>(
   }
   throw lastError;
 }
-
