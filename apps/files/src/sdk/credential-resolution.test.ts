@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFilesClientFromEnv, resolveFilesSdkTransport, FILES_APP_NAME } from "./index.js";
+import { createFilesClientFromEnv, resolveFilesSdkTransport, FILES_APP_NAME, FILES_SDK_AUTHORITY_PIN_MESSAGE } from "./index.js";
 import type { FilesKeychainCommandRunner, FilesKeychainOptions } from "../store/client-types.js";
 
 const KEY_ENV = "hasna_files_env_key_00000000001";
@@ -212,19 +212,37 @@ describe("resolveFilesSdkTransport — the transport report (sources and tiers, 
   });
 });
 
-describe("SDK authority pinning (#1794)", () => {
-  test("explicit baseUrl with NO apiKey never attaches the ambient fleet key", async () => {
-    // The station HAS a resolvable credential (disk tier) AND a fake Keychain
-    // runner is requested — but the caller pinned the authority, so neither is
-    // consulted and the requests go out unauthenticated to the pinned URL.
+describe("SDK authority pinning (#1794) and loud refusal on an unpinned credential", () => {
+  test("explicit baseUrl with NO apiKey REFUSES loudly — never an unauthenticated client", () => {
+    // The station HAS a resolvable credential (disk tier AND env) and a fake
+    // Keychain runner is requested — but the caller pinned the authority, so
+    // the ambient chain must not be consulted, and there is nothing else to
+    // authenticate with: the factory THROWS before any tier is read and
+    // before any request can go out (adversarial credential-seam audit,
+    // hasna/apps#1720 — the old behavior silently built an unauthenticated
+    // FilesClient pointed at the pinned URL).
     writeDiskCredential(KEY_DISK);
-    const { files, requests } = capturedClient(fakeHomeEnv({ HASNA_FILES_API_KEY: KEY_ENV }), {
-      baseUrl: "https://self-hosted.example.test",
-      ...keychainOverrides(KEY_CHAIN),
-    });
-    await files.listSources();
-    expect(requests[0]!.url.startsWith("https://self-hosted.example.test/v1/")).toBe(true);
-    expect(requests[0]!.xApiKey).toBeNull();
+    let calls = 0;
+    const captureFetch = (async () => {
+      calls += 1;
+      return new Response("{}", { status: 200 });
+    }) as typeof fetch;
+    expect(() =>
+      createFilesClientFromEnv(fakeHomeEnv({ HASNA_FILES_API_KEY: KEY_ENV }), {
+        baseUrl: "https://self-hosted.example.test",
+        fetch: captureFetch,
+        ...keychainOverrides(KEY_CHAIN),
+      }),
+    ).toThrow(FILES_SDK_AUTHORITY_PIN_MESSAGE);
+    expect(calls).toBe(0);
+
+    // The refusal names the expected env sources and carries no key VALUE.
+    const message = FILES_SDK_AUTHORITY_PIN_MESSAGE;
+    expect(message).toContain("HASNA_FILES_API_URL");
+    expect(message).toContain("HASNA_FILES_API_KEY");
+    expect(message).not.toContain(KEY_ENV);
+    expect(message).not.toContain(KEY_DISK);
+    expect(message).not.toContain(KEY_CHAIN);
   });
 
   test("explicit baseUrl WITH apiKey is a deliberate pin and re-resolves nothing", async () => {

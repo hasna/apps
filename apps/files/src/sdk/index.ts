@@ -45,10 +45,19 @@ export interface CreateFilesClientOptions extends Partial<FilesClientOptions> {
  * AUTHORITY PINNING (#1794). An explicit `baseUrl` pins the authority the
  * caller named. With an explicit `apiKey` the pair is a deliberate
  * caller-owned pin and the ambient chain (Keychain, credentials file,
- * `HASNA_FILES_API_KEY`) is never consulted. With a `baseUrl` and NO `apiKey`,
- * the client is built WITHOUT any credential — the ambient fleet key is never
- * attached to an authority it was not resolved for.
+ * `HASNA_FILES_API_KEY`) is never consulted. With a `baseUrl` and NO
+ * `apiKey`, the factory REFUSES loudly — the ambient fleet key is never
+ * attached to an authority it was not resolved for, and an unauthenticated
+ * client is never built silently (adversarial credential-seam audit,
+ * hasna/apps#1720).
  */
+export const FILES_SDK_AUTHORITY_PIN_MESSAGE =
+  "FILES_CREDENTIAL_PINNED: an explicit baseUrl requires an explicit apiKey. The @hasna/files SDK " +
+  "never sends the ambient fleet credential (Keychain hasna.credentials.files.api-key, " +
+  "~/.hasna/files/config/credentials, HASNA_FILES_API_KEY) to a caller-named authority: pass " +
+  "`apiKey` explicitly, or omit `baseUrl` and let HASNA_FILES_API_URL / the @hasna/contracts chain " +
+  "resolve the credential and the authority together.";
+
 export function createFilesClientFromEnv(
   env: ClientEnv = process.env,
   overrides: CreateFilesClientOptions = {},
@@ -61,8 +70,12 @@ export function createFilesClientFromEnv(
   // authority is normalised to the fleet's `<origin>/v1` spelling either way,
   // because the generated client's data paths carry no `/v1` prefix of their own.
   if (explicitBaseUrl !== undefined) {
-    const options: FilesClientOptions = { ...clientOverrides, baseUrl: toV1BaseUrl(explicitBaseUrl) } as FilesClientOptions;
-    if (explicitApiKey !== undefined) options.apiKey = explicitApiKey;
+    // Loud refusal before any tier is read and before any request can go out:
+    // with no caller-supplied key there is nothing authentic to pin, and a
+    // client built without one would be an UNAUTHENTICATED client that looks
+    // like a fleet client (adversarial credential-seam audit, hasna/apps#1720).
+    if (explicitApiKey === undefined) throw new Error(FILES_SDK_AUTHORITY_PIN_MESSAGE);
+    const options: FilesClientOptions = { ...clientOverrides, baseUrl: toV1BaseUrl(explicitBaseUrl), apiKey: explicitApiKey } as FilesClientOptions;
     return new FilesClient(options);
   }
   if (explicitApiKey !== undefined) {
