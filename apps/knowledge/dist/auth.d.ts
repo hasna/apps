@@ -1,4 +1,4 @@
-import { type CredentialTier } from '@hasna/contracts/client';
+import type { CredentialTier } from './contracts-types.js';
 export interface KnowledgeAuthConfig {
     api_key: string;
     email?: string;

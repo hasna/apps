@@ -49,6 +49,7 @@
  * app's behalf. `~/.hasna/knowledge/auth.json` is no longer consulted by the
  * credential chain at all (see src/auth.ts).
  */
+import type { CredentialTier, KeychainTierOptions } from './contracts-types.js';
 import {
   CREDENTIAL_PROFILE_ENV_KEY,
   clientTransportEnvKeys,
@@ -58,8 +59,6 @@ import {
   defaultFleetGatewayBaseUrl,
   resolveClientTransport,
   type CredentialChainOptions,
-  type CredentialTier,
-  type KeychainTierOptions,
 } from '@hasna/contracts/client';
 import { isNetworkGuardActive } from './net-guard.js';
 
