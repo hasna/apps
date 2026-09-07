@@ -4,9 +4,10 @@
  *
  * The env tier is exercised in `index.test.ts`; this file covers the macOS
  * Keychain and `~/.hasna/logs/config/credentials` disk tier through the same
- * @hasna/contracts resolver every surface calls, plus the fail-closed arm —
- * the assertion is not only the refusal but that NO SQLite file was created
- * anywhere under the run's home.
+ * @hasna/contracts resolver every surface calls, plus the every-transport arm
+ * (owner directive 2026-08-15, storage-mode axis retired): with no credential
+ * the local store is the default transport — an explicit `HASNA_LOGS_LOCAL=1`
+ * opt-in beats even a resolved credential.
  *
  * Two seams make that possible without touching the machine's real state:
  *
@@ -139,12 +140,18 @@ describe("tier 3 — the macOS Keychain", () => {
     );
   });
 
-  test("an absent item leaves the run host-mode-unresolvable (no local fallback without opt-in)", () => {
+  test("an absent item leaves the run on the local default transport (no credential, no fallthrough to another tier)", () => {
     const keychain = fakeKeychain({});
     const home = tempHome("kc-miss");
-    expect(() =>
-      resolveLogsTransport({ HOME: home, HASNA_STATION: STATION }, keychain.options),
-    ).toThrow(/no API key could be resolved/);
+    // With nothing configured anywhere, the local store is the default
+    // transport (owner directive 2026-08-15) — the absent item is not a
+    // refusal, and no SQLite file is opened by the REPORT alone.
+    const report = resolveLogsTransport(
+      { HOME: home, HASNA_STATION: STATION },
+      keychain.options,
+    );
+    expect(report.transport).toBe("local");
+    expect(report.local_opt_in).toBe(false);
     expect(sqliteFilesUnder(home)).toEqual([]);
   });
 
@@ -248,24 +255,33 @@ describe("precedence between the tiers", () => {
   });
 });
 
-describe("fail-closed through the store, on the tiers", () => {
-  test("no credential from ANY tier + no opt-in: refusal, no SQLite anywhere", () => {
-    const home = tempHome("failclosed");
-    expect(() => resolveStore({ HOME: home })).toThrow(/HASNA_LOGS_API_KEY/);
+describe("every-transport through the store, on the tiers", () => {
+  test("no credential from ANY tier: the local store is the default transport", () => {
+    const home = tempHome("everytransport");
+    const store = resolveStore({ HOME: home });
+    expect(store).toBeInstanceOf(LocalStore);
+  });
+
+  test("hosted with a resolved credential: the store is ApiStore, no local db", () => {
+    const home = tempHome("hosted");
+    const store = resolveStore({
+      HOME: home,
+      HASNA_LOGS_API_KEY: ENV_KEY,
+    });
+    expect(store).not.toBeInstanceOf(LocalStore);
     expect(sqliteFilesUnder(home)).toEqual([]);
   });
 
-  test("hosted with a resolved credential: the store is never local, no local db", () => {
-    const home = tempHome("hosted-local");
-    // The explicit opt-in is present, but the credential still resolves — a
-    // station that holds a hosted key stays hosted; the opt-in never overrides
-    // a configured run.
+  test("the explicit local opt-in wins over a resolved hosted credential", () => {
+    const home = tempHome("optin-wins");
+    // A station that holds a hosted key AND sets HASNA_LOGS_LOCAL=1 asked for
+    // the on-box store; the opt-in is the operator's explicit transport
+    // choice and is honoured.
     const store = resolveStore({
       HOME: home,
       HASNA_LOGS_LOCAL: "1",
       HASNA_LOGS_API_KEY: ENV_KEY,
     });
-    expect(store).not.toBeInstanceOf(LocalStore);
-    expect(sqliteFilesUnder(home)).toEqual([]);
+    expect(store).toBeInstanceOf(LocalStore);
   });
 });

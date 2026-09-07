@@ -34,9 +34,11 @@ function testEnv(extra: Record<string, string> = {}): Record<string, string> {
     if (typeof value === "string") env[key] = value;
   }
   // The machine may carry real HASNA_LOGS_API_* vars; the client reconciles
-  // env keys, so the tests scrub them for hermetic resolution. The store
-  // resolver FAILS CLOSED without the fleet API env, so local-mode children
-  // opt in explicitly with HASNA_LOGS_LOCAL=1.
+  // env keys, so the tests scrub them for hermetic resolution. The local
+  // transport is either the explicit HASNA_LOGS_LOCAL=1 opt-in or the
+  // no-credential default (owner directive 2026-08-15); the opt-in keeps the
+  // children pinned to a temp data dir even if the real disk tier holds a
+  // fleet credential.
   delete env.HASNA_LOGS_API_URL;
   delete env.HASNA_LOGS_API_KEY;
   delete env.HASNA_LOGS_STORAGE_MODE;
@@ -57,7 +59,7 @@ beforeAll(() => {
   delete process.env.HASNA_LOGS_API_URL;
   delete process.env.HASNA_LOGS_API_KEY;
   delete process.env.HASNA_LOGS_STORAGE_MODE;
-  // Point the client's disk tier at a temp dir so the machine's real cloud
+  // Point the client's disk tier at a temp dir so the machine's real fleet
   // config cannot flip the in-process store to the HTTP transport.
   process.env.HOME = mkdtempSync(join(tmpdir(), "logs-mcp-home-"));
 });

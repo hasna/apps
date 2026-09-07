@@ -351,7 +351,7 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
     return c.json(job, 201);
   });
 
-  // Scan-run + maintenance surface (hosted equivalents of the local-only
+  // Scan-run + maintenance surface (hosted equivalents of the scan/watch
   // CLI operations: `scan`, `watch --events` runbook support).
   v1.get("/jobs/:id", requireScope("logs:read"), async (c) => {
     const job = await store.getJob(c.req.param("id") ?? "");
@@ -475,7 +475,8 @@ export function buildCloudApp(options: CloudAppOptions): Hono {
     return c.json(snapshot, 201);
   });
 
-  // Events catalog (raw envelope is local-only)
+  // Events catalog (the raw envelope always comes from the on-box raw store;
+  // the hosted tier stores redacted records with content hashes)
   // Ingest one universal telemetry event, or a `{ events: [...] }` batch — the
   // data-plane path for `logs run` capture, `events push`, and the SDK/MCP.
   v1.post("/events", requireScope("logs:write"), async (c) => {

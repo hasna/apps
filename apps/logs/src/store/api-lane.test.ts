@@ -1,6 +1,8 @@
 /**
- * @hasna/logs — regression tests for the local-only-capability ports
- * (localonly-logs workflow, 2026-08-18).
+ * @hasna/logs — regression tests for the hosted-path ports of the
+ * raw-store maintenance capabilities (localonly-logs workflow, 2026-08-18;
+ * storage-mode axis retired 2026-08-15 — every command works on every
+ * transport).
  *
  * These tests pin the HOSTED-path behavior of the capabilities that previously
  * threw the "local-only operation" guard in api mode:

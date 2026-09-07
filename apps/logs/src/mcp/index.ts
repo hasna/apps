@@ -33,9 +33,10 @@ exitIfMetadataRequest({
 // Best-effort local store for internal self-telemetry (agent lifecycle + tool
 // calls). It is `null` when the API transport is live — MCP tool-call telemetry
 // is deliberately not mirrored into the shared hosted sink (volume), so it is
-// silently skipped there. Telemetry must NEVER change tool behavior. The event
-// catalog itself is a transport-resolved data-plane feature: `event_watch`
-// below works on both tiers through the unified Store.
+// silently skipped there; with the local store (opt-in or the no-credential
+// default) telemetry is recorded on the box. Telemetry must NEVER change tool
+// behavior. The event catalog itself is a transport-resolved data-plane
+// feature: `event_watch` below works on both tiers through the unified Store.
 const telemetryStore = localStoreIfAvailable();
 
 // register_agent / heartbeat / set_focus / list_agents are the canonical,
@@ -130,14 +131,14 @@ export function buildServer(): McpServer {
   }
 
   // The unified data-plane Store: ApiStore (HTTP /v1 + bearer key) when the
-  // @hasna/contracts client transport resolves a credential, LocalStore
-  // (SQLite) only under the EXPLICIT opt-in HASNA_LOGS_LOCAL=1 — otherwise
-  // FAILS CLOSED (owner ruling 2026-09-04): no silent local fallback to
-  // ~/.hasna/logs/logs.db. Every data-plane tool routes through this — no
-  // per-tool transport branching, no `getDb()` reads in handlers. Reversible:
-  // put a fleet credential in the chain (Keychain /
-  // ~/.hasna/logs/config/credentials / HASNA_LOGS_API_KEY) or unset the key
-  // vars and set HASNA_LOGS_LOCAL=1.
+  // @hasna/contracts client transport resolves a credential; LocalStore
+  // (SQLite) otherwise — the explicit HASNA_LOGS_LOCAL=1 opt-in or the
+  // no-credential default (storage-mode axis retired, owner directive
+  // 2026-08-15). Every data-plane tool routes through this — no per-tool
+  // transport branching, no `getDb()` reads in handlers. Put a fleet
+  // credential in the chain (Keychain / ~/.hasna/logs/config/credentials /
+  // HASNA_LOGS_API_KEY) to go hosted, or set HASNA_LOGS_LOCAL=1 to force the
+  // on-box store.
   const store = resolveStore();
 
   // Resolve a project name-or-id through the live store (local db or /v1).

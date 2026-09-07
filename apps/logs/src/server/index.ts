@@ -6,7 +6,6 @@ import {
   resolveServerDataBackend,
   serverDataBackendEnvKeys,
 } from "../generated/storage-kit/backend.ts";
-import { isLogsLocalOptIn } from "../store/index.ts";
 import { getBrowserScript } from "../lib/browser-script.ts";
 import { getHealth } from "../lib/health.ts";
 import { resolvePublicOrigin } from "./request-origin.ts";
@@ -53,14 +52,14 @@ if (hasOption(["--local-open"])) process.env.HASNA_LOGS_LOCAL_OPEN = "1";
 const PORT = Number(
   portArg ?? process.env.LOGS_PORT ?? process.env.PORT ?? 3460,
 );
-// The serve selects its backend from the environment, exactly like the client
-// store resolver (owner ruling 2026-09-04, hasna/apps#1720): a configured
-// HASNA_LOGS_DATABASE_URL (or LOGS_DATABASE_URL alias) selects the stateless
-// API in front of PostgreSQL — no SQLite, no scheduler, API-key auth — and the
-// vendored storage kit validates it fail-closed. Without a database URL the
-// serve NEVER silently opens the local SQLite database: it serves the on-box
-// store only under the explicit opt-in HASNA_LOGS_LOCAL=1 (alias LOGS_LOCAL=1)
-// and says so once on stderr, and fails loud otherwise.
+// The serve selects its backend from the environment, like the client store
+// resolver (owner directive 2026-08-15, storage-mode axis retired): a
+// configured HASNA_LOGS_DATABASE_URL (or LOGS_DATABASE_URL alias) selects the
+// stateless API in front of PostgreSQL — no SQLite, no scheduler, API-key
+// auth — and the vendored storage kit validates it. Without a database URL
+// the serve runs the on-box SQLite collector by default and says so once on
+// stderr; the storage-mode axis is retired, so the local collector is the
+// default rather than a refusal.
 let localServeAnnounced = false;
 
 function selectPostgresBackend(): boolean {
@@ -74,23 +73,17 @@ function selectPostgresBackend(): boolean {
     // The kit validates the URL (blank / malformed / conflicting fail loud).
     return resolveServerDataBackend("logs", process.env).backend === "postgresql";
   }
-  if (isLogsLocalOptIn(process.env)) {
-    // Explicit local opt-in: the on-box SQLite collector. Announce once so a
-    // "local" run is never silent.
-    if (!localServeAnnounced) {
-      localServeAnnounced = true;
-      process.stderr.write(
-        "logs-serve: local mode — no HASNA_LOGS_DATABASE_URL configured; serving the on-box SQLite " +
-          "store (explicit HASNA_LOGS_LOCAL=1 opt-in). To run the PostgreSQL-backed fleet API, set " +
-          "HASNA_LOGS_DATABASE_URL.\n",
-      );
-    }
-    return false;
+  // No database URL: the on-box SQLite collector is the default transport.
+  // Announce once so a "local" run is never silent.
+  if (!localServeAnnounced) {
+    localServeAnnounced = true;
+    process.stderr.write(
+      "logs-serve: local store — no HASNA_LOGS_DATABASE_URL configured; serving the on-box SQLite " +
+        "collector (HASNA_LOGS_LOCAL opt-in or the no-credential default). To run the PostgreSQL-backed " +
+        "API, set HASNA_LOGS_DATABASE_URL.\n",
+    );
   }
-  throw new Error(
-    "@hasna/logs serve requires a hosted backend: set HASNA_LOGS_DATABASE_URL (PostgreSQL) or run the " +
-      "on-box SQLite collector in explicit local mode with HASNA_LOGS_LOCAL=1 (alias LOGS_LOCAL=1).",
-  );
+  return false;
 }
 
 const databaseBackend = selectPostgresBackend();

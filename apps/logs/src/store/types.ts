@@ -177,7 +177,7 @@ export interface Store {
   listProjects(): Promise<Project[]>;
   getProject(id: string): Promise<Project | null>;
   createProject(input: CreateProjectInput): Promise<Project>;
-  /** Resolve a name-or-id to a canonical project id (or the input when local-only). */
+  /** Resolve a name-or-id to a canonical project id (or the input when no canonical id exists). */
   resolveProjectId(nameOrId: string | undefined): Promise<string | undefined>;
   listPages(projectId: string): Promise<Page[]>;
   createPage(input: CreatePageInput): Promise<Page>;

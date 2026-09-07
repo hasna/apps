@@ -227,10 +227,11 @@ export class LocalStore implements Store {
     return createJob(getDb(), input);
   }
 
-  // ── local-only maintenance / compute operations ─────────
-  // These have no cloud data model and run only against the on-box SQLite /
-  // filesystem. They live on the concrete LocalStore (not the Store interface),
-  // reached via `requireLocalStore()`, so `getDb()` stays confined to this file.
+  // ── raw-store maintenance / compute operations ──────────
+  // These operate on the on-box SQLite / filesystem raw store (their subject
+  // always lives on the box, whatever transport the data plane resolved).
+  // They live on the concrete LocalStore (not the Store interface), reached
+  // via `requireLocalStore()`, so `getDb()` stays confined to this file.
 
   /** Resolve name-or-id to an id that actually exists (else null). */
   resolveExistingProjectId(nameOrId: string | undefined): string | null {

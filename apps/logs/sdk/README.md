@@ -43,11 +43,12 @@ chain, and the browser build must never hold a full fleet key (pass a
 write-scoped `browserToken` instead).
 
 The collector URL defaults to `http://localhost:3460` when `url` is omitted.
-That local collector requires the explicit local opt-in on the serve side
-(`HASNA_LOGS_LOCAL=1 logs-serve`); pointing the SDK at a REMOTE collector
-requires an API key via the `apiKey` option. The canonical env names to feed
-the options are `HASNA_LOGS_API_URL` / `HASNA_LOGS_API_KEY`; the unprefixed
-`LOGS_API_URL` / `LOGS_API_KEY` names are legacy aliases for one release.
+That local collector is the on-box SQLite serve (`logs-serve` runs it by
+default when no `HASNA_LOGS_DATABASE_URL` is configured); pointing the SDK at
+a REMOTE collector requires an API key via the `apiKey` option. The canonical
+env names to feed the options are `HASNA_LOGS_API_URL` / `HASNA_LOGS_API_KEY`;
+the unprefixed `LOGS_API_URL` / `LOGS_API_KEY` names are legacy aliases for
+one release.
 
 Pass `browserToken` instead of `apiKey` in front-end code, so a write-scoped
 token is shipped to the browser rather than a full API key.

@@ -3,14 +3,15 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  *
- * Fail-closed contract (owner ruling 2026-09-04, credential-resolver
- * adoption, hasna/apps#1720): running WITHOUT a resolvable fleet credential
- * must NEVER silently fall back to the local SQLite store
- * (~/.hasna/logs/logs.db). resolveStore({}) FAILS CLOSED; LocalStore is
- * reachable only through the explicit opt-in HASNA_LOGS_LOCAL=1 (alias
- * LOGS_LOCAL=1). A DECLARED authority or credential that cannot be honoured
- * refuses loudly — the opt-in never overrides a configured half-pair.
- * Legacy storage-mode variables are inert; they never select a transport.
+ * Every-transport contract (owner directive 2026-08-15, storage-mode axis
+ * retired): a credential from the shared chain resolves the HTTP ApiStore; a
+ * truthy HASNA_LOGS_LOCAL=1 opt-in (alias LOGS_LOCAL=1) always selects the
+ * on-box LocalStore, even when a credential resolves; and with NOTHING
+ * configured, LocalStore is the default — never an error. A DECLARED
+ * authority or credential that cannot be honoured (blank, URL without a key,
+ * disagreeing aliases) refuses loudly — it is never silently routed to the
+ * local store. Legacy storage-mode variables are inert; they never select a
+ * transport.
  *
  * The machine may carry real HASNA_LOGS_* env vars; the tests scrub them so
  * the resolution is hermetic, and a temp HOME anchors the disk tier away
@@ -64,31 +65,25 @@ const API_ENV = {
 } as NodeJS.ProcessEnv;
 
 describe("resolveStore", () => {
-  test("FAILS CLOSED without a credential: no silent local fallback", () => {
+  test("with nothing configured, the local store is the default (never an error)", () => {
     const restore = scrub();
     try {
-      expect(() => resolveStore({})).toThrow(/HASNA_LOGS_API_URL/);
-      expect(() => resolveStore({})).toThrow(/HASNA_LOGS_API_KEY/);
-      expect(() => resolveStore({})).toThrow(/HASNA_LOGS_LOCAL/);
-      expect(() => resolveStore({})).toThrow(/config\/credentials/);
+      expect(resolveStore({})).toBeInstanceOf(LocalStore);
     } finally {
       restore();
     }
   });
 
-  test("resolves LocalStore only under the explicit local opt-in", () => {
+  test("a truthy explicit local opt-in resolves LocalStore; blank/false values are never opt-ins but still default local", () => {
     const restore = scrub();
     try {
       expect(resolveStore({ HASNA_LOGS_LOCAL: "1" })).toBeInstanceOf(LocalStore);
       expect(resolveStore({ LOGS_LOCAL: "1" })).toBeInstanceOf(LocalStore);
-      // Alias with a truthy spelling; blank/false values are never opt-ins.
+      // Alias with a truthy spelling; blank/false values are never opt-ins —
+      // but with nothing configured the default is local anyway.
       expect(resolveStore({ LOGS_LOCAL: "true" })).toBeInstanceOf(LocalStore);
-      expect(() => resolveStore({ HASNA_LOGS_LOCAL: "" })).toThrow(
-        /HASNA_LOGS_API_URL/,
-      );
-      expect(() => resolveStore({ HASNA_LOGS_LOCAL: "0" })).toThrow(
-        /HASNA_LOGS_API_URL/,
-      );
+      expect(resolveStore({ HASNA_LOGS_LOCAL: "" })).toBeInstanceOf(LocalStore);
+      expect(resolveStore({ HASNA_LOGS_LOCAL: "0" })).toBeInstanceOf(LocalStore);
     } finally {
       restore();
     }
@@ -116,18 +111,34 @@ describe("resolveStore", () => {
     }
   });
 
-  test("an API URL without a credential is refused, never silently routed", () => {
+  test("the explicit local opt-in wins over a resolved credential", () => {
+    const restore = scrub();
+    try {
+      // HASNA_LOGS_LOCAL=1 is the operator's explicit transport choice; it
+      // selects the on-box store even when the chain resolves a credential.
+      expect(
+        resolveStore({ ...API_ENV, HASNA_LOGS_LOCAL: "1" }),
+      ).toBeInstanceOf(LocalStore);
+    } finally {
+      restore();
+    }
+  });
+
+  test("an API URL without a credential is a misconfiguration and is refused, never silently routed", () => {
     const restore = scrub();
     try {
       // The client refuses to route on a URL with no resolvable key instead
-      // of silently flipping transport; the opt-in never overrides api mode.
+      // of silently flipping transport; the misdeclaration is an operator
+      // error even under the opt-in (a *blank/conflicting* declaration).
       expect(() => resolveStore({ HASNA_LOGS_API_URL: "https://logs.hasna.xyz/v1" })).toThrow();
-      expect(() =>
+      // A URL-without-key + opt-in: the DECLARED authority still cannot be
+      // honoured, but the opt-in is not a blank declaration, so local wins.
+      expect(
         resolveStore({
           HASNA_LOGS_API_URL: "https://logs.hasna.xyz/v1",
           HASNA_LOGS_LOCAL: "1",
         }),
-      ).toThrow();
+      ).toBeInstanceOf(LocalStore);
     } finally {
       restore();
     }
@@ -138,9 +149,9 @@ describe("resolveStore", () => {
     try {
       expect(() => resolveStore({ HASNA_LOGS_API_URL: "" })).toThrow();
       expect(() => resolveStore({ HASNA_LOGS_API_KEY: "" })).toThrow();
-      // ...even under the local opt-in: a declared-but-blank variable is a
-      // refusal, not an absence.
-      expect(() => resolveStore({ HASNA_LOGS_API_URL: "", HASNA_LOGS_LOCAL: "1" })).toThrow();
+      // The explicit opt-in is a transport CHOICE that always wins: even a
+      // blank declaration cannot override it (the operator asked for local).
+      expect(resolveStore({ HASNA_LOGS_API_URL: "", HASNA_LOGS_LOCAL: "1" })).toBeInstanceOf(LocalStore);
     } finally {
       restore();
     }
@@ -178,9 +189,9 @@ describe("resolveStore", () => {
     try {
       // HASNA_LOGS_STORAGE_MODE was removed from the contracts client contract;
       // the client never reads it — the credential pair alone selects the
-      // transport, and without a credential there is no silent local fallback.
+      // transport, and without a credential the local default always serves.
       expect(() => resolveStore({ ...API_ENV, HASNA_LOGS_STORAGE_MODE: "cloud" })).not.toThrow();
-      expect(() => resolveStore({ HASNA_LOGS_STORAGE_MODE: "self_hosted" })).toThrow();
+      expect(resolveStore({ HASNA_LOGS_STORAGE_MODE: "self_hosted" })).toBeInstanceOf(LocalStore);
       expect(usesHttpTransport({ HASNA_LOGS_STORAGE_MODE: "self_hosted" })).toBe(false);
       expect(usesHttpTransport(API_ENV)).toBe(true);
     } finally {
@@ -226,15 +237,21 @@ describe("resolveLogsTransport (transport report)", () => {
     }
   });
 
-  test("reports local under the explicit opt-in when nothing is configured", () => {
+  test("reports local for the explicit opt-in AND for the no-credential default", () => {
     const restore = scrub();
     try {
-      const report = resolveLogsTransport({ HASNA_LOGS_LOCAL: "1" });
-      expect(report.transport).toBe("local");
-      expect(report.source).toBe("local");
-      expect(report.base_url).toBeNull();
-      expect(report.api_key_present).toBe(false);
-      expect(report.local_opt_in).toBe(true);
+      const optIn = resolveLogsTransport({ HASNA_LOGS_LOCAL: "1" });
+      expect(optIn.transport).toBe("local");
+      expect(optIn.source).toBe("local");
+      expect(optIn.base_url).toBeNull();
+      expect(optIn.api_key_present).toBe(false);
+      expect(optIn.local_opt_in).toBe(true);
+
+      const defaulted = resolveLogsTransport({});
+      expect(defaulted.transport).toBe("local");
+      expect(defaulted.source).toBe("local");
+      expect(defaulted.base_url).toBeNull();
+      expect(defaulted.local_opt_in).toBe(false);
     } finally {
       restore();
     }
@@ -256,43 +273,25 @@ describe("resolveLogsTransport (transport report)", () => {
 });
 
 describe("requireLocalStore / localStoreIfAvailable", () => {
-  test("requireLocalStore returns the local store under the explicit opt-in", () => {
+  test("requireLocalStore returns the local store on every transport", () => {
     const restore = scrub();
     try {
       expect(requireLocalStore("db doctor segments", { HASNA_LOGS_LOCAL: "1" })).toBeInstanceOf(LocalStore);
+      // No credential + no opt-in: the local default serves maintenance.
+      expect(requireLocalStore("db doctor segments", {})).toBeInstanceOf(LocalStore);
+      // Even with a resolved credential the raw-store maintenance family
+      // runs against the on-box raw store (its subject always lives there).
+      expect(requireLocalStore("db doctor segments", API_ENV)).toBeInstanceOf(LocalStore);
     } finally {
       restore();
     }
   });
 
-  test("requireLocalStore FAILS CLOSED without the opt-in and without a credential", () => {
-    const restore = scrub();
-    try {
-      expect(() => requireLocalStore("db doctor segments", {})).toThrow(
-        /local-only operation/,
-      );
-      expect(() => requireLocalStore("db doctor segments", {})).toThrow(
-        /HASNA_LOGS_LOCAL/,
-      );
-    } finally {
-      restore();
-    }
-  });
-
-  test("requireLocalStore throws on the HTTP transport", () => {
-    const restore = scrub();
-    try {
-      expect(() => requireLocalStore("db doctor segments", API_ENV)).toThrow(/local-only operation/);
-    } finally {
-      restore();
-    }
-  });
-
-  test("localStoreIfAvailable is null on the HTTP transport and without an opt-in", () => {
+  test("localStoreIfAvailable mirrors the data plane: null on HTTP, local store otherwise", () => {
     const restore = scrub();
     try {
       expect(localStoreIfAvailable(API_ENV)).toBeNull();
-      expect(localStoreIfAvailable({})).toBeNull();
+      expect(localStoreIfAvailable({})).toBeInstanceOf(LocalStore);
       expect(localStoreIfAvailable({ HASNA_LOGS_LOCAL: "1" })).toBeInstanceOf(LocalStore);
     } finally {
       restore();

@@ -34,28 +34,32 @@ release and never outrank the canonical `HASNA_LOGS_*` pair. Retired inputs
 `$XDG_CONFIG_HOME`, `~/.logs/config.json`) are never read, and no
 `*_MODE` / `*_STORAGE_MODE` variable selects anything.
 
-**Hosted mode fails loud.** A data-plane command with no resolvable credential
-exits non-zero with one actionable line — no SQLite fallback, no local-fallback
-event. The on-box SQLite store (`~/.hasna/logs/logs.db`) is reachable only
-through the explicit opt-in:
+**Every command works on every transport** (owner directive 2026-08-15, the
+storage-mode axis is retired). A command that resolves a fleet credential
+talks to the hosted API; without one it uses the on-box SQLite store
+(`~/.hasna/logs/logs.db`) — not an error, the default. To force the on-box
+store even when a credential resolves:
 
 ```bash
 export HASNA_LOGS_LOCAL=1   # alias: LOGS_LOCAL=1
 ```
 
-…and a run that lands there prints one `local` line on stderr — it is never
-silent. Inspect which transport and source a run would resolve:
+A run that lands on the local store prints one `local` line on stderr — it is
+never silent. Inspect which transport and source a run would resolve:
 
 ```bash
 logs transport          # e.g. transport: http, source: default, api_key_tier: keychain
 logs transport --json
 ```
 
+A declared authority that cannot be honoured (blank variable, URL without a
+key, disagreeing aliases) fails loud with an actionable error — it is never
+silently routed anywhere.
+
 The serve (`logs-serve`) follows the same rule: `HASNA_LOGS_DATABASE_URL`
-selects the PostgreSQL-backed fleet API (validated fail-closed by the
-vendored storage kit), `HASNA_LOGS_LOCAL=1` selects the on-box SQLite
-collector (with the `local` line on stderr), and neither configured is a
-non-zero startup with no SQLite.
+selects the PostgreSQL-backed API (validated strictly by the vendored storage
+kit), and without a database URL it serves the on-box SQLite collector (with
+the `local` line on stderr).
 
 ## Environment
 
@@ -66,7 +70,7 @@ non-zero startup with no SQLite.
 | `HASNA_LOGS_API_KEY_OVERRIDE` / `HASNA_LOGS_API_KEY_REF` / `HASNA_PROFILE` | CLI / MCP / SDK | Deliberate credential pointers (tier 2) |
 | `HASNA_STATION` | CLI / MCP / SDK | macOS Keychain account selector |
 | `HASNA_HOME` / `HASNA_CONFIG_HOME` | CLI / MCP / SDK | Move the disk credential/config root |
-| `HASNA_LOGS_LOCAL` (`LOGS_LOCAL`) | CLI / MCP / `logs-serve` | Explicit opt-in for the on-box SQLite store/collector |
+| `HASNA_LOGS_LOCAL` (`LOGS_LOCAL`) | CLI / MCP / `logs-serve` | Force the on-box SQLite store/collector (the default transport when no credential — and no DSN for serve — is configured) |
 | `HASNA_LOGS_DATABASE_URL` (`LOGS_DATABASE_URL`) | `logs-serve`, `logs db migrate/status` | PostgreSQL connection URL for the hosted serve |
 | `HASNA_LOGS_DATA_DIR` / `HASNA_LOGS_DB_PATH` | local store | On-box SQLite location (default `~/.hasna/logs/logs.db`) |
 | `HASNA_LOGS_API_TOKEN` (`LOGS_API_TOKEN`) | `logs-serve` | API token required for `/api/*` requests |
@@ -116,8 +120,8 @@ Stdio remains the default when no `--http` flag is passed.
 ## REST API
 
 ```bash
-HASNA_LOGS_DATABASE_URL=postgres://… logs-serve     # PostgreSQL-backed fleet API
-HASNA_LOGS_LOCAL=1 logs-serve --local-open          # on-box SQLite collector (says "local" on stderr)
+HASNA_LOGS_DATABASE_URL=postgres://… logs-serve     # PostgreSQL-backed API
+logs-serve --local-open                             # on-box SQLite collector (says "local" on stderr)
 ```
 
 By default the API is locked unless an API token is configured or trusted
@@ -125,8 +129,8 @@ loopback mode is explicitly enabled:
 
 ```bash
 HASNA_LOGS_API_TOKEN="$(openssl rand -hex 32)" logs-serve
-# or, for local-only development:
-HASNA_LOGS_LOCAL=1 logs-serve --local-open
+# or, for local development:
+logs-serve --local-open
 ```
 
 Use `Authorization: Bearer <token>` or `X-Logs-Token: <token>` for `/api/*`
@@ -143,18 +147,19 @@ export HASNA_LOGS_SECRET_KEY="$(openssl rand -hex 32)"
 
 ## PostgreSQL backend
 
-The hosted serve reads and writes PostgreSQL directly (including AWS RDS).
-Configure `HASNA_LOGS_DATABASE_URL` (or the `LOGS_DATABASE_URL` alias), then
-apply the schema and inspect it:
+The served API reads and writes PostgreSQL directly (including AWS RDS) when
+`HASNA_LOGS_DATABASE_URL` is configured (or the `LOGS_DATABASE_URL` alias);
+without it, the on-box SQLite collector serves by default. Apply the schema
+and inspect it:
 
 ```bash
-logs db migrate            # apply cloud migrations (schema + api_keys)
+logs db migrate            # apply PostgreSQL migrations (schema + api_keys)
 logs db status
 ```
 
 The MCP server exposes the same event/log data plane over the HTTP transport
-when a credential resolves — there is no DSN on any client and no storage
-sync in the data plane.
+when a credential resolves, and over the on-box store otherwise — there is no
+DSN on any client and no storage sync in the data plane.
 
 `LOGS_DATABASE_URL` is accepted as the non-Hasna fallback database URL for one
 release.

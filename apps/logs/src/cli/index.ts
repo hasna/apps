@@ -55,28 +55,26 @@ function colorLevel(level: string): string {
  * The unified data-plane {@link Store}: ApiStore (HTTP /v1 + bearer key) when
  * the @hasna/contracts client transport resolves a credential (Keychain,
  * ~/.hasna/logs/config/credentials, HASNA_LOGS_API_KEY — the authority
- * defaults to the fleet gateway https://api.hasna.com/logs), LocalStore
- * (SQLite) only under the EXPLICIT opt-in HASNA_LOGS_LOCAL=1 (alias
- * LOGS_LOCAL). Running without a resolvable fleet credential and without the
- * opt-in FAILS CLOSED with an actionable error (owner ruling 2026-09-04) —
- * the CLI never silently serves the local store (~/.hasna/logs/logs.db), and
- * a run that does serve it says "local" once on stderr. Every data-plane
- * command routes through this — no per-command transport branching, no
- * `getDb()` in handlers.
+ * defaults to the fleet gateway https://api.hasna.com/logs). LocalStore
+ * (SQLite) otherwise: explicitly with HASNA_LOGS_LOCAL=1 (alias LOGS_LOCAL),
+ * or as the no-credential default — the storage-mode axis is retired (owner
+ * directive 2026-08-15), so NO command is transport-gated and every command
+ * works on the hosted API and on the local store alike. A run that lands on
+ * the local store says "local" once on stderr — it is never silent. Every
+ * data-plane command routes through this — no per-command transport
+ * branching, no `getDb()` in handlers.
  *
  * The store is resolved LAZILY on first data-plane use so that meta and
  * non-data-plane invocations (`--help`/`--version`, `db migrate`/`db status`
- * schema admin, `db doctor *` local maintenance, `mcp`, `serve`, and the
+ * schema admin, `db doctor *` raw-store maintenance, `mcp`, `serve`, and the
  * explicit `watch --server` SSE tail) keep working without a fleet
  * credential.
  *
  * The event-catalog maintenance commands (`db doctor segments`,
  * `db doctor rebuild-index`, `db doctor repair-segments`) call
- * `requireLocalStore(cmd)` instead: their subject — the raw JSONL segment
- * files and SQLite projections — exists only on the on-box backend, so they
- * throw loudly in api mode rather than touch a stale local db, and require
- * HASNA_LOGS_LOCAL=1 when no credential resolves (see src/store/index.ts for
- * the recorded strong reason).
+ * `requireLocalStore(cmd)` — their subject, the raw JSONL segment files and
+ * SQLite projections, always lives on the box, so they maintain it whatever
+ * transport the data plane resolved (see src/store/index.ts).
  */
 let store: Store | null = null;
 function getStore(): Store {
@@ -453,14 +451,14 @@ program
     }
   });
 
-// ── cloud database (server-side schema admin, in-VPC only) ─
+// ── logs db (PostgreSQL schema admin via HASNA_LOGS_DATABASE_URL) ──
 const dbCmd = program
   .command("db")
-  .description("Server-side Postgres schema commands (in-VPC admin only)");
+  .description("PostgreSQL schema commands (run against HASNA_LOGS_DATABASE_URL or HASNA_LOGS_OWNER_DATABASE_URL)");
 
 dbCmd
   .command("migrate")
-  .description("Apply pending cloud Postgres migrations (schema + api_keys)")
+  .description("Apply pending Postgres migrations (schema + api_keys)")
   .option("--dry-run", "Report the plan without applying anything")
   .option("--json", "Output as JSON")
   .action(async (opts) => {
@@ -497,7 +495,7 @@ dbCmd
 
 dbCmd
   .command("status")
-  .description("Show applied/pending cloud migrations")
+  .description("Show applied/pending Postgres migrations")
   .option("--json", "Output as JSON")
   .action(async (opts) => {
     const { runLogsCloudMigrations } = await import("../db/pg-migrate.ts");
@@ -1120,7 +1118,7 @@ program
   .description("Stream new telemetry events or legacy logs in real time")
   .option(
     "--events",
-    "Watch local event catalog records instead of legacy log rows",
+    "Watch event catalog records instead of legacy log rows",
   )
   .option(
     "--server <url>",
@@ -1525,7 +1523,7 @@ program
 program
   .command("serve")
   .description(
-    "Start the REST API server (PostgreSQL via HASNA_LOGS_DATABASE_URL, or the on-box SQLite collector with HASNA_LOGS_LOCAL=1)",
+    "Start the REST API server (PostgreSQL via HASNA_LOGS_DATABASE_URL, or the on-box SQLite collector by default)",
   )
   .option("--port <n>", "Port", "3460")
   .option(
@@ -1854,7 +1852,7 @@ if (!program.commands.some((command) => command.name() === "events")) {
 // complete, silently no-opping hosted writes. parseAsync awaits the action to
 // completion for both sync and async commands.
 //
-// A single top-level boundary turns thrown errors (local-only guards, cloud
+// A single top-level boundary turns thrown errors (resolver misconfiguration,
 // HTTP failures, validation) into a clean one-line message + non-zero exit
 // instead of an unhandled-rejection stack trace.
 try {
