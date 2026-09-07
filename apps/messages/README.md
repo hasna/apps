@@ -57,7 +57,7 @@ The CLI, the MCP server and the `./sdk` client all call the **one**
 `@hasna/contracts` client resolver, per request, fresh (hasna/apps#1720) — the
 same chain every hosted Hasna app uses. There is no per-app credential chain
 any more: no `~/.hasna/fleet-env`, no `~/.hasna/cloud`, no `~/.config/hasna`,
-no `HASNA_MESSAGES_LOCAL_MODE_ENV` switch, no deprecation notice. The ladder:
+no legacy opt-in spelling, no deprecation notice. The ladder:
 
 | tier | source |
 |------|--------|
