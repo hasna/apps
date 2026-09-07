@@ -8,6 +8,7 @@ import {
   onMount,
 } from "solid-js";
 import { NativeImage } from "@opentui/core";
+import { useRenderer } from "@opentui/solid";
 import {
   mailImages,
   loadMailImage,
@@ -24,6 +25,11 @@ export function MailImagePreview(props: {
   load?: typeof loadMailImage;
 }) {
   const theme = useTheme();
+  const renderer = useRenderer();
+  const cellPixelHeight = () => {
+    const measured = (renderer.resolution?.height ?? 0) / renderer.height;
+    return Number.isFinite(measured) && measured > 0 ? measured : 16;
+  };
   const [image, setImage] = createSignal<NativeImage>();
   const [error, setError] = createSignal("");
   const [loading, setLoading] = createSignal(false);
@@ -97,6 +103,8 @@ export function MailImagePreview(props: {
               2,
               Math.min(
                 18,
+                // Keep logos and status icons near their intrinsic size.
+                Math.ceil(value().height / cellPixelHeight()),
                 Math.ceil((60 * value().height) / value().width / 2),
               ),
             )}

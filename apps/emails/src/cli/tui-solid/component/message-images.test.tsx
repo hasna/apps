@@ -10,7 +10,7 @@ import {
 import { ThemeProvider } from "../context/theme.js";
 import { MailImagePreview, MessageImages } from "./message-images.js";
 
-function png() {
+function png(width = 8, height = 4) {
   const crc = (data: Buffer) => {
     let value = 0xffffffff;
     for (const byte of data) {
@@ -29,14 +29,14 @@ function png() {
     return out;
   };
   const header = Buffer.alloc(13);
-  header.writeUInt32BE(8);
-  header.writeUInt32BE(4, 4);
+  header.writeUInt32BE(width);
+  header.writeUInt32BE(height, 4);
   header[8] = 8;
   header[9] = 6;
-  const raw = Buffer.alloc(4 * (1 + 8 * 4));
-  for (let y = 0; y < 4; y++)
-    for (let x = 0; x < 8; x++) {
-      const at = y * 33 + 1 + x * 4;
+  const raw = Buffer.alloc(height * (1 + width * 4));
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) {
+      const at = y * (1 + width * 4) + 1 + x * 4;
       raw[at] = x < 4 ? 255 : 0;
       raw[at + 1] = y < 2 ? 180 : 40;
       raw[at + 2] = x >= 4 ? 255 : 0;
@@ -91,6 +91,23 @@ test("native image preview renders with automatic Unicode-block fallback", async
   expect(image.effectiveProtocol).toBe("blocks");
   expect(setup.captureCharFrame().trim().length).toBeGreaterThan(0);
 });
+test("small status icons stay compact while larger images retain preview space", async () => {
+  for (const [pixels, expectedRows] of [[48, 3], [640, 18]]) {
+    setup = await testRender(() => (
+      <ThemeProvider mode="light">
+        <MailImagePreview source={{ kind: "embedded", data: `data:image/png;base64,${png(pixels, pixels).toString("base64")}`, label: "Status icon", inline: true }} />
+      </ThemeProvider>
+    ), { width: 70, height: 24 });
+    await flush();
+    const image = nodes(setup.renderer.root).find(node => node instanceof ImageRenderable) as ImageRenderable;
+    await image.loadPromise;
+    await setup.flush();
+    expect(image.height).toBe(expectedRows);
+    setup.renderer.destroy();
+    setup = undefined;
+  }
+});
+
 test("remote image stays blocked until a deliberate click, then renders", async () => {
   let loads = 0;
   setup = await testRender(
