@@ -88,7 +88,7 @@ describe("bundled hook runs from an install prefix other than the build worktree
       const env: Record<string, string> = {
         ...process.env,
         HASNA_HOOKS_DATA_DIR: join(prefix, "home", ".hasna", "hooks"),
-        // Explicit local-mode opt-in (fleet fail-closed doctrine): this test
+        // Explicit local selection (storage-mode axis retired): this test
         // syncs the foreign prefix's bundled catalog into its local store on
         // purpose, with no registry API configured.
         HASNA_HOOKS_LOCAL: "1",
@@ -97,7 +97,7 @@ describe("bundled hook runs from an install prefix other than the build worktree
       // Hermetic by OMISSION: bun test files share one process.env, and the
       // env-isolation suites deliberately SEED credential-shaped variables
       // (HASNA_HOOKS_API_KEY included) into it mid-run. A stray key would
-      // outrank the local opt-in and point this child at the real fleet
+      // outrank the local selection and point this child at the real fleet
       // gateway — a false-green sync against the wrong registry.
       for (const key of [
         "HASNA_HOOKS_API_URL",

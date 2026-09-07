@@ -8,17 +8,21 @@
 ## 1. Design principles
 
 1. **Local by default.** A fresh install works entirely offline. Nothing is
-   configured, uploaded, or synced unless you opt in.
+   configured, uploaded, or synced unless a registry authority resolves.
 2. **One strict pair.** There are no deployment modes, no `local`/`cloud` mode
-   enums, and no placement vocabulary. The only thing that selects the remote
+   enums, and no placement vocabulary — the storage-mode axis is retired
+   (owner directive 2026-08-15). The only thing that selects the remote
    registry is the @hasna/contracts credential chain (hasna/apps#1720),
    resolved fresh on every call: the registry URL (`HASNA_HOOKS_API_URL`, the
    Keychain item `hasna.credentials.hooks.api-url`, or
    `~/.hasna/hooks/config/credentials`) and the key that must resolve with it
-   — a URL without a key is a refusal, never half-open progress. Nothing else
-   is read: `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`,
-   `$XDG_CONFIG_HOME`, the retired `~/.hasna/hooks/config.json` key store, and
-   `*_MODE` / `*_STORAGE_MODE` switches are all gone.
+   — a DECLARED URL without a key is a refusal, never half-open progress.
+   Nothing else is read: `~/.hasna/fleet-env`, `~/.hasna/cloud`,
+   `~/.config/hasna`, `$XDG_CONFIG_HOME`, the retired
+   `~/.hasna/hooks/config.json` key store, and `*_MODE` / `*_STORAGE_MODE`
+   switches are all gone. When nothing resolves, commands run against the
+   bundled registry + local store — the baseline transport, never a gated
+   fallback, and no command is transport-gated.
 3. **Versions are pinned by digest.** A hook version's artifact lives at
    `name@version`; the sha256 of its script is what gets pinned, trusted, and
    verified. The digest, not a mutable pointer, is what sync and the run-time
@@ -207,14 +211,18 @@ enforces the pin.
 
 ## 8. `hooks sync`
 
-`hooks sync` reconciles a machine against the registry:
+`hooks sync` reconciles a machine against the active registry:
 
-1. Resolve the transport through @hasna/contracts (strict pair, fresh per
-   call): with a resolved credential + URL, the remote registry; under the
-   explicit `HASNA_HOOKS_LOCAL=1` opt-in (and nothing configured in the env),
-   the bundled catalog (all bundled hooks with their current versions and
-   digests). A URL without a key, or any other refusal, aborts — there is no
-   silent local fallback.
+1. Resolve the transport through @hasna/contracts (strict pair for DECLARED
+   intent, fresh per call): with a resolved credential + URL, the remote
+   registry; otherwise the bundled catalog (all bundled hooks with their
+   current versions and digests) — the local store is the baseline, not a
+   gated fallback (owner directive 2026-08-15: the storage-mode axis is
+   retired and no command is transport-gated). The explicit
+   `HASNA_HOOKS_LOCAL=1` selection (with nothing configured in the env) takes
+   the same bundled path without consulting the resolver. A URL declared
+   without a key, or any other DECLARED-intent refusal, aborts — a named tier
+   never falls through to a different dataset.
 2. With a remote URL: pull the catalog and lock state from the API.
 3. Compute the difference against the local `hooks` table and `hooks.lock`
    (added / updated / unchanged / skipped).
@@ -225,6 +233,11 @@ enforces the pin.
 6. `--dry-run` prints the plan (adds, updates) without touching anything.
 7. Hooks that exist locally but not in the remote catalog (or remote lock) are
    **never deleted** — local-only hooks are preserved by design.
+8. Pinned requests (`hooks install <name>@<version>` /
+   `hooks update <name>@<version>`) resolve against the SAME active registry:
+   remotely when an authority resolves, from the bundled catalog otherwise
+   (the exact version must be the bundled one; anything else is a data error
+   naming the available version, never a transport refusal).
 
 ## 9. Secrets handling
 

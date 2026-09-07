@@ -186,7 +186,7 @@ export async function planSync(options: HooksSyncOptions = {}): Promise<SyncPlan
   const transport = resolveHooksTransport(options.env ?? process.env, {
     credentials: options.credentials,
   });
-  if (transport.mode === "remote" && transport.authority) {
+  if (transport.kind === "remote" && transport.authority) {
     const { origin, apiKey } = transport.authority;
     const { catalog, remoteLock } = await fetchRemoteState(origin, apiKey);
     return { apiUrl: origin, dryRun: options.dryRun ?? false, diff: computeDiff(catalog, remoteLock) };
@@ -201,7 +201,7 @@ export async function syncHooks(options: HooksSyncOptions = {}): Promise<SyncPla
   });
   const plan = await planSync(options);
   if (options.dryRun) return { ...plan, dryRun: true };
-  if (transport.mode !== "remote" || !transport.authority) {
+  if (transport.kind !== "remote" || !transport.authority) {
     const db = getDb();
     for (const entry of collectBundledCatalog()) {
       setPinnedHook(entry.name, { version: entry.version, sha256: entry.sha256, source: "bundled" });
@@ -365,7 +365,8 @@ export interface PinnedHookInstall {
   sha256: string;
   source: string;
   source_ref: string;
-  artifact: ArtifactResponse;
+  /** The registry artifact for remote pins; null for bundled-registry pins. */
+  artifact: ArtifactResponse | null;
   scriptPath: string;
 }
 
@@ -376,7 +377,7 @@ export interface PinnedHookInstall {
  * Powers `hooks install <name>@<version>` / `hooks update <name>@<version>`
  * (QA-2 finding: pinned-version install/update was unsupported).
  *
- * Requires an api_url (remote registry). P1-4: the exact version named by
+ * Requires a remote authority. P1-4: the exact version named by
  * the user is fetched from the versioned registry — older-than-latest pins
  * are first-class, never rejected as "not the latest".
  */
@@ -465,6 +466,55 @@ export async function fetchPinnedHook(
     source: entry.source ?? "remote",
     source_ref: apiUrl,
     artifact,
+    scriptPath,
+  };
+}
+
+/**
+ * Pin an exact hook version from the BUNDLED registry (the on-box catalog).
+ * Powers `hooks install <name>@<version>` / `hooks update <name>@<version>`
+ * on the local transport: every command must work hosted or local (owner
+ * directive 2026-08-15 — the storage-mode axis is retired), so a pinned
+ * request is never refused for the transport. The bundled registry holds the
+ * package's own catalog: the exact version named must be the bundled one,
+ * and the script stays at its bundled path — the pin (lock + DB record) is
+ * the trust anchor, exactly as local `hooks sync` pins the catalog.
+ *
+ * A name or version the bundled registry does not carry is a DATA error with
+ * the available version named — the same shape as a remote pin miss — never
+ * a "requires a remote registry" refusal.
+ */
+export async function installPinnedFromBundled(name: string, version: string): Promise<PinnedHookInstall> {
+  const bundled = collectBundledCatalog().find((entry) => entry.name === name);
+  if (!bundled) {
+    throw new Error(`Hook '${name}' is not in the bundled registry`);
+  }
+  if (bundled.version !== version) {
+    throw new Error(
+      `Hook '${name}' version ${version} is not in the bundled registry (available: ${bundled.version})`,
+    );
+  }
+  const scriptPath = resolveScriptPath(name);
+  if (!scriptPath) {
+    throw new Error(`Hook '${name}' has no script in the bundled registry`);
+  }
+  const db = getDb();
+  setPinnedHook(name, { version, sha256: bundled.sha256, source: "bundled", pinned: true });
+  upsertHookRecord(db, {
+    name,
+    version,
+    sha256: bundled.sha256,
+    source_type: "bundled",
+    source_ref: "bundled registry",
+    last_verified_at: new Date().toISOString(),
+  });
+  return {
+    name,
+    version,
+    sha256: bundled.sha256,
+    source: "bundled",
+    source_ref: "bundled registry",
+    artifact: null,
     scriptPath,
   };
 }

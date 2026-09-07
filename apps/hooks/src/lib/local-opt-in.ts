@@ -1,24 +1,31 @@
 /**
  * The routing preamble every surface runs before the credential chain: "did the
  * environment configure a remote hooks registry authority, and if not, did the
- * operator ask for the on-box store?"
+ * operator explicitly select the on-box store?"
  *
  * It lives in one leaf module because the CLI, the serve server and the SDK
  * surface all have to answer identically — a second spelling is a second thing
- * that can drift — and because the CLI gate must stay cheap (no Keychain spawn
- * on `hooks run`, which agents invoke on every hook event). Its only import is
- * the env-key derivation from @hasna/contracts, so the NAMES it looks for are
- * the resolver's own rather than a copy that can fall behind.
+ * that can drift — and because transport selection must stay cheap (no
+ * Keychain spawn on `hooks run`, which agents invoke on every hook event). Its
+ * only import is the env-key derivation from @hasna/contracts, so the NAMES it
+ * looks for are the resolver's own rather than a copy that can fall behind.
  *
  * ORDER, AND WHY IT IS THIS WAY ROUND. A configured environment outranks the
- * opt-in: a run with `HASNA_HOOKS_API_KEY` set goes hosted, and a
- * half-configured one fails loudly, rather than quietly serving a different
- * dataset because a stale `HASNA_HOOKS_LOCAL` was lying around. But when the
- * environment configures nothing, the opt-in is answered WITHOUT calling the
- * resolver — so no Keychain item and no credential file is read — which keeps
- * the unhosted opt-in a hermetic promise: a scrubbed test environment
- * physically cannot reach the shared store, now that a credential can arrive
- * from somewhere an env dictionary cannot blank.
+ * explicit local selection: a run with `HASNA_HOOKS_API_KEY` set goes hosted,
+ * and a half-configured one fails loudly, rather than quietly serving a
+ * different dataset because a stale `HASNA_HOOKS_LOCAL` was lying around. But
+ * when the environment configures nothing, the local selection is answered
+ * WITHOUT calling the resolver — so no Keychain item and no credential file is
+ * read — which keeps the on-box store a hermetic promise: a scrubbed test
+ * environment physically cannot reach the shared store, now that a credential
+ * can arrive from somewhere an env dictionary cannot blank.
+ *
+ * The storage-mode axis is retired (owner directive 2026-08-15): nothing here
+ * is a *MODE switch and no command is gated on the transport. Local is the
+ * baseline — when the resolver finds nothing and the environment declared
+ * nothing, commands use the bundled registry + on-box store without asking.
+ * `HASNA_HOOKS_LOCAL=1` (alias `HOOKS_LOCAL=1`) remains an accepted explicit
+ * local selection with exactly that effect.
  *
  * The registry-authority env names are the @hasna/contracts client-flip
  * spellings (`HASNA_HOOKS_API_URL` / `HASNA_HOOKS_API_KEY`, with the unprefixed
@@ -36,10 +43,10 @@ import {
 } from "@hasna/contracts/client";
 import type { HooksCredentialOptions, HooksLocalOptInEnv } from "./resolver-types.js";
 
-/** The deliberate unhosted opt-in, canonical name first. */
+/** The explicit local selection, canonical name first. */
 export const HOOKS_LOCAL_OPT_IN_ENV_KEYS = ["HASNA_HOOKS_LOCAL", "HOOKS_LOCAL"] as const;
 
-/** True when the operator deliberately asked for the unhosted local store. */
+/** True when the operator explicitly selected the on-box local store. */
 export function isHooksLocalOptIn(env: HooksLocalOptInEnv = process.env): boolean {
   return HOOKS_LOCAL_OPT_IN_ENV_KEYS.some((key) => (env[key] ?? "").trim() !== "");
 }

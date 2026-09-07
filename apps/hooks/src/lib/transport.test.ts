@@ -1,7 +1,9 @@
 /**
  * The five credential tiers, exercised through the hooks transport seam, plus
- * the strict-pair and fail-closed arms the 2026-09-04 adoption ruling
- * (hasna/apps#1720) binds.
+ * the strict-pair arm (a DECLARED authority without a credential is a
+ * refusal) and the baseline-local arm (an undeclared environment uses the
+ * bundled registry + on-box store — owner directive 2026-08-15: the
+ * storage-mode axis is retired and no transport gates a command).
  *
  * Two seams make that possible without touching the machine's real state:
  *
@@ -107,7 +109,7 @@ describe("tier 3 — the macOS Keychain", () => {
     const keychain = fakeKeychain({ "hasna.credentials.hooks.api-key": KEYCHAIN_KEY });
     const resolution = resolveHooksTransport({ HOME: tempHome("kc-only") }, keychain.options);
 
-    expect(resolution.mode).toBe("remote");
+    expect(resolution.kind).toBe("remote");
     expect(resolution.authority).toMatchObject({
       origin: "https://api.hasna.com/hooks",
       v1BaseUrl: "https://api.hasna.com/hooks/v1",
@@ -131,7 +133,7 @@ describe("tier 3 — the macOS Keychain", () => {
     });
     const resolution = resolveHooksTransport({ HOME: tempHome("kc-url") }, keychain.options);
 
-    expect(resolution.mode).toBe("remote");
+    expect(resolution.kind).toBe("remote");
     expect(resolution.authority).toMatchObject({
       origin: "https://hooks.station.example",
     });
@@ -164,15 +166,14 @@ describe("tier 3 — the macOS Keychain", () => {
     ).toThrow(/REMOTE_API_CREDENTIAL_INVALID/);
   });
 
-  test("the tier does not exist off darwin", () => {
+  test("on non-darwin with nothing declared the local store is the baseline", () => {
     const home = tempHome("kc-linux");
     const keychain = fakeKeychain({ "hasna.credentials.hooks.api-key": KEYCHAIN_KEY });
-    expect(() =>
-      resolveHooksTransport(
-        { HOME: home },
-        { credentials: { keychain: { ...keychain.options.credentials.keychain, platform: "linux" } } },
-      ),
-    ).toThrow(/REMOTE_API_CONFIG_MISSING/);
+    const resolution = resolveHooksTransport(
+      { HOME: home },
+      { credentials: { keychain: { ...keychain.options.credentials.keychain, platform: "linux" } } },
+    );
+    expect(resolution).toEqual({ kind: "local", source: "local", authority: null });
     expect(keychain.calls).toEqual([]);
   });
 });
@@ -186,7 +187,7 @@ describe("tier 4 — ~/.hasna/hooks/config/credentials", () => {
     );
     const resolution = resolveHooksTransport({ HOME: home });
 
-    expect(resolution.mode).toBe("remote");
+    expect(resolution.kind).toBe("remote");
     expect(resolution.authority).toMatchObject({
       origin: "https://hooks.disk.example",
       apiKeyTier: "disk",
@@ -267,62 +268,61 @@ describe("tier ordering, end to end", () => {
   });
 });
 
-describe("strict pair — a URL without a credential is a refusal", () => {
+describe("strict pair — a declared URL without a credential is a refusal", () => {
   test("HASNA_HOOKS_API_URL alone (no key anywhere) throws REMOTE_API_KEY_MISSING", () => {
     const home = tempHome("url-only");
     const keychain = fakeKeychain({});
     expect(() =>
       resolveHooksTransport({ HOME: home, HASNA_HOOKS_API_URL: "https://registry.example.com" }, keychain.options),
     ).toThrow(/REMOTE_API_KEY_MISSING/);
-    // No SQLite file, no data dir, no local fallback of any shape.
+    // No SQLite file, no data dir, no dataset switch of any shape.
     expect(sqliteFilesUnder(home)).toEqual([]);
     expect(existsSync(join(home, ".hasna", "hooks"))).toBe(false);
   });
 
-  test("a blank HASNA_HOOKS_API_URL is normalised to absent (blank means unset) and fails closed", () => {
+  test("a blank HASNA_HOOKS_API_URL is normalised to absent (blank means unset) and resolves local", () => {
     const home = tempHome("url-blank");
     // At the hooks seam a declared-but-blank variable means "not configured"
     // (the normaliser removes it before the resolver sees it), so a blank URL
-    // is the same refusal as no URL at all — never a half-open run.
-    expect(() => resolveHooksTransport({ HOME: home, HASNA_HOOKS_API_URL: "" })).toThrow(
-      /REMOTE_API_CONFIG_MISSING/,
-    );
+    // leaves the environment undeclared — the local store is the baseline.
+    const resolution = resolveHooksTransport({ HOME: home, HASNA_HOOKS_API_URL: "" });
+    expect(resolution).toEqual({ kind: "local", source: "local", authority: null });
   });
 
   test("the legacy registry spellings no longer configure anything", () => {
     const home = tempHome("legacy-names");
     // HASNA_HOOKS_REGISTRY_URL / HOOKS_REGISTRY_URL and config.json api_url
     // used to select the remote registry; the resolver does not read them, so
-    // they configure nothing and the run fails closed like any unconfigured
-    // environment.
-    expect(() =>
-      resolveHooksTransport({ HOME: home, HASNA_HOOKS_REGISTRY_URL: "https://registry.example.com" }),
-    ).toThrow(/REMOTE_API_CONFIG_MISSING/);
-    expect(() =>
-      resolveHooksTransport({ HOME: home, HOOKS_REGISTRY_URL: "https://registry.example.com" }),
-    ).toThrow(/REMOTE_API_CONFIG_MISSING/);
+    // they configure nothing and the environment is undeclared — the local
+    // store is the baseline, never a half-open remote.
+    expect(resolveHooksTransport({ HOME: home, HASNA_HOOKS_REGISTRY_URL: "https://registry.example.com" })).toEqual(
+      { kind: "local", source: "local", authority: null },
+    );
+    expect(resolveHooksTransport({ HOME: home, HOOKS_REGISTRY_URL: "https://registry.example.com" })).toEqual(
+      { kind: "local", source: "local", authority: null },
+    );
   });
 });
 
-describe("nothing resolves — fail closed, and leave no store behind", () => {
-  test("an empty home throws and creates no database", () => {
-    const home = tempHome("fail-closed");
+describe("nothing resolves — the local store is the baseline transport", () => {
+  test("an empty home resolves local and creates no database", () => {
+    const home = tempHome("local-baseline");
     const keychain = fakeKeychain({});
 
-    expect(() => resolveHooksTransport({ HOME: home }, keychain.options)).toThrow(
-      /REMOTE_API_CONFIG_MISSING/,
-    );
+    const resolution = resolveHooksTransport({ HOME: home }, keychain.options);
+    expect(resolution).toEqual({ kind: "local", source: "local", authority: null });
+    // No credential was resolved, so the publish key surface stays closed.
     expect(resolveHooksServePublishKey({ HOME: home }, keychain.options)).toBeUndefined();
 
-    // The seam throws before anything can open SQLite: no store file, and no
-    // app directory conjured as a side effect of failing.
+    // Resolving the transport never opens SQLite: no store file, and no
+    // app directory conjured as a side effect of the resolution.
     expect(sqliteFilesUnder(home)).toEqual([]);
     expect(existsSync(join(home, ".hasna", "hooks", "hooks.db"))).toBe(false);
     expect(existsSync(join(home, ".hooks"))).toBe(false);
   });
 
-  test("syncHooks with no credential fails closed before any store access", async () => {
-    const home = tempHome("sync-fail-closed");
+  test("syncHooks with a declared-but-unresolvable authority still refuses (strict pair)", async () => {
+    const home = tempHome("sync-strict-pair");
     process.env.HASNA_HOOKS_DATA_DIR = join(home, "data");
     process.env.HASNA_HOOKS_DB_PATH = ":memory:";
     try {
@@ -337,10 +337,27 @@ describe("nothing resolves — fail closed, and leave no store behind", () => {
     }
   });
 
-  test("the unhosted opt-in serves local WITHOUT reading the Keychain or disk", () => {
+  test("syncHooks with nothing resolved runs against the bundled registry", async () => {
+    const home = tempHome("sync-bundled");
+    process.env.HASNA_HOOKS_DATA_DIR = join(home, "data");
+    process.env.HASNA_HOOKS_DB_PATH = join(home, "data", "hooks.db");
+    process.env.HASNA_HOOKS_LOCK_PATH = join(home, "data", "hooks.lock");
+    try {
+      const plan = await syncHooks({ env: { HOME: home } });
+      expect(plan.apiUrl).toBeNull();
+      expect(plan.diff.added.length).toBeGreaterThan(20);
+    } finally {
+      delete process.env.HASNA_HOOKS_DATA_DIR;
+      delete process.env.HASNA_HOOKS_DB_PATH;
+      delete process.env.HASNA_HOOKS_LOCK_PATH;
+      closeDb();
+    }
+  });
+
+  test("the explicit local selection serves local WITHOUT reading the Keychain or disk", () => {
     // The isolation guarantee, asserted rather than assumed: a resolvable
     // credential exists in both stores and neither is touched.
-    const home = tempHome("opt-in");
+    const home = tempHome("local-selection");
     writeCredentialsFile(home, `HASNA_HOOKS_API_KEY=${DISK_KEY}\n`);
     const keychain = fakeKeychain({ "hasna.credentials.hooks.api-key": KEYCHAIN_KEY });
 
@@ -349,21 +366,47 @@ describe("nothing resolves — fail closed, and leave no store behind", () => {
       { HOME: home, HASNA_HOOKS_LOCAL: "1" },
       { ...keychain.options, notice: (line) => notices.push(line) },
     );
-    expect(resolution).toEqual({ mode: "local", source: "local-opt-in", authority: null });
+    expect(resolution).toEqual({ kind: "local", source: "local", authority: null });
     expect(keychain.calls).toEqual([]);
-    // Local mode SAYS so, on stderr, exactly once per process.
+    // The once-per-process notice says where the store lives — never a
+    // "LOCAL mode" framing.
     expect(notices).toHaveLength(1);
-    expect(notices[0]).toMatch(/LOCAL mode/);
+    expect(notices[0]).not.toMatch(/LOCAL mode/);
+    expect(notices[0]).toMatch(/local store/);
   });
 
-  test("a configured environment outranks the opt-in", () => {
-    const home = tempHome("opt-in-outranked");
+  test("a deliberate tier that cannot be honoured refuses when the environment DECLARED intent", () => {
+    const home = tempHome("declared-locked");
+    const run = (): KeychainCommandResult => ({ status: 51, stdout: "", stderr: "User interaction is not allowed." });
+    expect(() =>
+      resolveHooksTransport(
+        { HOME: home, HASNA_HOOKS_API_KEY: ENV_KEY },
+        { credentials: { keychain: { platform: "darwin", run } } },
+      ),
+    ).toThrow(/REMOTE_API_CREDENTIAL_INVALID/);
+  });
+
+  test("a deliberate tier that cannot be honoured but was never declared resolves local with a notice", () => {
+    const home = tempHome("undeclared-locked");
+    const run = (): KeychainCommandResult => ({ status: 51, stdout: "", stderr: "User interaction is not allowed." });
+    const notices: string[] = [];
+    const resolution = resolveHooksTransport(
+      { HOME: home },
+      { credentials: { keychain: { platform: "darwin", run } }, notice: (line) => notices.push(line) },
+    );
+    expect(resolution).toEqual({ kind: "local", source: "local", authority: null });
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatch(/no registry authority resolved/);
+  });
+
+  test("a configured environment outranks the local selection", () => {
+    const home = tempHome("selection-outranked");
     const keychain = fakeKeychain({});
     const resolution = resolveHooksTransport(
       { HOME: home, HASNA_HOOKS_LOCAL: "1", HASNA_HOOKS_API_KEY: ENV_KEY },
       keychain.options,
     );
-    expect(resolution.mode).toBe("remote");
+    expect(resolution.kind).toBe("remote");
     expect(resolution.authority!.apiKeyTier).toBe("env");
   });
 });
@@ -376,7 +419,7 @@ describe("transport report", () => {
       HASNA_HOOKS_API_URL: "https://registry.example.com",
       HASNA_HOOKS_API_KEY: ENV_KEY,
     });
-    expect(resolution.mode).toBe("remote");
+    expect(resolution.kind).toBe("remote");
     expect(resolution.source).toBe("HASNA_HOOKS_API_KEY+HASNA_HOOKS_API_URL");
     expect(resolution.authority).toMatchObject({
       origin: "https://registry.example.com",

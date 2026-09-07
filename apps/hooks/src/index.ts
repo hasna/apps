@@ -305,7 +305,7 @@ export {
   hooksRegistryOrigin,
   type HooksRemoteAuthority,
   type HooksCredentialOptions,
-  type HooksTransportMode,
+  type HooksTransportKind,
   type HooksTransportNotice,
   type HooksTransportOptions,
   type HooksTransportResolution,
@@ -359,6 +359,7 @@ export {
   planSync,
   syncHooks,
   fetchPinnedHook,
+  installPinnedFromBundled,
 } from "./lib/sync.js";
 export type { SyncDiff, SyncPlan, ArtifactResponse, PinnedHookInstall } from "./lib/sync.js";
 

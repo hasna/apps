@@ -121,22 +121,17 @@ hooks serve --port 39428            # publish key resolves from the @hasna/contr
 # PUT /api/v1/hooks (publish, requires the key), GET /api/v1/lock
 ```
 
-**Registry selection (fail closed, strict pair).** The remote-registry authority and its credential resolve through the ONE `@hasna/contracts` client chain (2026-09-04 adoption, hasna/apps#1720), fresh on every call, as a STRICT pair: a URL without a key is a refusal, never half-open progress, and a key alone is a complete configuration (it resolves the fleet gateway `https://api.hasna.com/hooks`). The chain, in order: an explicit `--api-key`/`--profile` argument; `HASNA_HOOKS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_HOOKS_API_KEY_REF`; the macOS Keychain items `hasna.credentials.hooks.api-key` / `.api-url`; `~/.hasna/hooks/config/credentials` (owner-only 0400/0600); then `HASNA_HOOKS_API_URL` / `HASNA_HOOKS_API_KEY` (the unprefixed `HOOKS_*` spellings remain only as the resolver's silent alias fallback). The retired locations (`~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME`) and the retired `~/.hasna/hooks/config.json` key store are never read, and no `*_MODE` switch exists. Without a resolved credential, the CLI **fails closed**: registry commands refuse to run rather than silently serving the bundled catalog and local SQLite store, and they name every tier they consulted in the error. Local mode (bundled registry + local store) is an explicit opt-in:
+**Registry selection (hosted or local — no mode axis).** The remote-registry authority and its credential resolve through the ONE `@hasna/contracts` client chain (hasna/apps#1720), fresh on every call, as a STRICT pair for DECLARED intent: an env URL without a key is a refusal, never half-open progress, and a key alone is a complete configuration (it resolves the fleet gateway `https://api.hasna.com/hooks`). The chain, in order: an explicit `--api-key`/`--profile` argument; `HASNA_HOOKS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_HOOKS_API_KEY_REF`; the macOS Keychain items `hasna.credentials.hooks.api-key` / `.api-url`; `~/.hasna/hooks/config/credentials` (owner-only 0400/0600); then `HASNA_HOOKS_API_URL` / `HASNA_HOOKS_API_KEY` (the unprefixed `HOOKS_*` spellings remain only as the resolver's silent alias fallback). The retired locations (`~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME`) and the retired `~/.hasna/hooks/config.json` key store are never read, and no `*_MODE` switch exists — the storage-mode axis is retired (owner directive 2026-08-15).
+
+**Every command works in any transport.** When a registry authority + credential resolves, registry reads (sync, pinned installs) target that origin. When nothing resolves, commands use the bundled registry + local SQLite store — the baseline, not a gated fallback. `HASNA_HOOKS_LOCAL=1` (alias `HOOKS_LOCAL=1`) remains an accepted explicit local selection:
 
 ```bash
-HASNA_HOOKS_LOCAL=1 hooks list      # canonical local opt-in
+HASNA_HOOKS_LOCAL=1 hooks list      # canonical local selection
 HOOKS_LOCAL=1 hooks list            # accepted alias
+hooks list                          # same, from an unconfigured environment
 ```
 
-Local mode is answered BEFORE the resolver runs (so an unhosted run touches neither the Keychain nor the credential file) and says so on stderr, once per process.
-
-Surfaces that are local, runtime, or operator-only by design never need either setting: `run`, `serve`, `mcp`, `cf`, `migrate`, `init`, `profile-export`/`profile-import`, `channels`, `events`, and `--help`/`--version`.
-
-```bash
-hooks init --cloudflare --api-url https://registry.example.com --api-key <vault-key-name>
-HASNA_HOOKS_LOCAL=1 hooks sync      # local workflow: bundled catalog into the local store
-HASNA_HOOKS_LOCAL=1 hooks sync --dry-run  # print the plan without changing anything
-```
+The explicit selection is answered BEFORE the resolver runs (so an unhosted run touches neither the Keychain nor the credential file) and a one-line stderr notice says where the store lives, once per process. The only refusals left are credential validation, not transport: an environment that DECLARES an authority (e.g. `HASNA_HOOKS_API_URL` without a key) is a strict-pair refusal — a named tier never falls through to a different dataset.
 
 `hooks init --cloudflare` no longer writes a config file — `config.json` is retired (hasna/apps#1720). It prints the exact configuration to apply: set `HASNA_HOOKS_API_URL` and `HASNA_HOOKS_API_KEY_REF` (the vault key NAME, never the value) in the environment, or store the Keychain items / credentials file:
 
@@ -200,12 +195,12 @@ the data layer, so it is no longer expressed as one.
 
 | Variable | Purpose |
 | --- | --- |
-| `HASNA_HOOKS_API_URL` | Registry URL (strict pair — requires a credential with it). Fallback aliases are not read; the unprefixed `HOOKS_API_URL` survives only as the resolver's silent alias. `HASNA_HOOKS_REGISTRY_URL` / `HOOKS_REGISTRY_URL` are retired. |
+| `HASNA_HOOKS_API_URL` | Registry URL (strict pair with a credential when DECLARED — an env URL without a key is a refusal). Fallback aliases are not read; the unprefixed `HOOKS_API_URL` survives only as the resolver's silent alias. `HASNA_HOOKS_REGISTRY_URL` / `HOOKS_REGISTRY_URL` are retired. |
 | `HASNA_HOOKS_API_KEY` | Registry key, resolved through the @hasna/contracts chain (below disk, above nothing else). Unprefixed `HOOKS_API_KEY` is the silent alias. |
 | `HASNA_HOOKS_API_KEY_OVERRIDE` | Deliberate per-run key override (tier 1). |
 | `HASNA_HOOKS_API_KEY_REF` | Vault ITEM KEY name; resolved through `@hasna/secrets` at request time. Never a value. |
 | `HASNA_PROFILE` | Selects which identity profile the chain reads. |
-| `HASNA_HOOKS_LOCAL` / `HOOKS_LOCAL` | Explicit opt-in to local mode (bundled registry + local store); answered before the resolver runs and printed on stderr. |
+| `HASNA_HOOKS_LOCAL` / `HOOKS_LOCAL` | Explicit local selection (bundled registry + local store). Accepted but not required: an environment that configures no registry authority uses the local store by default. A one-line stderr notice says where the store lives. |
 | `HASNA_STATION` | Keychain account when reading `hasna.credentials.hooks.*`. |
 | `HASNA_HOME` / `HASNA_CONFIG_HOME` | Move the disk credential root (`<…>/hooks/config/credentials`). `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna` and `$XDG_CONFIG_HOME` are never read. |
 | `HASNA_HOOKS_DATA_DIR` / `HOOKS_DATA_DIR`, `HASNA_HOOKS_HOME` / `HOOKS_HOME`, `HASNA_HOOKS_DB_PATH` / `HOOKS_DB_PATH`, `HASNA_HOOKS_LOCK_PATH` / `HOOKS_LOCK_PATH` | Local store locations (data root, DB, lock). |

@@ -1,13 +1,15 @@
 /**
  * Runtime configuration for @hasna/hooks.
  *
- * Transport policy (fleet fail-closed doctrine, 2026-09-04): the remote
- * registry is selected and authenticated by the ONE resolver in
- * `@hasna/contracts/client` (strict URL+key pair, resolved fresh per call —
- * see `src/lib/transport.ts`). Without a resolved pair the CLI must FAIL
- * CLOSED instead of silently serving the local store. Local mode (bundled
- * registry + local SQLite at the effective data root) is an explicit opt-in
- * via HASNA_HOOKS_LOCAL=1 / HOOKS_LOCAL=1 — never the default for a CLI run.
+ * Transport policy: the remote registry is selected and authenticated by the
+ * ONE resolver in `@hasna/contracts/client` (strict URL+key pair, resolved
+ * fresh per call — see `src/lib/transport.ts`). The storage-mode axis is
+ * retired (owner directive 2026-08-15): no command is gated on the transport
+ * and no `*_MODE` switch exists. Every command works hosted (any resolved
+ * registry authority + credential) or local (bundled registry + local SQLite
+ * store at the effective data root) — local is the baseline when nothing
+ * configures an authority, and `HASNA_HOOKS_LOCAL=1` / `HOOKS_LOCAL=1` remains
+ * an accepted explicit local selection.
  *
  * The app's own credential chain is gone: no `~/.hasna/fleet-env`,
  * `~/.hasna/cloud`, `~/.config/hasna` or `$XDG_CONFIG_HOME` read, no

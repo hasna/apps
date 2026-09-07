@@ -10,18 +10,26 @@ This is `@hasna/hooks`, an open-source monorepo of Claude Code hooks providing C
 
 The registry authority and its credential resolve through the ONE
 `@hasna/contracts` client resolver (`src/lib/transport.ts` / `local-opt-in.ts`),
-fresh on every call, as a STRICT pair — a URL without a key is a refusal, and a
-key alone resolves the fleet gateway. Order: an explicit argument, then
-`HASNA_HOOKS_API_KEY_OVERRIDE` / `HASNA_PROFILE` / `HASNA_HOOKS_API_KEY_REF`,
-the macOS Keychain `hasna.credentials.hooks.api-key` / `.api-url`, disk
+fresh on every call, as a STRICT pair for DECLARED intent — an env URL without
+a key is a refusal, and a key alone resolves the fleet gateway. Order: an
+explicit argument, then `HASNA_HOOKS_API_KEY_OVERRIDE` / `HASNA_PROFILE` /
+`HASNA_HOOKS_API_KEY_REF`, the macOS Keychain
+`hasna.credentials.hooks.api-key` / `.api-url`, disk
 `~/.hasna/hooks/config/credentials`, then `HASNA_HOOKS_API_URL` /
 `HASNA_HOOKS_API_KEY`. Retired and never read: `~/.hasna/fleet-env`,
 `~/.hasna/cloud`, `~/.config/hasna`, `$XDG_CONFIG_HOME`,
 `~/.hasna/hooks/config.json`, `HASNA_HOOKS_REGISTRY_URL` / `HOOKS_REGISTRY_URL`,
-and any `*_MODE` switch. Local mode is opt-in only (`HASNA_HOOKS_LOCAL=1`,
-alias `HOOKS_LOCAL=1`) and prints "LOCAL mode" on stderr once per process;
-without it, an unconfigured run fails closed. When touching resolution code,
-add hermetic tests (fake HOME / injected `security` runner) — see
+and any `*_MODE` switch (the storage-mode axis is retired, owner directive
+2026-08-15). **No command is transport-gated.** When a registry authority
+resolves, registry reads target it; otherwise commands use the bundled
+registry + local store — the baseline, never a refused fallback.
+`HASNA_HOOKS_LOCAL=1` (alias `HOOKS_LOCAL=1`) remains an accepted explicit
+local selection and short-circuits the resolver (hermetic promise); a
+one-line stderr notice says where the store lives. The only refusal is a
+DECLARED authority that cannot be honoured (strict pair — a named tier never
+falls through to a different dataset); there is no CLI transport gate and no
+API-independent command whitelist. When touching resolution code, add
+hermetic tests (fake HOME / injected `security` runner) — see
 `src/lib/transport.test.ts`.
 
 ## Quick Commands

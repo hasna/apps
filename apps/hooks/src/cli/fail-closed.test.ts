@@ -1,16 +1,22 @@
 /**
- * Fleet fail-closed doctrine (2026-09-04, hasna/apps#1613, #1720): a CLI run
- * without a resolved registry credential must FAIL CLOSED — non-zero exit,
- * actionable error naming the required env, and no local SQLite fallback —
- * unless local mode was explicitly opted into (HASNA_HOOKS_LOCAL=1) or the
- * @hasna/contracts chain resolves a STRICT pair (URL + key together; a URL
- * without a key is a refusal, never half-open progress).
+ * Transport independence (owner directive 2026-08-15: the storage-mode axis
+ * is retired). The CLI must NEVER gate a command on the transport: every
+ * command works hosted (registry authority + credential resolved by the
+ * @hasna/contracts chain — env pair, Keychain, or the credentials file) or
+ * local (bundled registry + on-box SQLite store, which is the baseline when
+ * no authority resolves and the explicit `HASNA_HOOKS_LOCAL=1` selection
+ * stays accepted).
+ *
+ * The ONE strict-pair refusal that survives is credential validation, not
+ * transport selection: an environment that DECLARES an authority (env URL
+ * without a key) is a refusal — a named tier never falls through to a
+ * different dataset.
  *
  * These tests spawn the real CLI entrypoint in a sandboxed environment that
  * strips every transport env key and pins the data root into a fresh tmp dir.
  */
 import { describe, test, expect, afterEach } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -37,7 +43,7 @@ interface Sandbox {
 }
 
 function makeSandbox(): Sandbox {
-  const root = mkdtempSync(join(tmpdir(), "hooks-fail-closed-"));
+  const root = mkdtempSync(join(tmpdir(), "hooks-no-gate-"));
   return {
     root,
     dataDir: join(root, "data"),
@@ -94,31 +100,119 @@ async function runCli(
   return { stdout, stderr, exitCode, timedOut };
 }
 
-describe("hooks transport gate (fleet fail-closed)", () => {
-  test("hooks list without API env or local opt-in fails closed and creates nothing on disk", async () => {
+describe("no transport gating (storage-mode axis retired)", () => {
+  test("a bare environment runs `hooks list` on the local store — no refusal", async () => {
     const sb = makeSandbox();
     sandboxes.push(sb);
-    const result = await runCli(["list"], cleanEnv(sb));
+    const result = await runCli(["list", "--limit", "2"], cleanEnv(sb));
     expect(result.timedOut).toBe(false);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("HASNA_HOOKS_API_URL");
-    expect(result.stderr).toContain("HASNA_HOOKS_LOCAL=1");
-    expect(result.stderr).toContain(REFUSING);
-    // No local store, no data dir, no settings writes anywhere in the sandbox.
-    expect(existsSync(sb.dataDir)).toBe(false);
-    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
-    expect(existsSync(join(sb.home, ".claude"))).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(REFUSING);
+    expect(result.stdout).toContain("Available hooks");
+    expect(result.stdout).toContain("gitguard");
   });
 
-  test("bare `hooks` (interactive) without API env or local opt-in fails closed instead of opening local mode", async () => {
+  test("a bare environment runs `hooks log tail` against the local SQLite store", async () => {
     const sb = makeSandbox();
     sandboxes.push(sb);
-    const result = await runCli([], cleanEnv(sb));
+    const result = await runCli(["log", "tail"], cleanEnv(sb));
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(REFUSING);
+    // The local store was created — the baseline transport, not a refused one.
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(true);
+  });
+
+  test("a bare environment runs `hooks sync` against the bundled registry", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const result = await runCli(["sync", "--json"], cleanEnv(sb));
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(REFUSING);
+    const plan = JSON.parse(result.stdout);
+    expect(plan.api_url).toBeNull();
+    expect(plan.diff.added.length).toBeGreaterThan(20);
+  });
+
+  test("a bare environment runs `hooks storage status` (local surfaces are never gated)", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const result = await runCli(["storage", "status", "--json"], cleanEnv(sb));
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(REFUSING);
+    const status = JSON.parse(result.stdout);
+    expect(status.backend).toBe("sqlite");
+  });
+
+  test("a bare environment resolves a pinned install from the bundled registry", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const result = await runCli(["install", "gitguard@0.1.0", "--json"], cleanEnv(sb));
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(REFUSING);
+    // install --json streams one line per hook and finishes with the summary.
+    const payload = JSON.parse(result.stdout.trim().split("\n").pop()!);
+    expect(payload.installed).toContain("gitguard");
+  });
+
+  test("HASNA_HOOKS_LOCAL=1 remains an accepted explicit local selection", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_LOCAL = "1";
+    const list = await runCli(["list", "--limit", "1"], env);
+    expect(list.timedOut).toBe(false);
+    expect(list.exitCode).toBe(0);
+    expect(list.stderr).not.toContain(REFUSING);
+    // The local store is the on-box surface for log reads too.
+    const tail = await runCli(["log", "tail"], env);
+    expect(tail.timedOut).toBe(false);
+    expect(tail.exitCode).toBe(0);
+    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(true);
+  });
+
+  test("a STRICT env pair (URL + key) runs against the hosted authority", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
+    env.HASNA_HOOKS_API_KEY = "gate-test-key";
+    const result = await runCli(["list", "--limit", "1"], env);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(REFUSING);
+  });
+
+  test("a URL-only environment is a strict-pair refusal at the registry command — declared intent never falls through", async () => {
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const env = cleanEnv(sb);
+    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
+    const result = await runCli(["sync"], env);
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("HASNA_HOOKS_API_URL");
-    expect(result.stderr).toContain(REFUSING);
+    expect(result.stderr).toContain("REMOTE_API_KEY_MISSING");
+    expect(result.stderr).toContain("HASNA_HOOKS_API_KEY");
     expect(existsSync(sb.dataDir)).toBe(false);
+  });
+
+  test("an unknown token opens the interactive TUI instead of a transport refusal", async () => {
+    // `interactive` is the default command, so commander routes any token that
+    // matches no command to the interactive TUI. No transport gate exists to
+    // refuse it: the TUI browses the local catalog. In a non-TTY harness the
+    // ink menu renders and exits 0 (raw mode is unavailable) — the assertion
+    // is that the TUI opened and the run never failed closed.
+    const sb = makeSandbox();
+    sandboxes.push(sb);
+    const result = await runCli(["frobnicate"], cleanEnv(sb), 8000);
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(REFUSING);
+    expect(result.stdout).toContain("Browse by category");
+    expect(result.stdout).toContain("Search hooks");
   });
 
   test("help and version stay available without any transport configuration", async () => {
@@ -130,104 +224,36 @@ describe("hooks transport gate (fleet fail-closed)", () => {
     const version = await runCli(["--version"], cleanEnv(sb));
     expect(version.exitCode).toBe(0);
     expect(version.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(existsSync(sb.dataDir)).toBe(false);
   });
 
-  test("an unknown token fails closed instead of falling into the interactive TUI", async () => {
-    // `interactive` is the default command, so commander routes ANY token that
-    // matches no command to the interactive TUI — a local-catalog browsing
-    // surface. Without an API URL or local opt-in that must fail closed, not
-    // open local mode.
-    const sb = makeSandbox();
-    sandboxes.push(sb);
-    const result = await runCli(["frobnicate"], cleanEnv(sb));
-    expect(result.timedOut).toBe(false);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("HASNA_HOOKS_API_URL");
-    expect(result.stderr).toContain(REFUSING);
-    expect(existsSync(sb.dataDir)).toBe(false);
-  });
-
-  test("HASNA_HOOKS_LOCAL=1 opts into local mode: list and log tail run against the local store", async () => {
-    const sb = makeSandbox();
-    sandboxes.push(sb);
-    const env = cleanEnv(sb);
-    env.HASNA_HOOKS_LOCAL = "1";
-    const list = await runCli(["list"], env);
-    expect(list.timedOut).toBe(false);
-    expect(list.exitCode).toBe(0);
-    expect(list.stderr).not.toContain(REFUSING);
-    // Local mode SAYS so on stderr, once per process ("local on stderr").
-    expect(list.stderr).toMatch(/LOCAL mode/);
-    // log tail opens the local SQLite store at the pinned data root.
-    const tail = await runCli(["log", "tail"], env);
-    expect(tail.timedOut).toBe(false);
-    expect(tail.exitCode).toBe(0);
-    expect(tail.stderr).not.toContain(REFUSING);
-    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(true);
-  });
-
-  test("a STRICT env pair (URL + key) opens the gate: list runs without touching SQLite", async () => {
-    const sb = makeSandbox();
-    sandboxes.push(sb);
-    // The pair is the unit after the @hasna/contracts adoption: a URL alone is
-    // a refusal, URL+key together is a complete configuration.
-    const env = cleanEnv(sb);
-    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
-    env.HASNA_HOOKS_API_KEY = "gate-test-key";
-    const result = await runCli(["list"], env);
-    expect(result.timedOut).toBe(false);
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).not.toContain(REFUSING);
-    // No local SQLite store was opened as a side effect of the gate opening.
-    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
-  });
-
-  test("a URL-only environment fails closed at the registry command — STRICT PAIR, no SQLite", async () => {
-    const sb = makeSandbox();
-    sandboxes.push(sb);
-    const env = cleanEnv(sb);
-    env.HASNA_HOOKS_API_URL = "https://api.hasna.com/hooks";
-    const result = await runCli(["sync"], env);
-    expect(result.timedOut).toBe(false);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("REMOTE_API_KEY_MISSING");
-    expect(result.stderr).toContain("HASNA_HOOKS_API_KEY");
-    expect(existsSync(sb.dataDir)).toBe(false);
-    expect(existsSync(join(sb.home, ".hasna"))).toBe(false);
-  });
-
-  test("the retired config.json api_url does NOT open the gate (key store removed)", async () => {
+  test("the retired config.json api_url does not resurrect remote routing — list still runs locally", async () => {
     const sb = makeSandbox();
     sandboxes.push(sb);
     // config.json (api_url / api_key_ref) was the app's own key store; it is
     // retired (hasna/apps#1720) — the resolver never reads it, so a leftover
-    // file must not resurrect remote routing.
+    // file must not resurrect remote routing. The command still runs on the
+    // local store: no transport gate.
     mkdirSync(sb.dataDir, { recursive: true });
     writeFileSync(
       join(sb.dataDir, "config.json"),
       JSON.stringify({ api_url: "https://api.hasna.com/hooks" }, null, 2) + "\n",
     );
     const env = cleanEnv(sb);
-    const result = await runCli(["list"], env);
+    const result = await runCli(["list", "--limit", "1"], env);
     expect(result.timedOut).toBe(false);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("HASNA_HOOKS_API_URL");
-    expect(result.stderr).toContain("config.json (api_url / api_key_ref) is RETIRED");
-    expect(result.stderr).toContain(REFUSING);
-    // No local SQLite store was opened.
-    expect(existsSync(join(sb.dataDir, "hooks.db"))).toBe(false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain(REFUSING);
+    expect(result.stdout).toContain("gitguard");
   });
 
-  test("a config.json without api_url does not open the gate", async () => {
+  test("a config.json without api_url does not affect anything", async () => {
     const sb = makeSandbox();
     sandboxes.push(sb);
     mkdirSync(sb.dataDir, { recursive: true });
     writeFileSync(join(sb.dataDir, "config.json"), "{}\n");
-    const result = await runCli(["list"], cleanEnv(sb));
+    const result = await runCli(["list", "--limit", "1"], cleanEnv(sb));
     expect(result.timedOut).toBe(false);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("HASNA_HOOKS_API_URL");
-    expect(result.stderr).toContain(REFUSING);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("gitguard");
   });
 });

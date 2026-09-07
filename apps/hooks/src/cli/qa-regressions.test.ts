@@ -26,8 +26,8 @@ beforeAll(() => {
   // the machine's real disk/Keychain credentials out of the resolution.
   process.env.HASNA_HOOKS_API_KEY = "qa6-test-key";
   process.env.HOME = TEST_HOME;
-  // Explicit local-mode opt-in (fleet fail-closed doctrine): these CLI
-  // subprocess tests exercise the bundled registry + local store on purpose.
+  // Explicit local selection (storage-mode axis retired): the non-pinned CLI
+  // tests run against the bundled registry + local store.
   process.env.HASNA_HOOKS_LOCAL = "1";
   process.env.NO_COLOR = "1";
 });

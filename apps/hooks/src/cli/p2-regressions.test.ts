@@ -37,7 +37,7 @@ beforeAll(() => {
   process.env.HASNA_HOOKS_CODEWITH_CONFIG_PATH = CODEWITH_CONFIG;
   process.env.HASNA_HOOKS_DATA_DIR = join(TEST_HOME, "data");
   process.env.HASNA_HOOKS_DB_PATH = join(TEST_HOME, "data", "hooks.db");
-  // Explicit local-mode opt-in (fleet fail-closed doctrine): CLI subprocess
+  // Explicit local selection (storage-mode axis retired): CLI subprocess
   // tests exercise the bundled registry + local store on purpose.
   process.env.HASNA_HOOKS_LOCAL = "1";
 });
