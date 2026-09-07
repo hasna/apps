@@ -1,3 +1,5 @@
+import { adaptShellFixtureTools } from "./helpers/confined-shell-fixture";
+import { requirePublicationFixtureConfinement } from "./helpers/publication-fixture-confinement";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
@@ -34,7 +36,9 @@ process.env.RECORDINGS_TEST_FS_GUARD_ADDON = ensureNativeFsGuardAddon(repository
 // (overrides "structurally unreachable on Darwin"). Those tests therefore run on the
 // non-Darwin hosts the fixture was authored for (the repo's Linux CI gate) and skip on macOS,
 // where the code under test deliberately closes the seam they depend on. Pure source-assertion
-// tests below still run everywhere.
+// tests below still run everywhere. Active Darwin preflight cases instead adapt only
+// copied external tool capabilities inside the OS-confined fixture runner; the real
+// kernel probe, broker refusal, trust checks and disabled recovery hooks are unchanged.
 const testOnNonDarwin = process.platform === "darwin" ? test.skip : test;
 const bunExecutable = process.execPath;
 const targetPlatformIdentity = "11111111-1111-4111-8111-111111111111";
@@ -144,7 +148,9 @@ function createLegacyState(fixture: ReturnType<typeof createInstallerFixture>): 
 }
 
 function createInstallerFixture() {
-  const root = temporaryDirectory("recordings-installer-");
+  requirePublicationFixtureConfinement();
+  const root = realpathSync(temporaryDirectory("recordings-installer-"));
+  chmodSync(root, 0o700);
   const home = join(root, "home");
   const bin = join(root, "bin");
   const markers = join(root, "markers");
@@ -153,7 +159,7 @@ function createInstallerFixture() {
   const manifest = join(root, "Hasna Recordings-0.2.12-macos.manifest.json");
   const installer = join(root, "scripts", "install_macos_app.sh");
   const tailscaleApp = join(root, "Tailscale.app");
-  mkdirSync(home, { recursive: true });
+  mkdirSync(home, { recursive: true, mode: 0o700 });
   mkdirSync(bin, { recursive: true });
   mkdirSync(markers, { recursive: true });
   createApp(candidate, "candidate");
@@ -162,6 +168,13 @@ function createInstallerFixture() {
   mkdirSync(dirname(installer), { recursive: true });
   cpSync(join(repositoryRoot, "scripts", "install_macos_app.sh"), installer);
   chmodSync(installer, 0o755);
+  // Darwin ignores the addon environment override. Keep the real descriptor
+  // guard at its packaged path in this isolated fixture, with its original bytes.
+  if (process.platform === "darwin") {
+    const addon = join(root, "scripts/native/prebuilds/darwin-universal/recordings_fs_guard.node");
+    mkdirSync(dirname(addon), { recursive: true });
+    cpSync(ensureNativeFsGuardAddon(repositoryRoot), addon);
+  }
   cpSync(join(repositoryRoot, "scripts", "macos_artifact.ts"), join(root, "scripts", "macos_artifact.ts"));
   cpSync(join(repositoryRoot, "scripts", "native_fs_guard.ts"), join(root, "scripts", "native_fs_guard.ts"));
   cpSync(
@@ -538,6 +551,16 @@ printf 'n%s\n' "$observed"
 `,
   );
 
+  writeExecutable(join(bin, "realpath"), `#!/bin/bash
+exec '${bunExecutable.replaceAll("'", "'\\''")}' -e 'import {realpathSync} from "node:fs"; process.stdout.write(realpathSync(process.argv.at(-1))+"\\n")' "$@"
+`);
+  writeExecutable(join(bin, "mktemp"), `#!/bin/bash
+set -euo pipefail
+if [ "$#" = 2 ] && [ "$1" = -d ] && [ "$2" = /tmp/recordings-install.XXXXXX ]; then
+  exec /usr/bin/mktemp -d '${root.replaceAll("'", "'\\''")}/recordings-install.XXXXXX'
+fi
+exec /usr/bin/mktemp "$@"
+`);
   return { root, home, bin, markers, candidate, artifact, manifest, tailscaleApp };
 }
 
@@ -569,7 +592,7 @@ function installerToolOverrides(fixture: ReturnType<typeof createInstallerFixtur
     RECORDINGS_TEST_INSTALL_LSOF_EXECUTABLE: join(fixture.bin, "lsof"),
     RECORDINGS_TEST_INSTALL_MDFIND_EXECUTABLE: join(fixture.bin, "mdfind"),
     RECORDINGS_TEST_INSTALL_MKDIR_EXECUTABLE: system("/bin/mkdir"),
-    RECORDINGS_TEST_INSTALL_MKTEMP_EXECUTABLE: system("/usr/bin/mktemp"),
+    RECORDINGS_TEST_INSTALL_MKTEMP_EXECUTABLE: join(fixture.bin, "mktemp"),
     RECORDINGS_TEST_INSTALL_MV_EXECUTABLE: join(fixture.bin, "mv"),
     RECORDINGS_TEST_INSTALL_OPEN_EXECUTABLE: join(fixture.bin, "open"),
     RECORDINGS_TEST_INSTALL_PS_EXECUTABLE: join(fixture.bin, "ps"),
@@ -595,7 +618,40 @@ async function runInstaller(
   args: string[] = [],
   environment: Record<string, string> = {},
   cwd?: string,
+  adaptDarwinCapabilities = true,
 ) {
+  requirePublicationFixtureConfinement();
+  if (process.platform === "darwin" && adaptDarwinCapabilities) {
+    const tools = Object.fromEntries(Object.entries(installerToolOverrides(fixture))
+      .filter(([key, value]) => key.startsWith("RECORDINGS_TEST_INSTALL_") && value.startsWith(`${fixture.bin}/`))
+      .map(([key, value]) => [key.slice("RECORDINGS_TEST_INSTALL_".length), value]));
+    writeFileSync(join(fixture.root, "scripts/install_macos_app.sh"), adaptShellFixtureTools(
+      readFileSync(join(repositoryRoot, "scripts/install_macos_app.sh"), "utf8"),
+      'BUN_EXECUTABLE="${RECORDINGS_BUN_EXECUTABLE:-}"', tools,
+    ));
+    // Redirect only external capabilities in the fixture copy. The pinned kernel
+    // probe, Darwin env -i path, signature arguments and all trust checks stay real.
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    let resolver = readFileSync(join(repositoryRoot, "scripts/resolve_tailscale_cli.sh"), "utf8");
+    const substitutions: [string, string, number][] = [
+      ["source_app='/Applications/Tailscale.app'", `source_app=${quote(environment.RECORDINGS_TEST_TRUSTED_TAILSCALE_APP ?? fixture.tailscaleApp)}`, 1],
+      ["codesign_executable='/usr/bin/codesign'", `codesign_executable=${quote(join(fixture.bin, "codesign"))}`, 2],
+      ["ditto_executable='/usr/bin/ditto'", `ditto_executable=${quote(join(fixture.bin, "ditto"))}`, 1],
+      ["/usr/bin/realpath", quote(join(fixture.bin, "realpath")), 3],
+    ];
+    for (const [before, after, count] of substitutions) {
+      if (resolver.split(before).length !== count + 1) throw new Error("Tailscale fixture capability boundary changed");
+      resolver = resolver.replaceAll(before, after);
+    }
+    writeFileSync(join(fixture.root, "scripts/resolve_tailscale_cli.sh"), resolver);
+    // The official Darwin launcher strips caller env. Put fictional responses in
+    // the owned executables themselves instead of weakening that clean environment.
+    for (const tool of [join(fixture.bin, "codesign"), join(fixture.tailscaleApp, "Contents/MacOS/Tailscale")]) {
+      const bindings = { MARKER_DIRECTORY: fixture.markers, FAIL_TAILSCALE_STATUS: environment.FAIL_TAILSCALE_STATUS ?? "0", TAILSCALE_STATUS_JSON: environment.TAILSCALE_STATUS_JSON ?? "" };
+      const body = readFileSync(tool, "utf8");
+      writeFileSync(tool, body.replace("set -euo pipefail", `set -euo pipefail\n${Object.entries(bindings).map(([key, value]) => `${key}=${quote(value)}`).join("\n")}`));
+    }
+  }
   const app = join(fixture.home, "Applications", "Hasna Recordings.app");
   const state = join(fixture.home, ".hasna", "recordings");
   if (existsSync(state) && mode(state) === 0o775) chmodSync(state, 0o755);
@@ -610,9 +666,9 @@ async function runInstaller(
   };
   if (existsSync(state) && !lstatSync(state).isSymbolicLink()) normalizeFixtureDescendants(state);
   const localPolicy = args.includes("local-only") || args.includes("local_only");
-  const process = Bun.spawn(
+  const child = Bun.spawn(
     [
-      "bash",
+      "/bin/bash",
       join(fixture.root, "scripts", "install_macos_app.sh"),
       "--artifact",
       fixture.artifact,
@@ -628,7 +684,7 @@ async function runInstaller(
       ...args,
     ],
     {
-      cwd,
+      cwd: cwd ?? fixture.root,
       env: {
         ...Bun.env,
         RECORDINGS_TEST_ENABLE_RECOVERY_HOOKS: "1",
@@ -646,9 +702,9 @@ async function runInstaller(
     },
   );
   const [exitCode, stdout, stderr] = await Promise.all([
-    process.exited,
-    new Response(process.stdout).text(),
-    new Response(process.stderr).text(),
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
   ]);
   return { exitCode, stdout, stderr };
 }
@@ -746,6 +802,17 @@ describe("macOS finalized artifact installer", () => {
     expect(existsSync(join(resolvedRelativeHome, ".hasna"))).toBeFalse();
     expect(existsSync(join(resolvedRelativeHome, "Applications"))).toBeFalse();
     expect(existsSync(join(fixture.markers, "bun.log"))).toBeFalse();
+  });
+
+  test("unadapted Darwin installer ignores inherited tool overrides before mutation", async () => {
+    if (process.platform !== "darwin") return; // This is a Darwin tool-selection control.
+    const fixture = createInstallerFixture();
+    const result = await runInstaller(fixture, ["--artifact-policy", "local-only"], {}, undefined, false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("CODESIGN_EXECUTABLE is missing or is not executable: /usr/bin/codesign");
+    expect(readdirSync(fixture.markers)).toEqual([]);
+    expect(existsSync(join(fixture.home, ".hasna"))).toBeFalse();
+    expect(existsSync(join(fixture.home, "Applications"))).toBeFalse();
   });
 
   test("has no package postinstall or target-build fallback", () => {
@@ -905,7 +972,9 @@ describe("macOS finalized artifact installer", () => {
     ["publish-candidate", "after-destination-fsync"],
     ["publish-candidate", "after-source-fsync"],
   ] as const)(
-    "recovers the exact prior app after a %s %s crash boundary",
+    process.platform === "darwin"
+      ? "requires the broker without shell mutation for %s %s recovery hooks"
+      : "recovers the exact prior app after a %s %s crash boundary",
     async (operation, point) => {
       const fixture = createInstallerFixture();
       const applications = join(fixture.home, "Applications");
@@ -920,7 +989,15 @@ describe("macOS finalized artifact installer", () => {
 
       const recovered = await runInstaller(fixture, [], { FAIL_ARCHIVE_VERIFY: "1" });
       expect(recovered.exitCode).not.toBe(0);
-      expect(recovered.stderr).toContain("Recovering incomplete");
+      if (process.platform === "darwin") {
+        expect(crashed.stderr).toContain("requires the root-owned Recordings updater broker");
+        expect(recovered.stderr).toContain("requires the root-owned Recordings updater broker");
+        expect(readdirSync(fixture.markers)).toEqual([]);
+        expect(readdirSync(applications)).toEqual(["Hasna Recordings.app"]);
+        expect(existsSync(join(fixture.home, ".hasna"))).toBeFalse();
+      } else {
+        expect(recovered.stderr).toContain("Recovering incomplete");
+      }
       expect(readFileSync(join(installed, "Contents", "MacOS", "Recordings"), "utf8")).toBe(
         "installed",
       );
@@ -1256,6 +1333,11 @@ describe("macOS finalized artifact installer", () => {
       ...environment,
     });
     expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(_label === "hash mismatch"
+      ? "does not match this Mac's approved machine identity"
+      : "Could not verify the live Tailscale identity");
+    expect(readFileSync(join(fixture.markers, "tailscale.log"), "utf8"))
+      .toContain("tailscale-identity-snapshot/Tailscale.app/Contents/MacOS/Tailscale");
     expect(existsSync(join(fixture.home, ".hasna"))).toBeFalse();
     expect(existsSync(join(fixture.home, "Applications"))).toBeFalse();
   });
