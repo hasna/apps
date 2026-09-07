@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
-import { REFUSAL_HELPERS, cliRefusalFor, refusalHelpersObserved, scanCliRefusals } from "../test-support/cli-refusals.js";
+import { REFUSAL_HELPERS, cliRefusalFor, scanCliRefusalSource } from "../test-support/cli-refusals.js";
 import { cliEquivalentForTool } from "./contracts.js";
 
 describe("MCP CLI equivalents", () => {
@@ -351,31 +351,15 @@ describe("MCP CLI equivalents", () => {
       .toBeNull();
   });
 
-  it("sees refusals through EVERY helper shape, not just the one this file happens to name", () => {
-    // The control above exercises `notImplementedAnywhere` only, and that was not
-    // enough. Deleting `serverOnly` from the oracle's regex left the whole suite
-    // green — `src/mcp/contracts.test.ts` 25/0, `src/cli/unshipped-surface.test.ts`
-    // 26/0, both `agent-context` suites, `status-commands-coverage.test.ts` 7/0 —
-    // because every downstream assertion is of the form "this command must NOT
-    // refuse", and an oracle that sees fewer refusals only ever RELAXES those.
-    //
-    // Before `emails domain dns` was wired up, the old control happened to cover
-    // the `serverOnly` arm: `src/cli/commands/domain.ts` used that helper. It now
-    // uses `notImplementedAnywhere` exclusively, and all 17 surviving
-    // `serverOnly(...)` call sites sit in `*.remote.ts` where nothing asserted
-    // them. So this is counted per helper rather than per command: no single
-    // command being wired up can silently retire a whole shape again.
-    const observed = refusalHelpersObserved();
-    expect(Object.keys(observed).sort()).toEqual([...REFUSAL_HELPERS].sort());
+  it("recognizes every refusal helper without requiring broken shipped commands", () => {
     for (const helper of REFUSAL_HELPERS) {
-      expect(observed[helper], `the refusal oracle no longer sees any ${helper}(...) call site`)
-        .toBeGreaterThan(0);
+      const source = `function ${helper}(command: string) {}\n${helper}("emails fixture blocked");`;
+      expect(scanCliRefusalSource(source, "fixture.remote.ts")).toEqual([
+        { command: "emails fixture blocked", file: "fixture.remote.ts", shared: false, helper },
+      ]);
+      expect(scanCliRefusalSource(source, "fixture.ts")[0]?.shared).toBe(true);
     }
-    // And the `serverOnly` arm is reachable through the public entry point too, so
-    // a scan that populated the count but broke `cliRefusalFor` still fails here.
-    const serverOnlyCommand = scanCliRefusals().find((r) => r.helper === "serverOnly")?.command;
-    expect(serverOnlyCommand, "no serverOnly refusal to use as a control").toBeTruthy();
-    expect(cliRefusalFor(serverOnlyCommand!, "self_hosted")).toBe(serverOnlyCommand);
+    expect(scanCliRefusalSource('function serverOnly(command: string) {}', "fixture.ts")).toEqual([]);
   });
 
   it("unguards get_dns_records' credential-free half while its CLI twin runs, and advertises the twin", () => {
