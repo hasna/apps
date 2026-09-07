@@ -577,10 +577,15 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
 
   inboxCmd
     .command("explain <email-id>")
-    .description("Explain local routing, recipient ownership, and source readiness for an inbound email")
+    .description("Explain recipient routing, ownership and delivery evidence from the API")
     .option("-j, --json", "Print JSON output", false)
-    .action(() => {
-      try { serverOnly("explain"); } catch (e) { handleError(e); }
+    .action(async (emailId: string) => {
+      try {
+        const { explainApiMessage } = await import("./api-diagnostics.js");
+        const { formatDeliveryDoctorReport } = await import("../../lib/delivery-doctor.js");
+        const report = await explainApiMessage(emailId);
+        output(report, `Routing for ${report.email_id}\n${report.recipients.map(formatDeliveryDoctorReport).join("\n\n")}`);
+      } catch (e) { handleError(e); }
     });
 
   // ─── SEARCH ───────────────────────────────────────────────────────────────
@@ -1085,10 +1090,14 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
 
   inboxCmd
     .command("realtime-status")
-    .description("Show real-time inbound queue, bucket, and sync health")
+    .description("Show API ingestion sources, last-sync evidence and worker-health availability")
     .option("-j, --json", "Print JSON output", false)
-    .action(() => {
-      try { serverOnly("realtime-status"); } catch (e) { handleError(e); }
+    .action(async () => {
+      try {
+        const { apiIngestionStatus, formatApiIngestionStatus } = await import("./api-diagnostics.js");
+        const status = apiIngestionStatus();
+        output(status, formatApiIngestionStatus(status));
+      } catch (e) { handleError(e); }
     });
 
   inboxCmd

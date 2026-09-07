@@ -193,7 +193,7 @@ function useAttachmentInventoryPages(
 ): void {
   attachmentInventoryPages = new Map(pages);
   process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-  process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
+  process.env.EMAILS_SELF_HOSTED_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
   resetSelfHostedConfigCache();
 }
 
@@ -1023,7 +1023,7 @@ describe("inbox attachments", () => {
       delete process.env.EMAILS_CLIENT_ENV_SECRET;
       delete process.env.EMAILS_SESSION_TOKEN;
       process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${attachmentInventoryServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = "attachment-inventory-test-key";
+      process.env.EMAILS_SELF_HOSTED_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
       process.env.EMAILS_DB_PATH = poisonDbDir;
       resetSelfHostedConfigCache();
 
@@ -1467,7 +1467,7 @@ describe("inbox attachment", () => {
 
     try {
       process.env.EMAILS_SELF_HOSTED_URL = `http://127.0.0.1:${legacyServer.port}`;
-      process.env.EMAILS_SELF_HOSTED_API_KEY = "legacy-attachment-test-key";
+      process.env.EMAILS_SELF_HOSTED_API_KEY = crypto.randomUUID(); // Per-run synthetic fixture credential.
       resetSelfHostedConfigCache();
       resetMailDataSource();
 
@@ -1737,10 +1737,8 @@ describe("inbox unread-count --by-address", () => {
 
 describe("server-only ingestion/diagnostic subcommands", () => {
   const cases: Array<{ label: string; args: string[]; command: string }> = [
-    { label: "explain", args: ["inbox", "explain", "31f40200"], command: "emails inbox explain" },
     { label: "sync-s3", args: ["inbox", "sync-s3", "--bucket", "mail-bucket", "--limit", "1"], command: "emails inbox sync-s3" },
     { label: "setup-realtime", args: ["inbox", "setup-realtime", "example.com"], command: "emails inbox setup-realtime" },
-    { label: "realtime-status", args: ["inbox", "realtime-status"], command: "emails inbox realtime-status" },
     { label: "watch", args: ["inbox", "watch", "--once"], command: "emails inbox watch" },
     { label: "listen", args: ["inbox", "listen", "--port", "2526"], command: "emails inbox listen" },
   ];

@@ -264,7 +264,6 @@ describe("server-only scheduling, batch and diagnostics commands", () => {
   const SERVER_ONLY = [
     { name: "schedule run", args: ["schedule", "run"] },
     { name: "scheduler", args: ["scheduler"] },
-    { name: "doctor delivery", args: ["doctor", "delivery", "ops@example.com"] },
   ] as const;
 
   for (const { name, args } of SERVER_ONLY) {

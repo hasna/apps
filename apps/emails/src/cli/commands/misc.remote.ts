@@ -256,9 +256,15 @@ export function registerMiscCommands(program: Command, output: (data: unknown, f
 
   doctorCmd
     .command("delivery <address>")
-    .description("Diagnose why inbound mail may not be reaching a local address")
-    .action(async () => {
-      try { serverOnly("emails doctor delivery"); } catch (e) { handleError(e); }
+    .description("Diagnose inbound delivery using the API registry and received-mail evidence")
+    .option("--live", "Also inspect public MX records")
+    .action(async (address: string, opts: { live?: boolean }) => {
+      try {
+        const { apiDeliveryDiagnosis } = await import("./api-diagnostics.js");
+        const { formatDeliveryDoctorReport } = await import("../../lib/delivery-doctor.js");
+        const report = await apiDeliveryDiagnosis(address, opts);
+        output(report, formatDeliveryDoctorReport(report));
+      } catch (e) { handleError(e); }
     });
 
   // ─── VERIFY EMAIL ─────────────────────────────────────────────────────────────
