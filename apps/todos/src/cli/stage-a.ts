@@ -193,6 +193,7 @@ const DIAGNOSTIC_COMMANDS = new Set([
   ...Object.keys(BUNDLED_STATIC_COMMANDS),
 ]);
 const REMOTE_COMMANDS = new Set([
+  "mine", "blocked", "overdue", "today", "yesterday",
   "machines",
   // `delegate` MUST be here as well as in the canonical list above. Membership
   // of the canonical list alone leaves a verb defaulted to `local-only`, which
