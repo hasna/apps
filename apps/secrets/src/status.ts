@@ -3,12 +3,25 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { getStore } from "./store/index.js";
+import { getStoreWithResolution } from "./store/index.js";
+import type { CredentialTier, SecretsClientResolutionOptions } from "./store/client-types.js";
 import type { SecretType } from "./types.js";
 import { VERSION } from "./version.js";
 
 const PACKAGE_NAME = "@hasna/secrets";
 const FALLBACK_PACKAGE_VERSION = VERSION;
+
+/**
+ * WHERE the hosted transport was resolved from — names only, never values.
+ * `null` for a local-vault run. Sources are an env key NAME, a Keychain item
+ * reference (`keychain:<service>@<account>`), a file PATH with the home
+ * prefix folded to `~`, or `"default"` (the fleet gateway).
+ */
+export interface SecretTransportStatus {
+  api_url_source: string | null;
+  api_key_source: string | null;
+  api_key_tier: CredentialTier;
+}
 
 export interface SecretReferenceStatus {
   service: "secrets";
@@ -21,6 +34,8 @@ export interface SecretReferenceStatus {
   mode: "local" | "api";
   /** Vault file path (local) or API origin (api). Never contains a key. */
   location: string;
+  /** Resolver provenance for a hosted run (hasna/apps#1720); null when local. */
+  transport: SecretTransportStatus | null;
   counts: {
     secrets: number;
     byType: Record<SecretType, number>;
@@ -49,8 +64,11 @@ export interface SecretReferenceStatus {
  * Routes through the Store; never touches sqlite or the network directly and
  * never emits secret values or key names.
  */
-export async function getSecretReferenceStatus(): Promise<SecretReferenceStatus> {
-  const store = getStore();
+export async function getSecretReferenceStatus(
+  env: NodeJS.ProcessEnv = process.env,
+  options: SecretsClientResolutionOptions = {},
+): Promise<SecretReferenceStatus> {
+  const { store, resolution } = getStoreWithResolution(env, options);
   const descriptor = store.describe();
   const counts = await store.status();
 
@@ -60,6 +78,13 @@ export async function getSecretReferenceStatus(): Promise<SecretReferenceStatus>
     package: { name: PACKAGE_NAME, version: packageVersion() },
     mode: descriptor.mode,
     location: redactLocation(descriptor),
+    transport: resolution
+      ? {
+          api_url_source: redactHomePrefix(resolution.apiUrlSource),
+          api_key_source: redactHomePrefix(resolution.apiKeySource),
+          api_key_tier: resolution.apiKeyTier,
+        }
+      : null,
     counts,
     references: { opaqueStoreRef: opaqueRef(descriptor.location || "default") },
     safety: {
@@ -86,6 +111,18 @@ function redactLocalPath(path: string): string {
   if (path === home) return "~";
   if (path.startsWith(`${home}/`)) return `~/${path.slice(home.length + 1)}`;
   return "<custom-database-path>";
+}
+
+/**
+ * A resolver SOURCE is a name (env key, Keychain reference, `"default"`) or an
+ * absolute credentials-file path. Only the path form carries the home prefix;
+ * fold it to `~` so a status line never spells the operator's home directory.
+ */
+function redactHomePrefix(source: string | null): string | null {
+  if (source === null) return null;
+  const home = homedir();
+  if (source.startsWith(`${home}/`)) return `~/${source.slice(home.length + 1)}`;
+  return source;
 }
 
 function opaqueRef(value: string): string {

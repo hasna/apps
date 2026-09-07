@@ -1,11 +1,22 @@
 // Typed client for the secrets serve API (@hasna/secrets/sdk).
 //
 // The method surface mirrors the serve OpenAPI document (src/server/openapi.ts).
-// It does NOT open its own HTTP transport: every request routes through the ONE
-// shared Hasna transport (createHasnaHttpTransport) that the ApiStore uses, so
-// there is a single auth/retry/timeout implementation — no raw `fetch` and no
+// It does NOT open its own HTTP transport: every authenticated request routes
+// through the ONE shared Hasna transport (createHasnaHttpTransport) that the
+// ApiStore uses, so there is a single auth/retry/timeout implementation — no
 // second parallel transport. Auth is sent as BOTH `Authorization: Bearer` and
 // `x-api-key` (the serve accepts either), matching the Store transport exactly.
+//
+// URL SHAPE (hasna/apps#1720 validation). The shared transport canonicalises
+// WHATEVER base it is given to `<origin-and-path>/v1` and joins request paths
+// onto that, so the data routes below are spelled RELATIVE TO `/v1` (`/secrets`,
+// `/items`, `/users`, `/audit`) — exactly as the ApiStore spells them. A base of
+// `https://api.hasna.com/secrets` and one of `https://api.hasna.com/secrets/v1`
+// therefore address the same API. The three PUBLIC probes (`/health`, `/ready`,
+// `/version`) live ABOVE `/v1` on the serve and on the gateway, and the contract
+// marks them `security: []`: they are fetched at `<origin-and-path>/health` etc.
+// WITHOUT a credential, because the authenticated transport cannot address a
+// path outside its base and must not attach the key to a public endpoint.
 //
 // This is a client-only surface: it always talks to a remote `<baseUrl>` and can
 // never touch local data, so it cannot split-brain.
@@ -67,7 +78,12 @@ export interface VaultItemInput { "id"?: string; "kind": string; "title": string
 export interface UserInput { "id": string; "name": string; "type"?: "human" | "agent" }
 
 export interface SecretsClientOptions {
-  /** Base URL origin, e.g. process.env.APP_API_URL (`https://secrets.your-deployment.example`). */
+  /**
+   * The service authority: an origin (`https://secrets.your-deployment.example`)
+   * or a gateway prefix (`https://api.hasna.com/secrets`). A trailing `/v1` is
+   * accepted and means the same thing — the data routes are sent under
+   * `<baseUrl>/v1/...` either way, and the public probes under `<baseUrl>/`.
+   */
   baseUrl: string;
   /**
    * API key, sent as Bearer + x-api-key.
@@ -94,11 +110,15 @@ export class ApiError extends Error {
 
 export class SecretsClient {
   private readonly transport: HasnaHttpTransport;
+  /** `<origin-and-path>` root above `/v1`, where the public probes live. */
+  private readonly probeRoot: string;
+  private readonly fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
+  private readonly baseHeaders: Record<string, string>;
 
   constructor(options: SecretsClientOptions) {
     if (!options.baseUrl) throw new Error("SecretsClient requires a baseUrl.");
-    // The OpenAPI paths already carry their own prefix (`/v1/...`, `/health`,
-    // `/version`), so the transport base is the raw origin, not `<origin>/v1`.
+    // The transport validates the authority and canonicalises it to
+    // `<origin-and-path>/v1`; every data route below is relative to that.
     this.transport = createHasnaHttpTransport({
       name: "secrets",
       baseUrl: options.baseUrl.replace(/\/+$/, ""),
@@ -106,6 +126,51 @@ export class SecretsClient {
       ...(options.fetch ? { fetchImpl: (input, init) => options.fetch!(input, init) } : {}),
       ...(options.headers ? { headers: options.headers } : {}),
     });
+    this.probeRoot = this.transport.baseUrl.replace(/\/v1$/, "");
+    this.fetchImpl = options.fetch
+      ? (input, init) => options.fetch!(input, init)
+      : (input, init) => fetch(input, init);
+    this.baseHeaders = options.headers ?? {};
+  }
+
+  /**
+   * The canonical `<origin-and-path>/v1` root every data route is joined onto.
+   * Names an authority only — never a credential.
+   */
+  get baseUrl(): string {
+    return this.transport.baseUrl;
+  }
+
+  /**
+   * A PUBLIC probe (`/health`, `/ready`, `/version`): fetched at the root above
+   * `/v1`, with no credential attached and no redirect followed. The contract
+   * declares these `security: []`, and the serve and the gateway answer them
+   * only there (`/v1/health` is a 404 on both).
+   */
+  private async probe<T>(path: string, init?: RequestInit): Promise<T> {
+    const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders };
+    new Headers(init?.headers ?? {}).forEach((value, key) => {
+      headers[key] = value;
+    });
+    const response = await this.fetchImpl(`${this.probeRoot}${path}`, {
+      ...init,
+      method: "GET",
+      headers,
+      redirect: "manual",
+    });
+    const text = await response.text();
+    let body: unknown = undefined;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
+    }
+    if (!response.ok) {
+      throw new ApiError(response.status, `GET ${path} failed: ${response.status}`, body);
+    }
+    return body as T;
   }
 
   private async request<T>(method: string, path: string, opts: { body?: unknown; query?: Record<string, unknown>; init?: RequestInit }): Promise<T> {
@@ -126,25 +191,17 @@ export class SecretsClient {
 
     /** Liveness probe */
     async health(init?: RequestInit): Promise<Status> {
-      return this.request("GET", `/health`, {
-        body: undefined,
-        query: undefined,
-        init,
-      });
+      return this.probe(`/health`, init);
     }
 
     /** Readiness probe */
     async ready(init?: RequestInit): Promise<ReadyStatus> {
-      return this.request("GET", `/ready`, {
-        body: undefined,
-        query: undefined,
-        init,
-      });
+      return this.probe(`/ready`, init);
     }
 
     /** List audit log entries */
     async listAudit(query?: { "key"?: string; "limit"?: number }, init?: RequestInit): Promise<Record<string, unknown>> {
-      return this.request("GET", `/v1/audit`, {
+      return this.request("GET", `/audit`, {
         body: undefined,
         query,
         init,
@@ -153,7 +210,7 @@ export class SecretsClient {
 
     /** List vault item metadata */
     async listItems(query?: { "kind"?: string }, init?: RequestInit): Promise<{ "items"?: Array<VaultItemMetadata> }> {
-      return this.request("GET", `/v1/items`, {
+      return this.request("GET", `/items`, {
         body: undefined,
         query,
         init,
@@ -162,7 +219,7 @@ export class SecretsClient {
 
     /** Create or update a vault item */
     async putItem(body: VaultItemInput, init?: RequestInit): Promise<VaultItem> {
-      return this.request("POST", `/v1/items`, {
+      return this.request("POST", `/items`, {
         body,
         query: undefined,
         init,
@@ -171,7 +228,7 @@ export class SecretsClient {
 
     /** Search vault item metadata */
     async searchItems(query?: { "q": string }, init?: RequestInit): Promise<{ "results"?: Array<VaultItemMetadata> }> {
-      return this.request("GET", `/v1/items/search`, {
+      return this.request("GET", `/items/search`, {
         body: undefined,
         query,
         init,
@@ -180,7 +237,7 @@ export class SecretsClient {
 
     /** Get a vault item with decrypted payload */
     async getItem(id: string, init?: RequestInit): Promise<VaultItem> {
-      return this.request("GET", `/v1/items/${encodeURIComponent(String(id))}`, {
+      return this.request("GET", `/items/${encodeURIComponent(String(id))}`, {
         body: undefined,
         query: undefined,
         init,
@@ -189,7 +246,7 @@ export class SecretsClient {
 
     /** Delete a vault item */
     async deleteItem(id: string, init?: RequestInit): Promise<Record<string, unknown>> {
-      return this.request("DELETE", `/v1/items/${encodeURIComponent(String(id))}`, {
+      return this.request("DELETE", `/items/${encodeURIComponent(String(id))}`, {
         body: undefined,
         query: undefined,
         init,
@@ -198,7 +255,7 @@ export class SecretsClient {
 
     /** List secret metadata */
     async listSecrets(query?: { "namespace"?: string }, init?: RequestInit): Promise<{ "secrets"?: Array<SecretMetadata> }> {
-      return this.request("GET", `/v1/secrets`, {
+      return this.request("GET", `/secrets`, {
         body: undefined,
         query,
         init,
@@ -207,7 +264,7 @@ export class SecretsClient {
 
     /** Create or update a secret */
     async putSecret(body: SecretInput, init?: RequestInit): Promise<SecretMetadata> {
-      return this.request("POST", `/v1/secrets`, {
+      return this.request("POST", `/secrets`, {
         body,
         query: undefined,
         init,
@@ -216,7 +273,7 @@ export class SecretsClient {
 
     /** Delete a secret by key */
     async deleteSecret(query?: { "key": string }, init?: RequestInit): Promise<Record<string, unknown>> {
-      return this.request("DELETE", `/v1/secrets`, {
+      return this.request("DELETE", `/secrets`, {
         body: undefined,
         query,
         init,
@@ -225,7 +282,7 @@ export class SecretsClient {
 
     /** Get a secret value by key */
     async getSecret(query?: { "key": string }, init?: RequestInit): Promise<Secret> {
-      return this.request("GET", `/v1/secrets/get`, {
+      return this.request("GET", `/secrets/get`, {
         body: undefined,
         query,
         init,
@@ -234,7 +291,7 @@ export class SecretsClient {
 
     /** Search secret metadata */
     async searchSecrets(query?: { "q": string }, init?: RequestInit): Promise<{ "results"?: Array<SecretMetadata> }> {
-      return this.request("GET", `/v1/secrets/search`, {
+      return this.request("GET", `/secrets/search`, {
         body: undefined,
         query,
         init,
@@ -243,7 +300,7 @@ export class SecretsClient {
 
     /** List secret version metadata (never value material) */
     async listSecretVersions(query?: { "key": string; "limit"?: number }, init?: RequestInit): Promise<{ "versions"?: Array<SecretVersionMeta> }> {
-      return this.request("GET", `/v1/secrets/versions`, {
+      return this.request("GET", `/secrets/versions`, {
         body: undefined,
         query,
         init,
@@ -252,7 +309,7 @@ export class SecretsClient {
 
     /** Version evidence in the get --check class: length + sha256, never the value */
     async checkSecretVersion(query?: { "key": string; "version": number }, init?: RequestInit): Promise<{ "check"?: SecretVersionCheck }> {
-      return this.request("GET", `/v1/secrets/versions/check`, {
+      return this.request("GET", `/secrets/versions/check`, {
         body: undefined,
         query,
         init,
@@ -261,7 +318,7 @@ export class SecretsClient {
 
     /** Append-only restore: server-side copy of a historical value into a new current version */
     async restoreSecretVersion(body: RestoreInput, init?: RequestInit): Promise<{ "restored"?: SecretVersionMeta }> {
-      return this.request("POST", `/v1/secrets/restore`, {
+      return this.request("POST", `/secrets/restore`, {
         body,
         query: undefined,
         init,
@@ -270,7 +327,7 @@ export class SecretsClient {
 
     /** List registered users */
     async listUsers(query?: { "type"?: string }, init?: RequestInit): Promise<Record<string, unknown>> {
-      return this.request("GET", `/v1/users`, {
+      return this.request("GET", `/users`, {
         body: undefined,
         query,
         init,
@@ -279,7 +336,7 @@ export class SecretsClient {
 
     /** Register a user or agent */
     async registerUser(body: UserInput, init?: RequestInit): Promise<Record<string, unknown>> {
-      return this.request("POST", `/v1/users`, {
+      return this.request("POST", `/users`, {
         body,
         query: undefined,
         init,
@@ -288,10 +345,6 @@ export class SecretsClient {
 
     /** Version info */
     async version(init?: RequestInit): Promise<Status> {
-      return this.request("GET", `/version`, {
-        body: undefined,
-        query: undefined,
-        init,
-      });
+      return this.probe(`/version`, init);
     }
 }

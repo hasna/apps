@@ -8,56 +8,28 @@
 // created here. Failures are non-fatal: the runtime creates the same
 // directories on first use.
 import { existsSync, mkdirSync } from "node:fs";
-// --- Local path resolver -------------------------------------------------
-// @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
-// implementation preserves the resolver contract (XDG / macOS home layout
-// honoring HASNA_{CONFIG,DATA,STATE,CACHE}_HOME, with the same env-override
-// and home-override semantics the deleted package had).
+// --- Local data-home resolver ------------------------------------------
+// @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this copy mirrors
+// src/data-dir.ts and resolves the DATA kind only (HASNA_DATA_HOME, else the
+// XDG / macOS data home). No config/state/cache location is composed here.
 import { homedir as pathsResolverHomedir } from "node:os";
 import { join as pathsResolverJoin } from "node:path";
 
-const PATHS_RESOLVER_KIND_ENV = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME",
-};
-
-function pathsResolverBaseDir(kind, options) {
+function pathsResolverDataBaseDir(options) {
   const env = options.env ?? process.env;
-  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
+  const override = env.HASNA_DATA_HOME;
   if (typeof override === "string" && override.length > 0) return override;
   const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
+    return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
   }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
+  return pathsResolverJoin(home, ".local", "share", "hasna");
 }
 
-function pathsResolverResolve(kind, options) {
-  const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
-  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
-}
 function dataDir(options) {
-  return pathsResolverResolve("data", options);
+  const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
+  return pathsResolverJoin(pathsResolverDataBaseDir(options), appSegment);
 }
 import { homedir } from "node:os";
 import { join } from "node:path";
