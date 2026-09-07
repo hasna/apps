@@ -20,3 +20,6 @@ export function buildProviderRootKms(env:NodeJS.ProcessEnv=process.env,factory:(
   }catch{throw new Error("Provider root KMS decryption failed; check server key permissions and availability");}finally{client.destroy();}},
  };
 }
+
+/** Preserve managed ownership checks when deployment key configuration is removed. */
+export const unconfiguredProviderRootKms:ProviderRootKms={configured:false,generate:async()=>{throw Error("Managed provider KMS is not configured");},decrypt:async()=>{throw Error("Managed provider KMS is not configured");}};

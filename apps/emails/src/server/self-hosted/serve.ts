@@ -1,6 +1,6 @@
 import {buildManagedSenderResolver} from "./managed-provider-sender.js";
 import {ManagedProviderSecrets} from "./managed-provider-secrets.js";
-import {buildProviderRootKms} from "./provider-root-kms.js";
+import {buildProviderRootKms,unconfiguredProviderRootKms} from "./provider-root-kms.js";
 // Bootstraps and runs the Emails self-hosted service (Bun.serve).
 //
 // Wires the product-owned Postgres pool, the API-key verifier
@@ -67,8 +67,8 @@ export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
     `[emails-self-hosted] idp auth ${idpAuthenticator ? `jwks=${new URL(idpAuthenticator.jwksUrl).host}` : "disabled (no JWKS configured; idp tokens refused)"}`,
   );
   const sender = buildSelfHostedSender();
-  const providerRootKms = buildProviderRootKms();
-  const managedProviderSecrets = providerRootKms ? (tenant: string) => new ManagedProviderSecrets(client,tenant,providerRootKms) : undefined;
+  const providerRootKms = buildProviderRootKms() ?? unconfiguredProviderRootKms;
+  const managedProviderSecrets = (tenant: string) => new ManagedProviderSecrets(client,tenant,providerRootKms);
   const externalSender = buildSenderResolver(sender);
   // Secret-free boot line: WHICH identity outbound mail is signed with. Without
   // it, "the SES credentials are configured" was unverifiable from the running
@@ -82,7 +82,7 @@ export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
     store: new EmailsSelfHostedStore(client),
     verifier,
     sender,
-    resolveSender: managedProviderSecrets ? buildManagedSenderResolver(externalSender,managedProviderSecrets) : externalSender,
+    resolveSender: buildManagedSenderResolver(externalSender,managedProviderSecrets),
     managedProviderSecrets,
     resolveExternalSender: externalSender,
     tracking: readTrackingConfig(),

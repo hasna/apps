@@ -2800,7 +2800,7 @@ export async function handleSelfHostedRequest(
       const denied = requireTenantOperator(auth, "managing tenant provider credentials");
       if (denied) return denied;
       const backend = deps.managedProviderSecrets?.(auth.ctx.tenantId);
-      if (!backend) return json(503, { error: "Managed provider credentials require deployment KMS configuration.", reason: "provider_credential_backend_unconfigured" });
+      if (!backend || backend.configured === false) return json(503, { error: "Managed provider credentials require deployment KMS configuration.", reason: "provider_credential_backend_unconfigured" });
       const operation = credentialInstall ? "install" : secretJob ? (isRead ? "job" : "advance") : secretLifecycle![1] as "rewrap" | "rotate-root" | "revoke-root";
       const id = credentialInstall?.[1] ?? secretJob?.[1];
       try {

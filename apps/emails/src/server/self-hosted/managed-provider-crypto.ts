@@ -1,6 +1,7 @@
 import {createCipheriv,createDecipheriv,randomBytes} from "node:crypto";
 export interface RootContext { app:"emails";tenant:string;root:string;purpose:"provider-root" }
 export interface ProviderRootKms {
+ readonly configured?:boolean;
   generate(context:RootContext,signal:AbortSignal):Promise<{plaintext:Buffer;ciphertext:Buffer}>;
   decrypt(ciphertext:Buffer,context:RootContext,signal:AbortSignal):Promise<Buffer>;
 }

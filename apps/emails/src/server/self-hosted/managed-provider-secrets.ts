@@ -3,12 +3,13 @@ import type {PoolQueryClient,TypedQueryClient} from "../../storage-kit/index.js"
 import {openProviderBytes,sealProviderBytes,providerSecretAad,validateManagedProviderCredentials,type ManagedProviderCredentials,type ProviderRootKms,type SealedBytes} from "./managed-provider-crypto.js";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 interface RootRow {id:string;wrapped_root:string|null;state:"active"|"available"|"revoked";revoke_after?:string|Date|null}
-interface EnvelopeRow {provider_region?:string|null;provider_type?:string;provider_id:string;root_id:string;revision:number;payload:SealedBytes;wrapped_dek:SealedBytes}
+interface EnvelopeRow {provider_active?:boolean;provider_region?:string|null;provider_type?:string;provider_id:string;root_id:string;revision:number;payload:SealedBytes;wrapped_dek:SealedBytes}
 export interface ProviderSecretJob {id:string;operation:"rewrap"|"rotate-root"|"revoke-root";status:"pending"|"complete";root_id:string;processed:number;remaining:number}
 export class ManagedProviderSecretError extends Error {constructor(message:string,readonly status=409){super(message);}}
 /** Tenant-scoped, transactional envelope lifecycle. KMS never receives provider payloads. */
 export class ManagedProviderSecrets {
  constructor(private readonly pool:PoolQueryClient,readonly tenant:string,private readonly kms:ProviderRootKms,private readonly retentionMs=7*86400000){if(!Number.isSafeInteger(retentionMs)||retentionMs<0||retentionMs>365*86400000)throw new Error("Invalid provider root retention policy");}
+ get configured(){return this.kms.configured!==false;}
  private validateActor(actor:string){if(typeof actor!=="string"||!actor.trim()||actor.length>256||/[\x00-\x1f\x7f]/.test(actor))throw new ManagedProviderSecretError("An opaque authenticated actor identifier is required",400);}
  private async transaction<T>(action:(tx:TypedQueryClient,signal:AbortSignal)=>Promise<T>):Promise<T>{
   const signal=AbortSignal.timeout(10000);
@@ -58,8 +59,10 @@ export class ManagedProviderSecrets {
   return this.transaction(async(tx,signal)=>{
    // Same state lock ordering as writers/revocation prevents key retirement during unwrap.
    await tx.get("SELECT active_root_id FROM provider_secret_state WHERE tenant_id=$1 FOR UPDATE",[this.tenant]);
-   const row=await tx.get<EnvelopeRow>("SELECT e.*,p.type AS provider_type,p.region AS provider_region FROM provider_credential_envelopes e JOIN self_hosted_providers p ON p.tenant_id=e.tenant_id AND p.id=e.provider_id WHERE e.tenant_id=$1 AND e.provider_id=$2 AND p.active=true FOR SHARE OF e,p",[this.tenant,provider]);
+   if(!await tx.get("SELECT id FROM self_hosted_providers WHERE tenant_id=$1 AND id=$2 AND active=true FOR SHARE",[this.tenant,provider]))throw new ManagedProviderSecretError("Provider is not active or registered in this tenant");
+   const row=await tx.get<EnvelopeRow>("SELECT e.*,p.active AS provider_active,p.type AS provider_type,p.region AS provider_region FROM provider_credential_envelopes e JOIN self_hosted_providers p ON p.tenant_id=e.tenant_id AND p.id=e.provider_id WHERE e.tenant_id=$1 AND e.provider_id=$2 FOR SHARE OF e,p",[this.tenant,provider]);
    if(!row)return null;
+   if(row.provider_active===false)throw new ManagedProviderSecretError("Managed provider is inactive");
    const root=await this.rootKey(tx,row.root_id,signal);let dek:Buffer|undefined,plain:Buffer|undefined;
    try{dek=openProviderBytes(row.wrapped_dek,root,providerSecretAad(this.tenant,provider,row.revision,"dek"));plain=openProviderBytes(row.payload,dek,providerSecretAad(this.tenant,provider,row.revision,"payload"));const credentials=validateManagedProviderCredentials(JSON.parse(plain.toString()));if(credentials.type!==row.provider_type)throw new ManagedProviderSecretError("Provider type changed after credential installation");return{credentials,revision:row.revision,region:row.provider_region??null};}
    finally{root.fill(0);dek?.fill(0);plain?.fill(0);}
@@ -94,7 +97,7 @@ export class ManagedProviderSecrets {
   if(!UUID.test(id))throw new ManagedProviderSecretError("A lifecycle job UUID is required",400);
   const row=await tx.get<Omit<ProviderSecretJob,"remaining">>("SELECT id,operation,status,root_id,processed FROM provider_secret_jobs WHERE tenant_id=$1 AND id=$2",[this.tenant,id]);
   if(!row)throw new ManagedProviderSecretError("Provider secret job does not exist in this tenant",404);
-  const remaining=row.operation==="revoke-root"?0:(await tx.one<{count:number}>("SELECT count(*)::int AS count FROM provider_credential_envelopes WHERE tenant_id=$1 AND root_id<>$2",[this.tenant,row.root_id])).count;
+  const remaining=row.status==="complete"||row.operation==="revoke-root"?0:(await tx.one<{count:number}>("SELECT count(*)::int AS count FROM provider_credential_envelopes WHERE tenant_id=$1 AND root_id<>$2",[this.tenant,row.root_id])).count;
   return{...row,remaining};
  }
  async getJob(id:string):Promise<ProviderSecretJob>{return this.transaction(tx=>this.job(tx,id));}

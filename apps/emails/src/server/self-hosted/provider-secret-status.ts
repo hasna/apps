@@ -13,8 +13,8 @@ export async function readProviderSecretStatus(store: TenantScopedStore, tenant:
     if (!rows.length) return {
       source:metadata ? "server_managed_and_references" : "server_references", complete:true, checked:false,
       activeKeyId:metadata?.roots.find(root=>root.state==="active")?.id ?? null, availableKeyIds:metadata?.roots.filter(root=>root.state!=="revoked").map(root=>root.id) ?? [], referencedKeyIds:[...new Set(metadata?.envelopes.map(envelope=>envelope.root_id) ?? [])], managed_envelopes:metadata?.envelopes.length ?? 0,
-      capabilities:{status:true,rewrap:!!metadata,rotate_root:!!metadata,revoke_root:!!metadata},
-      lifecycle_requirement:metadata ? "Tenant root operations affect managed envelopes only. Injected credentials and workload roles remain externally managed." : "A server-managed tenant credential envelope backend is required for rewrap, rotate-root and revoke-root; injected credentials and workload roles remain externally managed.",
+      capabilities:{status:true,rewrap:!!metadata&&managed?.configured!==false,rotate_root:!!metadata&&managed?.configured!==false,revoke_root:!!metadata&&managed?.configured!==false},
+      lifecycle_requirement:metadata&&managed?.configured!==false ? "Tenant root operations affect managed envelopes only. Injected credentials and workload roles remain externally managed." : "A server-managed tenant credential envelope backend is required for rewrap, rotate-root and revoke-root; injected credentials and workload roles remain externally managed.",
       default_sender:defaultSender ? {type:defaultSender.provider,credential_source:defaultSender.credentialSource ?? "server_binding",externally_managed:true} : null,
       providers,
     };
@@ -23,7 +23,7 @@ export async function readProviderSecretStatus(store: TenantScopedStore, tenant:
       seen.add(id);
       const envelope=metadata?.envelopes.find(item=>item.provider_id===id);
       // Metadata status must not unwrap or probe managed credentials.
-      if(envelope){providers.push({provider_id:id,name:String(row.name??id),type:String(row.type),active:row.active!==false,configured:true,credential_source:"managed_envelope",externally_managed:false,revision:envelope.revision});continue;}
+      if(envelope){providers.push({provider_id:id,name:String(row.name??id),type:String(row.type),active:row.active!==false,configured:row.active!==false&&managed?.configured!==false,credential_source:"managed_envelope",externally_managed:false,revision:envelope.revision});continue;}
       const sender=await resolveSender?.(tenant,id), compatible=!!sender&&sender.provider===row.type;
       providers.push({provider_id:id,name:String(row.name??id),type:String(row.type),active:row.active!==false,configured:compatible,credential_source:compatible ? sender.credentialSource ?? "server_binding" : sender ? "binding_type_mismatch" : "unconfigured",externally_managed:compatible});
     }
