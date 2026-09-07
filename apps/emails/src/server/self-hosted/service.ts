@@ -1,3 +1,4 @@
+import { runtimeLogQuery, withRuntimeLog } from "./runtime-log.js";
 import { writeManagedProvider, type ManagedCredentialValidator } from "./managed-provider-write.js";
 import { runProviderSecretOperation } from "./provider-secret-operations.js";
 import { ManagedProviderSecretError } from "./managed-provider-secrets.js";
@@ -1144,13 +1145,15 @@ export async function handleSelfHostedRequest(
             body.idempotency_key,
             auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator",
           );
-          const result = await runAddressProvisioningJob(
-            auth.store,
-            auth.ctx.tenantId,
-            job.id,
-            options,
-          );
-          return json(200, { job: publicJob(result) });
+          return await withRuntimeLog(auth.store, "daemon", "provision_address", async () => {
+            const result = await runAddressProvisioningJob(
+              auth.store,
+              auth.ctx.tenantId,
+              job.id,
+              options,
+            );
+            return json(200, { job: publicJob(result) });
+          });
         }
         const match = path.match(/^\/v1\/provision\/jobs\/([^/]+)(\/run)?$/)!;
         if (match[2]) {
@@ -1159,17 +1162,19 @@ export async function handleSelfHostedRequest(
           const body = await readJsonBody(req);
           if (Object.keys(body).length)
             return json(400, { error: "Provisioning job inputs are immutable" });
-          const result = await runAddressProvisioningJob(
-            auth.store,
-            auth.ctx.tenantId,
-            decodeURIComponent(match[1]!),
-            {
-              resolveSender: deps.resolveSender,
-              env: deps.env,
-              mx: deps.provisioning?.resolveMx,
-            },
-          );
-          return json(200, { job: publicJob(result) });
+          return await withRuntimeLog(auth.store, "daemon", "provision_job", async () => {
+            const result = await runAddressProvisioningJob(
+              auth.store,
+              auth.ctx.tenantId,
+              decodeURIComponent(match[1]!),
+              {
+                resolveSender: deps.resolveSender,
+                env: deps.env,
+                mx: deps.provisioning?.resolveMx,
+              },
+            );
+            return json(200, { job: publicJob(result) });
+          });
         }
         if (method !== "GET") return json(405, { error: "method not allowed" });
         const job = await auth.store.getProvisioningJob(
@@ -2689,6 +2694,21 @@ export async function handleSelfHostedRequest(
       }
     }
 
+    if (path === "/v1/runtime/logs") {
+      if (method !== "GET") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, read);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "reading runtime logs");
+      if (denied) return denied;
+      let query;
+      try {
+        if ([...url.searchParams.keys()].some(key => key !== "component" && key !== "lines") || url.searchParams.getAll("component").length > 1 || url.searchParams.getAll("lines").length > 1) throw Error("Only component and lines are supported");
+        query = runtimeLogQuery(url.searchParams.get("component") ?? "daemon", url.searchParams.get("lines") ?? "80");
+      } catch (error) { return json(400, { error: (error as Error).message }); }
+      const items = await auth.store.tailRuntimeLogs(query.component, query.limit);
+      return json(200, { scope: "tenant_api_operations", component: query.component, items, container_stdout: false, worker_liveness: "not_measured" });
+    }
+
     if (path === "/v1/scheduled/run") {
       if (method !== "POST") return json(405, { error: "method not allowed" });
       const auth = await authenticate(deps, req, url, write);
@@ -2711,10 +2731,12 @@ export async function handleSelfHostedRequest(
         if (!response) throw new Error("Send handler was not available");
         return response;
       };
-      const result = await runScheduledBatch(auth.store, send, limit);
-      const { runSequenceBatch } = await import("./sequence-worker.js");
-      const sequenceResult = sequenceLimit === 0 ? { sequences: { attempted: 0, sent: 0, failed: 0, pending: 0, skipped: 0 }, sequence_items: [] } : await runSequenceBatch(auth.store.sequenceWorker(), send, sequenceLimit);
-      return json(200, { ...result, ...sequenceResult, sequence_execution: sequenceLimit === 0 ? "not_requested" : "executed" });
+      return await withRuntimeLog(auth.store, "scheduler", "scheduled_run", async () => {
+        const result = await runScheduledBatch(auth.store, send, limit);
+        const { runSequenceBatch } = await import("./sequence-worker.js");
+        const sequenceResult = sequenceLimit === 0 ? { sequences: { attempted: 0, sent: 0, failed: 0, pending: 0, skipped: 0 }, sequence_items: [] } : await runSequenceBatch(auth.store.sequenceWorker(), send, sequenceLimit);
+        return json(200, { ...result, ...sequenceResult, sequence_execution: sequenceLimit === 0 ? "not_requested" : "executed" });
+      });
     }
 
     if (path === "/v1/inbox/smtp") {
@@ -2725,8 +2747,11 @@ export async function handleSelfHostedRequest(
       if (denied) return denied;
       try {
         if (method === "GET") return json(200, await smtpImportCapability(auth.store, url.searchParams.has("provider_id") ? url.searchParams.get("provider_id") : undefined));
-        const result = await importSmtpMessage(deps.store, auth.store, auth.ctx.tenantId, await readJsonBody(req, SMTP_IMPORT_JSON_BYTES));
-        return json(result.duplicate ? 200 : 201, result);
+        const body = await readJsonBody(req, SMTP_IMPORT_JSON_BYTES);
+        return await withRuntimeLog(auth.store, "inbound", "smtp_import", async () => {
+            const result = await importSmtpMessage(deps.store, auth.store, auth.ctx.tenantId, body);
+            return json(result.duplicate ? 200 : 201, result);
+        });
       } catch (error) { if (error instanceof SmtpImportError) return json(error.status, { error: error.message }); throw error; }
     }
 
@@ -2740,7 +2765,9 @@ export async function handleSelfHostedRequest(
       const selector = url.searchParams.has("provider_id") ? url.searchParams.get("provider_id") : undefined;
       try {
         if (!relayMatch[1]) return json(200, (await resolveWebhookRelay(auth.store, auth.ctx.tenantId, selector, deps.env ?? process.env)).capability);
-        return await relayWebhook(deps.store, auth.store, auth.ctx.tenantId, selector, relayMatch[1], providerWebhookRequest(req.url, await readJsonBody(req, 2 * 1048576)), deps.env ?? process.env, deps.webhookRelay);
+        const provider = relayMatch[1];
+        const inbound = providerWebhookRequest(req.url, await readJsonBody(req, 2 * 1048576));
+        return await withRuntimeLog(auth.store, "inbound", "webhook_relay", async () => relayWebhook(deps.store, auth.store, auth.ctx.tenantId, selector, provider, inbound, deps.env ?? process.env, deps.webhookRelay));
       } catch (error) {
         if (error instanceof WebhookRelayError) return json(error.status, { error: error.message });
         return json(503, { error: "Webhook relay did not confirm durable completion; retry the original event." });
@@ -2769,7 +2796,7 @@ export async function handleSelfHostedRequest(
       const body = await readJsonBody(req);
       const stringFields = ["source_id", "bucket", "prefix", "region", "provider_id", "queue_url", "profile", "cursor"];
       if (Object.keys(body).some(key => ![...stringFields, "force", "all_buckets", "limit"].includes(key)) || stringFields.some(key => body[key] !== undefined && (typeof body[key] !== "string" || !(body[key] as string).trim())) || ["force", "all_buckets"].some(key => body[key] !== undefined && typeof body[key] !== "boolean")) return json(400, { error: "Invalid ingest operation options" });
-      try { return json(200, await executeIngestBatch(deps.store, auth.store, auth.ctx.tenantId, ingestOperation[1] as "sync-s3" | "watch", body as IngestApiInput, deps.env ?? process.env, deps.ingestCloud)); }
+      try { return await withRuntimeLog(auth.store, ingestOperation[1] === "watch" ? "inbound" : "sync", ingestOperation[1] === "watch" ? "watch" : "sync_s3", async () => json(200, await executeIngestBatch(deps.store, auth.store, auth.ctx.tenantId, ingestOperation[1] as "sync-s3" | "watch", body as IngestApiInput, deps.env ?? process.env, deps.ingestCloud))); }
       catch (error) { if (error instanceof IngestApiError) return json(error.status, { error: error.message }); throw error; }
     }
 
@@ -2783,7 +2810,7 @@ export async function handleSelfHostedRequest(
       const body = await readJsonBody(req);
       if (Object.keys(body).some(key => !["after", "limit"].includes(key)) || (body.after !== undefined && (typeof body.after !== "string" || !body.after.trim())) || (body.limit !== undefined && (typeof body.limit !== "number" || !Number.isSafeInteger(body.limit) || body.limit < 1 || body.limit > 10))) return json(400, { error: "Use optional non-empty after cursor and integer limit from 1 to 10." });
       try {
-        return json(200, await syncProviderDelivery(auth.store, auth.ctx.tenantId, decodeURIComponent(providerSync[1]!), { after: body.after as string | undefined, limit: body.limit as number | undefined, resolveSender: deps.resolveSender }));
+        return await withRuntimeLog(auth.store, "sync", "provider_sync", async () => json(200, await syncProviderDelivery(auth.store, auth.ctx.tenantId, decodeURIComponent(providerSync[1]!), { after: body.after as string | undefined, limit: body.limit as number | undefined, resolveSender: deps.resolveSender })));
       } catch (error) {
         if (error instanceof ProviderSyncError) return json(error.status, { error: error.message });
         throw error;
@@ -2864,15 +2891,17 @@ export async function handleSelfHostedRequest(
       let options;
       try { options = normalizeForwardingOptions(await readJsonBody(req)); }
       catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid forwarding options" }); }
-      const result = await runForwardingBatch(auth.store, async (payload, forwardingHeaders) => {
-        const headers = new Headers(req.headers);
-        headers.set("Content-Type", "application/json"); headers.delete("Content-Length");
-        const response = await handleSelfHostedRequest(deps,
-          new Request(new URL("/v1/messages/send",req.url), { method: "POST",headers,body: JSON.stringify(payload) }), context, forwardingHeaders);
-        if (!response) throw new Error("Forwarding send handler unavailable");
-        return response;
-      }, options);
-      return json(200, result);
+      return await withRuntimeLog(auth.store, "scheduler", "forwarding_run", async () => {
+        const result = await runForwardingBatch(auth.store, async (payload, forwardingHeaders) => {
+          const headers = new Headers(req.headers);
+          headers.set("Content-Type", "application/json"); headers.delete("Content-Length");
+          const response = await handleSelfHostedRequest(deps,
+            new Request(new URL("/v1/messages/send",req.url), { method: "POST",headers,body: JSON.stringify(payload) }), context, forwardingHeaders);
+          if (!response) throw new Error("Forwarding send handler unavailable");
+          return response;
+        }, options);
+        return json(200, result);
+      });
     }
 
     // ---- generic resources (contacts/providers/templates/groups/…) --------

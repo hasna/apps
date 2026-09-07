@@ -7,15 +7,14 @@
 //     availability record and render as `≥N` when the read could not be completed.
 //   • `daemon restart` reports that no supervisor is configured, which is a
 //     statement about THIS process, not about the server — so it makes no request.
-//   • `logs tail` reads files under this machine's data directory. It opens no
-//     database and makes no request, and says so when there is nothing there.
+//   • `logs tail` reads tenant-scoped API lifecycle events without claiming worker liveness.
 //
 // The tests drive the REAL commands against an out-of-process /v1 stub, with a
 // temporary HOME so the log tail can never read (or create) anything in the
 // operator's real data directory.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startV1Stub, type V1Stub, type V1StubResources } from "../../test-support/v1-stub.js";
@@ -42,11 +41,6 @@ afterEach(() => {
   else process.env.HOME = priorHome;
   rmSync(home, { recursive: true, force: true });
 });
-
-/** The directory `getDataDir()` resolves to under the temporary HOME. */
-function dataDir(): string {
-  return join(home, ".hasna", "emails");
-}
 
 async function runDaemon(args: string[]) {
   const program = new Command();
@@ -147,47 +141,28 @@ describe("daemon restart reports this process, not the server", () => {
   });
 });
 
-describe("logs tail reads this machine's log files", () => {
-  it("tails an existing component log", async () => {
-    mkdirSync(dataDir(), { recursive: true });
-    writeFileSync(join(dataDir(), "scheduler.log"), ["first", "second", "third"].join("\n"), "utf-8");
-
-    const { data, output } = await runDaemon(["logs", "tail", "--component", "scheduler", "--lines", "2"]);
-    const result = data as { component: string; files: Array<{ exists: boolean; text: string }> };
-
-    expect(result.component).toBe("scheduler");
-    expect(result.files[0]?.exists).toBe(true);
-    expect(result.files[0]?.text).toBe("second\nthird");
-    expect(output).toContain("second");
-    expect(output).not.toContain("not available in the self-hosted client");
+describe("logs tail reads tenant API lifecycle events", () => {
+  async function api(items: unknown[], run: () => Promise<void>) {
+    const server = Bun.serve({hostname:"127.0.0.1",port:0,fetch: request => {
+      expect(request.headers.get("authorization")).toMatch(/^Bearer /);
+      const url=new URL(request.url);expect(url.pathname).toBe("/v1/runtime/logs");
+      return Response.json({scope:"tenant_api_operations",component:url.searchParams.get("component"),items,container_stdout:false,worker_liveness:"not_measured"});
+    }});
+    const previous=process.env.EMAILS_SELF_HOSTED_URL;process.env.EMAILS_SELF_HOSTED_URL=`http://127.0.0.1:${server.port}`;
+    try{await run();}finally{server.stop(true);if(previous===undefined)delete process.env.EMAILS_SELF_HOSTED_URL;else process.env.EMAILS_SELF_HOSTED_URL=previous;}
+  }
+  it("renders API events with original component and line options", async () => {
+    await api([{id:crypto.randomUUID(),request_id:crypto.randomUUID(),component:"scheduler",operation:"scheduled_run",event:"returned",http_status:200,created_at:"2026-09-07T00:00:00.000Z"}],async()=>{
+      const {data,output}=await runDaemon(["logs","tail","--component","scheduler","--lines","2"]);
+      expect(data).toMatchObject({scope:"tenant_api_operations",container_stdout:false});expect(output).toContain("scheduled_run  returned HTTP 200");expect(output).not.toContain("stopped");
+    });
   });
-
-  it("says the log is absent instead of refusing", async () => {
-    const { data, output } = await runDaemon(["logs", "tail", "--component", "inbound"]);
-    const result = data as { files: Array<{ exists: boolean }> };
-
-    expect(result.files.every((file) => !file.exists)).toBe(true);
-    expect(output).toContain("No inbound log files found");
-    // An empty tail must not read as "the deployment produced no logs": nothing in
-    // this package writes these files, and the server's logs are not on /v1.
-    expect(output).toContain("no process in this package writes them");
-    expect(output).toContain("not published over /v1");
+  it("empty components do not claim a stopped worker",async()=>{
+    await api([],async()=>{const {data,output}=await runDaemon(["logs","tail","--component","nightly"]);expect(data).toMatchObject({items:[],worker_liveness:"not_measured"});expect(output).toContain("not evidence that a worker is stopped");});
   });
-
-  it("still rejects unknown and inherited-key components", async () => {
-    const originalExit = process.exit;
-    const originalError = console.error;
-    const errors: string[] = [];
-    console.error = ((message?: unknown) => { errors.push(String(message ?? "")); }) as typeof console.error;
-    process.exit = ((code?: number) => { throw new Error(`process.exit:${code ?? 0}`); }) as typeof process.exit;
-    try {
-      for (const component of ["nope", "constructor", "__proto__"]) {
-        await expect(runDaemon(["logs", "tail", "--component", component])).rejects.toThrow("process.exit:1");
-        expect(errors.join("\n")).toContain(`Unknown log component: ${component}`);
-      }
-    } finally {
-      process.exit = originalExit;
-      console.error = originalError;
-    }
+  it("rejects invalid component and line inputs before transport",async()=>{
+    const originalExit=process.exit,originalError=console.error;console.error=()=>{};process.exit=((code?:number)=>{throw Error(`process.exit:${code}`);}) as typeof process.exit;
+    try{for(const args of [["--component","constructor"],["--component","__proto__"],["--lines","2x"],["--lines","501"]])await expect(runDaemon(["logs","tail",...args])).rejects.toThrow("process.exit:1");}
+    finally{process.exit=originalExit;console.error=originalError;}
   });
 });

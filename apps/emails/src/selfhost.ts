@@ -1871,6 +1871,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Read tenant API worker lifecycle logs (operator only; not container stdout or worker liveness) */
+    async tailRuntimeLogs(query?: { "component"?: "daemon" | "sync" | "inbound" | "scheduler" | "nightly"; "lines"?: number }, init?: RequestInit): Promise<{ "scope": "tenant_api_operations"; "component": string; "container_stdout": false; "worker_liveness": "not_measured"; "items": Array<{ "id": string; "request_id": string; "component": string; "operation": string; "event": "started" | "returned" | "threw"; "created_at": string; "http_status": number | null }> }> {
+      return this.request("GET", `/v1/runtime/logs`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     /** List tenant-scoped sandbox-emails */
     async listResourceSandboxEmails(query?: { "limit"?: number; "offset"?: number; "provider_id"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "provider_id": string | null; "from_address": string | null; "to_addresses": unknown; "cc_addresses": unknown; "bcc_addresses": unknown; "reply_to": string | null; "subject": string | null; "html": string | null; "text_body": string | null; "attachments_json": string | null; "headers_json": string | null; "created_at": string; "id": string; "tenant_id": string; "updated_at": string }> }> {
       return this.request("GET", `/v1/sandbox-emails`, {

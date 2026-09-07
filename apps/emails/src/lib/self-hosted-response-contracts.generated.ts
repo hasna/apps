@@ -29905,6 +29905,143 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "GET",
+    "operationId": "tailRuntimeLogs",
+    "path": "/v1/runtime/logs",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "scope",
+        "component",
+        "items",
+        "container_stdout",
+        "worker_liveness"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": [
+            "tenant_api_operations"
+          ]
+        },
+        "component": {
+          "type": "string"
+        },
+        "container_stdout": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "worker_liveness": {
+          "type": "string",
+          "enum": [
+            "not_measured"
+          ]
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "request_id",
+              "component",
+              "operation",
+              "event",
+              "created_at",
+              "http_status"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "component": {
+                "type": "string"
+              },
+              "operation": {
+                "type": "string"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "started",
+                  "returned",
+                  "threw"
+                ]
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "http_status": {
+                "type": "integer",
+                "nullable": true
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "tailRuntimeLogs",
+    "path": "/v1/runtime/logs",
+    "status": 400,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "tailRuntimeLogs",
+    "path": "/v1/runtime/logs",
+    "status": 401,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "tailRuntimeLogs",
+    "path": "/v1/runtime/logs",
+    "status": 403,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "tailRuntimeLogs",
+    "path": "/v1/runtime/logs",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "tailRuntimeLogs",
+    "path": "/v1/runtime/logs",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "tailRuntimeLogs",
+    "path": "/v1/runtime/logs",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
     "operationId": "listResourceSandboxEmails",
     "path": "/v1/sandbox-emails",
     "status": 200,

@@ -1,3 +1,4 @@
+import type { RuntimeLogEntry, RuntimeComponent } from "./runtime-log.js";
 import * as domainConnectStore from "./domain-connect-store.js";
 import type { DomainConnectInput, DomainConnectClaim, DomainConnectResult } from "./domain-connect.js";
 import type { TrackingDocument } from "./tracking.js";
@@ -2252,6 +2253,14 @@ export class TenantScopedStore {
     private readonly allowUnsafeTestTransactions = false,
     private readonly repairPolicy: AttachmentRepairPolicy = attachmentRepairPolicy(undefined),
   ) {}
+
+  async appendRuntimeLog(entry: Omit<RuntimeLogEntry, "id" | "created_at">): Promise<void> {
+    await this.client.execute("INSERT INTO runtime_logs(id,tenant_id,request_id,component,operation,event,http_status) VALUES($1,$2,$3,$4,$5,$6,$7)", [crypto.randomUUID(), this.tenantId, entry.request_id, entry.component, entry.operation, entry.event, entry.http_status]);
+  }
+  async tailRuntimeLogs(component: RuntimeComponent, limit: number): Promise<RuntimeLogEntry[]> {
+    const rows = await this.client.many<RuntimeLogEntry>("SELECT id,request_id,component,operation,event,http_status,created_at FROM runtime_logs WHERE tenant_id=$1 AND component=$2 ORDER BY created_at DESC,id DESC LIMIT $3", [this.tenantId, component, limit]);
+    return rows.map(row => ({ ...row, created_at: new Date(row.created_at).toISOString() }));
+  }
 
   resolveDomainConnect(input: DomainConnectInput) {
     return domainConnectStore.resolveDomainConnect(

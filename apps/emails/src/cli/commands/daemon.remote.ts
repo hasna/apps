@@ -1,24 +1,7 @@
 import type { Command } from "commander";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import chalk from "../../lib/chalk-lite.js";
-import { getEmailsDataDir } from "../../lib/config.js";
 import { renderStatusCount, renderStatusUnavailable } from "../../lib/status-availability.js";
 import { handleError } from "../utils.js";
-
-type LogComponent = "daemon" | "sync" | "inbound" | "scheduler" | "nightly";
-
-const LOG_FILES: Record<LogComponent, string[]> = {
-  daemon: ["daemon.log", "provision-daemon.log"],
-  sync: ["sync.log", "nightly-sync.log"],
-  inbound: ["inbound.log", "watch.log"],
-  scheduler: ["scheduler.log"],
-  nightly: ["nightly-sync.log"],
-};
-
-function isLogComponent(value: string): value is LogComponent {
-  return Object.hasOwn(LOG_FILES, value);
-}
 
 /**
  * The provisioning queue, taken from the SAME status facts `emails status` reports.
@@ -97,19 +80,6 @@ function formatDaemonStatus(status: Awaited<ReturnType<typeof daemonStatus>>): s
   return lines.join("\n");
 }
 
-function readTail(component: LogComponent, lines: number): { component: LogComponent; files: Array<{ path: string; exists: boolean; text: string }> } {
-  const dir = getEmailsDataDir();
-  return {
-    component,
-    files: LOG_FILES[component].map((name) => {
-      const path = join(dir, name);
-      if (!existsSync(path)) return { path, exists: false, text: "" };
-      const text = readFileSync(path, "utf-8").split(/\r?\n/).slice(-Math.max(1, lines)).join("\n");
-      return { path, exists: true, text };
-    }),
-  };
-}
-
 export function registerDaemonCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
   const daemon = program.command("daemon").description("Inspect email daemon and background worker health");
 
@@ -148,35 +118,19 @@ export function registerDaemonCommands(program: Command, output: (data: unknown,
       }
     });
 
-  // Log tailing is PROCESS-LOCAL: it reads whatever this machine's `emails`
-  // processes wrote under the data directory. It opens no database and makes no
-  // request, which is why it does not belong behind a mode guard — but it is also
-  // NOT the server's log. Nothing in this package writes these files today, and the
-  // operator's service logs are not published over /v1, so an empty result states
-  // both of those things rather than implying the deployment produced no output.
-  const logs = program.command("logs").description("Inspect emails logs written by this machine's own processes");
-  logs
-    .command("tail")
-    .description("Tail emails logs written by this machine's processes (NOT the self-hosted server's)")
+  const logs = program.command("logs").description("Inspect tenant API worker lifecycle logs");
+  logs.command("tail")
+    .description("Read persisted API operation logs; not container stdout or a worker heartbeat")
     .option("--component <name>", "daemon | sync | inbound | scheduler | nightly", "daemon")
-    .option("--lines <n>", "Lines to show from each file", "80")
-    .action((opts: { component: string; lines: string }) => {
+    .option("--lines <n>", "Newest log records to show (1-500)", "80")
+    .action(async (opts: { component: string; lines: string }) => {
       try {
-        if (!isLogComponent(opts.component)) handleError(new Error(`Unknown log component: ${opts.component}`));
-        const component = opts.component;
-        const result = readTail(component, parseInt(opts.lines, 10) || 80);
-        const existing = result.files.filter((file) => file.exists);
-        const formatted = existing.length
-          ? existing.map((file) => `${chalk.bold(file.path)}\n${file.text}`).join("\n\n")
-          : [
-            chalk.dim(`No ${component} log files found in ${getEmailsDataDir()}.`),
-            chalk.dim("This reads THIS machine's files only, and no process in this package writes them"),
-            chalk.dim("today. The self-hosted server's logs are not published over /v1 — read them where"),
-            chalk.dim("the service runs (for example its container logs)."),
-          ].join("\n");
-        output({ ...result, scope: "this_machine", server_logs_available: false }, formatted);
-      } catch (e) {
-        handleError(e);
-      }
+        const { tailApiRuntimeLogs } = await import("../../lib/runtime-log-api.js");
+        const result = await tailApiRuntimeLogs(opts.component, opts.lines);
+        const formatted = result.items.length
+          ? result.items.map(item => `${item.created_at}  ${item.operation}  ${item.event}${item.http_status === null ? "" : ` HTTP ${item.http_status}`}  ${item.request_id}`).join("\n")
+          : `No recorded ${result.component} API worker events. Older activity and uninstrumented workers are not reconstructed; this is not evidence that a worker is stopped.`;
+        output(result, `${formatted}\nAPI operation logs only; container stdout and worker liveness are not measured.`);
+      } catch (error) { handleError(error); }
     });
 }

@@ -3090,6 +3090,27 @@ DO $$ DECLARE tab TEXT; BEGIN
 END $$;
 `);
 
+const RUNTIME_LOGS = defineMigration("0037_runtime_logs", `
+CREATE TABLE runtime_logs (
+ id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES tenants(id), request_id UUID NOT NULL,
+ component TEXT NOT NULL CHECK(component IN ('daemon','sync','inbound','scheduler','nightly')),
+ operation TEXT NOT NULL CHECK(operation IN ('scheduled_run','forwarding_run','sync_s3','watch','provider_sync','smtp_import','webhook_relay','provision_address','provision_job')),
+ event TEXT NOT NULL CHECK(event IN ('started','returned','threw')),
+ http_status INTEGER CHECK(http_status BETWEEN 100 AND 599),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+ CHECK ((event='returned')=(http_status IS NOT NULL))
+);
+CREATE INDEX runtime_logs_tenant_component_tail ON runtime_logs(tenant_id,component,created_at DESC,id DESC);
+ALTER TABLE runtime_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime_logs FORCE ROW LEVEL SECURITY;
+CREATE POLICY runtime_logs_read ON runtime_logs FOR SELECT USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+CREATE POLICY runtime_logs_append ON runtime_logs FOR INSERT WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+CREATE FUNCTION reject_runtime_log_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'Runtime logs are append-only'; END;
+$$;
+CREATE TRIGGER runtime_logs_append_only BEFORE UPDATE OR DELETE ON runtime_logs FOR EACH ROW EXECUTE FUNCTION reject_runtime_log_mutation();
+`);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3134,5 +3155,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     SMTP_SUBMISSION_RECEIPTS,
     MESSAGE_TRACKING,
     MANAGED_PROVIDER_CREDENTIALS,
+    RUNTIME_LOGS,
   ];
 }

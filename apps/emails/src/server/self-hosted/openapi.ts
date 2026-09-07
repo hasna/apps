@@ -4877,3 +4877,131 @@ emailsSelfHostedOpenApi.paths!["/v1/providers/secrets/jobs/{id}/advance"]={post:
 emailsSelfHostedOpenApi.paths!["/v1/providers/{id}/credentials"]={put:{operationId:"installProviderCredentials",summary:"Install encrypted tenant provider credentials with a revision fence",security:[{apiKeyAuth:[]},{bearerAuth:[]}],parameters:[{name:"id",in:"path",required:true,schema:{type:"string"}}],requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["credentials","expected_revision"],properties:{expected_revision:{type:"integer",minimum:1,nullable:true},credentials:{type:"object",additionalProperties:false,required:["type"],properties:{type:{type:"string",enum:["ses","resend"]},api_key:{type:"string",writeOnly:true},access_key:{type:"string",writeOnly:true},secret_key:{type:"string",writeOnly:true}}}}}}}},responses:{"200":{description:"Stored encrypted credential revision; provider validity has not been probed",content:{"application/json":{schema:{type:"object",required:["provider_id","revision","root_id","status","checked"],properties:{provider_id:{type:"string"},revision:{type:"integer",minimum:1},root_id:{type:"string",format:"uuid"},status:{type:"string",enum:["complete"]},checked:{type:"boolean",enum:[false]}}}}}},"400":errorResponse("Invalid credentials or expected revision."),"404":errorResponse("Active tenant provider not found."),"409":errorResponse("Credential revision changed; inspect status before updating."),"503":errorResponse("Credential installation could not be confirmed; inspect status.")}}};
 emailsSelfHostedOpenApi.paths!["/v1/providers/{id}/managed"]={put:{operationId:"writeManagedProvider",summary:"Atomically write provider metadata and encrypted credentials after server validation",security:[{apiKeyAuth:[]},{bearerAuth:[]}],parameters:[{name:"id",in:"path",required:true,schema:{type:"string",format:"uuid"}}],requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["credentials","expected_revision"],properties:{create:{type:"boolean"},name:{type:"string"},type:{type:"string",enum:["ses","resend"]},region:{type:"string",nullable:true},skip_validation:{type:"boolean"},expected_revision:{type:"integer",minimum:1,nullable:true},credentials:{type:"object",additionalProperties:false,properties:{api_key:{type:"string",writeOnly:true},access_key:{type:"string",writeOnly:true},secret_key:{type:"string",writeOnly:true}}}}}}}},responses:{"200":{description:"Atomic provider and credential write confirmed",content:{"application/json":{schema:{type:"object",required:["provider_id","revision","root_id","status","checked"],properties:{provider_id:{type:"string"},revision:{type:"integer",minimum:1},root_id:{type:"string",format:"uuid"},status:{type:"string",enum:["complete"]},checked:{type:"boolean"}}}}}},"400":errorResponse("Invalid provider fields."),"404":errorResponse("Active provider not found in this tenant."),"409":errorResponse("Provider already exists or credential revision changed."),"422":errorResponse("Server credential validation failed; nothing was saved."),"503":errorResponse("Provider write could not be confirmed; inspect its ID and credential revision before retrying.")}}};
 addRoutineErrorParity(emailsSelfHostedOpenApi);
+
+
+emailsSelfHostedOpenApi.paths!["/v1/runtime/logs"] = {
+  "get": {
+    "operationId": "tailRuntimeLogs",
+    "summary": "Read tenant API worker lifecycle logs (operator only; not container stdout or worker liveness)",
+    "security": [
+      {
+        "apiKeyAuth": []
+      },
+      {
+        "bearerAuth": []
+      }
+    ],
+    "parameters": [
+      {
+        "name": "component",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "daemon",
+            "sync",
+            "inbound",
+            "scheduler",
+            "nightly"
+          ]
+        }
+      },
+      {
+        "name": "lines",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500
+        }
+      }
+    ],
+    "responses": {
+      "200": {
+        "description": "Persisted runtime events, newest first",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "scope",
+                "component",
+                "items",
+                "container_stdout",
+                "worker_liveness"
+              ],
+              "properties": {
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "tenant_api_operations"
+                  ]
+                },
+                "component": {
+                  "type": "string"
+                },
+                "container_stdout": {
+                  "type": "boolean",
+                  "enum": [
+                    false
+                  ]
+                },
+                "worker_liveness": {
+                  "type": "string",
+                  "enum": [
+                    "not_measured"
+                  ]
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "request_id",
+                      "component",
+                      "operation",
+                      "event",
+                      "created_at",
+                      "http_status"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "request_id": {
+                        "type": "string"
+                      },
+                      "component": {
+                        "type": "string"
+                      },
+                      "operation": {
+                        "type": "string"
+                      },
+                      "event": {
+                        "type": "string",
+                        "enum": [
+                          "started",
+                          "returned",
+                          "threw"
+                        ]
+                      },
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "http_status": {
+                        "type": "integer",
+                        "nullable": true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+};
+for (const code of ["400", "401", "403", "404", "405", "503"]) (emailsSelfHostedOpenApi.paths!["/v1/runtime/logs"]!.get as { responses: Record<string, unknown> }).responses[code] = errorResponse("Runtime log request failed");
