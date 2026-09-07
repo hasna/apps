@@ -111,20 +111,39 @@ function readMarker(dir: string): Record<string, unknown> | null {
   return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
 }
 
-async function withServer(fn: (ctx: { baseUrl: string; store: MemorySkillsStore }) => Promise<void>): Promise<void> {
+async function withServer(fn: (ctx: { baseUrl: string; store: MemorySkillsStore }) => Promise<void>, port = 0): Promise<void> {
   const store = new MemorySkillsStore();
   await store.ensureBootstrapApiKey(SYNC_AUTH, PRINCIPAL);
   const fetchHandler = await createSkillsFetchHandler({
     store,
     config: { inlineWorker: false, allowEphemeralStore: true },
   });
-  const server = Bun.serve({ port: 0, fetch: fetchHandler });
+  const server = Bun.serve({ hostname: "127.0.0.1", port, fetch: fetchHandler });
   try {
     await fn({ baseUrl: `http://127.0.0.1:${server.port}`, store });
   } finally {
     server.stop(true);
   }
 }
+
+test("reconciliation fixture refuses an occupied IPv4 port before sending any request", async () => {
+  let requests = 0;
+  let callbackInvoked = false;
+  const occupied = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch() {
+    requests++;
+    return new Response("Owned collision listener");
+  } });
+  try {
+    await expect(withServer(async ({ baseUrl }) => {
+      callbackInvoked = true;
+      await fetch(baseUrl);
+    }, occupied.port)).rejects.toMatchObject({ code: "EADDRINUSE" });
+    expect(callbackInvoked).toBe(false);
+    expect(requests).toBe(0);
+  } finally {
+    occupied.stop(true);
+  }
+});
 
 /** Seed one skill onto the instance through the real publish path. */
 async function seedRemote(client: RemoteSkillsClient, seedCorpus: string, slug: string): Promise<string> {
@@ -517,6 +536,7 @@ describe("reconcileRegistry", () => {
       // P1 names. The stub isolates the client path: resolve the credential + origin,
       // enumerate, plan — and write nothing.
       const server = Bun.serve({
+        hostname: "127.0.0.1",
         port: 0,
         fetch(req) {
           const url = new URL(req.url);
