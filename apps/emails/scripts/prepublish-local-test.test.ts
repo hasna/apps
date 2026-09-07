@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { buildPrepublishTestEnv } from "./prepublish-local-test.mjs";
@@ -45,4 +47,30 @@ describe("canonical prepublish test isolation", () => {
     expect(env.CI).toBe("1");
     expect(operator).toEqual(before);
   });
+});
+
+
+test("the actual runner creates private fixture directories under a group-writable umask", () => {
+  const fixture = mkdtempSync(join(tmpdir(), "emails-runner-permissions-"));
+  try {
+    mkdirSync(join(fixture, "tmp"), { mode: 0o700 });
+    const file = join(fixture, "permissions.test.ts");
+    writeFileSync(file, `import { expect, test } from "bun:test";
+import { statSync } from "node:fs";
+import { join } from "node:path";
+test("private fixture directories", () => {
+  for (const name of ["config", "data", "cache", "state", "tmp"]) {
+    expect(statSync(join(process.env.HOME!, name)).mode & 0o777).toBe(0o700);
+  }
+});`);
+    const result = spawnSync(process.execPath, ["-e", `
+      process.umask(0o002);
+      const result = Bun.spawnSync([process.execPath, ${JSON.stringify(join(import.meta.dir, "prepublish-local-test.mjs"))}, ${JSON.stringify(file)}], { stdout: "pipe", stderr: "pipe" });
+      process.stdout.write(result.stdout); process.stderr.write(result.stderr);
+      process.exit(result.exitCode);
+    `], { encoding: "utf8", env: buildPrepublishTestEnv(process.env, fixture) });
+    expect(result.status, result.stderr).toBe(0);
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
