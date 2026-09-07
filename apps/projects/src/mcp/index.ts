@@ -48,7 +48,7 @@ import {
   removeProjectTags,
   unlinkProjectIntegrationFields,
 } from "../lib/project-management.js";
-import { doctorWorkspace } from "../lib/workspace-doctor.js";
+import { doctorWorkspace, doctorWorkspaceWithStore } from "../lib/workspace-doctor.js";
 import {
   buildProjectAgentContext,
   buildProjectHandoff,
@@ -1927,14 +1927,16 @@ server.tool(
   },
   async (input) => {
     const store = resolveProjectStore();
-    const options = { fix: input.fix, dryRun: input.dry_run, transport: store.transport };
+    // Through the Store: a hosted project resolves its root/recipe against the
+    // shared registry and never opens the on-box SQLite (#1720).
+    const options = { fix: input.fix, dryRun: input.dry_run };
     if (input.id) {
       const project = await findProjectTarget(input.id, store);
       if (!project) return errorText(`Project not found: ${input.id}`);
       const owner = mcpMutationAgent(store);
       const result = input.fix && !input.dry_run
-        ? await withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspace(project, options))
-        : doctorWorkspace(project, options);
+        ? await withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspaceWithStore(store, project, options))
+        : await doctorWorkspaceWithStore(store, project, options);
       return jsonText(!input.compact || input.verbose
         ? [projectDoctorPayload(result)]
         : {
@@ -1950,8 +1952,8 @@ server.tool(
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
     const projects = await store.listProjects({ limit: input.compact && !input.verbose ? limit + 1 : input.limit ?? 500 });
     const results = await Promise.all(projects.map((project) => input.fix && !input.dry_run
-      ? withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspace(project, options))
-      : Promise.resolve(doctorWorkspace(project, options))));
+      ? withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspaceWithStore(store, project, options))
+      : doctorWorkspaceWithStore(store, project, options)));
     if (!input.compact || input.verbose) return jsonText(results.map(projectDoctorPayload));
     const visible = results.slice(0, limit);
     return jsonText({
@@ -2455,8 +2457,30 @@ server.tool(
 return server;
 }
 
+/**
+ * FAIL-CLOSED at startup (hasna/apps#1720, acceptance c; owner ruling
+ * 2026-09-04): the MCP server must not answer `initialize` unless a Projects
+ * store can be served. With no fleet credential resolvable from any tier
+ * (explicit override, HASNA_PROFILE, HASNA_PROJECTS_API_KEY_REF, the Keychain
+ * item hasna.credentials.projects.api-key, ~/.hasna/projects/config/credentials,
+ * HASNA_PROJECTS_API_KEY) and no explicit `HASNA_PROJECTS_LOCAL=1` opt-in,
+ * resolving the store THROWS: exit non-zero naming where the credential should
+ * live, BEFORE the stdio or HTTP transport starts, and create nothing on disk.
+ * The explicit local opt-in prints its one "local mode" line here, at startup.
+ * Mirrors the CLI, which resolves the store per command and exits the same way.
+ */
+function prepareMcpRuntime(): void {
+  try {
+    resolveProjectStore();
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  prepareMcpRuntime();
   if (isHttpMode(args)) {
     startMcpHttpServer({ name: "projects", port: resolveMcpHttpPort(args), buildServer });
     return;

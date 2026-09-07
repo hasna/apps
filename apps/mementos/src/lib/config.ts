@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { MementosConfig, MemoryCategory, MemoryScope } from "../types";
 import { getDataRoot } from "./paths.js";
 import { env } from "../lib/env.js";
+import { selectsMementosLocalStore } from "./local-opt-in.js";
 
 // ============================================================================
 // Default configuration
@@ -275,10 +276,14 @@ export function deleteProfile(name: string): boolean {
 
 export function getDbPath(): string {
   // 0. Auto-migrate: copy old ~/.mementos/ to the effective data root if needed
+  // — ONLY for a run that will open the on-box store (the explicit local
+  // opt-in). A hosted-mode diagnostic must never materialise a SQLite file
+  // under ~/.hasna/mementos (hasna/apps#1720 acceptance (f)); see
+  // src/db/database.ts migrateGlobalDir for the same gate on the store opener.
   const _home = homeDir();
   const _newDir = getDataRoot();
   const _oldDir = join(_home, ".mementos");
-  if (!existsSync(_newDir) && existsSync(_oldDir)) {
+  if (selectsMementosLocalStore() && !existsSync(_newDir) && existsSync(_oldDir)) {
     mkdirSync(join(_home, ".hasna"), { recursive: true });
     cpSync(_oldDir, _newDir, { recursive: true });
   }

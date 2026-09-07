@@ -14,7 +14,8 @@ export interface TranscriptionOptions {
 function getClient(config: RecordingsConfig): OpenAI {
   if (!config.openai_api_key) {
     throw new TranscriptionError(
-      "OpenAI API key not configured. Set OPENAI_API_KEY env var or add to ~/.secrets"
+      "OpenAI API key not configured. Set OPENAI_API_KEY env var (e.g. " +
+        "'secrets exec <key> --as OPENAI_API_KEY -- recordings …')"
     );
   }
   if (_client && _clientApiKey === config.openai_api_key) return _client;
@@ -133,7 +134,7 @@ export async function verifyTranscriptionCredential(
       role,
       message:
         `no API key configured for the ${role} role. ` +
-        "Set OPENAI_API_KEY env var or add to ~/.secrets",
+        "Set OPENAI_API_KEY env var (e.g. 'secrets exec <key> --as OPENAI_API_KEY -- recordings …')",
     };
   }
 

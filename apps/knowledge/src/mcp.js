@@ -8,7 +8,10 @@ import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
 import { defaultStorePath, itemMatchesSearch } from './store.ts';
 import { resolveItemStore } from './item-store.ts';
 import { usesKnowledgeHttpTransport } from './http-store.ts';
-import { assertNoRetiredKnowledgeStorageSelector } from './client-transport.ts';
+import {
+  assertNoRetiredKnowledgeStorageSelector,
+  resolveKnowledgeClientTransport,
+} from './client-transport.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
 import { getStorageStatus as getDatabaseStorageStatus } from './storage.ts';
@@ -1932,13 +1935,49 @@ Runs the @hasna/knowledge MCP server (stdio by default).
 Options:
   --http            Serve MCP over Streamable HTTP (127.0.0.1)
   --port <number>   HTTP port (default: 8819, env: MCP_HTTP_PORT)
+  --version         Print the package version and exit (no server is started)
   -h, --help        Show this help text`);
 }
 
+/**
+ * The startup gate: prove that a transport resolves BEFORE any server is
+ * connected or any port is bound (hasna/apps#1720 acceptance (c), the same
+ * ruling mementos applied in #1868). A hosted `knowledge-mcp` with no
+ * credential in any tier must exit non-zero before it answers `initialize`;
+ * an agent that registered the server on an unprovisioned station must see
+ * the refusal in its MCP log rather than a healthy handshake followed by a
+ * tool-call error — or, worse, a quietly different dataset.
+ *
+ * One resolution, names only (a tier and a source, never a value); every tool
+ * call still resolves the credential afresh through {@link itemStoreFor}, so a
+ * rotation on the Keychain or in the credentials file heals a long-lived
+ * server without a restart. The explicit `HASNA_KNOWLEDGE_LOCAL=1` opt-in is
+ * honoured here exactly as in the CLI and says "local mode" once on stderr;
+ * with no opt-in and no credential this THROWS the fail-closed diagnostic.
+ */
+export function assertKnowledgeMcpTransportResolvable(env = process.env) {
+  return resolveKnowledgeClientTransport(env);
+}
+
 export async function main() {
+  // Metadata-only invocations answer without touching storage, transport
+  // resolution, or the retired-selector ratchet — mirrors knowledge-serve.
   if (process.argv.includes('-h') || process.argv.includes('--help')) {
     printHelp();
     return;
+  }
+  if (process.argv.includes('--version')) {
+    console.log(pkg.version);
+    return;
+  }
+
+  try {
+    assertKnowledgeMcpTransportResolvable(process.env);
+  } catch (error) {
+    // FAIL CLOSED, before serving: non-zero exit, no transport connected, no
+    // port bound, no on-box store touched, no *-local-fallback event.
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
   }
 
   const { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } = await import('./mcp-http.js');

@@ -8,6 +8,8 @@ import pkg from "../../package.json" with { type: "json" };
 import { App } from "./components/App.js";
 import { loadBasicRegistry } from "../lib/registry.js";
 import { getCompactSkillDiscovery } from "../lib/discovery.js";
+import { isSkillsFleetCredentialError } from "../lib/fleet-credentials.js";
+import { requireSkillsReadAccess } from "../lib/read-access.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 
@@ -45,7 +47,7 @@ program
   // the message cannot rot.
   .allowExcessArguments(true)
   .description("Interactive skill browser (TUI)")
-  .action((_options: unknown, command: Command) => {
+  .action(async (_options: unknown, command: Command) => {
     const stray = command.args[0];
     if (stray !== undefined) {
       const verbs = program.commands
@@ -53,6 +55,17 @@ program
         .filter((n) => n !== "interactive")
         .sort();
       console.error(chalk.red(`error: unknown command '${stray}'. Valid commands: ${verbs.join(", ")}`));
+      process.exit(1);
+    }
+    // The bare verb is a data surface like `skills list`: it fails closed
+    // through the same ladder before the registry is read — one line on
+    // stderr, exit 1, nothing on stdout — instead of printing the bundled
+    // catalog for an install that was never told to serve it (#1720 validation).
+    try {
+      await requireSkillsReadAccess();
+    } catch (error) {
+      if (!isSkillsFleetCredentialError(error)) throw error;
+      console.error(chalk.red(error.message));
       process.exit(1);
     }
     if (!isTTY) {

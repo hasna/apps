@@ -1,7 +1,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { Command } from "commander";
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -4103,6 +4103,106 @@ describe("project-first CLI surface", () => {
       expect(collision.exitCode).toBe(1);
       expect(collision.stderr).toContain("belongs to project wks_someotherproject0001");
       expect(existsSync(join(projectsHome, "data", collisionId, "project.db"))).toBe(false);
+    } finally {
+      server.stop(true);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test("doctor on a hosted project resolves root/recipe through the registry and creates no on-box SQLite (#1720 acceptance f)", async () => {
+    // Regression: the hosted doctor opened/created projects.db(-wal/-shm) under
+    // the app home to answer the reference, agent-run and migration-map checks
+    // — a hosted READ creating a local store. Now the references come from
+    // /v1/roots and /v1/recipes and the on-box-only checks say so.
+    const root = mkdtempSync(join(tmpdir(), "projects-cloud-doctor-no-sqlite-"));
+    const projectsHome = join(root, "home");
+    const projectId = "wks_hosted_doctor_nodb";
+    const rootId = "root_hosted_doctor";
+    const recipeId = "rcp_hosted_doctor_missing";
+    const requests: string[] = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const url = new URL(req.url);
+        requests.push(`${req.method} ${url.pathname}`);
+        if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}`) {
+          return Response.json({
+            id: projectId,
+            slug: "hosted-doctor",
+            name: "Hosted Doctor",
+            description: null,
+            kind: "generic",
+            status: "active",
+            root_id: rootId,
+            recipe_id: recipeId,
+            canonical_machine: null,
+            primary_path: null,
+            git_remote: null,
+            s3_bucket: null,
+            s3_prefix: null,
+            tags: [],
+            integrations: {},
+            metadata: { migrated_from_project_id: "wks_old_local_row" },
+            last_opened_at: null,
+            created_at: "2026-08-07 12:00:00.000",
+            updated_at: "2026-08-07 12:00:00.000",
+            synced_at: null,
+          });
+        }
+        if (req.method === "GET" && url.pathname === `/v1/roots/${rootId}`) {
+          return Response.json({
+            id: rootId,
+            slug: "hosted-root",
+            name: "Hosted Root",
+            base_path: "/srv/hosted",
+            tags: [],
+            default_kind: null,
+            default_recipe_id: null,
+            default_tmux_profile_id: null,
+            github_org: null,
+            repo_visibility: null,
+            path_template: null,
+            name_template: null,
+            allowed_recipes: [],
+            allowed_agents: [],
+            metadata: {},
+            created_at: "2026-08-07 12:00:00.000",
+            updated_at: "2026-08-07 12:00:00.000",
+          });
+        }
+        return Response.json({ error: "Not found" }, { status: 404 });
+      },
+    });
+    try {
+      // No HASNA_PROJECTS_DB_PATH: the default registry path is under the
+      // redirected home, which must stay absent.
+      const result = await runProjectsAsync(["doctor", projectId, "--json"], {
+        HASNA_PROJECTS_HOME: projectsHome,
+        HASNA_PROJECTS_API_URL: `http://127.0.0.1:${server.port}`,
+        HASNA_PROJECTS_API_KEY: "test-key",
+      });
+      expect(text(result.stderr)).toBe("");
+      expect(result.exitCode).toBe(0);
+      const rows = JSON.parse(text(result.stdout)) as Array<{ ok: boolean; checks: Array<{ code: string; status: string }> }>;
+      expect(rows).toHaveLength(1);
+      const codes = rows[0]!.checks.map((check) => check.code);
+      expect(codes).toContain("WORKSPACE_ROOT_OK");
+      expect(codes).toContain("WORKSPACE_RECIPE_MISSING");
+      expect(codes).toContain("WORKSPACE_LOCATIONS_LOCAL_ONLY");
+      expect(codes).toContain("WORKSPACE_AGENT_RUNS_LOCAL_ONLY");
+      expect(codes).toContain("WORKSPACE_MIGRATION_MAP_LOCAL_ONLY");
+      expect(codes).not.toContain("WORKSPACE_AGENT_RUNS_OK");
+      expect(rows[0]!.ok).toBe(false);
+      expect(requests.sort()).toEqual([
+        `GET /v1/projects/${projectId}`,
+        `GET /v1/recipes/${recipeId}`,
+        `GET /v1/roots/${rootId}`,
+      ]);
+      const sqliteFiles = existsSync(projectsHome)
+        ? (readdirSync(projectsHome, { recursive: true }) as string[]).filter((name) => /\.db(-wal|-shm|-journal)?$/.test(name))
+        : [];
+      expect(sqliteFiles).toEqual([]);
     } finally {
       server.stop(true);
       rmSync(root, { recursive: true, force: true });
