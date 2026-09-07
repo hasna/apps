@@ -372,13 +372,10 @@ console.log(where.baseUrl, where.apiKeySource, where.apiUrlSource);
 The generated SDK client speaks HTTP to the `/v1` API — it has no local-store
 transport. With no credential resolvable anywhere it throws
 `ConversationsSdkResolutionError` (`CONVERSATIONS_CREDENTIAL_MISSING`) naming
-every tier it consulted — never a silent local fallback — and the explicit
-local opt-in `HASNA_CONVERSATIONS_DB_PATH` is refused
-(`CONVERSATIONS_LOCAL_STORE_SELECTED`): the HTTP client cannot address the
-on-box store, so use `getStore()` from `@hasna/conversations` (see
-[Credential resolution](#credential-resolution)) for the on-box store. Passing
-an explicit `baseUrl` to `createConversationsClient` keeps the #1794 pin: only
-an explicit `apiKey` beside it is ever sent.
+every tier it consulted. Retired database-path selectors are rejected by both
+the generated SDK and ordinary `getStore()` clients. Passing an explicit
+`baseUrl` to `createConversationsClient` keeps the authority pin: only an explicit
+`apiKey` beside it is ever sent.
 
 ## Credential resolution
 
@@ -408,20 +405,20 @@ fleet-env/`, `~/.hasna/cloud/` and `~/.config/hasna/` locations are inputs
 nowhere, and no storage-mode variable is read — the transport is decided by
 what resolves, never by a mode word.
 
-**Local is opt-in.** The on-box SQLite store is reachable ONLY through the
-explicit store path `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH`,
-which wins even when cloud credentials are exported globally — and a local run
-announces itself once on stderr (`conversations: local store — …`) so it can
-never be mistaken for a hosted run with an empty store. Nothing configured at
-all is an error, never the local default.
+**Shared API only.** Ordinary CLI, MCP, hook, TUI and public library calls never
+open a local database. Remove retired `HASNA_CONVERSATIONS_DB_PATH` and
+`CONVERSATIONS_DB_PATH` settings. With saved account credentials, no API key or
+URL arguments are needed on each invocation:
 
 ```bash
-# Hosted: a key from any tier is enough; the URL is optional (gateway default)
-HASNA_CONVERSATIONS_API_KEY=<key> conversations read --to codex --json
-
-# Local (explicit opt-in): an on-box SQLite file
-HASNA_CONVERSATIONS_DB_PATH=/path/to/store.db conversations read --to codex --json
+conversations read --to codex --json
 ```
+
+Preserve existing databases and their WAL/SHM files until a complete migration
+has been verified. Explicitly constructed `LocalStore` library handles remain
+available for controlled compatibility work; they are never selected by ordinary
+client resolution. Public collection and redaction convenience functions return
+promises and route through the shared API.
 
 ## Channels
 
@@ -451,15 +448,11 @@ resolved deterministically with suffixes.
 
 ## Data Directory
 
-The local SQLite store and per-install files (config, agent identity, exports,
-attachments, training) are resolved through the `@hasna/paths` resolver (XDG /
-macOS home layout). The legacy `~/.hasna/conversations/` data root stays the
-effective root until the store has been migrated to the resolver data home
-(`~/.local/share/hasna/conversations` on Linux) or the operator sets the
-data-kind override `HASNA_DATA_HOME`. An explicit store path
-(`HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH`) always wins; the
-exact-app overrides `HASNA_CONVERSATIONS_HOME` / `CONVERSATIONS_HOME` name an
-explicit data root.
+Per-install configuration, agent identity and explicit export/download paths use
+`@hasna/paths`. Ordinary clients do not move, copy or open legacy SQLite files.
+Saved credentials remain in the documented Keychain or credentials-file tiers.
+Existing data roots and corpus identities must be preserved until migration and
+readback are complete; changing a data directory is not a migration.
 
 ## License
 

@@ -29,8 +29,8 @@ export type ChatViewSubmitResult =
   | { ok: true; message: Message }
   | { ok: false; error: string; blocked?: boolean };
 
-function chatViewSendError(error: unknown): string {
-  if (error instanceof SensitiveContentError) {
+function chatViewSendError(blocked: boolean): string {
+  if (blocked) {
     return "Message blocked by sensitive-content controls.";
   }
   return "Unable to confirm message send. Check the conversation before retrying.";
@@ -68,7 +68,8 @@ export async function submitChatViewMessage(
       }),
     };
   } catch (error) {
-    return { ok: false, error: chatViewSendError(error), blocked: error instanceof SensitiveContentError || scanSensitiveContent(content).length > 0 };
+    const blocked = error instanceof SensitiveContentError || scanSensitiveContent(content).length > 0;
+    return { ok: false, error: chatViewSendError(blocked), blocked };
   }
 }
 

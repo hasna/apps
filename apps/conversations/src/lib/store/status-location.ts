@@ -1,6 +1,5 @@
-import { getDbPath } from "../db.js";
 import { loggableUrl } from "../loggable-url.js";
-import { cloudApiUrl, isCloudStore } from "./index.js";
+import { cloudApiUrl } from "./index.js";
 
 type Env = Record<string, string | undefined>;
 
@@ -78,10 +77,6 @@ export type StoreStatusLocation =
  * enforces that.
  */
 export function storeStatusLocation(env: Env = process.env): StoreStatusLocation {
-  // `env` reaches BOTH branches. It previously reached only the cloud one, while
-  // `getDbPath()` read `process.env` directly — so a caller (or a test) that
-  // injected a DB path got an answer the injection had not influenced.
-  if (!isCloudStore(env)) return { db_path: getDbPath(env) };
   const raw = cloudApiUrl(env);
   // Gateway-form URLs are safe to show as their resolved `/v1` root. Everything
   // else goes through `loggableUrl`, whose scheme/host/port allow-list keeps the

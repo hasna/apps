@@ -279,7 +279,8 @@ describe("getStore refuses the production store when it resolved it AMBIENTLY", 
       expect(err.code).toBe("CONVERSATIONS_CLOUD_IN_TEST");
       expect(err.host).toBe("conversations.hasna.xyz");
       expect(err.indicators.length).toBeGreaterThan(0);
-      expect(err.message).toContain("CONVERSATIONS_DB_PATH");
+      expect(err.message).toContain("isolated loopback API fixture");
+      expect(err.message).not.toContain("CONVERSATIONS_DB_PATH");
       expect(err.message).toContain(ALLOW_CLOUD_IN_TESTS_ENV_KEY);
       // A credential value must never reach a message, a field, or a stack.
       const rendered = `${err.message}\n${err.stack ?? ""}\n${JSON.stringify({ h: err.host, i: err.indicators })}`;
@@ -386,11 +387,10 @@ describe("the guard stays silent where it must — known-negative cases", () => 
     );
   });
 
-  test("the documented isolation variable still selects local, with no refusal", () => {
+  test("a retired isolation selector refuses without minting a client", () => {
     withAmbientCloudEnv(
       () => {
-        const store = getStore();
-        expect(store.transport).toBe("local");
+        expect(() => getStore()).toThrow(/no longer supported/);
       },
       { CONVERSATIONS_DB_PATH: "/tmp/conversations-guard-negative-control.db" },
     );

@@ -1,24 +1,17 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { Database as SqliteDatabase } from "bun:sqlite";
 
 const HOME_DIR = mkdtempSync(join(tmpdir(), "conversations-presence-home-"));
-const TEST_DB = join(tmpdir(), `conversations-presence-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[]) {
-  const env = { ...process.env } as Record<string, string>;
-  for (const key of Object.keys(env)) {
-    if (key === "CONVERSATIONS_AGENT_ID" || key.startsWith("HASNA_CONVERSATIONS_")) {
-      delete env[key];
-    }
-  }
-
-  env.HOME = HOME_DIR;
-  env.USERPROFILE = HOME_DIR;
-  env.CONVERSATIONS_DB_PATH = TEST_DB;
+  const env={...fixture.env};
   env.FORCE_COLOR = "0";
 
   const result = Bun.spawnSync({
@@ -36,35 +29,18 @@ function runCli(args: string[]) {
   };
 }
 
-function backdatePresence(agent: string, secondsAgo: number): void {
-  const db = new SqliteDatabase(TEST_DB);
-  db.prepare(
-    "UPDATE agent_presence SET last_seen_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', ?) WHERE agent = ?"
-  ).run(`-${secondsAgo} seconds`, agent);
-  db.close();
-}
-
-function seedSingleTouch(agent: string, daysAgo: number): void {
-  const db = new SqliteDatabase(TEST_DB);
-  db.prepare(
-    `INSERT INTO agent_presence (id, agent, session_id, role, project_id, status, last_seen_at, created_at, metadata)
-     VALUES (?, ?, ?, 'agent', '', 'online', strftime('%Y-%m-%dT%H:%M:%f', 'now', ?), strftime('%Y-%m-%dT%H:%M:%f', 'now', ?), NULL)`
-  ).run("st" + agent.slice(0, 6), agent, `sess-${agent}`, `-${daysAgo} days`, `-${daysAgo} days`);
-  db.close();
-}
+async function backdatePresence(agent:string, secondsAgo:number) { await fixture.seed({presence:[{agent,last_seen_at:new Date(Date.now()-secondsAgo*1000).toISOString()}]}); }
+async function seedSingleTouch(agent:string,daysAgo:number) { const at=new Date(Date.now()-daysAgo*86400000).toISOString(); await fixture.seed({presence:[{id:"st"+agent.slice(0,6),agent,session_id:`sess-${agent}`,role:"agent",project_id:"",status:"online",created_at:at,last_seen_at:at,metadata:null}]}); }
 
 describe("CLI agent presence status staleness (e2e)", () => {
   afterAll(() => {
     try { rmSync(HOME_DIR, { recursive: true, force: true }); } catch {}
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { rmSync(`${TEST_DB}${suffix}`, { force: true }); } catch {}
-    }
   });
 
-  test("agents list reports a self-declared 'online' status only while last_seen_at is fresh", () => {
+  test("agents list reports a self-declared 'online' status only while last_seen_at is fresh", async () => {
     runCli(["agents", "register", "fresh-list-agent", "--session", "sess-fresh", "--json"]);
     runCli(["agents", "register", "stale-list-agent", "--session", "sess-stale", "--json"]);
-    backdatePresence("stale-list-agent", 2 * 60 * 60);
+    await backdatePresence("stale-list-agent", 2 * 60 * 60);
 
     const listing = runCli(["agents", "list", "-j"]);
     expect(listing.exitCode).toBe(0);
@@ -74,10 +50,10 @@ describe("CLI agent presence status staleness (e2e)", () => {
     expect(byName.get("fresh-list-agent")).toMatchObject({ status: "online", online: true });
   });
 
-  test("agents reap-stale flags a stale single-touch registration and --apply removes it", () => {
-    seedSingleTouch("reap-cli-single", 10);
+  test("agents reap-stale flags a stale single-touch registration and --apply removes it", async () => {
+    await seedSingleTouch("reap-cli-single", 10);
     runCli(["agents", "register", "reap-cli-active", "--session", "sess-active", "--json"]);
-    backdatePresence("reap-cli-active", 10 * 24 * 60 * 60);
+    await backdatePresence("reap-cli-active", 10 * 24 * 60 * 60);
     // Active again after creation — must never be a candidate.
     runCli(["agents", "heartbeat", "--from", "reap-cli-active", "--status", "online", "--json"]);
 
@@ -95,11 +71,7 @@ describe("CLI agent presence status staleness (e2e)", () => {
 
     // The removed row is preserved in the append-only archive with its full
     // registration, so the delete has a rollback path.
-    const archiveDb = new SqliteDatabase(TEST_DB);
-    const archived = archiveDb.prepare(
-      "SELECT id, agent, session_id, status FROM agent_presence_reap_archive WHERE agent = ?"
-    ).all("reap-cli-single");
-    archiveDb.close();
+    const archived = (await fixture.inspect()).presenceArchive.filter(row=>row.agent === "reap-cli-single");
     expect(archived).toHaveLength(1);
     expect(archived[0]).toMatchObject({ agent: "reap-cli-single", session_id: "sess-reap-cli-single", status: "online" });
 

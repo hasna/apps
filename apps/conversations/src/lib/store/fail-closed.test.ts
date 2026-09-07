@@ -3,10 +3,8 @@
 //
 // A hosted conversations run with NO resolvable credential must exit non-zero,
 // create no SQLite file anywhere under the owning HOME, and emit no
-// `*-local-fallback` event. The on-box SQLite store is reachable ONLY through
-// the explicit opt-in `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH`,
-// and a local run must say "local" on stderr — an unhosted CLI that says
-// nothing looks exactly like a hosted one whose store happens to be empty.
+// `*-local-fallback` event. Retired DB selectors also refuse; only explicit
+// library construction retains local storage compatibility.
 //
 // The child environment is built by OMISSION: a sandbox HOME the test owns
 // (which also anchors the disk credential tier, `$HOME/.hasna/conversations/
@@ -38,7 +36,7 @@ function hermeticEnv(tempRoot: string): Record<string, string> {
     PATH: process.env["PATH"] ?? "",
     // No real Keychain item uses this account, so a login-keychain item (on a
     // Mac runner) can never answer for this run.
-    HASNA_STATION: "conversations-fail-closed-no-such-station",
+    HASNA_STATION: `conversations-fail-closed-${crypto.randomUUID()}`,
   };
 }
 
@@ -117,8 +115,8 @@ describe("fail-closed transport resolution (spawned CLI)", () => {
     // The refusal names the canonical API variables (the tiers to fix).
     expect(result.stderr).toContain("HASNA_CONVERSATIONS_API_URL");
     expect(result.stderr).toContain("HASNA_CONVERSATIONS_API_KEY");
-    // ...and the explicit local opt-in (the only way local is reachable).
-    expect(result.stderr).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    // Shared account guidance replaces the retired local opt-in.
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_API_KEY");
     // The seam throws before any SQLite open can run: no database file may
     // exist anywhere under the owning HOME.
     expect(sqliteFilesUnder(tempRoot)).toEqual([]);
@@ -149,7 +147,7 @@ describe("fail-closed transport resolution (spawned CLI)", () => {
     expect(result.stderr).not.toMatch(/falling?\s*back/i);
   });
 
-  test("the explicit local opt-in restores the local store, and says 'local' on stderr", async () => {
+  test("the retired local selector refuses status without creating storage", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "conversations-local-opt-in-"));
     tempRoots.push(tempRoot);
     const env = hermeticEnv(tempRoot);
@@ -157,17 +155,15 @@ describe("fail-closed transport resolution (spawned CLI)", () => {
 
     const result = await runCli(["status"], env);
 
-    expect(result.exitCode).toBe(0);
-    // The local-store notice: a local run must never be mistakable for a hosted
-    // one with an empty store.
-    expect(result.stderr).toContain("local store");
-    expect(result.stdout).toContain("Connection: SQLite");
-    const localDb = join(tempRoot, "store.db");
-    expect(existsSync(localDb)).toBe(true);
-    expect(sqliteFilesUnder(tempRoot).length).toBeGreaterThan(0);
+    expect(result.exitCode).not.toBe(0);
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+    expect(result.stderr).toContain("no longer supported");
+    expect(result.stdout).not.toContain("serverInfo");
+    expect(result.stdout).not.toContain("Connection: SQLite");
+    expect(result.stdout).not.toContain("scanned");
   });
 
-  test("the unprefixed local opt-in alias also restores the local store", async () => {
+  test("the unprefixed retired selector also refuses status", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "conversations-local-opt-in-alias-"));
     tempRoots.push(tempRoot);
     const env = hermeticEnv(tempRoot);
@@ -175,9 +171,12 @@ describe("fail-closed transport resolution (spawned CLI)", () => {
 
     const result = await runCli(["status"], env);
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain("local store");
-    expect(result.stdout).toContain("Connection: SQLite");
+    expect(result.exitCode).not.toBe(0);
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+    expect(result.stderr).toContain("no longer supported");
+    expect(result.stdout).not.toContain("serverInfo");
+    expect(result.stdout).not.toContain("Connection: SQLite");
+    expect(result.stdout).not.toContain("scanned");
   });
 });
 
@@ -199,8 +198,8 @@ describe("fail-closed: events-drain resolves through the Store (spawned CLI)", (
 
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout).not.toContain("scanned");
-    // The refusal is the store config refusal, naming the explicit local opt-in.
-    expect(result.stderr).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    // The refusal is the store config refusal, naming the required API credential.
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_API_KEY");
     expect(result.stderr).not.toMatch(/-local-fallback/i);
     expect(result.stderr).not.toMatch(/falling?\s*back/i);
     expect(sqliteFilesUnder(tempRoot)).toEqual([]);
@@ -224,7 +223,7 @@ describe("fail-closed: events-drain resolves through the Store (spawned CLI)", (
     expect(existsSync(join(tempRoot, ".hasna", "conversations"))).toBe(false);
   });
 
-  test("the explicit local opt-in runs the drain over the named store, and says 'local' on stderr", async () => {
+  test("the retired local selector refuses drain without creating storage", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "conversations-drain-local-opt-in-"));
     tempRoots.push(tempRoot);
     const env = hermeticEnv(tempRoot);
@@ -233,10 +232,12 @@ describe("fail-closed: events-drain resolves through the Store (spawned CLI)", (
 
     const result = await runCli(["events-drain"], env);
 
-    expect(result.exitCode, result.stderr).toBe(0);
-    expect(result.stderr).toContain("local store");
-    expect(result.stdout).toContain("events-drain: scanned 0");
-    expect(existsSync(localDb)).toBe(true);
+    expect(result.exitCode).not.toBe(0);
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+    expect(result.stderr).toContain("no longer supported");
+    expect(result.stdout).not.toContain("serverInfo");
+    expect(result.stdout).not.toContain("Connection: SQLite");
+    expect(result.stdout).not.toContain("scanned");
   });
 
   // Round-2 review of hasna/apps#1864: the command accepted no `--json`, so
@@ -254,12 +255,12 @@ describe("fail-closed: events-drain resolves through the Store (spawned CLI)", (
     const parsed = JSON.parse(result.stdout.trim());
     expect(parsed.code).toBe("CONVERSATIONS_STORE_CONFIG");
     // The refusal is the generic store config refusal (the old per-surface
-    // gate message that named `events-drain` is gone), and it names the opt-in.
-    expect(parsed.error).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    // gate message that named `events-drain` is gone), and it names the API credential.
+    expect(parsed.error).toContain("HASNA_CONVERSATIONS_API_KEY");
     expect(sqliteFilesUnder(tempRoot)).toEqual([]);
   });
 
-  test("under --json with the local opt-in the drain report is a JSON object on stdout", async () => {
+  test("under --json a retired selector returns a structured refusal", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "conversations-drain-local-json-"));
     tempRoots.push(tempRoot);
     const env = hermeticEnv(tempRoot);
@@ -267,9 +268,11 @@ describe("fail-closed: events-drain resolves through the Store (spawned CLI)", (
 
     const result = await runCli(["events-drain", "--json"], env);
 
-    expect(result.exitCode, result.stderr).toBe(0);
-    expect(result.stderr).toContain("local store");
-    expect(JSON.parse(result.stdout.trim())).toEqual({ scanned: 0, transported: 0, skipped: 0, spooled: 0 });
+    expect(result.exitCode).not.toBe(0);
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+    const receipt = JSON.parse(result.stdout.trim());
+    expect(receipt.code).toBe("CONVERSATIONS_STORE_CONFIG");
+    expect(receipt.error).toContain("no longer supported");
   });
 });
 
@@ -281,7 +284,7 @@ describe("fail-closed: events-drain resolves through the Store (spawned CLI)", (
 // returned an `isError` result — a healthy-looking server on a station that
 // had nothing to serve.
 describe("fail-closed: the MCP server refuses before serving (spawned conversations-mcp)", () => {
-  test("hosted with no credential: exits non-zero before serving, names the tiers and the opt-in, creates no SQLite", async () => {
+  test("hosted with no credential: exits non-zero before serving, names the credential tiers, creates no SQLite", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "conversations-mcp-fail-closed-"));
     tempRoots.push(tempRoot);
     const env = hermeticEnv(tempRoot);
@@ -292,10 +295,10 @@ describe("fail-closed: the MCP server refuses before serving (spawned conversati
     // Nothing was served: a stdio MCP server writes JSON-RPC to stdout only.
     expect(result.stdout).toBe("");
     // The FIRST stderr line is the refusal, and it names where the credential
-    // should live plus the explicit local opt-in.
+    // should live; no local selector is recommended.
     const firstLine = result.stderr.split("\n")[0] ?? "";
     expect(firstLine).toContain("HASNA_CONVERSATIONS_API_KEY");
-    expect(result.stderr).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_API_KEY");
     expect(result.stderr).not.toMatch(/-local-fallback/i);
     expect(result.stderr).not.toMatch(/falling?\s*back/i);
     expect(sqliteFilesUnder(tempRoot)).toEqual([]);
@@ -335,7 +338,7 @@ describe("fail-closed: the MCP server refuses before serving (spawned conversati
     expect(existsSync(join(tempRoot, ".hasna", "conversations"))).toBe(false);
   }, 30_000);
 
-  test("the explicit local opt-in starts the server, answers initialize, and says 'local' on stderr", async () => {
+  test("the retired local selector refuses MCP before initialize", async () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "conversations-mcp-local-opt-in-"));
     tempRoots.push(tempRoot);
     const env = hermeticEnv(tempRoot);
@@ -343,12 +346,12 @@ describe("fail-closed: the MCP server refuses before serving (spawned conversati
 
     const result = await runMcp(["--stdio"], env, INITIALIZE_REQUEST);
 
-    expect(result.exitCode, result.stderr).toBe(0);
-    expect(result.stdout).toContain("serverInfo");
-    // Announced once, at startup — a local MCP must never be mistakable for a
-    // hosted one with an empty store.
-    expect(result.stderr).toContain("local store");
-    expect(result.stderr.match(/local store/g)).toHaveLength(1);
+    expect(result.exitCode).not.toBe(0);
+    expect(sqliteFilesUnder(tempRoot)).toEqual([]);
+    expect(result.stderr).toContain("no longer supported");
+    expect(result.stdout).not.toContain("serverInfo");
+    expect(result.stdout).not.toContain("Connection: SQLite");
+    expect(result.stdout).not.toContain("scanned");
   }, 30_000);
 
   test("--http: hosted with no credential exits non-zero before binding a port", async () => {
@@ -376,7 +379,7 @@ describe("fail-closed: the MCP server refuses before serving (spawned conversati
     expect(result.exitCode).not.toBe(0);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("HASNA_CONVERSATIONS_API_KEY");
-    expect(result.stderr).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect(result.stderr).toContain("HASNA_CONVERSATIONS_API_KEY");
     expect(sqliteFilesUnder(tempRoot)).toEqual([]);
   });
 });

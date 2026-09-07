@@ -239,6 +239,41 @@ async function readJson(req: Request): Promise<Record<string, unknown>> {
   return parsed as Record<string, unknown>;
 }
 
+/** Project JSON fields keep the public object/string-array contract on writes.
+ * Bounds apply to each encoded field, with a depth ceiling before stringify so
+ * pathological input fails as validation rather than overflowing the stack. */
+function projectJsonFields(body: Record<string, unknown>): {
+  values: Partial<Record<"metadata" | "tags" | "settings", string | null>>;
+  error?: undefined;
+} | { error: Response; values?: undefined } {
+  const values: Partial<Record<"metadata" | "tags" | "settings", string | null>> = {};
+  for (const field of ["metadata", "tags", "settings"] as const) {
+    if (!Object.hasOwn(body, field)) continue;
+    const value = body[field];
+    if (value === null) { values[field] = null; continue; }
+    const invalid = field === "tags"
+      ? !Array.isArray(value) || !value.every(item => typeof item === "string")
+      : typeof value !== "object" || Array.isArray(value);
+    if (invalid) return { error: json({ error: `${field} must be ${field === "tags" ? "an array of strings" : "a JSON object"} or null`, field }, 400) };
+    const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+    while (pending.length) {
+      const entry = pending.pop()!;
+      if (entry.depth > 64 || (typeof entry.value === "number" && !Number.isFinite(entry.value))) {
+        return { error: json({ error: `${field} must contain finite JSON values within 64 levels`, field }, 400) };
+      }
+      if (entry.value && typeof entry.value === "object") {
+        for (const child of Object.values(entry.value)) pending.push({ value: child, depth: entry.depth + 1 });
+      }
+    }
+    const encoded = JSON.stringify(value);
+    if (Buffer.byteLength(encoded, "utf8") > 64 * 1024) {
+      return { error: json({ error: `${field} exceeds the 65536-byte JSON limit`, field, limit_bytes: 65536 }, 400) };
+    }
+    values[field] = encoded;
+  }
+  return { values };
+}
+
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
 }
@@ -2116,10 +2151,20 @@ async function handleV1(
     // markMentionsRead: stamp notified_at on the agent's @mentions (optionally
     // scoped to one channel). Routed here because the client posts it to
     // /messages/read with mentions_only=true.
-    if (body.mentions_only) {
-      const mentionIds = Array.isArray(body.mention_ids)
-        ? (body.mention_ids as unknown[]).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0)
-        : [];
+    const hasMentionIds = Object.prototype.hasOwnProperty.call(body, "mention_ids");
+    if ((body.mentions_only !== undefined && typeof body.mentions_only !== "boolean") ||
+        (hasMentionIds && body.mentions_only !== true)) {
+      return json({ error: "mention_ids requires mentions_only=true." }, 400);
+    }
+    if (body.mentions_only === true) {
+      if (hasMentionIds && (!Array.isArray(body.mention_ids) ||
+          !body.mention_ids.every((id: unknown) => typeof id === "number" && Number.isSafeInteger(id) && id > 0))) {
+        return json({ error: "mention_ids must be an array of positive safe integers." }, 400);
+      }
+      const mentionIds = hasMentionIds ? [...new Set(body.mention_ids as number[])] : [];
+      // Explicit empty selections are no-ops. Only an omitted selector retains
+      // the broader legacy markMentionsRead operation; never filter bad IDs into it.
+      if (hasMentionIds && mentionIds.length === 0) return json({ marked: 0 });
       const res = mentionIds.length
         ? await client.query(
             `UPDATE message_mentions SET notified_at = NOW()::text
@@ -2618,6 +2663,12 @@ async function handleV1(
     const body = await readJson(req);
     if (body.tenant_id !== undefined) {
       return json({ error: "tenant_id is owned by the authenticated storage context and cannot be supplied." }, 400);
+    }
+    // Validate the original identifier before normalization or channel lookup:
+    // normalization can turn credential-bearing text into an ordinary slug.
+    if (body.channel !== undefined && body.channel !== null) {
+      if (typeof body.channel !== "string") return json({ error: "channel must be a string when provided." }, 400);
+      assertNoSensitiveContent(body.channel, "Message channel");
     }
     const from = str(body.from) ?? agent ?? undefined;
     const content = str(body.content);
@@ -3941,6 +3992,8 @@ async function handleV1(
 
   if (sub === "projects" && method === "POST") {
     const body = await readJson(req);
+    const projectJson = projectJsonFields(body);
+    if (projectJson.error) return projectJson.error;
     const name = str(body.name);
     const createdBy = str(body.created_by) ?? agent ?? undefined;
     if (!name || !createdBy) return json({ error: "name and created_by are required" }, 400);
@@ -3948,9 +4001,9 @@ async function handleV1(
     if (dup) return json({ error: "Project name already exists" }, 409);
     const id = randomUUID();
     const row = await client.get(
-      `INSERT INTO projects (id, name, description, path, repository, created_by, status)
-       VALUES ($1,$2,$3,$4,$5,$6,'active') RETURNING id, name, description, path, repository, created_by, created_at, status`,
-      [id, name, str(body.description) ?? null, str(body.path) ?? null, str(body.repository) ?? null, createdBy],
+      `INSERT INTO projects (id, name, description, path, repository, created_by, status, metadata, tags, settings)
+       VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9) RETURNING *`,
+      [id, name, str(body.description) ?? null, str(body.path) ?? null, str(body.repository) ?? null, createdBy, projectJson.values.metadata ?? null, projectJson.values.tags ?? null, projectJson.values.settings ?? null],
     );
     return json({ project: row ? parseServerProject(row) : null }, 201);
   }
@@ -3969,10 +4022,15 @@ async function handleV1(
     }
     if (method === "PATCH") {
       const body = await readJson(req);
+      const projectJson = projectJsonFields(body);
+      if (projectJson.error) return projectJson.error;
       const sets: string[] = [];
       const params: unknown[] = [];
       for (const field of ["name", "description", "path", "repository", "status"] as const) {
         if (field in body) { params.push(str(body[field]) ?? null); sets.push(`${field} = $${params.length}`); }
+      }
+      for (const field of ["metadata", "tags", "settings"] as const) {
+        if (Object.hasOwn(projectJson.values, field)) { params.push(projectJson.values[field]); sets.push(`${field} = $${params.length}`); }
       }
       if (!sets.length) return json({ error: "No updatable fields provided" }, 400);
       params.push(id);

@@ -1,10 +1,4 @@
-// `send_feedback` routes through the Store like every other surface: the MCP
-// tool (src/mcp/tools/advanced.ts) calls `getStore().saveFeedback(...)`, so a
-// hosted run writes the row through the hosted API's feedback route and a
-// local run writes the on-box `feedback` table. The fail-closed property from
-// hasna/apps#1720 still holds by delegation: with neither a credential nor a
-// store path, `getStore()` refuses before anything is opened — a hosted run
-// can never silently grow `~/.hasna/conversations/messages.db`.
+// Ordinary feedback clients require shared credentials; explicit library storage stays separately tested.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
@@ -12,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDb } from "./db.js";
 import { saveFeedbackLocal } from "./feedback.js";
-import { ConversationsStoreConfigError, getStore } from "./store/index.js";
+import { ConversationsStoreConfigError, getStore, LocalStore } from "./store/index.js";
 import { enterHermeticTestEnv } from "../test/hermetic.js";
 
 const HOME_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONVERSATIONS_HOME", "CONVERSATIONS_HOME"] as const;
@@ -57,7 +51,7 @@ afterEach(() => {
 });
 
 describe("saveFeedback (store-routed surface)", () => {
-  test("nothing configured: refuses naming HASNA_CONVERSATIONS_DB_PATH, opens nothing", async () => {
+  test("nothing configured: requires shared API credentials and opens nothing", async () => {
     let message: string;
     try {
       // getStore() itself throws synchronously for a config refusal, so the
@@ -67,7 +61,7 @@ describe("saveFeedback (store-routed surface)", () => {
       expect(error).toBeInstanceOf(ConversationsStoreConfigError);
       message = (error as Error).message;
     }
-    expect(message).toContain("HASNA_CONVERSATIONS_DB_PATH");
+    expect(message).toContain("HASNA_CONVERSATIONS_API_KEY");
     expect(message).not.toMatch(/-local-fallback/i);
     expect(sqliteFilesUnder(tempRoot)).toEqual([]);
   });
@@ -82,10 +76,10 @@ describe("saveFeedback (store-routed surface)", () => {
     expect(sqliteFilesUnder(tempRoot)).toEqual([]);
   });
 
-  test("the explicit local opt-in saves the entry into the named store, through the Store", async () => {
+  test("explicit LocalStore library saves the entry into its named store", async () => {
     const dbPath = join(tempRoot, "store.db");
     process.env.HASNA_CONVERSATIONS_DB_PATH = dbPath;
-    const saved = await getStore().saveFeedback({ message: "hello", email: "someone@example.invalid", category: "bug" });
+    const saved = await new LocalStore().saveFeedback({ message: "hello", email: "someone@example.invalid", category: "bug" });
     expect(saved.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(saved.sent).toBe(true);
     expect(saved.error).toBeNull();

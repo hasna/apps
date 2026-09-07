@@ -1,13 +1,32 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { Pool } from "pg";
+import { ApiKeyStore, mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
+import { createQueryClient } from "../generated/storage-kit/query.js";
+import { PG_MIGRATIONS } from "../lib/pg-migrations.js";
+import { startApiServer } from "../server/api.js";
+import { assertNoClientDatabase } from "../lib/store/test-support/loopback-api-fixture.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { projectChannelRegistrationDigest } from "../lib/project-channel-registration.js";
-import { isolatedStoreChildEnv } from "../lib/store/isolated-test-env.js";
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "conversations-project-registration-cli-"));
-const TEST_DB = join(TEST_DIR, "conversations.db");
+const CLIENT_HOME = join(TEST_DIR, "client");
+const UNAUTHENTICATED_HOME = join(TEST_DIR, "unauthenticated");
+mkdirSync(CLIENT_HOME, { mode: 0o700 });
+mkdirSync(UNAUTHENTICATED_HOME, { mode: 0o700 });
+// This durable contract runs in the required live-PostgreSQL gate. The ordinary
+// package suite still exercises the unauthenticated, no-client-database boundary.
+const dsn = process.env.CONVERSATIONS_TEST_DATABASE_URL;
+const pgTest = dsn ? test : test.skip;
+const schema = `registration_${randomUUID().replaceAll("-", "")}`;
+const role = `${schema}_role`;
+let admin: Pool | undefined;
+let pool: Pool;
+let server: ReturnType<typeof startApiServer> | undefined;
+let clientEnv: Record<string, string>;
+let startBackend: () => Promise<void>;
 const REQUEST_FILE = join(TEST_DIR, "registration.json");
 const LOOKUP_FILE = join(TEST_DIR, "registration-lookup.json");
 const INVERSE_FORWARD_FILE = join(TEST_DIR, "registration-inverse-forward.json");
@@ -17,31 +36,92 @@ const BIND_NO_INTENT_FILE = join(TEST_DIR, "registration-bind-existing-no-intent
 const ADOPT_NO_INTENT_FILE = join(TEST_DIR, "registration-adopt-existing-no-intent.json");
 const BIND_INVERSE_FILE = join(TEST_DIR, "registration-bind-existing-inverse.json");
 const PROJECT_ID = "wks_ys8tzpsZJMNtx0ORZtLsA";
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const PACKAGE_ROOT = join(import.meta.dir, "../..");
+const CLI = [process.execPath, "--no-env-file", "./src/cli/index.tsx"];
 
-function runCli(args: string[]) {
-  const result = Bun.spawnSync({
-    cmd: [...CLI, ...args],
-    cwd: process.cwd(),
-    env: isolatedStoreChildEnv(TEST_DB, {
-      CONVERSATIONS_AGENT_ID: "project-registration-cli-test",
-      FORCE_COLOR: "0",
-    }),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+function isolatedEnv(home: string): Record<string, string> {
   return {
-    exitCode: result.exitCode,
-    stdout: new TextDecoder().decode(result.stdout),
-    stderr: new TextDecoder().decode(result.stderr),
+    PATH: process.env.PATH ?? "", HOME: home, USERPROFILE: home,
+    TMPDIR: process.env.TMPDIR ?? tmpdir(),
+    HASNA_STATION: `fixture-${randomUUID()}`,
+    CONVERSATIONS_AGENT_ID: "project-registration-cli-test",
+    FORCE_COLOR: "0", NO_COLOR: "1",
   };
 }
 
-afterAll(() => rmSync(TEST_DIR, { recursive: true, force: true }));
+async function runCli(args: string[], env = clientEnv) {
+  // Async subprocesses let the real in-process HTTP server service requests.
+  const child = Bun.spawn([...CLI, ...args], {
+    cwd: PACKAGE_ROOT, env, stdout: "pipe", stderr: "pipe",
+  });
+  const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    return { exitCode, stdout, stderr };
+  } finally { clearTimeout(timeout); }
+}
+
+beforeAll(async () => {
+  if (!dsn) return;
+  admin = new Pool({ connectionString: dsn, max: 1, connectionTimeoutMillis: 5_000 });
+  await admin.query(`CREATE SCHEMA ${schema}`);
+  const setup = new Pool({ connectionString: dsn, options: `-csearch_path=${schema}`, max: 1 });
+  try {
+    for (const sql of PG_MIGRATIONS) await setup.query(sql);
+    await admin.query(`CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
+    await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
+    await admin.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role}`);
+    await admin.query(`GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${role}`);
+  } finally { await setup.end(); }
+  const signingSecret = randomBytes(32);
+  const minted = mintApiKey({ app: "conversations", agent: "registration-fixture", scopes: ["conversations:read", "conversations:write"], signingSecret });
+  clientEnv = isolatedEnv(CLIENT_HOME);
+  startBackend = async () => {
+    pool = new Pool({ connectionString: dsn, options: `-csearch_path=${schema} -crole=${role}`, max: 4 });
+    const identity = (await pool.query("SELECT current_user AS name,rolsuper,rolbypassrls FROM pg_roles WHERE rolname=current_user")).rows[0];
+    expect(identity).toEqual({ name: role, rolsuper: false, rolbypassrls: false });
+    const client = createQueryClient(pool);
+    server = startApiServer({ port: 0, host: "127.0.0.1", deps: {
+      client, keys: new ApiKeyStore(client), incidentProjector: null,
+      verifier: verifyApiKey({ app: "conversations", signingSecret,
+        keyStatus: async kid => kid === minted.kid ? "active" : "unknown" }),
+    } });
+    const url = `http://127.0.0.1:${server.port}`;
+    const config = join(CLIENT_HOME, ".hasna", "conversations", "config");
+    mkdirSync(config, { recursive: true, mode: 0o700 });
+    writeFileSync(join(config, "credentials"), `HASNA_CONVERSATIONS_API_URL=${url}\nHASNA_CONVERSATIONS_API_KEY=${minted.token}\n`, { mode: 0o600 });
+    expect((await fetch(`${url}/v1/project-registration/channels/capability`)).status).toBe(401);
+  };
+  await startBackend();
+}, 60_000);
+
+afterAll(async () => {
+  try {
+    server?.stop(true);
+    await pool?.end();
+    if (admin) {
+      try {
+        await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+        await admin.query(`DROP ROLE IF EXISTS ${role}`);
+      } finally { await admin.end(); }
+    }
+    assertNoClientDatabase(CLIENT_HOME);
+    assertNoClientDatabase(UNAUTHENTICATED_HOME);
+  } finally { rmSync(TEST_DIR, { recursive: true, force: true }); }
+}, 30_000);
+
+test("project-registration requires shared API credentials without creating a client database", async () => {
+  const result = await runCli(["project-registration", "capability", "--json"], isolatedEnv(UNAUTHENTICATED_HOME));
+  expect(result.exitCode).toBe(1);
+  expect(`${result.stdout}\n${result.stderr}`).toContain("HASNA_CONVERSATIONS_API_KEY");
+  assertNoClientDatabase(UNAUTHENTICATED_HOME);
+});
 
 describe("project-registration CLI producer contract", () => {
-  test("creates one channel and drains its inherited parent/reply collection", () => {
-    const capabilityResult = runCli(["project-registration", "capability", "--json"]);
+  pgTest("creates one channel and drains its inherited parent/reply collection", async () => {
+    const capabilityResult = await runCli(["project-registration", "capability", "--json"]);
     expect(capabilityResult.exitCode, capabilityResult.stderr).toBe(0);
     const capability = JSON.parse(capabilityResult.stdout) as {
       route: string;
@@ -83,7 +163,7 @@ describe("project-registration CLI producer contract", () => {
       call_limit: 1,
     }));
 
-    const createdResult = runCli([
+    const createdResult = await runCli([
       "project-registration",
       "create",
       "--request",
@@ -93,7 +173,7 @@ describe("project-registration CLI producer contract", () => {
     expect(createdResult.exitCode, createdResult.stderr).toBe(0);
     const created = JSON.parse(createdResult.stdout) as Record<string, any> & { target_id: string };
     expect(created.target_id).toMatch(/^chn_[0-9a-f]{32}$/);
-    const bindWithCreateShape = runCli([
+    const bindWithCreateShape = await runCli([
       "project-registration",
       "bind-existing",
       "--request",
@@ -125,7 +205,13 @@ describe("project-registration CLI producer contract", () => {
       time_budget_ms: 5_000,
       call_limit: 1,
     }));
-    const lookupResult = runCli([
+    server!.stop(true);
+    await pool.end();
+    await startBackend();
+    const restartedCapability = await runCli(["project-registration", "capability", "--json"]);
+    expect(restartedCapability.exitCode, restartedCapability.stderr).toBe(0);
+    expect(JSON.parse(restartedCapability.stdout)).toMatchObject(capability);
+    const lookupResult = await runCli([
       "project-registration",
       "lookup-receipt",
       "--request",
@@ -139,7 +225,15 @@ describe("project-registration CLI producer contract", () => {
       target_id: created.target_id,
     });
 
-    const unboundResult = runCli([
+    expect((await pool.query("SELECT target_id,outcome FROM project_channel_registration_receipts WHERE receipt_id=$1", [created.receipt_id])).rows).toEqual([
+      { target_id: created.target_id, outcome: "accepted" },
+    ]);
+    const replayResult = await runCli(["project-registration", "create", "--request", REQUEST_FILE, "--json"]);
+    expect(replayResult.exitCode, replayResult.stderr).toBe(0);
+    expect(JSON.parse(replayResult.stdout)).toMatchObject({ target_id: created.target_id, outcome: "duplicate_of_accepted" });
+    expect(Number((await pool.query("SELECT count(*) FROM channels WHERE name=$1", [desired.channel])).rows[0].count)).toBe(1);
+
+    const unboundResult = await runCli([
       "channel",
       "create",
       "cli-unbound",
@@ -149,7 +243,7 @@ describe("project-registration CLI producer contract", () => {
     ]);
     expect(unboundResult.exitCode, unboundResult.stderr).toBe(0);
 
-    const parentResult = runCli([
+    const parentResult = await runCli([
       "channel",
       "send",
       "cli-project-feed",
@@ -160,7 +254,7 @@ describe("project-registration CLI producer contract", () => {
     ]);
     expect(parentResult.exitCode, parentResult.stderr).toBe(0);
     const parent = JSON.parse(parentResult.stdout) as { id: number; uuid: string };
-    const replyResult = runCli([
+    const replyResult = await runCli([
       "reply",
       "--to",
       parent.uuid,
@@ -172,7 +266,7 @@ describe("project-registration CLI producer contract", () => {
     expect(replyResult.exitCode, replyResult.stderr).toBe(0);
     const reply = JSON.parse(replyResult.stdout) as { id: number; uuid: string };
 
-    const channelsResult = runCli([
+    const channelsResult = await runCli([
       "project-registration",
       "channels",
       "--project",
@@ -200,26 +294,13 @@ describe("project-registration CLI producer contract", () => {
     expect(channels.complete).toBe(true);
     expect(channels.truncated).toBe(false);
 
-    const db = new Database(TEST_DB);
-    db.prepare(
-      "INSERT INTO channels (id, name, project_id, created_by) VALUES (?, ?, ?, ?)",
-    ).run(
-      "chn_10000000000000000000000000000000",
-      "cli-project-first",
-      PROJECT_ID,
-      "tester",
+    await pool.query(
+      "INSERT INTO channels (id,name,project_id,created_by) VALUES ($1,$2,$3,$4),($5,$6,$3,$4)",
+      ["chn_10000000000000000000000000000000", "cli-project-first", PROJECT_ID, "tester",
+        "chn_f0000000000000000000000000000000", "cli-project-last"],
     );
-    db.prepare(
-      "INSERT INTO channels (id, name, project_id, created_by) VALUES (?, ?, ?, ?)",
-    ).run(
-      "chn_f0000000000000000000000000000000",
-      "cli-project-last",
-      PROJECT_ID,
-      "tester",
-    );
-    db.close();
 
-    const allChannelsResult = runCli([
+    const allChannelsResult = await runCli([
       "project-registration",
       "channels",
       "--project",
@@ -251,16 +332,11 @@ describe("project-registration CLI producer contract", () => {
       complete: true,
       truncated: false,
     });
-    const cleanupDb = new Database(TEST_DB);
-    cleanupDb.prepare(
-      "DELETE FROM channels WHERE id IN (?, ?)",
-    ).run(
-      "chn_10000000000000000000000000000000",
-      "chn_f0000000000000000000000000000000",
-    );
-    cleanupDb.close();
+    await pool.query("DELETE FROM channels WHERE id = ANY($1::text[])", [[
+      "chn_10000000000000000000000000000000", "chn_f0000000000000000000000000000000",
+    ]]);
 
-    const firstMessagesResult = runCli([
+    const firstMessagesResult = await runCli([
       "project-registration",
       "messages",
       created.target_id,
@@ -287,7 +363,7 @@ describe("project-registration CLI producer contract", () => {
     expect(firstMessages.complete).toBe(false);
     expect(firstMessages.truncated).toBe(true);
 
-    const secondMessagesResult = runCli([
+    const secondMessagesResult = await runCli([
       "project-registration",
       "messages",
       created.target_id,
@@ -347,7 +423,7 @@ describe("project-registration CLI producer contract", () => {
       time_budget_ms: 5_000,
       call_limit: 1,
     }));
-    const inverseCreatedResult = runCli([
+    const inverseCreatedResult = await runCli([
       "project-registration",
       "create",
       "--request",
@@ -389,7 +465,7 @@ describe("project-registration CLI producer contract", () => {
       time_budget_ms: 5_000,
       call_limit: 1,
     }));
-    const compensatedResult = runCli([
+    const compensatedResult = await runCli([
       "project-registration",
       "compensate",
       "--request",
@@ -405,7 +481,7 @@ describe("project-registration CLI producer contract", () => {
       accepted_receipt_id: inverseCreated.receipt_id,
     });
 
-    const verifiedResult = runCli([
+    const verifiedResult = await runCli([
       "project-registration",
       "verify-inverse",
       "--request",
@@ -420,7 +496,7 @@ describe("project-registration CLI producer contract", () => {
       digest: compensated.result_digest,
     });
 
-    const existingResult = runCli([
+    const existingResult = await runCli([
       "channel",
       "create",
       "cli-bind-existing",
@@ -430,7 +506,7 @@ describe("project-registration CLI producer contract", () => {
     ]);
     expect(existingResult.exitCode, existingResult.stderr).toBe(0);
     const existing = JSON.parse(existingResult.stdout) as { id: string; name: string };
-    const existingMessageResult = runCli([
+    const existingMessageResult = await runCli([
       "channel",
       "send",
       existing.name,
@@ -441,7 +517,7 @@ describe("project-registration CLI producer contract", () => {
     ]);
     expect(existingMessageResult.exitCode, existingMessageResult.stderr).toBe(0);
     const existingMessage = JSON.parse(existingMessageResult.stdout) as { uuid: string };
-    const priorReadResult = runCli([
+    const priorReadResult = await runCli([
       "project-registration",
       "read-channel",
       existing.id,
@@ -506,7 +582,7 @@ describe("project-registration CLI producer contract", () => {
     writeFileSync(BIND_FILE, JSON.stringify(bindRequest));
     const { operation_intent: _operationIntent, ...bindWithoutIntent } = bindRequest;
     writeFileSync(BIND_NO_INTENT_FILE, JSON.stringify(bindWithoutIntent));
-    const createWithBindShape = runCli([
+    const createWithBindShape = await runCli([
       "project-registration",
       "create",
       "--request",
@@ -517,7 +593,7 @@ describe("project-registration CLI producer contract", () => {
     expect(createWithBindShape.stderr).toContain(
       "create surface requires operation_intent=create",
     );
-    const createWithBindShapeWithoutIntent = runCli([
+    const createWithBindShapeWithoutIntent = await runCli([
       "project-registration",
       "create",
       "--request",
@@ -539,7 +615,7 @@ describe("project-registration CLI producer contract", () => {
         target_id: existing.id,
       },
     }));
-    const createWithAdoptShapeWithoutIntent = runCli([
+    const createWithAdoptShapeWithoutIntent = await runCli([
       "project-registration",
       "create",
       "--request",
@@ -550,7 +626,7 @@ describe("project-registration CLI producer contract", () => {
     expect(createWithAdoptShapeWithoutIntent.stderr).toContain(
       "create surface rejects adopt-existing intent",
     );
-    const bindWithoutIntentResult = runCli([
+    const bindWithoutIntentResult = await runCli([
       "project-registration",
       "bind-existing",
       "--request",
@@ -561,7 +637,7 @@ describe("project-registration CLI producer contract", () => {
     expect(bindWithoutIntentResult.stderr).toContain(
       "bind_existing surface requires operation_intent=bind_existing",
     );
-    const boundResult = runCli([
+    const boundResult = await runCli([
       "project-registration",
       "bind-existing",
       "--request",
@@ -587,7 +663,7 @@ describe("project-registration CLI producer contract", () => {
         },
       },
     });
-    const boundMessagesResult = runCli([
+    const boundMessagesResult = await runCli([
       "project-registration",
       "messages",
       existing.id,
@@ -603,11 +679,9 @@ describe("project-registration CLI producer contract", () => {
         project_id: PROJECT_ID,
       }],
     });
-    const boundDb = new Database(TEST_DB, { readonly: true });
-    const boundMessage = boundDb.query(
-      "SELECT project_id, content FROM messages WHERE uuid = ?",
-    ).get(existingMessage.uuid);
-    boundDb.close();
+    const boundMessage = (await pool.query(
+      "SELECT project_id,content FROM messages WHERE uuid=$1", [existingMessage.uuid],
+    )).rows[0];
     expect(boundMessage).toEqual({
       project_id: PROJECT_ID,
       content: "legacy message ownership",
@@ -646,7 +720,7 @@ describe("project-registration CLI producer contract", () => {
       time_budget_ms: 5_000,
       call_limit: 1,
     }));
-    const bindRestoredResult = runCli([
+    const bindRestoredResult = await runCli([
       "project-registration",
       "compensate",
       "--request",
@@ -661,7 +735,7 @@ describe("project-registration CLI producer contract", () => {
       result_revision: priorRead.revision,
       result_digest: priorRead.digest,
     });
-    const bindVerifiedResult = runCli([
+    const bindVerifiedResult = await runCli([
       "project-registration",
       "verify-inverse",
       "--request",
@@ -678,17 +752,15 @@ describe("project-registration CLI producer contract", () => {
       revision: priorRead.revision,
       digest: priorRead.digest,
     });
-    const restoredDb = new Database(TEST_DB, { readonly: true });
-    const restoredMessage = restoredDb.query(
-      "SELECT project_id, content FROM messages WHERE uuid = ?",
-    ).get(existingMessage.uuid);
-    restoredDb.close();
+    const restoredMessage = (await pool.query(
+      "SELECT project_id,content FROM messages WHERE uuid=$1", [existingMessage.uuid],
+    )).rows[0];
     expect(restoredMessage).toEqual({
       project_id: null,
       content: "legacy message ownership",
     });
 
-    const channelsAfterInverse = runCli([
+    const channelsAfterInverse = await runCli([
       "project-registration",
       "channels",
       "--project",

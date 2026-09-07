@@ -1,42 +1,29 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { unlinkSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { createChannel } from "./channels.js";
-import { closeDb } from "./db.js";
-import { sendMessage } from "./messages.js";
 import { createConversationsProjectPanel } from "./project-panel.js";
-import { createProject } from "./projects.js";
-import { pinStoreToDb, restoreStoreEnv } from "./store/isolated-test-env.js";
+import { getStore } from "./store/index.js";
+import { startLoopbackApiFixture } from "./store/test-support/loopback-api-fixture.js";
+import { activateClientEnvironment } from "./store/test-support/client-environment.js";
 
-const TEST_DB = join(tmpdir(), `conversations-test-project-panel-${Date.now()}.db`);
-
-function cleanupDb(): void {
-  closeDb();
-  try { unlinkSync(TEST_DB); } catch {}
-  try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-  try { unlinkSync(`${TEST_DB}-shm`); } catch {}
-}
-
-beforeEach(() => {
-  pinStoreToDb(TEST_DB);
-  cleanupDb();
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+let restoreClient: () => void;
+beforeEach(async () => {
+  fixture = await startLoopbackApiFixture();
+  restoreClient = activateClientEnvironment(fixture.env);
 });
-
-afterEach(() => {
-  cleanupDb();
-  restoreStoreEnv();
+afterEach(async () => {
+  restoreClient();
+  await fixture.stop();
 });
 
 describe("createConversationsProjectPanel", () => {
   test("emits a contract-valid project conversation panel without full message bodies", async () => {
-    const project = createProject({ name: "Swiss Bank Account", created_by: "alice" });
-    createChannel("iproj-swiss-bank-account", "alice", {
+    const project = await getStore().createProject({ name: "Swiss Bank Account", created_by: "alice" });
+    await getStore().createChannel("iproj-swiss-bank-account", "alice", {
       project_id: project.id,
       description: "Swiss banking coordination",
       tags: ["project", "iproj"],
     });
-    sendMessage({
+    await getStore().sendMessage({
       from: "alice",
       to: "iproj-swiss-bank-account",
       channel: "iproj-swiss-bank-account",
@@ -44,7 +31,7 @@ describe("createConversationsProjectPanel", () => {
       content: "Initial document checklist and bank shortlist.",
       priority: "normal",
     });
-    sendMessage({
+    await getStore().sendMessage({
       from: "bob",
       to: "iproj-swiss-bank-account",
       channel: "iproj-swiss-bank-account",
@@ -70,8 +57,8 @@ describe("createConversationsProjectPanel", () => {
   });
 
   test("falls back to #iproj-prefixed channels when no conversations project row exists", async () => {
-    createChannel("#iproj-swiss-bank-account", "alice");
-    sendMessage({
+    await getStore().createChannel("#iproj-swiss-bank-account", "alice");
+    await getStore().sendMessage({
       from: "alice",
       to: "iproj-swiss-bank-account",
       channel: "iproj-swiss-bank-account",
@@ -88,9 +75,9 @@ describe("createConversationsProjectPanel", () => {
   });
 
   test("includes channel-scoped messages when a project row exists but messages have no project_id", async () => {
-    const project = createProject({ name: "Swiss Bank Account", created_by: "alice" });
-    createChannel("iproj-swiss-bank-account", "alice", { project_id: project.id });
-    sendMessage({
+    const project = await getStore().createProject({ name: "Swiss Bank Account", created_by: "alice" });
+    await getStore().createChannel("iproj-swiss-bank-account", "alice", { project_id: project.id });
+    await getStore().sendMessage({
       from: "alice",
       to: "iproj-swiss-bank-account",
       channel: "iproj-swiss-bank-account",

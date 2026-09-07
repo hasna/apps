@@ -1,18 +1,20 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { startLoopbackApiFixture } from "../lib/store/test-support/loopback-api-fixture.js";
+let fixture: Awaited<ReturnType<typeof startLoopbackApiFixture>>;
+beforeAll(async () => { fixture = await startLoopbackApiFixture(); });
+afterAll(async () => { await fixture?.stop(); });
+import { beforeAll, afterAll, describe, expect, test } from "bun:test";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const TEST_DB = join(tmpdir(), `conversations-channel-read-${Date.now()}.db`);
-const CLI = ["bun", "run", "./src/cli/index.tsx"];
+const CLI = [process.execPath, "--no-env-file", "run", "./src/cli/index.tsx"];
 
 function runCli(args: string[]) {
   const result = Bun.spawnSync({
     cmd: [...CLI, ...args],
     cwd: process.cwd(),
     env: {
-      ...process.env,
-      CONVERSATIONS_DB_PATH: TEST_DB,
+      ...fixture.env,
       CONVERSATIONS_AGENT_ID: "channel-reader",
       FORCE_COLOR: "0",
     },
@@ -28,9 +30,8 @@ function runCli(args: string[]) {
 
 describe("channel read CLI", () => {
   afterAll(() => {
-    try { unlinkSync(TEST_DB); } catch {}
-    try { unlinkSync(`${TEST_DB}-wal`); } catch {}
-    try { unlinkSync(`${TEST_DB}-shm`); } catch {}
+
+
   });
 
   test("distinguishes an empty channel from a missing channel", () => {
@@ -40,8 +41,8 @@ describe("channel read CLI", () => {
     const empty = runCli(["channel", "read", "empty-read-channel", "--limit", "1"]);
     expect(empty.exitCode).toBe(0);
     expect(empty.stdout).toContain("No messages in #empty-read-channel.");
-    // The local store announces itself once on stderr (hasna/apps#1720).
-    expect(empty.stderr).toContain("local store");
+    // API clients must not announce a local store.
+    expect(empty.stderr).not.toContain("local store");
 
     const missing = runCli(["channel", "read", "missing-read-channel", "--limit", "1"]);
     expect(missing.exitCode).toBe(1);
@@ -52,7 +53,7 @@ describe("channel read CLI", () => {
   test("emits a JSON error for a missing channel with --json", () => {
     const missing = runCli(["channel", "read", "missing-json-channel", "--json"]);
     expect(missing.exitCode).toBe(1);
-    expect(missing.stderr).toContain("local store");
+    expect(missing.stderr).not.toContain("local store");
     expect(JSON.parse(missing.stdout)).toEqual({
       error: "Channel #missing-json-channel not found.",
     });
