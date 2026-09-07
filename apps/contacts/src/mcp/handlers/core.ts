@@ -27,7 +27,7 @@ const stripUndef = (o: Record<string, unknown>): Record<string, unknown> => {
 
 /** Enrich a contact with its many-to-many project ids. The
  * /v1 API does not expose project links yet, so this degrades gracefully rather
- * than failing the whole call (it never falls back to writing local SQLite). */
+ * than failing the whole call (a /v1 gap never degrades to a local write). */
 async function withProjectIds<T extends { id: string } | null>(store: Store, contact: T): Promise<T | (T & { project_ids: string[] })> {
   if (!contact) return contact;
   try {

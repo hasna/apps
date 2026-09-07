@@ -65,7 +65,7 @@ afterEach(() => {
 });
 
 describe("contacts status CLI", () => {
-  test("answers cleanly (never crashes) when the box is unconfigured", () => {
+  test("answers cleanly (never crashes) when the box is unconfigured, using the local store", () => {
     const result = runStatus(["status", "--json"], testEnv(), false);
 
     expect(result.exitCode).toBe(0);
@@ -73,18 +73,18 @@ describe("contacts status CLI", () => {
     expect(report).toMatchObject({
       service: "contacts",
       version: expect.any(String),
-      storage: "unconfigured",
+      storage: "local (sqlite)",
       api: expect.stringContaining("(not configured"),
       api_url_source: null,
       api_key_source: null,
       api_key_tier: null,
+      counts: { contacts: 0, companies: 0 },
     });
-    expect(report.counts).toBeUndefined();
     expect(report.error).toBeUndefined();
 
     const text = runStatus(["status"], testEnv(), false);
     expect(text.exitCode).toBe(0);
-    expect(stdoutText(text)).toContain("Storage:  unconfigured");
+    expect(stdoutText(text)).toContain("Storage:  local (sqlite)");
   });
 
   test("reports a transport error, not unconfigured, when a configured request fails", () => {
@@ -150,7 +150,7 @@ describe("contacts status CLI", () => {
     const report = parseStdout(result);
     expect(report).toMatchObject({
       service: "contacts",
-      storage: "cloud (/v1)",
+      storage: "api (/v1)",
       api: "https://contacts.example.test/v1",
       api_url_source: "HASNA_CONTACTS_API_URL",
       api_key_source: "HASNA_CONTACTS_API_KEY",

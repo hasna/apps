@@ -15,7 +15,6 @@ import {
 import { buildV1OpenApiDocument } from "./openapi.js";
 import { handleV1Request } from "./v1.js";
 
-const CLOUD_MODE = "cloud" as const;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -42,9 +41,9 @@ export function createCloudRequestHandler(): (req: Request) => Promise<Response>
 
     let response: Response;
     if (url.pathname === "/health" && req.method === "GET") {
-      response = json({ status: "ok", name: "contacts", version: getPackageVersion(), mode: CLOUD_MODE });
+      response = json({ status: "ok", name: "contacts", version: getPackageVersion(), mode: "cloud" });
     } else if (url.pathname === "/version" && req.method === "GET") {
-      response = json({ status: "ok", version: getPackageVersion(), mode: CLOUD_MODE });
+      response = json({ status: "ok", version: getPackageVersion(), mode: "cloud" });
     } else if (url.pathname === "/ready" && req.method === "GET") {
       // This entrypoint is always cloud, even when configuration is incomplete.
       // Missing remote configuration therefore fails closed rather than
@@ -60,7 +59,7 @@ export function createCloudRequestHandler(): (req: Request) => Promise<Response>
           {
             status: ok ? "ready" : "not_ready",
             version: getPackageVersion(),
-            mode: CLOUD_MODE,
+            mode: "cloud",
             db: dbOk,
             signing_secret: hasSecret,
           },
@@ -70,7 +69,7 @@ export function createCloudRequestHandler(): (req: Request) => Promise<Response>
         response = json(
           {
             status: "not_ready",
-            mode: CLOUD_MODE,
+            mode: "cloud",
             version: getPackageVersion(),
             error: (error as Error).message,
           },

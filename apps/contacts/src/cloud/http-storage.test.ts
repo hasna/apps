@@ -106,14 +106,26 @@ describe("canonical contacts client transport", () => {
     });
   });
 
-  test("rejects retired database and mode selectors", () => {
+  test("ignores retired database and mode selectors", () => {
+    const base = {
+      HASNA_CONTACTS_API_URL: "https://contacts.example.invalid",
+      HASNA_CONTACTS_API_KEY: "test-key",
+    };
     for (const [key, value] of [
       ["HASNA_CONTACTS_STORAGE_MODE", "cloud"],
+      ["CONTACTS_STORAGE_MODE", "self_hosted"],
       ["CONTACTS_DB_PATH", "/tmp/contacts.db"],
       ["CONTACTS_DATABASE_URL", "postgresql://client-dsn"],
     ] as const) {
-      expect(() => resolveContactsClientTransport("contacts", env({ [key]: value }))).toThrow("RETIRED_CONTACTS_CLIENT_SELECTOR");
+      // The switch is inert: the canonical URL+key still resolve to https.
+      const resolution = resolveContactsClientTransport("contacts", env({ ...base, [key]: value }));
+      expect(resolution).toMatchObject({ transport: "https", configured: true });
+      expect(resolveContactsStorageClient("contacts", env({ ...base, [key]: value })).transport).toBe("https");
     }
+    // Without a canonical configuration the same switches resolve as
+    // unconfigured (nothing refuses), so getStore can pick the local store.
+    const unconfigured = resolveContactsClientTransport("contacts", env({ HASNA_CONTACTS_STORAGE_MODE: "local" }));
+    expect(unconfigured).toMatchObject({ transport: "unconfigured", configured: false });
   });
 
   test("rejects blank and conflicting canonical aliases", () => {

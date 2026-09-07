@@ -9,8 +9,8 @@ import * as pkg from "./index.js";
 // point) and NOT the raw on-box SQLite layer. Re-exporting db/* functions such
 // as createContact/getDatabase from the package root was the split-brain bug
 // this rebuild eliminates: an SDK caller would write local SQLite even while the
-// client is pointed at the cloud (self_hosted/cloud mode). All domain reads and
-// writes flow through getStore() -> LocalStore | ApiStore.
+// client was pointed at the cloud. All domain reads and writes flow through
+// getStore() -> LocalStore | ApiStore (transport chosen automatically).
 describe("@hasna/contacts public surface", () => {
   it("exposes the Store abstraction as the data entry point", () => {
     expect(typeof pkg.getStore).toBe("function");

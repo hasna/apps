@@ -874,7 +874,7 @@ export const TOOL_DEFINITIONS = [
     },
     {
       name: "sync_from_google_contacts",
-      description: "Pull contacts from Google Contacts (People API) and upsert them into the local database. Skips contacts that already exist by email. Requires connect-googlecontacts auth login. Returns { imported, skipped, errors }.",
+      description: "Pull contacts from Google Contacts (People API) and upsert them into the contacts store. Skips contacts that already exist by email. Requires connect-googlecontacts auth login. Returns { imported, skipped, errors }.",
       inputSchema: {
         type: "object",
         properties: {

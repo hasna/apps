@@ -67,7 +67,7 @@ function textPayload(result: { content: Array<{ text: string }> }) {
 afterEach(restoreEnv);
 
 describe("contacts connection MCP runtime", () => {
-  test("reports unconfigured with local fallback disabled when URL/key are absent", async () => {
+  test("reports the local transport when URL/key are absent", async () => {
     isolateEnv();
     const result = await registeredTools()["contacts_connection_status"]!.handler({});
     expect(textPayload(result)).toMatchObject({
@@ -76,7 +76,7 @@ describe("contacts connection MCP runtime", () => {
       misconfigured: true,
       api_key_present: false,
       api_key_source: null,
-      local_fallback: false,
+      active_transport: "local",
     });
   });
 
@@ -115,11 +115,12 @@ describe("contacts connection MCP runtime", () => {
     expect(result.content[0]!.text).not.toContain("disk-key-not-a-real-secret");
   });
 
-  test("rejects retired client storage selectors", async () => {
+  test("retired client storage selectors are inert", async () => {
     isolateEnv();
     process.env.CONTACTS_DATABASE_URL = "postgresql://should-not-be-in-a-client";
+    process.env.HASNA_CONTACTS_STORAGE_MODE = "cloud";
     const result = await registeredTools()["contacts_connection_status"]!.handler({});
-    expect(result.isError).toBe(true);
-    expect(result.content[0]!.text).toContain("RETIRED_CONTACTS_CLIENT_SELECTOR");
+    expect(result.isError).not.toBe(true);
+    expect(textPayload(result)).toMatchObject({ active_transport: "local" });
   });
 });

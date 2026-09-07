@@ -29,7 +29,7 @@ describe("contacts CLI connection contract", () => {
     expect(storageSource).not.toContain("getStore");
     expect(storageSource).not.toContain("../db/");
     expect(storageSource).not.toContain("getDatabase");
-    expect(storageSource).toContain("local_fallback: false");
+    expect(storageSource).toContain("active_transport");
 
     for (const term of forbidden) {
       expect(cliSource).not.toContain(term);

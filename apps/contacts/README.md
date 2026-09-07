@@ -13,10 +13,19 @@ npm install -g @hasna/contacts
 
 ## Configure the client
 
-Every CLI, MCP, and package data operation uses one authenticated HTTPS `/v1`
-authority resolved by the shared `@hasna/contracts` client chain
-(hasna/apps#1720), resolved fresh on every request. There is no local database
-fallback and no per-app env chain of its own.
+Every CLI, MCP, and package data operation flows through one `Store`
+abstraction whose transport is chosen automatically:
+
+- a resolved authenticated HTTPS `/v1` authority (via the shared
+  `@hasna/contracts` client chain, hasna/apps#1720, resolved fresh on every
+  request) selects the hosted API transport;
+- otherwise commands read and write the on-box SQLite store at the XDG data
+  path (`~/.local/share/hasna/contacts/contacts.db`, or
+  `HASNA_CONTACTS_DB_PATH`).
+
+The storage-mode axis is retired: no `*_MODE` switch, DB-path selector, or DSN
+gates, redirects, or refuses a command — every command works in either
+transport.
 
 Once a contacts API key resolves from any tier, the authority defaults to the
 fleet gateway `https://api.hasna.com/contacts` — no URL configuration is
@@ -45,16 +54,19 @@ export HASNA_CONTACTS_API_KEY="…"     # or configure the Keychain/disk tiers
 contacts connection --json
 ```
 
-An absent URL and key fails closed: operations exit non-zero and never open a
-local store; `contacts connection` reports `transport: "unconfigured"`.
+Without a resolved API authority and key, commands use the local SQLite store;
+`contacts connection` reports `transport: "unconfigured"` for the API half and
+`active_transport: "local"` for the store the commands actually use.
 `HASNA_CONTACTS_STORAGE_MODE`, `CONTACTS_STORAGE_MODE`, contacts DB-path
-variables, and contacts database URLs are rejected in client processes.
-PostgreSQL URLs belong only to `contacts-serve` and the migration task.
+variables, and contacts database URLs are inert in client processes — they
+never switched a transport and now do nothing (the DB-path variables still
+select the local SQLite file). PostgreSQL URLs belong to `contacts-serve` and
+the migration task.
 
 ## CLI Usage
 
 ```bash
-contacts status            # CLI version, resolved /v1 authority + sources, storage mode, record counts
+contacts status            # CLI version, resolved /v1 authority + sources, active transport, record counts
 contacts status --json
 contacts --help
 ```
@@ -64,11 +76,11 @@ contacts --help
 `api_key_source`, `api_key_tier`: an env key name, a Keychain item reference,
 a credentials-file path, or `default` for the fleet gateway; never a value.
 It answers even on a box without an API key: an unconfigured client reports
-storage `unconfigured` with the resolver's `issue` (a failed request on a
+storage `local (sqlite)` with live local counts (a failed request on a
 configured box reports storage `error` with the failure message) instead of
 crashing, so agents can observe the configuration drift the command exists to
 expose. `status` and `connection` are diagnostics and exit 0 with that report;
-every data verb fails closed (non-zero exit, no local store).
+every data verb works against whichever transport is active.
 
 ## SDK
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/** Immutable, pure-remote production entrypoint used by the self-hosted image. */
+/** Immutable, production `/v1` entrypoint backed by PostgreSQL. */
 import { getPackageVersion } from "../lib/package-version.js";
 import {
   closeCloud,

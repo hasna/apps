@@ -1,17 +1,7 @@
 import { getDatabase, getDbPath, type ContactsDatabase } from "./database.js";
+import type { ContactsStorageStatus, StorageTableStatus } from "../types/store-dto.js";
 
-export interface StorageTableStatus {
-  table: string;
-  ok: boolean;
-  rows: number | null;
-  error?: string;
-}
-
-export interface ContactsStorageStatus {
-  mode: "local";
-  db_path: string;
-  tables: StorageTableStatus[];
-}
+export type { ContactsStorageStatus, StorageTableStatus };
 
 export const CONTACTS_STORAGE_TABLES = [
   "companies",
@@ -61,10 +51,10 @@ function quoteId(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
-export function getStorageStatus(db: ContactsDatabase = getDatabase()): ContactsStorageStatus {
+export function getStorageStatus(db: ContactsDatabase = getDatabase(), dbPath: string = getDbPath()): ContactsStorageStatus {
   return {
     mode: "local",
-    db_path: getDbPath(),
+    db_path: dbPath,
     tables: CONTACTS_STORAGE_TABLES.map((table) => {
       try {
         const row = db.query(`SELECT COUNT(*) as count FROM ${quoteId(table)}`).get() as { count: number };

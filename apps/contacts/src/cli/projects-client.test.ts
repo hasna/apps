@@ -24,14 +24,12 @@ async function runContacts(args: string[], overrides: Record<string, string>) {
     "CONTACTS_DATABASE_URL",
   ]) delete env[key];
   // The child resolves on its own live process.env, so the station's ambient
-  // tiers must be pinned away or they configure the child: a populated Mac
-  // Keychain api-url disagreed with the loopback URL below and the shared
-  // resolver refused (CONTACTS_API_NOT_CONFIGURED, "select different service
-  // authorities") before the HTTPS check ever ran. An account that cannot
-  // exist makes `security` exit 44 (tier absent) and an empty HASNA_HOME
+  // tiers must be pinned away or they configure the child. An account that
+  // cannot exist makes `security` exit 44 (tier absent) and an empty HASNA_HOME
   // holds no credentials file, so only the overrides configure the child.
   const tempHome = mkdtempSync(join(tmpdir(), "contacts-projects-home-"));
   tempHomes.push(tempHome);
+  env.HOME = tempHome;
   env.HASNA_HOME = tempHome;
   env.HASNA_STATION = "no-such-station";
   Object.assign(env, overrides);
@@ -54,22 +52,35 @@ afterEach(() => {
 });
 
 describe("contacts project client transport", () => {
-  test("refuses plaintext loopback instead of falling back to local state", async () => {
-    const result = await runContacts(["projects", "list", "contact-1", "--json"], {
-      HASNA_CONTACTS_API_URL: "http://127.0.0.1:54321",
-      HASNA_CONTACTS_API_KEY: "test-key",
-    });
-    expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain("CONTACTS_API_HTTPS_REQUIRED");
-    expect(result.stdout).toBe("");
+  test("works over the local SQLite store when no API configuration resolves", async () => {
+    const result = await runContacts(["projects", "list", "contact-1", "--json"], {});
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain('"project_ids"');
   });
 
-  test("fails closed with no credential: non-zero exit, no data, nothing written under HASNA_HOME", async () => {
-    const result = await runContacts(["projects", "list", "contact-1", "--json"], {});
+  test("uses the hosted /v1 transport when an HTTPS authority and key resolve", async () => {
+    const result = await runContacts(["projects", "list", "contact-1", "--json"], {
+      HASNA_CONTACTS_API_URL: "https://contacts.example.invalid",
+      HASNA_CONTACTS_API_KEY: "test-key",
+    });
+    // The request fails (reserved .invalid TLD) but the transport itself is
+    // the configured https API: the failure is a transport error, never a
+    // local-store fallback or a selector refusal.
     expect(result.exitCode).not.toBe(0);
-    expect(result.stderr).toContain("CONTACTS_API_NOT_CONFIGURED");
-    expect(result.stderr).not.toContain("local-fallback");
-    expect(result.stdout).toBe("");
-    expect(readdirSync(result.tempHome)).toEqual([]);
+    expect(result.stderr).not.toContain("RETIRED_CONTACTS_CLIENT_SELECTOR");
+    expect(result.stderr).not.toContain("CONTACTS_API_NOT_CONFIGURED");
+  });
+
+  test("ignores retired mode switches and proceeds on the local store", async () => {
+    const result = await runContacts(["projects", "list", "contact-1", "--json"], {
+      HASNA_CONTACTS_STORAGE_MODE: "cloud",
+      CONTACTS_STORAGE_MODE: "self_hosted",
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain('"project_ids"');
+    // The local store lives under the temp home — nothing leaked elsewhere.
+    expect(readdirSync(result.tempHome)).not.toEqual([]);
   });
 });

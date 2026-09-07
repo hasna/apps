@@ -165,7 +165,7 @@ export function preserveLegacyDatabase(sourceArg: string | undefined, outputArg:
 export function registerLegacyCommands(program: Command): void {
   const legacy = program
     .command("legacy")
-    .description("Inspect or preserve retired local contacts data; never uses it as the live store");
+    .description("Inspect or preserve SQLite files from retired @hasna/contacts releases");
 
   legacy
     .command("inspect")
@@ -174,14 +174,14 @@ export function registerLegacyCommands(program: Command): void {
     .action((opts: { json?: boolean }) => {
       const candidates = legacyDatabaseCandidates();
       if (opts.json) {
-        console.log(JSON.stringify({ candidates, local_fallback: false }, null, 2));
+        console.log(JSON.stringify({ candidates }, null, 2));
         return;
       }
       for (const candidate of candidates) {
         const state = candidate.exists ? chalk.yellow("found") : chalk.gray("absent");
         console.log(`${state}  ${candidate.path}`);
       }
-      console.log(chalk.gray("These files are never selected by the contacts client."));
+      console.log(chalk.gray("These files are copied only on explicit request; the live client never adopts them."));
     });
 
   legacy
@@ -193,10 +193,10 @@ export function registerLegacyCommands(program: Command): void {
     .action((opts: { source?: string; output: string; json?: boolean }) => {
       const result = preserveLegacyDatabase(opts.source, opts.output);
       if (opts.json) {
-        console.log(JSON.stringify({ ...result, local_fallback: false }, null, 2));
+        console.log(JSON.stringify({ ...result }, null, 2));
         return;
       }
       console.log(chalk.green(`Preserved ${basename(result.source)} at ${result.output} (${result.bytes} bytes).`));
-      console.log(chalk.gray("The source was not changed or deleted. Use a legacy @hasna/contacts release to export portable JSON, then import it through the HTTPS client."));
+      console.log(chalk.gray("The source was not changed or deleted. Export portable JSON with a legacy @hasna/contacts release, then import it with the current contacts client."));
     });
 }

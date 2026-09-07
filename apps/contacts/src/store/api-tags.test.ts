@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe("ApiStore contact tag operations", () => {
-  test("looks up a tag by name and attaches/removes it without local fallback", async () => {
+  test("looks up a tag by name and attaches/removes it through the hosted transport", async () => {
     const calls: Array<{ method: string; url: string; apiKey: string | null }> = [];
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);

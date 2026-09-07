@@ -257,11 +257,22 @@ export type audiencesSetContactConsentInput2 = "opt_in" | "opt_out" | "unknown";
 export type audiencesSuppressAddressInput0 = SuppressInput;
 export type audiencesUnsuppressAddressInput0 = "email" | "telegram" | "sms";
 export type audiencesListSuppressionsInput0 = { channel?: Domain.AudienceChannel; unsyncedOnly?: boolean; } | undefined;
-export type mailerySyncSyncSuppressionsResult = Promise<SuppressionSyncResult>;
+export type mailerySyncSyncSuppressionsResult = SuppressionSyncResult;
 export type contextAssembleContextInput1 = "meeting_prep" | "deal_review" | "outreach" | "research" | undefined;
 export type statsGetNetworkStatsResult = NetworkStats;
 export type meetingCaptureIngestMeetingParticipantsInput0 = { title: string; event_date: string; attendees: Array<{ name: string; email: string; }>; context?: string; };
 
-/** The HTTPS client has no local storage diagnostics endpoint. */
-export type ContactsStorageStatus = null;
-export interface StorageTableStatus { table: string; ok: boolean; rows: number | null; error?: string; }
+/** Storage diagnostics shape. The local SQLite transport reports on-box table
+ * status; the hosted /v1 transport has no on-box tables and reports null. */
+export interface ContactsStorageStatus {
+  mode: "local";
+  db_path: string;
+  tables: StorageTableStatus[];
+}
+
+export interface StorageTableStatus {
+  table: string;
+  ok: boolean;
+  rows: number | null;
+  error?: string;
+}

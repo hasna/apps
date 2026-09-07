@@ -1,6 +1,7 @@
 // Frozen pre-isolation public signatures from 7a24052a2. Type-only imports
-// never execute or ship; every method except the corrected null status must
-// remain exactly equal. The production declaration closure is tested below.
+// never execute or ship; every method except the transport-union mode and the
+// truthful storage-status must remain exactly equal. The production
+// declaration closure is tested below.
 import { expect, test } from "bun:test";
 import { dirname, resolve } from "node:path";
 import ts from "typescript";
@@ -63,7 +64,7 @@ export interface ContactsStats {
   groups: number;
 }
 export interface LegacyStore {
-  readonly mode: "api";
+  readonly mode: "local" | "api";
 
   // Contacts
   createContact(input: CreateContactInput): Promise<Contact>;
@@ -334,8 +335,8 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B 
 type Assert<T extends true> = T;
 type _SameMethods = Assert<Equal<keyof Store, keyof LegacyStore>>;
 type _SameSignatures = Assert<Equal<Omit<Store, "storageStatus">, Omit<LegacyStore, "storageStatus">>>;
-type _TruthfulStatus = Assert<Equal<Awaited<ReturnType<Store["storageStatus"]>>, null>>;
-type _ExportedStatus = Assert<Equal<PublicStatus, null>>;
+type _TruthfulStatus = Assert<Equal<Awaited<ReturnType<Store["storageStatus"]>>, ContactsStorageStatus | null>>;
+type _ExportedStatus = Assert<Equal<PublicStatus, ContactsStorageStatus>>;
 
 function declarationClosure(entries: string[], emitted: Map<string, string>): string[] {
   const seen = new Set<string>();

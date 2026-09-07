@@ -24,14 +24,16 @@ function connectionStatus() {
     misconfigured: resolution.misconfigured,
     issue: resolution.issue,
     warning: resolution.warning,
-    local_fallback: false,
+    // The transport the client actually uses: the hosted /v1 API when
+    // configured, otherwise the local SQLite store. Nothing is gated.
+    active_transport: resolution.configured ? "api" : "local",
   };
 }
 
 export function registerContactsStorageTools(server: McpServer): void {
   server.tool(
     "contacts_connection_status",
-    "Inspect the canonical contacts HTTPS client configuration without exposing credential values",
+    "Inspect the active contacts client transport and API configuration without exposing credential values",
     {},
     async () => {
       try {

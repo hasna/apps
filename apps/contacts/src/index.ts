@@ -1,9 +1,14 @@
 // @hasna/contacts — public library API
 //
 // The public surface is the Store abstraction plus shared domain types and the
-// typed `/v1` SDK client. Every data operation uses an explicitly configured,
-// authenticated HTTPS authority. The raw SQLite and PostgreSQL layers are not
-// public client API; missing or invalid URL/key configuration fails closed.
+// typed `/v1` SDK client. The Store resolves its transport automatically: a
+// configured, authenticated HTTPS authority (the @hasna/contracts chain) selects
+// the hosted `/v1` ApiStore; otherwise the on-box SQLite LocalStore. The
+// storage-mode axis is retired — no switch gates or redirects a command, and
+// both transports expose the same command surface.
+//
+// The raw SQLite and PostgreSQL layers are not public client API; every data
+// operation flows through `getStore()`.
 
 // ─── Storage abstraction (the ONLY data entry point) ────────────────────────────
 export {

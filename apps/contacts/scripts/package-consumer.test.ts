@@ -56,10 +56,19 @@ describe("published package consumer contract", () => {
     for (const bundle of ["dist/cli/index.js", "dist/server/index.js", "dist/mcp/index.js"]) {
       const contents = await readFile(join(installedRoot, bundle), "utf8");
       expect(contents).not.toMatch(/(?:require\(|from\s+)["']fast-uri["']/);
-      expect(contents).not.toContain('from "bun:sqlite"');
-      expect(contents).not.toContain("class LocalStore");
-      expect(contents).not.toContain("CREATE TABLE contacts");
     }
+    // The CLI and MCP bundles ship BOTH transports: LocalStore (SQLite) is a
+    // first-class client transport again after the storage-mode axis was
+    // retired, so the bundles must contain it. The server bundle stays the
+    // pure-PostgreSQL /v1 boundary and must never carry the on-box layer.
+    for (const bundle of ["dist/cli/index.js", "dist/mcp/index.js"]) {
+      const contents = await readFile(join(installedRoot, bundle), "utf8");
+      expect(contents).toContain("class LocalStore");
+    }
+    const serverBundle = await readFile(join(installedRoot, "dist/server/index.js"), "utf8");
+    expect(serverBundle).not.toContain('from "bun:sqlite"');
+    expect(serverBundle).not.toContain("class LocalStore");
+    expect(serverBundle).not.toContain("CREATE TABLE contacts");
     const version = Bun.spawnSync(
       ["bun", join(installedRoot, "dist/server/index.js"), "--version"],
       {

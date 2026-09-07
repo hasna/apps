@@ -1,17 +1,22 @@
 /**
  * Canonical contacts client transport.
  *
- * Public clients have exactly one data path: an authenticated HTTPS `/v1`
- * authority, resolved by `@hasna/contracts/client` — the ONE fleet resolver.
- * The authority defaults to the fleet gateway `https://api.hasna.com/contacts`
- * once any credential tier resolves, and `HASNA_CONTACTS_API_URL`, the
- * Keychain `api-url` item, or the credentials file override it. API-key
- * resolution and per-request rotation are owned by the shared resolver, so
- * key material is never exposed by status objects or cached in this package.
+ * Clients have two data paths, both first-class:
  *
- * SQLite, PostgreSQL DSNs, and storage/deployment modes are not client
- * transports. A stale selector is a configuration error, not a reason to read
- * a different data set.
+ *   - ApiStore  — an authenticated HTTPS `/v1` authority, resolved by
+ *     `@hasna/contracts/client` — the ONE fleet resolver. The authority
+ *     defaults to the fleet gateway `https://api.hasna.com/contacts` once any
+ *     credential tier resolves, and `HASNA_CONTACTS_API_URL`, the Keychain
+ *     `api-url` item, or the credentials file override it. API-key resolution
+ *     and per-request rotation are owned by the shared resolver, so key
+ *     material is never exposed by status objects or cached in this package.
+ *   - LocalStore — on-box SQLite at the XDG data path (or
+ *     `HASNA_CONTACTS_DB_PATH`), selected automatically when no API authority
+ *     resolves. The storage-mode axis is retired: no mode switch selects a
+ *     transport, and commands are never gated on one.
+ *
+ * `getStore()` (src/store) chooses: a resolved API authority + credential →
+ * ApiStore; otherwise LocalStore.
  */
 import {
   ClientTransportConfigurationError,
@@ -31,38 +36,12 @@ import type { Env } from "./resolver-inputs.js";
 
 export type { Env, QueryParams };
 
-export const RETIRED_CLIENT_SELECTOR_KEYS = [
-  "HASNA_CONTACTS_STORAGE_MODE",
-  "CONTACTS_STORAGE_MODE",
-  "HASNA_CONTACTS_MODE",
-  "CONTACTS_MODE",
-  "HASNA_CONTACTS_DB_PATH",
-  "CONTACTS_DB_PATH",
-  "HASNA_CONTACTS_DATABASE_URL",
-  "CONTACTS_DATABASE_URL",
-] as const;
-
-function configuredKeys(env: Env, keys: readonly string[]): string[] {
-  return keys.filter((key) => env[key] !== undefined && env[key]!.trim().length > 0);
-}
-
-function assertNoRetiredClientSelectors(env: Env): void {
-  const found = configuredKeys(env, RETIRED_CLIENT_SELECTOR_KEYS);
-  if (found.length === 0) return;
-  throw new ContactsClientConfigurationError(
-    "RETIRED_CONTACTS_CLIENT_SELECTOR",
-    `Contacts clients use only HASNA_CONTACTS_API_URL plus an API key resolved by @hasna/contracts. ` +
-      `Remove retired client selector${found.length === 1 ? "" : "s"}: ${found.join(", ")}. ` +
-      "PostgreSQL configuration belongs only on contacts-serve; local SQLite is available only through the explicit legacy migration command.",
-  );
-}
-
 function assertHttpsBaseUrl(baseUrl: string): void {
   const url = new URL(baseUrl);
   if (url.protocol !== "https:") {
     throw new ContactsClientConfigurationError(
       "CONTACTS_API_HTTPS_REQUIRED",
-      "HASNA_CONTACTS_API_URL must use HTTPS. Plain HTTP and local-store fallback are disabled for contacts clients.",
+      "HASNA_CONTACTS_API_URL must use HTTPS.",
     );
   }
 }
@@ -112,12 +91,11 @@ function unconfiguredResolution(
 /**
  * Resolve value-free connection diagnostics.
  *
- * @hasna/contracts 1.0.2 THROWS `ClientTransportConfigurationError` for every
- * incomplete or invalid configuration — nothing resolves to a local or
- * partial transport any more. A refusal of that class is reported here as
- * `unconfigured` (never as a usable transport); the shared resolver's own
- * hard refusals — a blank declared variable, a conflict, an unreadable
- * credential file — stay hard errors, exactly as the resolver throws them.
+ * A miss (no authority or credential) is reported here as `unconfigured`
+ * (never as a usable transport); callers decide whether that means the local
+ * SQLite transport or a hard API requirement. The shared resolver's own hard
+ * refusals — a blank declared variable, a conflict, an unreadable credential
+ * file — stay hard errors, exactly as the resolver throws them.
  */
 export function resolveContactsClientTransport(
   name: string,
@@ -127,7 +105,6 @@ export function resolveContactsClientTransport(
   if (name !== "contacts") {
     throw new ContactsClientConfigurationError("CONTACTS_CLIENT_NAME_INVALID", "This resolver only accepts the contacts app slug.");
   }
-  assertNoRetiredClientSelectors(env);
   const stamp = clientConfigurationStamp(env);
   let resolution: SharedClientTransportResolution;
   try {
@@ -239,7 +216,10 @@ export interface ResolveStorageClientResult {
   resolution: ClientTransportResolution;
 }
 
-/** Build the sole contacts client. Any incomplete configuration is terminal. */
+/** Build the contacts client for a resolved API configuration. An incomplete
+ * configuration is terminal for THIS function — callers that want the
+ * automatic transport fallback (hosted API when configured, local SQLite
+ * otherwise) resolve through `getStore()` instead. */
 export function resolveContactsStorageClient(
   name: string,
   env: Env = process.env,
@@ -250,7 +230,8 @@ export function resolveContactsStorageClient(
     throw new ContactsClientConfigurationError(
       "CONTACTS_API_NOT_CONFIGURED",
       `${resolution.issue ?? "The contacts API client is not configured."} ` +
-        "Configure HASNA_CONTACTS_API_URL and a contacts API key; the client will not read or create a local SQLite database.",
+        "Configure HASNA_CONTACTS_API_URL and a contacts API key to use the hosted API; " +
+        "without them the client uses the local SQLite store.",
     );
   }
 

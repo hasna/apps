@@ -19,8 +19,8 @@
  *   once a credential resolves. The KEY is re-resolved on every request (a
  *   rotation heals a long-lived agent); the AUTHORITY is pinned for the life
  *   of the client, so a credential written for one service is never sent to
- *   another. Nothing resolving THROWS — there is no local fallback and no
- *   unauthenticated client.
+ *   another. Nothing resolving THROWS — the SDK always targets the /v1 API and
+ *   never reads local data.
  */
 import { resolveCredential, type CredentialChainOptions, type KeychainTierOptions } from "@hasna/contracts/client";
 import { ContactsClientConfigurationError, resolveContactsClientTransport } from "../cloud/http-storage.js";
@@ -119,7 +119,7 @@ export function contactsSdkAuthorityPinMessage(): string {
   );
 }
 
-const SDK_HOSTED_ONLY = "The contacts SDK is hosted-only and never falls back to local data.";
+const SDK_REQUIRES_API = "The contacts SDK targets the configured /v1 API endpoint and never reads local data.";
 
 /** One pass down the credential chain; a miss or an unusable tier is terminal. */
 function resolveSdkCredential(env: Env, chainOptions: CredentialChainOptions): string {
@@ -128,7 +128,7 @@ function resolveSdkCredential(env: Env, chainOptions: CredentialChainOptions): s
     const diagnosis = resolveContactsClientTransport(CONTACTS_APP_NAME, env, chainOptions);
     throw new ContactsClientConfigurationError(
       "CONTACTS_API_NOT_CONFIGURED",
-      `${diagnosis.issue ?? "No contacts credential resolved."} ${SDK_HOSTED_ONLY}`,
+      `${diagnosis.issue ?? "No contacts credential resolved."} ${SDK_REQUIRES_API}`,
     );
   }
   if (credential.tier === "pointer") {
@@ -152,7 +152,7 @@ function resolveSdkCredential(env: Env, chainOptions: CredentialChainOptions): s
  * - otherwise the @hasna/contracts chain resolves credential + authority, and
  *   every request re-resolves the KEY on a fresh snapshot while the AUTHORITY
  *   stays pinned (a changed authority is a new client, never a key sent to the
- *   wrong server). Any refusal throws — there is no local fallback.
+ *   wrong server). Any refusal throws — the SDK always targets the /v1 API.
  */
 export function createContactsClient(options: CreateContactsClientOptions = {}): ContactsV1Client {
   const { baseUrl, apiKey, env, profile, keychain, ...clientOptions } = options;
@@ -179,7 +179,7 @@ export function createContactsClient(options: CreateContactsClientOptions = {}):
   if (!resolution.configured || !resolution.baseUrl) {
     throw new ContactsClientConfigurationError(
       "CONTACTS_API_NOT_CONFIGURED",
-      `${resolution.issue ?? "The contacts API client is not configured."} ${SDK_HOSTED_ONLY}`,
+      `${resolution.issue ?? "The contacts API client is not configured."} ${SDK_REQUIRES_API}`,
     );
   }
   const pinnedBaseUrl = resolution.baseUrl;

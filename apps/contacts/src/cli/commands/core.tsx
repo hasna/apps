@@ -25,7 +25,7 @@ export function registerCoreCommands(program: Command, version: string): void {
 
 program
   .command("status")
-  .description("Show CLI version, API endpoint, storage mode, and record counts")
+  .description("Show CLI version, API endpoint, active transport, and record counts")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
     // The authority is whatever the shared @hasna/contracts chain resolves —
@@ -56,7 +56,7 @@ program
         store.listCompanies({ limit: 1 }),
       ]);
       counts = { contacts: contacts.total, companies: companies.total };
-      storage = "cloud (/v1)";
+      storage = store.mode === "api" ? "api (/v1)" : "local (sqlite)";
     } catch (err) {
       if (err instanceof ContactsClientConfigurationError) {
         // Genuinely unconfigured (CONTACTS_API_NOT_CONFIGURED etc.): a reportable
