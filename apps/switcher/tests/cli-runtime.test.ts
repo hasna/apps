@@ -203,14 +203,14 @@ test("actual CLI auto-configures split DeepSeek catalog, launches a harness, reu
   }});
   try {
     const executable = join(dir,"claude-fixture");
-    await writeFile(executable, `#!${process.execPath}\nif(process.argv.includes('--version')) { console.log('2.1.261 (Claude Code)'); } else {\nconst args=process.argv.slice(2); const file=args[args.indexOf('--settings')+1]; const settings=await Bun.file(file).json();\nconsole.log(JSON.stringify({model:process.env.ANTHROPIC_MODEL,base:process.env.ANTHROPIC_BASE_URL,catalog:settings.modelPicker.options.map(m=>m.model),authCorrect:process.env.ANTHROPIC_AUTH_TOKEN==='fixture-deepseek-key',operatorPresent:!!process.env.HASNA_SWITCHER_API_KEY,unrelatedPresent:!!process.env.UNRELATED_API_KEY,args}));\n}\n`, {mode:0o700});
+    await writeFile(executable, `#!${process.execPath}\nif(process.argv.includes('--version')) { console.log('2.1.261 (Claude Code)'); } else {\nconst args=process.argv.slice(2); const file=args[args.indexOf('--settings')+1]; const settings=await Bun.file(file).json();\nconsole.log(JSON.stringify({model:process.env.ANTHROPIC_MODEL,base:process.env.ANTHROPIC_BASE_URL,catalog:settings.modelPicker.options.map(m=>m.model),authCorrect:!!process.env.ANTHROPIC_AUTH_TOKEN&&process.env.ANTHROPIC_AUTH_TOKEN!=='fixture-deepseek-key',operatorPresent:!!process.env.HASNA_SWITCHER_API_KEY,unrelatedPresent:!!process.env.UNRELATED_API_KEY,args}));\n}\n`, {mode:0o700});
     const args = ["launch","claude","--provider","deepseek","--model","fixture-pro","--url",upstream.url.origin+"/anthropic/v1","--catalog-url",upstream.url.origin,"--credential-env","SWITCHER_PROVIDER_FIXTURE","--executable",executable];
     for (let i=0; i<2; i++) {
       const result = await command(dir,args,{SWITCHER_PROVIDER_FIXTURE:"fixture-deepseek-key",UNRELATED_API_KEY:"fixture-unrelated"});
       expect(result.code, result.stderr).toBe(0);
       const output = JSON.parse(result.stdout);
       expect(output.model).toBe("fixture-pro"); expect(output.catalog).toEqual(["fixture-pro","fixture-flash"]);
-      expect(output.base).toBe(upstream.url.origin+"/anthropic");
+      expect(output.base).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
       expect(output.authCorrect).toBe(true); expect(output.operatorPresent).toBe(false); expect(output.unrelatedPresent).toBe(false);
       expect(result.stdout).not.toContain("fixture-deepseek-key");
     }

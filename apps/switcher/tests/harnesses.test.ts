@@ -15,27 +15,28 @@ test("Claude and Codex configurations preserve model IDs, endpoint prefixes and 
   const input=await fixture();
   try{
     const claude=await prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.261",authStyle:"bearer",args:["-p","hello"]});
-    expect(claude.env.ANTHROPIC_BASE_URL).toBe("https://example.com/prefix");expect(claude.env.ANTHROPIC_AUTH_TOKEN).toBe(input.credential);
+    expect(claude.env.ANTHROPIC_BASE_URL).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);expect(claude.env.ANTHROPIC_AUTH_TOKEN).not.toBe(input.credential);
     expect(claude.env.ANTHROPIC_DEFAULT_MODEL).toBe(input.model);
     expect(claude.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe(input.model);
-    expect(claude.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE).toBeUndefined();
+    expect(claude.env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE).toBe("1");
     const settings=JSON.parse(await readFile(claude.configPaths[0],"utf8"));expect(settings.modelPicker.options[0].model).toBe(input.model);
     expect(JSON.stringify(settings)).not.toContain(input.credential);expect(claude.args).toContain("hello");
+    await claude.cleanup?.();
     const codex=await prepareHarnessLaunch({...input,harness:"codex",version:"codex-cli 0.153.4",args:["exec","hello"]});
     const catalog=JSON.parse(await readFile(codex.configPaths[0],"utf8"));expect(catalog.models[0].slug).toBe(input.model);expect(catalog.models[0].context_window).toBe(64000);
     expect(codex.args.join(" ")).toContain('wire_api = "responses"');expect(codex.args.join(" ")).not.toContain(input.credential);
-    expect(JSON.stringify(catalog)).not.toContain(input.credential);
+    expect(JSON.stringify(catalog)).not.toContain(input.credential);await codex.cleanup?.();
   } finally {await rm(input.stateDir,{recursive:true,force:true});}
 });
-test("Codex sends a literal api-key provider header without an auth bridge",async()=>{
+test("Codex uses an ephemeral gateway credential for providers with literal api-key authentication",async()=>{
   const input=await fixture();
   try {
     const prepared=await prepareHarnessLaunch({...input,harness:"codex",authStyle:"api-key",version:"codex-cli 0.153.4",args:["exec","hello"]});
     const command=prepared.args.join(" ");
-    expect(command).toContain('"api-key" = "SWITCHER_HARNESS_API_KEY"');
-    expect(command).toContain(input.baseUrl);
-    expect(prepared.env.SWITCHER_HARNESS_API_KEY).toBe(input.credential);
-    expect(command).not.toContain("127.0.0.1");
+    expect(command).toContain('env_key = "SWITCHER_HARNESS_API_KEY"');
+    expect(command).not.toContain(input.baseUrl);
+    expect(prepared.env.SWITCHER_HARNESS_API_KEY).not.toBe(input.credential);
+    expect(command).toContain("127.0.0.1");
     await prepared.cleanup?.();
   } finally { await rm(input.stateDir,{recursive:true,force:true}); }
 });
@@ -43,9 +44,9 @@ test("unsupported protocols, old clients and unsafe model catalogs fail before l
   const input=await fixture();
   try {
     await expect(prepareHarnessLaunch({...input,harness:"codex",protocol:"openai-chat",version:"0.153.4"})).rejects.toThrow("incompatible");
-    await expect(prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.100"})).rejects.toThrow("2.1.242");
+    await expect(prepareHarnessLaunch({...input,harness:"claude",protocol:"anthropic-messages",version:"2.1.100"})).rejects.toThrow("2.1.257");
     await expect(prepareHarnessLaunch({...input,harness:"opencode2",version:"1.2.0"})).rejects.toThrow("legacy");
-    await expect(prepareHarnessLaunch({...input,harness:"codex",version:"0.153.4",models:[]})).rejects.toThrow("missing");
+    await expect(prepareHarnessLaunch({...input,harness:"codex",version:"0.153.4",models:[]})).rejects.toThrow("eligible catalog");
   } finally {await rm(input.stateDir,{recursive:true,force:true});}
 });
 test("Pi uses the selected provider/model across all supported wire protocols and preserves native resume flags",async()=>{
@@ -56,7 +57,7 @@ test("Pi uses the selected provider/model across all supported wire protocols an
       try {
         const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
         const provider:any=Object.values(config.providers)[0];
-        expect(provider.api).toBe(api);expect(provider.baseUrl).toBe(protocol==="anthropic-messages"?input.baseUrl.replace(/\/v1$/i,""):input.baseUrl);expect(provider.models).toHaveLength(input.models.length);
+        expect(provider.api).toBe(api);expect(provider.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+(?:\/v1)?$/);expect(provider.models).toHaveLength(input.models.length);
         expect(config.providers[Object.keys(config.providers)[0]].apiKey).toBe("$SWITCHER_HARNESS_API_KEY");
         expect(prepared.args.slice(0,6)).toEqual(["--provider",Object.keys(config.providers)[0],"--model",input.model,"--models",`${Object.keys(config.providers)[0]}/**`]);
         expect(prepared.args.slice(6)).toEqual(["--session","/owned/session.jsonl","--continue","-p","prompt"]);
@@ -106,8 +107,8 @@ test("Pi bridges protocol/auth mismatches without leaking bridge credentials ups
         const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
         const base=(Object.values(config.providers)[0] as any).baseUrl;
         const headers:Record<string,string>={"content-type":"application/json"};headers[entry.native]=entry.native==="authorization"?`Bearer ${prepared.env.SWITCHER_HARNESS_API_KEY}`:prepared.env.SWITCHER_HARNESS_API_KEY;
-        expect((await fetch(base+entry.path,{method:"POST",headers,body:JSON.stringify({model:input.model})})).status).toBe(200);
-        expect((await fetch(base+entry.path,{method:"POST",headers:{...headers,[entry.native]:entry.native==="authorization"?"Bearer wrong-key":"wrong-key"},body:JSON.stringify({model:input.model})})).status).toBe(401);
+        expect((await fetch(base+entry.path,{method:"POST",headers,body:JSON.stringify({model:input.model,messages:[{role:"user",content:"hello"}]})})).status).toBe(200);
+        expect((await fetch(base+entry.path,{method:"POST",headers:{...headers,[entry.native]:entry.native==="authorization"?"Bearer wrong-key":"wrong-key"},body:JSON.stringify({model:input.model,messages:[{role:"user",content:"hello"}]})})).status).toBe(401);
       } finally { await prepared.cleanup?.(); }
     }
     expect(upstreamRequests.map(request=>request.path)).toEqual(cases.map(entry=>entry.upstreamPath));
@@ -133,10 +134,10 @@ test("Cline writes isolated full provider/model registries with environment-only
       const settings = providers.providers[providerId].settings;
       expect(settings.protocol).toBe(protocol === "anthropic-messages" ? "anthropic" : protocol);
       expect(settings.client).toBe(client);
-      expect(settings.baseUrl).toBe(input.baseUrl);
+      expect(settings.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
       if (protocol === "openai-responses") expect(settings.routingProviderId).toBe("openai-native");
       expect(Object.keys(catalog.providers[providerId].models)).toEqual(models.map(model => model.id));
-      expect(prepared.env[envName]).toBe(input.credential);
+      expect(prepared.env[envName]).not.toBe(input.credential);
       expect(JSON.stringify(providers)).not.toContain(input.credential);
       expect(JSON.stringify(catalog)).not.toContain(input.credential);
       expect(prepared.args).toContain("--auto-approve");
@@ -248,7 +249,7 @@ test("Legacy OpenCode uses the singular provider schema and durable XDG session 
     expect(prepared.env.XDG_CONFIG_HOME).toBe(join(input.stateDir,"config"));
     expect(prepared.env.HOME).toBe(join(input.stateDir,"home"));
     expect(prepared.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
-    expect(JSON.parse(prepared.env.OPENCODE_CONFIG_CONTENT).provider[providerId].options.baseURL).toBe(input.baseUrl);
+    expect(JSON.parse(prepared.env.OPENCODE_CONFIG_CONTENT).provider[providerId].options.baseURL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
     expect(prepared.args.slice(0,4)).toEqual(["run","--model",`${providerId}/${input.model}`,"--continue"]);
     expect(JSON.stringify(config)).not.toContain(input.credential);
   } finally { await rm(input.stateDir,{recursive:true,force:true}); }
@@ -268,7 +269,7 @@ test("Legacy OpenCode copies project instructions and permission rules without p
       expect(content.instructions).toEqual([join(project,"AGENTS.md")]);
       expect(content.permission).toEqual({bash:"deny"});
       expect(content.enabled_providers).toEqual([providerId]);
-      expect(content.provider[providerId].options.baseURL).toBe(input.baseUrl);
+      expect(content.provider[providerId].options.baseURL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
       expect(content.provider.attacker).toBeUndefined();
       expect(prepared.env.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
     } finally { await prepared.cleanup?.(); }
@@ -299,6 +300,22 @@ test("Legacy OpenCode preserves merged JSONC permission layers and per-agent pol
     await expect(prepareHarnessLaunch({...input,harness:"opencode",version:"1.18.29",cwd:nested,stateDir:join(input.stateDir,"invalid"),args:["run","hello"]})).rejects.toThrow("could not be parsed safely");
   } finally { await rm(input.stateDir,{recursive:true,force:true}); }
 });
+test("Legacy OpenCode retains custom JSON and Markdown subagents and their instructions",async()=>{
+  const input=await fixture();const project=join(input.stateDir,"project");
+  await mkdir(join(project,".opencode","agents"),{recursive:true});
+  await writeFile(join(project,"opencode.json"),JSON.stringify({agent:{auditor:{mode:"subagent",prompt:"Keep audit instructions",model:"foreign",options:{baseURL:"https://attacker.invalid"}},writer:{mode:"primary",prompt:"Keep writer instructions"}}}));
+  await writeFile(join(project,".opencode","agents","inspector.md"),'---\nmode: subagent\npermission:\n  edit: deny\n---\nKeep inspector instructions.\n');
+  try {
+    const prepared=await prepareHarnessLaunch({...input,harness:"opencode",version:"1.18.29",cwd:project,stateDir:join(input.stateDir,"launch"),models:[...input.models,{id:"child",name:"Child"}],modelPolicy:{version:1,roles:{subagent:"child"}},args:["run","--agent","auditor","Inspect"]});
+    try {
+      const config=JSON.parse(prepared.env.OPENCODE_CONFIG_CONTENT);const provider=Object.keys(config.provider)[0];
+      expect(config.agent.auditor).toEqual({mode:"subagent",prompt:"Keep audit instructions",model:provider+"/child"});
+      expect(config.agent.inspector).toMatchObject({mode:"subagent",prompt:"Keep inspector instructions.",permission:{edit:"deny"},model:provider+"/child"});
+      expect(config.agent.writer).toMatchObject({mode:"primary",prompt:"Keep writer instructions",model:provider+"/vendor/model"});
+      expect(prepared.args).toContain(provider+"/child");expect(JSON.stringify(config)).not.toContain("attacker.invalid");
+    } finally {await prepared.cleanup?.();}
+  } finally {await rm(input.stateDir,{recursive:true,force:true});}
+});
 test("Legacy OpenCode preserves supported environment policy layers without importing authority",async()=>{
   const input=await fixture();
   const project=join(input.stateDir,"project"); await mkdir(project,{recursive:true});
@@ -326,7 +343,7 @@ test("Legacy OpenCode leaves incomplete native limits unset and maps each docume
         const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
         const provider:any=Object.values(config.provider)[0];
         expect(provider.npm).toBe(npm);
-        expect(provider.options.baseURL).toBe(input.baseUrl);
+        expect(provider.options.baseURL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
         expect(provider.models[input.model].limit).toEqual({context:64000,output:8000});
         expect(prepared.args.slice(0,3)).toEqual(["run","--model",`${Object.keys(config.provider)[0]}/${input.model}`]);
       } finally { await prepared.cleanup?.(); }
@@ -347,7 +364,7 @@ test("Grok catalog bridge preserves streaming, changes upstream model, isolates 
   const upstream=Bun.serve({hostname:"127.0.0.1",port:0,async fetch(req){received.push({path:new URL(req.url).pathname,key:req.headers.get("x-api-key"),auth:req.headers.get("authorization"),body:await req.json()});return new Response('data: {"type":"message_stop"}\n\n',{headers:{"content-type":"text/event-stream"}});}});
   let prepared:Awaited<ReturnType<typeof prepareHarnessLaunch>>|undefined;
   try {
-    prepared=await prepareHarnessLaunch({...input,harness:"grok",baseUrl:upstream.url.origin+"/prefix/v1",protocol:"anthropic-messages",authStyle:"x-api-key",version:"grok 1.0.13",models:[...input.models,{...input.models[0],id:"second/model"}]});
+    prepared=await prepareHarnessLaunch({...input,harness:"grok",baseUrl:upstream.url.origin+"/prefix/v1",protocol:"anthropic-messages",authStyle:"x-api-key",version:"grok 1.0.13",modelPolicy:{version:1,allowedModels:["second/model"]},models:[...input.models,{...input.models[0],id:"second/model"}]});
     const url=prepared.env.GROK_MODELS_BASE_URL;
     expect((await fetch(url+"/models")).status).toBe(401);
     const headers={authorization:`Bearer ${prepared.env.XAI_API_KEY}`,"content-type":"application/json"};
@@ -374,7 +391,7 @@ test("reserved provider flags cannot redirect a profile and no-auth endpoints re
   try{
     for(const args of [["--model=outside"],["-c","model_provider=outside"],["--config=model_providers.switcher.base_url=outside"]]) await expect(prepareHarnessLaunch({...input,harness:"codex",version:"0.153.4",args})).rejects.toThrow("profile");
     prepared=await prepareHarnessLaunch({...input,harness:"claude",version:"2.1.261",protocol:"anthropic-messages",baseUrl:upstream.url.origin+"/v1",credential:undefined});
-    const res=await fetch(prepared.env.ANTHROPIC_BASE_URL+"/v1/messages",{method:"POST",headers:{authorization:`Bearer ${prepared.env.ANTHROPIC_AUTH_TOKEN}`,"content-type":"application/json","anthropic-beta":"test-beta"},body:JSON.stringify({model:input.model})});
+    const res=await fetch(prepared.env.ANTHROPIC_BASE_URL+"/v1/messages",{method:"POST",headers:{authorization:`Bearer ${prepared.env.ANTHROPIC_AUTH_TOKEN}`,"content-type":"application/json","anthropic-beta":"test-beta"},body:JSON.stringify({model:input.model,messages:[{role:"user",content:"hello"}]})});
     expect(res.status).toBe(200);expect(received[0].get("authorization")).toBeNull();expect(received[0].get("x-api-key")).toBeNull();expect(received[0].get("anthropic-beta")).toBe("test-beta");
   }finally{await prepared?.cleanup?.();await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true});}
 });
@@ -385,7 +402,7 @@ test("OpenCode's fixed native auth convention can bridge a provider's different 
   try{
     prepared=await prepareHarnessLaunch({...input,harness:"opencode2",version:"opencode2 v0.0.0-beta-19157",protocol:"anthropic-messages",authStyle:"bearer",baseUrl:upstream.url.origin+"/v1"});
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const provider:any=Object.values(config.providers)[0];
-    const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model})});
+    const response=await fetch(provider.settings.baseURL+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model,messages:[{role:"user",content:"hello"}]})});
     expect(response.status).toBe(200);expect(auth).toBe(`Bearer ${input.credential}`);expect(key).toBeNull();
   }finally{await prepared?.cleanup?.();await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true});}
 });
@@ -517,13 +534,13 @@ test("Prime Agent writes an isolated catalog, pins provider/model on resume, and
     expect(prepared.args[0]).toBe("--daemon-socket");
     expect(prepared.args[1]).toStartWith(join(prepared.env.TMPDIR,"p-"));
     expect(prepared.args.slice(2,8)).toEqual(["--provider",Object.keys(config.providers)[0],"--model",input.model,"--models",`${Object.keys(config.providers)[0]}/**`]);
-    expect(provider.baseUrl).toBe(input.baseUrl); expect(provider.api).toBe("openai-responses"); expect(provider.apiKey).toBe("SWITCHER_HARNESS_API_KEY");
+    expect(provider.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/); expect(provider.api).toBe("openai-responses"); expect(provider.apiKey).toBe("SWITCHER_HARNESS_API_KEY");
     expect(prepared.env.PRIME_AGENT_CODING_AGENT_DIR).toContain(input.stateDir); expect(prepared.env.PRIME_AGENT_SESSION_DIR).toBe(join(input.stateDir,"sessions"));
     expect(JSON.stringify(config)).not.toContain(input.credential); expect(prepared.args).toContain("--continue");
     await prepared.cleanup?.();
     const anthropic=await prepareHarnessLaunch({...input,stateDir:join(input.stateDir,"anthropic"),harness:"prime-agent",version:"0.9.2",protocol:"anthropic-messages",authStyle:"x-api-key",baseUrl:"https://example.com/prefix/v1"});
     const anthropicConfig=JSON.parse(await readFile(anthropic.configPaths[0],"utf8"));
-    expect((Object.values(anthropicConfig.providers)[0] as any).baseUrl).toBe("https://example.com/prefix");
+    expect((Object.values(anthropicConfig.providers)[0] as any).baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);await anthropic.cleanup?.();
     expect((Object.values(anthropicConfig.providers)[0] as any).api).toBe("anthropic-messages");
     await anthropic.cleanup?.();
   } finally { await rm(input.stateDir,{recursive:true,force:true}); }
@@ -612,7 +629,7 @@ setTimeout(()=>{
   await chmod(cancelledScript,0o700);
   try {
     const prepared=await prepareHarnessLaunch({...cancelledInput,harness:"prime-agent",version:"0.9.2",executable:cancelledScript,args:["--continue"]});
-    const pending=prepared.beforeLaunch?.();
+    const pending=prepared.beforeLaunch?.();void pending?.catch(()=>undefined);
     await new Promise(resolve=>setTimeout(resolve,200));
     await prepared.cleanup?.();
     await expect(pending).rejects.toThrow("exited before");
@@ -630,7 +647,7 @@ test("OMP literal api-key Messages requires the public launch bridge without ext
     await expect(prepareOmpLaunch(options)).rejects.toThrow("requires the Switcher launch bridge");
     prepared=await prepareHarnessLaunch(options);
     const config=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));
-    const response=await fetch(config.providers.switcher.baseUrl+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model})});
+    const response=await fetch(config.providers.switcher.baseUrl+"/messages",{method:"POST",headers:{"x-api-key":prepared.env.SWITCHER_HARNESS_API_KEY,"content-type":"application/json"},body:JSON.stringify({model:input.model,messages:[{role:"user",content:"hello"}]})});
     expect(response.status).toBe(200);expect(calls).toEqual([{key:input.credential,auth:null,xKey:null}]);
   } finally {await prepared?.cleanup?.();await upstream.stop(true);await rm(input.stateDir,{recursive:true,force:true});}
 });
