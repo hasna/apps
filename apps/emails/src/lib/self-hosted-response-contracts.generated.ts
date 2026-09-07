@@ -24525,7 +24525,9 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "operationId": "getProviderHealth",
     "path": "/v1/providers/{id}/health",
     "status": 404,
-    "schema": null
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
   },
   {
     "method": "GET",

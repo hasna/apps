@@ -232,7 +232,9 @@ describe("Emails self-hosted inbound messages", () => {
     expect(ids.indexOf("0026_legacy_gmail_replay_provenance")).toBeGreaterThan(
       ids.indexOf("0026_priority_sender_rules"),
     );
-    expect(ids.at(-1)).toBe("0027_message_provider_provenance");
+    expect(ids).toContain("0027_message_provider_provenance");
+    expect(ids.indexOf("0028_scheduled_enqueue_identity")).toBeGreaterThan(ids.indexOf("0027_message_provider_provenance"));
+    expect(ids.indexOf("0029_sequence_execution_lease")).toBeGreaterThan(ids.indexOf("0028_scheduled_enqueue_identity"));
   });
 
   test("POST inbound preserves all fields and returns 201", async () => {

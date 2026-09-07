@@ -344,14 +344,11 @@ describe("MCP CLI equivalents", () => {
   });
 
   it("still admits that a guarded tool names a refused command", () => {
-    // NEGATIVE CONTROL for the check above: if the oracle stopped seeing refusals it
-    // would go green over everything, so at least one guarded tool must still be
-    // observed naming a command that refuses. `verify_domain` is it — its CLI twin
-    // `emails domain verify` is `notImplementedAnywhere`, because wiring a WRITE to
-    // `getAdapter().verifyDomain` behind whatever ambient AWS credentials the calling
-    // machine happens to carry is a decision nobody has made.
+    // Provisioning still lacks its execution service; domain verification now runs.
+    expect(cliRefusalFor(cliEquivalentForTool("provision_domain", { domain: "acme.example" }), "self_hosted"))
+      .toBe("emails provision domain");
     expect(cliRefusalFor(cliEquivalentForTool("verify_domain", { domain: "acme.example" }), "self_hosted"))
-      .toBe("emails domain verify");
+      .toBeNull();
   });
 
   it("sees refusals through EVERY helper shape, not just the one this file happens to name", () => {

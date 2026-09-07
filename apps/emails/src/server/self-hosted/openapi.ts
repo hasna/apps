@@ -3423,7 +3423,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
       get: {
         operationId: "getProviderHealth", summary: "Read server binding metadata or probe provider credentials",
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { name: "live", in: "query", schema: { type: "boolean", default: false } }],
-        responses: { "200": { description: "Server provider health", content: { "application/json": { schema: { type: "object", additionalProperties: true, required: ["provider_id", "checked", "status", "message"], properties: { provider_id: { type: "string" }, checked: { type: "boolean" }, status: { type: "string" }, message: { type: "string" } } } } } }, "404": errorResponse },
+        responses: { "200": { description: "Server provider health", content: { "application/json": { schema: { type: "object", additionalProperties: true, required: ["provider_id", "checked", "status", "message"], properties: { provider_id: { type: "string" }, checked: { type: "boolean" }, status: { type: "string" }, message: { type: "string" } } } } } }, "404": errorResponse("Provider not found in this tenant.") },
       },
     },
     "/v1/domains/{id}/verify": {

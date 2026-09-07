@@ -150,8 +150,8 @@ describe("refusal registry covers every CLI refusal call site", () => {
   // someone re-refuses it this test says so.
   it("sees the shared-module refusals the original grep could not", () => {
     const shared = refusals.filter((r) => r.shared).map((r) => r.command);
-    expect(shared).toContain("emails domain status");
-    expect(shared).toContain("emails domain verify");
+    expect(shared).not.toContain("emails domain status");
+    expect(shared).not.toContain("emails domain verify");
     expect(shared).toContain("emails address provision");
   });
 
