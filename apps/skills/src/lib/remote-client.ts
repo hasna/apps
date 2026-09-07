@@ -1,3 +1,4 @@
+import { workspaceLeaveInput, workspaceLeaveFailure, parseWorkspaceLeaveResult, RemoteWorkspaceLeaveError, RemoteWorkspaceLeaveUnconfirmedError, type LeaveRemoteWorkspace, type RemoteWorkspaceLeaveResult } from "./remote-workspace-leave.js";
 import { workspaceContext, parseAccountWorkspaces, parseWorkspaceIdentity, parseWorkspaceSession,
   workspaceSelectionFailure, workspaceSelectionFailures, invalidWorkspaceResult, WorkspaceIdentityMismatchError,
   workspaceExpectedUserId, type RemoteWorkspaceIdentity, type RemoteWorkspaceContext, type RemoteAccountWorkspaces, type RemoteWorkspaceSession, type RemoteWorkspaceSelectionErrorCode } from "./remote-workspace-selection.js";
@@ -369,6 +370,27 @@ export class RemoteSkillsClient {
       throw new RemoteRequestError(path, response.status);
     }
     return value;
+  }
+  /** Leave only the explicitly confirmed current incarnation, once. No credential writes or retries. */
+  async leaveWorkspace(context: RemoteWorkspaceContext, input: LeaveRemoteWorkspace): Promise<RemoteWorkspaceLeaveResult> {
+    const captured = workspaceLeaveInput(context, input);
+    const connection = new RemoteSkillsClient(this.apiKey, this.apiUrl);
+    const value = await connection.requestWorkspaceSelection("/api/auth/whoami");
+    if (!value || typeof value !== "object" || (value as Record<string, unknown>).authMethod !== "jwt")
+      throw new RemoteWorkspaceLeaveError("INTERACTIVE_SESSION_REQUIRED");
+    const identity = parseWorkspaceIdentity(value, captured.context.userId);
+    if (identity.user.membershipId !== captured.context.membershipId) throw new WorkspaceIdentityMismatchError();
+    let response: Response, body: unknown;
+    try {
+      response = await connection.request("/api/v1/account/workspaces/leave", { method: "POST", body: JSON.stringify(captured.body) });
+      body = JSON.parse(new TextDecoder().decode(await readBoundedResponse(response, 4096)));
+    } catch { throw new RemoteWorkspaceLeaveUnconfirmedError(); }
+    if (!response.ok) {
+      const code = workspaceLeaveFailure(body, response.status);
+      if (code) throw new RemoteWorkspaceLeaveError(code);
+      throw new RemoteWorkspaceLeaveUnconfirmedError();
+    }
+    return parseWorkspaceLeaveResult(body, captured.context.membershipId, identity.organization.id);
   }
   async listApiKeys(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/auth/keys"); }
   async createApiKey(name: string, scopes?: string[]): Promise<{ key: string; [field: string]: unknown }> {

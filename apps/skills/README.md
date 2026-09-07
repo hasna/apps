@@ -674,7 +674,7 @@ skills/                      # Public skill contracts and local OSS skills
 |---|---|---|
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 61 | `tools/list` against a live `buildServer()` |
+| MCP tools | 62 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather
@@ -933,3 +933,30 @@ through a tool remains a separate follow-up.
 If enrollment reports that key issuance was attempted but not confirmed, inspect
 the selected profile and workspace keys before retrying. A lost response can
 still have created a server key; the CLI does not retry issuance automatically.
+
+### Leave a workspace
+
+Use the exact membership ID and observed role from fresh `workspace list` output.
+Leaving requires deliberate confirmation and a fresh verification code:
+
+```sh
+HASNA_PROFILE=team-b skills workspace leave <membership-id> --expected-role member --email you@example.com --code-stdin --confirm --json
+```
+
+The selected profile must authenticate the same membership. Without a named
+profile, supply `--user-id <user-id>` from discovery; this also supports viewers
+who cannot create API keys. The server refuses stale roles, the last active
+owner, and leaving your last available workspace. It decides authority atomically.
+
+The SDK offers `RemoteSkillsAuthClient.leaveWorkspace(email, code,
+{ userId, membershipId }, { expectedRole, confirm: true })`; an existing interactive
+session can use `RemoteSkillsClient.leaveWorkspace(context, input)`. MCP exposes
+`leave_workspace` with those same explicit IDs, role, confirmation and fresh code.
+All surfaces call the same HTTP method once. API keys cannot authorize the leave.
+
+Success returns `{ organizationId, membershipId, removed: true,
+signInRequired: true }`. Sign in again to an available workspace afterwards.
+Saved credentials and unrelated profiles remain unchanged; credentials for the
+left membership no longer grant access. A lost or invalid response raises
+`RemoteWorkspaceLeaveUnconfirmedError`: inspect available memberships before any
+new action. Never automatically retry or substitute another membership ID.

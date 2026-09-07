@@ -482,3 +482,6 @@ export type { RemoteWorkspaceContext, RemoteAccountWorkspace, RemoteAccountWorks
   RemoteWorkspaceSession, RemoteAccountWorkspaceDiscovery, RemoteWorkspaceSelectionErrorCode } from "./lib/remote-workspace-selection.js";
 export { WorkspaceContextInputError, WorkspaceIdentityMismatchError } from "./lib/remote-workspace-selection.js";
 export { RemoteWorkspaceSelectionError } from "./lib/remote-client.js";
+
+export type { LeaveRemoteWorkspace, RemoteWorkspaceLeaveResult, RemoteWorkspaceLeaveErrorCode } from "./lib/remote-workspace-leave.js";
+export { WorkspaceLeaveInputError, RemoteWorkspaceLeaveError, RemoteWorkspaceLeaveUnconfirmedError } from "./lib/remote-workspace-leave.js";
