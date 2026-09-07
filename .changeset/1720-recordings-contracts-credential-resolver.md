@@ -79,3 +79,26 @@ Behaviour worth knowing about:
 - `@hasna/contracts` stays a runtime dependency (unchanged position): the
   serve bundle externalises it for `@hasna/contracts/auth`, and the SDK entry
   imports it; the CLI and MCP bundles inline it as before.
+
+Validation-wave additions (same release, hasna/apps#1720 round 1):
+
+- `recordings check` is no longer a false green for a machine whose credential
+  failed to resolve. `describeActiveStore` reports `transport: "none"` /
+  `mode_source: "unresolved"` for a refusal and never opens the on-box file to
+  count it (`local_db_recordings: null`), and `check` renders
+  `✗ Active store: none — fail-closed (REMOTE_API_…)` — naming whether the
+  file is present but NOT opened, or absent — and exits non-zero, in text and
+  `--json` (`active_store.transport === "none"`) alike. The local opt-in arm
+  is unchanged.
+- `recordings-mcp` fails closed at STARTUP: with no resolvable credential and
+  no explicit local opt-in it prints one `ERROR: REMOTE_API_*` line on stderr
+  and exits 1 before any transport connects (no listener, no answer to
+  `initialize`, no local store directories as a side effect). The
+  `HASNA_RECORDINGS_LOCAL=1` opt-in prints one `recordings: LOCAL mode` line
+  on stderr and proceeds; tool calls keep resolving fresh through
+  `getStore()`.
+- The `~/.secrets/**/*.env` walk for the OpenAI transcription key is retired
+  (`loadSecretKey`/`listSecretFiles` removed from `config.ts`); the key stores
+  are the env override, the config file, and the macOS Keychain entry native
+  Settings writes. CLI/transcriber hints now point at `OPENAI_API_KEY` (e.g.
+  `secrets exec <key> --as OPENAI_API_KEY -- recordings …`).
