@@ -370,6 +370,17 @@ export function getTodosRemoteAuthorityConfigStatus(
 }
 
 function classifyRemoteRequestError(baseUrl: string, route: string, error: unknown): never {
+  // A credential the transport could not COMPLETE at request time — a vault
+  // pointer (`HASNA_TODOS_API_KEY_REF`) whose item is unavailable, or a
+  // credential file that became unsafe mid-process — is a TERMINAL resolver
+  // failure, not a network one. Before this arm it carried no HTTP status and
+  // so was reported as REMOTE_API_UNREACHABLE, which sent an operator to
+  // debug connectivity for a pointer the message already explains
+  // (hasna/apps#1720 validation). The same mapping stage A applies at startup.
+  const errorName = error instanceof Error ? error.name : "";
+  if (errorName === "CredentialResolutionError" || errorName === "CredentialFileUnsafeError") {
+    rethrowAuthorityFailure(error);
+  }
   const status = error && typeof error === "object" ? (error as { status?: unknown }).status : undefined;
   if (status === 401) {
     throw new Error(

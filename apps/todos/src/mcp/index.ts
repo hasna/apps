@@ -2,7 +2,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getAgent, getAgentByName } from "../db/agents.js";
-import { getDatabase, resolvePartialId } from "../db/database.js";
+import { getDatabase, isLocalStoreRefused, refuseLocalStore, resolvePartialId } from "../db/database.js";
+import { resolveTodosCliTransport } from "../cli/cloud-router.js";
+import { hasTodosEnvAuthorityIntent, todosLocalModeNotice } from "../lib/local-opt-in.js";
 import { formatExpiredLock, lockDisplayState } from "../lib/lock-display.js";
 import { logError } from "../lib/logger.js";
 import {
@@ -93,12 +95,23 @@ interface AgentFocus {
   task_list_id?: string;
 }
 
-const agentFocusMap = new Map<string, AgentFocus>();
+/**
+ * Session focus, keyed by agent id. Exported so a test can drive the real
+ * `applyFocus` through the session path without a live MCP transport.
+ */
+export const agentFocusMap = new Map<string, AgentFocus>();
 
 function getAgentFocus(agentId: string): AgentFocus | undefined {
   // Session focus takes priority
   const sessionFocus = agentFocusMap.get(agentId);
   if (sessionFocus) return sessionFocus;
+  // The persisted fallback is a read of the LOCAL agents table. On a hosted
+  // route — the stdio server's refusal, or an HTTP server whose environment
+  // configures a Todos authority — focus is answered from the session map
+  // alone: the local row is a different dataset from the one the tools are
+  // routing to, and reading it here was a silent local read on the hosted
+  // route (hasna/apps#1720 validation).
+  if (isLocalStoreRefused() || hasTodosEnvAuthorityIntent(process.env)) return undefined;
   // Fall back to DB active_project_id
   try {
     const agent = getAgentByName(agentId) || getAgent(agentId);
@@ -161,6 +174,16 @@ function formatError(error: unknown): string {
   }
   if (error instanceof Error) {
     const msg = error.message;
+    // The fail-closed diagnostics pass through under their own code instead of
+    // collapsing to UNKNOWN_ERROR: an agent that hits REMOTE_API_CONFIG_MISSING
+    // or REMOTE_COMMAND_UNSUPPORTED needs the text that names the Keychain
+    // item, the credentials file, HASNA_TODOS_API_KEY, or the local opt-in. The
+    // messages name only SOURCES (an env key NAME, a Keychain item, a path) and
+    // never a credential value, so they are safe to hand to the client.
+    const refusal = /^(REMOTE_API_[A-Z_]+|REMOTE_COMMAND_[A-Z_]+):/.exec(msg);
+    if (refusal) {
+      return JSON.stringify({ code: refusal[1], message: msg });
+    }
     // Wrap SQLite constraint errors with agent-friendly messages
     if (msg.includes("UNIQUE constraint failed: projects.path")) {
       const db = getDatabase();
@@ -307,6 +330,51 @@ registerDispatchTools(server, { shouldRegisterTool: shouldRegisterToolOnce, reso
   return server;
 }
 
+// === AUTHORITY ===
+
+export type TodosMcpAuthority =
+  | { route: "local"; notice: string }
+  | { route: "hosted"; v1_base_url: string; source: string };
+
+/**
+ * Decide the stdio server's authority BEFORE anything can open a store.
+ *
+ * Same preamble, same resolver, same refusals as the CLI's stage A: the
+ * deliberate `HASNA_TODOS_LOCAL=1` opt-in is answered first and without
+ * consulting the resolver; otherwise the `@hasna/contracts` chain must resolve
+ * a credential (explicit pointer tiers, the macOS Keychain item
+ * `hasna.credentials.todos.api-key`, `~/.hasna/todos/config/credentials`,
+ * `HASNA_TODOS_API_KEY`) or this THROWS the CLI's `REMOTE_API_*` diagnostic.
+ * The server used to skip this decision entirely and call
+ * `startRuntimeShadowDrain(getDatabase())` unconditionally, which created
+ * `~/.hasna/todos/todos.db` (+ -wal/-shm, migrations, a machine heartbeat)
+ * on every start — hosted, unconfigured, or not — before answering
+ * `initialize` (hasna/apps#1720 validation).
+ */
+export function resolveTodosMcpAuthority(
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): TodosMcpAuthority {
+  const resolution = resolveTodosCliTransport(env);
+  if (resolution.transport === "sqlite") {
+    return { route: "local", notice: todosLocalModeNotice("local-opt-in") };
+  }
+  return { route: "hosted", v1_base_url: resolution.authority!.baseUrl, source: resolution.source };
+}
+
+/**
+ * The refusal every local-only tool and `todos://` resource returns on the
+ * hosted route. Mirrors stage A's `REMOTE_COMMAND_UNSUPPORTED` for a
+ * local-only verb: it names the opt-in, never a credential value.
+ */
+export function hostedRouteLocalStoreRefusal(v1BaseUrl: string): string {
+  return (
+    "REMOTE_COMMAND_UNSUPPORTED: this tool or resource is local-only — it reads the on-box SQLite " +
+    `store, which the hosted Todos /v1 authority (${v1BaseUrl}) does not serve; local SQLite is ` +
+    "opt-in only (HASNA_TODOS_LOCAL=1, alias TODOS_LOCAL=1) and is disabled by default. Use the hosted " +
+    "tools on this route (list_tasks, list_projects, list_agents, get_status, ...) instead."
+  );
+}
+
 // === START SERVER ===
 
 async function main() {
@@ -316,12 +384,36 @@ async function main() {
   // when they spawn the bare `todos-mcp` binary, so stdio must be the default.
   const portRequested = process.argv.some((arg) => arg === "--port" || arg.startsWith("--port="));
   if (!isHttpMode() && !portRequested) {
-    const server = buildServer();
-    // Durable dual-write shadow: long-running stdio MCP drains the outbox.
+    // Authority FIRST, transport LAST: with nothing resolved the process exits
+    // non-zero here, before the stdio transport exists, so `initialize` is
+    // never answered and no local file is created. The first stderr line is the
+    // REMOTE_API_* diagnostic naming where the credential should live.
+    let authority: TodosMcpAuthority;
     try {
-      const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
-      startRuntimeShadowDrain(getDatabase());
-    } catch { /* shadow disabled or unavailable — local writes stay durable */ }
+      authority = resolveTodosMcpAuthority();
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exit(1);
+    }
+    if (authority.route === "hosted") {
+      // Every `src/db/*` read funnels through getDatabase(): refusing it here
+      // is what keeps the hundreds of local-only tools and the `todos://`
+      // resources from answering an empty local file on the hosted route.
+      refuseLocalStore(hostedRouteLocalStoreRefusal(authority.v1_base_url));
+    }
+    const server = buildServer();
+    if (authority.route === "local") {
+      // Say it out loud: a local server must never be mistakable for a hosted
+      // one with an empty store (hasna/apps#1720).
+      process.stderr.write(`${authority.notice}\n`);
+      // Durable dual-write shadow: long-running stdio MCP drains the outbox.
+      // The ONLY place the stdio server opens the store, and only under the
+      // explicit local opt-in.
+      try {
+        const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
+        startRuntimeShadowDrain(getDatabase());
+      } catch { /* shadow disabled or unavailable — local writes stay durable */ }
+    }
     const transport = new StdioServerTransport();
     await server.connect(transport);
     return;

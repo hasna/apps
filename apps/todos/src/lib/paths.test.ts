@@ -8,6 +8,7 @@ import {
   getDefaultDbPath,
   getConfigPath,
   getTrainingDir,
+  hasnaHomeRoot,
   legacyHomeDir,
   resolverHome,
   adoptResolverHome,
@@ -16,12 +17,14 @@ import {
 let originalHome: string | undefined;
 let originalUserProfile: string | undefined;
 let originalDataHome: string | undefined;
+let originalHasnaHome: string | undefined;
 let testHome = "";
 
 beforeEach(() => {
   originalHome = process.env["HOME"];
   originalUserProfile = process.env["USERPROFILE"];
   originalDataHome = process.env["HASNA_DATA_HOME"];
+  originalHasnaHome = process.env["HASNA_HOME"];
   testHome = join(tmpdir(), `todos-paths-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   mkdirSync(testHome, { recursive: true });
   process.env["HOME"] = testHome;
@@ -29,6 +32,7 @@ beforeEach(() => {
   // Hermetic: the @hasna/paths resolver and the data-kind override must not
   // inherit ambient values.
   delete process.env["HASNA_DATA_HOME"];
+  delete process.env["HASNA_HOME"];
 });
 
 afterEach(() => {
@@ -38,7 +42,40 @@ afterEach(() => {
   else process.env["USERPROFILE"] = originalUserProfile;
   if (originalDataHome === undefined) delete process.env["HASNA_DATA_HOME"];
   else process.env["HASNA_DATA_HOME"] = originalDataHome;
+  if (originalHasnaHome === undefined) delete process.env["HASNA_HOME"];
+  else process.env["HASNA_HOME"] = originalHasnaHome;
   rmSync(testHome, { recursive: true, force: true });
+});
+
+describe("HASNA_HOME moves the todos data home (hasna/apps#1720 validation)", () => {
+  // The same rule @hasna/contracts applies to the credentials file: an
+  // absolute, non-blank HASNA_HOME REPLACES `~/.hasna`, so one isolated root
+  // isolates both the credential tier and the store.
+  test("an absolute HASNA_HOME replaces ~/.hasna for the store, config and training dirs", () => {
+    const isolated = join(testHome, "isolated-hasna-home");
+    process.env["HASNA_HOME"] = isolated;
+    expect(hasnaHomeRoot()).toBe(isolated);
+    expect(legacyHomeDir()).toBe(join(isolated, "todos"));
+    expect(getTodosDir()).toBe(join(isolated, "todos"));
+    expect(getDefaultDbPath()).toBe(join(isolated, "todos", "todos.db"));
+    expect(getConfigPath()).toBe(join(isolated, "todos", "config.json"));
+    expect(getTrainingDir()).toBe(join(isolated, "todos", "training"));
+    // Nothing resolves under the real HOME any more.
+    expect(getDefaultDbPath().startsWith(join(testHome, ".hasna"))).toBe(false);
+  });
+
+  test("a blank or relative HASNA_HOME is unset, not an override", () => {
+    process.env["HASNA_HOME"] = "   ";
+    expect(legacyHomeDir()).toBe(join(testHome, ".hasna", "todos"));
+    process.env["HASNA_HOME"] = "relative/hasna";
+    expect(legacyHomeDir()).toBe(join(testHome, ".hasna", "todos"));
+  });
+
+  test("an explicit env object is honoured without touching process.env", () => {
+    const env = { HOME: testHome, HASNA_HOME: join(testHome, "from-env") };
+    expect(legacyHomeDir(env)).toBe(join(testHome, "from-env", "todos"));
+    expect(legacyHomeDir()).toBe(join(testHome, ".hasna", "todos"));
+  });
 });
 
 describe("paths resolver adoption", () => {

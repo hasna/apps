@@ -7,7 +7,7 @@ import { registerAgent } from "../db/agents.js";
 import { createProject } from "../db/projects.js";
 import { createTask, listTasks } from "../db/tasks.js";
 import type { Task } from "../types/index.js";
-import { applyFocus } from "./index.js";
+import { agentFocusMap, applyFocus } from "./index.js";
 import { registerTaskCrudTools } from "./tools/task-crud.js";
 import { persistIdentity } from "../lib/creator-identity.js";
 import { resetConfig } from "../lib/config.js";
@@ -201,10 +201,16 @@ describe("MCP create_task applies focus", () => {
     expect(onlyTask("mcp focused task").project_id).toBe(project.id);
   });
 
-  it("sends the caller's focus project to the HTTP authority", async () => {
+  it("sends the caller's SESSION focus project to the HTTP authority, never a focus read from the local agents table", async () => {
+    // On the hosted route focus comes from the session map (`set_focus`) alone.
+    // The local `agents.active_project_id` row is a different dataset from the
+    // one the tool is routing to, so reading it here was a silent local read on
+    // the hosted route (hasna/apps#1720 validation): the row below exists ONLY
+    // in the local store and must not reach the authority.
     const project = createProject({ name: "Remote focused project", path: "/tmp/remote-focused-project" });
     const explicitProject = createProject({ name: "Explicit remote project", path: "/tmp/explicit-remote-project" });
-    registerAgent({ name: "cassius", session_id: "remote-focus-session", project_id: project.id });
+    const localOnlyProject = createProject({ name: "Local-only focus", path: "/tmp/local-only-focus" });
+    registerAgent({ name: "cassius", session_id: "remote-focus-session", project_id: localOnlyProject.id });
     process.env["TODOS_AGENT_ID"] = "cassius";
     process.env["HASNA_TODOS_API_URL"] = "https://todos.example.test";
     process.env["HASNA_TODOS_API_KEY"] = "nonsecret-test-value";
@@ -222,15 +228,22 @@ describe("MCP create_task applies focus", () => {
     };
 
     try {
+      // 1. Only the local agents-table focus exists: nothing is sent.
+      await createTool().handler({ title: "remote task with local-only focus" });
+      // 2. A session focus is set: it is sent.
+      agentFocusMap.set("cassius", { agent_id: "cassius", project_id: project.id });
       await createTool().handler({ title: "remote focused task" });
+      // 3. An explicit project_id still wins over the session focus.
       await createTool().handler({ title: "explicit remote task", project_id: explicitProject.id });
     } finally {
+      agentFocusMap.delete("cassius");
       globalThis.fetch = originalFetch;
     }
 
-    expect(postedBodies).toHaveLength(2);
-    expect(postedBodies[0]?.["project_id"]).toBe(project.id);
-    expect(postedBodies[1]?.["project_id"]).toBe(explicitProject.id);
+    expect(postedBodies).toHaveLength(3);
+    expect(postedBodies[0]?.["project_id"]).toBeUndefined();
+    expect(postedBodies[1]?.["project_id"]).toBe(project.id);
+    expect(postedBodies[2]?.["project_id"]).toBe(explicitProject.id);
   });
 });
 

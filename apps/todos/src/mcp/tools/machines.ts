@@ -76,7 +76,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
             ],
           };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }] };
+          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -106,7 +106,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
           });
           return { content: [{ type: "text" as const, text: `Machines:\n${lines.join("\n")}` }] };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }] };
+          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -152,7 +152,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
           }, getDb());
           return { content: [{ type: "text" as const, text: `Heartbeat recorded for ${machine.name} (${machine.id.slice(0, 8)}) at ${machine.last_seen_at}` }] };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }] };
+          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -190,7 +190,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
             }],
           };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }] };
+          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -214,7 +214,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
             ],
           };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }] };
+          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -238,7 +238,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
           archiveMachine(machine.id, db);
           return { content: [{ type: "text" as const, text: `Machine '${params.name}' archived` }] };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }] };
+          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -266,7 +266,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
             ],
           };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }] };
+          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
         }
       },
     );
@@ -294,7 +294,7 @@ export function registerMachineTools(server: McpServer, ctx: ToolContext) {
             ],
           };
         } catch (error) {
-          return { content: [{ type: "text" as const, text: ctx.formatError(error) }] };
+          return { content: [{ type: "text" as const, text: ctx.formatError(error) }], isError: true };
         }
       },
     );
