@@ -1,3 +1,4 @@
+import { setupBoundSesInbound, type SesInboundSetupCloudFactory, type SesInboundSetupInput } from "./ses-inbound-setup.js";
 import { readDomainDnsRecords, DomainDnsReadError } from "./domain-dns-read.js";
 import { normalizeSendMetadata } from "../../lib/send-metadata.js";
 import { normalizeFeedback } from "./feedback.js";
@@ -212,6 +213,7 @@ export interface SelfHostedServiceDeps {
   validateManagedCredentials?: ManagedCredentialValidator;
   ingestCloud?: IngestCloudFactory;
   realtimeSetupCloud?: RealtimeSetupCloudFactory;
+  sesInboundSetupCloud?: SesInboundSetupCloudFactory;
   migrations: readonly Migration[];
   version: string;
   // ---- multi-tenancy + auth (WI-2) ----
@@ -2892,6 +2894,18 @@ export async function handleSelfHostedRequest(
         if (error instanceof WebhookRelayError) return json(error.status, { error: error.message });
         return json(503, { error: "Webhook relay did not confirm durable completion; retry the original event." });
       }
+    }
+
+    if (path === "/v1/inbox/setup-ses-inbound") {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "configuring SES inbound storage");
+      if (denied) return denied;
+      try {
+        const result = await setupBoundSesInbound(auth.store, auth.ctx.tenantId, await readJsonBody(req) as unknown as SesInboundSetupInput, deps.env ?? process.env, deps.sesInboundSetupCloud, req.signal);
+        return json(200, result);
+      } catch (error) { if (error instanceof IngestApiError) return json(error.status, { error: error.message }); throw error; }
     }
 
     if (path === "/v1/inbox/setup-realtime") {

@@ -5,26 +5,12 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AGENT_WRITABLE_CONFIG_KEYS, loadConfig, getConfigValue, setAgentConfigValue } from '../../lib/config.js';
 import { normalizeRoute53RegistrationContact } from '../../lib/route53-contact.js';
-import { resolveClientMode } from '../../lib/mode.js';
 import { formatError, resolveId } from '../helpers.js';
 
 const MAX_MCP_S3_SYNC_LIMIT = 10000;
 const MAX_MCP_PROVISION_WAIT_SECONDS = 300;
 const MAX_MCP_PROVISION_INTERVAL_SECONDS = 60;
 const MAX_DOMAIN_REGISTRATION_YEARS = 10;
-
-/** Remaining SES bucket/rule setup needs an authenticated server operation. */
-function assertProvisioningInfraAllowed(toolName: string): void {
-  if (resolveClientMode().mode !== "self_hosted") return;
-  throw new Error(
-    `MCP tool ${toolName} is disabled in self_hosted mode: it would mutate cloud infrastructure ` +
-      "(SES identity, Cloudflare DNS records, SES receipt rules) using the ambient AWS/Cloudflare " +
-      "environment of this client machine while recording the result in the operator's shared " +
-      "domain state, and the self-hosted server exposes no route that performs provisioning. " +
-      "Run it in a local-database configuration (HASNA_EMAILS_DB_PATH or EMAILS_DB_PATH set to a " +
-      "database file, API settings unset) against cloud accounts this machine owns.",
-  );
-}
 
 export function registerInfrastructureTools(server: McpServer): void {
   // ─── DOMAIN PURCHASING (via @hasna/domains / Route 53) ───────────────────────
@@ -190,20 +176,19 @@ export function registerInfrastructureTools(server: McpServer): void {
 
   server.tool(
   "setup_ses_inbound",
-  "Create S3 bucket + SES receipt rules to receive inbound email for a domain",
+  "Configure and verify the exact server-bound S3 bucket and SES receipt rule through the operator API. Does not start an ingest worker.",
   {
     domain: z.string().describe("Domain to receive email for"),
     bucket: z.string().describe("S3 bucket name to create/use"),
     region: z.string().optional().describe("AWS region (default: us-east-1)"),
     prefix: z.string().optional().describe("S3 key prefix"),
-    catch_all: z.boolean().optional().describe("Also catch subdomains"),
+    catch_all: z.boolean().optional().describe("Subdomain catch-all is rejected until separately authorized domain routes are configured"),
   },
   async ({ domain, bucket, region, prefix, catch_all }) => {
     try {
-      assertProvisioningInfraAllowed("setup_ses_inbound");
-      const { setupInboundEmail } = await import("../../lib/aws-inbound.js");
-      const result = await setupInboundEmail({ domain, bucket, region, prefix, catchAll: catch_all });
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      const { setupSesInboundApi } = await import("../../lib/ses-inbound-setup-api.js");
+      const result = await setupSesInboundApi({ domain, bucket, ...(region !== undefined ? { region } : {}), ...(prefix !== undefined ? { prefix } : {}), ...(catch_all !== undefined ? { catch_all } : {}) });
+      return { content: [{ type: "text", text: JSON.stringify(result) }], ...(!result.ok || !result.verified ? { isError: true } : {}) };
     } catch (e) {
       return { content: [{ type: "text", text: `Error: ${formatError(e)}` }], isError: true };
     }

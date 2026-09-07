@@ -5815,3 +5815,13 @@ emailsSelfHostedOpenApi.paths!["/v1/workers/{id}/control"] = {
   }
 };
 for (const path of ["/v1/workers", "/v1/workers/{id}/control"]) { const item = emailsSelfHostedOpenApi.paths![path]!; const operation = (item.get ?? item.post) as { responses: Record<string,unknown> }; for (const code of ["400","401","403","404","405","409","422","429","500","503"]) operation.responses[code]=errorResponse("Worker control failed"); }
+
+const sesInboundSetupReceipt = { type: "object", required: ["ok","verified","domain","source_id","bucket","prefix","region","changed","attempted","changes_may_have_applied","worker_started","delivery_tested"], properties: {
+  ok:{type:"boolean"}, verified:{type:"boolean"}, domain:{type:"string"}, source_id:{type:"string"}, bucket:{type:"string"}, prefix:{type:"string"}, region:{type:"string"},
+  changed:{type:"array",items:{type:"string"}}, attempted:{type:"array",items:{type:"string"}}, changes_may_have_applied:{type:"boolean"}, worker_started:{type:"boolean",enum:[false]}, delivery_tested:{type:"boolean",enum:[false]}, message:{type:"string"}
+} };
+emailsSelfHostedOpenApi.paths!["/v1/inbox/setup-ses-inbound"] = { post: {
+  operationId: "setupSesInbound", summary: "Configure and verify the exact server-bound SES bucket and receipt rule (operator only)", tags: ["inbox"],
+  requestBody: { required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["domain","bucket"],properties:{domain:{type:"string"},bucket:{type:"string"},region:{type:"string"},prefix:{type:"string"},catch_all:{type:"boolean"}}}}}},
+  responses: { "200":{description:"Completed setup attempt with explicit verified or partial result",content:{"application/json":{schema:sesInboundSetupReceipt}}}, ...Object.fromEntries(["400","401","403","404","405","409","422","429","500","502","503"].map(code=>[code,errorResponse("SES inbound setup failed")])) }
+} };

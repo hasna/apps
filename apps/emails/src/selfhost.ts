@@ -1265,6 +1265,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Configure and verify the exact server-bound SES bucket and receipt rule (operator only) */
+    async setupSesInbound(body: { "domain": string; "bucket": string; "region"?: string; "prefix"?: string; "catch_all"?: boolean }, init?: RequestInit): Promise<{ "ok": boolean; "verified": boolean; "domain": string; "source_id": string; "bucket": string; "prefix": string; "region": string; "changed": Array<string>; "attempted": Array<string>; "changes_may_have_applied": boolean; "worker_started": false; "delivery_tested": false; "message"?: string }> {
+      return this.request("POST", `/v1/inbox/setup-ses-inbound`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Check operator SMTP import capability before binding a local listener */
     async getSmtpImportCapability(query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "available": boolean; "durable_receipts": boolean; "max_raw_bytes": number; "provider_id": string | null }> {
       return this.request("GET", `/v1/inbox/smtp`, {

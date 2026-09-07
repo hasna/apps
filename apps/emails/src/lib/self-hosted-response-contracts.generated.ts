@@ -19696,6 +19696,181 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "ok",
+        "verified",
+        "domain",
+        "source_id",
+        "bucket",
+        "prefix",
+        "region",
+        "changed",
+        "attempted",
+        "changes_may_have_applied",
+        "worker_started",
+        "delivery_tested"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "bucket": {
+          "type": "string"
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "attempted": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "changes_may_have_applied": {
+          "type": "boolean"
+        },
+        "worker_started": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "delivery_tested": {
+          "type": "boolean",
+          "enum": [
+            false
+          ]
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 400,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 401,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 403,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 422,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 429,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 500,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 502,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "setupSesInbound",
+    "path": "/v1/inbox/setup-ses-inbound",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
     "method": "GET",
     "operationId": "getSmtpImportCapability",
     "path": "/v1/inbox/smtp",

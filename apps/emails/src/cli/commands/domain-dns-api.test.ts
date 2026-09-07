@@ -285,7 +285,8 @@ test("MCP does not turn an HTTP 200 blocked DNS receipt into success", async () 
   const result = await mcp._registeredTools.provision_domain!.handler({ domain: "example.test", provider_id: "provider" });
   expect(result.isError).toBe(true);
   const payload = JSON.parse(result.content[0]!.text);
-  expect(JSON.parse(payload.error.message).job.status).toBe("blocked");
+  expect(payload.job).toMatchObject({ id: "fixture-job", status: "blocked", dns_published: false, verified_for_sending: false });
+  expect(payload.error).toMatchObject({ code: "provisioning_incomplete", retryable: false });
 });
 
 test("owned domain setup works without purchase flags or PII, and skip-buy remains compatible",async()=>{

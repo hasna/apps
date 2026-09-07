@@ -290,36 +290,11 @@ describe("MCP self_hosted guards", () => {
     expect((await callTool("provision_status", { domain: " " })).isError).toBe(true);
   });
 
-  it("refuses infrastructure-mutating provisioning tools instead of using client cloud credentials", async () => {
-    // In self_hosted mode `getProvider` returns a row whose secrets are nulled by
-    // policy, so the SES adapter would resolve credentials from the CLIENT's
-    // ambient AWS_* environment and Cloudflare from the client's token — while
-    // `createDomain` writes into the OPERATOR's shared domain state. That lets a
-    // tenant member stand up a SES identity in their own AWS account and record a
-    // domain the operator's SES cannot send from, so these refuse outright.
-    const cases: Array<[string, Record<string, unknown>]> = [
-
-
-      ["setup_ses_inbound", { domain: "attacker.example.com", bucket: "attacker-inbound" }],
-    ];
-
-    for (const [name, args] of cases) {
-      const result = await callTool(name, args);
-      expect(result.isError).toBe(true);
-      const text = resultText(result);
-      // This is the assertion that discriminates: with the guard removed these
-      // tools instead fail later, at provider resolution or at the first AWS
-      // call, so the refusal text cannot appear by accident.
-      expect(text).toContain(`MCP tool ${name} is disabled in self_hosted mode`);
-      expect(text).toContain("local-database configuration");
-      // The refusal must not repeat the false claim that a server route exists.
-      expect(text).not.toContain("runs on the self-hosted server");
-      // ...nor mention credentials: mcp/contracts.ts classifies by regex over the
-      // message and would mislabel a mode refusal as an auth_error whose
-      // fix_commands point at provider credentials.
-      expect(text.toLowerCase()).not.toContain("credential");
-      expect((JSON.parse(text) as { error?: { code?: string } }).error?.code).not.toBe("auth_error");
-    }
+  it("reports missing SES API capability without falling back to client cloud credentials", async () => {
+    const result = await callTool("setup_ses_inbound", { domain: "example.test", bucket: "bound-inbound" });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain("API needs an update");
+    expect(resultText(result)).not.toContain("local-database configuration");
   });
 
   it("routes read tools through /v1 (empty store yields empty lists, no local DB)", async () => {
