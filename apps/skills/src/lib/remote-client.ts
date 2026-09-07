@@ -461,8 +461,10 @@ export class RemoteSkillsClient {
     const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/versions`, undefined, { domainNotFoundCodes: ["SKILL_NOT_FOUND"] });
     if (response.status === 404) return [];
     if (!response.ok) throw new Error(`versions request failed: ${response.status}`);
-    const body = (await response.json()) as { versions?: RemoteSkillVersion[] };
-    return Array.isArray(body.versions) ? body.versions : [];
+    const body = await readSkillVersionPayload(response);
+    if (!isVersionRecord(body) || !Array.isArray(body.versions) ||
+      (body.slug !== undefined && body.slug !== slug)) throw new Error(INVALID_SKILL_VERSION_RESPONSE);
+    return body.versions.map(entry => normalizeSkillVersion(entry, slug));
   }
 
   /** One version's manifest, or null when the slug@version was never published. */
@@ -470,7 +472,7 @@ export class RemoteSkillsClient {
     const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/versions/${encodeURIComponent(version)}`, undefined, { domainNotFoundCodes: ["SKILL_NOT_FOUND", "SKILL_VERSION_NOT_FOUND"] });
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`version request failed: ${response.status}`);
-    return (await response.json()) as RemoteSkillVersion;
+    return normalizeSkillVersion(await readSkillVersionPayload(response), slug, version);
   }
 
   /** List the pins the instance holds for this principal. */
@@ -552,6 +554,32 @@ function requireOptionalString(record: Record<string, unknown>, field: string): 
     throw new Error(`Remote payload did not match the expected contract (${field} must be a string when present)`);
   }
   return record[field] as string;
+}
+
+const INVALID_SKILL_VERSION_RESPONSE = "Remote skill version payload did not match the expected contract.";
+
+function isVersionRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function readSkillVersionPayload(response: Response): Promise<unknown> {
+  try { return await response.json(); }
+  catch { throw new Error(INVALID_SKILL_VERSION_RESPONSE); }
+}
+
+/** Validate the shared row without rewriting timestamps or dropping additive server fields. */
+function normalizeSkillVersion(entry: unknown, slug: string, version?: string): RemoteSkillVersion {
+  if (!isVersionRecord(entry) || typeof entry.slug !== "string" || !entry.slug.trim() || entry.slug !== slug ||
+    typeof entry.version !== "string" || !entry.version.trim() || (version !== undefined && entry.version !== version) ||
+    typeof entry.bundleSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(entry.bundleSha256) ||
+    typeof entry.bundleByteSize !== "number" || !Number.isSafeInteger(entry.bundleByteSize) || entry.bundleByteSize < 0 ||
+    typeof entry.createdAt !== "string" || !entry.createdAt.trim() ||
+    (entry.current !== undefined && typeof entry.current !== "boolean") ||
+    (entry.storageKind !== undefined && typeof entry.storageKind !== "string") ||
+    (entry.manifest !== undefined && !isVersionRecord(entry.manifest))) {
+    throw new Error(INVALID_SKILL_VERSION_RESPONSE);
+  }
+  return entry as unknown as RemoteSkillVersion;
 }
 
 function normalizePin(entry: unknown): RemotePin {
