@@ -34,11 +34,16 @@ afterAll(() => {
  * prefixed key plus the shared credential pointers (a shell or wrapper that
  * exported the fleet env must not flip these tests onto the network or past
  * the fail-closed gate), point HOME at a temp dir so the disk tier can never
- * find a machine credential, then apply the extras. */
+ * find a machine credential, pin HASNA_STATION to a Keychain account that
+ * holds no messages item so the ambient macOS Keychain tier misses on a
+ * provisioned station, then apply the extras. */
+const NO_SUCH_STATION = "messages-cli-test-no-such-station";
+
 function cliEnv(extra: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
+    if (key === "HOME" || key === "USERPROFILE" || key === "HASNA_STATION") continue;
     if (key.startsWith("HASNA_MESSAGES_") || key.startsWith("MESSAGES_")) continue;
     // The conversations identity is an accepted --agent default (#1602), so a
     // shell that exported it must not satisfy the fail-closed tests below.
@@ -47,7 +52,7 @@ function cliEnv(extra: Record<string, string>): Record<string, string> {
     if (key === "HASNA_PROFILE" || key === "HASNA_HOME" || key === "HASNA_CONFIG_HOME") continue;
     env[key] = value;
   }
-  return { ...env, HOME: fakeHome, ...extra };
+  return { ...env, HOME: fakeHome, HASNA_STATION: NO_SUCH_STATION, ...extra };
 }
 
 function runCli(args: string[], extraEnv: Record<string, string> = {}): { stdout: string; stderr: string; status: number } {
