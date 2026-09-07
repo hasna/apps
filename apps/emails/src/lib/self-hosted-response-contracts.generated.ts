@@ -16525,16 +16525,23 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "path": "/v1/inbox/setup-realtime",
     "status": 400,
     "schema": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "error": {
-          "type": "string",
-          "minLength": 1
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
         }
-      },
-      "required": [
-        "error"
       ]
     }
   },
@@ -16591,7 +16598,9 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "operationId": "setupInboxRealtime",
     "path": "/v1/inbox/setup-realtime",
     "status": 409,
-    "schema": null
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
   },
   {
     "method": "POST",
@@ -16640,14 +16649,18 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     "operationId": "setupInboxRealtime",
     "path": "/v1/inbox/setup-realtime",
     "status": 502,
-    "schema": null
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
   },
   {
     "method": "POST",
     "operationId": "setupInboxRealtime",
     "path": "/v1/inbox/setup-realtime",
     "status": 503,
-    "schema": null
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
   },
   {
     "method": "POST",
