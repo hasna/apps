@@ -14631,6 +14631,987 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "GET",
+    "operationId": "listResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Tenant-scoped feedback row.",
+            "properties": {
+              "message": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 10000
+              },
+              "email": {
+                "type": "string",
+                "nullable": true,
+                "maxLength": 254
+              },
+              "category": {
+                "type": "string",
+                "enum": [
+                  "bug",
+                  "feature",
+                  "general"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "saved"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "tenant_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "tenant_id",
+              "message",
+              "email",
+              "category",
+              "status",
+              "created_at",
+              "updated_at"
+            ],
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": [
+        "items"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "listResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 201,
+    "schema": {
+      "type": "object",
+      "description": "Tenant-scoped feedback row.",
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10000
+        },
+        "email": {
+          "type": "string",
+          "nullable": true,
+          "maxLength": 254
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "bug",
+            "feature",
+            "general"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "saved"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "message",
+        "email",
+        "category",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "createResourceFeedback",
+    "path": "/v1/feedback",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "deleted": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "deleted",
+        "id"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "feedback not found"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "DELETE",
+    "operationId": "deleteResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "description": "Tenant-scoped feedback row.",
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10000
+        },
+        "email": {
+          "type": "string",
+          "nullable": true,
+          "maxLength": 254
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "bug",
+            "feature",
+            "general"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "saved"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "message",
+        "email",
+        "category",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "feedback not found"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "description": "Tenant-scoped feedback row.",
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10000
+        },
+        "email": {
+          "type": "string",
+          "nullable": true,
+          "maxLength": 254
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "bug",
+            "feature",
+            "general"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "saved"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "message",
+        "email",
+        "category",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "feedback not found"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PATCH",
+    "operationId": "updateResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "description": "Tenant-scoped feedback row.",
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10000
+        },
+        "email": {
+          "type": "string",
+          "nullable": true,
+          "maxLength": 254
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "bug",
+            "feature",
+            "general"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "saved"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "tenant_id",
+        "message",
+        "email",
+        "category",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "additionalProperties": true
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 404,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "feedback not found"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "PUT",
+    "operationId": "replaceResourceFeedback",
+    "path": "/v1/feedback/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
     "operationId": "listResourceForwarding",
     "path": "/v1/forwarding",
     "status": 200,

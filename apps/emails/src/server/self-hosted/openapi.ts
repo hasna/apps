@@ -1713,6 +1713,14 @@ for (const resource of SELF_HOSTED_RESOURCES) {
     ...(resource.requiredColumns === undefined ? {} : { required: resource.requiredColumns }),
     additionalProperties: false,
   };
+  if (resource.path === "feedback") {
+    Object.assign(bodySchema.properties, {
+      message: { type: "string", minLength: 1, maxLength: 10000 },
+      email: { type: "string", nullable: true, maxLength: 254 },
+      category: { type: "string", enum: ["bug", "feature", "general"] },
+    });
+    Object.assign(itemSchema.properties, bodySchema.properties, { status: { type: "string", enum: ["saved"] } });
+  }
   const queryParameters = [
     ...listParams,
     ...(resource.filters ?? []).map((filter) => ({
@@ -1749,6 +1757,11 @@ for (const resource of SELF_HOSTED_RESOURCES) {
       responses: { "201": { content: { "application/json": { schema: itemSchema } } } },
     },
   };
+  if (resource.path === "feedback") {
+    const post = genericResourcePaths["/v1/feedback"]!.post as { responses: Record<string, unknown> };
+    post.responses["404"] = errorResponse("This API version does not expose feedback storage.");
+    post.responses["405"] = errorResponse("This API version does not accept feedback submissions.");
+  }
   const resourceItemPath: Record<string, unknown> = {
     get: {
       operationId: `getResource${name}`,
@@ -1778,14 +1791,14 @@ for (const resource of SELF_HOSTED_RESOURCES) {
       operationId: `updateResource${name}`,
       summary: `Update a tenant-scoped ${resource.path} row`,
       parameters: idParam,
-      requestBody: { required: true, content: { "application/json": { schema: bodySchema } } },
+      requestBody: { required: true, content: { "application/json": { schema: resource.path === "feedback" ? { ...bodySchema, required: [] } : bodySchema } } },
       responses: { "200": { content: { "application/json": { schema: itemSchema } } } },
     };
     resourceItemPath.put = {
       operationId: `replaceResource${name}`,
       summary: `Replace mutable fields on a tenant-scoped ${resource.path} row`,
       parameters: idParam,
-      requestBody: { required: true, content: { "application/json": { schema: bodySchema } } },
+      requestBody: { required: true, content: { "application/json": { schema: resource.path === "feedback" ? { ...bodySchema, required: [] } : bodySchema } } },
       responses: { "200": { content: { "application/json": { schema: itemSchema } } } },
     };
   }

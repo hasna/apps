@@ -1,3 +1,4 @@
+import { normalizeFeedback } from "./feedback.js";
 import { WorkerError, workerFence, workerId } from "./worker-supervisor.js";
 import { runtimeLogQuery, withRuntimeLog } from "./runtime-log.js";
 import { writeManagedProvider, type ManagedCredentialValidator } from "./managed-provider-write.js";
@@ -3027,6 +3028,10 @@ export async function handleSelfHostedRequest(
             const specError = requireResourceWriteAuthority(auth, spec);
             if (specError) return specError;
             let body = await readJsonBody(req);
+            if (spec.path === "feedback") {
+              try { body = normalizeFeedback(body, true); }
+              catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid feedback" }); }
+            }
             if (spec.path === "forwarding") {
               try { body = normalizeForwardingRule(body, true); }
               catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid forwarding rule" }); }
@@ -3047,6 +3052,10 @@ export async function handleSelfHostedRequest(
           const specError = requireResourceWriteAuthority(auth, spec);
           if (specError) return specError;
           let body = await readJsonBody(req);
+          if (spec.path === "feedback") {
+            try { body = normalizeFeedback(body, false); }
+            catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid feedback" }); }
+          }
           if (spec.path === "forwarding") {
             try { body = normalizeForwardingRule(body, false); }
             catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid forwarding rule" }); }

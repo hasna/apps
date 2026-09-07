@@ -3140,6 +3140,25 @@ ALTER TABLE worker_operations ENABLE ROW LEVEL SECURITY; ALTER TABLE worker_oper
 CREATE POLICY worker_operations_tenant ON worker_operations USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid) WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
 `);
 
+const SERVICE_FEEDBACK = defineMigration("0039_service_feedback", `
+CREATE TABLE service_feedback (
+  id UUID PRIMARY KEY,
+  tenant_id UUID NOT NULL REFERENCES tenants(id),
+  message TEXT NOT NULL CHECK (char_length(btrim(message)) BETWEEN 1 AND 10000),
+  email TEXT CHECK (email IS NULL OR char_length(email) BETWEEN 3 AND 254),
+  category TEXT NOT NULL DEFAULT 'general' CHECK (category IN ('bug','feature','general')),
+  status TEXT NOT NULL DEFAULT 'saved' CHECK (status = 'saved'),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX service_feedback_tenant_created ON service_feedback(tenant_id,created_at DESC,id DESC);
+ALTER TABLE service_feedback ENABLE ROW LEVEL SECURITY;
+ALTER TABLE service_feedback FORCE ROW LEVEL SECURITY;
+CREATE POLICY service_feedback_tenant ON service_feedback
+  USING (tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+  WITH CHECK (tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+`);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3186,5 +3205,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MANAGED_PROVIDER_CREDENTIALS,
     RUNTIME_LOGS,
     WORKER_SUPERVISOR,
+    SERVICE_FEEDBACK,
   ];
 }

@@ -977,6 +977,60 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** List tenant-scoped feedback */
+    async listResourceFeedback(query?: { "limit"?: number; "offset"?: number; "category"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "message": string; "email": string | null; "category": "bug" | "feature" | "general"; "status": "saved"; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
+      return this.request("GET", `/v1/feedback`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Create a tenant-scoped feedback row */
+    async createResourceFeedback(body: { "message": string; "email"?: string | null; "category"?: "bug" | "feature" | "general" }, init?: RequestInit): Promise<{ "message": string; "email": string | null; "category": "bug" | "feature" | "general"; "status": "saved"; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("POST", `/v1/feedback`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Get a tenant-scoped feedback row */
+    async getResourceFeedback(id: string, init?: RequestInit): Promise<{ "message": string; "email": string | null; "category": "bug" | "feature" | "general"; "status": "saved"; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("GET", `/v1/feedback/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Replace mutable fields on a tenant-scoped feedback row */
+    async replaceResourceFeedback(id: string, body: { "message"?: string; "email"?: string | null; "category"?: "bug" | "feature" | "general" }, init?: RequestInit): Promise<{ "message": string; "email": string | null; "category": "bug" | "feature" | "general"; "status": "saved"; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("PUT", `/v1/feedback/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Delete a tenant-scoped feedback row */
+    async deleteResourceFeedback(id: string, init?: RequestInit): Promise<{ "deleted": true; "id": string }> {
+      return this.request("DELETE", `/v1/feedback/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Update a tenant-scoped feedback row */
+    async updateResourceFeedback(id: string, body: { "message"?: string; "email"?: string | null; "category"?: "bug" | "feature" | "general" }, init?: RequestInit): Promise<{ "message": string; "email": string | null; "category": "bug" | "feature" | "general"; "status": "saved"; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
+      return this.request("PATCH", `/v1/feedback/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List tenant-scoped forwarding */
     async listResourceForwarding(query?: { "limit"?: number; "offset"?: number; "source_address"?: string | null; "target_address"?: string | null; "mode"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "source_address": string | null; "target_address": string | null; "mode": string | null; "provider_id": string | null; "from_address": string | null; "enabled": boolean; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
       return this.request("GET", `/v1/forwarding`, {

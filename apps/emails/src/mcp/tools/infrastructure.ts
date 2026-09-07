@@ -393,19 +393,20 @@ export function registerInfrastructureTools(server: McpServer): void {
 
   server.tool(
   "send_feedback",
-  "Send feedback about this service",
+  "Save feedback in your Emails account. This stores feedback; it does not send an email or deliver it externally.",
   {
-    message: z.string(),
-    email: z.string().optional(),
+    message: z.string().trim().min(1).max(10000),
+    email: z.string().email().max(254).optional(),
     category: z.enum(["bug", "feature", "general"]).optional(),
   },
-  async () => {
-    // Feedback was written to a local SQLite table with no /v1 equivalent in the
-    // self-hosted client. Fail loud (rule 6).
-    return {
-      content: [{ type: "text" as const, text: "Error: send_feedback is not available in the self-hosted client; feedback is collected by the self-hosted server." }],
-      isError: true,
-    };
+  async (input) => {
+    try {
+      const { saveApiFeedback } = await import("../../lib/feedback-api.js");
+      const receipt = await saveApiFeedback(input);
+      return { content: [{ type: "text" as const, text: JSON.stringify(receipt) }] };
+    } catch (error) {
+      return { content: [{ type: "text" as const, text: formatError(error) }], isError: true };
+    }
   },
   );
 
