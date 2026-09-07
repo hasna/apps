@@ -183,8 +183,7 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
   // serves for the slug, and name it in If-Match. A first publish (no remote row) needs
   // no guard; a re-push that races a newer remote revision is refused with 409 instead
   // of silently overwriting it.
-  const current = await client.getSkill(skill.name);
-  const ifMatch = current && typeof current.revisionId === "string" && current.revisionId ? current.revisionId : undefined;
+  const ifMatch = await readPublishRevision(client, skill.name);
   let version = options.version ?? manifest.version;
   let response = await publishOnce(client, skill, manifest, packed, skillMd, versionManifest, version, ifMatch);
   let payload = await readBody(response);
@@ -244,6 +243,44 @@ export async function pushSkill(name: string, options: PushSkillOptions = {}): P
     version,
     ...(alreadyPublished ? { alreadyPublished: true } : {}),
   };
+}
+
+/** Absence or an exact usable revision is required before any upload, including a bump. */
+async function readPublishRevision(client: RemoteSkillsClient, slug: string): Promise<string | undefined> {
+  let lookup: Awaited<ReturnType<RemoteSkillsClient["getSkillStatus"]>>;
+  try {
+    lookup = await client.getSkillStatus(slug);
+  } catch {
+    throw new PushSkillError(
+      "Publishing was refused because the current skill revision could not be verified.",
+      ["Check the configured instance and connection, then retry the push. No upload was attempted."],
+    );
+  }
+  const body = lookup.body;
+  const record = body !== null && typeof body === "object" && !Array.isArray(body)
+    ? body as Record<string, unknown> : undefined;
+  const nestedError = record?.error;
+  const code = typeof record?.code === "string" ? record.code
+    : nestedError !== null && typeof nestedError === "object" && !Array.isArray(nestedError)
+      ? (nestedError as Record<string, unknown>).code : undefined;
+  if (lookup.status === 404 && code === "SKILL_NOT_FOUND") return undefined;
+  if (lookup.status < 200 || lookup.status >= 300) {
+    throw new PushSkillError(
+      `Publishing was refused because the current skill lookup failed: HTTP ${lookup.status}.`,
+      ["Only an explicit SKILL_NOT_FOUND response establishes an initial publish. Check access and server compatibility before retrying."],
+    );
+  }
+  const revision = record?.revisionId;
+  // Do not trim, coerce or silently omit an unusable precondition. HTTP field
+  // values must be safe bytes; this opaque revision is sent exactly as observed.
+  if (record?.slug !== slug || typeof revision !== "string" || revision.length === 0
+    || revision !== revision.trim() || !/^[\x21-\x7e]+$/.test(revision)) {
+    throw new PushSkillError(
+      "Publishing was refused because the current skill response did not contain a matching slug and valid revision.",
+      ["Check the configured instance and server compatibility. No upload was attempted."],
+    );
+  }
+  return revision;
 }
 
 async function publishOnce(

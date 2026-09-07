@@ -368,12 +368,12 @@ describe("skills push", () => {
     }
   });
 
-  test("surfaces a server rejection instead of reporting success", async () => {
+  test("refuses an unauthorized revision lookup before publishing", async () => {
     const root = makeCorpus({ "release-notes": VALID_SKILL });
     try {
       await withServer(async (ctx) => {
         const wrongKey = new RemoteSkillsClient("sk_not_a_real_key", ctx.baseUrl);
-        await expect(pushSkill("release-notes", { rootDir: root, client: wrongKey })).rejects.toThrow(/failed: 401/);
+        await expect(pushSkill("release-notes", { rootDir: root, client: wrongKey })).rejects.toThrow(/current skill lookup failed: HTTP 401/);
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
