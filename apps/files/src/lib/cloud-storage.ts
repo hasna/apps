@@ -98,18 +98,23 @@ export function rethrowFilesAuthorityFailure(error: unknown): never {
   );
 }
 
-/** One line every local run prints, so an unhosted run is never mistaken for an empty hosted one. */
+/** One line every on-box run prints, so it is never mistaken for a hosted one. */
 export function filesLocalModeNotice(): string {
   return (
-    "files: LOCAL mode — using the on-box SQLite store, not the hosted fleet (HASNA_FILES_LOCAL is set). " +
-    "Unset it and provide a credential via the Keychain item hasna.credentials.files.api-key, " +
-    "~/.hasna/files/config/credentials, or HASNA_FILES_API_KEY, to work against https://api.hasna.com/files."
+    "files: LOCAL mode — operating on the on-box SQLite store, not the hosted fleet. " +
+    "Select on-box storage explicitly with HASNA_FILES_LOCAL=1 / FILES_LOCAL=1, or reach the hosted " +
+    "service with HASNA_FILES_API_URL + HASNA_FILES_API_KEY, the Keychain item " +
+    "hasna.credentials.files.api-key, or ~/.hasna/files/config/credentials (default " +
+    "https://api.hasna.com/files)."
   );
 }
 
 /**
  * Print {@link filesLocalModeNotice} once per process. A no-op for every
- * hosted run, so a hosted run's stderr stays empty.
+ * hosted data-plane run; machine-local commands (index, Drive sync, peers,
+ * watch, db, organize, knowledge outbox) call it themselves when they operate
+ * on the on-box store under a hosted credential, so a local machine execution
+ * is never silent.
  */
 export function announceFilesLocalMode(
   write: (line: string) => void = (line) => process.stderr.write(`${line}\n`),

@@ -4,7 +4,8 @@
  * tagged, PROJECT-LINKED file resource on the files service.
  *
  * Bug de9aeeed: in api mode `files upload` was refused on the client with
- * "runs on-box only and is unavailable on the hosted transport", and the
+ * The hosted ingestion path (`uploadFile`) used to be refused in api mode and
+ * the server had no ingestion route; the seam now serves both transports and
  * hosted `/v1` surface had no ingestion route — so a partner contract PDF
  * could not be stored to the files service as a tagged, project-linked
  * resource. This test pins the ApiStore contract: it must POST the upload

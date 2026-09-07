@@ -47,7 +47,7 @@ function transportRecordingQueries(): { transport: HasnaHttpTransport; queries: 
 }
 
 describe("ApiStore listFiles — every filter the CLI accepts reaches /v1/files", () => {
-  it("forwards the collection/date/size/sort filter subset (port of the local-only filters)", async () => {
+  it("forwards the collection/date/size/sort filter subset (hosted port of the on-box filters)", async () => {
     const { transport, queries } = transportRecordingQueries();
     const store = new ApiStore(createHasnaStorageClient("files", transport));
 

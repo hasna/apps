@@ -59,7 +59,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--region <region>", "S3 region")
     .option("--aws-profile <profile>", "AWS profile")
     .option("--prefix <prefix>", "Object key prefix")
-    .option("--local-root <path>", "Local evidence root for local mode")
+    .option("--local-root <path>", "Local evidence root (on-box interactive storage)")
     .option("--expires <seconds>", "Upload URL expiry seconds", "600")
     .option("--include-upload-url", "Include the credential-bearing upload URL in JSON output")
     .option("--json", "Output as JSON")
@@ -121,7 +121,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--region <region>", "S3 region")
     .option("--aws-profile <profile>", "AWS profile")
     .option("--prefix <prefix>", "Object key prefix")
-    .option("--local-root <path>", "Local evidence root for local mode")
+    .option("--local-root <path>", "Local evidence root (on-box interactive storage)")
     .option("--json", "Output as JSON")
     .action(async (path: string, opts: EvidenceUploadOptions) => {
       await runCli(async () => {
@@ -167,7 +167,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--region <region>", "S3 region")
     .option("--aws-profile <profile>", "AWS profile")
     .option("--prefix <prefix>", "Object key prefix")
-    .option("--local-root <path>", "Local evidence root for local mode")
+    .option("--local-root <path>", "Local evidence root (on-box interactive storage)")
     .option("--json", "Output as JSON")
     .action(async (intentId: string, opts: EvidenceStorageCliOptions) => {
       await runCli(async () => {
@@ -212,7 +212,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--region <region>", "S3 region")
     .option("--aws-profile <profile>", "AWS profile")
     .option("--prefix <prefix>", "Object key prefix")
-    .option("--local-root <path>", "Local evidence root for local mode")
+    .option("--local-root <path>", "Local evidence root (on-box interactive storage)")
     .option("--json", "Output as JSON")
     .action(async (assetId: string, opts: EvidenceDownloadOptions) => {
       await runCli(async () => {
@@ -234,7 +234,7 @@ export function registerEvidenceCommands(program: Command): void {
     .option("--region <region>", "S3 region")
     .option("--aws-profile <profile>", "AWS profile")
     .option("--prefix <prefix>", "Object key prefix")
-    .option("--local-root <path>", "Local evidence root for local mode")
+    .option("--local-root <path>", "Local evidence root (on-box interactive storage)")
     .option("--json", "Output as JSON")
     .action(async (assetId: string, opts: EvidenceStorageCliOptions) => {
       await runCli(async () => {

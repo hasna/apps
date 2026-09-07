@@ -28,9 +28,11 @@ work and win.
 Without any resolvable credential the CLI **fails closed** — non-zero exit, no
 SQLite, no `*-local-fallback` event. Local SQLite mode is an explicit opt-in:
 set `HASNA_FILES_LOCAL=1` (alias `FILES_LOCAL=1`), and no credential or
-PostgreSQL/S3 configuration is required for local folders. Every local run
-prints one `files: LOCAL mode — ...` line on stderr so an unhosted run is never
-mistaken for an empty hosted one. The retired `HASNA_FILES_LOCAL_MODE` /
+PostgreSQL/S3 configuration is required for local folders. Every run that
+touches the on-box store — the opted-in store, or an explicitly invoked
+machine command under a hosted credential — prints one
+`files: LOCAL mode — ...` line on stderr so it is never mistaken for an empty
+hosted one. The retired `HASNA_FILES_LOCAL_MODE` /
 `FILES_LOCAL_MODE` / `*_STORAGE_MODE` switches are gone, and nothing reads
 `~/.hasna/fleet-env`, `~/.hasna/cloud`, `~/.config/hasna` or
 `$XDG_CONFIG_HOME`.

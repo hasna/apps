@@ -19,11 +19,11 @@ import { listGoogleDriveItems, listGoogleDriveProfiles, listGoogleDriveSharedDri
 import { indexS3Source } from "../lib/s3.js";
 import { downloadResolvedFileObject, resolveFileObject, resolvedFileObjectSummary } from "../lib/file-object.js";
 import { extractTextFromFile } from "../lib/extraction.js";
-import { extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
+import { extractTextSnapshotFromFile, buildExtractionSnapshot } from "../lib/extraction-snapshot.js";
 import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest, formatKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
-import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
+import { buildFilesContextPackFromStore, buildFilesSearchPackFromStore } from "../lib/context-pack.js";
 import { openSecureOutput } from "../lib/secure-output.js";
 import { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef } from "../lib/source-ref.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
@@ -37,6 +37,7 @@ import type {
   FileSearchDocument,
   FileSearchDocumentKind,
   FileSearchDocumentStatus,
+  FileSearchIndexStats,
   GoogleDriveConfig,
   KnowledgeSourceManifestFormat,
   KnowledgeSourceResolveMode,
@@ -45,6 +46,7 @@ import type {
 } from "../types/index.js";
 import { ApiStore, store } from "../store/index.js";
 import { announceFilesLocalMode, resolveFilesCloudStorage } from "../lib/cloud-storage.js";
+import { collectHostedBytes, hostedWhereUrl, hostedStorageResolve, hostedFileToTemp } from "../lib/hosted-content.js";
 
 import { createRequire } from "module";
 const _require = createRequire(import.meta.url);
@@ -63,20 +65,18 @@ const DEFAULT_PROD_FILES_SOURCE_NAME = "prod-files-drive";
 const DEFAULT_PROD_FILES_AWS_PROFILE = process.env.HASNA_FILES_AWS_PROFILE ?? "default";
 
 /**
- * Refuse a physical, on-box-only command when the client is bound to the
- * hosted HTTP transport. Indexing, Drive sync, uploads, extraction, local
- * FTS/search indexes, peer sync, the change outbox, and on-disk diagnostics
- * are all machine-local side effects the files service owns; a thin hosted
- * client must never silently read or write the local SQLite island for them.
- * Data-plane reads/writes always route through the Store and work on both
- * transports.
+ * Every command runs on both transports. Data-plane commands route through the
+ * Store (on-box SQLite under `HASNA_FILES_LOCAL=1`, the hosted service
+ * otherwise). Content commands (cat/open/where/resolve/extract-snapshot,
+ * context packs, search-index stats) have hosted implementations on the ApiStore
+ * so they work against the service's own data. Machine-local commands (index,
+ * Drive sync, peers, watch, knowledge outbox, organize, db) operate on the
+ * machine where the CLI runs in BOTH environments — exactly like `config`,
+ * `ops`, `events` and `channels` already do — and announce the on-box store
+ * with the LOCAL-mode line when a hosted credential is configured, so a local
+ * machine execution is never mistaken for a hosted one. There are no
+ * transport-conditional refusals: the storage-mode axis is retired.
  */
-function requireLocalTransport(command: string): void {
-  if (store().transport !== "local") {
-    console.error(chalk.red(`${command} runs on-box only and is unavailable on the hosted transport; the files service owns ingestion.`));
-    process.exit(1);
-  }
-}
 
 program
   .name("files")
@@ -303,7 +303,7 @@ sources
     json?: boolean;
   }) => {
     return (async () => {
-    requireLocalTransport("files sources add-google-drive");
+    announceFilesLocalMode();
     const machine = getCurrentMachine();
     const destinationId = opts.destinationSource ? requireId(opts.destinationSource, "sources") : undefined;
     if (destinationId) {
@@ -387,7 +387,7 @@ sources
     googleDriveDefault?: boolean;
     json?: boolean;
   }) => {
-    requireLocalTransport("files sources bootstrap-prod-files");
+    announceFilesLocalMode();
     if (!opts.bucket) {
       console.error(chalk.red("Missing --bucket (or set HASNA_FILES_S3_BUCKET). This package ships no default bucket."));
       process.exit(1);
@@ -497,7 +497,7 @@ sources
   .description("List Google Drive profiles available through connectors auth")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
-    requireLocalTransport("files sources google-drive-profiles");
+    announceFilesLocalMode();
     const profiles = await listGoogleDriveProfiles();
     if (opts.json) { console.log(JSON.stringify(profiles, null, 2)); return; }
     if (!profiles.length) {
@@ -561,7 +561,7 @@ program
   .command("index [source-id]")
   .description("Index all sources (or a specific one)")
   .action(async (sourceId?: string) => {
-    requireLocalTransport("files index");
+    announceFilesLocalMode();
     const machine = getCurrentMachine();
     let resolvedSourceId = sourceId;
     if (sourceId) {
@@ -601,7 +601,7 @@ sources
   .description("List accessible Google shared drives for a source")
   .option("--json", "Output as JSON")
   .action(async (id: string, opts: { json?: boolean }) => {
-    requireLocalTransport("files sources shared-drives");
+    announceFilesLocalMode();
     const source = getSource(requireId(id, "sources"));
     if (!source || source.type !== "google_drive") {
       console.error(chalk.red("Source must be a Google Drive source"));
@@ -620,7 +620,7 @@ sources
   .description("List Google Drive items visible to a source")
   .option("--json", "Output as JSON")
   .action(async (id: string, opts: { json?: boolean }) => {
-    requireLocalTransport("files sources google-drive-items");
+    announceFilesLocalMode();
     const source = getSource(requireId(id, "sources"));
     if (!source || source.type !== "google_drive") {
       console.error(chalk.red("Source must be a Google Drive source"));
@@ -639,7 +639,7 @@ sources
   .description("Preflight Google Drive auth, destination, and item scope without uploading")
   .option("--json", "Output as JSON")
   .action(async (id: string | undefined, opts: { json?: boolean }) => {
-    requireLocalTransport("files sources google-drive-status");
+    announceFilesLocalMode();
     const sources = id
       ? [getSource(requireId(id, "sources"))].filter(Boolean)
       : listSources().filter((source) => source.enabled && source.type === "google_drive");
@@ -670,7 +670,7 @@ sources
   .option("--dry-run", "Preflight auth, destination, and item scope without uploading")
   .option("--json", "Output as JSON")
   .action(async (id: string | undefined, opts: { dryRun?: boolean; json?: boolean }) => {
-    requireLocalTransport("files sources sync-google-drive");
+    announceFilesLocalMode();
     const toSync = id
       ? [getSource(requireId(id, "sources"))].filter(Boolean)
       : listSources().filter((source) => source.enabled && source.type === "google_drive");
@@ -818,11 +818,13 @@ program
   .option("--dry-run", "With --out, preview the artifact pointer without writing the file")
   .action(async (fileIds: string[], opts: ContextPackCliOptions) => {
     try {
-      requireLocalTransport("context-pack");
       const positionalRefs = fileIds.filter((value) => value.startsWith("open-files://"));
       const positionalFileIds = fileIds.filter((value) => !value.startsWith("open-files://"));
-      const pack = await buildFilesContextPack({
-        file_ids: positionalFileIds.map(resolveFileIdForPack),
+      const files = store();
+      // Partial-id resolution is a local-store refinement; hosted ids pass through.
+      const resolvedIds = files.transport === "local" ? positionalFileIds.map(resolveFileIdForPack) : positionalFileIds;
+      const pack = await buildFilesContextPackFromStore(files, {
+        file_ids: resolvedIds,
         source_refs: [...opts.sourceRef, ...positionalRefs],
         ...packLimitsFromCli(opts),
         redact_patterns: compileRedactions(opts.redact),
@@ -853,8 +855,8 @@ program
   .option("--dry-run", "With --out, preview the artifact pointer without writing the file")
   .action(async (query: string, opts: SearchPackCliOptions) => {
     try {
-      requireLocalTransport("search-pack");
-      const pack = await buildFilesSearchPack({
+      const files = store();
+      const pack = await buildFilesSearchPackFromStore(files, {
         query,
         source_id: opts.source,
         machine_id: opts.machine,
@@ -1007,9 +1009,9 @@ searchIndex
   .command("stats")
   .description("Show derived search index coverage")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
-    requireLocalTransport("files search-index stats");
-    const stats = getFileSearchIndexStats();
+  .action(async (opts: { json?: boolean }) => {
+    const files = store();
+    const stats = files.transport === "api" ? await hostedSearchIndexStats(files as ApiStore) : getFileSearchIndexStats();
     if (opts.json) { console.log(JSON.stringify(stats, null, 2)); return; }
     console.log(chalk.bold("derived search index"));
     console.log(`documents: ${stats.documents}  indexed_files: ${stats.indexed_files}  stale: ${stats.stale_documents}`);
@@ -1022,14 +1024,88 @@ searchIndex
     }
   });
 
+/**
+ * Derived-search-index coverage computed from the hosted transport's API
+ * surface: the derived-content documents (/v1/search-documents) joined
+ * client-side with the active file set (/v1/files). Organization-review-only
+ * fields (owner/target-path aggregates) report zero on the hosted transport —
+ * the service owns that review surface — and the JSON marks `hosted: true`.
+ */
+async function hostedSearchIndexStats(api: ApiStore): Promise<FileSearchIndexStats & { hosted: boolean }> {
+  const documents = await walkApiSearchDocuments(api);
+  const files = await walkApiFiles(api);
+  // /v1/files returns the active file set, matching the local stats' active-file semantics.
+  const activeFiles = files.length;
+  const activeIds = new Set(files.map((file) => file.id));
+  const indexable = documents.filter((doc) => doc.status === "ready" || doc.status === "partial");
+  const indexedFiles = new Set(indexable.map((doc) => doc.file_id));
+  const activeIndexed = [...indexedFiles].filter((id) => activeIds.has(id)).length;
+  const byKind = new Map<string, number>();
+  const byStatus = new Map<string, number>();
+  for (const doc of documents) {
+    byKind.set(doc.kind, (byKind.get(doc.kind) ?? 0) + 1);
+    byStatus.set(doc.status, (byStatus.get(doc.status) ?? 0) + 1);
+  }
+  return {
+    documents: documents.length,
+    indexed_files: indexedFiles.size,
+    active_files: activeFiles,
+    active_indexed_files: activeIndexed,
+    missing_indexed_active_files: Math.max(0, activeFiles - activeIndexed),
+    indexed_active_coverage_pct: activeFiles > 0 ? Math.round((activeIndexed / activeFiles) * 100) : 0,
+    organized_active_files: 0,
+    active_files_with_owner: 0,
+    active_files_with_target_path: 0,
+    active_files_with_canonical_name: files.filter((file) => Boolean(file.canonical_name)).length,
+    stale_documents: documents.filter((doc) => doc.status === "stale").length,
+    by_kind: [...byKind.entries()].map(([kind, count]) => ({ kind: kind as FileSearchDocumentKind, count })),
+    by_status: [...byStatus.entries()].map(([status, count]) => ({ status: status as FileSearchDocumentStatus, count })),
+    by_owner: [],
+    by_review_status: [],
+    hosted: true,
+  };
+}
+
+const HOSTED_STATS_WALK_PAGE = 500;
+const HOSTED_STATS_WALK_MAX_PAGES = 2000;
+
+async function walkApiSearchDocuments(api: ApiStore, pageLimit = HOSTED_STATS_WALK_PAGE, maxPages = HOSTED_STATS_WALK_MAX_PAGES): Promise<FileSearchDocument[]> {
+  const docs: FileSearchDocument[] = [];
+  for (let offset = 0; offset < maxPages * pageLimit; offset += pageLimit) {
+    const page = await api.listSearchDocuments({ limit: pageLimit, offset });
+    docs.push(...page);
+    if (page.length < pageLimit) break;
+  }
+  return docs;
+}
+
+async function walkApiFiles(api: ApiStore, pageLimit = HOSTED_STATS_WALK_PAGE, maxPages = HOSTED_STATS_WALK_MAX_PAGES): Promise<import("../types/index.js").FileWithTags[]> {
+  const rows: import("../types/index.js").FileWithTags[] = [];
+  for (let offset = 0; offset < maxPages * pageLimit; offset += pageLimit) {
+    // The /v1/files default (active rows) matches the local stats' active-file semantics.
+    const page = await api.listFiles({ limit: pageLimit, offset });
+    rows.push(...page);
+    if (page.length < pageLimit) break;
+  }
+  return rows;
+}
+
 searchIndex
   .command("rebuild-fts")
   .description("Rebuild derived search FTS entries from stored search documents")
   .option("--json", "Output as JSON")
-  .action((opts: { json?: boolean }) => {
-    requireLocalTransport("files search-index rebuild-fts");
+  .action(async (opts: { json?: boolean }) => {
+    const files = store();
+    if (files.transport === "api") {
+      // The hosted service keeps its derived-content index as server-maintained
+      // columns; there are no client-side FTS entries to rebuild.
+      if (opts.json) { console.log(JSON.stringify({ refreshed: 0, hosted: true })); return; }
+      console.log(chalk.green("refreshed 0 search document(s)"));
+      console.log(chalk.dim("The hosted service maintains its derived-content search index server-side."));
+      return;
+    }
     const refreshed = refreshAllFileSearchDocumentFts();
-    if (opts.json) { console.log(JSON.stringify({ refreshed }, null, 2)); return; }
+    if (opts.json) { console.log(JSON.stringify({ refreshed })); return; }
     console.log(chalk.green(`refreshed ${refreshed} search document(s)`));
   });
 
@@ -1186,19 +1262,18 @@ program
   });
 
 // ─── upload ──────────────────────────────────────────────────────────────────
-// Cloud-mode ingestion: `files upload` used to refuse on the hosted transport
-// ("runs on-box only ... the files service owns ingestion"), and the hosted
-// service had no ingestion route — so a document could not be added as a
-// tagged, project-linked resource in cloud mode (bug de9aeeed). It now routes
-// through the store seam: ApiStore signs a server-owned PUT URL, uploads the
-// bytes, completes, and applies tags + the project link; LocalStore keeps the
-// existing S3-source upload and adds the same tag/project application.
+// Hosted-mode ingestion: `files upload` used to refuse on the hosted transport,
+// and the hosted service had no ingestion route — so a document could not be
+// added as a tagged, project-linked resource in hosted mode (bug de9aeeed). It
+// now routes through the store seam: ApiStore signs a server-owned PUT URL,
+// uploads the bytes, completes, and applies tags + the project link; LocalStore
+// keeps the existing S3-source upload and adds the same tag/project application.
 
 const collectTag = (value: string, acc: string[]): string[] => [...acc, value];
 
 program
   .command("upload <local-path> [source-id] [s3-key]")
-  .description("Upload a local document (cloud: server-owned ingestion as a tagged project resource; local: to an S3 source)")
+  .description("Upload a local document as a tagged, project-linked file resource")
   .option("--project <id>", "Link the uploaded file to a project as a resource")
   .option("--tag <tag>", "Tag the uploaded file (repeatable)", collectTag, [])
   .option("--name <name>", "Stored file name (defaults to the local basename)")
@@ -1342,9 +1417,26 @@ program
   .command("resolve <file-id>")
   .description("Resolve a file to its current object storage location")
   .option("--json", "Output as JSON")
-  .action((fileId: string, opts: { json?: boolean }) => {
-    requireLocalTransport("files resolve");
+  .action(async (fileId: string, opts: { json?: boolean }) => {
     try {
+      const files = store();
+      if (files.transport === "api") {
+        const api = files as ApiStore;
+        const file = await api.getFile(fileId);
+        if (!file) throw new Error(`No file found matching "${fileId}"`);
+        const summary = await hostedStorageResolve(api, file);
+        if (opts.json) {
+          console.log(JSON.stringify(summary, null, 2));
+          return;
+        }
+        console.log(`${chalk.bold("ID:")}        ${summary.file_id}`);
+        console.log(`${chalk.bold("Name:")}      ${summary.name}`);
+        console.log(`${chalk.bold("Kind:")}      ${summary.kind}`);
+        console.log(`${chalk.bold("Provider:")}  ${summary.provider}`);
+        console.log(`${chalk.bold("URL:")}       ${summary.url}`);
+        console.log(`${chalk.bold("Expires:")}   ${summary.expires_in}s`);
+        return;
+      }
       const resolved = resolveFileObject(requireId(fileId, "files"));
       const summary = resolvedFileObjectSummary(resolved);
       if (opts.json) {
@@ -1440,7 +1532,7 @@ peers
   .description("List saved peers")
   .option("--json", "Output as JSON")
   .action((opts: { json?: boolean }) => {
-    requireLocalTransport("files peers list");
+    announceFilesLocalMode();
     const all = listPeers();
     if (opts.json) { console.log(JSON.stringify(all, null, 2)); return; }
     if (!all.length) { console.log(chalk.dim("No peers saved. Run: files peers add <url>")); return; }
@@ -1458,7 +1550,7 @@ peers
   .option("--auto", "Enable auto-sync")
   .option("--interval <minutes>", "Auto-sync interval in minutes", "30")
   .action((url: string, opts: { name?: string; auto?: boolean; interval: string }) => {
-    requireLocalTransport("files peers add");
+    announceFilesLocalMode();
     let intervalMinutes: number;
     try {
       intervalMinutes = parseIntFlag(opts.interval, "interval", { min: 1 });
@@ -1476,7 +1568,7 @@ peers
   .description("Remove a peer")
   .option("--yes", "Confirm destructive removal")
   .action((idOrUrl: string, opts: { yes?: boolean }) => {
-    requireLocalTransport("files peers remove");
+    announceFilesLocalMode();
     if (!opts.yes) {
       console.error(chalk.red("Refusing to remove peer without --yes (destructive operation)."));
       process.exit(1);
@@ -1491,7 +1583,7 @@ program
   .description("Sync file index from one or more peer machines (e.g. http://192.168.1.10:19432)")
   .option("--json", "Output as JSON")
   .action(async (peerUrls: string[], opts: { json?: boolean }) => {
-    requireLocalTransport("files sync");
+    announceFilesLocalMode();
     const { syncWithPeers } = await import("../lib/sync.js");
     const results = await syncWithPeers(peerUrls);
     if (opts.json) { console.log(JSON.stringify(results, null, 2)); return; }
@@ -1507,9 +1599,21 @@ program
 program
   .command("open <file-id>")
   .description("Open a file in the default application")
-  .action((fileId: string) => {
-    requireLocalTransport("files open");
+  .action(async (fileId: string) => {
     try {
+      const files = store();
+      if (files.transport === "api") {
+        // The hosted service owns the bytes: download a fresh copy into an
+        // owner-only temp file and open it with the OS default application.
+        const api = files as ApiStore;
+        const file = await api.getFile(fileId);
+        if (!file) throw new Error(`No file found matching "${fileId}"`);
+        const fullPath = await hostedFileToTemp(api, file);
+        console.log(chalk.dim(`Downloaded ${file.name} to ${fullPath}`));
+        Bun.spawn(getOpenCommand(fullPath), { stdout: "inherit", stderr: "inherit" });
+        console.log(chalk.green(`✓ Opening ${file.name}`));
+        return;
+      }
       const file = getFile(requireId(fileId, "files"))!;
       const source = getSource(file.source_id);
       if (!source || source.type !== "local") { console.error(chalk.red("open only works with local sources")); process.exit(1); }
@@ -1520,10 +1624,17 @@ program
 
 program
   .command("where <file-id>")
-  .description("Print the full absolute path of a file (for shell scripting)")
-  .action((fileId: string) => {
-    requireLocalTransport("files where");
+  .description("Print the file's current location (absolute path on-box; signed URL on the hosted transport)")
+  .action(async (fileId: string) => {
     try {
+      const files = store();
+      if (files.transport === "api") {
+        // Hosted files live in the service's object store; the signed URL is
+        // the machine-usable location (e.g. `curl "$(files where f_1)"`).
+        const url = await hostedWhereUrl(files as ApiStore, fileId);
+        process.stdout.write(url + "\n");
+        return;
+      }
       const file = getFile(requireId(fileId, "files"))!;
       const source = getSource(file.source_id);
       if (!source || source.type !== "local") { console.error(chalk.red("where only works with local sources")); process.exit(1); }
@@ -1535,9 +1646,16 @@ program
   .command("cat <file-id>")
   .description("Print file content to stdout")
   .option("--max-bytes <n>", "Max bytes to read (default: unlimited)", "0")
-  .action((fileId: string, opts: { maxBytes: string }) => {
-    requireLocalTransport("files cat");
+  .action(async (fileId: string, opts: { maxBytes: string }) => {
     try {
+      const files = store();
+      if (files.transport === "api") {
+        // Stream the file's bytes through the service's content route.
+        const maxBytes = parseIntFlag(opts.maxBytes, "max-bytes", { min: 0 });
+        const { chunks } = await collectHostedBytes(files as ApiStore, fileId, maxBytes > 0 ? maxBytes : undefined);
+        for (const chunk of chunks) process.stdout.write(chunk);
+        return;
+      }
       const file = getFile(requireId(fileId, "files"))!;
       const source = getSource(file.source_id);
       if (!source || source.type !== "local") { console.error(chalk.red("cat only works with local sources")); process.exit(1); }
@@ -1637,15 +1755,28 @@ program
     segmentChars: string;
     redact: string[];
   }) => {
-    requireLocalTransport("files extract-snapshot");
     try {
       const maxBytes = parseIntFlag(opts.maxBytes, "max-bytes", { min: 1 });
       const maxSegmentChars = parseIntFlag(opts.segmentChars, "segment-chars", { min: 256 });
-      const snapshot = await extractTextSnapshotFromFile(requireId(fileId, "files"), {
-        max_bytes: maxBytes,
-        max_segment_chars: maxSegmentChars,
-        redact_patterns: opts.redact.map((pattern) => new RegExp(pattern, "g")),
-      });
+      const redactPatterns = opts.redact.map((pattern) => new RegExp(pattern, "g"));
+      const files = store();
+      let snapshot;
+      if (files.transport === "api") {
+        // Server-side extraction (bounded, redacted), snapshot assembled
+        // client-side — identical snapshot semantics on both transports.
+        const result = await (files as ApiStore).extractFileText(fileId, {
+          max_bytes: maxBytes,
+          max_segment_chars: maxSegmentChars,
+          redact_patterns: opts.redact,
+        });
+        snapshot = buildExtractionSnapshot(result);
+      } else {
+        snapshot = await extractTextSnapshotFromFile(requireId(fileId, "files"), {
+          max_bytes: maxBytes,
+          max_segment_chars: maxSegmentChars,
+          redact_patterns: redactPatterns,
+        });
+      }
 
       if (opts.json) {
         console.log(JSON.stringify(snapshot, null, 2));
@@ -1703,7 +1834,7 @@ knowledge
     includeEvidenceAssets?: boolean;
     json?: boolean;
   }) => {
-    requireLocalTransport("files knowledge manifest");
+    announceFilesLocalMode();
     try {
       const limit = parseIntFlag(opts.limit, "limit", { min: 1 });
       const format = parseManifestFormat(opts.format);
@@ -1769,7 +1900,7 @@ knowledge
     segmentChars: string;
     json?: boolean;
   }) => {
-    requireLocalTransport("files knowledge doctor");
+    announceFilesLocalMode();
     try {
       const report = await doctorKnowledgeSources({
         source_refs: sourceRefs,
@@ -1824,7 +1955,7 @@ knowledge
     signedUrlExpires: string;
     json?: boolean;
   }) => {
-    requireLocalTransport("files knowledge resolve");
+    announceFilesLocalMode();
     try {
       const mode = parseResolveMode(opts.mode);
       const result = await resolveKnowledgeSourceRef(sourceRef, {
@@ -1873,7 +2004,7 @@ knowledgeOutbox
     limit: string;
     json?: boolean;
   }) => {
-    requireLocalTransport("files knowledge outbox poll");
+    announceFilesLocalMode();
     try {
       const result = pollKnowledgeSourceOutbox({
         consumer_id: opts.consumer,
@@ -1899,7 +2030,7 @@ knowledgeOutbox
   .description("Acknowledge source change outbox progress")
   .option("--json", "Output as JSON")
   .action((consumerId: string, cursor: string, opts: { json?: boolean }) => {
-    requireLocalTransport("files knowledge outbox ack");
+    announceFilesLocalMode();
     try {
       const checkpoint = acknowledgeKnowledgeSourceOutbox(
         consumerId,
@@ -1941,7 +2072,7 @@ program
   .command("watch")
   .description("Start file watcher for all local sources (foreground daemon)")
   .action(async () => {
-    requireLocalTransport("files watch");
+    announceFilesLocalMode();
     const machine = getCurrentMachine();
     const { watchSource } = await import("../lib/watcher.js");
     const localSources = listSources(machine.id).filter((s) => s.enabled && s.type === "local");
@@ -1993,8 +2124,8 @@ config
 
 program
   .command("db")
-  .description("Show the on-box SQLite database path (local mode only)")
-  .action(() => { requireLocalTransport("files db"); console.log(getDbPath()); });
+  .description("Show the on-box SQLite database path")
+  .action(() => { announceFilesLocalMode(); console.log(getDbPath()); });
 
 // ─── utils ───────────────────────────────────────────────────────────────────
 
@@ -2245,7 +2376,7 @@ program
     else { console.error(chalk.red(`Source not found: ${id}`)); process.exit(1); }
   });
 
-// ─── transport gate (fail closed) ───────────────────────────────────────────
+// ─── transport preamble (fail closed, never silent) ─────────────────────────
 // Every command action runs only when the client transport resolves: either
 // the @hasna/contracts chain supplies a hosted credential (the Keychain item
 // hasna.credentials.files.api-key, ~/.hasna/files/config/credentials, or
@@ -2254,10 +2385,11 @@ program
 // on-box SQLite store (HASNA_FILES_LOCAL=1 / FILES_LOCAL=1 — the retired
 // *_MODE switches are gone). Running WITHOUT either fails closed before any
 // command body executes — no silent local `~/.hasna/files/files.db` session,
-// no false-green exit 0 — and a local run prints one "LOCAL mode" line on
-// stderr so it is never mistaken for an empty hosted run. `--help` and
-// `--version` are handled by commander and never reach an action, so they keep
-// working unconfigured.
+// no false-green exit 0. A run that touches the on-box store — the opt-in
+// store, or an explicitly invoked machine-local command under a hosted
+// credential — prints one "LOCAL mode" line on stderr so it is never mistaken
+// for an empty hosted run. `--help` and `--version` are handled by commander
+// and never reach an action, so they keep working unconfigured.
 program.hook("preAction", () => {
   let storage;
   try {

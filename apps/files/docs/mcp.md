@@ -56,13 +56,16 @@ the default server is not strictly read-only: `register_agent`, `heartbeat`,
 `files_organization_update_review` can write state without a capability flag.
 Read-oriented tools that accept an agent ID may also record activity telemetry.
 
-## Local and API Modes
+## Local and API Transports
 
-Data-plane tools use the same local/API store selection as the CLI. Physical
-operations that need files or ingestion state on the current machine fail in
-API mode. These include source indexing and Google Drive sync, byte download or
-upload, context/extraction/knowledge resolution, imports, copies, starting
-watchers, and all organization-review tools.
+Data-plane tools use the same local/API store selection as the CLI on every
+transport. Physical operations that need files or ingestion state on the
+machine where the MCP server runs — source indexing, Google Drive sync,
+imports, copies, starting watchers, and all organization-review tools — are
+machine operations that run in both environments; under a hosted credential
+they announce the on-box store with the LOCAL-mode line on stderr. Content
+tools (download, file content, extraction, context packs, storage resolution,
+signed URLs) serve the hosted transport through the service's own routes.
 
 Two process-local exceptions do not route through the API store:
 `resolve_id` consults the local SQLite ID resolver even in API mode, and

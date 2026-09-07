@@ -52,30 +52,143 @@ describe("context-pack CLI", () => {
     expect(existsSync(outPath)).toBe(false);
   });
 
-  test("refuses context-pack and search-pack on the hosted transport instead of querying the local island", () => {
+  test("builds context and search packs on the hosted transport through the service's data and extraction routes", async () => {
     testDir = mkdtempSync(join(tmpdir(), "files-cli-context-pack-api-"));
     const dataDir = join(testDir, "data");
     mkdirSync(dataDir, { recursive: true });
-    // Bind the client to the hosted transport. The pack builders read on-box
-    // SQLite/FTS directly, so on the hosted transport they must refuse (as the
-    // MCP tools already do) rather than silently return results from the wrong
-    // island.
+    // A fake files service: file metadata, ranked search, content route, and
+    // the server-side extract-text route the hosted pack builder consumes.
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        const path = url.pathname.replace(/^\/v1/, "") || "/";
+        if (req.headers.get("x-api-key") !== "hf_test_key") {
+          return Response.json({ error: "Unauthorized" }, { status: 401 });
+        }
+        if (req.method === "GET" && path === "/files/f_remote") {
+          return Response.json({
+            id: "f_remote",
+            source_id: "src_remote",
+            machine_id: "m_remote",
+            path: "notes.md",
+            name: "notes.md",
+            ext: ".md",
+            size: 34,
+            mime: "text/markdown",
+            hash: "c".repeat(64),
+            status: "active",
+            indexed_at: "2026-08-18T00:00:00.000Z",
+            created_at: "2026-08-18T00:00:00.000Z",
+            modified_at: "2026-08-18T00:00:00.000Z",
+            tags: [],
+          });
+        }
+        if (req.method === "GET" && path === "/files") {
+          const q = url.searchParams.get("q");
+          if (q !== "loop receipt") return Response.json({ items: [] });
+          return Response.json({
+            items: [{
+              id: "f_remote",
+              source_id: "src_remote",
+              machine_id: "m_remote",
+              path: "notes.md",
+              name: "notes.md",
+              ext: ".md",
+              size: 34,
+              mime: "text/markdown",
+              hash: "c".repeat(64),
+              status: "active",
+              indexed_at: "2026-08-18T00:00:00.000Z",
+              created_at: "2026-08-18T00:00:00.000Z",
+              modified_at: "2026-08-18T00:00:00.000Z",
+              tags: [],
+              rank: 1,
+              search_match_sources: ["metadata"],
+            }],
+          });
+        }
+        if (req.method === "POST" && path === "/files/f_remote/extract-text") {
+          return Response.json({
+            source_ref: "open-files://file/f_remote",
+            file_id: "f_remote",
+            status: "ready",
+            mime: "text/markdown",
+            bytes_read: 34,
+            total_size: 34,
+            truncated: false,
+            redacted: false,
+            segments: [{
+              index: 0,
+              text: "Hosted loop receipt stdout line one.",
+              byte_start: 0,
+              byte_end: 34,
+              char_start: 0,
+              char_end: 34,
+              line_start: 1,
+              line_end: 1,
+            }],
+            metadata: { extractor: "hosted-extractor", max_bytes: 262144, max_segment_chars: 900, supported_mime: true },
+          });
+        }
+        return Response.json({ error: `fake server: no route ${req.method} ${path}` }, { status: 404 });
+      },
+    });
+
     const env = {
       ...process.env,
       HASNA_FILES_DATA_DIR: dataDir,
       HASNA_FILES_DB_PATH: join(dataDir, "files.db"),
-      HASNA_FILES_API_URL: "https://files.md/v1",
-      HASNA_FILES_API_KEY: "hf_test_key_not_used_offline",
+      HASNA_HOME: dataDir,
+      HASNA_FILES_API_URL: `http://127.0.0.1:${server.port}/v1`,
+      HASNA_FILES_API_KEY: "hf_test_key",
     };
 
-    for (const args of [["context-pack", "open-files://file/f_missing"], ["search-pack", "anything"]]) {
-      const result = run(args, env);
-      expect(result.exitCode).toBe(1);
-      expect(new TextDecoder().decode(result.stderr)).toContain("on-box only");
-      expect(stdout(result).trim()).toBe("");
+    try {
+      const context = await runCliAsync(
+        ["context-pack", "open-files://file/f_remote", "--max-excerpt-chars", "40", "--max-total-chars", "40"],
+        env,
+      );
+      expect(context.exitCode).toBe(0);
+      expect(context.stderr).not.toContain("on-box only");
+      const pack = JSON.parse(context.stdout) as {
+        pack_id: string;
+        files: Array<{ file_id: string; source_ref: string; excerpts: Array<{ text: string }> }>;
+        counts: { included_files: number };
+      };
+      expect(pack.pack_id).toMatch(/^ctxpack_/);
+      expect(pack.files[0]?.file_id).toBe("f_remote");
+      expect(pack.files[0]?.source_ref).toBe("open-files://file/f_remote");
+      expect(pack.files[0]?.excerpts[0]?.text).toContain("Hosted loop receipt");
+
+      const search = await runCliAsync(
+        ["search-pack", "loop receipt", "--max-files", "1", "--max-excerpt-chars", "40", "--max-total-chars", "40"],
+        env,
+      );
+      expect(search.exitCode).toBe(0);
+      const searchPack = JSON.parse(search.stdout) as { files: Array<{ file_id: string }>; counts: { included_files: number } };
+      expect(searchPack.files[0]?.file_id).toBe("f_remote");
+    } finally {
+      server.stop(true);
     }
   });
 });
+
+/** Async spawn so an in-process fake server can answer the subprocess. */
+async function runCliAsync(args: string[], env: NodeJS.ProcessEnv): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  const proc = Bun.spawn({
+    cmd: ["bun", "run", cliPath, ...args],
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { exitCode, stdout, stderr };
+}
 
 function seedCliFiles(): NodeJS.ProcessEnv {
   testDir = mkdtempSync(join(tmpdir(), "files-cli-context-pack-"));

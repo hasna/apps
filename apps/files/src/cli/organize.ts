@@ -23,22 +23,19 @@ import type {
   FileOrganizationReviewStatus,
   FileOrganizationRootType,
 } from "../types/index.js";
-import { store } from "../store/index.js";
+import { announceFilesLocalMode } from "../lib/cloud-storage.js";
 
 /**
- * Recorded strong reason for the local-transport guard (local-only-capability-
- * removal workflow, 2026-08-18; reviewer-ruled — do not remove this gate by
- * assumption). Organization reviews operate on locally-imported Google Drive
- * metadata (`google_drive_imported_objects`), which the hosted server has no
- * schema, routes, or producer for (see src/mcp/organization-tools.ts for the
- * full evidence chain and its behavior lock). In api mode this refuses instead
- * of silently touching the local SQLite island (the split-brain guard).
+ * Organization reviews operate on the machine's imported Google Drive metadata
+ * (`google_drive_imported_objects`). They are an explicitly invoked machine
+ * operation — like `config`, `ops`, `peers`, and `watch` — so they run in
+ * BOTH environments; under a hosted credential they announce the on-box store
+ * so a local machine execution is never mistaken for a hosted one. There is no
+ * transport refusal: the storage-mode axis is retired (owner directive
+ * 2026-08-15).
  */
-function requireLocalOrganize(command: string): void {
-  if (store().transport !== "local") {
-    console.error(chalk.red(`${command} runs on-box only and is unavailable in cloud (api) mode; organization reviews operate on locally-imported Google Drive metadata.`));
-    process.exit(1);
-  }
+function announceOnBoxOrganize(): void {
+  announceFilesLocalMode();
 }
 
 interface OrganizationListOptions {
@@ -149,7 +146,7 @@ export function registerOrganizationCommands(program: Command): void {
     .description("Create or refresh Google Drive archive review queues from imported Drive metadata")
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
-      requireLocalOrganize("files organize bootstrap-google-drive");
+      announceOnBoxOrganize();
       const result = bootstrapGoogleDriveOrganizationQueues();
       if (opts.json) {
         printJson(result);
@@ -165,7 +162,7 @@ export function registerOrganizationCommands(program: Command): void {
     .description("Show file organization review progress")
     .option("--json", "Output as JSON")
     .action((opts: { json?: boolean }) => {
-      requireLocalOrganize("files organize stats");
+      announceOnBoxOrganize();
       const stats = getFileOrganizationStats();
       if (opts.json) {
         printJson(stats);
@@ -196,7 +193,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("--offset <n>", "Offset", "0")
     .option("--json", "Output as JSON")
     .action((opts: OrganizationListOptions) => {
-      requireLocalOrganize("files organize list");
+      announceOnBoxOrganize();
       try {
         const rows = listFileOrganizationReviews({
           status: opts.status,
@@ -245,7 +242,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("--note <text>", "Audit-log note for this change")
     .option("--json", "Output as JSON")
     .action((idOrFileId: string, opts: OrganizationReviewOptions) => {
-      requireLocalOrganize("files organize review");
+      announceOnBoxOrganize();
       try {
         const review = updateFileOrganizationReview(idOrFileId, {
           status: opts.status,
@@ -284,7 +281,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("-l, --limit <n>", "Max rows to scan; 0 scans all", "0")
     .option("--json", "Output as JSON")
     .action((opts: OrganizationInferOptions) => {
-      requireLocalOrganize("files organize infer-google-drive");
+      announceOnBoxOrganize();
       try {
         const result = inferGoogleDriveOrganizationCandidates({
           root_type: opts.rootType,
@@ -319,7 +316,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("-l, --limit <n>", "Max rows to scan; 0 scans all", "0")
     .option("--json", "Output as JSON")
     .action((opts: OrganizationApplyDrivePolicyOptions) => {
-      requireLocalOrganize("files organize apply-drive-policy");
+      announceOnBoxOrganize();
       try {
         const result = applyGoogleDriveUnifiedOrganizationPolicy({
           apply: opts.apply,
@@ -362,7 +359,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("--offset <n>", "Offset", "0")
     .option("--json", "Output as JSON")
     .action((opts: OrganizationDuplicateOptions) => {
-      requireLocalOrganize("files organize duplicates");
+      announceOnBoxOrganize();
       try {
         if (opts.owner && opts.unassigned) {
           throw new Error("Use either --owner or --unassigned, not both");
@@ -404,7 +401,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("--offset <n>", "Offset", "0")
     .option("--json", "Output as JSON")
     .action((opts: OrganizationUnassignedOptions) => {
-      requireLocalOrganize("files organize unassigned");
+      announceOnBoxOrganize();
       try {
         if (opts.topLevel && opts.excludeTopLevel.length > 0) {
           throw new Error("Use either --top-level or --exclude-top-level, not both");
@@ -444,7 +441,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("--output <path>", "Write JSON packet to a file")
     .option("--json", "Output as JSON")
     .action((opts: OrganizationApprovalPacketOptions) => {
-      requireLocalOrganize("files organize approval-packet");
+      announceOnBoxOrganize();
       try {
         const packet = buildFileOrganizationApprovalPacket({
           root_type: opts.rootType,
@@ -493,7 +490,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("--include-events", "Include organization audit event history")
     .option("-l, --limit <n>", "Max rows per export section; 0 exports all matching rows", "1000")
     .action((opts: OrganizationExportOptions) => {
-      requireLocalOrganize("files organize export");
+      announceOnBoxOrganize();
       try {
         const format = parseExportFormat(opts.format);
         const audit = exportFileOrganizationAudit({
@@ -519,7 +516,7 @@ export function registerOrganizationCommands(program: Command): void {
     .option("-l, --limit <n>", "Max rows", "50")
     .option("--json", "Output as JSON")
     .action((idOrFileId: string, opts: { limit: string; json?: boolean }) => {
-      requireLocalOrganize("files organize events");
+      announceOnBoxOrganize();
       try {
         const events = listFileOrganizationEvents(idOrFileId, parseLimit(opts.limit, "limit"));
         if (opts.json) {

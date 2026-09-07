@@ -9,7 +9,7 @@
  * canonical `HASNA_FILES_*` names are gone. Those two names survive only as a
  * silent alias inside the shared resolver, for one release.
  *
- * Plain construction still works for a deliberate self-hosted pin:
+ * Plain construction still works for a deliberate pinned-authority pin:
  *   const files = new FilesClient({ baseUrl: "https://files.example.test", apiKey: "k" });
  * The resolver-backed factory is {@link createFilesClientFromEnv}.
  */

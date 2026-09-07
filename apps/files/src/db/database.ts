@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
-import { join } from "path";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "path";
 import { getDataDir } from "../lib/paths.js";
 export { getDataDir } from "../lib/paths.js";
 
@@ -22,6 +23,10 @@ export function getDb(): Database {
   const dbPath = getDbPath();
   if (_db && _dbPath === dbPath) return _db;
   _db?.close();
+  // An explicit HASNA_FILES_DB_PATH may point into a directory that does not
+  // exist yet; surface a clean create instead of SQLite's raw
+  // "unable to open database file".
+  mkdirSync(dirname(dbPath), { recursive: true });
   _db = new Database(dbPath, { create: true });
   _dbPath = dbPath;
   _db.exec("PRAGMA busy_timeout=5000");

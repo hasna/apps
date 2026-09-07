@@ -6,6 +6,8 @@ import {
   parseOpenFilesSourceRef,
 } from "./source-ref.js";
 import { resolveKnowledgeSourceRef } from "./knowledge-resolver.js";
+import type { FilesStore } from "../store/types.js";
+import type { ApiStore } from "../store/index.js";
 import type {
   ExtractedTextSegment,
   ExtractedTextResult,
@@ -73,6 +75,34 @@ interface BuildOptions extends FilesContextPackOptions {
   initialErrors?: FilesContextPackError[];
 }
 
+interface BuildOptions extends FilesContextPackOptions {
+  mode: FilesContextPack["mode"];
+  query?: string;
+  candidates: Candidate[];
+  requestedCount: number;
+  matchedCount: number;
+  initialErrors?: FilesContextPackError[];
+  /**
+   * Per-candidate extraction resolver. Defaults to the on-box
+   * {@link resolveKnowledgeSourceRef} path; the hosted transport injects an
+   * ApiStore-backed resolver so packs built against the files service use the
+   * server's own extraction route.
+   */
+  resolveExtraction?: (candidate: Candidate, limits: NormalizedLimits) => Promise<PackResolution>;
+}
+
+/** The per-file resolution shape {@link buildPack} consumes. */
+interface PackResolution {
+  source_ref: string;
+  revision_id?: string;
+  name?: string;
+  path?: string;
+  content: { mime: string; size?: number; hash?: string };
+  updated_at?: string;
+  status_reason?: string;
+  extracted_text?: ExtractedTextResult;
+}
+
 export async function buildFilesContextPack(opts: FilesContextPackOptions = {}): Promise<FilesContextPack> {
   const resolved = resolveContextCandidates(opts);
   return buildPack({
@@ -103,6 +133,123 @@ export async function buildFilesSearchPack(opts: FilesSearchPackOptions): Promis
     requestedCount: results.length,
     matchedCount: results.length,
   });
+}
+
+/**
+ * Build a context pack against the active transport's dataset. On the hosted
+ * transport candidates resolve through the files service (getFile /
+ * getFileByPath / searchFiles) and extraction runs through the service's
+ * `/v1/files/:id/extract-text` route, so the pack is bounded, cited, and
+ * built from the same data the data-plane commands see. On the local
+ * transport this delegates to {@link buildFilesContextPack} unchanged.
+ */
+export async function buildFilesContextPackFromStore(files: FilesStore, opts: FilesContextPackOptions = {}): Promise<FilesContextPack> {
+  if (files.transport === "local") return buildFilesContextPack(opts);
+  const api = files as ApiStore;
+  const errors: FilesContextPackError[] = [];
+  const candidates: Candidate[] = [];
+  const seen = new Set<string>();
+  for (const input of [...(opts.file_ids ?? []).map((id) => ({ kind: "file_id" as const, value: id })), ...(opts.source_refs ?? []).map((ref) => ({ kind: "source_ref" as const, value: ref }))]) {
+    try {
+      const file = input.kind === "file_id"
+        ? await api.getFile(input.value)
+        : await hostedFileFromSourceRef(api, input.value);
+      if (!file) {
+        errors.push({
+          input: input.value,
+          code: "not_found",
+          message: `File not found for ${input.kind === "file_id" ? "id" : "source ref"}: ${input.value}`,
+        });
+        continue;
+      }
+      const dedupeKey = input.kind === "source_ref" ? input.value : file.id;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      candidates.push({ input: input.value, file, source_ref: input.kind === "source_ref" ? input.value : undefined });
+    } catch (error) {
+      errors.push({
+        input: input.value,
+        code: "invalid_ref",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return buildPack({
+    ...opts,
+    mode: "context",
+    candidates,
+    requestedCount: (opts.file_ids?.length ?? 0) + (opts.source_refs?.length ?? 0),
+    matchedCount: candidates.length,
+    initialErrors: errors,
+    resolveExtraction: hostedPackResolution(api, packRedactPatternStrings(opts)),
+  });
+}
+
+/**
+ * Build a search context pack against the active transport's dataset. The
+ * hosted path searches through the service's ranked `/v1/files` surface and
+ * extracts through the service's extract-text route.
+ */
+export async function buildFilesSearchPackFromStore(files: FilesStore, opts: FilesSearchPackOptions): Promise<FilesContextPack> {
+  if (files.transport === "local") return buildFilesSearchPack(opts);
+  const api = files as ApiStore;
+  const limits = normalizeLimits(opts);
+  const results = await api.searchFiles(opts.query, {
+    source_id: opts.source_id,
+    machine_id: opts.machine_id,
+    tag: opts.tag,
+    ext: opts.ext,
+    search_scope: opts.search_scope,
+    limit: limits.max_files + 1,
+    offset: opts.offset,
+  });
+  return buildPack({
+    ...opts,
+    mode: "search",
+    candidates: results.map((result) => ({ input: result.id, file: result, search: result })),
+    requestedCount: results.length,
+    matchedCount: results.length,
+    resolveExtraction: hostedPackResolution(api, packRedactPatternStrings(opts)),
+  });
+}
+
+/** The pack's full redaction list (built-in + custom) as regex source strings. */
+function packRedactPatternStrings(opts: FilesContextPackOptions): string[] {
+  return [...DEFAULT_REDACT_PATTERNS, ...(opts.redact_patterns ?? [])].map((pattern) => pattern.source);
+}
+
+async function hostedFileFromSourceRef(api: ApiStore, sourceRef: string): Promise<import("../types/index.js").FileWithTags | null> {
+  const parsed = parseOpenFilesSourceRef(sourceRef);
+  if (parsed.kind === "file") return api.getFile(parsed.file_id);
+  if (parsed.kind === "source_path") {
+    const record = await api.getFileByPath(parsed.source_id, parsed.path);
+    return record ? api.getFile(record.id) : null;
+  }
+  throw new Error("Context packs support file and source path refs; asset refs are attachment refs only.");
+}
+
+/** The hosted per-file extraction resolver: server-side extract-text route. */
+function hostedPackResolution(api: ApiStore, redactPatternStrings: string[]): (candidate: Candidate, limits: NormalizedLimits) => Promise<PackResolution> {
+  return async (candidate, limits) => {
+    const file = candidate.file;
+    const extracted = await api.extractFileText(file.id, {
+      max_bytes: limits.max_bytes_per_file,
+      max_segment_chars: limits.max_excerpt_chars,
+      redact_patterns: redactPatternStrings,
+    });
+    return {
+      source_ref: buildOpenFilesFileRef(file.id),
+      name: file.name,
+      path: file.path,
+      content: {
+        mime: extracted.mime || file.mime,
+        size: extracted.total_size ?? file.size,
+        hash: file.hash,
+      },
+      updated_at: file.modified_at ?? undefined,
+      extracted_text: extracted,
+    };
+  };
 }
 
 function resolveContextCandidates(opts: FilesContextPackOptions): {
@@ -178,13 +325,30 @@ async function buildPack(opts: BuildOptions): Promise<FilesContextPack> {
     }
 
     try {
-      const resolution = await resolveKnowledgeSourceRef(candidate.source_ref ?? buildOpenFilesFileRef(candidate.file.id), {
-        mode: "extracted_text",
-        purpose: "agent_context",
-        max_bytes: limits.max_bytes_per_file,
-        max_segment_chars: limits.max_excerpt_chars,
-        redact_patterns: redactionPatterns,
+      const resolveExtraction = opts.resolveExtraction ?? (async (resolvedCandidate: Candidate, resolvedLimits: NormalizedLimits) => {
+        const localResolution = await resolveKnowledgeSourceRef(resolvedCandidate.source_ref ?? buildOpenFilesFileRef(resolvedCandidate.file.id), {
+          mode: "extracted_text",
+          purpose: "agent_context",
+          max_bytes: resolvedLimits.max_bytes_per_file,
+          max_segment_chars: resolvedLimits.max_excerpt_chars,
+          redact_patterns: redactionPatterns,
+        });
+        return {
+          source_ref: localResolution.source_ref,
+          revision_id: localResolution.revision_id,
+          name: localResolution.name,
+          path: localResolution.path,
+          content: {
+            mime: localResolution.content.mime,
+            size: localResolution.content.size,
+            hash: localResolution.content.hash,
+          },
+          updated_at: localResolution.updated_at,
+          status_reason: localResolution.status_reason,
+          extracted_text: localResolution.extracted_text ?? undefined,
+        };
       });
+      const resolution = await resolveExtraction(candidate, limits);
       const extraction = resolution.extracted_text ?? emptyExtraction(resolution.source_ref, candidate.file.id, resolution.revision_id, resolution.status_reason);
       const attachmentRef = buildOpenFilesFileRef(candidate.file.id);
       const revisionRef = resolution.revision_id ? resolution.source_ref : undefined;

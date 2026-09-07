@@ -2,13 +2,12 @@
  * Regression tests for hosted (`/v1`) cloud ingestion of a document as a
  * TAGGED, PROJECT-LINKED file resource.
  *
- * Bug de9aeeed (@hasna/files — no supported cloud-mode path to add/link a
+ * Bug de9aeeed (@hasna/files — no supported hosted-mode path to add/link a
  * project-resource file). The runtime `/v1/files` surface was read-only: it
  * could LIST files, tag them, link them to projects and serve their bytes,
  * but there was NO route to CREATE an ingested file row, and the CLI `files
- * upload` refused in api mode ("runs on-box only ... the files service owns
- * ingestion"). A partner contract PDF therefore could not be stored to the
- * files service as a tagged, project-linked resource.
+ * upload` refused in api mode. A partner contract PDF therefore could not be
+ * stored to the files service as a tagged, project-linked resource.
  *
  * These tests drive the real V1Handler through a fake typed query client (no
  * live Postgres), with an injected upload verifier standing in for the

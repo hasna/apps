@@ -12,7 +12,8 @@ import { buildExtractionSnapshot, extractTextSnapshotFromFile } from "../lib/ext
 import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
-import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
+import { buildFilesContextPackFromStore, buildFilesSearchPackFromStore } from "../lib/context-pack.js";
+import { hostedStorageResolve } from "../lib/hosted-content.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
 import { store } from "../store/index.js";
@@ -199,25 +200,14 @@ function logActivity(input: LogActivityInput): void {
 }
 
 /**
- * Guard for tools that perform physical, machine-local work (indexing a local
- * folder or S3 bucket, syncing Google Drive, moving/copying bytes on local
- * disk, watching the filesystem). These only make sense against the on-box
- * {@link LocalStore}; on the hosted transport the files service owns ingestion,
- * so the thin client refuses rather than silently operating on the wrong
- * machine.
- */
-function requireLocalTransport(tool: string) {
-  if (store().transport !== "local") {
-    return mcpError(`${tool} runs on-box only and is unavailable on the hosted transport; the files service owns ingestion.`);
-  }
-  return null;
-}
-
-/**
  * The active store when the client is on the hosted (api) transport, or null
  * on the local transport. Read-side tools route through the {@link ApiStore}'s
- * hosted routes here; every other tool keeps the `requireLocalTransport` gate
- * above so api mode can never silently fall back to the on-box SQLite island.
+ * hosted routes here. There are no transport refusals: content tools serve the
+ * hosted transport through the ApiStore, and machine-local tools (indexing,
+ * Drive sync, imports, watch, knowledge outbox) operate on the machine where
+ * the MCP server runs in BOTH environments, announcing the on-box store with
+ * {@link announceFilesLocalMode} so a local machine execution is never
+ * mistaken for a hosted one.
  */
 function apiStore(): ApiStore | null {
   const files = store();
@@ -340,9 +330,8 @@ registerTool("add_google_drive_source", "Add a Google Drive source that syncs in
   path_mode: z.enum(["path_based", "id_based"]).optional().default("path_based"),
   delete_behavior: z.enum(["ignore", "mark_deleted"]).optional().default("ignore"),
 }, async (params) => {
-  const denied = requireLocalTransport("add_google_drive_source");
-  if (denied) return denied;
-  if (params.destination_source_id) {
+  announceFilesLocalMode();
+    if (params.destination_source_id) {
     const destination = await store().getSource(params.destination_source_id);
     if (!destination || (destination.type !== "s3" && destination.type !== "local")) {
       return { content: [{ type: "text" as const, text: "Destination source must be an S3 or local source" }], isError: true };
@@ -372,9 +361,8 @@ registerTool("add_google_drive_source", "Add a Google Drive source that syncs in
 registerTool("list_google_drive_items", "List Google Drive items visible to a Google Drive source", {
   source_id: z.string().describe("Google Drive source ID"),
 }, async ({ source_id }) => {
-  const denied = requireLocalTransport("list_google_drive_items");
-  if (denied) return denied;
-  const source = await store().getSource(source_id);
+  announceFilesLocalMode();
+    const source = await store().getSource(source_id);
   if (!source || source.type !== "google_drive") {
     return { content: [{ type: "text" as const, text: "Source must be a Google Drive source" }], isError: true };
   }
@@ -385,9 +373,8 @@ registerTool("list_google_drive_items", "List Google Drive items visible to a Go
 registerTool("preflight_google_drive_sync", "Check Google Drive auth, destination, and visible item scope without uploading", {
   source_id: z.string().describe("Google Drive source ID"),
 }, async ({ source_id }) => {
-  const denied = requireLocalTransport("preflight_google_drive_sync");
-  if (denied) return denied;
-  const source = await store().getSource(source_id);
+  announceFilesLocalMode();
+    const source = await store().getSource(source_id);
   if (!source || source.type !== "google_drive") {
     return { content: [{ type: "text" as const, text: "Source must be a Google Drive source" }], isError: true };
   }
@@ -399,9 +386,8 @@ registerTool("sync_google_drive", "Sync one Google Drive source, or all enabled 
   source_id: z.string().optional().describe("Google Drive source ID"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ source_id, agent_id }) => {
-  const denied = requireLocalTransport("sync_google_drive");
-  if (denied) return denied;
-  const sources = source_id
+  announceFilesLocalMode();
+    const sources = source_id
     ? [await store().getSource(source_id)].filter(Boolean)
     : (await store().listSources()).filter((source) => source.enabled && source.type === "google_drive");
   const results = [];
@@ -427,9 +413,8 @@ registerTool("index_source", "Re-index a source (or all sources on this machine)
   source_id: z.string().optional().describe("Source ID — omit to index all enabled sources"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ source_id, agent_id }) => {
-  const denied = requireLocalTransport("index_source");
-  if (denied) return denied;
-  const machine = await store().currentMachine();
+  announceFilesLocalMode();
+    const machine = await store().currentMachine();
   const toIndex = source_id
     ? [await store().getSource(source_id)].filter(Boolean)
     : (await store().listSources(machine.id)).filter((s) => s.enabled);
@@ -512,10 +497,8 @@ registerTool("build_context_pack", "Build a bounded, cited context pack for expl
   output_local_path: z.string().optional().describe("Write full bounded pack JSON to this local path and return a compact pointer"),
   dry_run: z.boolean().optional().default(false).describe("With output_local_path, preview the pointer without writing"),
 }, async (params) => {
-  const denied = requireLocalTransport("build_context_pack");
-  if (denied) return denied;
   try {
-    const pack = await buildFilesContextPack({
+    const pack = await buildFilesContextPackFromStore(store(), {
       file_ids: params.file_ids,
       source_refs: params.source_refs,
       max_files: params.max_files,
@@ -548,10 +531,8 @@ registerTool("search_context_pack", "Search files and return a bounded, cited co
   output_local_path: z.string().optional().describe("Write full bounded pack JSON to this local path and return a compact pointer"),
   dry_run: z.boolean().optional().default(false).describe("With output_local_path, preview the pointer without writing"),
 }, async (params) => {
-  const denied = requireLocalTransport("search_context_pack");
-  if (denied) return denied;
   try {
-    const pack = await buildFilesSearchPack({
+    const pack = await buildFilesSearchPackFromStore(store(), {
       query: params.query,
       source_id: params.source_id,
       machine_id: params.machine_id,
@@ -604,8 +585,6 @@ registerTool("download_file", "Download a file from S3 to a local path", {
       return mcpError(error instanceof Error ? error.message : String(error));
     }
   }
-  const denied = requireLocalTransport("download_file");
-  if (denied) return denied;
   let resolved;
   try {
     resolved = resolveFileObject(id);
@@ -625,10 +604,10 @@ registerTool("download_file", "Download a file from S3 to a local path", {
   return { content: [{ type: "text", text: `Downloaded to: ${outPath}` }] };
 });
 
-registerTool("upload_file", "Upload a local document (cloud: server-owned ingestion as a tagged project resource; local: to an S3 source)", {
+registerTool("upload_file", "Upload a local document as a tagged, project-linked file resource", {
   local_path: z.string().describe("Path to the local document to upload"),
-  source_id: z.string().optional().describe("Target S3 source ID (local mode only; the cloud service owns its upload source)"),
-  s3_key: z.string().optional().describe("Custom S3 key (local mode; defaults to prefix/filename)"),
+  source_id: z.string().optional().describe("Target S3 source ID (used by the on-box store; the hosted service assigns its own upload source)"),
+  s3_key: z.string().optional().describe("Custom S3 key (on-box uploads; defaults to prefix/filename)"),
   project_id: z.string().optional().describe("Link the uploaded file to a project as a tagged resource"),
   tags: z.array(z.string()).optional().describe("Tags to apply to the uploaded file"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
@@ -856,8 +835,6 @@ registerTool("get_file_url", "Get a pre-signed URL for temporary access to an S3
       return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
     }
   }
-  const denied = requireLocalTransport("get_file_url");
-  if (denied) return denied;
   let resolved;
   try {
     resolved = resolveFileObject(id);
@@ -872,9 +849,18 @@ registerTool("get_file_url", "Get a pre-signed URL for temporary access to an S3
 
 registerTool("resolve_file_storage", "Resolve a file to its current object storage location", {
   id: z.string().describe("File ID"),
-}, ({ id }) => {
-  const denied = requireLocalTransport("resolve_file_storage");
-  if (denied) return denied;
+}, async ({ id }) => {
+  const api = apiStore();
+  if (api) {
+    try {
+      const file = await api.getFile(id);
+      if (!file) return mcpError(`File not found: ${id}`);
+      const summary = await hostedStorageResolve(api, file);
+      return { content: [{ type: "text", text: JSON.stringify(summary, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
+    }
+  }
   try {
     return { content: [{ type: "text", text: JSON.stringify(resolvedFileObjectSummary(resolveFileObject(id)), null, 2) }] };
   } catch (error) {
@@ -922,8 +908,6 @@ registerTool("get_file_content", "Read the content of a text file (local or S3 s
       return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
     }
   }
-  const denied = requireLocalTransport("get_file_content");
-  if (denied) return denied;
   try {
     const limit = normalizeMcpReadLimit(max_bytes);
     const resolution = await resolveKnowledgeSourceRef(buildOpenFilesFileRef(id), {
@@ -965,8 +949,6 @@ registerTool("extract_file_text", "Return chunk-ready extracted text metadata fo
       return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
     }
   }
-  const denied = requireLocalTransport("extract_file_text");
-  if (denied) return denied;
   try {
     const result = await extractTextFromFile(id, {
       max_bytes,
@@ -999,8 +981,6 @@ registerTool("extract_file_snapshot", "Return a deterministic extraction snapsho
       return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
     }
   }
-  const denied = requireLocalTransport("extract_file_snapshot");
-  if (denied) return denied;
   try {
     const result = await extractTextSnapshotFromFile(id, {
       max_bytes,
@@ -1032,8 +1012,7 @@ registerTool("export_knowledge_manifest", "Export a read-only open-files source 
   include_acl_summary: z.boolean().optional(),
   include_evidence_assets: z.boolean().optional(),
 }, async (params) => {
-  const denyApi = requireLocalTransport("export_knowledge_manifest");
-  if (denyApi) return denyApi;
+  announceFilesLocalMode();
   try {
     if (params.output_local_path || params.output_s3_source_id || params.output_s3_key) {
       const denied = requireMcpCapability("export_knowledge_manifest", "mutations");
@@ -1079,9 +1058,8 @@ registerTool("resolve_knowledge_source", "Resolve an open-files:// source ref wi
   agent_id: z.string().optional(),
   session_id: z.string().optional(),
 }, async (params) => {
-  const denied = requireLocalTransport("resolve_knowledge_source");
-  if (denied) return denied;
-  try {
+  announceFilesLocalMode();
+    try {
     const result = await resolveKnowledgeSourceRef(params.source_ref, {
       mode: params.mode as KnowledgeSourceResolveMode,
       purpose: params.purpose,
@@ -1113,9 +1091,8 @@ registerTool("doctor_knowledge_sources", "Diagnose open-files source refs for kn
   max_bytes: z.number().optional().default(262144),
   segment_chars: z.number().optional().default(4000),
 }, async (params) => {
-  const denied = requireLocalTransport("doctor_knowledge_sources");
-  if (denied) return denied;
-  try {
+  announceFilesLocalMode();
+    try {
     const result = await doctorKnowledgeSources({
       source_refs: params.source_refs,
       source_id: params.source_id,
@@ -1142,9 +1119,8 @@ registerTool("resolve_extracted_text", "Resolve extracted text for an open-files
   max_bytes: z.number().optional().default(1048576),
   segment_chars: z.number().optional().default(4000),
 }, async ({ source_ref, purpose, max_bytes, segment_chars }) => {
-  const denied = requireLocalTransport("resolve_extracted_text");
-  if (denied) return denied;
-  try {
+  announceFilesLocalMode();
+    try {
     parseOpenFilesSourceRef(source_ref);
     const result = await resolveKnowledgeSourceRef(source_ref, {
       mode: "extracted_text",
@@ -1171,9 +1147,8 @@ registerTool("poll_knowledge_outbox", "Poll open-files source change outbox even
   file_id: z.string().optional(),
   limit: z.number().optional().default(100),
 }, async (params) => {
-  const denied = requireLocalTransport("poll_knowledge_outbox");
-  if (denied) return denied;
-  try {
+  announceFilesLocalMode();
+    try {
     const result = pollKnowledgeSourceOutbox({
       consumer_id: params.consumer_id,
       after_cursor: params.after_cursor,
@@ -1192,9 +1167,8 @@ registerTool("ack_knowledge_outbox", "Acknowledge open-files source change outbo
   consumer_id: z.string(),
   cursor: z.number(),
 }, async ({ consumer_id, cursor }) => {
-  const denied = requireLocalTransport("ack_knowledge_outbox");
-  if (denied) return denied;
-  try {
+  announceFilesLocalMode();
+    try {
     const checkpoint = acknowledgeKnowledgeSourceOutbox(consumer_id, cursor);
     return { content: [{ type: "text", text: JSON.stringify(checkpoint, null, 2) }] };
   } catch (error) {
@@ -1260,8 +1234,6 @@ registerTool("describe_file", "Get file metadata + first lines of content in one
       return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], isError: true };
     }
   }
-  const denied = requireLocalTransport("describe_file");
-  if (denied) return denied;
   let resolved;
   try {
     resolved = resolveFileObject(id);
@@ -1333,9 +1305,8 @@ registerTool("copy_file", "Copy a file to another source (local→S3, S3→local
   dest_path: z.string().optional().describe("Custom destination path"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ file_id, dest_source_id, dest_path, agent_id }) => {
-  const denied = requireLocalTransport("copy_file");
-  if (denied) return denied;
-  const file = await store().getFile(file_id);
+  announceFilesLocalMode();
+    const file = await store().getFile(file_id);
   if (!file) return { content: [{ type: "text" as const, text: `File not found: ${file_id}` }], isError: true };
   const srcSource = await store().getSource(file.source_id);
   const dstSource = await store().getSource(dest_source_id);
@@ -1491,9 +1462,8 @@ registerTool("import_from_url", "Import a file from any URL (iCloud, Google Driv
   tags: z.array(z.string()).optional().describe("Tags to apply after import"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ url: fileUrl, dest_source_id, dest_path, tags: importTags, agent_id }) => {
-  const denied = requireLocalTransport("import_from_url");
-  if (denied) return denied;
-  const source = await store().getSource(dest_source_id);
+  announceFilesLocalMode();
+    const source = await store().getSource(dest_source_id);
   if (!source) return { content: [{ type: "text" as const, text: `Source not found: ${dest_source_id}` }], isError: true };
 
   try {
@@ -1560,9 +1530,8 @@ registerTool("import_from_local", "Import a file from any local path into a mana
   copy: z.boolean().optional().default(true).describe("true=copy (default), false=move"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ path: srcPath, dest_source_id, dest_path, tags: importTags, copy, agent_id }) => {
-  const denied = requireLocalTransport("import_from_local");
-  if (denied) return denied;
-  const source = await store().getSource(dest_source_id);
+  announceFilesLocalMode();
+    const source = await store().getSource(dest_source_id);
   if (!source) return { content: [{ type: "text" as const, text: `Source not found: ${dest_source_id}` }], isError: true };
   if (!existsSync(srcPath)) return { content: [{ type: "text" as const, text: `File not found: ${srcPath}` }], isError: true };
 
@@ -1609,9 +1578,8 @@ registerTool("bulk_import", "Import multiple files at once from URLs or local pa
   dest_source_id: z.string().describe("Destination source ID"),
   agent_id: z.string().optional().describe("Agent ID for activity tracking"),
 }, async ({ items, dest_source_id, agent_id }) => {
-  const denied = requireLocalTransport("bulk_import");
-  if (denied) return denied;
-  let imported = 0;
+  announceFilesLocalMode();
+    let imported = 0;
   let failed = 0;
   const errors: string[] = [];
 
@@ -1817,9 +1785,8 @@ registerTool("list_agents", "List all registered agents.", {}, async () => {
 registerTool("watch_source", "Start watching a local source for file changes (real-time indexing)", {
   source_id: z.string().describe("Source ID (must be a local source)"),
 }, async ({ source_id }) => {
-  const denied = requireLocalTransport("watch_source");
-  if (denied) return denied;
-  const source = await store().getSource(source_id);
+  announceFilesLocalMode();
+    const source = await store().getSource(source_id);
   if (!source) return { content: [{ type: "text" as const, text: `Source not found: ${source_id}` }], isError: true };
   if (source.type !== "local") return { content: [{ type: "text" as const, text: "watch_source only works with local sources" }], isError: true };
   const { watchSource } = await import("../lib/watcher.js");

@@ -7,17 +7,19 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { buildServer } from "./index.js";
 
 /**
- * Behavior lock for the per-tool transport triage of the 26 `requireLocalTransport`
- * gates (local-only-capability-removal workflow, task c4459d0c, 2026-08-18):
+ * Behavior lock for the per-tool transport triage of the retired
+ * `requireLocalTransport` gates (allcmds campaign, owner directive 2026-08-15 —
+ * the storage-mode axis is retired):
  *
  * Read-side tools are ported to the hosted /v1 path: `download_file`,
  * `get_file_content`, `extract_file_text`, `extract_file_snapshot`,
  * `describe_file`, and `get_file_url` must route through the ApiStore's hosted
- * routes in api mode instead of refusing. Write/ingest/mechanism-local tools
- * keep the local-transport guard, and the api-mode refusal must fire with the
- * documented reason — never silently reading or writing the local SQLite island
- * (the split-brain this guard exists to close). These tests make both halves
- * checkable as behavior, not prose.
+ * routes in api mode. Context packs and `resolve_file_storage` also serve the
+ * hosted transport. Machine-local tools (indexing, Drive sync, imports,
+ * watch, knowledge outbox, organization) run their machine operation in BOTH
+ * environments — they announce the on-box store with the LOCAL-mode line under
+ * a hosted credential and never refuse with transport vocabulary. These tests
+ * make both halves checkable as behavior, not prose.
  */
 
 const ENV_KEYS = [
@@ -25,6 +27,7 @@ const ENV_KEYS = [
   "HASNA_FILES_DB_PATH",
   "HASNA_FILES_API_URL",
   "HASNA_FILES_API_KEY",
+  "HASNA_HOME",
   "OPEN_FILES_MCP_ALLOW_DOWNLOADS",
   "OPEN_FILES_MCP_ALLOW_SIGNED_URLS",
   "OPEN_FILES_MCP_ALLOW_ALL",
@@ -39,6 +42,10 @@ function setLocalMode() {
   testDir = mkdtempSync(join(tmpdir(), "files-mcp-transport-"));
   process.env.HASNA_FILES_DATA_DIR = testDir;
   process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
+  // Isolate the credential disk tier from the station's real credentials file
+  // (~/.hasna/files/config/credentials) so fake-URL tests never trip the
+  // mixed-authority refusal.
+  process.env.HASNA_HOME = testDir;
   delete process.env.HASNA_FILES_API_URL;
   delete process.env.HASNA_FILES_API_KEY;
   process.env.OPEN_FILES_MCP_ALLOW_DOWNLOADS = "1";
@@ -437,19 +444,51 @@ describe("ported read-side MCP tools on the hosted (api) transport", () => {
       await close();
     }
   });
+
+  test("build_context_pack serves the hosted transport through the service's data and extraction routes", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({
+        name: "build_context_pack",
+        arguments: { file_ids: ["f_hosted1"], max_files: 1, max_excerpts: 1, max_excerpt_chars: 20 },
+      });
+      expect(result.isError).not.toBe(true);
+      const parsed = JSON.parse(callText(result)) as {
+        pack_id: string;
+        files: Array<{ file_id: string; source_ref: string; excerpts: Array<unknown> }>;
+      };
+      expect(parsed.pack_id.startsWith("ctxpack_")).toBe(true);
+      expect(parsed.files[0]?.file_id).toBe("f_hosted1");
+      expect(parsed.files[0]?.source_ref).toBe("open-files://file/f_hosted1");
+    } finally {
+      await close();
+    }
+  });
+
+  test("resolve_file_storage signs the hosted route and returns the storage summary", async () => {
+    const { client, close } = await connectedClient();
+    try {
+      const result = await client.callTool({ name: "resolve_file_storage", arguments: { id: "f_hosted1" } });
+      expect(result.isError).not.toBe(true);
+      const parsed = JSON.parse(callText(result)) as { kind: string; provider: string; url: string };
+      expect(parsed.kind).toBe("s3");
+      expect(parsed.provider).toBe("hosted-service");
+      expect(parsed.url).toBe("https://s3.example.test/presigned-f_hosted1");
+    } finally {
+      await close();
+    }
+  });
 });
 
-// ─── Kept local-only tools: api-mode refusal with the recorded reason ─────────
+// ─── Machine-local tools: no transport refusal in api mode ────────────────────
 
-describe("write/ingest MCP tools keep the local-transport guard in api mode", () => {
-  const LOCAL_ONLY_TOOLS: Array<{ tool: string; args: Record<string, unknown> }> = [
+describe("machine-local MCP tools run in api mode (no transport refusal)", () => {
+  const MACHINE_TOOLS: Array<{ tool: string; args: Record<string, unknown> }> = [
     { tool: "add_google_drive_source", args: { profile: "test-profile" } },
     { tool: "list_google_drive_items", args: { source_id: "src_1" } },
     { tool: "preflight_google_drive_sync", args: { source_id: "src_1" } },
     { tool: "sync_google_drive", args: {} },
     { tool: "index_source", args: {} },
-    { tool: "build_context_pack", args: {} },
-    { tool: "search_context_pack", args: { query: "anything" } },
     { tool: "export_knowledge_manifest", args: {} },
     { tool: "resolve_knowledge_source", args: { source_ref: "open-files://file/f_hosted1" } },
     { tool: "doctor_knowledge_sources", args: {} },
@@ -461,7 +500,6 @@ describe("write/ingest MCP tools keep the local-transport guard in api mode", ()
     { tool: "import_from_local", args: { path: "/tmp/nope.txt", dest_source_id: "src_1" } },
     { tool: "bulk_import", args: { items: [{ url_or_path: "https://example.test/a.txt" }], dest_source_id: "src_1" } },
     { tool: "watch_source", args: { source_id: "src_1" } },
-    { tool: "resolve_file_storage", args: { id: "f_hosted1" } },
   ];
 
   beforeEach(async () => {
@@ -470,15 +508,19 @@ describe("write/ingest MCP tools keep the local-transport guard in api mode", ()
     process.env.OPEN_FILES_MCP_ALLOW_ALL = "1";
   });
 
-  for (const { tool, args } of LOCAL_ONLY_TOOLS) {
-    test(`${tool} refuses in api mode with the recorded reason, never touching the local island`, async () => {
+  for (const { tool, args } of MACHINE_TOOLS) {
+    test(`${tool} executes in api mode without transport-refusal vocabulary`, async () => {
       const { client, close } = await connectedClient();
       try {
         const result = await client.callTool({ name: tool, arguments: args });
-        expect(result.isError).toBe(true);
         const text = callText(result);
-        expect(text).toContain("runs on-box only");
-        expect(text).toContain("hosted transport");
+        // The retired transport gates are gone: no tool may refuse with
+        // on-box/hosted vocabulary. Operational errors against the fake
+        // service for data it does not have (sources, files) are fine.
+        expect(text).not.toContain("on-box only");
+        expect(text).not.toContain("hosted transport");
+        expect(text).not.toContain("local mode only");
+        expect(text).not.toContain("LOCAL mode — operating");
       } finally {
         await close();
       }

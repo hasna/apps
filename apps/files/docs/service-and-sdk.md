@@ -37,7 +37,8 @@ key rotation without a restart:
    used **only** under the explicit opt-in `HASNA_FILES_LOCAL=1` (alias
    `FILES_LOCAL=1`) — local mode is never a default, an unconfigured run never
    creates `~/.hasna/files/files.db` or reports a false-green local session,
-   and every local run prints one `files: LOCAL mode — ...` line on stderr.
+   and every run that touches the on-box store prints one
+   `files: LOCAL mode — ...` line on stderr.
 3. A credential with no explicit URL is complete: the authority defaults to
    the fleet gateway `https://api.hasna.com/files`. An explicit URL without a
    resolvable key is a misconfiguration and fails closed instead of falling
@@ -61,9 +62,9 @@ files-serve --port 19432
 
 The default bind host is `127.0.0.1`; override it with
 `OPEN_FILES_REST_HOST` (or `FILES_REST_HOST`). If the requested port is in use,
-the launcher probes up to 99 subsequent ports. In local mode the launcher also
-starts non-blocking indexing for enabled local sources and schedules configured
-auto-sync peers.
+the launcher probes up to 99 subsequent ports. On the local transport the
+launcher also starts non-blocking indexing for enabled local sources and
+schedules configured auto-sync peers.
 
 The following endpoints do not require `/v1` API-key authentication:
 

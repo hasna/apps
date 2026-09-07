@@ -59,7 +59,7 @@ and IAM are applied as infrastructure change (documented constants in
 5. Verified assets may be linked to app records.
 6. Downloads are signed through `@hasna/files` and recorded in `file_access_events`.
 
-## Local Mode
+## On-Box Storage
 
 Local filesystem storage is allowed for development, tests, and offline
 deployments. The default evidence provider is S3; select local storage with
@@ -93,12 +93,12 @@ apps that already use evidence-specific configuration.
 
 Evidence operations use the active files store:
 
-- In local mode, evidence metadata is in SQLite. Per-call CLI/MCP/SDK storage
-  overrides are honored and bytes may use local storage or S3.
-- In API mode, evidence metadata is in the service's PostgreSQL database and
-  the service owns storage configuration. Client bucket, profile, endpoint,
-  prefix, and local-root overrides are ignored by the API store so a thin
-  client cannot redirect the vault.
+- On the local transport, evidence metadata is in SQLite. Per-call CLI/MCP/SDK
+  storage overrides are honored and bytes may use local storage or S3.
+- On the hosted (API) transport, evidence metadata is in the service's
+  PostgreSQL database and the service owns storage configuration. Client
+  bucket, profile, endpoint, prefix, and local-root overrides are ignored by
+  the API store so a thin client cannot redirect the vault.
 - There is no local/remote metadata synchronization command. PostgreSQL schema
   changes are applied by the service-only `files-migrate` executable.
 - Bytes move only through evidence, S3, Google Drive import, upload, download,

@@ -8,7 +8,7 @@ import {
   listFileOrganizationReviews,
   updateFileOrganizationReview,
 } from "../db/organization.js";
-import { store } from "../store/index.js";
+import { announceFilesLocalMode } from "../lib/cloud-storage.js";
 
 type ToolHandler = (params: any) => unknown | Promise<unknown>;
 type RegisterTool = (
@@ -30,33 +30,18 @@ function err(error: unknown) {
 }
 
 /**
- * Recorded strong reason for the local-transport guard (local-only-capability-
- * removal workflow, 2026-08-18; reviewer-ruled — do not remove this gate by
- * assumption).
- *
- * Organization is a review workflow over Google-Drive-imported metadata. Its
- * data plane (`google_drive_imported_objects`, `file_organization_reviews`,
- * `file_organization_events`) exists ONLY on-box: the hosted server has no
- * schema and no routes for these tables (server/migrate.ts, pg-store.ts,
- * v1.ts), and the producer — `sync_google_drive` — is itself local-only
- * (machine-bound Drive OAuth tokens in ~/.hasna/files) and refuses in api
- * mode, as do the downstream FTS refresh and knowledge-outbox consumers.
- * A server-side port with no hosted producer would be a vacuous data plane
- * (bootstrap scans an empty table); moving the Drive sync server-side would
- * require the owner's Drive OAuth credentials in the cloud, which is a
- * secret-bearing authority boundary, not a port. Commit 5ff9700ef (2026-07-08)
- * already applied this ruling after adversarial review found the split-brain:
- * the evidence subsystem was ported to the cloud; organization was guarded.
- * Behavior lock: src/mcp/organization-tools.test.ts.
+ * Organization is a machine-local review workflow over Google-Drive-imported
+ * metadata (`google_drive_imported_objects`, `file_organization_reviews`,
+ * `file_organization_events`). It is an explicitly invoked machine operation —
+ * like the CLI's `files organize` and `files index` — so it runs in BOTH
+ * environments against the machine's on-box store, announcing it with the
+ * LOCAL-mode line under a hosted credential so a local machine execution is
+ * never mistaken for a hosted one. The storage-mode axis is retired (owner
+ * directive 2026-08-15): there are no transport refusals and no transport-
+ * conditional tool blocks.
  */
-function localOnly(tool: string): { content: Array<{ type: "text"; text: string }>; isError: true } | null {
-  if (store().transport !== "local") {
-    return {
-      content: [{ type: "text", text: `${tool} runs on-box only and is unavailable in cloud (api) mode; organization reviews operate on locally-imported Google Drive metadata.` }],
-      isError: true,
-    };
-  }
-  return null;
+function announceOrganizationOnBox(): void {
+  announceFilesLocalMode();
 }
 
 const reviewStatus = z.enum(["unreviewed", "in_review", "approved", "moved", "duplicate", "ignored"]);
@@ -68,8 +53,7 @@ const exportFormat = z.enum(["json", "jsonl", "csv"]);
 
 export function registerOrganizationTools(registerTool: RegisterTool): void {
   registerTool("files_organization_bootstrap_google_drive", "Create or refresh Google Drive archive review queues", {}, () => {
-    const denied = localOnly("files_organization_bootstrap_google_drive");
-    if (denied) return denied;
+    announceOrganizationOnBox();
     try {
       return ok(bootstrapGoogleDriveOrganizationQueues());
     } catch (error) {
@@ -78,8 +62,7 @@ export function registerOrganizationTools(registerTool: RegisterTool): void {
   });
 
   registerTool("files_organization_stats", "Show file organization review progress", {}, () => {
-    const denied = localOnly("files_organization_stats");
-    if (denied) return denied;
+    announceOrganizationOnBox();
     try {
       return ok(getFileOrganizationStats());
     } catch (error) {
@@ -97,8 +80,7 @@ export function registerOrganizationTools(registerTool: RegisterTool): void {
     limit: z.number().optional().default(50),
     offset: z.number().optional().default(0),
   }, (params) => {
-    const denied = localOnly("files_organization_reviews");
-    if (denied) return denied;
+    announceOrganizationOnBox();
     try {
       return ok(listFileOrganizationReviews(params));
     } catch (error) {
@@ -125,8 +107,7 @@ export function registerOrganizationTools(registerTool: RegisterTool): void {
     actor: z.string().optional(),
     note: z.string().optional(),
   }, (params) => {
-    const denied = localOnly("files_organization_update_review");
-    if (denied) return denied;
+    announceOrganizationOnBox();
     try {
       return ok(updateFileOrganizationReview(params.id_or_file_id, params));
     } catch (error) {
@@ -139,8 +120,7 @@ export function registerOrganizationTools(registerTool: RegisterTool): void {
     include_events: z.boolean().optional(),
     limit: z.number().int().nonnegative().optional().default(1000),
   }, (params) => {
-    const denied = localOnly("files_organization_export_audit");
-    if (denied) return denied;
+    announceOrganizationOnBox();
     try {
       const audit = exportFileOrganizationAudit({
         include_events: params.include_events,
@@ -156,8 +136,7 @@ export function registerOrganizationTools(registerTool: RegisterTool): void {
     id_or_file_id: z.string(),
     limit: z.number().optional().default(50),
   }, ({ id_or_file_id, limit }) => {
-    const denied = localOnly("files_organization_events");
-    if (denied) return denied;
+    announceOrganizationOnBox();
     try {
       return ok(listFileOrganizationEvents(id_or_file_id, limit));
     } catch (error) {

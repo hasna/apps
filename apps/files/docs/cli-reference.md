@@ -23,63 +23,69 @@ resolves (the client appends `/v1`). The unprefixed `FILES_API_URL` /
 With no resolvable credential and no local opt-in, the CLI fails closed — a
 command exits non-zero naming every tier the resolver consulted, and no on-disk
 SQLite store is created, no `*-local-fallback` event is emitted. The local
-transport is used only under the explicit opt-in `HASNA_FILES_LOCAL=1` (alias
+transport is used under the explicit opt-in `HASNA_FILES_LOCAL=1` (alias
 `FILES_LOCAL=1`) — the retired `HASNA_FILES_LOCAL_MODE` /
-`FILES_LOCAL_MODE`/`*_STORAGE_MODE` switches are gone — and every local run
-prints one `files: LOCAL mode — ...` line on stderr. Local mode uses the
-resolver-resolved data root (`~/.local/share/hasna/files/files.db` on Linux,
+`FILES_LOCAL_MODE`/`*_STORAGE_MODE` switches are gone — and every run that
+touches the on-box store prints one `files: LOCAL mode — ...` line on stderr.
+Local mode uses the resolver-resolved data root
+(`~/.local/share/hasna/files/files.db` on Linux,
 `~/Library/Application Support/Hasna/files/files.db` on macOS; the legacy
 `~/.hasna/files/files.db` stays effective until migrated or `HASNA_DATA_HOME`
 is set).
 
-Commands marked **on-box** require local files, a local SQLite index, or local
-ingestion state and fail explicitly on the hosted transport. Commands marked
-**data plane** route through either the local or the hosted API store.
-**Process-local** commands manage configuration, event state, or diagnostics on
-the machine where they run.
+The storage-mode axis is retired: **every command runs on every transport**.
+Data-plane commands route through the Store, so they read and write whatever
+dataset the configured transport serves. Content commands (`cat`, `open`,
+`where`, `resolve`, `extract-snapshot`, context packs, `search-index`) have
+hosted implementations that use the service's own content/sign/extract routes.
+Machine commands (`index`, Google Drive sync, `peers`, `sync`, `watch`, `db`,
+`organize`, `knowledge`) operate on the machine where the CLI runs in BOTH
+environments — they are explicit machine operations, and a hosted-configured
+run that touches the on-box store announces it on stderr. There are no
+transport-conditional refusals.
 
 ## Top-Level Commands
 
-| Command | Purpose | Availability |
-| --- | --- | --- |
-| `files sources` | Manage local, S3, and Google Drive source records | Mixed; see below |
-| `files index [source-id]` | Index all enabled sources or one source | On-box |
-| `files machines` | List known machines | Data plane |
-| `files search <query>` | Search metadata and derived content | Data plane |
-| `files context-pack [file-ids...]` | Build a bounded cited pack from IDs or refs | On-box |
-| `files search-pack <query>` | Search and build a bounded cited pack | On-box |
-| `files search-index` | Manage derived search documents and FTS | On-box |
-| `files list` (`ls`) | List files | Data plane |
-| `files tag <file-id> <tags...>` | Add tags | Data plane |
-| `files untag <file-id> <tags...>` | Remove tags | Data plane |
-| `files tags` | List tags | Data plane |
-| `files download <file-id> [dest]` | Resolve/download bytes | On-box |
-| `files upload <local-path> [source-id] [s3-key]` | Upload a local document. Cloud (api) mode: server-owned ingestion into the files service, optionally tagged + linked to a project (`--project`, `--tag`). Local mode: upload to an S3 source and reindex | Data plane |
-| `files collections` | Manage collections | Data plane |
-| `files projects` | Manage projects | Data plane |
-| `files project-panel` | Build a project-panel contract from local data | Process-local |
-| `files info <file-id>` | Show file metadata | Data plane |
-| `files resolve <file-id>` | Resolve the current byte-storage location | On-box |
-| `files stats` | Show aggregate statistics | Data plane |
-| `files dupes` | Find duplicate hashes | Data plane |
-| `files peers` | Manage saved peer endpoints | On-box |
-| `files sync <peer-url...>` | Pull file indexes from peer servers | On-box |
-| `files open <file-id>` | Open a local file with the OS default app | On-box |
-| `files where <file-id>` | Print a local file's absolute path | On-box |
-| `files cat <file-id>` | Print local file bytes | On-box |
-| `files extract-text <file-id>` | Produce bounded chunk-ready text | On-box |
-| `files extract-snapshot <file-id>` | Produce a deterministic semantic snapshot | On-box |
-| `files knowledge` | Manifest, resolver, doctor, and outbox APIs | On-box |
-| `files evidence` | Manage shared evidence assets | Data plane |
-| `files organize` | Review imported Google Drive metadata | On-box |
-| `files recent` | List recently touched files | Data plane |
-| `files watch` | Watch enabled local sources in the foreground | On-box |
-| `files ops` | Check/snapshot operational SQLite databases | Process-local |
-| `files config` | Read/write local CLI configuration | Process-local |
-| `files db` | Print the local SQLite path | On-box |
-| `files events` | Emit, list, and replay shared Hasna events | Process-local |
-| `files webhooks` | Manage event webhook/command subscriptions | Process-local |
-| `files remove <source-id>` | Alias for `sources remove` | Data plane |
+| Command | Purpose |
+| --- | --- |
+| `files sources` | Manage local, S3, and Google Drive source records |
+| `files index [source-id]` | Index enabled sources on this machine |
+| `files machines` | List known machines |
+| `files search <query>` | Search metadata and derived content |
+| `files context-pack [file-ids...]` | Build a bounded cited pack from IDs or refs |
+| `files search-pack <query>` | Search and build a bounded cited pack |
+| `files search-index` | Manage derived search documents and FTS |
+| `files list` (`ls`) | List files |
+| `files tag <file-id> <tags...>` | Add tags |
+| `files untag <file-id> <tags...>` | Remove tags |
+| `files tags` | List tags |
+| `files download <file-id> [dest]` | Resolve/download bytes |
+| `files upload <local-path> [source-id] [s3-key]` | Upload a local document as a tagged, project-linked file resource. On the hosted transport the service owns ingestion (`source-id` unused); on the local transport the document uploads to an S3 source and is reindexed |
+| `files collections` | Manage collections |
+| `files projects` | Manage projects |
+| `files project-panel` | Build a project-panel contract |
+| `files info <file-id>` | Show file metadata |
+| `files resolve <file-id>` | Resolve the current byte-storage location (storage summary on-box, signed URL on the hosted transport) |
+| `files stats` | Show aggregate statistics |
+| `files dupes` | Find duplicate hashes |
+| `files peers` | Manage saved peer endpoints on this machine |
+| `files sync <peer-url...>` | Pull file indexes from peer servers |
+| `files open <file-id>` | Open a file with the OS default app (hosted files download to a temp copy first) |
+| `files where <file-id>` | Print a file's current location (absolute on-box path; signed URL on the hosted transport) |
+| `files cat <file-id>` | Print file bytes (hosted files stream through the service's content route) |
+| `files extract-text <file-id>` | Produce bounded chunk-ready text |
+| `files extract-snapshot <file-id>` | Produce a deterministic semantic snapshot |
+| `files knowledge` | Manifest, resolver, doctor, and outbox APIs |
+| `files evidence` | Manage shared evidence assets |
+| `files organize` | Review imported Google Drive metadata |
+| `files recent` | List recently touched files |
+| `files watch` | Watch enabled local sources in the foreground |
+| `files ops` | Check/snapshot operational SQLite databases |
+| `files config` | Read/write local CLI configuration |
+| `files db` | Print the on-box SQLite path |
+| `files events` | Emit, list, and replay shared Hasna events |
+| `files webhooks` | Manage event webhook/command subscriptions |
+| `files remove <source-id>` | Alias for `sources remove` |
 
 `list` and `search` run identically on both backends. In API mode the full
 local filter surface — source, machine, tag, collection, project, extension,
@@ -111,7 +117,9 @@ files sources sync-google-drive [id]
 
 `list`, `add`, `rename`, `enable`, `disable`, and `remove` use the active data
 plane. Google Drive discovery/sync, bootstrap, and shared-drive commands are
-on-box. `add` rejects static access/secret keys; use `--aws-profile` or the AWS
+machine operations that run on the machine where the CLI executes, on both
+transports (announcing the on-box store under a hosted credential).
+`add` rejects static access/secret keys; use `--aws-profile` or the AWS
 provider chain. `bootstrap-prod-files` requires `--bucket` or
 `HASNA_FILES_S3_BUCKET` and has no built-in production bucket.
 
@@ -132,10 +140,12 @@ files search-index rebuild-fts
 `search-index add|list|remove` route through the active data plane: the local
 store writes FTS5 rows, the hosted store writes `/v1` search documents — so a
 document indexed on either backend is searchable by `files search --scope
-content` on that backend. `search-index stats` and `search-index rebuild-fts`
-remain on-box: stats is a local-database diagnostic, and rebuild-fts maintains
-the SQLite FTS5 side table (the hosted store's tsvector is a generated column
-with nothing to rebuild).
+content` on that backend. `search-index stats` computes coverage on the local
+database (on-box) or from the hosted `/v1` API surface (`hosted: true` in the
+JSON). `search-index rebuild-fts` rebuilds the SQLite FTS5 side table on-box;
+on the hosted transport the derived-content index is a server-maintained
+generated column, and the command truthfully reports `refreshed 0` —
+there are no client-side FTS entries to rebuild.
 
 Context packs default to 5 files, 12 excerpts, 900 characters per excerpt,
 6,000 excerpt characters total, and 262,144 bytes read per file. Secret-like
@@ -162,6 +172,9 @@ files sync <peer-url...>
 ```
 
 Source, collection, project, and peer removals require `--yes`.
+
+Peers are a machine registry and peer sync is a machine operation; both run on
+the machine where the CLI executes in either environment.
 
 ## Knowledge Commands
 
@@ -191,10 +204,11 @@ files evidence list
 files evidence audit <asset-id>
 ```
 
-The create/upload commands require organization, app, and kind metadata. Local
-mode honors per-command storage overrides. In API mode evidence metadata and
-storage policy belong to the service; client bucket/local-root overrides are
-not used by the remote store.
+The create/upload commands require organization, app, and kind metadata. Both
+transports are first-class: the local store honors per-command storage
+overrides (`--storage s3|local`, `--local-root`); the hosted store keeps
+evidence metadata and storage policy with the service, and client overrides
+are not used by the remote store.
 
 Evidence is write-once. Use `--provenance-type`, `--provenance-id`,
 `--provenance-ref`, `--evidence-version`, repeatable `--external-ref`, and
@@ -219,8 +233,9 @@ files organize export
 files organize events <id-or-file-id>
 ```
 
-Organization is a metadata review workflow over locally imported Google Drive
-rows. `apply-drive-policy` is a dry run unless `--apply` is supplied.
+Organization is a metadata review workflow over the machine's imported Google
+Drive rows and is a machine operation on both transports. `apply-drive-policy`
+is a dry run unless `--apply` is supplied.
 
 ## Operational, Event, and Configuration Commands
 
