@@ -1,0 +1,5 @@
+---
+"@hasna/logs": patch
+---
+
+`logs-mcp` refuses a deliberate credential tier it cannot honour before serving (hasna/apps#1720 validation, round 2). The startup gate now completes a `HASNA_LOGS_API_KEY_REF` vault pointer once — through the same `@hasna/contracts` completion the transport runs per request — so a pointer this process cannot dereference (no `@hasna/secrets`, no secrets-client configuration, an unreachable vault, an empty item) exits 1 with the resolver's TERMINAL message as the first stderr line before `initialize` is answered, instead of starting and refusing every tool call. The MCP self-telemetry store is resolved inside `buildServer()` rather than at module load, so a `HASNA_PROFILE` naming a profile with no key is diagnosed by the gate with the remedy as the first stderr line rather than thrown from the module's top level behind a Bun source frame. Nothing is created in either case; the completed credential is discarded and the transport keeps re-resolving per request.
