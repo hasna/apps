@@ -19,3 +19,5 @@ Official references checked September 7, 2026:
 `bun scripts/demo-mail-images.tsx` opens a synthetic native demo. Supplying an output path instead creates text/span captures with `testRender`; no API or real email is accessed. The image tests exercise actual native decoding and block fallback, remote opt-in, and disclosure interactions.
 
 Image controls join the reader keyboard focus order: Tab/Shift+Tab focuses a preview or its load action; Enter/Space expands, loads, or collapses it. The synthetic demo uses the same focus provider and verifies expansion, loading, and collapse when writing captures.
+
+External preview URL checks reject credentials, non-HTTPS URLs, common private/loopback literal addresses (including 100.64.0.0/10), IPv6 literals, and local/internal hostname suffixes. These checks do not resolve or pin DNS addresses; they are not a guarantee that a hostname resolves to a public network. Every external preview still requires explicit consent. HTTP, content-type and declared-size rejection immediately cancels the response body.

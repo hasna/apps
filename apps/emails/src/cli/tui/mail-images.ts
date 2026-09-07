@@ -250,10 +250,13 @@ export async function loadMailImage(
       "External images are blocked until you choose Load external image",
     );
   const url = new URL(source.url);
+  // Literal-host protection only: this does not resolve or pin public DNS.
+  const sharedAddress = /^100\.(\d{1,3})\./.exec(url.hostname);
   if (
     url.protocol !== "https:" ||
     url.username ||
     url.password ||
+    (sharedAddress !== null && Number(sharedAddress[1]) >= 64 && Number(sharedAddress[1]) <= 127) ||
     /^(localhost|127\.|0\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[)/i.test(
       url.hostname,
     ) ||
@@ -266,16 +269,23 @@ export async function loadMailImage(
     referrerPolicy: "no-referrer",
     signal: options.signal ?? AbortSignal.timeout(10000),
   });
+  let rejection: string | undefined;
   if (!response.ok)
-    throw new Error(`Image request failed (HTTP ${response.status})`);
-  if (
+    rejection = `Image request failed (HTTP ${response.status})`;
+  else if (
     !supported(
       (response.headers.get("content-type") ?? "").split(";")[0]!.trim(),
     )
   )
-    throw new Error("External URL did not return a supported image");
-  if (Number(response.headers.get("content-length")) > MAX_MAIL_IMAGE_BYTES)
-    throw new Error("Image exceeds the 5 MiB preview limit");
+    rejection = "External URL did not return a supported image";
+  else if (Number(response.headers.get("content-length")) > MAX_MAIL_IMAGE_BYTES)
+    rejection = "Image exceeds the 5 MiB preview limit";
+  if (rejection) {
+    // Release the connection immediately instead of waiting for the request
+    // deadline. A cancellation failure must not hide the validation error.
+    try { await response.body?.cancel(); } catch {}
+    throw new Error(rejection);
+  }
   const reader = response.body?.getReader();
   if (!reader) throw new Error("Image response is empty");
   const chunks: Uint8Array[] = [];

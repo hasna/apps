@@ -156,3 +156,38 @@ test("streamed remote responses cannot bypass preview size limits with missing h
   ).rejects.toThrow("5 MiB");
   expect(cancelled).toBe(true);
 });
+
+test("header rejection cancels response bodies and retains the validation error", async () => {
+  for (const fixture of [
+    { status: 503, headers: { "content-type": "image/png" }, expected: "HTTP 503" },
+    { status: 200, headers: { "content-type": "text/html" }, expected: "supported image" },
+    { status: 200, headers: { "content-type": "image/png", "content-length": String(MAX_MAIL_IMAGE_BYTES + 1) }, expected: "5 MiB" },
+  ]) {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([1])); },
+      cancel() { cancelled = true; throw new Error("fixture cancellation failure"); },
+    });
+    await expect(loadMailImage({ kind: "remote", url: "https://images.example/fixture", label: "Fixture", inline: true }, {
+      allowRemote: true,
+      getAttachment: async () => { throw new Error("Unexpected attachment call"); },
+      fetch: async () => new Response(body, { status: fixture.status, headers: fixture.headers }),
+    })).rejects.toThrow(fixture.expected);
+    expect(cancelled).toBe(true);
+  }
+});
+
+test("shared-address literals are blocked before fetching, without blocking adjacent public ranges", async () => {
+  let calls = 0;
+  const options = {
+    allowRemote: true,
+    getAttachment: async () => { throw new Error("Unexpected attachment call"); },
+    fetch: async () => { calls++; return new Response(png(), { headers: { "content-type": "image/png" } }); },
+  };
+  for (const host of ["100.64.0.1", "100.127.255.254"]) {
+    await expect(loadMailImage({ kind: "remote", url: `https://${host}/fixture`, label: "Fixture", inline: true }, options)).rejects.toThrow("public HTTPS");
+  }
+  expect(calls).toBe(0);
+  for (const host of ["100.63.255.254", "100.128.0.1"]) await loadMailImage({ kind: "remote", url: `https://${host}/fixture`, label: "Fixture", inline: true }, options);
+  expect(calls).toBe(2);
+});
