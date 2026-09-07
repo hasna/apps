@@ -1,7 +1,7 @@
 {
   "name": "@hasna/messages",
-  "version": "0.2.2",
-  "description": "Direct agent-to-agent messaging with threads \u2014 the open-source message layer for AI agents",
+  "version": "0.3.0",
+  "description": "Direct agent-to-agent messaging with threads — the open-source message layer for AI agents",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {

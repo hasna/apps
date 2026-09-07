@@ -5,6 +5,7 @@ import {selfScopedStore,testAuthDeps} from "./auth/test-support.js";
 import {DEFAULT_TENANT_ID} from "./migrations.js";
 import type {TypedQueryClient} from "../../storage-kit/index.js";
 import {fetchProviderSecretStatus,requireProviderSecretOperation} from "../../lib/provider-secret-api.js";
+import type {ManagedProviderSecrets} from "./managed-provider-secrets.js";
 function fixture(){
  const client={query:async()=>({rows:[],rowCount:0}),many:async()=>[],get:async()=>null,one:async()=>({}),execute:async()=>{}} as TypedQueryClient;
  const store=selfScopedStore(client);const tenants:string[]=[];let probes=0;
@@ -24,6 +25,16 @@ test("operator status reports only tenant binding metadata and cannot claim mana
 });
 test("ordinary tenant readers and writers cannot inspect server credential metadata",async()=>{
  const f=fixture();for(const scope of ["emails:read","emails:write"])expect((await f.request([scope]))!.status).toBe(403);expect(f.tenants).toEqual([]);
+});
+test("managed status uses metadata without invoking the credential decrypting resolver",async()=>{
+ const f=fixture();let resolutions=0;
+ f.deps.resolveExternalSender=f.deps.resolveSender;
+ f.deps.resolveSender=async()=>{resolutions++;throw Error("must not unwrap credentials for status");};
+ f.deps.managedProviderSecrets=()=>({metadata:async()=>({roots:[{id:"root",state:"active",created_at:"fixture"}],envelopes:[{provider_id:"bound",root_id:"root",revision:1,updated_at:"fixture"}]})} as unknown as ManagedProviderSecrets);
+ const response=(await f.request())!;expect(response.status).toBe(200);const body=await response.json();
+ expect(body).toMatchObject({checked:false,managed_envelopes:1,activeKeyId:"root"});
+ expect(body.providers[0]).toMatchObject({credential_source:"managed_envelope",externally_managed:false});
+ expect(resolutions).toBe(0);expect(f.probes()).toBe(0);
 });
 test("client validates actual API status, uses credentials and rejects older APIs",async()=>{
  const f=fixture();const status=await fetchProviderSecretStatus({baseUrl:"https://fixture/v1",credentials:[f.token()],fetchImpl:async(input,init)=>(await handleSelfHostedRequest(f.deps,new Request(input,init)))!});expect(status.complete).toBe(true);

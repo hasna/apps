@@ -3093,11 +3093,17 @@ export interface CloudLockResult {
  * agent — the previous local-sqlite lookup 404'd cloud tasks ("Task not found").
  */
 export async function cloudLockTask(client: HasnaStorageClient, id: string, agentId: string): Promise<CloudLockResult> {
+  if (!agentId.trim()) throw new Error("agent_id must not be blank");
   const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/lock`, { agent_id: agentId });
-  if (raw && typeof raw === "object" && "result" in (raw as Record<string, unknown>)) {
-    return (raw as { result: CloudLockResult }).result;
+  const result = (raw && typeof raw === "object" && "result" in raw ? raw.result : raw) as CloudLockResult | null;
+  if (!result || typeof result.success !== "boolean") throw new Error("REMOTE_API_INCOMPATIBLE: task lock receipt is missing a boolean success; inspect before retrying");
+  if (result.success && (
+    result.locked_by !== agentId || typeof result.locked_at !== "string" || !Number.isFinite(Date.parse(result.locked_at)) ||
+    (result.expires_at !== undefined && (typeof result.expires_at !== "string" || !Number.isFinite(Date.parse(result.expires_at)) || Date.parse(result.expires_at) <= Date.parse(result.locked_at)))
+  )) {
+    throw new Error("REMOTE_API_INCOMPATIBLE: task lock receipt does not confirm the requested owner and valid lease; inspect before retrying");
   }
-  return (raw ?? { success: true }) as CloudLockResult;
+  return result;
 }
 
 /** Release a lock on a cloud task (`POST /v1/tasks/:id/unlock`). */
@@ -3107,14 +3113,16 @@ export async function cloudUnlockTask(
   agentId?: string,
   force = false,
 ): Promise<boolean> {
+  if (agentId !== undefined && !agentId.trim()) throw new Error("agent_id must not be blank");
   const raw = await client.transport.post<unknown>(
     `/tasks/${encodeURIComponent(id)}/unlock`,
     { ...(agentId ? { agent_id: agentId } : {}), ...(force ? { force: true } : {}) },
   );
   if (raw && typeof raw === "object" && "success" in (raw as Record<string, unknown>)) {
-    return Boolean((raw as { success: unknown }).success);
+    if (typeof (raw as { success: unknown }).success !== "boolean") throw new Error("REMOTE_API_INCOMPATIBLE: invalid unlock receipt; inspect before retrying");
+    return (raw as { success: boolean }).success;
   }
-  return true;
+  throw new Error("REMOTE_API_INCOMPATIBLE: missing unlock receipt; inspect before retrying");
 }
 
 /** Exact remote CAS (`POST /v1/tasks/:id/stale-lock-handoff`). */
@@ -3168,7 +3176,13 @@ export interface CloudTaskDependencies {
 export async function cloudGetDependencies(client: HasnaStorageClient, id: string): Promise<CloudTaskDependencies> {
   const raw = await client.transport.get<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`);
   const env = (raw ?? {}) as { dependencies?: TaskDependency[]; blocks?: TaskDependency[]; blocked_by?: TaskDependency[] };
-  return { dependencies: env.dependencies ?? [], blocks: env.blocks ?? env.blocked_by ?? [] };
+  const blocks = env.blocks ?? env.blocked_by;
+  if (!Array.isArray(env.dependencies) || !Array.isArray(blocks)) throw new Error("REMOTE_API_INCOMPATIBLE: dependency receipt is incomplete; upgrade the Todos server");
+  for (const edge of [...env.dependencies, ...blocks]) {
+    if (!edge || typeof edge.task_id !== "string" || !edge.task_id || typeof edge.depends_on !== "string" || !edge.depends_on) throw new Error("REMOTE_API_INCOMPATIBLE: invalid dependency edge");
+  }
+  if (env.dependencies.some(edge => edge.task_id !== id) || blocks.some(edge => edge.depends_on !== id)) throw new Error("REMOTE_API_INCOMPATIBLE: dependency edge belongs to another task");
+  return { dependencies: env.dependencies, blocks };
 }
 
 /**
@@ -3314,21 +3328,16 @@ function dedupe(ids: Array<string | null | undefined>): string[] {
 /** Add a dependency edge to a cloud task (`POST /v1/tasks/:id/dependencies`). */
 export async function cloudAddDependency(client: HasnaStorageClient, id: string, dependsOn: string): Promise<TaskDependency> {
   const raw = await client.transport.post<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies`, { depends_on: dependsOn });
-  if (raw && typeof raw === "object" && "dependency" in (raw as Record<string, unknown>)) {
-    return (raw as { dependency: TaskDependency }).dependency;
-  }
-  return raw as TaskDependency;
+  const edge = raw && typeof raw === "object" && "dependency" in raw ? (raw as {dependency: TaskDependency}).dependency : raw as TaskDependency;
+  if (!edge || edge.task_id !== id || edge.depends_on !== dependsOn) throw new Error("REMOTE_API_INCOMPATIBLE: dependency write receipt does not match the requested edge; inspect before retrying");
+  return edge;
 }
 
-/** Remove a dependency edge from a cloud task (`DELETE /v1/tasks/:id/dependencies/:dep`). */
+/** Remove a dependency edge; a missing receipt never means it was removed. */
 export async function cloudRemoveDependency(client: HasnaStorageClient, id: string, dependsOn: string): Promise<boolean> {
-  const raw = await client.transport.del<unknown>(
-    `/tasks/${encodeURIComponent(id)}/dependencies/${encodeURIComponent(dependsOn)}`,
-  );
-  if (raw && typeof raw === "object" && "removed" in (raw as Record<string, unknown>)) {
-    return Boolean((raw as { removed: unknown }).removed);
-  }
-  return true;
+  const raw = await client.transport.del<unknown>(`/tasks/${encodeURIComponent(id)}/dependencies/${encodeURIComponent(dependsOn)}`);
+  if (!raw || typeof raw !== "object" || typeof (raw as {removed?:unknown}).removed !== "boolean") throw new Error("REMOTE_API_INCOMPATIBLE: missing dependency removal receipt; inspect before retrying");
+  return (raw as {removed:boolean}).removed;
 }
 
 /** A verification record returned by the cloud. */

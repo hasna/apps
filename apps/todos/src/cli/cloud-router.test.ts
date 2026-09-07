@@ -1614,6 +1614,22 @@ describe("cloud agent + lock + deps + verification routing (identity/coordinatio
     expect(calls[0]!.body).toEqual({ agent_id: "cli" });
   });
 
+  test("lock rejects successful receipts for another owner or an invalid lease", async () => {
+    for (const invalid of [
+      { locked_by: "another-agent", locked_at: "2026-01-01T00:00:00Z" },
+      { locked_by: "cli", locked_at: "invalid" },
+      { locked_by: "cli" },
+      { locked_by: "cli", locked_at: "2026-01-01T00:00:00Z", expires_at: "invalid" },
+      { locked_by: "cli", locked_at: "2026-01-01T00:00:00Z", expires_at: "2025-01-01T00:00:00Z" },
+    ]) {
+      installFetch(() => ({ body: { result: { success: true, ...invalid } } }));
+      await expect(cloudLockTask(getTodosCloudClient(CLOUD_ENV)!, "t1", "cli")).rejects.toThrow("requested owner and valid lease");
+    }
+    const conflict = { success: false, locked_by: "another-agent", error: "already locked" };
+    installFetch(() => ({ body: { result: conflict } }));
+    await expect(cloudLockTask(getTodosCloudClient(CLOUD_ENV)!, "t1", "cli")).resolves.toEqual(conflict);
+  });
+
   test("unlock -> POST /v1/tasks/:id/unlock, returns success boolean", async () => {
     const calls = installFetch(() => ({ body: { success: true } }));
     const client = getTodosCloudClient(CLOUD_ENV)!;

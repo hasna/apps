@@ -382,11 +382,21 @@ describe("public release gate", () => {
       expect(boundaryFailures([{ path, text: ratchetDts }])).toEqual([]);
     }
 
-    // The admitted-local redaction assignment shape (src/cli/stage-a.ts emit) passes only
-    // in the module that bundles it, and only in that exact shape.
+    // The admitted-local redaction DELETE statement (src/cli/stage-a.ts emit) passes only
+    // in the module that bundles it, and only in that exact shape. The gate strips the
+    // emitted delete and re-tests what remains (release-review P1, 0d22a7aa2 — the gate
+    // used to strip only the retired blanking assignment shape while stage-a deleted).
     expect(
-      boundaryFailures([{ path: "package/dist/cli/index.js", text: 'env.TODOS_API_URL = "";' }]),
+      boundaryFailures([{ path: "package/dist/cli/index.js", text: 'delete env.TODOS_API_URL;' }]),
     ).toEqual([]);
+
+    // The retired blanking assignment is NOT exempt any more: stage-a deletes the alias
+    // (never blanks — declared-but-blank is refused loudly downstream), so a blanking
+    // emission means the source drifted from the gate and must fail.
+    const blankingDrift = boundaryFailures([
+      { path: "package/dist/cli/index.js", text: 'env.TODOS_API_URL = "";' },
+    ]);
+    expect(blankingDrift.map((failure) => failure.check)).toContain("public-text-boundary");
 
     // The runbook retirement sentence passes as a docs surface.
     expect(

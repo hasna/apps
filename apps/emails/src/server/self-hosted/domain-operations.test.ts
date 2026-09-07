@@ -13,7 +13,7 @@ function fixture() {
     applyDomainProvisioning: async (_id: string, patch: object) => { patches.push(patch); return Object.assign(row, patch); },
   } as unknown as TenantScopedStore;
   const sender: SelfHostedSender = { provider: "ses", region: "us-east-1", send: async () => { throw new Error("no mail"); }, verifyDomain: async () => ({ dkim: "verified", spf: "verified", dmarc: "pending" }), checkInboundDomain: async () => ({ ready: true, reason: "receipt rule checked" }) };
-  return { store, row, patches, sender, options: { resolveSender: () => sender } };
+  return { store, row, patches, sender, options: { resolveSender: async () => sender } };
 }
 it("disables outbound without altering verification or inbound readiness", async () => {
   const f = fixture();

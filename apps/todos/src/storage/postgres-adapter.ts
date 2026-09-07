@@ -1,3 +1,4 @@
+import { createPostgresMachineRegistry, validateMachines } from "./machine-registry.js";
 import { randomUUID } from "node:crypto";
 import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, isTerminalStatus } from "../types/index.js";
 import type {
@@ -109,7 +110,7 @@ import {
 } from "./audit-history-import.js";
 import { deterministicUuid } from "../task-manifest/canonical.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "plan_comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
+type RemoteObjectType = "machines" | TodosPostgresSyncRecordType | "comments" | "plan_comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -308,10 +309,11 @@ export function createPostgresTodosStorageAdapter(
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .slice(0, limit),
     },
+    machines: createPostgresMachineRegistry(options.client, options.service ?? "todos", options.tableName ?? DEFAULT_TODOS_POSTGRES_SYNC_TABLE, () => store.ensureSchema()),
     sync: {
       getTasksChangedSince: (since, filters) => getChangedSince(since, filters, store),
       exportSnapshot: () => exportSnapshot(store),
-      importSnapshot: (snapshot, context) => importSnapshot(snapshot, store, context),
+      importSnapshot: (snapshot, context) => importSnapshot(snapshot, store, context, adapter.machines),
     },
     integrity: {
       report: () => store.integrityReport(),
@@ -337,6 +339,17 @@ class PostgresJsonRecordStore {
 
   machineId(context?: TodosStorageContext): string | null {
     return context?.requestId ?? this.sourceMachineId ?? null;
+  }
+
+  /** Serialize graph validation and writes with task deletion on one connection. */
+  async withDependencyGraphTransaction<T>(fn: (store: PostgresJsonRecordStore) => Promise<T>): Promise<T> {
+    await this.ensureSchema();
+    return this.withTaskParentIntegrityTransaction(async client => {
+      const scoped = new PostgresJsonRecordStore({ ...this.options, client });
+      // Schema was ensured before BEGIN; do not run DDL inside this transaction.
+      scoped.schemaReady = Promise.resolve();
+      return fn(scoped);
+    });
   }
 
   async ensureSchema(): Promise<void> {
@@ -2631,38 +2644,42 @@ async function addDependency(
   store: PostgresJsonRecordStore,
   context?: TodosStorageContext,
 ): Promise<TaskDependency> {
-  if (taskId === dependsOn) throw new Error("A task cannot depend on itself");
-  if (!(await store.get<Task>("tasks", taskId))) throw new Error(`Task not found: ${taskId}`);
-  if (!(await store.get<Task>("tasks", dependsOn))) throw new Error(`Task not found: ${dependsOn}`);
-  // Cycle guard: adding taskId->dependsOn creates a cycle if dependsOn can already
-  // reach taskId through the existing edges. BFS over the current dependency set.
-  const edges = await store.list<TaskDependency & { id?: string }>("dependencies");
-  const adjacency = new Map<string, string[]>();
-  for (const edge of edges) {
-    if (!adjacency.has(edge.task_id)) adjacency.set(edge.task_id, []);
-    adjacency.get(edge.task_id)!.push(edge.depends_on);
-  }
-  const queue = [dependsOn];
-  const seen = new Set<string>();
-  while (queue.length) {
-    const node = queue.shift()!;
-    if (node === taskId) throw new Error(`Adding dependency ${taskId} -> ${dependsOn} would create a cycle`);
-    if (seen.has(node)) continue;
-    seen.add(node);
-    for (const next of adjacency.get(node) ?? []) queue.push(next);
-  }
-  const timestamp = new Date().toISOString();
-  const record = { id: dependencyId(taskId, dependsOn), task_id: taskId, depends_on: dependsOn, created_at: timestamp, updated_at: timestamp };
-  await store.upsert("dependencies", record, context);
-  return { task_id: taskId, depends_on: dependsOn };
+  return store.withDependencyGraphTransaction(async store => {
+    if (taskId === dependsOn) throw new Error("A task cannot depend on itself");
+    if (!(await store.get<Task>("tasks", taskId))) throw new Error(`Task not found: ${taskId}`);
+    if (!(await store.get<Task>("tasks", dependsOn))) throw new Error(`Task not found: ${dependsOn}`);
+    // Cycle guard: adding taskId->dependsOn creates a cycle if dependsOn can already
+    // reach taskId through the existing edges. BFS over the current dependency set.
+    const edges = await store.list<TaskDependency & { id?: string }>("dependencies");
+    const adjacency = new Map<string, string[]>();
+    for (const edge of edges) {
+      if (!adjacency.has(edge.task_id)) adjacency.set(edge.task_id, []);
+      adjacency.get(edge.task_id)!.push(edge.depends_on);
+    }
+    const queue = [dependsOn];
+    const seen = new Set<string>();
+    while (queue.length) {
+      const node = queue.shift()!;
+      if (node === taskId) throw new Error(`Adding dependency ${taskId} -> ${dependsOn} would create a cycle`);
+      if (seen.has(node)) continue;
+      seen.add(node);
+      for (const next of adjacency.get(node) ?? []) queue.push(next);
+    }
+    const timestamp = new Date().toISOString();
+    const record = { id: dependencyId(taskId, dependsOn), task_id: taskId, depends_on: dependsOn, created_at: timestamp, updated_at: timestamp };
+    await store.upsert("dependencies", record, context);
+    return { task_id: taskId, depends_on: dependsOn };
+  });
 }
 
 /** Remove a dependency edge. Returns false when the edge did not exist. */
 async function removeDependency(taskId: string, dependsOn: string, store: PostgresJsonRecordStore): Promise<boolean> {
-  const existing = await store.get<unknown>("dependencies", dependencyId(taskId, dependsOn));
-  if (!existing) return false;
-  await store.delete("dependencies", dependencyId(taskId, dependsOn));
-  return true;
+  return store.withDependencyGraphTransaction(async store => {
+    const existing = await store.get<unknown>("dependencies", dependencyId(taskId, dependsOn));
+    if (!existing) return false;
+    await store.delete("dependencies", dependencyId(taskId, dependsOn));
+    return true;
+  });
 }
 
 /**
@@ -3332,6 +3349,7 @@ async function exportSnapshot(store: PostgresJsonRecordStore): Promise<TodosStor
   return {
     exportedAt: new Date().toISOString(),
     source: "postgres",
+    machines: await store.list<import("../types/index.js").Machine>("machines"),
     tasks: await store.list<Task>("tasks"),
     projects: await store.list<Project>("projects"),
     projectMachinePaths: await store.list<NonNullable<TodosStorageSnapshot["projectMachinePaths"]>[number]>("project_machine_paths"),
@@ -3349,8 +3367,11 @@ async function importSnapshot(
   snapshot: TodosStorageSnapshot,
   store: PostgresJsonRecordStore,
   context?: TodosStorageContext,
+  machines?: import("./machine-registry.js").MachineRegistryStore,
 ): Promise<TodosStorageImportResult> {
   const result: TodosStorageImportResult = { inserted: 0, updated: 0, deleted: 0, skipped: 0, errors: [] };
+  if ((snapshot.tombstones ?? []).some(row => (row.object_type as string) === "machines")) { result.errors.push("Machine tombstones require explicit registry lifecycle operations"); return result; }
+  try { if (snapshot.machines !== undefined) validateMachines(snapshot.machines); } catch (e) { result.errors.push(e instanceof Error ? e.message : String(e)); return result; }
   result.errors.push(...validateSnapshotRoutingRecords(snapshot.projects, snapshot.taskLists));
   if (result.errors.length > 0) return result;
   const [existingProjects, existingTaskLists] = await Promise.all([
@@ -3367,6 +3388,14 @@ async function importSnapshot(
   const auditHistory = await preflightAuditHistoryImport(snapshot.auditHistory, snapshot.tombstones ?? [], store);
   result.errors.push(...auditHistory.errors);
   if (result.errors.length > 0) return result;
+  if (snapshot.machines?.length) {
+    try {
+      if (!machines) throw new Error("Machine registry import is unavailable");
+      const receipt = await machines.execute({ action: "import", machines: snapshot.machines });
+      result.inserted += receipt.inserted;
+      result.skipped += receipt.skipped;
+    } catch (error) { result.errors.push(error instanceof Error ? error.message : String(error)); return result; }
+  }
   result.skipped += auditHistory.identical;
   const entries: ReadonlyArray<readonly [
     RemoteObjectType,
@@ -3632,4 +3661,3 @@ async function retryOnTransientPostgresError<T>(
   }
   throw lastError;
 }
-

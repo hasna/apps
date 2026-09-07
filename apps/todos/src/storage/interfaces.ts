@@ -59,6 +59,7 @@ export interface TodosStorageAdapter {
   readonly kind: TodosStorageKind;
   readonly capabilities: TodosStorageCapabilities;
   readonly tasks: TodosTaskStore;
+  readonly machines?: import("./machine-registry.js").MachineRegistryStore;
   readonly projects: TodosProjectStore;
   readonly plans: TodosPlanStore;
   /** Atomic guarded linkage for one existing plan and every current member task. */
@@ -483,6 +484,7 @@ export interface TodosStorageSnapshot {
   tasks: Task[];
   projects: Project[];
   projectMachinePaths?: TodosProjectMachinePath[];
+  machines?: import("../types/index.js").Machine[];
   plans: Plan[];
   agents: Agent[];
   taskLists: TaskList[];

@@ -33,7 +33,7 @@ if (import.meta.main) {
   const testHome = mkdtempSync(join(tmpdir(), "emails-prepublish-"));
   try {
     const env = buildPrepublishTestEnv(process.env, testHome);
-    for (const name of ["config", "data", "cache", "state", "tmp"]) mkdirSync(join(testHome, name));
+    for (const name of ["config", "data", "cache", "state", "tmp"]) mkdirSync(join(testHome, name), { mode: 0o700 });
     const result = spawnSync(process.execPath, ["test", ...process.argv.slice(2)], { stdio: "inherit", env });
     process.exitCode = result.status ?? 1;
   } finally {
