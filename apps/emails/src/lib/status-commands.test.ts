@@ -45,7 +45,7 @@ describe("command suggestion availability", () => {
   it("matches command words and preserves suggestion ordering", () => {
     expect(isCommandAvailableInMode("emails provision domain-report", "self_hosted")).toBe(true);
     expect(isCommandAvailableInMode("emails provision domain example.com", "self_hosted")).toBe(false);
-    expect(keepAvailableCommands(["emails status --json", "emails stats --json", "emails inbox listen", "emails provider list --json"], "self_hosted"))
+    expect(keepAvailableCommands(["emails status --json", "emails stats --json", "emails refresh", "emails provider list --json"], "self_hosted"))
       .toEqual(["emails status --json", "emails stats --json", "emails provider list --json"]);
   });
 
