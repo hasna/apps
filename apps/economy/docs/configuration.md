@@ -54,9 +54,9 @@ export HASNA_ECONOMY_LOCAL=1
 
 The unprefixed `ECONOMY_LOCAL=1` alias is accepted. The opt-in yields to every hosted signal (a URL, a key, or a pointer in the environment outranks it), and a local run prints one line on stderr — `economy: local mode (HASNA_ECONOMY_LOCAL=1) …` — so an unhosted run is never mistaken for a hosted one that came back empty.
 
-Retired `*_STORAGE_MODE` / `*_MODE` variables no longer exist as selectors: `HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`, plus the accounts variants `HASNA_ACCOUNTS_*_MODE`) are a hard error on the client — delete them and let the resolved credential do the routing.
+The retired `*_STORAGE_MODE` / `*_MODE` variables — `HASNA_ECONOMY_STORAGE_MODE`, `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`, plus the accounts variants `HASNA_ACCOUNTS_*_MODE` — are inert: they select nothing, gate nothing, and error nothing (owner directive 2026-08-15). A wrapper may still export `HASNA_ECONOMY_STORAGE_MODE=cloud`; it changes nothing. Transport and backend come from the resolved credential / DSN above.
 
-In cloud-client mode, data commands use the HTTP API, and local auto-sync, explicit `economy sync`, and `economy billing sync` are skipped. Clients never need or use a Postgres DSN.
+In cloud-client mode, data commands use the HTTP API: read commands answer from the API's GET routes (on-box auto-sync is skipped), and the explicit `economy sync` / `economy billing sync` verbs run the same on-box provider ingest against a scratch store and push the rows to `/v1/ingest`. Clients never need or use a Postgres DSN.
 
 ## REST server
 
@@ -71,7 +71,7 @@ economy-serve --port 3456
 
 Without a local token, the current server defaults to `0.0.0.0` and API routes are unauthenticated. Set a token and an intentional bind address before exposing a local-mode server to another host.
 
-## Self-hosted server
+## Server deployment
 
 The server backend follows the database URL alone — `postgresql` when one of these is set, `sqlite` when none is:
 
@@ -81,7 +81,7 @@ ECONOMY_DATABASE_URL
 DATABASE_URL
 ```
 
-`HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`) no longer selects a backend: the server refuses to start and prints a migration hint. Delete it and set a DSN instead. The client follows the same rule — the variables are a hard error there too, and API routing comes from the URL + key pair above.
+`HASNA_ECONOMY_STORAGE_MODE` (and `HASNA_ECONOMY_MODE`, `ECONOMY_STORAGE_MODE`, `ECONOMY_MODE`) never select a backend: the stale variables are inert and the server starts regardless — the DSN alone decides. The client follows the same rule: the variables select nothing, and API routing comes from the URL + key pair above.
 
 Apply migrations with `economy-serve migrate`. `ECONOMY_PG_POOL_MAX` defaults to 5. A non-loopback server also requires one of `HASNA_ECONOMY_API_SIGNING_KEY`, `HASNA_API_SIGNING_KEY`, or `API_KEY_SIGNING_SECRET`; API keys are then verified by `@hasna/contracts`. The signing secret belongs only on the server.
 

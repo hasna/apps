@@ -20,7 +20,7 @@ export function buildServer(): any {
 // on-box agent log files and prices its rows from the local table. Every DATA
 // tool — including `send_feedback` — routes through the Store. It is opened
 // lazily and only after `sync` has already confirmed local mode via isCloudStore,
-// so self_hosted/cloud mode never touches (or creates) a local SQLite file — in
+// so hosted mode never touches (or creates) a local SQLite file — in
 // cloud mode the client reads/writes the shared API only.
 let _db: ReturnType<typeof openDatabase> | undefined
 const localDb = (): ReturnType<typeof openDatabase> => {
@@ -574,7 +574,7 @@ server.tool(
   async ({ sources, json }: { sources?: typeof SYNC_SOURCES[number]; json?: boolean }) => {
     const selected = sources ?? 'all'
     const opts = selected === 'all' ? {} : { [selected]: true } as Record<string, boolean>
-    // self_hosted/cloud mode: the on-box provider files exist on THIS machine, so
+    // hosted mode: the on-box provider files exist on THIS machine, so
     // the client reads them and pushes the ingested rows to the shared API
     // (/v1/ingest) instead of a local SQLite the cloud transport never reads.
     if (isCloudStore()) {

@@ -22,9 +22,9 @@
  *    shared client chain rather than by hand.
  *  - Transport selection is the resolved credential alone: the API when
  *    `@hasna/contracts` resolves an accounts credential for the environment,
- *    else the local JSON registry. Deployment modes no longer exist; any
- *    retired `*_STORAGE_MODE` / `*_MODE` variable still set is a hard error
- *    (owner directive 2026-07-29), never a hint or a selector.
+ *    else the local JSON registry. Deployment modes no longer exist; a stale
+ *    retired `*_STORAGE_MODE` / `*_MODE` variable is inert — ignored, never a
+ *    selector and never an error (owner directive 2026-08-15).
  *
  * When @hasna-internal/subscriptions is published, this file can be replaced
  * by a thin adapter over its SubscriptionsStore (same shape, new env vars).
@@ -196,32 +196,13 @@ class LocalStore implements AccountsStore {
 }
 
 // ---------------------------------------------------------------------------
-// API transport (self-hosted accounts-serve at <API_URL>/v1).
+// API transport (accounts-serve at <API_URL>/v1).
 // @hasna/accounts delegated this to the @hasna/contracts 0.5.2 HTTP transport;
 // the same observable behavior is replicated here with global fetch (default
 // timeout 30s, retries 2 on 408/425/429/5xx with jittered backoff, `status` +
 // `body` on errors), so attribution keeps working against a configured
 // accounts-serve without pulling the doomed package (or its successor) in.
 // ---------------------------------------------------------------------------
-
-const RETIRED_STORAGE_MODE_KEYS = [
-  'HASNA_ACCOUNTS_STORAGE_MODE',
-  'ACCOUNTS_STORAGE_MODE',
-  'HASNA_ACCOUNTS_MODE',
-  'ACCOUNTS_MODE',
-] as const
-
-function assertNoRetiredStorageMode(env: NodeJS.ProcessEnv): void {
-  const legacyKey = RETIRED_STORAGE_MODE_KEYS.find(
-    (key) => Object.hasOwn(env, key) && env[key] !== undefined,
-  )
-  if (!legacyKey) return
-  throw new Error(
-    `${legacyKey} was removed. Deployment modes no longer exist: delete the storage-mode variable. ` +
-      `The accounts registry uses the local JSON store, or the HTTP API selected by ` +
-      `HASNA_ACCOUNTS_API_URL + HASNA_ACCOUNTS_API_KEY.`,
-  )
-}
 
 const RETRY_STATUSES = [408, 425, 429, 500, 502, 503, 504]
 
@@ -324,7 +305,7 @@ function toProfile(account: Record<string, unknown>): Profile {
   return profile
 }
 
-/** Registry backed by the self-hosted accounts-serve API. */
+/** Registry backed by the accounts-serve API. */
 class ApiStore implements AccountsStore {
   readonly transport = 'api' as const
 
@@ -404,15 +385,14 @@ class ApiStore implements AccountsStore {
  * credential for this environment (env `HASNA_ACCOUNTS_API_KEY` / legacy
  * `ACCOUNTS_API_KEY`, the accounts credentials file, or the Keychain, with the
  * authority defaulted to the fleet gateway `https://api.hasna.com/accounts`),
- * else the local JSON registry. Retired `*_STORAGE_MODE` / `*_MODE` variables
- * are a hard error so a half-migrated deployment fails loudly instead of
- * silently reading the wrong dataset.
+ * else the local JSON registry. Stale `*_STORAGE_MODE` / `*_MODE` variables
+ * are ignored — they never select a store and never error (owner directive
+ * 2026-08-15).
  */
 export function resolveStore(
   env: NodeJS.ProcessEnv = process.env,
   options: ResolveAccountsStoreOptions = {},
 ): AccountsStore {
-  assertNoRetiredStorageMode(env)
   const clientEnv = env as Record<string, string | undefined>
   try {
     const credential = resolveCredential(ACCOUNTS_APP, clientEnv, options.credentials)
