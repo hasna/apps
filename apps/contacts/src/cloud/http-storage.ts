@@ -36,6 +36,24 @@ import type { Env } from "./resolver-inputs.js";
 
 export type { Env, QueryParams };
 
+// The shared @hasna/contracts resolver serves hosted-only packages and still
+// appends this sentence to its "no credential resolved" refusal. It describes
+// EVERY client of that resolver; since the storage-mode axis retired, the
+// @hasna/contacts client DOES use the on-box SQLite store whenever no API
+// configuration resolves, so this exact sentence is false for contacts and
+// must not ship on its diagnostic surfaces. Replaced verbatim in displayIssue
+// (the "." closes the resolver's own lead sentence, which ended at the em
+// dash), never reworded: what remains is the resolver's own value-free context.
+const DISPLAY_ISSUE_STALE_SENTENCE = " — public clients never fall back to SQLite or another local store.";
+
+/** Surface a resolver diagnostic issue for status/connection output. Strips the
+ * hosted-only fallback sentence (see above) so diagnostics never contradict
+ * the transport they report; all other message content is preserved as-is. */
+export function displayIssue(issue: string | null): string | null {
+  if (issue === null) return null;
+  return issue.replaceAll(DISPLAY_ISSUE_STALE_SENTENCE, ".");
+}
+
 function assertHttpsBaseUrl(baseUrl: string): void {
   const url = new URL(baseUrl);
   if (url.protocol !== "https:") {

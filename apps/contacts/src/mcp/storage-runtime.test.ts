@@ -78,6 +78,9 @@ describe("contacts connection MCP runtime", () => {
       api_key_source: null,
       active_transport: "local",
     });
+    // The shared resolver's hosted-only sentence must not surface on the local
+    // transport's diagnostic surfaces.
+    expect(String(textPayload(result).issue ?? "")).not.toContain("never fall back to SQLite");
   });
 
   test("reports HTTPS without exposing the API key", async () => {

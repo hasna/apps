@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { resolveContactsClientTransport } from "../cloud/http-storage.js";
+import { displayIssue, resolveContactsClientTransport } from "../cloud/http-storage.js";
 
 function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -22,7 +22,7 @@ function connectionStatus() {
     api_key_source: resolution.apiKeySource,
     api_key_tier: resolution.apiKeyTier,
     misconfigured: resolution.misconfigured,
-    issue: resolution.issue,
+    issue: displayIssue(resolution.issue),
     warning: resolution.warning,
     // The transport the client actually uses: the hosted /v1 API when
     // configured, otherwise the local SQLite store. Nothing is gated.

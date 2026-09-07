@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { getStore } from "../../store/index.js";
-import { ContactsClientConfigurationError, resolveContactsClientTransport } from "../../cloud/http-storage.js";
+import { ContactsClientConfigurationError, displayIssue, resolveContactsClientTransport } from "../../cloud/http-storage.js";
 import { importContacts } from "../../lib/import.js";
 import { exportContacts } from "../../lib/export.js";
 import type { CreateContactInput, Group } from "../../types/index.js";
@@ -48,7 +48,7 @@ program
       apiUrlSource = resolution.apiUrlSource;
       apiKeySource = resolution.apiKeySource;
       apiKeyTier = resolution.apiKeyTier;
-      issue = resolution.issue;
+      issue = displayIssue(resolution.issue);
       if (resolution.configured && resolution.baseUrl) apiLine = resolution.baseUrl;
       const store = getStore();
       const [contacts, companies] = await Promise.all([

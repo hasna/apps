@@ -89,6 +89,10 @@ describe("contacts client CLI runtime", () => {
     const status = runContacts(["status", "--json"], env);
     expect(status.exitCode).toBe(0);
     expect(parseStdout(status)).toMatchObject({ storage: "local (sqlite)" });
+
+    // The shared resolver's hosted-only sentence must not surface on the local
+    // transport's diagnostic surfaces.
+    expect(String(parseStdout(result).issue ?? "")).not.toContain("never fall back to SQLite");
   });
 
   test("resolves the canonical ~/.hasna/contacts/config/credentials file from a bare env", () => {

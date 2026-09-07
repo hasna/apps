@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { KeychainCommandRunner } from "@hasna/contracts/client";
 import {
   ContactsClientConfigurationError,
+  displayIssue,
   resolveContactsClientTransport,
   resolveContactsStorageClient,
 } from "./http-storage.js";
@@ -322,5 +323,20 @@ describe("canonical contacts client transport", () => {
     expect(resolution.apiKeyTier).toBe("env");
     expect(resolution.baseUrl).toBe("https://contacts.example.invalid/v1");
     expect(report).not.toContain("super-secret-value");
+  });
+
+  test("displayIssue strips the shared resolver's hosted-only fallback sentence", () => {
+    const raw =
+      "HASNA_CONTACTS_API_URL is not set and no API key could be resolved for 'contacts'; " +
+      "refusing to create an unauthenticated client — public clients never fall back to SQLite or another local store. " +
+      "Looked in the Keychain (macOS only).";
+    expect(displayIssue(raw)).toBe(
+      "HASNA_CONTACTS_API_URL is not set and no API key could be resolved for 'contacts'; " +
+        "refusing to create an unauthenticated client. " +
+        "Looked in the Keychain (macOS only).",
+    );
+    // Everything else passes through untouched; null stays null.
+    expect(displayIssue(null)).toBeNull();
+    expect(displayIssue("plain issue")).toBe("plain issue");
   });
 });

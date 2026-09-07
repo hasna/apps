@@ -81,6 +81,10 @@ describe("contacts status CLI", () => {
       counts: { contacts: 0, companies: 0 },
     });
     expect(report.error).toBeUndefined();
+    // The shared resolver's hosted-only sentence must not surface: this box's
+    // commands DO use the local SQLite store.
+    expect(String(report.issue ?? "")).not.toContain("never fall back to SQLite");
+    expect(stdoutText(result)).not.toContain("never fall back to SQLite");
 
     const text = runStatus(["status"], testEnv(), false);
     expect(text.exitCode).toBe(0);

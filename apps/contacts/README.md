@@ -160,17 +160,20 @@ readiness fails closed when either is unavailable.
 
 ## Storage and legacy data
 
-The client never opens SQLite or PostgreSQL. The server owns PostgreSQL and all
-authoritative data remains server-side. Inspect the value-free connection state
-with:
+The client has two automatic transports: the hosted `/v1` API (PostgreSQL on
+the server) when an API authority and key resolve, or the on-box SQLite store
+at the XDG data path (`~/.local/share/hasna/contacts/contacts.db`, or
+`HASNA_CONTACTS_DB_PATH`) when no API configuration resolves. PostgreSQL is a
+server-only transport the client never opens. Inspect the value-free connection
+state with:
 
 ```bash
 contacts connection --json
 ```
 
-Retired local databases are never auto-adopted or silently ignored. The
-explicit migration aid only inspects and copies them; it never opens, changes,
-deletes, or selects one as the live store:
+SQLite files from retired releases are never auto-adopted or silently ignored:
+the live client reads and writes only its own data path, and the explicit
+migration aid only inspects and copies files it is pointed at:
 
 ```bash
 contacts legacy inspect --json
@@ -181,8 +184,8 @@ contacts legacy preserve --source /exact/path/contacts.db \
 If a SQLite WAL, journal, or shared-memory sidecar is present, preservation
 refuses to proceed until every legacy process is stopped and the old client has checkpointed the database. To move
 portable contact records, use a legacy release against the preserved copy to
-export JSON, then run `contacts import exported.json` with the HTTPS client
-configured. Existing files are never overwritten.
+export JSON, then run `contacts import exported.json`; import writes into
+whichever transport is active. Existing files are never overwritten.
 
 Preservation rejects source, ancestor, or output replacement races and verifies
 the copied bytes with SHA-256 and stable output metadata before success. If a copy

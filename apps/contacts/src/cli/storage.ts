@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { resolveContactsClientTransport } from "../cloud/http-storage.js";
+import { displayIssue, resolveContactsClientTransport } from "../cloud/http-storage.js";
 
 function connectionStatus() {
   const resolution = resolveContactsClientTransport("contacts");
@@ -12,7 +12,7 @@ function connectionStatus() {
     api_key_source: resolution.apiKeySource,
     api_key_tier: resolution.apiKeyTier,
     misconfigured: resolution.misconfigured,
-    issue: resolution.issue,
+    issue: displayIssue(resolution.issue),
     warning: resolution.warning,
     // The transport the client actually uses: the hosted /v1 API when
     // configured, otherwise the local SQLite store. Nothing is gated.
