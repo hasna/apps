@@ -770,7 +770,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .action(async () => {
       try {
         const { listRegisteredS3Sources } = await import("../../lib/inbox-source-registry.js");
-        const sources = listRegisteredS3Sources();
+        const sources = await listRegisteredS3Sources();
         output(sources, formatSourceList(sources));
       } catch (e) {
         handleError(e);
@@ -794,7 +794,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
         const status = parseSourceStatus(opts.status);
         if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("Provider ID must not be blank.");
         const providerId = opts.provider ? resolveId("providers", opts.provider) : undefined;
-        const source = registerApiS3Source({
+        const source = await registerApiS3Source({
           bucket: opts.bucket,
           prefix: opts.prefix,
           region: opts.region,
@@ -819,7 +819,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .action(async (sourceRef: string) => {
       try {
         const { retireApiS3Source } = await import("../../lib/inbox-source-registry.js");
-        const retired = retireApiS3Source(sourceRef);
+        const retired = await retireApiS3Source(sourceRef);
         output(retired, chalk.green(`✓ Retired S3 source ${retired.id}`));
       } catch (e) {
         handleError(e);
