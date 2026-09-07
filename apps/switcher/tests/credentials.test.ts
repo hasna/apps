@@ -97,7 +97,7 @@ test("binding CLI validates metadata/source flags before creating data or openin
     for (const args of [["credentials","bind","deepseek","--vault-key","fixture/key","--vault-operator","env"],["credentials","list","--vault-key","fixture/key"],["launch","claude","--vault-account","fixture"],["credentials","bind","deepseek","--keychain-service","fixture","--keychain-account","fixture","--vault-key","fixture/key"]]) {
       expect((await command(dir,args)).code).toBe(1);
     }
-    expect((await readdir(dir)).filter(name=>name!=="Library")).toEqual([]); // Bun may create a cache under the isolated HOME.
+    expect((await readdir(dir)).filter(name=>!["Library",".bun"].includes(name))).toEqual([]); // Bun caches under Library on macOS and .bun on Linux; app data must remain absent.
     const bind = await command(dir,["credentials","bind","deepseek","--keychain-service","fixture-provider","--keychain-account","fixture-account"]);
     expect(bind.code,bind.stderr).toBe(0);
     expect(await readdir(join(dir,"data"))).toEqual(["config"]);
