@@ -2,7 +2,7 @@
 import { assertHarnessArguments } from "./harness-arguments";
 import { parseArgs } from "node:util";
 import { SwitcherError } from "./sdk";
-import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, harnessEligible, validateHarnessProvider } from "./domain";
+import { VERSION, Fault, CommandInterrupted, parse, harnessSchema, protocolSchema, providerInputSchema, profileInputSchema, modelPolicySchema, harnessEligible, validateHarnessProvider, type ModelPolicy } from "./domain";
 import { detectHarness, validateHarnessConfiguration } from "./harnesses";
 import { launch, validateOriForPlan, type LaunchBackend } from "./launcher";
 import { openCliRuntime } from "./runtime";
@@ -20,7 +20,7 @@ const HELP = `switcher — launch a coding harness with a provider and its model
   switcher providers delete ID --version N
   switcher models PROVIDER [--refresh] [--search TEXT] [--limit N]
   switcher profiles list|get [ID]
-  switcher profiles add ID --provider ID --harness HARNESS --model MODEL
+  switcher profiles add ID --provider ID --harness HARNESS --model MODEL [--model-policy-file FILE] [--role-model ROLE=MODEL]
   switcher profiles update ID --file profile.json --version N
   switcher profiles delete ID --version N
   switcher launch HARNESS --provider PROVIDER [--model MODEL] [--dry-run]
@@ -52,6 +52,22 @@ switcher --version | --help
 async function readInput(path: string): Promise<unknown> {
   try { return await Bun.file(path).json(); } catch { throw new Error("Input file must be readable, valid JSON."); }
 }
+export async function readModelPolicy(file: string | undefined, roleValues: string[] | undefined): Promise<ModelPolicy | undefined> {
+  if (file && roleValues?.length) throw new Fault(400, "conflicting_options", "Use either --model-policy-file or --role-model, not both.");
+  if (file) return parse(modelPolicySchema, await readInput(file));
+  if (!roleValues?.length) return undefined;
+  const roles: Record<string, string> = {};
+  const valid = new Set(["subagent", "fast", "planning", "review", "summary", "compaction", "weak", "editor"]);
+  for (const item of roleValues) {
+    const split = item.indexOf("=");
+    if (split <= 0 || split === item.length - 1) throw new Fault(400, "invalid_request", "Each --role-model must use ROLE=MODEL.");
+    const role = item.slice(0, split); const model = item.slice(split + 1);
+    if (!valid.has(role)) throw new Fault(400, "invalid_request", `Unknown model policy role: ${role}.`);
+    if (roles[role] !== undefined) throw new Fault(400, "conflicting_options", `Duplicate model policy role: ${role}.`);
+    roles[role] = model;
+  }
+  return parse(modelPolicySchema, {version: 1, roles});
+}
 export async function main(args = process.argv.slice(2)) {
   if (args.length === 1 && args[0] === "__credential-delivery") return deliverVaultCredential();
   const split = args.indexOf("--"); const nativeArgs = split >= 0 ? args.slice(split+1) : [];
@@ -62,6 +78,7 @@ export async function main(args = process.argv.slice(2)) {
     "catalog-url":{type:"string"},"catalog-format":{type:"string"},"catalog-auth-style":{type:"string"},
     "catalog-credential-env":{type:"string"},"catalog-account-id":{type:"string"},"models-path":{type:"string"},"dry-run":{type:"boolean"},provider:{type:"string"},
     harness:{type:"string"},model:{type:"string"},search:{type:"string"},limit:{type:"string"},offset:{type:"string"},
+    "model-policy-file":{type:"string"},"role-model":{type:"string",multiple:true},
     refresh:{type:"boolean"},backend:{type:"string"},cwd:{type:"string"},executable:{type:"string"},"ori-executable":{type:"string"},"state-dir":{type:"string"},timeout:{type:"string"},
     "vault-key":{type:"string"},"vault-url":{type:"string"},"vault-cli":{type:"string"},"vault-account":{type:"string"},
     "keychain-service":{type:"string"},"keychain-account":{type:"string"},origin:{type:"string",multiple:true},
@@ -104,9 +121,9 @@ export async function main(args = process.argv.slice(2)) {
   if (command === "launch" && backend === "direct" && values["ori-executable"] !== undefined)
     throw new Fault(400, "conflicting_options", "--ori-executable requires --backend ori.");
   const mutation = (command === "providers" || command === "profiles") && ["add", "update"].includes(action);
-  if (values.file && (!mutation || provided([...providerFlags, "name", "provider", "harness", "model"])))
+  if (values.file && (!mutation || provided([...providerFlags, "name", "provider", "harness", "model", "model-policy-file", "role-model"])))
     throw new Fault(400, "conflicting_options", "Use --file by itself for provider/profile settings; inline settings cannot override an input file.");
-  if (command === "launch" && !values.provider && provided([...providerFlags, "name", "harness", "model", "search"]))
+  if (command === "launch" && !values.provider && provided([...providerFlags, "name", "harness", "model", "search", "model-policy-file", "role-model"]))
     throw new Fault(400, "conflicting_options", "Use --provider PROVIDER for direct launch settings, or update the saved profile explicitly.");
   if (values.preset && !(command === "providers" && mutation))
     throw new Fault(400, "conflicting_options", "--preset belongs to providers add/update. For direct launches use --provider PRESET.");
@@ -146,6 +163,7 @@ export async function main(args = process.argv.slice(2)) {
     let profileId = action;
     if (values.provider) {
       const harness = parse(harnessSchema, action);
+      const modelPolicy = await readModelPolicy(values["model-policy-file"], values["role-model"]);
       const provider = await resolveLaunchProvider(client, values.provider, {...presetOptions(), harness});
       validateHarnessProvider(harness, provider);
       const catalog = await client.refreshModels(provider.id);
@@ -153,9 +171,9 @@ export async function main(args = process.argv.slice(2)) {
       const selected = catalog.models.find(m => m.id === model);
       if (!selected) throw new Fault(422, "model_missing", "Selected model is not in the provider catalog.");
       if (!harnessEligible(selected,harness)) throw new Fault(422, "model_ineligible", "Selected model explicitly lacks text output or tool support.");
-      profileId = (await ensureLaunchProfile(client, provider, harness, model)).id;
+      profileId = (await ensureLaunchProfile(client, provider, harness, model, modelPolicy)).id;
     } else {
-      if (values.model || values.protocol || values.url || values["credential-env"])
+      if (values.model || values.protocol || values.url || values["credential-env"] || values["model-policy-file"] || values["role-model"])
         throw new Error("Use --provider PROVIDER for a direct launch, or update the saved profile explicitly.");
       const profile = await client.getProfile(profileId);
       if (profile.harness === "gemini") validateHarnessProvider(profile.harness, await client.getProvider(profile.providerId));
@@ -209,7 +227,8 @@ export async function main(args = process.argv.slice(2)) {
     if(action==="get"&&id) {output(await client.getProfile(id));return;}
     if(action==="delete"&&id) {output(await client.deleteProfile(id,currentVersion()));return;}
     if(["add","update"].includes(action)&&id) {
-      const input = parse(profileInputSchema,values.file?await readInput(values.file):{id,name:values.name??id,providerId:values.provider,harness:values.harness,model:values.model});
+      const modelPolicy = await readModelPolicy(values["model-policy-file"], values["role-model"]);
+      const input = parse(profileInputSchema,values.file?await readInput(values.file):{id,name:values.name??id,providerId:values.provider,harness:values.harness,model:values.model,...(modelPolicy ? {modelPolicy} : {})});
       if(input.id!==id) throw new Error("File id must match the command id.");
       output(action==="add"?await client.createProfile(input):await client.updateProfile(input,currentVersion()));return;
     }

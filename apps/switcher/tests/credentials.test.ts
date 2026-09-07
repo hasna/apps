@@ -136,7 +136,7 @@ test("actual CLI resolves its vault binding, launches directly, preserves exit c
     const executable = join(dir,"claude-fixture");
     await writeFile(executable,`#!${process.execPath}
 if(process.argv.includes('--version')) console.log('2.1.263 (Claude Code)');
-else { console.log(JSON.stringify({auth:process.env.ANTHROPIC_AUTH_TOKEN==='fixture-provider-key',model:process.env.ANTHROPIC_DEFAULT_MODEL,subagent:process.env.CLAUDE_CODE_SUBAGENT_MODEL,leaked:Object.keys(process.env).filter(n=>/^(HASNA_|SWITCHER_CREDENTIAL_)/.test(n))})); process.exit(7); }
+else { console.log(JSON.stringify({auth:!!process.env.ANTHROPIC_AUTH_TOKEN&&process.env.ANTHROPIC_AUTH_TOKEN!=='fixture-provider-key',model:process.env.ANTHROPIC_DEFAULT_MODEL,subagent:process.env.CLAUDE_CODE_SUBAGENT_MODEL,leaked:Object.keys(process.env).filter(n=>/^(HASNA_|SWITCHER_CREDENTIAL_)/.test(n))})); process.exit(7); }
 `,{mode:0o700});
     const args = ["launch","claude","--provider","generic-anthropic-messages","--url",upstream.url.origin,"--credential-env","SWITCHER_PROVIDER_FIXTURE","--model","fixture-pro","--executable",executable];
     const poisoned = {HASNA_SECRETS_API_KEY:"fixture-operator",HASNA_SECRETS_API_KEY_OVERRIDE:"fixture-wrong",HASNA_SECRETS_API_KEY_REF:"fixture/wrong",HASNA_PROFILE:"wrong",SECRETS_API_URL:"https://wrong.example",SECRETS_API_KEY:"fixture-wrong",UNRELATED_API_KEY:"fixture-unrelated"};

@@ -40,9 +40,9 @@ attachments/
 │       ├── download.ts       # Download logic
 │       ├── links.ts          # Presigned URL / server link generation
 │       └── s3.ts             # S3 client wrapper
-├── sdk/
-│   └── src/
-│       └── index.ts          # @hasna/attachments-sdk
+│   └── sdk/
+│       ├── generated.ts      # generated /v1 client (bun run sdk:generate)
+│       └── index.ts          # @hasna/attachments/sdk export subpath
 └── package.json
 ```
 

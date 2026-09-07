@@ -208,7 +208,7 @@ await Bun.write(${JSON.stringify(started)},'started');process.exit(7);
     try { await launch(client,'fixture',{executable,cwd:dir,stateDir:join(dir,'state'),resolveCredential:async()=> 'fixture-key',timeoutMs:500,refresh:false}); }
     catch (caught) { error=caught; }
     expect(error).toMatchObject({code:'interrupted',exitCode:143});
-    expect(records).toEqual([{status:'interrupted',exitCode:143}]);
+    expect(records).toEqual([{status:'interrupted',exitCode:143,routingEvents:[],routingEventsDropped:0}]);
     expect(await readFile(started).catch(()=>''),'native client must not start after createRun cancellation').toBe('');
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
@@ -231,7 +231,7 @@ await Bun.write(${JSON.stringify(started)},'started');process.exit(7);
     try { await launch(client,'fixture',{executable,cwd:dir,stateDir:join(dir,'state'),resolveCredential:async()=> 'fixture-key',timeoutMs:5000,refresh:false}); }
     catch (caught) { error=caught; }
     expect(error).toMatchObject({code:'interrupted',exitCode:143});
-    expect(records).toEqual([{status:'interrupted',exitCode:143}]);
+    expect(records).toEqual([{status:'interrupted',exitCode:143,routingEvents:[],routingEventsDropped:0}]);
     expect(await readFile(started).catch(()=>''),'native client must not start after same-turn cancellation').toBe('');
   } finally { await rm(dir,{recursive:true,force:true}); }
 });
@@ -257,7 +257,7 @@ test("same-turn signal and createRun resolution finalize exactly once in either 
       catch (caught) { error=caught; }
       expect(error).toMatchObject({code:'interrupted',exitCode:signal==='SIGINT'?130:signal==='SIGTERM'?143:129});
       expect(records).toHaveLength(1);
-      expect(records[0]).toEqual({status:'interrupted',exitCode:signal==='SIGINT'?130:signal==='SIGTERM'?143:129});
+      expect(records[0]).toEqual({status:'interrupted',exitCode:signal==='SIGINT'?130:signal==='SIGTERM'?143:129,routingEvents:[],routingEventsDropped:0});
       expect(await readFile(join(dir,'native-started')).catch(()=>'')).toBe('');
     }
   } finally { await rm(dir,{recursive:true,force:true}); }
