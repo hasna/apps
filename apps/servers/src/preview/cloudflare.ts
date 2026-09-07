@@ -4,12 +4,13 @@ import { fileURLToPath } from "node:url";
 import { hostname } from "node:os";
 import { createHash } from "node:crypto";
 import { slugSchema, workerName } from "./config.js";
-import { loadPreviewSettings, loadPreviewStation, previewControl, requiredSecret, savePreviewState, settingsSchema, type PreviewSettings, type PreviewStation } from "./state.js";
+import { loadPreviewSettings, loadPreviewStation, previewControl, PreviewControlError, requiredSecret, savePreviewState, settingsSchema, type PreviewSettings, type PreviewStation } from "./state.js";
 
 type Binding = { type: string; name: string; [key: string]: unknown };
 interface WorkerSettings { bindings?: Binding[]; tags?: string[]; migrations?: { tag?: string }; }
 const ROUTER_TAG = "servers-preview-router-v1";
 const ALIAS_TAG = "servers-preview-alias-v1";
+const waitForStationPropagation = (delayMs: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, delayMs));
 export class CloudflareApiError extends Error {
   constructor(public status: number, method: string, path: string) { super(`Cloudflare ${method} ${path.split("?")[0]} failed (HTTP ${status}); check token permissions and account configuration`); }
 }
@@ -114,7 +115,7 @@ export async function setupPreviews(options: SetupPreviewOptions, request?: type
   else await configure();
   return { ...plan, ready: true };
 }
-async function registerStationUnlocked(options: { name?: string; gatewayPort?: number; dryRun?: boolean } = {}, request?: typeof fetch, assertLock?: () => Promise<void>): Promise<unknown> {
+async function registerStationUnlocked(options: { name?: string; gatewayPort?: number; dryRun?: boolean } = {}, request?: typeof fetch, assertLock?: () => Promise<void>, wait = waitForStationPropagation): Promise<unknown> {
   const settings = loadPreviewSettings();
   let existingStation: PreviewStation | undefined;
   try { existingStation = loadPreviewStation(); } catch {}
@@ -143,7 +144,18 @@ async function registerStationUnlocked(options: { name?: string; gatewayPort?: n
     bindings.push({ type: "vpc_service", name: binding, service_id: serviceId });
     await api.upload(settings.routerName, "preview-router", bindings, latest);
     const station: PreviewStation = { id, name, tunnelId: tunnel.id, serviceId, binding, gatewayPort };
-    await previewControl(settings, { action: "register-station", station: { id, binding } }, request);
+    // A successful upload can precede the new VPC binding reaching the serving
+    // Worker. Retry only this idempotent registration, keeping the setup lease.
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await assertLock?.();
+      try {
+        await previewControl(settings, { action: "register-station", station: { id, binding } }, request);
+        break;
+      } catch (error) {
+        if (!(error instanceof PreviewControlError) || error.status !== 503 || attempt === 9) throw error;
+        await wait(3000);
+      }
+    }
     savePreviewState("station", station);
     return station;
   } catch (error) {
@@ -203,9 +215,9 @@ async function withInfrastructureLock<T>(settings: PreviewSettings, work: (asser
     await previewControl(settings, { action: "release-setup", operationId }, request).catch(() => {});
   }
 }
-export async function registerPreviewStation(options: { name?: string; gatewayPort?: number; dryRun?: boolean } = {}, request?: typeof fetch): Promise<unknown> {
+export async function registerPreviewStation(options: { name?: string; gatewayPort?: number; dryRun?: boolean } = {}, request?: typeof fetch, wait = waitForStationPropagation): Promise<unknown> {
   if (options.dryRun) return registerStationUnlocked(options, request);
-  return withInfrastructureLock(loadPreviewSettings(), (assertLock) => registerStationUnlocked(options, request, assertLock), request);
+  return withInfrastructureLock(loadPreviewSettings(), (assertLock) => registerStationUnlocked(options, request, assertLock, wait), request);
 }
 export async function provisionPreviewAlias(settings: PreviewSettings, key: string, request?: typeof fetch): Promise<{ hostname: string; worker: string }> {
   return withInfrastructureLock(settings, (assertLock) => provisionAliasUnlocked(settings, key, request, assertLock), request);
