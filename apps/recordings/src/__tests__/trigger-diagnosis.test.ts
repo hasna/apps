@@ -507,6 +507,12 @@ describe("recordings check exit contract", () => {
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
+        // Hermetic against the station Keychain (hasna/apps#1720 validation): the sentinel
+        // station has no item and the env tier supplies a fixture credential, so the store
+        // resolves the same way on a fleet Mac and on Linux CI — without it, `check` fails
+        // closed (exit 1) on a host with no credential and these trigger assertions never run.
+        HASNA_STATION: "no-such-station",
+        HASNA_RECORDINGS_API_KEY: "fixture-hosted-key-not-a-secret",
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         RECORDINGS_AUDIO_DIR: join(home, "audio"),
         OPENAI_API_KEY: "test-openai-key",
@@ -579,6 +585,12 @@ printf '%s\\n' "$value"
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
+        // Hermetic against the station Keychain (hasna/apps#1720 validation): the sentinel
+        // station has no item and the env tier supplies a fixture credential, so the store
+        // resolves the same way on a fleet Mac and on Linux CI — without it, `check` fails
+        // closed (exit 1) on a host with no credential and these trigger assertions never run.
+        HASNA_STATION: "no-such-station",
+        HASNA_RECORDINGS_API_KEY: "fixture-hosted-key-not-a-secret",
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         OPENAI_API_KEY: "test-openai-key",
         ...fakeDefaults(home, "0", "0"),
@@ -715,6 +727,9 @@ printf '%s\\n' "$value"
         env: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           HOME: home,
+          // Hermetic against the station Keychain: see `runCheck` above.
+          HASNA_STATION: "no-such-station",
+          HASNA_RECORDINGS_API_KEY: "fixture-hosted-key-not-a-secret",
             HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
           OPENAI_API_KEY: "test-openai-key",
           ...fakeDefaults(home, STORED_F5, "1"),
