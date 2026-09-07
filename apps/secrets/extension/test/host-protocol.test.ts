@@ -116,6 +116,10 @@ function localEnv(vaultDir: string, binDir: string, appendPath = true): Record<s
   delete env.HASNA_SECRETS_TEST_ISOLATION;
   delete env.OPEN_SECRETS_DB;
   env.HASNA_SECRETS_DB_PATH = join(vaultDir, "vault.db");
+  // The master key follows the vault into the temp dir: without this the child
+  // (which deliberately runs as a NON-test process) would read or create
+  // `vault.key` under the operator's own ~/.hasna/secrets (HC-00304).
+  env.HASNA_SECRETS_KEY_DIR = join(vaultDir, "keys");
   // The credential chain has two AMBIENT tiers above the environment (#1720):
   // the macOS Keychain and ~/.hasna/secrets/config/credentials. Deleting
   // variables does not make them absent on a station that holds a live key, so
@@ -398,9 +402,15 @@ describe("installed host cold launch (Chrome path resolution)", () => {
     // since 2026-09-04: without fleet API env the CLI fails closed rather than
     // silently serving the local vault, and this regression exercises the
     // local transport (no API env here by construction).
+    // The vault and its key are pinned to this suite's temp dir explicitly:
+    // with the real HOME and no file-level override the shelled CLI would open
+    // the operator's own ~/.hasna/secrets/vault.db (HC-00304 — measured: its
+    // -shm mtime advanced on every run of this file).
     const host = HostClient.direct(installedHost, {
       HOME: homedir(),
       HASNA_SECRETS_LOCAL_VAULT: "1",
+      HASNA_SECRETS_DB_PATH: join(vaultDir, "vault.db"),
+      HASNA_SECRETS_KEY_DIR: join(vaultDir, "keys"),
       ...ambientTierRedirect(vaultDir),
     });
     try {
