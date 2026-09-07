@@ -22,7 +22,7 @@ class InMemoryS3 implements S3ClientLike {
 }
 
 const originalEnv = new Map(
-  ["HASNA_TELEPHONY_API_URL", "HASNA_TELEPHONY_API_KEY", "TELEPHONY_API_URL", "TELEPHONY_API_KEY", "HASNA_TELEPHONY_DB_PATH", "HASNA_TELEPHONY_LOCAL", "TELEPHONY_LOCAL"].map(
+  ["HASNA_TELEPHONY_API_URL", "HASNA_TELEPHONY_API_KEY", "TELEPHONY_API_URL", "TELEPHONY_API_KEY", "HASNA_TELEPHONY_DB_PATH", "HASNA_TELEPHONY_LOCAL", "TELEPHONY_LOCAL", "HASNA_CONFIG_HOME", "HASNA_HOME"].map(
     (name) => [name, process.env[name]] as const,
   ),
 );
@@ -85,6 +85,10 @@ describe("handleStatusWebhook media copy", () => {
   it("copies the recording at call completion and stores object_key + sha256 on the call row", async () => {
     tempRoot = mkdtempSync(join(tmpdir(), "telephony-status-webhook-test-"));
     process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
+    // Scrub the disk credential tier: the machine's own station credential
+    // (~/.hasna/telephony/config/credentials) would otherwise outrank the
+    // explicit local opt-in from beforeEach.
+    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
     resetStore();
 
     const call = createCall({
@@ -121,6 +125,10 @@ describe("handleStatusWebhook media copy", () => {
   it("ignores intermediate recording status callbacks (partial media must not be copied)", async () => {
     tempRoot = mkdtempSync(join(tmpdir(), "telephony-status-webhook-test-"));
     process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
+    // Scrub the disk credential tier: the machine's own station credential
+    // (~/.hasna/telephony/config/credentials) would otherwise outrank the
+    // explicit local opt-in from beforeEach.
+    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
     resetStore();
 
     const call = createCall({
@@ -156,6 +164,10 @@ describe("handleStatusWebhook media copy", () => {
   it("leaves the call row untouched when the recording copy fails (soft-fail)", async () => {
     tempRoot = mkdtempSync(join(tmpdir(), "telephony-status-webhook-test-"));
     process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
+    // Scrub the disk credential tier: the machine's own station credential
+    // (~/.hasna/telephony/config/credentials) would otherwise outrank the
+    // explicit local opt-in from beforeEach.
+    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
     resetStore();
 
     createCall({

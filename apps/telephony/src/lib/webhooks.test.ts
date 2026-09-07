@@ -14,6 +14,12 @@ const cloudEnvNames = [
   "TELEPHONY_API_URL",
   "TELEPHONY_API_KEY",
   "HASNA_TELEPHONY_DB_PATH",
+  // The disk credential tier must not leak into these tests either: the
+  // resolver consults `<HASNA_CONFIG_HOME|HASNA_HOME|~/.hasna>/telephony/
+  // config/credentials` even when every env spelling above is cleared, and a
+  // real station credential selects (or conflicts with) the hosted transport.
+  "HASNA_CONFIG_HOME",
+  "HASNA_HOME",
 ] as const;
 const originalEnv = new Map(cloudEnvNames.map((name) => [name, process.env[name]]));
 const apiKeyEnvName = ["HASNA", "TELEPHONY", "API", "KEY"].join("_");
@@ -104,6 +110,10 @@ describe("dispatchWebhook", () => {
     try {
       tempRoot = mkdtempSync(join(tmpdir(), "telephony-webhook-dispatch-test-"));
       process.env.HASNA_TELEPHONY_DB_PATH = join(tempRoot, "telephony.db");
+      // Scrub the disk tier: the machine's own station credential would
+      // otherwise be consulted alongside the explicit loopback pair below and
+      // the resolver would refuse the divergent authorities.
+      process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
       process.env.HASNA_TELEPHONY_API_URL = `http://127.0.0.1:${cloud.port}`;
       process.env[apiKeyEnvName] = ["synthetic", "api", "key"].join("-");
       resetStore();

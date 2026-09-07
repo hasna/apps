@@ -26,6 +26,13 @@ const clientStoreEnvNames = [
   "TELEPHONY_API_URL",
   "TELEPHONY_API_KEY",
   "TELEPHONY_LOCAL",
+  // The disk credential tier must not leak into these tests either: the
+  // resolver consults `<HASNA_CONFIG_HOME|HASNA_HOME|~/.hasna>/telephony/
+  // config/credentials` even when every env spelling above is cleared, and a
+  // real station credential outranks the local opt-in (or conflicts with a
+  // synthetic loopback pair).
+  "HASNA_CONFIG_HOME",
+  "HASNA_HOME",
 ] as const;
 const originalClientStoreEnv = new Map(clientStoreEnvNames.map((name) => [name, process.env[name]]));
 
@@ -55,6 +62,10 @@ function startIsolatedServer() {
   clearClientStoreEnv();
   tempDir = mkdtempSync(join(tmpdir(), "telephony-server-test-"));
   process.env.HASNA_TELEPHONY_DB_PATH = join(tempDir, "telephony.db");
+  // Scrub the disk credential tier into the temp dir: the machine's own
+  // station credential (~/.hasna/telephony/config/credentials) would
+  // otherwise outrank the explicit local opt-in below.
+  process.env.HASNA_CONFIG_HOME = join(tempDir, "config-home");
   // This legacy local serve surface stores on-box: select that EXPLICITLY.
   // Without the fleet API env AND without this opt-in the store resolver fails
   // closed (owner directive 2026-09-04) — local SQLite is never the default.
@@ -456,6 +467,10 @@ describe("server-backed read routing", () => {
     // Isolated (empty) local DB so any accidental local read would return [].
     tempDir = mkdtempSync(join(tmpdir(), "telephony-server-test-"));
     process.env.HASNA_TELEPHONY_DB_PATH = join(tempDir, "telephony.db");
+    // Scrub the disk credential tier: the machine's own station credential
+    // would otherwise be consulted alongside the explicit loopback pair below
+    // and the resolver would refuse the divergent authorities.
+    process.env.HASNA_CONFIG_HOME = join(tempDir, "config-home");
     Object.assign(process.env, { [restCredentialEnvName]: restCredential() });
     process.env[apiUrlEnv] = `http://127.0.0.1:${cloud.port}`;
     process.env[apiKeyEnv] = ["test", "cloud", "key"].join("-");

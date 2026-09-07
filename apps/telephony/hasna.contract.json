@@ -49,14 +49,14 @@
       "kind": "cli",
       "status": "supported",
       "bin": "telephony",
-      "authMode": "local-only"
+      "authMode": "api-key"
     },
     {
       "name": "telephony-mcp",
       "kind": "mcp",
       "status": "supported",
       "mcpBin": "telephony-mcp",
-      "authMode": "local-only"
+      "authMode": "api-key"
     }
   ],
   "storage": {

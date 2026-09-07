@@ -42,6 +42,11 @@ describe("handleVoicemailRecording media copy", () => {
     // fails closed without the API env — select local mode EXPLICITLY
     // (HASNA_TELEPHONY_LOCAL=1), like the other store-backed telephony tests.
     process.env.HASNA_TELEPHONY_LOCAL = "1";
+    // The opt-in YIELDS to any resolved credential, and the machine's own
+    // station credential (~/.hasna/telephony/config/credentials) would
+    // resolve from the disk tier under the real HOME — scrub the tier to a
+    // scratch dir so this test deterministically runs on-box SQLite.
+    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
     const s3 = new InMemoryS3();
     const { bytes, digest } = recordingFixture();
     const originalFetch = globalThis.fetch;
@@ -87,6 +92,11 @@ describe("handleVoicemailRecording media copy", () => {
     // fails closed without the API env — select local mode EXPLICITLY
     // (HASNA_TELEPHONY_LOCAL=1), like the other store-backed telephony tests.
     process.env.HASNA_TELEPHONY_LOCAL = "1";
+    // The opt-in YIELDS to any resolved credential, and the machine's own
+    // station credential (~/.hasna/telephony/config/credentials) would
+    // resolve from the disk tier under the real HOME — scrub the tier to a
+    // scratch dir so this test deterministically runs on-box SQLite.
+    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
     const s3 = new InMemoryS3();
     s3.failUploads = true;
     const originalFetch = globalThis.fetch;
@@ -127,6 +137,11 @@ describe("handleVoicemailRecording media copy", () => {
     // fails closed without the API env — select local mode EXPLICITLY
     // (HASNA_TELEPHONY_LOCAL=1), like the other store-backed telephony tests.
     process.env.HASNA_TELEPHONY_LOCAL = "1";
+    // The opt-in YIELDS to any resolved credential, and the machine's own
+    // station credential (~/.hasna/telephony/config/credentials) would
+    // resolve from the disk tier under the real HOME — scrub the tier to a
+    // scratch dir so this test deterministically runs on-box SQLite.
+    process.env.HASNA_CONFIG_HOME = join(tempRoot, "config-home");
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () =>
       new Response(new TextEncoder().encode("bytes"), { status: 200, headers: { "content-type": "audio/mpeg" } });
