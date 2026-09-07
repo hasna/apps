@@ -13,35 +13,29 @@
 // Both now refuse, naming the value and the valid set.
 //
 // WHY A SUBPROCESS. `handleError` (src/cli/utils.ts) ends in `process.exit(1)`;
-// same harness as email-log-provider-filter.test.ts: temp HOME, temp SQLite,
+// same harness as email-log-provider-filter.test.ts: temp HOME, authenticated API,
 // environment scrubbed BY PREFIX (an operator shell may export this package's whole
 // client configuration, and enumerating those keys here would add references
 // the mode-axis ratchet counts).
 
-import { afterAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const SCRUBBED_ENV_PREFIXES = ["EMAILS_", "HASNA_EMAILS_", "MAILERY_", "HASNA_MAILERY_"] as const;
-const SCRUBBED_ENV_KEYS = [
-  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
-  "RESEND_API_KEY",
-] as const;
-
+import { buildPrepublishTestEnv } from "../../../scripts/prepublish-local-test.mjs";
+import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
+let api: V1Stub;
 const tempDirs: string[] = [];
-
-function localEnv(): NodeJS.ProcessEnv {
+beforeAll(async () => { api = await startV1Stub({ openapi: true, apiKey: crypto.randomUUID() }); });
+afterEach(() => {
+  for (const dir of tempDirs) expect(readdirSync(dir, { recursive: true }).filter(name => /\.(?:db|sqlite)(?:-|$)/.test(String(name)))).toEqual([]);
+});
+function apiEnv(): NodeJS.ProcessEnv {
   const dir = mkdtempSync(join(tmpdir(), "emails-list-filter-"));
   tempDirs.push(dir);
-  const homePath = join(dir, "home");
-  mkdirSync(homePath, { recursive: true, mode: 0o700 });
-  const base = { ...process.env };
-  for (const key of Object.keys(base)) {
-    if (SCRUBBED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) delete base[key];
-  }
-  for (const key of SCRUBBED_ENV_KEYS) delete base[key];
-  return { ...base, EMAILS_DB_PATH: join(dir, "emails.db"), HOME: homePath, NO_COLOR: "1" };
+  mkdirSync(join(dir, "tmp"), { mode: 0o700 });
+  return { ...buildPrepublishTestEnv(process.env, dir), HASNA_STATION: `emails-filter-${crypto.randomUUID()}`, HASNA_EMAILS_API_URL: api.baseUrl, HASNA_EMAILS_API_KEY: api.apiKey, EMAILS_CLIENT_ENV_LOADED: "1", NO_COLOR: "1" };
 }
 
 interface CliRun {
@@ -52,7 +46,7 @@ interface CliRun {
 
 function runCli(args: string[], env: NodeJS.ProcessEnv): CliRun {
   const result = Bun.spawnSync({
-    cmd: ["bun", "src/cli/index.tsx", ...args],
+    cmd: [process.execPath, "src/cli/index.tsx", ...args],
     cwd: process.cwd(),
     env,
     stdout: "pipe",
@@ -67,6 +61,7 @@ function runCli(args: string[], env: NodeJS.ProcessEnv): CliRun {
 }
 
 afterAll(() => {
+  api.stop();
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -74,7 +69,7 @@ describe("inbox --folder validates its value", () => {
   // STRONG: the refusal, with the valid set named so the operator can fix the
   // typo instead of re-running blind.
   it("refuses `inbox list --folder starrred` instead of listing the inbox", () => {
-    const env = localEnv();
+    const env = apiEnv();
     const run = runCli(["--json", "inbox", "list", "--folder", "starrred", "--limit", "3"], env);
 
     expect(run.exitCode, `expected a refusal, got: ${run.stdout}`).not.toBe(0);
@@ -86,7 +81,7 @@ describe("inbox --folder validates its value", () => {
   }, 120_000);
 
   it("refuses `inbox search --folder bogus` the same way", () => {
-    const env = localEnv();
+    const env = apiEnv();
     const run = runCli(["--json", "inbox", "search", "anything", "--folder", "bogus"], env);
 
     expect(run.exitCode, `expected a refusal, got: ${run.stdout}`).not.toBe(0);
@@ -98,7 +93,7 @@ describe("inbox --folder validates its value", () => {
   // The complement: every valid folder still answers. An unconditional refusal
   // would also make the two cases above pass.
   it("still lists every valid folder on an empty store", () => {
-    const env = localEnv();
+    const env = apiEnv();
     for (const folder of ["inbox", "unread", "starred", "sent", "archived", "spam", "trash"]) {
       const run = runCli(["--json", "inbox", "list", "--folder", folder, "--limit", "1"], env);
       expect(run.exitCode, `--folder ${folder} failed: ${run.stderr}`).toBe(0);
@@ -109,7 +104,7 @@ describe("inbox --folder validates its value", () => {
 describe("scheduled --status validates against the enum", () => {
   for (const command of [["scheduled", "list"], ["schedule", "list"]] as const) {
     it(`refuses \`${command.join(" ")} --status bogus\` instead of answering []`, () => {
-      const env = localEnv();
+      const env = apiEnv();
       const run = runCli(["--json", ...command, "--status", "bogus"], env);
 
       expect(run.exitCode, `expected a refusal, got: ${run.stdout}`).not.toBe(0);
@@ -124,7 +119,7 @@ describe("scheduled --status validates against the enum", () => {
   }
 
   it("still answers a valid --status filter", () => {
-    const env = localEnv();
+    const env = apiEnv();
     const run = runCli(["--json", "scheduled", "list", "--status", "pending"], env);
     expect(run.exitCode, `valid status refused: ${run.stderr}`).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual([]);

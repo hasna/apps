@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -24,16 +24,18 @@ test.each(["sent", "pending", "uncertain", "replayed", "old-api", "cancel-read",
     }
     return Response.json({ error: "unexpected fixture request" }, { status: 404 });
   } });
+  const mailHome = join(home, "mail");
+  mkdirSync(mailHome, { mode: 0o700 });
   const env = { ...process.env };
   for (const name of Object.keys(env)) if (/^(?:HASNA_EMAILS_|EMAILS_|HASNA_STATION)/.test(name)) delete env[name];
-  Object.assign(env, { HOME: home, HASNA_EMAILS_API_URL: `http://127.0.0.1:${api.port}/emails/v1`, HASNA_EMAILS_API_KEY: token, EMAILS_CLIENT_ENV_LOADED: "1", EMAILS_DB_PATH: join(home, "must-not-exist.db"), NO_COLOR: "1" });
+  Object.assign(env, { HOME: home, HASNA_EMAILS_API_URL: `http://127.0.0.1:${api.port}/emails/v1`, HASNA_EMAILS_API_KEY: token, EMAILS_CLIENT_ENV_LOADED: "1", EMAILS_HOME: mailHome, HASNA_EMAILS_HOME: mailHome, HASNA_STATION: `emails-roundtrip-${crypto.randomUUID()}`, NO_COLOR: "1" });
   const child = Bun.spawn({ cmd: [process.execPath, "--no-env-file", resolve(import.meta.dir, "../index.tsx"), "provision", "roundtrip", "--domain", "example.com", "--provider", "provider-1", "--addresses", "one,two", "--count", "1", "--poll-attempts", "1", "--poll-interval", "0", "--throttle", "0", "--idempotency-key", "cli-fixture", "--json"], env, stdout: "pipe", stderr: "pipe" });
   try {
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect(code, stderr + stdout).toBe(outcome.startsWith("cancel-") ? 130 : confirmed ? 0 : 1);
     if (outcome === "old-api") {
       expect(sends).toHaveLength(0); expect(stderr).toContain("provider-aware sending");
-      expect(existsSync(join(home, "must-not-exist.db"))).toBe(false);
+      expect(readdirSync(home, { recursive: true }).filter(name => /\.(?:db|sqlite)(?:-|$)/.test(String(name)))).toEqual([]);
       return;
     }
     const result = JSON.parse(stdout);
@@ -43,7 +45,7 @@ test.each(["sent", "pending", "uncertain", "replayed", "old-api", "cancel-read",
     expect(sends).toHaveLength(outcome.startsWith("cancel-") ? 0 : confirmed ? 2 : 1);
     if (outcome.startsWith("cancel-")) expect(result.errors[0]).toContain("interrupted");
     expect(sends.every(item => item.provider_id === "provider-1" && String(item.idempotency_key).startsWith("roundtrip:"))).toBe(true);
-    expect(existsSync(join(home, "must-not-exist.db"))).toBe(false);
+    expect(readdirSync(home, { recursive: true }).filter(name => /\.(?:db|sqlite)(?:-|$)/.test(String(name)))).toEqual([]);
     expect(existsSync(join(home, ".hasna/emails/emails.db"))).toBe(false);
   } finally { child.kill(); await child.exited; api.stop(true); rmSync(home, { recursive: true, force: true }); }
 }, 15000);

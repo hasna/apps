@@ -96,6 +96,7 @@ function publishedResourceContract() {
       post: { requestBody: post?.requestBody ?? null },
     };
   }
+  paths["/v1/messages/send"] = published["/v1/messages/send"];
   paths["/v1/messages"] = { get: { parameters: (published["/v1/messages"]?.get as { parameters?: unknown })?.parameters ?? [] } };
   return { openapi: emailsSelfHostedOpenApi.openapi, info: emailsSelfHostedOpenApi.info,
     security: emailsSelfHostedOpenApi.security, components: {}, paths };
@@ -149,7 +150,7 @@ export interface V1Stub {
   /** Read the entire store back from the stub. */
   dump(): Promise<V1StubResources>;
   /** Select a deterministic send outcome for controlled-send regressions. */
-  setSendBehavior(behavior: "normal" | "delayed_success" | "post_send_warning"): Promise<void>;
+  setSendBehavior(behavior: "normal" | "delayed_success" | "post_send_warning" | "warming_rejected"): Promise<void>;
   /** Read the number of provider-send calls made since the last reset. */
   sendStats(): Promise<{ providerCalls: number }>;
   /**
@@ -925,7 +926,7 @@ const server = Bun.serve({
     if (req.method === "POST" && parts[0] === "v1" && parts[1] === "__send_behavior") {
       const body = await req.json().catch(function () { return {}; });
       const next = String(body.behavior || "");
-      if (next !== "normal" && next !== "delayed_success" && next !== "post_send_warning") {
+      if (next !== "normal" && next !== "delayed_success" && next !== "post_send_warning" && next !== "warming_rejected") {
         return json({ error: "unsupported send behavior" }, 400);
       }
       sendBehavior = next;
@@ -1291,6 +1292,7 @@ const server = Bun.serve({
           retry_safe: false,
         }, 409);
       }
+      if (sendBehavior === "warming_rejected") return json({ error: "Warming limit reached", reason: "warming_limit_exceeded", message: null, retry_safe: false }, 409);
       providerSendCalls += 1;
       if (sendBehavior === "delayed_success") await Bun.sleep(300);
       const now = new Date().toISOString();
@@ -1305,6 +1307,7 @@ const server = Bun.serve({
         body_text: typeof body.text === "string" ? body.text : null,
         body_html: typeof body.html === "string" ? body.html : null,
         status: "sent",
+        provider_id: body.provider_id ?? null,
         provider_message_id: providerMessageId,
         message_id: "stub-" + (rowsFor("messages").length + 1),
         is_read: true,

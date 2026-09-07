@@ -1,28 +1,9 @@
-// The collapsed email-operation tool family, exercised against the local SQLite
-// store.
-//
-// WHY THIS FILE EXISTS. This family used to be three modules: a facade that read
-// the process-wide deployment word and two sibling arm modules that registered the
-// SAME seventeen tool names. Sixteen of the seventeen differed only in which
-// module layer they imported. The seventeenth, `send_email`, differed in what it
-// would ACCEPT — and that asymmetry is the one this file pins, because it is the
-// one a collapse can get wrong quietly.
-//
-// The self-hosted half of the same surface is covered in
-// src/mcp/self-hosted-guards.test.ts against the out-of-process /v1 stub. This
-// file covers the local half, because local is where the deleted arm honoured
-// options the single send path cannot carry, and therefore where "collapsed and
-// silently dropped an option" would look exactly like success.
-
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+// Public MCP email-operation handlers exercised against the authenticated API fixture.
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
 import { suppressContact } from "../../db/contacts.js";
 import { getEmailContent } from "../../db/email-content.js";
-import { createProvider } from "../../db/providers.local.js";
-import { listSandboxEmails } from "../../db/sandbox.js";
-import { createWarmingSchedule } from "../../db/warming.js";
-import { resetMailDataSource } from "../../lib/mail-data-source.js";
+import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 import { registerEmailOpsTools } from "./email-ops.js";
 
 interface RegisteredTool {
@@ -71,46 +52,16 @@ const FAMILY_TOOLS = [
   "cancel_scheduled",
 ];
 
-const STORE_MODE_ENV = ["EMAILS", "MODE"].join("_");
-const STORE_DB_ENV = ["EMAILS", "DB_PATH"].join("_");
-const STORE_ENV_KEYS = [
-  STORE_MODE_ENV,
-  `HASNA_${STORE_MODE_ENV}`,
-  STORE_DB_ENV,
-  `HASNA_${STORE_DB_ENV}`,
-  "EMAILS_CLIENT_ENV_SECRET",
-  "EMAILS_SELF_HOSTED_URL",
-  "EMAILS_SELF_HOSTED_API_KEY",
-  "EMAILS_SESSION_TOKEN",
-  "EMAILS_IDP_TOKEN",
-] as const;
-
-let providerId: string;
-let previousStoreEnv: Partial<Record<(typeof STORE_ENV_KEYS)[number], string | undefined>>;
-
-beforeEach(() => {
-  previousStoreEnv = {};
-  for (const key of STORE_ENV_KEYS) {
-    previousStoreEnv[key] = process.env[key];
-    delete process.env[key];
-  }
-  // The deployment-mode variable is retired (hasna/apps#1566): the database path
-  // alone routes the local arm.
-  process.env[STORE_DB_ENV] = ":memory:";
-  resetDatabase();
-  resetMailDataSource();
-  providerId = createProvider({ name: "email-ops-sandbox", type: "sandbox", active: true }).id;
+let stub: V1Stub;
+const providerId = "00000000-0000-4000-8000-000000000071";
+beforeAll(async () => {
+  stub = await startV1Stub({ openapi: true, apiKey: crypto.randomUUID(), seed: {
+    providers: [{ id: providerId, name: "email-ops-fixture", type: "ses", active: true }],
+  } });
 });
-
-afterEach(() => {
-  closeDatabase();
-  resetMailDataSource();
-  for (const key of STORE_ENV_KEYS) {
-    const value = previousStoreEnv[key];
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
-});
+beforeEach(async () => { await stub.reset(); stub.applyEnv(); });
+afterEach(() => stub.clearEnv());
+afterAll(() => stub.stop());
 
 describe("collapsed email-ops tool family", () => {
   it("registers every tool unconditionally, from one implementation", () => {
@@ -163,14 +114,14 @@ describe("collapsed email-ops tool family", () => {
       // variable assignment, no "run it the other way".
       expect(message).not.toMatch(/[A-Z][A-Z0-9]*_[A-Z0-9_]*=/);
       // And it must be a REFUSAL, not a quiet success: nothing was sent.
-      expect(await listSandboxEmails(providerId, 10), `${option} must not send`).toHaveLength(0);
+      expect(await stub.list("messages"), `${option} must not send`).toHaveLength(0);
     }
   });
 
   it("still refuses a suppressed recipient, with no force escape", async () => {
     // Carried over from the deleted local arm, which was the ONLY arm that had it.
     // The canonical comparison matters: a display-name form is the same recipient.
-    await suppressContact("blocked@example.test", getDatabase());
+    await suppressContact("blocked@example.test");
 
     const result = await call("send_email", {
       from: "agent@example.test",
@@ -182,7 +133,7 @@ describe("collapsed email-ops tool family", () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toContain("suppressed recipient(s)");
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
+    expect(await stub.list("messages")).toHaveLength(0);
 
     // No `force` escape. Asserted BEHAVIOURALLY rather than by inspecting the
     // schema: an absent key in a serialized zod object is vacuously true, so a
@@ -198,23 +149,13 @@ describe("collapsed email-ops tool family", () => {
     });
     expect(forced.isError).toBe(true);
     expect(text(forced)).toContain("suppressed recipient(s)");
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
+    expect(await stub.list("messages")).toHaveLength(0);
   });
 
   it("still blocks a send that a warming schedule forbids", async () => {
-    // POSITIVE CONTROL for a guard this collapse deleted from THIS module. The
-    // deleted local arm re-implemented a warming pre-check here; the single send
-    // path already enforces it downstream (src/lib/send.local.ts:40-52), so the
-    // duplicate went away. If that reasoning were wrong, this test is where it
-    // shows up — an unwarmed domain would send.
-    //
-    // A schedule that has not started yet has a limit of zero, so any send from
-    // the domain is over it. That is the guard's fail-closed branch, not a fixture
-    // trick: an unusable or future start date must not mean "go".
-    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    // The collapsed family, scoped to the same process-wide connection the send
-    // gate reads (the same handle `suppressContact` is given above).
-    await createWarmingSchedule({ domain: "warming.example.test", provider_id: providerId, target_daily_volume: 500, start_date: tomorrow }, getDatabase());
+    // The service owns warming policy; pin the MCP handler's real HTTP refusal
+    // boundary here. Full warming policy/store tests exercise the calculation.
+    await stub.setSendBehavior("warming_rejected");
 
     const result = await call("send_email", {
       from: "agent@warming.example.test",
@@ -225,8 +166,8 @@ describe("collapsed email-ops tool family", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(text(result)).toContain("Warming limit reached for warming.example.test");
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
+    expect(text(result)).toContain("warming_limit_exceeded");
+    expect(await stub.list("messages")).toHaveLength(0);
   });
 
   it("sends a plain-text message without fabricating an HTML part", async () => {
@@ -266,7 +207,7 @@ describe("collapsed email-ops tool family", () => {
     });
 
     expect(sent.isError).not.toBe(true);
-    const captured = await listSandboxEmails(providerId, 10);
+    const captured = await stub.list("messages");
     expect(captured).toHaveLength(1);
     expect(JSON.stringify(captured[0])).toContain("Hello Ada");
   });
@@ -281,7 +222,7 @@ describe("collapsed email-ops tool family", () => {
 
     expect(result.isError).toBe(true);
     expect(text(result)).toContain("Template not found: no-such-template");
-    expect(await listSandboxEmails(providerId, 10)).toHaveLength(0);
+    expect(await stub.list("messages")).toHaveLength(0);
   });
 
   it("round-trips templates, contacts and the scheduled queue through one implementation", async () => {
@@ -332,21 +273,11 @@ describe("collapsed email-ops tool family", () => {
     });
     const emailId = (JSON.parse(text(sent)) as { email_id: string }).email_id;
 
-    // THE PROVIDER FILTER NOW REFUSES, AND THE REFUSAL IS THE ASSERTION.
-    //
-    // This case used to read: "the provider filter is a REAL filter, not decoration. This is
-    // the pair the store seam's message list cannot express, which is why this tool did not
-    // move onto it." The tool HAS moved onto it — `src/db/emails` collapsed — and that
-    // sentence's premise is exactly why the filter cannot be served: no message projection on
-    // the seam carries a provider, so it can be neither pushed down nor re-checked. Answering
-    // with every provider's mail and answering with none are both wrong, so the tool refuses
-    // and names what is missing. An agent that asked for one provider's sent mail must not be
-    // handed another's, and must not be handed an empty list either.
-    const refused = await call("list_emails", { provider_id: providerId, limit: 10 });
-    expect(refused.isError, "a provider-filtered list must refuse").toBe(true);
-    expect(text(refused)).toContain("provider_id");
-    // ...and the UNFILTERED read still works, which is the half that turns a refused filter
-    // into a refused filter rather than a dead tool.
+    // The legacy ledger facade still refuses provider filtering; pin that
+    // honest refusal until its projection is migrated to the API message model.
+    const filtered = await call("list_emails", { provider_id: providerId, limit: 10 });
+    expect(filtered.isError).toBe(true);
+    expect(text(filtered)).toContain("provider_id");
     const all = JSON.parse(text(await call("list_emails", { limit: 10 }))) as unknown[];
     expect(all).toHaveLength(1);
     // The status filter is still served, in this module, over the enumerated stream.
