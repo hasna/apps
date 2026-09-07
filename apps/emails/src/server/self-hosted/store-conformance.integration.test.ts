@@ -428,3 +428,11 @@ describe.skipIf(!pgClient)("the conformance suite can fail against the real serv
     );
   }
 });
+
+// Uses the real route, immutable migration, tenant scope, and Postgres predicates.
+describe.skipIf(!pgClient)("provider-scoped statistics", () => {
+  it("retains provider provenance and isolates all three reports", async () => {
+    const { checkProviderStatistics } = await import("../../test-support/provider-stats-check.js");
+    await checkProviderStatistics(await liveStore(`provider-stats-${RUN}`));
+  }, SUITE_TIMEOUT_MS);
+});

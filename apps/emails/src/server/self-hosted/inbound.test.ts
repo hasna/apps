@@ -14,7 +14,7 @@ const COLS = [
   "id", "direction", "from_addr", "to_addrs", "cc_addrs", "subject", "body_text",
   "body_html", "status", "provider_message_id", "message_id", "in_reply_to",
   "received_at", "is_read", "is_starred", "labels", "headers", "attachments", "source_id",
-  "idempotency_key", "send_payload_hash", "send_state", "send_started_at",
+  "idempotency_key", "send_payload_hash", "send_state", "send_started_at", "provider_id",
 ];
 
 /**
@@ -232,7 +232,10 @@ describe("Emails self-hosted inbound messages", () => {
     expect(ids.indexOf("0026_legacy_gmail_replay_provenance")).toBeGreaterThan(
       ids.indexOf("0026_priority_sender_rules"),
     );
-    expect(ids.at(-1)).toBe("0026_legacy_gmail_replay_provenance");
+    expect(ids).toContain("0027_message_provider_provenance");
+    expect(ids.indexOf("0028_scheduled_enqueue_identity")).toBeGreaterThan(ids.indexOf("0027_message_provider_provenance"));
+    expect(ids.indexOf("0029_sequence_execution_lease")).toBeGreaterThan(ids.indexOf("0028_scheduled_enqueue_identity"));
+    expect(ids.indexOf("0031_provider_status_observations")).toBeGreaterThan(ids.indexOf("0029_sequence_execution_lease"));
   });
 
   test("POST inbound preserves all fields and returns 201", async () => {
@@ -868,3 +871,50 @@ function req(d: SelfHostedServiceDeps, method: string): Request {
     headers: { "Content-Type": "application/json", "x-api-key": writeToken() },
   });
 }
+
+
+describe("tenant-bound send provider selection", () => {
+  function sendRequest(body: Record<string, unknown>): Request {
+    return new Request("http://svc/v1/messages/send", { method: "POST", headers: { "Content-Type": "application/json", "x-api-key": writeToken() }, body: JSON.stringify({ from: "me@example.com", to: ["you@example.com"], subject: "provider test", idempotency_key: "provider-test-key", ...body }) });
+  }
+  it("dispatches the selected sender and retains provenance and unsubscribe headers", async () => {
+    const d = deps();
+    const inputs: Array<Record<string, unknown>> = [];
+    let defaults = 0;
+    d.sender = { provider: "ses", send: async () => { defaults++; return "wrong-default"; } };
+    d.store.getResource = (async (_spec, id) => id === "bound-provider" ? { id, type: "resend", active: true } : null) as typeof d.store.getResource;
+    d.resolveSender = (_tenant, provider) => provider === "bound-provider" ? { provider: "resend", send: async (input) => { inputs.push(input as unknown as Record<string, unknown>); return "resend-accepted"; } } : null;
+    const response = await handleSelfHostedRequest(d, sendRequest({ provider_id: "bound-provider", unsubscribe_url: "https://example.com/unsubscribe" }));
+    expect(response?.status).toBe(202);
+    const result = await response!.json();
+    expect(result.message.provider_id).toBe("bound-provider");
+    expect(result.provider).toBe("resend");
+    expect(defaults).toBe(0);
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toMatchObject({ provider_id: "bound-provider", unsubscribe_url: "https://example.com/unsubscribe" });
+    expect((await handleSelfHostedRequest(d, sendRequest({ provider_id: "bound-provider", unsubscribe_url: "https://example.com/unsubscribe" })))?.status).toBe(200);
+    expect(inputs).toHaveLength(1);
+    expect((await handleSelfHostedRequest(d, sendRequest({ provider_id: "bound-provider", unsubscribe_url: "https://example.com/different" })))?.status).toBe(409);
+  });
+  it("never falls back to default for an unavailable, inactive, or mismatched provider", async () => {
+    const d = deps();
+    let sends = 0;
+    d.sender = { provider: "ses", send: async () => { sends++; return "wrong"; } };
+    d.store.getResource = (async (_spec, id) => id === "missing" ? null : { id, type: "resend", active: id !== "inactive" }) as typeof d.store.getResource;
+    expect((await handleSelfHostedRequest(d, sendRequest({ provider_id: "missing" })))?.status).toBe(404);
+    expect((await handleSelfHostedRequest(d, sendRequest({ provider_id: "inactive" })))?.status).toBe(409);
+    expect((await handleSelfHostedRequest(d, sendRequest({ provider_id: "unconfigured" })))?.status).toBe(503);
+    d.resolveSender = () => d.sender;
+    expect((await handleSelfHostedRequest(d, sendRequest({ provider_id: "wrong-type" })))?.status).toBe(409);
+    expect(sends).toBe(0);
+  });
+  it("rejects unsafe unsubscribe URLs before a provider call", async () => {
+    const d = deps();
+    let sends = 0;
+    d.sender = { provider: "ses", send: async () => { sends++; return "wrong"; } };
+    for (const unsubscribe_url of ["javascript:alert(1)", "https://example.com/\r\nBcc:bad", "https://user:pass@example.com/"]) {
+      expect((await handleSelfHostedRequest(d, sendRequest({ unsubscribe_url })))?.status).toBe(400);
+    }
+    expect(sends).toBe(0);
+  });
+});

@@ -66,10 +66,9 @@ async function daemonStatus() {
       drainable: false,
     },
     realtime: system.inbox.realtime,
-    // No client-side start command is advertised. Realtime ingestion runs on the
-    // operator's server, and `emails inbox watch` refuses in this mode — naming it
-    // here would propose a remedy that throws.
-    start_commands: {},
+    // Watch is a foreground API polling client, not evidence of a running daemon.
+    start_commands: { inbound: "emails inbox watch --source <source-id>" },
+    start_requirements: "Requires an operator credential and a registered API server ingest binding with a dedicated queue.",
   };
 }
 
@@ -86,15 +85,15 @@ function formatDaemonStatus(status: Awaited<ReturnType<typeof daemonStatus>>): s
       lines.push(chalk.yellow(`  Counts are LOWER BOUNDS: ${queue.availability.reason ?? "the enumeration could not be completed"}`));
     }
   }
-  // The realtime block is an availability gap over /v1 in every case
-  // (src/lib/status-facts.remote.ts realtimeGap), so it is rendered as one. There is
-  // no "configured / not configured" branch here because there is no measurement to
-  // branch on, and `not configured` would be a fabricated negative claim.
+  // Status facts do not poll SQS or prove that a watcher process is running.
+  // Preserve their availability instead of inferring a worker heartbeat.
   lines.push(`  Realtime:   ${renderStatusUnavailable(status.realtime.availability)}`);
   lines.push("");
   lines.push(chalk.dim("  No schedule-aware 'due now' count is derivable over /v1; pending/failed are shown instead."));
   lines.push(chalk.dim("  No provisioning reconciler ships in this build; the queue above is not drained automatically."));
-  lines.push(chalk.dim("  Realtime ingestion runs on the self-hosted server; this client starts no worker."));
+  lines.push(chalk.dim(`  Foreground inbox polling: ${status.start_commands.inbound}`));
+  lines.push(chalk.dim(`  ${status.start_requirements}`));
+  lines.push(chalk.dim("  Watch polls the API; this status does not establish a separate worker heartbeat."));
   return lines.join("\n");
 }
 
@@ -138,9 +137,9 @@ export function registerDaemonCommands(program: Command, output: (data: unknown,
         // the server being up.
         const result = {
           managed_process: false,
-          reason: "No built-in supervisor or PID file is configured for this package; "
-            + "background workers run on the self-hosted server.",
-          start_commands: {},
+          reason: "No built-in supervisor or PID file is configured for this package; no process was restarted.",
+          start_commands: { inbound: "emails inbox watch --source <source-id>" },
+          start_requirements: "Requires an operator credential and a registered API server ingest binding with a dedicated queue.",
           cli_equivalent: "emails daemon status --json",
         };
         output(result, chalk.yellow("No managed email daemon process is configured in this client."));

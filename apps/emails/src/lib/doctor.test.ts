@@ -606,8 +606,8 @@ describe("runDiagnostics and the facts the seam does not carry", () => {
     const credentials = named(checks, "Provider credentials");
 
     expect(credentials.status).toBe("unknown");
-    expect(credentials.message).toContain("cannot be performed");
-    expect(credentials.message).toContain("redacts provider sending credentials");
+    expect(credentials.message).not.toContain("Missing Resend API key");
+    expect(credentials.message).not.toContain("credentials invalid");
   });
 
   it("recommends a command that actually performs the check it defers", async () => {

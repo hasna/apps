@@ -2949,6 +2949,110 @@ const LEGACY_GMAIL_REPLAY_PROVENANCE = defineMigration(
   `,
 );
 
+// Provider provenance is nullable: unknown historical sources must remain unknown.
+const MESSAGE_PROVIDER_PROVENANCE = defineMigration(
+  "0027_message_provider_provenance",
+  `ALTER TABLE messages ADD COLUMN IF NOT EXISTS provider_id TEXT;
+   -- Only one unambiguous provider recorded on events for this exact tenant/message
+   -- is evidence. Conflicting or absent historical provenance stays NULL.
+   UPDATE messages m SET provider_id = evidence.provider_id
+   FROM (
+     SELECT tenant_id, email_id, min(provider_id) AS provider_id
+     FROM events WHERE provider_id IS NOT NULL AND provider_id <> '' AND email_id IS NOT NULL
+     GROUP BY tenant_id, email_id HAVING count(DISTINCT provider_id) = 1
+   ) evidence
+   WHERE m.tenant_id = evidence.tenant_id AND m.id = evidence.email_id AND m.provider_id IS NULL;
+   CREATE INDEX IF NOT EXISTS messages_tenant_provider_ts_idx
+   ON messages (tenant_id, provider_id, sort_ts DESC, id DESC);`,
+);
+
+const SCHEDULED_ENQUEUE_IDENTITY = defineMigration(
+  "0028_scheduled_enqueue_identity",
+  `ALTER TABLE scheduled_emails ADD COLUMN IF NOT EXISTS enqueue_key TEXT;
+   ALTER TABLE scheduled_emails ADD COLUMN IF NOT EXISTS enqueue_hash TEXT;
+   ALTER TABLE scheduled_emails ADD COLUMN IF NOT EXISTS send_options JSONB NOT NULL DEFAULT '{}'::jsonb;
+   CREATE UNIQUE INDEX IF NOT EXISTS scheduled_emails_tenant_enqueue_key
+   ON scheduled_emails(tenant_id, enqueue_key) WHERE enqueue_key IS NOT NULL;`,
+);
+
+const SEQUENCE_EXECUTION_LEASE = defineMigration("0029_sequence_execution_lease", `
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_lease TIMESTAMPTZ;
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_payload JSONB;
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_error TEXT;
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_started BOOLEAN NOT NULL DEFAULT false;
+  CREATE INDEX IF NOT EXISTS sequence_execution_due ON sequence_enrollments(tenant_id,next_send_at) WHERE status='active';
+`);
+
+/** Current provider snapshots have observation times, not historical event times. */
+const PROVIDER_STATUS_OBSERVATIONS = defineMigration(
+  "0031_provider_status_observations",
+  `ALTER TABLE events DROP CONSTRAINT IF EXISTS events_type_enum_check;
+   ALTER TABLE events ADD CONSTRAINT events_type_enum_check
+   CHECK (type IN ('delivered','bounced','complained','opened','clicked','unsubscribed','status_observed')) NOT VALID;`,
+);
+
+const FORWARDING_DELIVERY_JOBS = defineMigration(
+  "0030_forwarding_delivery_jobs",
+  `CREATE TABLE IF NOT EXISTS forwarding_delivery_jobs (
+     tenant_id UUID NOT NULL, rule_id TEXT NOT NULL, message_id TEXT NOT NULL,
+     snapshot JSONB NOT NULL, status TEXT NOT NULL CHECK(status IN ('processing','sent','failed','skipped')),
+     lease UUID NOT NULL, sent_email_id TEXT, error TEXT,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     PRIMARY KEY(tenant_id,rule_id,message_id)
+   );
+   CREATE INDEX IF NOT EXISTS forwarding_delivery_jobs_pending ON forwarding_delivery_jobs(tenant_id,status,updated_at);
+   ALTER TABLE forwarding_delivery_jobs ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE forwarding_delivery_jobs FORCE ROW LEVEL SECURITY;
+   DROP POLICY IF EXISTS forwarding_delivery_jobs_tenant_policy ON forwarding_delivery_jobs;
+   CREATE POLICY forwarding_delivery_jobs_tenant_policy ON forwarding_delivery_jobs
+     USING (tenant_id = NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+     WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant',true),'')::uuid);`,
+);
+
+const PROVISIONING_JOBS = defineMigration(
+  "0033_provisioning_jobs",
+  `CREATE TABLE IF NOT EXISTS provisioning_jobs (
+    id TEXT PRIMARY KEY, tenant_id UUID NOT NULL, kind TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL, input_hash TEXT NOT NULL, input JSONB NOT NULL, actor TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','processing','blocked','ready')), receipt JSONB, lease UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(tenant_id,kind,idempotency_key)
+  );
+  CREATE INDEX IF NOT EXISTS provisioning_jobs_tenant_status ON provisioning_jobs(tenant_id,status,updated_at);
+  ALTER TABLE provisioning_jobs ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE provisioning_jobs FORCE ROW LEVEL SECURITY;
+  DROP POLICY IF EXISTS provisioning_jobs_tenant_policy ON provisioning_jobs;
+  CREATE POLICY provisioning_jobs_tenant_policy ON provisioning_jobs
+    USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+    WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);`,
+);
+
+const SMTP_SUBMISSION_RECEIPTS = defineMigration("0034_smtp_submission_receipts", `
+CREATE TABLE smtp_submission_receipts (
+  tenant_id UUID NOT NULL, transaction_id UUID NOT NULL, payload_hash TEXT NOT NULL,
+  message_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, transaction_id), CHECK (payload_hash ~ '^[0-9a-f]{64}$')
+);
+ALTER TABLE smtp_submission_receipts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE smtp_submission_receipts FORCE ROW LEVEL SECURITY;
+CREATE POLICY smtp_submission_receipts_tenant_policy ON smtp_submission_receipts
+  USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
+`);
+
+const MESSAGE_TRACKING = defineMigration("0035_message_tracking", `
+CREATE TABLE IF NOT EXISTS message_tracking (
+  tenant_id UUID NOT NULL, message_id TEXT NOT NULL, document JSONB NOT NULL,
+  PRIMARY KEY(tenant_id,message_id),
+  FOREIGN KEY(tenant_id,message_id) REFERENCES messages(tenant_id,id) ON DELETE CASCADE
+);
+ALTER TABLE message_tracking ENABLE ROW LEVEL SECURITY;
+ALTER TABLE message_tracking FORCE ROW LEVEL SECURITY;
+CREATE POLICY message_tracking_tenant ON message_tracking
+  USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+  WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+`);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -2984,5 +3088,13 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MAILBOX_FILTERS,
     PRIORITY_SENDER_RULES,
     LEGACY_GMAIL_REPLAY_PROVENANCE,
+    MESSAGE_PROVIDER_PROVENANCE,
+    SCHEDULED_ENQUEUE_IDENTITY,
+    SEQUENCE_EXECUTION_LEASE,
+    FORWARDING_DELIVERY_JOBS,
+    PROVIDER_STATUS_OBSERVATIONS,
+    PROVISIONING_JOBS,
+    SMTP_SUBMISSION_RECEIPTS,
+    MESSAGE_TRACKING,
   ];
 }

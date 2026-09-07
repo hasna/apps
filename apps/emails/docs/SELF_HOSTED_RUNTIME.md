@@ -235,3 +235,212 @@ commit SHAs. Refresh them in a reviewed dependency update: verify the upstream
 tag/release, resolve its current digest/SHA, run the full isolated suite and
 Postgres integration job, then record the change in the changelog. Never
 silently retag a deployment.
+
+### Binding registry providers to senders
+
+The provider registry stores metadata. Sending credentials remain on the server.
+A client can select `emails send --provider <id>` after the server operator binds
+that active registry ID to a sender in `EMAILS_SENDER_BINDINGS`. Bindings are keyed
+by both tenant ID and provider ID, so another tenant cannot select your sender.
+
+The JSON array contains secret **environment variable names**, never secret
+values. Inject those variables through your deployment's secret manager:
+
+```json
+[
+  { "tenant_id": "tenant-id", "provider_id": "primary-provider-id", "sender": "default" },
+  { "tenant_id": "tenant-id", "provider_id": "resend-provider-id", "type": "resend", "api_key_env": "TRANSACTIONAL_RESEND_TOKEN" },
+  { "tenant_id": "tenant-id", "provider_id": "ses-provider-id", "type": "ses", "region": "us-east-1", "access_key_env": "TRANSACTIONAL_SES_ACCESS", "secret_key_env": "TRANSACTIONAL_SES_SECRET" }
+]
+```
+
+`sender: "default"` explicitly binds the existing `EMAILS_SEND_PROVIDER` sender,
+including its deployment role when configured. Additional SES bindings require
+both named credential variables and a region. Additional Resend bindings require
+the named API key variable. Unknown fields, missing variables, or duplicate
+bindings prevent startup. Restart the API after updating these settings.
+
+Omitting `--provider` keeps the existing default sender. An explicit provider
+without a binding fails before sending; it never falls back to the default.
+The selected provider is recorded on the message and included in the idempotency
+payload. Changing providers while reusing an idempotency key is a conflict.
+
+`--unsubscribe-url https://example.com/unsubscribe` passes an HTTP(S) URL to the
+provider adapters, which emit the List-Unsubscribe headers. The URL participates
+in idempotency checking. Clients check the advertised send API contract before
+using provider selection or unsubscribe URLs; an older API must be upgraded
+first so these options cannot be silently dropped.
+
+
+### Domain lifecycle commands
+
+`emails domain status` and `emails domains status [domain]` read the tenant's
+server registry. `domains verify`, `enable-outbound`, `disable-outbound`, and
+`enable-inbound` call authenticated operator-only domain lifecycle routes.
+Verification and enablement use the domain's tenant provider binding described
+above; they never read provider credentials from the CLI machine. An optional
+`--provider` selects and persists a verified tenant provider association.
+
+Disabling outbound immediately denies sends even for previously ready addresses.
+Verification alone does not undo that disable. Enabling outbound requires the
+bound provider to confirm identity/DKIM readiness. SES identity verification is
+reported separately from SPF/DMARC DNS observations; neither a missing DMARC
+observation nor a provider transport error is reported as successful DNS proof.
+
+Enabling inbound requires the server ingest bucket/queue configuration, regional
+SES MX, and an enabled SES receipt action delivering to that bucket. It does not
+modify DNS, receipt rules, or S3 notifications and does not prove end-to-end queue
+delivery. Both directions survive lifecycle ordering: an inbound-only state is
+`inbound_ready`, and verified sending plus inbound readiness is
+`verified_inbound_ready`. Disabling outbound preserves the inbound tenant route. Full DNS provisioning/connect/setup remains
+separate from these readiness operations. Readiness checks cannot be forced off.
+
+
+### Provider health command coverage
+
+| Command | Server operation | Deployment prerequisite |
+| --- | --- | --- |
+| `provider status`, `provider check` | `GET /v1/providers/{id}/health?live=true` for every registered provider | API with this route; explicit tenant/provider sender bindings |
+| `doctor --live` | Same server credential probes | Same; absent bindings are unknown/unconfigured, not invalid client credentials |
+| Domain status | Read tenant registry readiness | Existing domains API |
+| Domain verify / outbound enable | Bound SES identity or Resend verification API | Tenant provider binding with domain-read permissions |
+| Domain inbound enable | Provider verification, regional MX and active SES receipt/S3 route checks | Server ingest config and existing receiving infrastructure |
+
+The provider health endpoint without `live=true` only reports binding metadata.
+Live SES checks call `GetAccount` using server credentials and report sending and
+production-access flags. Resend checks read the domain list; the binding needs
+permission to read domains. Failure means the read-only probe failed, not proof
+that the key itself is invalid. Provider error payloads and secret values are
+never returned. Probes abort after five seconds; the CLI bounds its transport too.
+An older API produces an explicit update error. No provider registration or mail
+send occurs during health checks. Inactive and unsupported/unbound registry rows
+remain visible. DNS provisioning, purchase, and inbox end-to-end delivery are not
+claimed by these checks.
+
+### Provider delivery sync
+
+`emails provider sync [--provider <id>]` and `emails pull` call the operator-only
+`POST /v1/providers/{id}/sync` route. `pull --watch --interval 5m` repeats the API
+operation and exits on Ctrl+C. The API processes at most ten known messages per
+request; the client follows its cursor, preserves failures, and exits nonzero
+for incomplete results. Provider credentials stay in the server bindings.
+Migration `0031_provider_status_observations` must be deployed before syncing.
+
+SES uses [GetMessageInsights](https://docs.aws.amazon.com/ses/latest/APIReference-V2/API_GetMessageInsights.html)
+for recorded provider message IDs, with one-second spacing within each batch.
+The binding needs insights permission and provider-retained data. Throttling,
+expired history, unavailable insights, and authentication errors are reported as
+partial failures; they are never zero-event successes.
+
+Resend uses [Retrieve Sent Email](https://resend.com/docs/api-reference/emails/retrieve-email)
+for each known message. Its current-status response does not supply an event
+timestamp: the app records `status_observed` with `observed_status` metadata,
+updates the message state, and does not misdate it as a new delivery/bounce event
+in period analytics. Multiple-recipient snapshots do not identify an affected
+recipient, so contact counters are left unchanged and the report names the
+unattributed count. No complete provider event history is claimed.
+
+Each message's observations, monotonic delivery status, and attributable contact
+effects commit atomically. Repeated/concurrent syncs do not count a recipient's
+bounce or complaint twice for the same message. A matching timestamped webhook
+event is reused. Complaints, proven permanent bounces, and three distinct bounced
+messages suppress the contact; absent contacts are created within the transaction.
+Only messages carrying the selected tenant/provider provenance are queried.
+Messages sent outside this app, old rows without provenance, and inbox/Gmail/S3
+imports require their own ingestion paths; this command does not imply they were
+pulled. The existing webhook ingestion remains active independently of sync.
+
+### Tenant-bound inbox imports and queue watch
+
+`emails inbox sync-s3` and `emails inbox watch` call operator-authorized API
+operations. They use the same saved API credentials as the other CLI commands.
+`watch` polls SQS on the server and acknowledges a notification only after every
+referenced object is imported or already present. `--once` performs one poll;
+otherwise Ctrl-C stops the client polling loop. This does not install a background
+worker. API responses include imported/duplicate/error counts, queue counts when
+available, the check time and the S3 continuation cursor. Queue counts are
+approximate. A partial S3 page retains its starting cursor (or reports
+`retry_from_start`) so a retry does not skip failed objects.
+
+Use `emails inbox source add-s3 --bucket inbound-mail-bucket --prefix inbound/example.com/`
+to register the tenant-owned API source. `inbox source list` (alias `status`)
+reads the same registry from every authenticated client. Registration records
+metadata and returns the source ID; it does not create cloud infrastructure.
+The service operator must then configure
+`EMAILS_INGEST_BINDINGS` on the API service. This configuration contains resource
+identifiers, not AWS secrets. Example with placeholder IDs:
+
+```json
+[
+  {
+    "tenant_id": "TENANT_UUID",
+    "source_id": "SOURCE_ID",
+    "provider_id": "OPTIONAL_REGISTERED_PROVIDER_ID",
+    "bucket": "inbound-mail-bucket",
+    "prefix": "inbound/example.com/",
+    "domain": "example.com",
+    "region": "us-east-1",
+    "queue_url": "https://sqs.us-east-1.amazonaws.com/123456789012/tenant-inbound"
+  }
+]
+```
+
+`provider_id` and `queue_url` are optional for S3 import; watching requires a
+queue. Each queue must be dedicated to its binding. Bucket prefixes must not
+overlap across bindings. The domain must already route inbound email to the
+bound tenant. For S3 notifications without envelope recipients, this operator
+configured prefix/domain mapping supplies the routing evidence; MIME headers are
+never routing authority. New messages retain the configured provider ID. Existing
+immutable source provenance is checked on retries.
+
+The server AWS credential chain needs S3 ListBucket/GetObject and, for queue
+watch, SQS ReceiveMessage/DeleteMessage/GetQueueAttributes on those bound resources.
+No client AWS credentials are accepted. `--bucket`, `--region`, `--provider` and
+`--queue-url` validate the corresponding binding; `--prefix` can narrow it.
+`--profile` reports a configuration error because profiles belong to the server.
+`--all-buckets` polls every bound queue in this tenant, at most ten per request.
+Each request shares a 25-second cloud deadline; S3 batches contain at most ten
+objects and queue batches contain at most ten notifications per source.
+
+SES receipt rules, SNS/SQS delivery permissions, dedicated queues, domain routing
+and IAM credentials must be provisioned before these operations can run.
+`setup-realtime` and a network SMTP listener still require separate infrastructure
+work; these commands do not create that infrastructure. Historical machine-local
+source entries are not imported automatically; register their bucket/prefix through
+`inbox source add-s3` and bind the returned API source ID. Repeating registration
+for a unique bucket/prefix updates that source without replacing its ID.
+`--status import` permits manual sync without queue watch; `--no-live-sync` also
+disables watch while retaining manual recovery. `inbox source retire ID` retires
+the API source and preserves its metadata and mail. Registry lifecycle settings
+are distinct from worker health or verified cloud configuration.
+
+
+### Configure bound realtime notification wiring
+
+`emails inbox setup-realtime <domain> --source <source-id>` calls the operator-only
+`POST /v1/inbox/setup-realtime` API. Add `topic_arn`, `rule_set` and `rule_name`
+to the existing `EMAILS_INGEST_BINDINGS` entry, alongside its dedicated `queue_url`.
+The queue and SNS topic must already exist in the same AWS account, region and
+partition. The domain and active S3 source must belong to the authenticated tenant.
+Legacy `--rule-set`, `--rule` and `--region` values validate that binding;
+`--profile` cannot select machine-local cloud credentials.
+
+The operation validates the active SES rule set and action ordering, bound S3
+bucket/prefix, recipient scope, topic/queue identities and exclusive queue
+subscription before configuring anything. It preserves unrelated policy grants
+and receipt actions, refuses conflicting topics, filters and Deny policies, adds
+source-scoped SNS/SQS grants and raw delivery, and reads the configuration back.
+No queue messages are read or acknowledged and no test mail is sent by setup.
+
+`verified: true` means the exact notification configuration was read back.
+It does not establish delivery, worker liveness, AWS organizational-policy/KMS
+permissions, or an operational mailbox. Use `emails inbox watch --source <id>`
+to poll; setup never starts a watcher. A failure returns the stage, confirmed
+`changed` steps and `attempted` steps, with `changes_may_have_applied` when an AWS
+mutation could have landed despite a missing acknowledgement. Inspect those
+resources and retry the same binding. AWS policy updates are read-modify-write;
+avoid concurrent external policy/rule editors during setup.
+
+AWS contracts: [SES receiving permissions](https://docs.aws.amazon.com/ses/latest/dg/receiving-email-permissions.html),
+[SNS to SQS subscriptions](https://docs.aws.amazon.com/sns/latest/dg/subscribe-sqs-queue-to-sns-topic.html),
+and [raw delivery](https://docs.aws.amazon.com/sns/latest/dg/sns-large-payload-raw-message-delivery.html).

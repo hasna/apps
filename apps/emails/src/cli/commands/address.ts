@@ -1,10 +1,11 @@
+import { provisionAddress, formatAddressProvisioningResult, addressProvisioningReady, type ProvisionAddressOptions } from "../../lib/address-provisioning-api.js";
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
 import { createAddress, findAddressesByEmail, listAddresses, deleteAddress, getAddress, getAddressByEmail, markVerified } from "../../db/addresses.js";
 import { suspendAddress, activateAddress, setAddressQuota } from "../../db/address-lifecycle.js";
 import { recordProvisioningEvent } from "../../db/provisioning.js";
 import { colorDnsStatus, tableRow, truncate } from "../../lib/format.js";
-import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, MAX_CLI_PAGE_LIMIT, parseCliListPage, resolveId } from "../utils.js";
+import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliPage } from "../utils.js";
 import {
   enrichAddresses,
   getAddressOwnershipDetail,
@@ -14,33 +15,6 @@ import {
   transferAddressOwnerByRef,
   unassignAddressOwnerByRef,
 } from "../../lib/address-ownership.js";
-
-// `address provision` used to throw "is not available in the self-hosted client;
-// it runs on the self-hosted server". Both halves were false: the throw was
-// unconditional, so it fired in local mode too, and there is no server route for
-// it to run on — `openapi.ts` exposes plain CRUD for `/v1/addresses` and no
-// provisioning route, and the container runs no reconciler. The orchestrator
-// this command wrapped was deleted as unreachable dead code, and nothing
-// replaced it in any configuration.
-//
-// So the refusal now says exactly that and names the two commands that DO the
-// work, matching the wording `emails provision *` and the MCP provisioning tools
-// already settled on. It must not name a deployment mode.
-//
-// Address ownership is NOT in this category: `src/db/owners.ts` has collapsed onto
-// the store seam, so its subcommands read and write whichever store this
-// installation's STORAGE configuration names — owner rows through the `owners`
-// repository, the ownership columns through `addresses`/`addressLifecycle`, and the
-// audit trail through the address-ownership ledger.
-function notImplementedAnywhere(command: string): never {
-  throw new Error(
-    `${command} is not implemented in this build: there is no address provisioning ` +
-      `orchestrator and no route that performs one. Create the address with ` +
-      `'emails address add <email> --provider <id>', record who owns it with ` +
-      `'emails address set-owner <email> --owner <name>', and wire the domain's inbound ` +
-      `route with 'emails aws setup-inbound --domain <domain>'.`,
-  );
-}
 
 /** Upper bound for `address owner-history --limit`, mirroring the repo cap. */
 const MAX_OWNER_HISTORY_LIMIT = 100;
@@ -73,7 +47,7 @@ function resolveSelfHostedAddressId(ref: string): string {
   // verify, set-owner) accept the email, and `address list` prints it (task
   // 55c19dde).
   const wanted = ref.trim().toLowerCase();
-  const matches = listAddresses(undefined, { limit: 1000 })
+  const matches = listAddresses()
     .filter((address) => address.id.startsWith(ref) || address.email.toLowerCase() === wanted);
   if (matches.length === 1) return matches[0]!.id;
   if (matches.length > 1) {
@@ -116,19 +90,20 @@ export function registerAddressCommands(program: Command, output: (data: unknown
 
   const listAddressesAction = async (opts: { provider?: string; limit?: string; offset?: string; verbose?: boolean; unverified?: boolean }) => {
     try {
-      const page = parseCliListPage(opts);
+      const page = parseCliPage(opts);
       // Hydrate owner/administrator/provider_name instead of hardcoding nulls: an
       // owned address must never be reported as unowned, in the table or in --json.
       // Filter BEFORE applying the requested page. Otherwise a page containing
       // verified rows can print "No addresses" even though unverified senders are
-      // present later in the registry — precisely the default-page blind spot this
-      // option exists to remove. The address family has a documented 1,000-row CLI
-      // ceiling, so use that same bounded scan rather than an unbounded read.
+      // present later in the registry. An omitted limit means the full account
+      // registry; the repository pager either proves completion or fails closed.
       const listed = opts.unverified
-        ? listAddresses(opts.provider, { limit: MAX_CLI_PAGE_LIMIT, offset: 0 })
+        ? listAddresses(opts.provider)
             .filter((address) => !address.verified)
-            .slice(page.offset, page.offset + page.limit)
-        : listAddresses(opts.provider, page);
+            .slice(page.offset, opts.limit === undefined ? undefined : page.offset + page.limit)
+        : opts.limit === undefined
+          ? listAddresses(opts.provider).slice(page.offset)
+          : listAddresses(opts.provider, page);
       const addresses = await enrichAddresses(listed);
       if (addresses.length === 0) {
         output([], chalk.dim(opts.unverified ? "No unverified addresses." : "No addresses configured."));
@@ -179,6 +154,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
         shown: addresses.length,
         limit: page.limit,
         offset: page.offset,
+        complete: opts.limit === undefined,
         noun: "address",
         detailCommand: "use emails address owner <email-or-id> for ownership details",
         verbose,
@@ -193,7 +169,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .command("addresses")
     .description("List sender email addresses (alias: emails address list)")
     .option("--provider <id>", "Filter by provider ID")
-    .option("--limit <n>", "Maximum addresses to show (default 20 compact, 50 verbose/json)")
+    .option("--limit <n>", "Maximum addresses to show (default: all registered addresses)")
     .option("--offset <n>", "Number of addresses to skip", "0")
     .option("--unverified", "Show only addresses whose verified flag is false")
     .option("--verbose", "Show expanded owner/admin/quota fields")
@@ -250,7 +226,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .command("list")
     .description("List sender addresses")
     .option("--provider <id>", "Filter by provider ID")
-    .option("--limit <n>", "Maximum addresses to show (default 20 compact, 50 verbose/json)")
+    .option("--limit <n>", "Maximum addresses to show (default: all registered addresses)")
     .option("--offset <n>", "Number of addresses to skip", "0")
     .option("--unverified", "Show only addresses whose verified flag is false")
     .option("--verbose", "Show expanded owner/admin/quota fields")
@@ -368,7 +344,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .action((opts: { domain: string }) => {
       try {
         const domain = opts.domain.trim().toLowerCase();
-        const exists = listAddresses(undefined, { limit: 1000 }).map((address) => address.email);
+        const exists = listAddresses().map((address) => address.email);
         const suggestions = suggestAddressLocalParts(domain, exists);
         output({ domain, suggestions }, suggestions.length ? suggestions.join("\n") : chalk.dim(`No obvious suggestions left for ${domain}.`));
       } catch (e) {
@@ -378,7 +354,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
 
   addressCmd
     .command("provision <email>")
-    .description("Create an email address on a provisioned domain (NOT IMPLEMENTED in this build; use emails address add)")
+    .description("Provision an address on a configured domain through the authenticated API")
     .requiredOption("--provider <id>", "Provider ID")
     .option("--domain <id>", "Domain ID (defaults to the address's domain if registered)")
     .option("--receive <strategy>", "Receive strategy: ses-s3 | cf-routing | resend-webhook", "ses-s3")
@@ -387,11 +363,15 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .option("--administrator <name|id>", "Administering agent (required for human owners; defaults to owner for agents)")
     .option("--dry-run", "Resolve inputs and show the planned change without writing address, provisioning, or ownership state")
     .option("--wait", "Advance provisioning now and wait until the address is ready to receive")
-    .option("--timeout <sec>", "Max seconds to wait when --wait is used", "120")
-    .option("--interval <sec>", "Seconds between readiness checks when --wait is used", "5")
-    .option("--bucket <name>", "Inbound S3 bucket for receive validation (defaults to config inbound_s3_bucket)")
-    .action(async () => {
-      try { notImplementedAnywhere("emails address provision"); } catch (e) { handleError(e); }
+    .option("--timeout <sec>", "Max seconds to wait when --wait is used (1–300)", "120")
+    .option("--interval <sec>", "Seconds between readiness checks when --wait is used (1–60)", "5")
+    .option("--bucket <name>", "Inbound bucket assertion (must match server ingest configuration)")
+    .action(async (email: string, opts: ProvisionAddressOptions) => {
+      try {
+        const result = await provisionAddress(email, opts);
+        output(result, formatAddressProvisioningResult(result));
+        if (!addressProvisioningReady(result)) process.exitCode = 1;
+      } catch (e) { handleError(e); }
     });
 
   // `verify` READS. `set-verified` WRITES. They are separate commands, and this one
@@ -402,9 +382,8 @@ export function registerAddressCommands(program: Command, output: (data: unknown
   // gets "⚠ … is not yet verified", and reasonably concludes the tool has told them
   // what to do next — when in fact this command has no write path at all and, before
   // `set-verified` and `address add --verified` existed, neither did any other.
-  // `address provision` still refuses in every mode, so the only route left at the
-  // time was a hand-rolled PATCH /v1/addresses/{id}. The name is kept for
-  // compatibility; the description and output name the command that writes.
+  // The name is kept for compatibility; provision performs verified readiness
+  // checks, while set-verified remains an explicit manual override.
   addressCmd
     .command("verify <email>")
     .description("Check verification status of an address (READ-ONLY; use 'address set-verified' to change it)")
@@ -507,7 +486,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .description("Suspend a sender address (blocks sending until reactivated)")
     .action(async (id: string) => {
       try {
-        const resolvedId = resolveId("addresses", id);
+        const resolvedId = resolveSelfHostedAddressId(id);
         if (!getAddress(resolvedId)) handleError(new Error(`Address not found: ${id}`));
         const a = await suspendAddress(resolvedId);
         output(a, chalk.yellow(`⏸ Suspended ${a.email} — sending blocked`));

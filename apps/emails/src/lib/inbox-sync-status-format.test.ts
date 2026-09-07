@@ -130,7 +130,7 @@ describe("formatInboxSyncStatus — the pull hint names a real command", () => {
     expect(rendered).not.toContain("emails refresh");
   });
 
-  it("omits the pull hint in self_hosted, where the server owns ingestion", () => {
+  it("suggests API-backed pull and watch with saved server credentials", () => {
     const selfHosted = emptyLocalStatus({
       current: "self_hosted",
       label: "Server API",
@@ -139,7 +139,8 @@ describe("formatInboxSyncStatus — the pull hint names a real command", () => {
     });
 
     const out = formatInboxSyncStatus(selfHosted);
-    expect(out).not.toContain("emails pull");
+    expect(out).toContain("Pull now: emails pull");
+    expect(out).toContain("emails inbox watch");
     expect(out).not.toContain("emails refresh");
   });
 });

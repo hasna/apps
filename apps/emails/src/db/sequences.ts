@@ -139,6 +139,7 @@ export interface SequenceStep {
 }
 
 export interface SequenceEnrollment {
+  execution_error?: string | null;
   id: string;
   sequence_id: string;
   contact_email: string;
@@ -406,6 +407,7 @@ function toEnrollment(row: ResourceRow): SequenceEnrollment {
     enrolled_at: requiredTimestamp(row, "enrolled_at", "sequence enrollment"),
     next_send_at: cstrOrNull(row["next_send_at"]),
     completed_at: cstrOrNull(row["completed_at"]),
+    ...(row["execution_error"] !== undefined ? { execution_error: cstrOrNull(row["execution_error"]) } : {}),
   };
 }
 

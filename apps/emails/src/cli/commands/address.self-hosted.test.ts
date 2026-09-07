@@ -82,19 +82,11 @@ describe("address CLI — self-hosted (/v1) routing", () => {
     expect(out).toContain("No addresses configured.");
   });
 
-  it("refuses address provisioning without inventing a server route for it", async () => {
-    for (const args of [
-      ["address", "provision", "agent@example.com", "--provider", "prov-1"],
-    ]) {
-      const result = await runAddressCommandExpectingExit(args);
-      expect(result.error).toBe("process.exit:1");
-      expect(result.stderr).toContain("emails address provision is not implemented in this build");
-      // `/v1` carries plain CRUD for addresses and no provisioning route, so the
-      // old "it runs on the self-hosted server" pointed at nothing — and this is
-      // the arm where it was most plausible.
-      expect(result.stderr).not.toContain("runs on the self-hosted server");
-      expect(result.stderr).toContain("emails address add <email> --provider <id>");
-    }
+  it("reports an older API lacking address orchestration without creating local state", async () => {
+    const result = await runAddressCommandExpectingExit(["address","provision","agent@example.com","--provider","prov-1"]);
+    expect(result.error).toBe("process.exit:1");
+    expect(result.stderr).toContain("POST /v1/provision/address");
+    expect(result.stderr).toContain("HTTP 405");
   });
 
   it("`address owner` answers from /v1 instead of refusing", async () => {

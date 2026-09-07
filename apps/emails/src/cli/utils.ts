@@ -409,6 +409,8 @@ export function parseCliListPage(
 export function formatListHint(opts: {
   shown: number;
   limit: number;
+  /** The caller enumerated the complete registry, so no next page exists. */
+  complete?: boolean;
   offset?: number;
   noun: string;
   pluralNoun?: string;
@@ -429,7 +431,7 @@ export function formatListHint(opts: {
   // `provider list --limit 1000` printed a clamped 500-row page as if it were
   // the complete set (task 9ec32ef4). Against a store that serves the full
   // request, a set that ends exactly at the cap earns a harmless extra hint.
-  if (opts.shown >= Math.min(opts.limit, SEAM_LIST_HARD_CAP)) hints.push(`page with --offset ${offset + opts.shown} or set --limit`);
+  if (!opts.complete && opts.shown >= Math.min(opts.limit, SEAM_LIST_HARD_CAP)) hints.push(`page with --offset ${offset + opts.shown} or set --limit`);
   if (hints.length > 0) parts.push(hints.join("; "));
   return chalk.dim(parts.join(" "));
 }

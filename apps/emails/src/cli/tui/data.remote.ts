@@ -29,7 +29,7 @@ import {
   removePrioritySenderRuleRemote,
 } from "../../db/priority-senders.js";
 import { listDomains } from "../../db/domains.js";
-import { findAddressesByEmail, listAddresses } from "../../db/addresses.js";
+import { findAddressesByEmail, listAddresses, listActiveAddressCountsByDomains, getPreferredActiveAddressEmail } from "../../db/addresses.js";
 import { getLatestActiveProviderId } from "../../db/providers.js";
 import { getInboundBuckets, loadConfig, saveConfig } from "../../lib/config.js";
 import { assessDomainReadiness } from "../../lib/domain-readiness.js";
@@ -198,6 +198,7 @@ function v1AttachmentInfos(row: Record<string, unknown>): AttachmentInfo[] {
     const o = cobj(attachment);
     return {
       filename: cstr(o["filename"]) || `attachment-${index + 1}`,
+      ...(typeof o["content_id"] === "string" ? { content_id: o["content_id"] as string } : {}),
       content_type: cstr(o["content_type"]) || "application/octet-stream",
       size: cnum(o["size"]),
     };
@@ -683,15 +684,14 @@ export function providerIdForSender(address: string): string | null {
 
 /** Pick the best configured sender for a new TUI compose. */
 export function defaultFromAddress(opts?: { source?: MailboxSource; fallback?: string }): string {
-  if (opts?.source?.address) return opts.source.address;
+  if (opts?.source?.address) {
+    const registrations = findAddressesByEmail(opts.source.address);
+    if (registrations.some((address) => address.status !== "suspended")) return opts.source.address;
+  }
   if (opts?.fallback) return opts.fallback;
   try {
     const domain = opts?.source?.domain?.toLowerCase();
-    const candidates = listAddresses(undefined, { limit: 200 })
-      .map((address) => extractEmail(address.email))
-      .filter((address): address is string => !!address)
-      .filter((address) => !domain || address.endsWith(`@${domain}`));
-    return candidates[0] ?? "";
+    return getPreferredActiveAddressEmail({ domain }) ?? "";
   } catch (error) {
     rethrowSelfHostedResponseFailure(error);
     return "";
@@ -754,14 +754,7 @@ export async function listDomainSummaries(opts?: ListDomainSummaryOptions): Prom
   const page = pageFromOptions(opts, 50);
   try {
     const domains = listDomains(undefined, page);
-    const addresses = listAddresses(undefined, { limit: 1000 });
-    const addressCountByDomain = new Map<string, number>();
-    for (const item of addresses) {
-      const address = extractEmail(item.email);
-      const domain = address?.split("@")[1];
-      if (!domain || (item.status ?? "active") !== "active") continue;
-      addressCountByDomain.set(domain, (addressCountByDomain.get(domain) ?? 0) + 1);
-    }
+    const addressCountByDomain = listActiveAddressCountsByDomains(domains.map((domain) => domain.domain));
     const mode = resolveClientMode();
     return domains
       .map((domain) => {
@@ -817,40 +810,43 @@ export interface ListInboxAddressOptions {
 
 /** User-facing mailbox choices: all mailboxes plus the configured addresses. */
 export function listInboxAddresses(opts?: ListInboxAddressOptions): InboxAddressChoice[] {
-  try {
-    const limit = opts ? positiveInt(opts.limit, 200) : 200;
-    const q = opts?.search?.trim().toLowerCase();
-    const choices = listAddresses(undefined, { limit: Math.max(limit, 200) })
-      .filter((item) => (item.status ?? "active") === "active")
-      .map((item): InboxAddressChoice | null => {
-        const address = extractEmail(item.email);
-        if (!address) return null;
-        return {
-          id: `a:${address}`,
-          label: item.display_name ? `${item.display_name} <${address}>` : address,
-          address,
-          domain: address.split("@")[1],
-          providerId: item.provider_id || undefined,
-          provider: item.provider_id || undefined,
-          receiveStatus: item.verified ? "ready" : "pending",
-          configured: true,
-          observed: false,
-        };
-      })
-      .filter((item): item is InboxAddressChoice => item !== null)
-      .filter((item) => !q || [item.address, item.label, item.domain].some((value) => String(value ?? "").toLowerCase().includes(q)))
-      .slice(0, limit);
-    return opts?.search?.trim() ? choices : [ALL_ADDRESSES, ...choices];
-  } catch (error) {
-    rethrowSelfHostedResponseFailure(error);
-    return opts?.search?.trim() ? [] : [ALL_ADDRESSES];
+  const limit = opts?.limit === undefined ? undefined : positiveInt(opts.limit, 200);
+  const q = opts?.search?.trim().toLowerCase();
+  const rows = listAddresses()
+    .map((item): InboxAddressChoice | null => {
+      const address = extractEmail(item.email);
+      if (!address) return null;
+      return {
+        id: `a:${address}`,
+        label: item.display_name ? `${item.display_name} <${address}>` : address,
+        address,
+        domain: address.split("@")[1],
+        providerId: item.provider_id || undefined,
+        provider: item.provider_id || undefined,
+        receiveStatus: item.status === "suspended" ? "suspended" : item.verified ? "ready" : "pending",
+        configured: true,
+        observed: false,
+      };
+    })
+    .filter((item): item is InboxAddressChoice => item !== null);
+  // A mailbox is selected by address, even when several provider records bind it.
+  // Keep one choice per selection id and prefer an available binding for its label.
+  const mailboxes = new Map<string, InboxAddressChoice>();
+  const rank = (choice: InboxAddressChoice) => choice.receiveStatus === "ready" ? 2 : choice.receiveStatus === "pending" ? 1 : 0;
+  for (const choice of rows) {
+    const current = mailboxes.get(choice.id);
+    if (!current || rank(choice) > rank(current)) mailboxes.set(choice.id, choice);
   }
+  const choices = [...mailboxes.values()]
+    .filter((item) => !q || [item.address, item.label, item.domain].some((value) => String(value ?? "").toLowerCase().includes(q)))
+    .slice(0, limit);
+  return opts?.search?.trim() ? choices : [ALL_ADDRESSES, ...choices];
 }
 
 export function addressChoiceByAddress(address: string | null | undefined): InboxAddressChoice {
   const normalized = extractEmail(address);
   if (!normalized) return ALL_ADDRESSES;
-  return listInboxAddresses({ search: normalized, limit: 20 })
+  return listInboxAddresses({ search: normalized })
     .find((choice) => choice.address?.toLowerCase() === normalized)
     ?? {
       id: `a:${normalized}`,

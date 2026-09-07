@@ -246,13 +246,14 @@ export class SESAdapter implements ProviderAdapter {
     return records;
   }
 
-  async addDomain(domain: string): Promise<void> {
+  async addDomain(domain: string, signal?: AbortSignal): Promise<void> {
     try {
       // EasyDKIM: create the identity WITHOUT DkimSigningAttributes so SES
       // generates and rotates the DKIM keys itself. (Passing an empty
       // DomainSigningPrivateKey is rejected with a validation error.)
       await this.client.send(
         new CreateEmailIdentityCommand({ EmailIdentity: domain }),
+        ...(signal ? [{ abortSignal: signal }] : []),
       );
     } catch (err: unknown) {
       // If identity already exists, that's fine

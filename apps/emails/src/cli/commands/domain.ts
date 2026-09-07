@@ -1,3 +1,5 @@
+import { connectDomain, formatDomainConnection, type ConnectDomainOptions } from "../../lib/domain-connect-api.js";
+import { selfHostedApiRequest } from "../../db/self-hosted-store.js";
 import type { Command } from "commander";
 import type { DnsRecord, DomainType, Provider } from "../../types/index.js";
 import chalk from "../../lib/chalk-lite.js";
@@ -9,7 +11,7 @@ import { getAdapter, providerDnsPublishing } from "../../providers/index.js";
 import { createWarmingSchedule, deleteWarmingSchedule, getWarmingSchedule, listWarmingSchedules, updateWarmingStatus } from "../../db/warming.js";
 import { describeWarmingProgress, formatWarmingStatus, generateWarmingPlan, getTodaySentCountsByDomain, type WarmingSchedule } from "../../lib/warming.js";
 import { colorDnsStatus, tableRow, truncate } from "../../lib/format.js";
-import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliListPage, resolveId } from "../utils.js";
+import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliListPage, parseCliPage, resolveId } from "../utils.js";
 import { normalizeRoute53RegistrationContact } from "../../lib/route53-contact.js";
 import { resolveClientMode } from "../../lib/mode.js";
 import { now } from "../../db/runtime.js";
@@ -44,48 +46,6 @@ interface UnshippedSurface {
 }
 
 const UNSHIPPED_DOMAIN_SURFACES: Record<string, UnshippedSurface> = {
-  "emails domain connect": {
-    missing: "the connect orchestration — register the domain, call the provider, then emit DNS "
-      + "readiness tasks — was removed and nothing replaced it",
-    instead: "Do those steps explicitly: 'emails domain add <domain> --provider <id>', then "
-      + "'emails domain dns <domain>' for the records to publish, then "
-      + "'emails domain adopt <domain> --provider <id>' once the provider has verified it.",
-  },
-  "emails domain verify": {
-    missing: "no command is wired to the provider's verification API",
-    // "needs no provider" was FALSE and this file is the one place it must not be:
-    // `emails domain check` resolves the domain's registered provider when it has
-    // one, and only falls back to the generic SPF/DMARC pair when none resolves.
-    // `--json` returns a non-null `provider_id` for any registered domain.
-    instead: "'emails domain adopt <domain> --provider <id>' re-checks the provider and records "
-      + "DKIM/SPF/DMARC through the same adapter; 'emails domain check <domain>' reads the "
-      + "published DNS, resolving the domain's provider for DKIM when it has one and reporting "
-      + "SPF/DMARC alone when it does not.",
-  },
-  "emails domain status": {
-    missing: "no command is wired to the domain lifecycle-readiness ledger; it is reachable only "
-      + "from the library export and the HTTP readiness API (GET /api/domains/readiness)",
-    instead: "'emails domains status [domain]' renders the domain records this client holds, and "
-      + "'emails domain check <domain>' reports live DNS readiness.",
-  },
-  "emails domains enable-inbound": {
-    missing: "no command is wired to the readiness ledger; the transition ships only as a library "
-      + "export and on the HTTP readiness API (PATCH /api/domains/:id/readiness)",
-    instead: "'emails domain adopt <domain> --provider <id>' wires SES inbound and marks the "
-      + "domain ready when it succeeds; 'emails aws setup-inbound --domain <domain>' does the "
-      + "S3 + receipt-rule half on its own.",
-  },
-  "emails domains enable-outbound": {
-    missing: "no command is wired to the readiness ledger; the transition ships only as a library "
-      + "export and on the HTTP readiness API (PATCH /api/domains/:id/readiness)",
-    instead: "'emails domain check <domain>' reports whether DKIM and SPF are actually published, "
-      + "which is the evidence the transition would have required.",
-  },
-  "emails domains disable-outbound": {
-    missing: "no command is wired to the readiness ledger; the transition ships only as a library "
-      + "export and on the HTTP readiness API (PATCH /api/domains/:id/readiness)",
-    instead: "To stop mail from an address today, suspend it: 'emails address suspend <id>'.",
-  },
   "emails domain setup-cloudflare": {
     missing: "the Cloudflare DNS writer ships as a library but no command is wired to it, because "
       + "it would publish records using whatever provider and Cloudflare credentials the calling "
@@ -104,8 +64,6 @@ const UNSHIPPED_DOMAIN_SURFACES: Record<string, UnshippedSurface> = {
 // Plural aliases refuse for exactly the same reason as their singular twins, so
 // they share one entry instead of drifting apart.
 const UNSHIPPED_DOMAIN_ALIASES: Record<string, string> = {
-  "emails domains connect": "emails domain connect",
-  "emails domains verify": "emails domain verify",
 };
 
 function notImplementedAnywhere(command: string): never {
@@ -189,7 +147,7 @@ function resolveSelfHostedDomainId(ref: string): string {
   // takes the name, and `domain list` prints it — a remove that refused the
   // name was the family's one odd verb out (task 55c19dde).
   const wanted = ref.trim().toLowerCase();
-  const matches = listDomains(undefined, { limit: 1000 })
+  const matches = listDomains()
     .filter((domain) => domain.id.startsWith(ref) || domain.domain.toLowerCase() === wanted);
   if (matches.length === 1) return matches[0]!.id;
   if (matches.length > 1) {
@@ -199,13 +157,29 @@ function resolveSelfHostedDomainId(ref: string): string {
 }
 
 export function registerDomainCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
+  const lifecycle = (action: string) => (ref: string, opts: { provider?: string; force?: boolean }) => {
+    try {
+      if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("--provider must name a provider ID.");
+      if (opts.force) throw new Error("Readiness checks cannot be bypassed. Fix the reported DNS/provider prerequisites before enabling mail.");
+      const domainId = resolveSelfHostedDomainId(ref);
+      const providerId = opts.provider ? resolveId("providers", opts.provider) : undefined;
+      const result = selfHostedApiRequest("POST", `/domains/${encodeURIComponent(domainId)}/${action}`, providerId ? { provider_id: providerId } : {});
+      if (result.status < 200 || result.status >= 300) {
+        const error = result.json as { error?: string };
+        throw new Error(error?.error ?? `Domain operation failed (HTTP ${result.status}).`);
+      }
+      output(result.json, JSON.stringify(result.json, null, 2) + "\n");
+    } catch (error) { handleError(error); }
+  };
   const domainCmd = program.command("domain").description("Manage sending domains");
   const domainsCmd = program.command("domains").description("Manage domain lifecycle");
 
   const listDomainsAction = (opts: { provider?: string; limit?: string; offset?: string; verbose?: boolean }) => {
     try {
-      const page = parseCliListPage(opts);
-      const domains = listDomains(opts.provider, page);
+      const page = parseCliPage(opts);
+      const domains = opts.limit === undefined
+        ? listDomains(opts.provider).slice(page.offset)
+        : listDomains(opts.provider, page);
       if (domains.length === 0) {
         output([], chalk.dim("No domains configured."));
         return;
@@ -222,6 +196,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
         shown: domains.length,
         limit: page.limit,
         offset: page.offset,
+        complete: opts.limit === undefined,
         noun: "domain",
         detailCommand: "use emails domain dns <domain> for DNS details",
         verbose: opts.verbose || isCliVerboseOutput(),
@@ -234,19 +209,18 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   const statusLifecycleAction = (domainOrId: string | undefined, opts: { provider?: string; limit?: string; offset?: string; verbose?: boolean }) => {
     try {
-      // There is no lifecycle-readiness ledger this client can read, in any
-      // configuration: list the domain records, or render the single match.
+      // Report the server-owned domain registry, or render the single match.
       if (!domainOrId) {
         listDomainsAction(opts);
         return;
       }
-      const match = listDomains(undefined, { limit: 1000 })
+      const match = listDomains()
         .find((d) => d.id === domainOrId || d.id.startsWith(domainOrId) || d.domain.toLowerCase() === domainOrId.toLowerCase());
       if (!match) {
         handleError(new Error(`Domain not found: ${domainOrId}`));
         return;
       }
-      output(match, `${chalk.bold(`\nDomain ${match.domain}`)}\n  ID:   ${match.id.slice(0, 8)}\n  DNS:  DKIM:${colorDnsStatus(match.dkim_status)} SPF:${colorDnsStatus(match.spf_status)} DMARC:${colorDnsStatus(match.dmarc_status)}\n  ${chalk.dim(`Live DNS readiness: emails domain check ${match.domain}`)}\n`);
+      output(match, `${chalk.bold(`\nDomain ${match.domain}`)}\n  ID:   ${match.id.slice(0, 8)}\n  Outbound: ${match.outbound_status}  Inbound: ${match.inbound_status}\n  DNS:  DKIM:${colorDnsStatus(match.dkim_status)} SPF:${colorDnsStatus(match.spf_status)} DMARC:${colorDnsStatus(match.dmarc_status)}\n  ${chalk.dim(`Live DNS readiness: emails domain check ${match.domain}`)}\n`);
     } catch (e) {
       handleError(e);
     }
@@ -500,7 +474,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .command("list")
     .description("List domains with lifecycle readiness")
     .option("--provider <id>", "Filter by provider ID")
-    .option("--limit <n>", "Maximum domains to show (default 20 compact, 50 verbose/json)")
+    .option("--limit <n>", "Maximum domains to show (default: all registered domains)")
     .option("--offset <n>", "Number of domains to skip", "0")
     .option("--verbose", "Show expanded lifecycle details")
     .action(listDomainsAction);
@@ -527,13 +501,12 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   domainsCmd
     .command("connect <domain>")
-    .description("Connect an already-owned domain and generate DNS readiness tasks (NOT IMPLEMENTED in this build)")
+    .description("Connect an already-owned domain through the API and record DNS publication tasks")
     .requiredOption("--provider <id>", "Provider ID")
-    .option("--domain-type <type>", "Domain type: system, self_hosted, or local_only")
     .option("--dns-provider <provider>", "DNS provider label: manual, cloudflare, or route53", "manual")
     .option("--no-register-provider", "Do not call the mail provider to register the domain")
     .option("--dry-run", "Show the connection plan without calling the provider or writing to the DB")
-    .action(() => { try { notImplementedAnywhere("emails domains connect"); } catch (e) { handleError(e); } });
+    .action(async (domain: string, opts: ConnectDomainOptions) => { try { const result=await connectDomain(domain,opts); output(result,formatDomainConnection(result)); if(result.connection.status === "blocked")process.exitCode=1; } catch(error){handleError(error);} });
 
   domainsCmd
     .command("dns <domain>")
@@ -543,9 +516,9 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   domainsCmd
     .command("verify <domain>")
-    .description("Re-verify domain DNS status and update lifecycle context (NOT IMPLEMENTED in this build)")
+    .description("Verify domain DNS through its bound server provider")
     .option("--provider <id>", "Provider ID")
-    .action(() => { try { notImplementedAnywhere("emails domains verify"); } catch (e) { handleError(e); } });
+    .action(lifecycle("verify"));
 
   domainsCmd
     .command("check <domain>")
@@ -555,23 +528,23 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   domainsCmd
     .command("enable-inbound <domain>")
-    .description("Mark a domain inbound-ready after provider/DNS routing is configured (NOT IMPLEMENTED in this build)")
+    .description("Check DNS and SES receipt routing, then mark inbound ready")
     .option("--provider <id>", "Provider ID")
-    .option("--force", "Mark inbound ready even if local readiness checks are not yet verified")
-    .action(() => { try { notImplementedAnywhere("emails domains enable-inbound"); } catch (e) { handleError(e); } });
+    .option("--force", "Deprecated: readiness checks cannot be bypassed")
+    .action(lifecycle("enable-inbound"));
 
   domainsCmd
     .command("enable-outbound <domain>")
-    .description("Enable outbound sending for a verified domain (NOT IMPLEMENTED in this build)")
+    .description("Verify the provider domain and enable outbound sending")
     .option("--provider <id>", "Provider ID")
-    .option("--force", "Enable outbound even if local DKIM/SPF checks are not yet verified")
-    .action(() => { try { notImplementedAnywhere("emails domains enable-outbound"); } catch (e) { handleError(e); } });
+    .option("--force", "Deprecated: readiness checks cannot be bypassed")
+    .action(lifecycle("enable-outbound"));
 
   domainsCmd
     .command("disable-outbound <domain>")
-    .description("Disable outbound sending for a domain (NOT IMPLEMENTED in this build)")
+    .description("Disable outbound sending for every address at this domain")
     .option("--provider <id>", "Provider ID")
-    .action(() => { try { notImplementedAnywhere("emails domains disable-outbound"); } catch (e) { handleError(e); } });
+    .action(lifecycle("disable-outbound"));
 
   domainCmd
     .command("add <domain>")
@@ -603,7 +576,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
         const inboundConfig = getInboundConfig();
         const bucket = opts.bucket ?? inboundConfig.bucket;
         const region = opts.region ?? inboundConfig.region;
-        const registered = listDomains(undefined, { limit: 1000 });
+        const registered = listDomains();
         const registeredNames = new Set(registered.map((d) => d.domain.trim().toLowerCase()));
         const targets = domainArg ? [domainArg] : [...registeredNames];
         if (targets.length === 0) {
@@ -646,13 +619,12 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   domainCmd
     .command("connect <domain>")
-    .description("Connect an already-owned domain and generate DNS readiness tasks (NOT IMPLEMENTED in this build)")
+    .description("Connect an already-owned domain through the API and record DNS publication tasks")
     .requiredOption("--provider <id>", "Provider ID")
-    .option("--domain-type <type>", "Domain type: system, self_hosted, or local_only")
     .option("--dns-provider <provider>", "DNS provider label: manual, cloudflare, or route53", "manual")
     .option("--no-register-provider", "Do not call the mail provider to register the domain")
     .option("--dry-run", "Show the connection plan without calling the provider or writing to the DB")
-    .action(() => { try { notImplementedAnywhere("emails domain connect"); } catch (e) { handleError(e); } });
+    .action(async (domain: string, opts: ConnectDomainOptions) => { try { const result=await connectDomain(domain,opts); output(result,formatDomainConnection(result)); if(result.connection.status === "blocked")process.exitCode=1; } catch(error){handleError(error);} });
 
   // ── adopt: seamlessly add an already-registered & SES-verified domain ────────
   // Operator command. Domain/alias/provisioning writes route through the /v1 db
@@ -791,7 +763,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .command("list")
     .description("List domains")
     .option("--provider <id>", "Filter by provider ID")
-    .option("--limit <n>", "Maximum domains to show (default 20 compact, 50 verbose/json)")
+    .option("--limit <n>", "Maximum domains to show (default: all registered domains)")
     .option("--offset <n>", "Number of domains to skip", "0")
     .option("--verbose", "Show expanded list hints")
     .action(listDomainsAction);
@@ -804,18 +776,18 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   domainCmd
     .command("verify <domain>")
-    .description("Re-verify domain DNS status (NOT IMPLEMENTED in this build)")
+    .description("Verify domain DNS through its bound server provider")
     .option("--provider <id>", "Provider ID")
-    .action(() => { try { notImplementedAnywhere("emails domain verify"); } catch (e) { handleError(e); } });
+    .action(lifecycle("verify"));
 
   domainCmd
     .command("status")
-    .description("Show domain readiness summary table (NOT IMPLEMENTED in this build; use emails domains status)")
+    .description("Show domain readiness summary table")
     .option("--provider <id>", "Filter by provider ID")
     .option("--limit <n>", "Maximum domains to show (default 20 compact, 50 verbose/json)")
     .option("--offset <n>", "Number of domains to skip", "0")
     .option("--verbose", "Show per-domain issues and first fix command")
-    .action(() => { try { notImplementedAnywhere("emails domain status"); } catch (e) { handleError(e); } });
+    .action((opts) => statusLifecycleAction(undefined, opts));
 
   domainCmd
     .command("usable")

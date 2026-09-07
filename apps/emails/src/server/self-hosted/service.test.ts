@@ -262,7 +262,7 @@ describe("Emails self-hosted service", () => {
       is_starred: false,
       labels: [],
       headers: { Before: "yes" },
-      attachments: [],
+      attachments: [{ filename: "chart.png", content_type: "image/png", size: 128, content_id: "<chart@example.test>" }],
       source_id: null,
       idempotency_key: null,
       send_payload_hash: null,
@@ -286,6 +286,10 @@ describe("Emails self-hosted service", () => {
       },
     } as unknown as TenantScopedStore;
     d.store = { forTenant: () => scoped } as unknown as EmailsSelfHostedStore;
+
+    const detail = await handleSelfHostedRequest(d, req("GET", `/v1/messages/${original.id}`, { token }));
+    expect(detail?.status).toBe(200);
+    expect((await detail!.json()).message.attachments).toEqual(original.attachments);
 
     const updated = await handleSelfHostedRequest(d, req("PATCH", `/v1/messages/${original.id}`, {
       token,

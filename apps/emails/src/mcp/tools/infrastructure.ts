@@ -1,3 +1,4 @@
+import { provisionAddress, addressProvisioningReady } from "../../lib/address-provisioning-api.js";
 // MCP tool module: infrastructure.ts
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -441,18 +442,19 @@ export function registerInfrastructureTools(server: McpServer): void {
       forward_to: z.string().optional(),
       owner: z.string().optional().describe("Owner name, ID, or ID prefix"),
       administrator: z.string().optional().describe("Administering agent name, ID, or ID prefix"),
+      dry_run: z.boolean().optional().describe("Check readiness and return a plan without writing address or ownership state"),
       wait: z.boolean().optional().describe("Advance provisioning now and wait until ready"),
       timeout_seconds: z.number().int().positive().max(MAX_MCP_PROVISION_WAIT_SECONDS).optional().describe("Max seconds to wait when wait=true (max 300)"),
       interval_seconds: z.number().int().positive().max(MAX_MCP_PROVISION_INTERVAL_SECONDS).optional().describe("Polling interval when wait=true (max 60)"),
       inbound_bucket: z.string().optional().describe("Inbound S3 bucket for receive validation"),
     },
-    async () => {
-      // No provisioning orchestrator ships in ANY mode (see provision_domain).
-      // Fail loud with the truth (rule 6).
-      return {
-        content: [{ type: "text" as const, text: "Error: provision_address is not implemented in this build: there is no local provisioning orchestrator and the self-hosted server exposes no provisioning route. Create the address with `emails address add <email> --provider <id>`." }],
-        isError: true,
-      };
+    async (args) => {
+      try {
+        const result = await provisionAddress(args.email, { provider:args.provider_id, domain:args.domain_id,
+          receive:args.receive_strategy, forwardTo:args.forward_to, owner:args.owner, administrator:args.administrator,
+          wait:args.wait, dryRun:args.dry_run, timeout:args.timeout_seconds, interval:args.interval_seconds, bucket:args.inbound_bucket });
+        return {content:[{type:"text" as const,text:JSON.stringify(result)}],...(!addressProvisioningReady(result)?{isError:true}:{})};
+      } catch(error) { return {content:[{type:"text" as const,text:error instanceof Error?error.message:"Address provisioning failed"}],isError:true}; }
     },
   );
 

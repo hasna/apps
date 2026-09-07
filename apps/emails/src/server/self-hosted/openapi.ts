@@ -687,6 +687,7 @@ const messageSchema = {
     body_text: { type: "string", nullable: true },
     body_html: { type: "string", nullable: true },
     status: { type: "string" },
+    provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
     provider_message_id: { type: "string", nullable: true },
     message_id: { type: "string", nullable: true, description: "RFC 5322 Message-ID" },
     in_reply_to: { type: "string", nullable: true },
@@ -873,6 +874,7 @@ const messageListItemSchema = {
     subject: { type: "string", nullable: true },
     snippet: { type: "string", nullable: true, description: "Short text preview (<=140 chars); full bodies are available only from GET /v1/messages/{id}." },
     status: { type: "string" },
+    provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
     provider_message_id: { type: "string", nullable: true },
     message_id: { type: "string", nullable: true, description: "RFC 5322 Message-ID" },
     in_reply_to: { type: "string", nullable: true },
@@ -2191,6 +2193,56 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
   paths: {
     ...genericResourcePaths,
     "/v1/mailbox-filters/{id}/apply": mailboxFilterApplyPath,
+    "/v1/forwarding/run": {
+      post: {
+        operationId: "runForwardingBatch",
+        summary: "Forward matching inbound mail with durable delivery identities (tenant operator required)",
+        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: {
+          limit: { type: "integer", minimum: 1, maximum: 1000 }, provider_id: { type: "string" },
+          from_address: { type: "string" }, backfill: { type: "boolean" },
+        } } } } },
+        responses: {
+          "200": { content: { "application/json": { schema: { type: "object", required: ["attempted","sent","failed","skipped","pending","items"], properties: {
+            attempted: { type: "integer", minimum: 0 }, sent: { type: "integer", minimum: 0 }, failed: { type: "integer", minimum: 0 },
+            skipped: { type: "integer", minimum: 0 }, pending: { type: "integer", minimum: 0 },
+            items: { type: "array", items: { type: "object", required: ["rule_id","inbound_email_id","target_address","status","sent_email_id","error"], properties: {
+              rule_id: { type: "string" }, inbound_email_id: { type: "string" }, target_address: { type: "string" },
+              status: { type: "string", enum: ["sent","failed","skipped","processing"] }, sent_email_id: { type: "string", nullable: true }, error: { type: "string", nullable: true },
+            } } },
+          } } } } },
+          "400": errorResponse("Invalid forwarding options"), "401": errorResponse("Authentication required"), "403": errorResponse("Tenant operator required"),
+        },
+      },
+    },
+    "/v1/scheduled/run": {
+      post: {
+        operationId: "runScheduledBatch",
+        summary: "Claim and execute a due scheduled-send batch (tenant operator required)",
+        requestBody: { required: false, content: { "application/json": { schema: {
+          type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100, default: 10 }, sequence_limit: { type: "integer", minimum: 0, maximum: 100, default: 10 } },
+        } } } },
+        responses: {
+          "200": { content: { "application/json": { schema: {
+            type: "object", properties: {
+              scheduled: { type: "object", properties: {
+                attempted: { type: "integer", minimum: 0 }, sent: { type: "integer", minimum: 0 },
+                failed: { type: "integer", minimum: 0 }, pending: { type: "integer", minimum: 0 }, skipped: { type: "integer", minimum: 0 },
+              }, required: ["attempted", "sent", "failed", "pending", "skipped"] },
+              items: { type: "array", items: { type: "object", properties: { id: { type: "string" }, status: { type: "string", enum: ["sent", "failed", "processing", "lease_lost"] }, error: { type: "string" } }, required: ["id", "status"] } },
+              sequences: { type: "object", properties: {
+                attempted: { type: "integer", minimum: 0 }, sent: { type: "integer", minimum: 0 },
+                failed: { type: "integer", minimum: 0 }, pending: { type: "integer", minimum: 0 }, skipped: { type: "integer", minimum: 0 },
+              }, required: ["attempted", "sent", "failed", "pending", "skipped"] },
+              sequence_items: { type: "array", items: { type: "object", properties: { id: { type: "string" }, status: { type: "string", enum: ["sent", "failed", "processing", "lease_lost", "completed"] }, error: { type: "string" } }, required: ["id", "status"] } },
+              sequence_execution: { type: "string", enum: ["not_requested", "executed"] },
+            }, required: ["scheduled", "items", "sequence_execution", "sequences", "sequence_items"],
+          } } } },
+          "400": { description: "Invalid batch limit", content: { "application/json": { schema: errorResponseSchema } } },
+          "401": { description: "Authentication required", content: { "application/json": { schema: errorResponseSchema } } },
+          "403": { description: "Tenant operator required", content: { "application/json": { schema: errorResponseSchema } } },
+        },
+      },
+    },
     "/health": {
       get: {
         ...publicOperation,
@@ -3388,10 +3440,103 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         responses: { "200": { content: { "application/json": { schema: deleteReceiptSchema } } } },
       },
     },
+    "/v1/inbox/smtp": {
+      get: {
+        operationId: "getSmtpImportCapability", summary: "Check operator SMTP import capability before binding a local listener",
+        parameters: [{ name: "provider_id", in: "query", required: false, schema: { type: "string" } }],
+        responses: { "200": jsonResponse("SMTP import capability", { type: "object", required: ["available", "durable_receipts", "max_raw_bytes", "provider_id"], properties: { available: { type: "boolean" }, durable_receipts: { type: "boolean" }, max_raw_bytes: { type: "integer" }, provider_id: { type: "string", nullable: true } } }), "400": errorResponse("Invalid selector"), "403": errorResponse("Operator required"), "404": errorResponse("Provider not found") },
+      },
+      post: {
+        operationId: "importSmtpMessage", summary: "Import bounded MIME with an immutable DATA transaction receipt (operator only)",
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["transaction_id", "raw_base64", "envelope"], properties: { transaction_id: { type: "string", format: "uuid" }, raw_base64: { type: "string", maxLength: 13981016 }, provider_id: { type: "string" }, envelope: { type: "object", additionalProperties: false, required: ["from", "to"], properties: { from: { type: "string" }, to: { type: "array", minItems: 1, maxItems: 100, items: { type: "string" } } } } } } } } },
+        responses: Object.fromEntries([
+          ...["200", "201"].map(status => [status, jsonResponse("Durably stored SMTP transaction receipt", { type: "object", required: ["stored", "id", "duplicate"], properties: { stored: { type: "boolean" }, id: { type: "string" }, duplicate: { type: "boolean" } } })]),
+          ...["400", "403", "404", "409", "413"].map(status => [status, errorResponse("Invalid, forbidden, conflicting or oversized SMTP submission")]),
+        ]),
+      },
+    },
+    "/v1/webhooks/relay": { get: {
+      operationId: "getWebhookRelayCapability", summary: "Check a tenant-bound server-verified webhook relay before opening a local listener",
+      parameters: [{ name: "provider_id", in: "query", required: false, schema: { type: "string" } }],
+      responses: { "200": jsonResponse("Provider relay capability without credentials", { type: "object", required: ["available", "signature_verification", "durable_receipts", "provider_id", "type", "max_webhook_bytes"], properties: { available: { type: "boolean" }, signature_verification: { type: "boolean" }, durable_receipts: { type: "boolean" }, provider_id: { type: "string" }, type: { type: "string", enum: ["ses", "resend"] }, max_webhook_bytes: { type: "integer" } } }), "400": errorResponse("Invalid selector"), "403": errorResponse("Operator required"), "404": errorResponse("No selected provider binding"), "409": errorResponse("Invalid provider/source registry binding"), "503": errorResponse("Server verification configuration missing") },
+    } },
+    ...Object.fromEntries(["ses", "resend"].map(type => [`/v1/webhooks/relay/${type}`, { post: {
+      operationId: type === "ses" ? "relaySesWebhook" : "relayResendWebhook", summary: "Relay exact signed provider bytes with tenant/operator authorization; acknowledgment requires durable completion",
+      parameters: [{ name: "provider_id", in: "query", required: false, schema: { type: "string" } }],
+      requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["raw_body_base64", "signature_headers"], properties: { raw_body_base64: { type: "string", description: "Canonical base64 of the original signed provider bytes, at most 1 MiB decoded", maxLength: 1398104 }, signature_headers: { type: "object", additionalProperties: { type: "string" }, description: "Original lowercase Svix/SNS signature headers and optional content-type only" } } } } } },
+      responses: { "200": jsonResponse("Verified durable completion or replay", { type: "object", required: ["ok", "completed", "provider_id"], properties: { ok: { type: "boolean" }, completed: { type: "boolean" }, provider_id: { type: "string" } }, additionalProperties: true }), ...Object.fromEntries(["400", "401", "403", "404", "409", "413", "422", "502", "503"].map(status => [status, errorResponse("Webhook verification, binding, content or durable completion failed")])) },
+    } } ])),
+    "/v1/inbox/setup-realtime": { post: {
+      operationId: "setupInboxRealtime", summary: "Configure and read back a tenant-bound SES/SNS/SQS notification path (operator only)", tags: ["inbox"],
+      requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["domain"], additionalProperties: false, properties: { domain: { type: "string" }, source_id: { type: "string" }, rule_set: { type: "string" }, rule_name: { type: "string" }, region: { type: "string" }, profile: { type: "string", description: "Rejected: cloud credentials belong to the API server" } } } } } },
+      responses: { "200": { description: "Notification wiring verified; no worker started and no delivery test sent", content: { "application/json": { schema: { type: "object", required: ["ok", "verified", "source_id", "changed", "worker_started", "delivery_tested"], properties: { ok: { type: "boolean" }, verified: { type: "boolean" }, source_id: { type: "string" }, changed: { type: "array", items: { type: "string" } }, worker_started: { type: "boolean" }, delivery_tested: { type: "boolean" } }, additionalProperties: true } } } }, "400": errorResponse("Invalid selectors"), "403": errorResponse("Operator required"), "409": errorResponse("Conflicting cloud topology"), "502": errorResponse("Partial operation or readback failure; inspect changed steps"), "503": errorResponse("Server binding missing setup fields") },
+    } },
+    "/v1/inbox/sync-s3": { post: {
+      operationId: "syncInboxS3", summary: "Run a bounded server-bound tenant ingestion batch",
+      requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: {
+        source_id: { type: "string" }, bucket: { type: "string" }, prefix: { type: "string" }, region: { type: "string" }, provider_id: { type: "string" }, queue_url: { type: "string" }, profile: { type: "string" }, cursor: { type: "string" }, force: { type: "boolean" }, all_buckets: { type: "boolean" }, limit: { type: "integer", minimum: 1, maximum: 10 }
+      } } } } },
+      responses: { "200": jsonResponse("Ingestion counts, continuation and observed queue state", { type: "object", required: ["ok", "sources"], properties: { ok: { type: "boolean" }, sources: { type: "array", items: { type: "object", additionalProperties: true } } } }), "400": errorResponse("Invalid or mismatched binding options"), "403": errorResponse("Operator authority required"), "503": errorResponse("Server ingest binding is not configured") },
+    } },
+    "/v1/inbox/watch": { post: {
+      operationId: "watchInboxQueue", summary: "Run a bounded server-bound tenant ingestion batch",
+      requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: {
+        source_id: { type: "string" }, bucket: { type: "string" }, prefix: { type: "string" }, region: { type: "string" }, provider_id: { type: "string" }, queue_url: { type: "string" }, profile: { type: "string" }, cursor: { type: "string" }, force: { type: "boolean" }, all_buckets: { type: "boolean" }, limit: { type: "integer", minimum: 1, maximum: 10 }
+      } } } } },
+      responses: { "200": jsonResponse("Ingestion counts, continuation and observed queue state", { type: "object", required: ["ok", "sources"], properties: { ok: { type: "boolean" }, sources: { type: "array", items: { type: "object", additionalProperties: true } } } }), "400": errorResponse("Invalid or mismatched binding options"), "403": errorResponse("Operator authority required"), "503": errorResponse("Server ingest binding is not configured") },
+    } },
+    "/v1/providers/{id}/sync": {
+      post: {
+        operationId: "syncProviderDelivery", summary: "Reconcile known tenant provider message delivery observations",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: { after: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 10 } } } } } },
+        responses: { "200": { description: "Bounded provider sync report with explicit completeness and failures", content: { "application/json": { schema: { type: "object", additionalProperties: true, required: ["provider_id", "complete", "checked", "synced", "failures"], properties: { provider_id: { type: "string" }, complete: { type: "boolean" }, checked: { type: "integer" }, synced: { type: "integer" }, failures: { type: "array", items: { type: "object", additionalProperties: true } } } } } } }, "404": errorResponse("Provider not found"), "503": errorResponse("Provider binding is unavailable") },
+      },
+    },
+    "/v1/providers/{id}/health": {
+      get: {
+        operationId: "getProviderHealth", summary: "Read server binding metadata or probe provider credentials",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { name: "live", in: "query", schema: { type: "boolean", default: false } }],
+        responses: { "200": { description: "Server provider health", content: { "application/json": { schema: { type: "object", additionalProperties: true, required: ["provider_id", "checked", "status", "message"], properties: { provider_id: { type: "string" }, checked: { type: "boolean" }, status: { type: "string" }, message: { type: "string" } } } } } }, "404": errorResponse("Provider not found in this tenant.") },
+      },
+    },
+    "/v1/domains/{id}/verify": {
+      post: {
+        operationId: "domainVerify",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { provider_id: { type: "string" } } } } } },
+        responses: { "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true, properties: { domain: { $ref: "#/components/schemas/Domain" } }, required: ["domain"] } } } }, "409": errorResponse("Domain readiness prerequisites are not satisfied"), "503": errorResponse("Provider binding or ingest configuration is missing") },
+      },
+    },
+    "/v1/domains/{id}/enable-outbound": {
+      post: {
+        operationId: "domainEnableOutbound",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { provider_id: { type: "string" } } } } } },
+        responses: { "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true, properties: { domain: { $ref: "#/components/schemas/Domain" } }, required: ["domain"] } } } }, "409": errorResponse("Domain readiness prerequisites are not satisfied"), "503": errorResponse("Provider binding or ingest configuration is missing") },
+      },
+    },
+    "/v1/domains/{id}/disable-outbound": {
+      post: {
+        operationId: "domainDisableOutbound",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { provider_id: { type: "string" } } } } } },
+        responses: { "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true, properties: { domain: { $ref: "#/components/schemas/Domain" } }, required: ["domain"] } } } }, "409": errorResponse("Domain readiness prerequisites are not satisfied"), "503": errorResponse("Provider binding or ingest configuration is missing") },
+      },
+    },
+    "/v1/domains/{id}/enable-inbound": {
+      post: {
+        operationId: "domainEnableInbound",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { provider_id: { type: "string" } } } } } },
+        responses: { "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true, properties: { domain: { $ref: "#/components/schemas/Domain" } }, required: ["domain"] } } } }, "409": errorResponse("Domain readiness prerequisites are not satisfied"), "503": errorResponse("Provider binding or ingest configuration is missing") },
+      },
+    },
     "/v1/messages": {
       get: {
         operationId: "listMessages",
         parameters: [
+          { name: "provider_id", in: "query", required: false, schema: { type: "string" } },
           ...listParams,
           { name: "cursor", in: "query", required: false, schema: { type: "string" }, description: "Opaque keyset cursor from a previous page's next_cursor. Takes precedence over offset; pages are ordered by (received_at || created_at, id) descending." },
           { name: "direction", in: "query", required: false, schema: { type: "string", enum: ["inbound", "outbound"] } },
@@ -3462,6 +3607,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   labels: { type: "array", items: { type: "string" } },
                   headers: { type: "object", additionalProperties: true },
                   attachments: { type: "array", items: { type: "object", additionalProperties: true } },
+                  provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
                   provider_message_id: { type: "string", nullable: true },
                   source_id: { type: "string", description: "Stable upstream id; enables idempotent upsert" },
                 },
@@ -3610,6 +3756,11 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
               schema: {
                 type: "object",
                 properties: {
+                  provider_id: { type: "string", description: "Active tenant provider with a server sender binding." },
+                  track_opens: {type:"boolean",description:"Observe unique message open requests using configured server tracking."},
+                  track_clicks: {type:"boolean",description:"Observe unique message click requests using configured server tracking."},
+                  tracking_url: {type:"string",format:"uri",description:"Exact tenant-approved HTTPS tracking base; requires a tracking switch."},
+                  unsubscribe_url: { type: "string", format: "uri", description: "HTTP(S) unsubscribe URL emitted as List-Unsubscribe headers." },
                   from: { type: "string" },
                   to: { type: "array", items: { type: "string" } },
                   cc: { type: "array", items: { type: "string" } },
@@ -3861,6 +4012,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   labels: { type: "array", items: { type: "string" } },
                   headers: { type: "object", additionalProperties: true },
                   attachments: { type: "array", items: { type: "object", additionalProperties: true } },
+                  provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
                   provider_message_id: { type: "string", nullable: true },
                   source_id: {
                     type: "string",
@@ -4535,4 +4687,184 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
   },
 };
 
+// Reuse the immediate-send payload contract so attachment and option support cannot drift.
+const enqueueSendSchema = structuredClone((emailsSelfHostedOpenApi.paths!["/v1/messages/send"]!.post as { requestBody: { content: Record<string, { schema: unknown }> } }).requestBody.content["application/json"]!.schema) as Record<string, any>;
+delete enqueueSendSchema.properties.send_key;
+enqueueSendSchema.properties.scheduled_at = { type: "string", format: "date-time", description: "Future instant with an explicit timezone. Identical idempotent retries may replay after that time." };
+enqueueSendSchema.required = [...enqueueSendSchema.required, "scheduled_at"];
+const enqueueReceipt = {
+  type: "object", required: ["enqueued", "scheduled", "idempotent_replay"],
+  properties: {
+    enqueued: { type: "boolean", enum: [true] }, idempotent_replay: { type: "boolean" },
+    scheduled: { type: "object", required: ["id", "status", "scheduled_at"], properties: {
+      id: { type: "string" }, status: { type: "string", enum: ["pending", "processing", "sent", "failed", "cancelled"] }, scheduled_at: { type: "string", format: "date-time" },
+    } },
+  },
+};
+emailsSelfHostedOpenApi.paths!["/v1/scheduled/enqueue"] = { post: {
+  operationId: "enqueueScheduledSend", summary: "Validate and enqueue an idempotent scheduled send",
+  description: "Requires a tenant operator. Persists no delegated send keys. The scheduler rechecks sending policy at execution time. Queue content and identity are immutable; cancel using scheduled status.",
+  requestBody: { required: true, content: { "application/json": { schema: enqueueSendSchema } } },
+  responses: {
+    "200": { description: "Existing enqueue identity", content: { "application/json": { schema: enqueueReceipt } } },
+    "201": { description: "New scheduled send; no mail sent", content: { "application/json": { schema: enqueueReceipt } } },
+    "400": errorResponse("Invalid payload or nonfuture new schedule"), "401": errorResponse("Authentication required"),
+    "403": errorResponse("Tenant operator required"), "409": errorResponse("Idempotency key conflict"), "413": errorResponse("Payload too large"),
+  },
+} };
+
+const provisioningInput = { type: "object", additionalProperties: false, required: ["email","provider_id"], properties: {
+  email:{type:"string"},provider_id:{type:"string"},domain_id:{type:"string"},receive_strategy:{type:"string",enum:["ses-s3","cf-routing","resend-webhook"]},
+  forward_to:{type:"string"},owner:{type:"string"},administrator:{type:"string"},inbound_bucket:{type:"string"},
+} };
+const provisioningReceipt = {type:"object",required:["ready","code","message","checked_at"],properties:{
+  ready:{type:"boolean"},code:{type:"string"},message:{type:"string"},checked_at:{type:"string",format:"date-time"},address_id:{type:"string"},
+  checks:{type:"object",required:["provider_verified","mx_verified","receipt_route_verified","queue_route_verified"],properties:{
+    provider_verified:{type:"boolean"},mx_verified:{type:"boolean"},receipt_route_verified:{type:"boolean"},queue_route_verified:{type:"boolean"}
+  }}
+}};
+const provisioningJob = {type:"object",required:["id","kind","status","input","receipt","created_at","updated_at"],properties:{
+  id:{type:"string"},kind:{type:"string",enum:["address"]},status:{type:"string",enum:["pending","processing","blocked","ready"]},input:provisioningInput,
+  receipt:{...provisioningReceipt,nullable:true},created_at:{type:"string",format:"date-time"},updated_at:{type:"string",format:"date-time"},
+}};
+const provisioningJobResponse = {type:"object",required:["job"],properties:{job:provisioningJob}};
+const provisioningErrors = {"400":errorResponse("Invalid provisioning options"),"401":errorResponse("Authentication required"),"403":errorResponse("Tenant operator required"),"404":errorResponse("Tenant resource not found"),"409":errorResponse("Conflicting provisioning inputs or bindings")};
+emailsSelfHostedOpenApi.paths!["/v1/provision/address"]={post:{operationId:"provisionAddress",summary:"Ensure an address on a configured SES/S3 domain after fresh readiness checks",
+  requestBody:{required:true,content:{"application/json":{schema:{...provisioningInput,properties:{...provisioningInput.properties,dry_run:{type:"boolean"},idempotency_key:{type:"string",maxLength:200}}}}}},
+  responses:{...provisioningErrors,"200":{description:"Durable job receipt or a read-only plan",content:{"application/json":{schema:{oneOf:[provisioningJobResponse,
+    {type:"object",required:["dry_run","plan","receipt"],properties:{dry_run:{type:"boolean",enum:[true]},plan:{...provisioningInput,properties:{...provisioningInput.properties,owner_id:{type:"string",nullable:true},administrator_id:{type:"string",nullable:true},address_exists:{type:"boolean"}}},receipt:provisioningReceipt}}
+  ]}}}}}
+}};
+for(const run of [false,true]) emailsSelfHostedOpenApi.paths![`/v1/provision/jobs/{id}${run?"/run":""}`]={[run?"post":"get"]:{
+  operationId:run?"runProvisioningJob":"getProvisioningJob",summary:run?"Retry readiness checks for one immutable provisioning job":"Read a tenant provisioning job receipt",
+  parameters:[{name:"id",in:"path",required:true,schema:{type:"string"}}],
+  ...(run?{requestBody:{content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{}}}}}}:{}),
+  responses:{...provisioningErrors,"200":{description:"Provisioning job",content:{"application/json":{schema:provisioningJobResponse}}}},
+}};
+
+const domainConnectionSchema = {
+  type: "object",
+  required: ["dry_run", "connection"],
+  properties: {
+    dry_run: { type: "boolean" },
+    connection: {
+      type: "object",
+      required: [
+        "id",
+        "domain_id",
+        "domain",
+        "provider_id",
+        "dns_provider",
+        "register_provider",
+        "status",
+        "provider_registered",
+        "dns_tasks",
+        "checked_at",
+        "message",
+      ],
+      properties: {
+        id: { type: "string", nullable: true },
+        domain_id: { type: "string", nullable: true },
+        domain: { type: "string" },
+        provider_id: { type: "string" },
+        dns_provider: {
+          type: "string",
+          enum: ["manual", "cloudflare", "route53"],
+        },
+        register_provider: { type: "boolean" },
+        status: {
+          type: "string",
+          enum: [
+            "planned",
+            "processing",
+            "blocked",
+            "pending_verification",
+            "verified",
+          ],
+        },
+        provider_registered: { type: "boolean", nullable: true },
+        checked_at: { type: "string", format: "date-time" },
+        message: { type: "string" },
+        dns_tasks: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["type", "name", "value", "purpose", "status"],
+            properties: {
+              type: { type: "string", enum: ["TXT", "CNAME", "MX"] },
+              name: { type: "string" },
+              value: { type: "string" },
+              purpose: { type: "string", enum: ["DKIM", "SPF", "MAIL_FROM"] },
+              status: { type: "string", enum: ["pending", "verified"] },
+              priority: { type: "integer", minimum: 0, maximum: 65535 },
+            },
+          },
+        },
+      },
+    },
+  },
+};
+const domainConnectionResponses = {
+  ...provisioningErrors,
+  "503": errorResponse("Server provider capability missing"),
+  "200": {
+    description:
+      "Connection plan, processing state or durable DNS task receipt",
+    content: { "application/json": { schema: domainConnectionSchema } },
+  },
+};
+emailsSelfHostedOpenApi.paths!["/v1/domains/connect"] = {
+  post: {
+    operationId: "connectDomain",
+    summary:
+      "Connect an already-owned domain using the server provider binding and record DNS tasks",
+    requestBody: {
+      required: true,
+      content: {
+        "application/json": {
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["domain", "provider_id"],
+            properties: {
+              domain: { type: "string" },
+              provider_id: { type: "string" },
+              dns_provider: {
+                type: "string",
+                enum: ["manual", "cloudflare", "route53"],
+              },
+              register_provider: { type: "boolean" },
+              dry_run: { type: "boolean" },
+            },
+          },
+        },
+      },
+    },
+    responses: domainConnectionResponses,
+  },
+};
+emailsSelfHostedOpenApi.paths!["/v1/domain-connections/{id}"] = {
+  get: {
+    operationId: "getDomainConnection",
+    summary: "Read a tenant operator domain connection receipt",
+    parameters: [
+      { name: "id", in: "path", required: true, schema: { type: "string" } },
+    ],
+    responses: domainConnectionResponses,
+  },
+};
+
+emailsSelfHostedOpenApi.paths!["/v1/tracking/{token}"] = {
+  get: { operationId: "observeMessageTracking", summary: "Observe a public opaque tracking capability", security: [],
+    parameters: [{name:"token",in:"path",required:true,schema:{type:"string"}}],
+    responses: {"200":{description:"Transparent GIF for a valid open capability",content:{"image/gif":{schema:{type:"string",format:"binary"}}}},"302":{description:"Redirect to the stored click destination",headers:{Location:{description:"Stored HTTP(S) destination",schema:{type:"string",format:"uri"}}}},"404":{description:"Invalid or expired capability"},"503":{description:"Tracking persistence unavailable"}} },
+};
+emailsSelfHostedOpenApi.paths!["/v1/providers/secrets/status"]={get:{operationId:"getProviderSecretStatus",summary:"Inspect server credential bindings without reading values",security:[{apiKeyAuth:[]},{bearerAuth:[]}],responses:{
+  "200":{description:"Complete tenant registry and binding metadata; no live credential probe",content:{"application/json":{schema:{type:"object",required:["source","complete","checked","activeKeyId","availableKeyIds","referencedKeyIds","managed_envelopes","capabilities","lifecycle_requirement","default_sender","providers"],properties:{
+    source:{type:"string"},complete:{type:"boolean",enum:[true]},checked:{type:"boolean",enum:[false]},activeKeyId:{type:"string",nullable:true},availableKeyIds:{type:"array",items:{type:"string"}},referencedKeyIds:{type:"array",items:{type:"string"}},managed_envelopes:{type:"integer",minimum:0},lifecycle_requirement:{type:"string"},
+    capabilities:{type:"object",required:["status","rewrap","rotate_root","revoke_root"],properties:{status:{type:"boolean"},rewrap:{type:"boolean"},rotate_root:{type:"boolean"},revoke_root:{type:"boolean"}}},
+    default_sender:{type:"object",nullable:true,properties:{type:{type:"string"},credential_source:{type:"string"},externally_managed:{type:"boolean"}}},
+    providers:{type:"array",items:{type:"object",required:["provider_id","name","type","active","configured","credential_source","externally_managed"],properties:{provider_id:{type:"string"},name:{type:"string"},type:{type:"string"},active:{type:"boolean"},configured:{type:"boolean"},credential_source:{type:"string"},externally_managed:{type:"boolean"}}}}
+  }}}}},"405":errorResponse("Only GET is supported for provider credential status.")
+}}};
 addRoutineErrorParity(emailsSelfHostedOpenApi);

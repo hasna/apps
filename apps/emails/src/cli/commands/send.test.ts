@@ -112,13 +112,13 @@ describe("emails send — dry-run previews without sending", () => {
     expect(await stub.list("messages")).toHaveLength(0);
   });
 
-  it("warns that scheduling is unavailable during a dry-run", async () => {
+  it("previews API scheduling during a dry-run", async () => {
     const result = await runSendCommand([
       "send", "--from", "agent@acme.com", "--to", "dest@ext.com", "--subject", "Hi", "--body", "x",
       "--schedule", "2030-01-01T00:00:00Z", "--dry-run",
     ]);
 
-    expect(result.consoleOutput).toContain("the self-hosted server does not accept a scheduled send");
+    expect(result.consoleOutput).toContain("queues on the API");
     expect(await stub.list("messages")).toHaveLength(0);
   });
 
@@ -135,7 +135,7 @@ describe("emails send — dry-run previews without sending", () => {
   });
 });
 
-describe("emails send — self-hosted-unsupported paths fail loud", () => {
+describe("emails send — invalid send requests fail clearly", () => {
   // `--to-group` used to live here as an unconditional refusal. It is a real
   // command now — group expansion is a client-side lookup over the routed
   // groups repo, needing no server route — and is covered in both modes by
@@ -149,13 +149,13 @@ describe("emails send — self-hosted-unsupported paths fail loud", () => {
     expect(errors).toContain("No recipients specified");
   });
 
-  it("rejects a real scheduled send (no server-side scheduling)", async () => {
+  it("rejects an invalid scheduled timestamp before enqueue", async () => {
     const errors = await runSendCommandExpectingExit([
       "send", "--from", "agent@acme.com", "--to", "dest@ext.com", "--subject", "Hi", "--body", "x",
-      "--schedule", "2030-01-01T00:00:00Z",
+      "--schedule", "invalid-time",
     ]);
 
-    expect(errors).toContain("Scheduled send is not supported");
+    expect(errors).toContain("ISO-8601");
     expect(await stub.list("messages")).toHaveLength(0);
   });
 });

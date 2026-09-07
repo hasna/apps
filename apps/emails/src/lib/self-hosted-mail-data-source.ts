@@ -47,7 +47,6 @@ import {
   type UnreadByAddressRow,
   mailboxLabel,
   renderMarkdown,
-  SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED,
 } from "./mail-types.js";
 import { normalizePriorityRuleInput, priorityRuleMatchesSender, prioritySenderRuleId, type PrioritySenderRule } from "./priority-senders.js";
 import type {
@@ -98,6 +97,7 @@ interface V1Message {
   status?: string | null;
   send_state?: string | null;
   provider_message_id?: string | null;
+  provider_id?: string | null;
   message_id?: string | null;
   in_reply_to?: string | null;
   received_at?: string | null;
@@ -403,7 +403,7 @@ function scopedCountWalkExhausted(scannedRows: number, requests: number): Error 
 // fields are already lower-cased by selfHostedScopeOf, and the separator cannot
 // occur in either, so distinct scopes cannot collide on one key.
 function scopedCountsKey(scope: SelfHostedScope): string {
-  return `a=${scope.address ?? ""} d=${scope.domain ?? ""}`;
+  return JSON.stringify([scope.address, scope.domain, scope.providerId]);
 }
 // Hard cap on rows walked while collecting one conversation. The candidate read
 // is already narrowed server-side by the subject filter, so this only bounds a
@@ -855,6 +855,7 @@ function v1AttachmentMetadata(m: V1Message): AttachmentPath[] {
     const record = attachmentRecord(attachment);
     return {
       filename: String(record?.filename || `attachment-${index + 1}`),
+      ...(typeof record?.content_id === "string" ? { content_id: record.content_id } : {}),
       content_type: String(record?.content_type || "application/octet-stream"),
       size: Number(record?.size ?? 0) || 0,
       // A malformed array element is an explicit non-downloadable placeholder,
@@ -948,6 +949,7 @@ function folderMatch(m: V1Message, folder: Mailbox, rules: PrioritySenderRule[] 
  * `undefined` means "the whole shared store" (no narrowing).
  */
 interface SelfHostedScope {
+  providerId?: string;
   address?: string;
   domain?: string;
 }
@@ -955,9 +957,7 @@ interface SelfHostedScope {
 /** Scope selectors that describe LOCAL ingestion provenance the /v1 store does not record. */
 function unsupportedScopeSelectors(source: MailboxSource): string[] {
   const selectors: string[] = [];
-  const providerId = source.providerId?.trim();
   const s3Bucket = source.s3Bucket?.trim();
-  if (providerId) selectors.push(`--provider ${providerId}`);
   if (s3Bucket) selectors.push(`--source s3:${s3Bucket}`);
   if (source.legacy) selectors.push("--source legacy");
   return selectors;
@@ -980,6 +980,8 @@ function unsupportedScopeSelectors(source: MailboxSource): string[] {
  */
 function selfHostedScopeOf(source?: MailboxSource): SelfHostedScope | undefined {
   if (!source) return undefined;
+  if (source.providerId !== undefined && (typeof source.providerId !== "string" || !source.providerId.trim())) throw new Error("Provider ID must not be empty.");
+  const providerId = source.providerId?.trim() || undefined;
   const address = source.address?.trim().toLowerCase() || undefined;
   const domain = source.domain?.trim().toLowerCase() || undefined;
   const sourceId = source.sourceId?.trim() || undefined;
@@ -988,7 +990,7 @@ function selfHostedScopeOf(source?: MailboxSource): SelfHostedScope | undefined 
   const unsupported = unsupportedScopeSelectors(source);
   // An id that is neither a whole-store id nor a mailbox scope names an
   // ingestion source this store does not have.
-  if (!wholeStore && unsupported.length === 0 && !address && !domain) {
+  if (!wholeStore && unsupported.length === 0 && !address && !domain && !providerId) {
     unsupported.push(`--source ${sourceId}`);
   }
   if (source.unknown && unsupported.length === 0) unsupported.push(`--source ${sourceId ?? "<unknown>"}`);
@@ -1000,21 +1002,23 @@ function selfHostedScopeOf(source?: MailboxSource): SelfHostedScope | undefined 
       + "`emails inbox sources` lists the scopes this store supports.",
     );
   }
-  if (!address && !domain) return undefined;
-  return { ...(address ? { address } : {}), ...(domain ? { domain } : {}) };
+  if (!address && !domain && !providerId) return undefined;
+  return { ...(providerId ? { providerId } : {}), ...(address ? { address } : {}), ...(domain ? { domain } : {}) };
 }
 
 function scopeMatch(m: V1Message, scope?: SelfHostedScope): boolean {
   if (!scope) return true;
+  if (scope.providerId && m.provider_id !== scope.providerId) return false;
   const recipients = (m.to_addrs ?? []).map(bareEmail);
   if (scope.address) return recipients.includes(scope.address) || bareEmail(m.from_addr ?? "") === scope.address;
   if (scope.domain) return recipients.some((r) => r.endsWith(`@${scope.domain}`));
   return true;
 }
 
-function scopeServerFilterSets(scope: SelfHostedScope | undefined): Array<{ to?: string; from?: string }> {
-  if (scope?.address) return [{ to: scope.address }, { from: scope.address }];
-  return scope?.domain ? [{ to: scope.domain }] : [{}];
+function scopeServerFilterSets(scope: SelfHostedScope | undefined): Array<{ to?: string; from?: string; provider_id?: string }> {
+  const provider = scope?.providerId ? { provider_id: scope.providerId } : {};
+  if (scope?.address) return [{ ...provider, to: scope.address }, { ...provider, from: scope.address }];
+  return scope?.domain ? [{ ...provider, to: scope.domain }] : [provider];
 }
 
 function sanitizedAttachmentSearchText(m: V1Message): string {
@@ -1196,6 +1200,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     position: V1MessagePagePosition = {},
     opts: {
       direction?: "inbound" | "outbound";
+      provider_id?: string;
       since?: string;
       until?: string;
       to?: string;
@@ -1217,6 +1222,14 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (position.cursor) params.set("cursor", position.cursor);
     else if (position.offset !== undefined && position.offset > 0) params.set("offset", String(position.offset));
     if (opts.folder) params.set("folder", opts.folder);
+    if (opts.provider_id) {
+      const contract = await this.request("GET", "/openapi.json");
+      const document = contract.json as { paths?: Record<string, { get?: { parameters?: Array<{ name?: string; in?: string }> } }> };
+      if (contract.status !== 200 || !document?.paths?.["/v1/messages"]?.get?.parameters?.some((p) => p.name === "provider_id" && p.in === "query")) {
+        throw new Error("The Emails API needs an update before provider-scoped mail can be read or cleared.");
+      }
+      params.set("provider_id", opts.provider_id);
+    }
     if (opts.direction) params.set("direction", opts.direction);
     if (opts.since) params.set("since", opts.since);
     if (opts.until) params.set("until", opts.until);
@@ -1237,6 +1250,9 @@ export class SelfHostedMailDataSource implements MailDataSource {
     }
     const body = json as { messages?: unknown; next_cursor?: unknown } | null;
     const messages = Array.isArray(body?.messages) ? (body.messages as V1Message[]) : [];
+    if (opts.provider_id && messages.some((message) => message.provider_id !== opts.provider_id)) {
+      throw new Error("The Emails API returned mail outside the requested provider; no messages were changed.");
+    }
     const nextCursor = body?.next_cursor;
     if (nextCursor === undefined) return { messages, nextCursor };
     if (nextCursor !== null && !validServerCursor(nextCursor)) {
@@ -1249,6 +1265,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     limit: number,
     opts: {
       direction?: "inbound" | "outbound";
+      provider_id?: string;
       since?: string;
       to?: string;
       from?: string;
@@ -1481,7 +1498,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
       const filters = scopeServerFilterSets(scope);
       // Address scopes need a to/from union. A single unfiltered cursor walk
       // preserves global ordering and avoids duplicate rows across that union.
-      const sourceFilters = filters.length > 1 ? [{}] : filters;
+      const sourceFilters = filters.length > 1 ? [{ provider_id: scope?.providerId }] : filters;
       for (const filtersForRequest of sourceFilters) {
         for await (const page of budgeted(PAGE_LIMIT, {
           folder,
@@ -2247,30 +2264,8 @@ export class SelfHostedMailDataSource implements MailDataSource {
   }
 
   async send(input: MailSendInput): Promise<MailSendResult> {
-    if (input.scheduledAt) {
-      throw new Error("Scheduled send is not supported on the self-hosted emails serve.");
-    }
-    if (input.providerId) {
-      // The /v1 send contract has no provider selector: the server sends with
-      // the single operator-configured provider (EMAILS_SEND_PROVIDER + its
-      // server-side credentials). Accepting the flag and ignoring it made an
-      // operator believe mail had been re-routed to another SES account when it
-      // had not.
-      throw new Error(
-        "--provider is not supported in self_hosted mode: the server selects the outbound provider "
-          + "(EMAILS_SEND_PROVIDER) and holds its credentials. Re-run without --provider.",
-      );
-    }
-    if (input.unsubscribeUrl) {
-      // Same class as --provider above: the POST /v1/messages/send contract carries
-      // no unsubscribe_url field, so the RFC 8058 List-Unsubscribe headers cannot be
-      // honored on this path. Accepting the flag and mailing WITHOUT the headers is
-      // a compliance failure the operator cannot see — refuse before the request.
-      throw new Error(
-        "--unsubscribe-url is not supported against the emails serve send API: its send contract "
-          + "carries no unsubscribe_url field, so the List-Unsubscribe headers would be silently "
-          + "dropped. Re-run without --unsubscribe-url, or send through a local provider.",
-      );
+    if (input.providerId !== undefined && (typeof input.providerId !== "string" || !input.providerId.trim())) {
+      throw new Error("providerId must be a non-empty provider identifier.");
     }
     const to = input.to.split(",").map((v) => v.trim()).filter(Boolean);
     const useMarkdown = input.markdown !== false;
@@ -2283,6 +2278,24 @@ export class SelfHostedMailDataSource implements MailDataSource {
       html,
       idempotency_key: input.idempotencyKey ?? crypto.randomUUID(),
     };
+    const trackingRequested = input.trackOpens === true || input.trackClicks === true;
+    for (const value of [input.trackOpens,input.trackClicks]) if (value !== undefined && typeof value !== "boolean") throw new Error("Tracking switches must be boolean");
+    if (input.trackingUrl !== undefined && (typeof input.trackingUrl !== "string" || !input.trackingUrl.trim() || !trackingRequested)) throw new Error("trackingUrl requires a nonempty URL and trackOpens or trackClicks");
+    if (input.providerId || input.unsubscribeUrl || trackingRequested) {
+      const contract = await this.request("GET", "/openapi.json");
+      const doc = contract.json as { paths?: Record<string, { post?: { requestBody?: { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> } } }> };
+      const properties = doc?.paths?.[input.scheduledAt ? "/v1/scheduled/enqueue" : "/v1/messages/send"]?.post?.requestBody?.content?.["application/json"]?.schema?.properties;
+      if (trackingRequested && (!properties?.track_opens || !properties?.track_clicks || !properties?.tracking_url)) throw new Error("The Emails API needs an update to support tracking; no message was sent.");
+      if (contract.status !== 200 || (input.providerId && !properties?.provider_id) || (input.unsubscribeUrl && !properties?.unsubscribe_url)) {
+        throw new Error("The Emails API needs an update to support provider selection and unsubscribe headers; no message was sent.");
+      }
+    }
+    if (trackingRequested) {
+      body.track_opens = input.trackOpens === true; body.track_clicks = input.trackClicks === true;
+      if (input.trackingUrl !== undefined) body.tracking_url = input.trackingUrl;
+    }
+    if (input.providerId) body["provider_id"] = input.providerId;
+    if (input.unsubscribeUrl) body["unsubscribe_url"] = input.unsubscribeUrl;
     if (input.attachments?.length) body["attachments"] = input.attachments;
     if (input.cc) body["cc"] = input.cc.split(",").map((v) => v.trim()).filter(Boolean);
     if (input.bcc) body["bcc"] = input.bcc.split(",").map((v) => v.trim()).filter(Boolean);
@@ -2294,7 +2307,12 @@ export class SelfHostedMailDataSource implements MailDataSource {
     // reason.
     if (input.allowSuppressedRecipients) body["allow_suppressed_recipients"] = true;
     this.invalidate();
-    const { status, json } = await this.request("POST", "/messages/send", body);
+    const path = input.scheduledAt ? "/scheduled/enqueue" : "/messages/send";
+    if (input.scheduledAt) {
+      const { parseScheduledSendTime } = await import("./scheduled-send-time.js");
+      body["scheduled_at"] = parseScheduledSendTime(input.scheduledAt, Number.NEGATIVE_INFINITY);
+    }
+    const { status, json } = await this.request("POST", path, body);
     const payload = (json ?? {}) as {
       message?: V1Message;
       error?: unknown;
@@ -2309,7 +2327,12 @@ export class SelfHostedMailDataSource implements MailDataSource {
       const detail = typeof response["error"] === "string" && response["error"]
         ? ` — ${String(response["error"])}`
         : "";
-      throw new Error(`self-hosted Emails: POST /messages/send failed (HTTP ${status})${reason}${detail}`);
+      throw new Error(`self-hosted Emails: POST ${path} failed (HTTP ${status})${reason}${detail}`);
+    }
+    if (input.scheduledAt) {
+      const receipt = json as { enqueued?: boolean; scheduled?: { id: string; status: string; scheduled_at: string }; idempotent_replay?: boolean };
+      if (!receipt.enqueued || !receipt.scheduled?.id) throw new Error("Emails API returned an invalid scheduled receipt; retry only with the same idempotency key.");
+      return { id: receipt.scheduled.id, messageId: "", scheduled: receipt.scheduled, idempotentReplay: receipt.idempotent_replay === true };
     }
     const rec = payload.message;
     const id = rec?.id ?? "";
@@ -2330,18 +2353,11 @@ export class SelfHostedMailDataSource implements MailDataSource {
   }
 
   async clear(filter?: MailClearFilter): Promise<MailClearResult> {
-    // Resolve the scope before the scan so unsupported provenance selectors
-    // refuse rather than widening. The complete cursor walk is preflighted
-    // before the first destructive request.
-    //
-    // `providerId` is one of those selectors: a /v1 message row carries no
-    // provider dimension, so the scope is unexpressible here — and dropping it
-    // silently would turn "clear one provider" into "clear the whole tenant
-    // folder" while reporting a plausible count. The local backend honours the
-    // same argument, so a silent widening would also make the guarantee depend
-    // on configuration. Refuse instead.
-    if (filter?.providerId) throw new Error(SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED);
-    const scope = selfHostedScopeOf(filter?.source);
+    if (filter?.providerId !== undefined && (typeof filter.providerId !== "string" || !filter.providerId.trim())) throw new Error("Provider ID must not be empty; no messages were changed.");
+    if (filter?.providerId && filter.source?.providerId && filter.providerId !== filter.source.providerId) {
+      throw new Error("Conflicting provider filters; no messages were changed.");
+    }
+    const scope = selfHostedScopeOf({ ...filter?.source, ...(filter?.providerId ? { providerId: filter.providerId } : {}) });
     const mailbox: Mailbox = filter?.mailbox ?? "inbox";
     const rules = await this.priorityRules();
     const targets = new Set<string>();

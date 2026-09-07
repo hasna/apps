@@ -1,7 +1,5 @@
-// Self-hosted-ONLY: provider event ingestion, sent-log stats/analytics and the
-// live monitor are owned by the self-hosted server. This client keeps the
-// commands for discoverability but fails loud — there is no local island to
-// sync/aggregate and no /v1 equivalent to route them through.
+// Statistics use the configured API store; remaining ingestion handlers are
+// exercised separately until their API replacements land.
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Command } from "commander";
 import { registerSyncCommands } from "./sync.js";
@@ -72,23 +70,11 @@ afterEach(() => {
   }
 });
 
-describe("sync CLI commands (server-only in the self-hosted client)", () => {
-  const cases: Array<{ args: string[]; command: string }> = [
-    { args: ["provider", "sync"], command: "emails provider sync" },
-    { args: ["pull"], command: "emails pull" },
-    { args: ["stats"], command: "emails stats" },
-    { args: ["stats", "--inbox"], command: "emails stats" },
-    { args: ["monitor"], command: "emails monitor" },
-    { args: ["analytics"], command: "emails analytics" },
-  ];
-
-  for (const { args, command } of cases) {
-    it(`fails loud for emails ${args.join(" ")}`, async () => {
+describe("sync CLI provider selection", () => {
+  for (const args of [["provider", "sync", "--provider", " "], ["pull", "--provider", " "]]) {
+    it(`rejects a blank selector for ${args[0]} before contacting a provider`, async () => {
       enableSelfHostedMode();
-
-      const error = await runSyncCommandExpectingExit(args);
-
-      expect(error).toContain(`${command} is not available in the self-hosted client; it runs on the self-hosted server.`);
+      expect(await runSyncCommandExpectingExit(args)).toContain("--provider must name a provider identifier");
     });
   }
 });
@@ -128,7 +114,7 @@ describe("sync JSON output", () => {
   it("prints parseable JSON errors with a non-zero exit", async () => {
     enableSelfHostedMode();
     const child = Bun.spawn({
-      cmd: [process.execPath, "run", "src/cli/index.tsx", "pull", "--json"],
+      cmd: [process.execPath, "run", "src/cli/index.tsx", "pull", "--provider", " ", "--json"],
       cwd: process.cwd(),
       env: { ...process.env, NO_COLOR: "1" },
       stdout: "pipe",
@@ -143,7 +129,7 @@ describe("sync JSON output", () => {
     expect(exitCode).toBe(1);
     expect(stdout).toBe("");
     expect(JSON.parse(stderr)).toMatchObject({
-      error: { message: expect.stringContaining("emails pull is not available") },
+      error: { message: expect.stringContaining("--provider must name a provider identifier") },
     });
   });
 });

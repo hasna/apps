@@ -3,6 +3,7 @@
 // Wires the product-owned Postgres pool, the API-key verifier
 // (@hasna/contracts/auth), the migration set, and the request handler together.
 
+import { readTrackingConfig } from "./tracking.js";
 import { ApiKeyStore, type ApiKeyVerifier } from "@hasna/contracts/auth";
 import { assertServingRoleCannotBypassRls } from "./rls-guard.js";
 import { getSelfHostedPool, requireSigningSecret, SELF_HOSTED_APP, SELF_HOSTED_APP_ALIASES } from "./env.js";
@@ -10,7 +11,7 @@ import { formatApiAuthAuditLine, verifyApiKeyWithAliases } from "./api-key-verif
 import { emailsSelfHostedMigrations } from "./migrations.js";
 import { EmailsSelfHostedStore } from "./store.js";
 import { handleSelfHostedRequest, type SelfHostedServiceDeps } from "./service.js";
-import { buildSelfHostedSender } from "./sender.js";
+import { buildSelfHostedSender, buildSenderResolver } from "./sender.js";
 import { AuthStore } from "./auth/store.js";
 import { RateLimiter } from "./auth/rate-limit.js";
 import { buildAuthMailerConfig } from "./auth/mailer.js";
@@ -75,6 +76,8 @@ export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
     store: new EmailsSelfHostedStore(client),
     verifier,
     sender,
+    resolveSender: buildSenderResolver(sender),
+    tracking: readTrackingConfig(),
     migrations: emailsSelfHostedMigrations(),
     version,
     // ---- multi-tenancy + auth (WI-2) ----

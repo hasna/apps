@@ -299,7 +299,7 @@ describe.each(IMPLEMENTATIONS)("delivery statistics measured through %s", (_labe
     expect(wide.sent).toBe(4);
   });
 
-  it("refuses the SENT count when a provider is named, and does not answer with the unfiltered one", async () => {
+  it("scopes sent counts and delivery events to the named provider", async () => {
     const { alpha } = await seed();
     const store = await open();
     const stats = await getLocalStats(alpha, "30d", store);
@@ -311,18 +311,11 @@ describe.each(IMPLEMENTATIONS)("delivery statistics measured through %s", (_labe
     expect(stats.complained).toBe(0);
     expect(stats.provider_id).toBe(alpha);
 
-    // `sent` is not, and the answer is a refusal rather than the unscoped number — which
-    // is 3, asserted above, so this also proves it was not quietly substituted.
-    expect(stats.sent).toBeNull();
-    expect(stats.gaps["sent"]?.reason).toContain("no_provider_on_message_stream");
-    expect(statusGapClass(stats.gaps["sent"]?.reason)).toBe("structural");
-
-    // The two rates that divide by it go with it. `open_rate` does not: both of its
-    // operands are event counts.
-    expect(stats.delivery_rate).toBeNull();
-    expect(stats.bounce_rate).toBeNull();
+    expect(stats.sent).toBe(1);
+    expect(stats.delivery_rate).toBe(200);
+    expect(stats.bounce_rate).toBe(100);
     expect(stats.open_rate).toBe(50);
-    expect(Object.keys(stats.gaps).sort()).toEqual(["bounce_rate", "delivery_rate", "sent"]);
+    expect(Object.keys(stats.gaps)).toEqual([]);
   });
 
   it("reports a MEASURED zero as zero, and refuses only the rate that has no denominator", async () => {

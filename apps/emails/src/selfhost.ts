@@ -40,9 +40,9 @@ export interface Address { "id": string; "email": string; "domain"?: string | nu
 
 export interface SendKey { "id": string; "owner_id": string | null; "prefix": string | null; "label": string | null; "last_used_at": string | null; "revoked_at": string | null; "created_at": string; "updated_at": string }
 
-export interface MessageListItem { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "snippet": string | null; "status": string; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "attachment_count": number; "source_id": string | null; "send_state": string; "policy_denial"?: string | null; "send_started_at": string | null; "created_at": string; "updated_at": string }
+export interface MessageListItem { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "snippet": string | null; "status": string; "provider_id"?: string | null; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "attachment_count": number; "source_id": string | null; "send_state": string; "policy_denial"?: string | null; "send_started_at": string | null; "created_at": string; "updated_at": string }
 
-export interface Message { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "body_text": string | null; "body_html": string | null; "status": string; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "headers": Record<string, unknown>; "attachments": Array<AttachmentMeta | null>; "source_id": string | null; "send_state": string; "send_started_at": string | null; "created_at": string; "updated_at": string }
+export interface Message { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "body_text": string | null; "body_html": string | null; "status": string; "provider_id"?: string | null; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "headers": Record<string, unknown>; "attachments": Array<AttachmentMeta | null>; "source_id": string | null; "send_state": string; "send_started_at": string | null; "created_at": string; "updated_at": string }
 
 export interface MessageCounts { "inbox": number; "unread": number; "priority"?: number; "starred": number; "sent": number; "archived": number; "spam": number; "trash": number; "total": number; "latest_received_at": string | null }
 
@@ -168,7 +168,14 @@ export class EmailsSelfHostClient {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
@@ -618,6 +625,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Read a tenant operator domain connection receipt */
+    async getDomainConnection(id: string, init?: RequestInit): Promise<{ "dry_run": boolean; "connection": { "id": string | null; "domain_id": string | null; "domain": string; "provider_id": string; "dns_provider": "manual" | "cloudflare" | "route53"; "register_provider": boolean; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "provider_registered": boolean | null; "checked_at": string; "message": string; "dns_tasks": Array<{ "type": "TXT" | "CNAME" | "MX"; "name": string; "value": string; "purpose": "DKIM" | "SPF" | "MAIL_FROM"; "status": "pending" | "verified"; "priority"?: number }> } }> {
+      return this.request("GET", `/v1/domain-connections/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List sending domains */
     async listDomains(query?: { "limit"?: number; "offset"?: number }, init?: RequestInit): Promise<{ "domains": Array<Domain> }> {
       return this.request("GET", `/v1/domains`, {
@@ -630,6 +646,15 @@ export class EmailsSelfHostClient {
     /** Register a sending domain (scope emails:write) */
     async createDomain(body: { "domain": string; "status"?: string; "provider"?: string | null; "verified"?: boolean; "notes"?: string | null }, init?: RequestInit): Promise<{ "domain": Domain }> {
       return this.request("POST", `/v1/domains`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Connect an already-owned domain using the server provider binding and record DNS tasks */
+    async connectDomain(body: { "domain": string; "provider_id": string; "dns_provider"?: "manual" | "cloudflare" | "route53"; "register_provider"?: boolean; "dry_run"?: boolean }, init?: RequestInit): Promise<{ "dry_run": boolean; "connection": { "id": string | null; "domain_id": string | null; "domain": string; "provider_id": string; "dns_provider": "manual" | "cloudflare" | "route53"; "register_provider": boolean; "status": "planned" | "processing" | "blocked" | "pending_verification" | "verified"; "provider_registered": boolean | null; "checked_at": string; "message": string; "dns_tasks": Array<{ "type": "TXT" | "CNAME" | "MX"; "name": string; "value": string; "purpose": "DKIM" | "SPF" | "MAIL_FROM"; "status": "pending" | "verified"; "priority"?: number }> } }> {
+      return this.request("POST", `/v1/domains/connect`, {
         body,
         query: undefined,
         init,
@@ -662,6 +687,38 @@ export class EmailsSelfHostClient {
 
     async updateDomain(id: string, body: { "status"?: string; "provider"?: string | null; "verified"?: boolean; "notes"?: string | null; "provisioning_status"?: string; "purchase_provider"?: string | null; "dns_provider"?: string; "send_provider"?: string | null; "cf_zone_id"?: string | null; "registrar"?: string | null; "nameservers_json"?: Array<string>; "mail_from_domain"?: string | null; "last_error"?: string | null; "next_check_at"?: string | null }, init?: RequestInit): Promise<{ "domain": Domain }> {
       return this.request("PATCH", `/v1/domains/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    async domainDisableOutbound(id: string, body: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": Domain }> {
+      return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/disable-outbound`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    async domainEnableInbound(id: string, body: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": Domain }> {
+      return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/enable-inbound`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    async domainEnableOutbound(id: string, body: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": Domain }> {
+      return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/enable-outbound`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    async domainVerify(id: string, body: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": Domain }> {
+      return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/verify`, {
         body,
         query: undefined,
         init,
@@ -902,6 +959,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Forward matching inbound mail with durable delivery identities (tenant operator required) */
+    async runForwardingBatch(body: { "limit"?: number; "provider_id"?: string; "from_address"?: string; "backfill"?: boolean }, init?: RequestInit): Promise<{ "attempted": number; "sent": number; "failed": number; "skipped": number; "pending": number; "items": Array<{ "rule_id": string; "inbound_email_id": string; "target_address": string; "status": "sent" | "failed" | "skipped" | "processing"; "sent_email_id": string | null; "error": string | null }> }> {
+      return this.request("POST", `/v1/forwarding/run`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Get a tenant-scoped forwarding row */
     async getResourceForwarding(id: string, init?: RequestInit): Promise<{ "source_address": string | null; "target_address": string | null; "mode": string | null; "provider_id": string | null; "from_address": string | null; "enabled": boolean; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("GET", `/v1/forwarding/${encodeURIComponent(String(id))}`, {
@@ -1086,6 +1152,51 @@ export class EmailsSelfHostClient {
     async revokeIdpPrincipalByPost(sub: string, init?: RequestInit): Promise<{ "revoked": true; "sub": string }> {
       return this.request("POST", `/v1/idp-principals/${encodeURIComponent(String(sub))}/revoke`, {
         body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Configure and read back a tenant-bound SES/SNS/SQS notification path (operator only) */
+    async setupInboxRealtime(body: { "domain": string; "source_id"?: string; "rule_set"?: string; "rule_name"?: string; "region"?: string; "profile"?: string }, init?: RequestInit): Promise<{ "ok": boolean; "verified": boolean; "source_id": string; "changed": Array<string>; "worker_started": boolean; "delivery_tested": boolean }> {
+      return this.request("POST", `/v1/inbox/setup-realtime`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Check operator SMTP import capability before binding a local listener */
+    async getSmtpImportCapability(query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "available": boolean; "durable_receipts": boolean; "max_raw_bytes": number; "provider_id": string | null }> {
+      return this.request("GET", `/v1/inbox/smtp`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Import bounded MIME with an immutable DATA transaction receipt (operator only) */
+    async importSmtpMessage(body: { "transaction_id": string; "raw_base64": string; "provider_id"?: string; "envelope": { "from": string; "to": Array<string> } }, init?: RequestInit): Promise<{ "stored": boolean; "id": string; "duplicate": boolean }> {
+      return this.request("POST", `/v1/inbox/smtp`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Run a bounded server-bound tenant ingestion batch */
+    async syncInboxS3(body: { "source_id"?: string; "bucket"?: string; "prefix"?: string; "region"?: string; "provider_id"?: string; "queue_url"?: string; "profile"?: string; "cursor"?: string; "force"?: boolean; "all_buckets"?: boolean; "limit"?: number }, init?: RequestInit): Promise<{ "ok": boolean; "sources": Array<Record<string, unknown>> }> {
+      return this.request("POST", `/v1/inbox/sync-s3`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Run a bounded server-bound tenant ingestion batch */
+    async watchInboxQueue(body: { "source_id"?: string; "bucket"?: string; "prefix"?: string; "region"?: string; "provider_id"?: string; "queue_url"?: string; "profile"?: string; "cursor"?: string; "force"?: boolean; "all_buckets"?: boolean; "limit"?: number }, init?: RequestInit): Promise<{ "ok": boolean; "sources": Array<Record<string, unknown>> }> {
+      return this.request("POST", `/v1/inbox/watch`, {
+        body,
         query: undefined,
         init,
       });
@@ -1280,7 +1391,7 @@ export class EmailsSelfHostClient {
       });
     }
 
-    async listMessages(query?: { "limit"?: number; "offset"?: number; "cursor"?: string; "direction"?: "inbound" | "outbound"; "folder"?: "inbox" | "starred" | "sent" | "archived" | "spam" | "trash"; "domain"?: Array<string>; "to"?: string; "from"?: string; "subject"?: string; "q"?: string; "search"?: string; "since"?: string; "until"?: string; "read"?: boolean; "unread"?: boolean; "starred"?: boolean; "archived"?: boolean; "address"?: string; "label"?: string }, init?: RequestInit): Promise<{ "messages": Array<MessageListItem>; "next_cursor": string | null }> {
+    async listMessages(query?: { "provider_id"?: string; "limit"?: number; "offset"?: number; "cursor"?: string; "direction"?: "inbound" | "outbound"; "folder"?: "inbox" | "starred" | "sent" | "archived" | "spam" | "trash" | "priority"; "domain"?: Array<string>; "to"?: string; "from"?: string; "subject"?: string; "q"?: string; "search"?: string; "since"?: string; "until"?: string; "read"?: boolean; "unread"?: boolean; "starred"?: boolean; "archived"?: boolean; "address"?: string; "label"?: string }, init?: RequestInit): Promise<{ "messages": Array<MessageListItem>; "next_cursor": string | null }> {
       return this.request("GET", `/v1/messages`, {
         body: undefined,
         query,
@@ -1289,7 +1400,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Import an inbound message. Supplying source_id makes the write idempotent. Scope emails:write. */
-    async createMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "subject"?: string | null; "text"?: string | null; "html"?: string | null; "status"?: string; "direction": "inbound"; "received_at"?: string | null; "message_id"?: string | null; "in_reply_to"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "labels"?: Array<string>; "headers"?: Record<string, unknown>; "attachments"?: Array<Record<string, unknown>>; "provider_message_id"?: string | null; "source_id"?: string }, init?: RequestInit): Promise<{ "message": Message }> {
+    async createMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "subject"?: string | null; "text"?: string | null; "html"?: string | null; "status"?: string; "direction": "inbound"; "received_at"?: string | null; "message_id"?: string | null; "in_reply_to"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "labels"?: Array<string>; "headers"?: Record<string, unknown>; "attachments"?: Array<Record<string, unknown>>; "provider_id"?: string | null; "provider_message_id"?: string | null; "source_id"?: string }, init?: RequestInit): Promise<{ "message": Message }> {
       return this.request("POST", `/v1/messages`, {
         body,
         query: undefined,
@@ -1316,7 +1427,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Record a message in either direction WITHOUT sending it. Supplying source_id makes the write idempotent. Scope emails:write. */
-    async recordMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "subject"?: string | null; "text"?: string | null; "html"?: string | null; "status"?: string; "direction"?: "inbound" | "outbound"; "received_at"?: string | null; "message_id"?: string | null; "in_reply_to"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "labels"?: Array<string>; "headers"?: Record<string, unknown>; "attachments"?: Array<Record<string, unknown>>; "provider_message_id"?: string | null; "source_id"?: string }, init?: RequestInit): Promise<{ "message": Message }> {
+    async recordMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "subject"?: string | null; "text"?: string | null; "html"?: string | null; "status"?: string; "direction"?: "inbound" | "outbound"; "received_at"?: string | null; "message_id"?: string | null; "in_reply_to"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "labels"?: Array<string>; "headers"?: Record<string, unknown>; "attachments"?: Array<Record<string, unknown>>; "provider_id"?: string | null; "provider_message_id"?: string | null; "source_id"?: string }, init?: RequestInit): Promise<{ "message": Message }> {
       return this.request("POST", `/v1/messages/record`, {
         body,
         query: undefined,
@@ -1325,7 +1436,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Send through the configured SES or Resend provider and persist the resulting ledger row */
-    async sendMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "send_key"?: string; "idempotency_key": string }, init?: RequestInit): Promise<{ "message": Message; "provider": string; "idempotent_replay": true; "sent": true; "provider_message_id": string } | { "message": Message; "provider": string; "in_progress": true } | { "message": Message; "provider": string; "sent": true; "provider_message_id": string; "warning"?: string; "retry_safe"?: false }> {
+    async sendMessage(body: { "provider_id"?: string; "track_opens"?: boolean; "track_clicks"?: boolean; "tracking_url"?: string; "unsubscribe_url"?: string; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "send_key"?: string; "allow_suppressed_recipients"?: boolean; "idempotency_key": string }, init?: RequestInit): Promise<{ "message": Message; "provider": string; "idempotent_replay": true; "sent": true; "provider_message_id": string } | { "message": Message; "provider": string; "in_progress": true } | { "message": Message; "provider": string; "sent": true; "provider_message_id": string; "warning"?: string; "retry_safe"?: false }> {
       return this.request("POST", `/v1/messages/send`, {
         body,
         query: undefined,
@@ -1553,6 +1664,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Inspect server credential bindings without reading values */
+    async getProviderSecretStatus(init?: RequestInit): Promise<{ "source": string; "complete": true; "checked": false; "activeKeyId": string | null; "availableKeyIds": Array<string>; "referencedKeyIds": Array<string>; "managed_envelopes": number; "lifecycle_requirement": string; "capabilities": { "status": boolean; "rewrap": boolean; "rotate_root": boolean; "revoke_root": boolean }; "default_sender": { "type"?: string; "credential_source"?: string; "externally_managed"?: boolean } | null; "providers": Array<{ "provider_id": string; "name": string; "type": string; "active": boolean; "configured": boolean; "credential_source": string; "externally_managed": boolean }> }> {
+      return this.request("GET", `/v1/providers/secrets/status`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Get a tenant-scoped providers row */
     async getResourceProviders(id: string, init?: RequestInit): Promise<{ "name": string | null; "type": string | null; "region": string | null; "active": boolean; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("GET", `/v1/providers/${encodeURIComponent(String(id))}`, {
@@ -1583,6 +1703,51 @@ export class EmailsSelfHostClient {
     /** Update a tenant-scoped providers row */
     async updateResourceProviders(id: string, body: { "name"?: string | null; "type"?: string | null; "region"?: string | null; "active"?: boolean }, init?: RequestInit): Promise<{ "name": string | null; "type": string | null; "region": string | null; "active": boolean; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("PATCH", `/v1/providers/${encodeURIComponent(String(id))}`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read server binding metadata or probe provider credentials */
+    async getProviderHealth(id: string, query?: { "live"?: boolean }, init?: RequestInit): Promise<{ "provider_id": string; "checked": boolean; "status": string; "message": string }> {
+      return this.request("GET", `/v1/providers/${encodeURIComponent(String(id))}/health`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Reconcile known tenant provider message delivery observations */
+    async syncProviderDelivery(id: string, body: { "after"?: string; "limit"?: number }, init?: RequestInit): Promise<{ "provider_id": string; "complete": boolean; "checked": number; "synced": number; "failures": Array<Record<string, unknown>> }> {
+      return this.request("POST", `/v1/providers/${encodeURIComponent(String(id))}/sync`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Ensure an address on a configured SES/S3 domain after fresh readiness checks */
+    async provisionAddress(body: { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string; "dry_run"?: boolean; "idempotency_key"?: string }, init?: RequestInit): Promise<{ "job": { "id": string; "kind": "address"; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string }; "receipt": { "ready": boolean; "code": string; "message": string; "checked_at": string; "address_id"?: string; "checks"?: { "provider_verified": boolean; "mx_verified": boolean; "receipt_route_verified": boolean; "queue_route_verified": boolean } } | null; "created_at": string; "updated_at": string } } | { "dry_run": true; "plan": { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string; "owner_id"?: string | null; "administrator_id"?: string | null; "address_exists"?: boolean }; "receipt": { "ready": boolean; "code": string; "message": string; "checked_at": string; "address_id"?: string; "checks"?: { "provider_verified": boolean; "mx_verified": boolean; "receipt_route_verified": boolean; "queue_route_verified": boolean } } }> {
+      return this.request("POST", `/v1/provision/address`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read a tenant provisioning job receipt */
+    async getProvisioningJob(id: string, init?: RequestInit): Promise<{ "job": { "id": string; "kind": "address"; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string }; "receipt": { "ready": boolean; "code": string; "message": string; "checked_at": string; "address_id"?: string; "checks"?: { "provider_verified": boolean; "mx_verified": boolean; "receipt_route_verified": boolean; "queue_route_verified": boolean } } | null; "created_at": string; "updated_at": string } }> {
+      return this.request("GET", `/v1/provision/jobs/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Retry readiness checks for one immutable provisioning job */
+    async runProvisioningJob(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<{ "job": { "id": string; "kind": "address"; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string }; "receipt": { "ready": boolean; "code": string; "message": string; "checked_at": string; "address_id"?: string; "checks"?: { "provider_verified": boolean; "mx_verified": boolean; "receipt_route_verified": boolean; "queue_route_verified": boolean } } | null; "created_at": string; "updated_at": string } }> {
+      return this.request("POST", `/v1/provision/jobs/${encodeURIComponent(String(id))}/run`, {
         body,
         query: undefined,
         init,
@@ -1709,6 +1874,24 @@ export class EmailsSelfHostClient {
     /** Create a tenant-scoped scheduled row */
     async createResourceScheduled(body: { "provider_id"?: string | null; "from_address"?: string | null; "to_addresses"?: unknown; "cc_addresses"?: unknown; "bcc_addresses"?: unknown; "reply_to"?: string | null; "subject"?: string | null; "html"?: string | null; "text_body"?: string | null; "attachments_json"?: unknown; "template_name"?: string | null; "template_vars"?: unknown; "scheduled_at"?: string | null; "status"?: string | null; "error"?: string | null }, init?: RequestInit): Promise<{ "provider_id": string | null; "from_address": string | null; "to_addresses": unknown; "cc_addresses": unknown; "bcc_addresses": unknown; "reply_to": string | null; "subject": string | null; "html": string | null; "text_body": string | null; "attachments_json": unknown; "template_name": string | null; "template_vars": unknown; "scheduled_at": string | null; "status": string | null; "error": string | null; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("POST", `/v1/scheduled`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Validate and enqueue an idempotent scheduled send */
+    async enqueueScheduledSend(body: { "provider_id"?: string; "track_opens"?: boolean; "track_clicks"?: boolean; "tracking_url"?: string; "unsubscribe_url"?: string; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "allow_suppressed_recipients"?: boolean; "idempotency_key": string; "scheduled_at": string }, init?: RequestInit): Promise<{ "enqueued": true; "idempotent_replay": boolean; "scheduled": { "id": string; "status": "pending" | "processing" | "sent" | "failed" | "cancelled"; "scheduled_at": string } }> {
+      return this.request("POST", `/v1/scheduled/enqueue`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Claim and execute a due scheduled-send batch (tenant operator required) */
+    async runScheduledBatch(body?: { "limit"?: number; "sequence_limit"?: number }, init?: RequestInit): Promise<{ "scheduled": { "attempted": number; "sent": number; "failed": number; "pending": number; "skipped": number }; "items": Array<{ "id": string; "status": "sent" | "failed" | "processing" | "lease_lost"; "error"?: string }>; "sequences": { "attempted": number; "sent": number; "failed": number; "pending": number; "skipped": number }; "sequence_items": Array<{ "id": string; "status": "sent" | "failed" | "processing" | "lease_lost" | "completed"; "error"?: string }>; "sequence_execution": "not_requested" | "executed" }> {
+      return this.request("POST", `/v1/scheduled/run`, {
         body,
         query: undefined,
         init,
@@ -2172,6 +2355,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Observe a public opaque tracking capability */
+    async observeMessageTracking(token: string, init?: RequestInit): Promise<undefined> {
+      return this.request("GET", `/v1/tracking/${encodeURIComponent(String(token))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List tenant-scoped triage */
     async listResourceTriage(query?: { "limit"?: number; "offset"?: number; "label"?: string | null; "priority"?: number; "sentiment"?: string | null; "email_id"?: string | null; "inbound_email_id"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "email_id": string | null; "inbound_email_id": string | null; "label": string | null; "priority": number; "summary": string | null; "sentiment": string | null; "draft_reply": string | null; "confidence": number; "model": string | null; "triaged_at": string | null; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
       return this.request("GET", `/v1/triage`, {
@@ -2330,6 +2522,33 @@ export class EmailsSelfHostClient {
       return this.request("PATCH", `/v1/webhook-receipts/${encodeURIComponent(String(id))}`, {
         body,
         query: undefined,
+        init,
+      });
+    }
+
+    /** Check a tenant-bound server-verified webhook relay before opening a local listener */
+    async getWebhookRelayCapability(query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "available": boolean; "signature_verification": boolean; "durable_receipts": boolean; "provider_id": string; "type": "ses" | "resend"; "max_webhook_bytes": number }> {
+      return this.request("GET", `/v1/webhooks/relay`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Relay exact signed provider bytes with tenant/operator authorization; acknowledgment requires durable completion */
+    async relayResendWebhook(body: { "raw_body_base64": string; "signature_headers": Record<string, string> }, query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "ok": boolean; "completed": boolean; "provider_id": string }> {
+      return this.request("POST", `/v1/webhooks/relay/resend`, {
+        body,
+        query,
+        init,
+      });
+    }
+
+    /** Relay exact signed provider bytes with tenant/operator authorization; acknowledgment requires durable completion */
+    async relaySesWebhook(body: { "raw_body_base64": string; "signature_headers": Record<string, string> }, query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "ok": boolean; "completed": boolean; "provider_id": string }> {
+      return this.request("POST", `/v1/webhooks/relay/ses`, {
+        body,
+        query,
         init,
       });
     }

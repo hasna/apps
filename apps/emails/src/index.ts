@@ -668,3 +668,6 @@ export async function verifyEmailAddress(...args: Parameters<EmailVerifyModule["
   const { verifyEmailAddress } = await import("./lib/email-verify.js");
   return verifyEmailAddress(...args);
 }
+
+export { provisionAddress, type ProvisionAddressOptions, type ProvisionAddressResult } from "./lib/address-provisioning-api.js";
+export { connectDomain, inspectDomainConnection, type ConnectDomainOptions, type ConnectDomainResult } from "./lib/domain-connect-api.js";
