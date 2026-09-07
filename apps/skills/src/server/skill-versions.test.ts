@@ -27,8 +27,8 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
-const TOKEN = "sk_versions_org_a";
-const OTHER_TOKEN = "sk_versions_org_b";
+const TOKEN = crypto.randomUUID();
+const OTHER_TOKEN = crypto.randomUUID();
 const ORG = { orgId: "org_va", orgSlug: "org-va", orgName: "Org VA", userId: "user_va", email: "va@example.com", apiKeyId: "key_va" };
 const OTHER = { orgId: "org_vb", orgSlug: "org-vb", orgName: "Org VB", userId: "user_vb", email: "vb@example.com", apiKeyId: "key_vb" };
 const PREFIX = "prod/artifacts";
@@ -90,7 +90,7 @@ for (const backend of backends) {
         artifactStorage,
         config: { inlineWorker: false, allowEphemeralStore: true },
       });
-      const server = Bun.serve({ port: 0, fetch: fetchHandler });
+      const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: fetchHandler });
       const root = makeCorpus(SKILL_V1);
       try {
         const baseUrl = `http://127.0.0.1:${server.port}`;
@@ -245,7 +245,7 @@ for (const backend of backends) {
         artifactStorage: new ArtifactStorage({ bucket: BUCKET, prefix: PREFIX, client: s3 }),
         config: { inlineWorker: false, allowEphemeralStore: true },
       });
-      const server = Bun.serve({ port: 0, fetch: fetchHandler });
+      const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: fetchHandler });
       try {
         const response = await fetch(`http://127.0.0.1:${server.port}/api/v1/skills`, {
           method: "POST",
@@ -286,7 +286,7 @@ describe("a version-object write that fails after the row commit heals on retry"
       artifactStorage: new ArtifactStorage({ bucket: BUCKET, prefix: PREFIX, client: s3 }),
       config: { inlineWorker: false, allowEphemeralStore: true },
     });
-    const server = Bun.serve({ port: 0, fetch: fetchHandler });
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: fetchHandler });
     const root = makeCorpus(SKILL_V1);
     try {
       const client = new RemoteSkillsClient(TOKEN, `http://127.0.0.1:${server.port}`);

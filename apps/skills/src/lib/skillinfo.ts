@@ -205,7 +205,7 @@ export function getSkillDependencyStatus(name: string): SkillDependencyStatus[] 
 export async function runSkill(
   name: string,
   args: string[],
-  options: { installed?: boolean; stdio?: "inherit" | "pipe"; env?: Record<string, string> } = {}
+  options: { installed?: boolean; stdio?: "inherit" | "pipe" | "stderr"; env?: Record<string, string> } = {}
 ): Promise<{ exitCode: number; error?: string; stdout?: string; stderr?: string }> {
   // Skills execute from the bundled package source. Project `.skills/` is only
   // for pins, run metadata, logs, and exports; it is never a source directory.
@@ -268,15 +268,19 @@ export async function runSkill(
   // Run the skill
   const proc = Bun.spawn(["bun", "run", entryPath, ...args], {
     cwd: skillPath,
-    stdout: options.stdio === "pipe" ? "pipe" : "inherit",
+    // Structured command output owns fd1. Stream child diagnostics directly to
+    // fd2 in stderr mode; do not accumulate them in an unbounded string buffer.
+    stdout: options.stdio === "pipe" ? "pipe" : options.stdio === "stderr" ? 2 : "inherit",
     stderr: options.stdio === "pipe" ? "pipe" : "inherit",
     stdin: "inherit",
     env: { ...process.env, ...options.env },
   });
 
   if (options.stdio === "pipe") {
+    // This branch requested a pipe; the numeric stdout descriptor belongs only
+    // to stderr mode and cannot reach this existing capture path.
     const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
+      new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
       new Response(proc.stderr).text(),
       proc.exited,
     ]);

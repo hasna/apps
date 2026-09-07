@@ -169,10 +169,14 @@ export class NotesHttpStore {
         });
       }
       if (typeof body === 'string') {
-        return new NotesHttpStoreError(redact(`Notes API ${method} ${path} returned invalid JSON`), {
-          status,
-          code: 'invalid_json',
-        });
+        // Name the status: the CLI and MCP print only this message, and a
+        // deployment or gateway mismatch (an origin that does not serve /v1
+        // answers 404 text/plain) must read differently from a corrupt JSON
+        // body on a 200.
+        return new NotesHttpStoreError(
+          redact(`Notes API ${method} ${path} returned HTTP ${status} with a non-JSON body`),
+          { status, code: 'invalid_json' },
+        );
       }
       return new NotesHttpStoreError(redact(`Notes API ${method} ${path} failed`), { status });
     }

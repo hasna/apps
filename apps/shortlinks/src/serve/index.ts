@@ -19,6 +19,7 @@ import type { TypedQueryClient } from "../generated/storage-kit/query.js";
 import { resolveServerDataBackend } from "../generated/storage-kit/backend.js";
 import { ApiKeyStore } from "@hasna/contracts/auth";
 import { SHORTLINKS_MIGRATIONS } from "../db/migrations.js";
+import { handleEarlyArgs } from "../early-args.js";
 import { PgShortlinksStore } from "../pg-store.js";
 import { createServeApp } from "./app.js";
 
@@ -54,8 +55,37 @@ async function resolveVersion(): Promise<string> {
   }
 }
 
+function usage(): string {
+  return `usage: shortlinks-serve [--no-migrate]   Migrate (idempotent) then serve the /v1 HTTP API over PostgreSQL
+       shortlinks-serve migrate           Run migrations and exit
+       shortlinks-serve --version         Print the version
+
+options:
+  --no-migrate        serve without running migrations on boot (env: SHORTLINKS_SKIP_MIGRATE=1)
+  --help, -h          show this help and exit
+  --version, -V       print the package version and exit
+
+environment:
+  HASNA_SHORTLINKS_DATABASE_URL     PostgreSQL DSN (required; the pool factory fails closed without it)
+  HASNA_SHORTLINKS_API_SIGNING_KEY  API-key signing secret (or HASNA_API_SIGNING_KEY)
+  PORT, HOST                        listen address (default 0.0.0.0:8080)
+`;
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  // --help / --version answer before the data backend is resolved or a port
+  // is bound (hasna/apps#1720 validation): both used to fall through to the
+  // PostgreSQL pool factory and die on the missing database URL.
+  const early = handleEarlyArgs(args);
+  if (early === "help") {
+    process.stdout.write(usage());
+    return;
+  }
+  if (early === "version") {
+    process.stdout.write(`${await resolveVersion()}\n`);
+    return;
+  }
   const migrateOnly = args.includes("migrate");
   const skipMigrate = args.includes("--no-migrate") || process.env.SHORTLINKS_SKIP_MIGRATE === "1";
 

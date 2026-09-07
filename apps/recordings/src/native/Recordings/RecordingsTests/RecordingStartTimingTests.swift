@@ -11,7 +11,13 @@ private final class FakePCMRecorder: PCMRecordingSource, @unchecked Sendable {
     private let lock = NSLock()
     private var startedFlag = false
     private var stoppedFlag = false
+    private var stoppingFlag = false
+    private let stopGate: DispatchSemaphore?
     private var onPCM: (@Sendable (Data) -> Void)?
+
+    init(stopGate: DispatchSemaphore? = nil) { self.stopGate = stopGate }
+
+    var isStopping: Bool { lock.withLock { stoppingFlag } }
 
     var started: Bool {
         lock.withLock { startedFlag }
@@ -46,6 +52,8 @@ private final class FakePCMRecorder: PCMRecordingSource, @unchecked Sendable {
     }
 
     func stop() {
+        lock.withLock { stoppingFlag = true }
+        _ = stopGate?.wait(timeout: .now() + 2)
         lock.withLock { stoppedFlag = true }
     }
 }
@@ -186,6 +194,28 @@ struct RecordingStartTimingTests {
         })
         #expect(engine.statusMessage == "No audio captured")
         #expect(engine.canStartRecording)
+    }
+
+    @Test("slow microphone shutdown keeps the UI responsive and finishes draining before transcription")
+    func stopDoesNotBlockMainActor() async {
+        let stopGate = DispatchSemaphore(value: 0)
+        let recorder = FakePCMRecorder(stopGate: stopGate)
+        let engine = makeStartableEngine(recorder: recorder)
+        engine.startRecording(trigger: .manual)
+        #expect(await confirmCapture(engine, recorder))
+
+        let started = ContinuousClock.now
+        engine.stopAndTranscribe()
+        #expect(ContinuousClock.now - started < .milliseconds(300))
+        #expect(await waitUntil { recorder.isStopping })
+        #expect(engine.isTranscribing)
+        #expect(!engine.canStartRecording)
+        #expect(!recorder.isStopped)
+
+        stopGate.signal()
+        #expect(await waitUntil { !engine.isTranscribing })
+        #expect(recorder.isStopped)
+        #expect(engine.statusMessage == "No audio captured")
     }
 
     @Test("a released key before the capture resolves still cancels cleanly")

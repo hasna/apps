@@ -3,9 +3,9 @@
  * Generate the typed SDK client from the serve OpenAPI document.
  *
  * Source of truth: src/serve/openapi.ts.
- * Outputs (both kept in lockstep):
- *   - src/sdk/generated.ts      (the in-package `@hasna/shortlinks/sdk` export)
- *   - sdk/src/generated.ts      (the standalone `@hasna/shortlinks-sdk` package)
+ * Output: src/sdk/generated.ts — the `@hasna/shortlinks/sdk` export subpath.
+ * One package carries every surface; there is no separate `-sdk` package
+ * (package-surfaces rule), so this is the only target.
  * Run: bun run sdk:generate
  */
 
@@ -30,16 +30,11 @@ const header =
   "// Regenerate: bun run sdk:generate\n\n";
 const out = header + code;
 
-const targets = [
-  join(repoRoot, "src", "sdk", "generated.ts"),
-  join(repoRoot, "sdk", "src", "generated.ts"),
-];
-for (const target of targets) {
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, out);
-}
+const target = join(repoRoot, "src", "sdk", "generated.ts");
+mkdirSync(dirname(target), { recursive: true });
+writeFileSync(target, out);
 
-console.log(`Generated ${operations.length} operations -> src/sdk/generated.ts + sdk/src/generated.ts`);
+console.log(`Generated ${operations.length} operations -> src/sdk/generated.ts`);
 for (const op of operations) console.log(`  ${op.method.toUpperCase().padEnd(6)} ${op.path} -> ${op.functionName}`);
 if (warnings.length) {
   console.log("Warnings:");

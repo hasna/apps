@@ -312,7 +312,10 @@ describe("retired configuration is inert", () => {
         .split("\n")
         .filter((line) => !line.trimStart().startsWith("//"))
         .join("\n");
-      for (const retired of [".hasna/fleet-env", ".hasna/cloud", "-cloud.env"]) {
+      // `".config"` catches the composed form too (`join(home, ".config", "hasna")`
+      // was the last ~/.config/hasna shape shipped, in the dead XDG config kind
+      // of the data-dir resolver).
+      for (const retired of [".hasna/fleet-env", ".hasna/cloud", "-cloud.env", ".config/hasna", '".config"']) {
         expect(code).not.toContain(retired);
       }
     }

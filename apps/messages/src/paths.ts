@@ -3,20 +3,16 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 // --- Local path resolver -------------------------------------------------
 // @hasna/paths was deleted (hasna/apps#1535, 2026-09-03); this in-package
-// implementation preserves the resolver contract (XDG / macOS home layout
-// honoring HASNA_{CONFIG,DATA,STATE,CACHE}_HOME, with the same env-override
-// and home-override semantics the deleted package had).
+// implementation preserves the data-kind resolver contract (XDG / macOS home
+// layout honoring HASNA_DATA_HOME, with the same env-override and
+// home-override semantics the deleted package had). messages only ever
+// resolves the data kind (its SQLite store root): the config/state/cache
+// kinds of the deleted package — and with them the retired dot-config
+// location under the home — are deliberately not carried here (#1720).
 import { homedir as pathsResolverHomedir } from "node:os";
 import { join as pathsResolverJoin } from "node:path";
 
-export type PathKind = "config" | "data" | "state" | "cache";
-
-const PATHS_RESOLVER_KIND_ENV: Record<PathKind, string> = {
-  config: "HASNA_CONFIG_HOME",
-  data: "HASNA_DATA_HOME",
-  state: "HASNA_STATE_HOME",
-  cache: "HASNA_CACHE_HOME",
-};
+const PATHS_RESOLVER_DATA_ENV = "HASNA_DATA_HOME";
 
 export interface PathsResolverOptions {
   app: string;
@@ -39,51 +35,22 @@ function pathsResolverAssertApp(app: string): void {
   }
 }
 
-function pathsResolverAssertKind(kind: PathKind): void {
-  if (!(Object.keys(PATHS_RESOLVER_KIND_ENV) as string[]).includes(kind)) {
-    throw new TypeError(
-      `paths: invalid path kind "${kind}" — expected one of ${Object.keys(PATHS_RESOLVER_KIND_ENV).join(", ")}`,
-    );
-  }
-}
-
-function pathsResolverBaseDir(kind: PathKind, options: PathsResolverOptions): string {
-  pathsResolverAssertKind(kind);
+function pathsResolverDataBaseDir(options: PathsResolverOptions): string {
   const env: Record<string, string | undefined> = options.env ?? process.env;
-  const override = env[PATHS_RESOLVER_KIND_ENV[kind]];
+  const override = env[PATHS_RESOLVER_DATA_ENV];
   if (typeof override === "string" && override.length > 0) return override;
   const home = options.home ?? pathsResolverHomedir();
   const platform = options.platform ?? process.platform;
   if (platform === "darwin") {
-    switch (kind) {
-      case "config":
-      case "data":
-        return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
-      case "cache":
-        return pathsResolverJoin(home, "Library", "Caches", "Hasna");
-      case "state":
-        return pathsResolverJoin(home, "Library", "Logs", "Hasna");
-    }
+    return pathsResolverJoin(home, "Library", "Application Support", "Hasna");
   }
-  switch (kind) {
-    case "config":
-      return pathsResolverJoin(home, ".config", "hasna");
-    case "data":
-      return pathsResolverJoin(home, ".local", "share", "hasna");
-    case "state":
-      return pathsResolverJoin(home, ".local", "state", "hasna");
-    case "cache":
-      return pathsResolverJoin(home, ".cache", "hasna");
-  }
+  return pathsResolverJoin(home, ".local", "share", "hasna");
 }
 
-function pathsResolverResolve(kind: PathKind, options: PathsResolverOptions): string {
+export function dataDir(options: PathsResolverOptions): string {
   pathsResolverAssertApp(options.app);
   const appSegment = options.internal === true ? pathsResolverJoin("internal", options.app) : options.app;
-  return pathsResolverJoin(pathsResolverBaseDir(kind, options), appSegment);
-}
-export function dataDir(options: PathsResolverOptions): string {
-  return pathsResolverResolve("data", options);
+  return pathsResolverJoin(pathsResolverDataBaseDir(options), appSegment);
 }
 
 /**

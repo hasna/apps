@@ -14,6 +14,7 @@ describe("CLI server auth", () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-api-key-"));
     const seenAuthHeaders: Array<string | null> = [];
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       port: 0,
       fetch: async (req) => {
         const url = new URL(req.url);
@@ -63,6 +64,7 @@ describe("CLI server auth", () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-api-key-login-"));
     const seenAuthHeaders: Array<string | null> = [];
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       port: 0,
       fetch: async (req) => {
         const url = new URL(req.url);
@@ -118,9 +120,11 @@ describe("CLI server auth", () => {
     // therefore beats env — and the recorded identity is shown only because the
     // key in effect is the one this CLI stored.
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-whoami-disk-over-env-"));
+    const storedKey = crypto.randomUUID();
+    const staleKey = crypto.randomUUID();
     const configDir = join(tmpDir, ".hasna", "skills", "config");
     mkdirSync(configDir, { recursive: true, mode: 0o700 });
-    writeFileSync(join(configDir, "credentials"), "HASNA_SKILLS_API_KEY=stored_fixture_key\n", { mode: 0o600 });
+    writeFileSync(join(configDir, "credentials"), `HASNA_SKILLS_API_KEY=${storedKey}\n`, { mode: 0o600 });
     writeFileSync(join(configDir, "identity.json"), JSON.stringify({
       email: "stored@example.com",
       orgId: "org_stored",
@@ -129,11 +133,12 @@ describe("CLI server auth", () => {
     }), { mode: 0o600 });
 
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       port: 0,
       fetch: async (req) => {
         const url = new URL(req.url);
         if (url.pathname === "/api/auth/whoami" && req.method === "GET") {
-          expect(req.headers.get("authorization")).toBe("Bearer stored_fixture_key");
+          expect(req.headers.get("authorization")).toBe(`Bearer ${storedKey}`);
           return Response.json({
             user: { role: "member" },
             organization: { name: "Stored Org" },
@@ -145,11 +150,11 @@ describe("CLI server auth", () => {
     });
 
     try {
-      writeFileSync(join(configDir, "credentials"), `HASNA_SKILLS_API_KEY=stored_fixture_key\nHASNA_SKILLS_API_URL=http://127.0.0.1:${server.port}\n`, { mode: 0o600 });
+      writeFileSync(join(configDir, "credentials"), `HASNA_SKILLS_API_KEY=${storedKey}\nHASNA_SKILLS_API_URL=http://127.0.0.1:${server.port}\n`, { mode: 0o600 });
       const result = await runCliInCwd(["auth", "whoami", "--json"], tmpDir, {
         HOME: tmpDir,
         SKILLS_API_URL: `http://127.0.0.1:${server.port}`,
-        SKILLS_API_KEY: "stale_exported_key",
+        SKILLS_API_KEY: staleKey,
       });
       expect(result.exitCode).toBe(0);
       const data = JSON.parse(result.stdout);
@@ -161,8 +166,8 @@ describe("CLI server auth", () => {
         email: "stored@example.com",
       });
       // Never a value, from any tier.
-      expect(result.stdout).not.toContain("stored_fixture_key");
-      expect(result.stdout).not.toContain("stale_exported_key");
+      expect(result.stdout).not.toContain(storedKey);
+      expect(result.stdout).not.toContain(staleKey);
     } finally {
       server.stop(true);
       rmSync(tmpDir, { recursive: true, force: true });
@@ -182,6 +187,7 @@ describe("CLI server auth", () => {
     }), { mode: 0o600 });
 
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       port: 0,
       fetch: async (req) => {
         const url = new URL(req.url);
@@ -219,7 +225,9 @@ describe("CLI server auth", () => {
 
   test("device login stores credentials for the Skills API", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-device-auth-"));
+    const apiKey = crypto.randomUUID();
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       port: 0,
       fetch: async (req) => {
         const url = new URL(req.url);
@@ -237,7 +245,7 @@ describe("CLI server auth", () => {
         if (url.pathname === "/api/auth/device/token" && req.method === "POST") {
           return Response.json({
             token: "jwt_device",
-            apiKey: "sk_device_login",
+            apiKey,
             user: { id: "user_1", email: "user@example.com", displayName: null, role: "owner" },
             organization: { id: "org_1", slug: "user", name: "User" },
             firstLogin: false,
@@ -273,7 +281,7 @@ describe("CLI server auth", () => {
       const credentialsPath = join(tmpDir, ".hasna", "skills", "config", "credentials");
       expect(existsSync(credentialsPath)).toBe(true);
       expect(statSync(credentialsPath).mode & 0o077).toBe(0);
-      expect(readFileSync(credentialsPath, "utf8")).toContain("HASNA_SKILLS_API_KEY=sk_device_login");
+      expect(readFileSync(credentialsPath, "utf8")).toContain(`HASNA_SKILLS_API_KEY=${apiKey}`);
       expect(JSON.parse(readFileSync(join(tmpDir, ".hasna", "skills", "config", "identity.json"), "utf8"))).toMatchObject({
         email: "user@example.com",
         orgSlug: "user",
@@ -287,6 +295,7 @@ describe("CLI server auth", () => {
   test("email sign-in failures report status, endpoint and a condensed body (issue #24)", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-signup-opaque-error-"));
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       port: 0,
       fetch: () => Response.json({ error: "Something went wrong!" }, { status: 500 }),
     });
@@ -313,6 +322,7 @@ describe("CLI server auth", () => {
   test("email sign-in condenses non-JSON error pages instead of dumping them (issue #24)", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-signup-html-error-"));
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       port: 0,
       fetch: () => new Response(
         "<!DOCTYPE html>\n<html><head><title>502 Bad Gateway</title></head>\n<body>\n<h1>Something went wrong!</h1>\n<p>noise</p>\n</body></html>",
@@ -340,6 +350,7 @@ describe("CLI server auth", () => {
   test("email sign-in against an API without email routes points at SKILLS_API_URL (issue #24)", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-signup-wrong-api-"));
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       port: 0,
       fetch: () => Response.json({ error: "authentication required", code: "AUTH_REQUIRED" }, { status: 401 }),
     });
@@ -381,6 +392,7 @@ describe("CLI server auth", () => {
   test("--json auth failures carry the endpoint and status machine-readably (issue #24)", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-json-endpoint-"));
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       port: 0,
       fetch: () => Response.json({ error: "Something went wrong!" }, { status: 500 }),
     });
@@ -439,6 +451,7 @@ describe("CLI server auth", () => {
   test("server auth failures stay structured with --json", async () => {
     const tmpDir = mkdtempSync(join(tmpdir(), "cli-hosted-json-errors-"));
     const server = Bun.serve({
+      hostname: "127.0.0.1",
       port: 0,
       fetch: () => new Response("temporary outage", { status: 503, statusText: "Unavailable" }),
     });

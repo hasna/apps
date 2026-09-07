@@ -12,7 +12,7 @@ import { existsSync, readFileSync, rmSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
-import { adaptSkillMdForAgent, SYNC_MARKER_FILE, writeManagedSkillDir } from "./agent-sync.js";
+import { adaptSkillMdForAgent, hasSkillsOwnershipMarker, writeManagedSkillDir } from "./agent-sync.js";
 import { normalizeSkillName } from "./utils.js";
 import { getDataDir } from "./config.js";
 import { findPortableSkill } from "./portable-skills.js";
@@ -397,9 +397,9 @@ export function removeSkillForAgent(name: string, options: AgentInstallOptions):
   const canonicalName = getCanonicalSkillName(name);
   const scope = options.scope ?? "global";
   const dir = getAgentSkillPath(canonicalName, options.agent, scope, options.projectDir);
-  // Refuse to delete a directory this tool did not write: no marker means it is the
-  // user's, and removeSkillForAgent must never take a hand-authored skill with it.
-  if (!existsSync(join(dir, SYNC_MARKER_FILE))) return false;
+  // Marker presence alone is not ownership. Foreign or malformed markers must
+  // preserve the directory, for project and global installs alike.
+  if (!hasSkillsOwnershipMarker(dir)) return false;
   rmSync(dir, { recursive: true, force: true });
   return true;
 }

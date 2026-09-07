@@ -12,7 +12,7 @@
 //   shebang to `env bun`).
 
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -27,21 +27,47 @@ const ENTRIES = [...BINS, 'cli/notes.mjs', 'mcp/notes-mcp.mjs'];
 // directory for the kernel's `env bun` lookup — defensive when the suite runs
 // from an environment where bun is not already on PATH.
 const bunBinDir = dirname(process.execPath);
+
+// Hermetic against the machine (hasna/apps#1720 validation): the child's
+// resolver walks the AMBIENT tiers because it receives its own live
+// process.env, so a provisioned macOS station's Keychain items
+// (hasna.credentials.notes.api-key / api-url, account HASNA_STATION else the
+// short hostname) would otherwise resolve here — turning the fixed-authority
+// case into a Keychain-vs-env conflict and the no-credential case into a live
+// fleet request. A sentinel HASNA_STATION makes the Keychain tier miss (item
+// not found, exit 44), a throwaway HASNA_HOME makes the disk tier read an
+// empty root, and the parent's own fleet variables never reach the child.
+const STATION_SENTINEL = 'notes-test-no-such-station';
+const AMBIENT_FLEET_KEYS = [
+  'HASNA_NOTES_API_URL', 'HASNA_NOTES_API_KEY', 'HASNA_NOTES_API_KEY_OVERRIDE',
+  'HASNA_NOTES_API_KEY_REF', 'HASNA_PROFILE', 'HASNA_HOME', 'HASNA_CONFIG_HOME',
+  'HASNA_NOTES_DATABASE_URL', 'HASNA_STATION',
+];
 const execEnv = {
   ...process.env,
   PATH: `${bunBinDir}${process.env.PATH ? `:${process.env.PATH}` : ''}`,
 };
+for (const key of AMBIENT_FLEET_KEYS) delete execEnv[key];
 
 function directExec(bin, args, env = {}) {
   // Execute the bin file itself — the kernel honors the shebang, exactly like
-  // the installed artifact's symlink target.
+  // the installed artifact's symlink target. `root` is the throwaway
+  // HASNA_HOME (exists, empty); the maintenance data root is a child of it
+  // that does not exist, so `created` lists everything the child wrote.
   const root = mkdtempSync(join(tmpdir(), 'notes-bin-runtime-'));
   const result = spawnSync(join(REPO, bin), args, {
-    env: { ...execEnv, HASNA_NOTES_ROOT: root, ...env },
+    env: {
+      ...execEnv,
+      HASNA_STATION: STATION_SENTINEL,
+      HASNA_HOME: root,
+      HASNA_NOTES_ROOT: join(root, 'notes-root'),
+      ...env,
+    },
     encoding: 'utf8',
   });
+  const created = readdirSync(root);
   rmSync(root, { recursive: true, force: true });
-  return { rc: result.status, stdout: result.stdout, stderr: result.stderr };
+  return { rc: result.status, stdout: result.stdout, stderr: result.stderr, created };
 }
 
 describe('bin runtime contract', () => {
@@ -65,7 +91,7 @@ describe('bin runtime contract', () => {
   });
 
   test('bin/notes.mjs authenticated HTTPS status runs through the shebang', () => {
-    const { rc, stdout, stderr } = directExec('bin/notes.mjs', ['storage', 'status', '--json'], {
+    const { rc, stdout, stderr, created } = directExec('bin/notes.mjs', ['storage', 'status', '--json'], {
       HASNA_NOTES_API_URL: 'https://notes.example.test',
       HASNA_NOTES_API_KEY: 'secret',
     });
@@ -73,7 +99,16 @@ describe('bin runtime contract', () => {
     expect(rc).toBe(0);
     const report = JSON.parse(stdout);
     expect(report.client.transport).toBe('http');
+    expect(report.client.baseUrl).toBe('https://notes.example.test/v1');
+    // The fixture pair resolved through the env tier: the sentinel station
+    // kept the machine Keychain out, and the empty HASNA_HOME held no file.
+    expect(report.client.apiKeyTier).toBe('env');
+    expect(report.client.apiKeySource).toBe('HASNA_NOTES_API_KEY');
+    expect(report.client.apiUrlSource).toBe('HASNA_NOTES_API_URL');
+    expect(report.client.apiUrlPresent).toBe(true);
     expect(report.localFallback).toBe(false);
+    expect(stdout).not.toContain('secret');
+    expect(created).toEqual([]);
   });
 
   test('bin/notes.mjs help runs through the shebang', () => {
@@ -83,9 +118,14 @@ describe('bin runtime contract', () => {
   });
 
   test('bin/notes.mjs fails closed rather than opening a local store', () => {
-    const { rc, stdout, stderr } = directExec('bin/notes.mjs', ['list', '--limit', '1']);
+    const { rc, stdout, stderr, created } = directExec('bin/notes.mjs', ['list', '--limit', '1']);
     expect(rc).toBe(1);
     expect(stdout).toBe('');
     expect(stderr).toContain('HASNA_NOTES_API_URL');
+    // The first stderr line names where the credential should live — every
+    // tier, in chain order — and nothing local was opened or created.
+    expect(stderr.split('\n')[0]).toMatch(/Keychain[\s\S]*credential file[\s\S]*HASNA_NOTES_API_KEY/);
+    expect(stderr).not.toMatch(/local-fallback|local mode/i);
+    expect(created).toEqual([]);
   });
 });

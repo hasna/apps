@@ -11,9 +11,9 @@ Four surfaces share one core library:
 | Surface | Bin / package | Purpose |
 | --- | --- | --- |
 | CLI | `shortlinks` | Interactive/scriptable link + domain management (`--json` for agents). |
-| MCP | `shortlinks-mcp` | Model Context Protocol server (stdio or `--http`) exposing link/domain tools to agents. |
-| REST API | `shortlinks-serve` | HTTP service: `GET /health`, `/ready`, `/version`, `/openapi.json`, and a versioned `/v1` CRUD API guarded by API-key auth. |
-| SDK | `@hasna/shortlinks-sdk` (+ `@hasna/shortlinks/sdk`) | Typed fetch client generated from the serve OpenAPI (`bun run sdk:generate`); the in-package `@hasna/shortlinks/sdk` also ships the resolver-backed `createShortlinksApiClient`. |
+| MCP | `shortlinks-mcp` | Model Context Protocol server (stdio or `--http`; `--version` / `--help` answer without starting a transport) exposing link/domain tools to agents. Fails closed at startup — exits non-zero naming the credential chain — when no credential resolves and local mode was not opted into. |
+| REST API | `shortlinks-serve` | HTTP service: `GET /health`, `/ready`, `/version`, `/openapi.json`, and a versioned `/v1` CRUD API guarded by API-key auth (`--version` / `--help` answer without touching the database). |
+| SDK | `@hasna/shortlinks/sdk` | Typed fetch client generated from the serve OpenAPI (`bun run sdk:generate`) plus the resolver-backed `createShortlinksApiClient`. One package, one `./sdk` export subpath — there is no separate `-sdk` package. |
 
 ### Hosted service
 
@@ -64,6 +64,7 @@ request:
 | `HASNA_SHORTLINKS_API_KEY_REF` | Deliberate pointer to a `@hasna/secrets` vault item key (resolved at request time). |
 | `HASNA_PROFILE` | Selects which identity profile's credential file to use. |
 | `HASNA_SHORTLINKS_LOCAL=1` | Explicit opt-in to the on-box SQLite store (alias `SHORTLINKS_LOCAL=1`), announced on stderr. `--db <path>` does the same for one command. |
+| `SHORTLINKS_HOME` / `HASNA_HOME` | Relocate the app home (`~/.hasna/shortlinks`: config, click salt, machine id, and the on-box database). `SHORTLINKS_HOME` names the directory itself; `HASNA_HOME` replaces `~/.hasna` exactly as it does for the credential chain. Every surface derives the home from the environment it was handed, and a hosted-mode read creates nothing there. |
 | `HASNA_SHORTLINKS_DATABASE_URL` | Server only (`shortlinks-serve`): Postgres DSN for the service's own pool. Never read by clients. |
 
 With no credential resolvable and no local opt-in, store-backed commands exit

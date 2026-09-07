@@ -47,7 +47,7 @@ test('default data root is always the resolver XDG root, never a legacy root', (
   assert.equal(getLegacyDataRoot(env), legacy);
 });
 
-test('exact overrides retain their established precedence', () => {
+test('exact overrides retain their established precedence; the unprefixed NOTES_HOME is never read', () => {
   const { env, home } = fixture();
   const withAll = {
     ...env,
@@ -59,7 +59,23 @@ test('exact overrides retain their established precedence', () => {
   delete withAll.HASNA_NOTES_HOME;
   assert.equal(getDataRoot(withAll), join(home, 'root'));
   delete withAll.HASNA_NOTES_ROOT;
-  assert.equal(getDataRoot(withAll), join(home, 'fallback'));
+  // Only prefixed names select a root: NOTES_HOME alone leaves the resolver
+  // data root in charge (hasna/apps#1720 validation).
+  assert.equal(getExactDataRoot(withAll), undefined);
+  assert.equal(getDataRoot(withAll), getResolverDataRoot(withAll));
+  assert.notEqual(getDataRoot(withAll), join(home, 'fallback'));
+});
+
+test('the path module names paths only: no retired config shape, nothing evaluated at import', () => {
+  const source = readFileSync(new URL('../server/paths.mjs', import.meta.url), 'utf8');
+  // The retired `~/.config/hasna` shape, the unused config/state/cache
+  // branches, the unprefixed NOTES_HOME read and the import-time server.db
+  // default are gone from the client import graph (cli -> data-migration ->
+  // paths).
+  assert.doesNotMatch(source, /['"]\.config['"]\s*,\s*['"]hasna['"]/);
+  assert.doesNotMatch(source, /HASNA_CONFIG_HOME|HASNA_STATE_HOME|HASNA_CACHE_HOME/);
+  assert.doesNotMatch(source, /DEFAULT_DB_PATH|server\.db/);
+  assert.doesNotMatch(source, /env\.NOTES_HOME/);
 });
 
 test('ordinary local-library path resolution performs no implicit migration', () => {

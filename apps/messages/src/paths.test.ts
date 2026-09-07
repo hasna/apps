@@ -52,6 +52,17 @@ function isolateHome(): string {
   return tempHome;
 }
 
+/**
+ * The resolver follows process.platform: the XDG shape on Linux, the macOS
+ * home layout on darwin. Both are the same resolver; the tests assert the
+ * shape for the platform they run on instead of assuming Linux.
+ */
+function expectedResolverDataRoot(home: string): string {
+  return process.platform === "darwin"
+    ? join(home, "Library", "Application Support", "Hasna", "messages")
+    : join(home, ".local", "share", "hasna", "messages");
+}
+
 describe("resolver (XDG) data-root resolution", () => {
   test("home resolves HOME first, then the OS user database", () => {
     const home = isolateHome();
@@ -60,7 +71,7 @@ describe("resolver (XDG) data-root resolution", () => {
 
   test("resolver data root follows @hasna/paths under a fake HOME", () => {
     const home = isolateHome();
-    expect(getResolverDataRoot()).toBe(join(home, ".local", "share", "hasna", "messages"));
+    expect(getResolverDataRoot()).toBe(expectedResolverDataRoot(home));
     expect(getLegacyDataRoot()).toBe(join(home, ".hasna", "messages"));
   });
 });
@@ -85,7 +96,7 @@ describe("resolver (XDG) adoption — the legacy home must never become invisibl
 
   test("an existing store at the resolver data root adopts it even without HASNA_DATA_HOME", () => {
     const home = isolateHome();
-    const xdg = join(home, ".local", "share", "hasna", "messages");
+    const xdg = expectedResolverDataRoot(home);
     mkdirSync(xdg, { recursive: true });
     writeFileSync(join(xdg, "messages.db"), "existing-migrated-store");
     expect(adoptResolverDataRoot(getResolverDataRoot())).toBe(true);

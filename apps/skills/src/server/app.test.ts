@@ -76,7 +76,7 @@ async function testServer(backend: StoreBackendFixture, configOverrides: Record<
     governanceStore: fixture.governanceStore,
     config: { inlineWorker: false, allowEphemeralStore: fixture.allowEphemeralStore, ...configOverrides },
   });
-  const server = Bun.serve({ port: 0, fetch });
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch });
   return {
     server,
     store: fixture.store,
@@ -684,7 +684,7 @@ for (const backend of backends) {
           store: ctx.store,
           config: { inlineWorker: false, allowEphemeralStore: true, skillBundleLimitBytes: 128 },
         });
-        const server = Bun.serve({ port: 0, fetch: small });
+        const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: small });
         try {
           const capped = new RemoteSkillsClient("sk_test_org_a", `http://127.0.0.1:${server.port}`);
           const response = await capped.publishSkill(manifestFor("team-runbook", "alpha", bundle.skillMd, bundle.sha256), bundle.bytes);

@@ -1,4 +1,7 @@
 import { parseWorkspaceMembersPage, workspaceMembersQuery, type RemoteWorkspaceMembersOptions, type RemoteWorkspaceMembersPage } from "./remote-workspace.js";
+import { workspaceMemberRoleInput, workspaceMemberRemovalInput, parseWorkspaceMemberRoleResult, parseWorkspaceMemberRemovalResult,
+  workspaceMemberFailure, workspaceMemberFailures, invalidMemberResult, type RemoteWorkspaceMemberErrorCode,
+  type SetRemoteWorkspaceMemberRole, type RemoveRemoteWorkspaceMember, type RemoteWorkspaceMemberRoleResult, type RemoteWorkspaceMemberRemovalResult } from "./remote-workspace.js";
 import { getApiUrl } from "./auth-store.js";
 import { normalizeSkillsApiOrigin, resolveSkillsConnection } from "./fleet-credentials.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
@@ -38,6 +41,15 @@ export class RemoteRequestError extends Error {
     // Keep the optional argument for existing SDK callers without displaying it.
     super(`Remote request to ${path} failed: HTTP ${status}`);
     this.name = "RemoteRequestError";
+  }
+}
+
+/** A recognized membership refusal, with fixed text and no server payload. */
+export class RemoteWorkspaceMemberError extends RemoteRequestError {
+  constructor(path: string, readonly code: RemoteWorkspaceMemberErrorCode) {
+    super(path, workspaceMemberFailures[code][0]);
+    this.name = "RemoteWorkspaceMemberError";
+    this.message = workspaceMemberFailures[code][1];
   }
 }
 
@@ -268,6 +280,31 @@ export class RemoteSkillsClient {
     if (requestedCursor !== undefined && page.nextCursor === requestedCursor) throw new Error("The server returned an invalid workspace roster.");
     return page;
   }
+  /** Exact incarnation and expected role; no refresh or retry. Server enforces current authority. */
+  async setWorkspaceMemberRole(membershipId: string, input: SetRemoteWorkspaceMemberRole): Promise<RemoteWorkspaceMemberRoleResult> {
+    const captured = workspaceMemberRoleInput(membershipId, input);
+    const value = await this.requestWorkspaceMember(captured.membershipId, "PATCH", captured.body);
+    return parseWorkspaceMemberRoleResult(value, captured.membershipId, captured.body.role);
+  }
+  /** Removes only this incarnation. A successful tombstone replay is returned unchanged. */
+  async removeWorkspaceMember(membershipId: string, input: RemoveRemoteWorkspaceMember): Promise<RemoteWorkspaceMemberRemovalResult> {
+    const captured = workspaceMemberRemovalInput(membershipId, input);
+    return parseWorkspaceMemberRemovalResult(await this.requestWorkspaceMember(captured.membershipId, "DELETE", captured.body), captured.membershipId);
+  }
+  private async requestWorkspaceMember(membershipId: string, method: "PATCH" | "DELETE", body: RemoveRemoteWorkspaceMember | SetRemoteWorkspaceMemberRole): Promise<unknown> {
+    const path = `/api/v1/workspace/members/${membershipId}`;
+    const response = await this.request(path, { method, body: JSON.stringify(body) });
+    let value: unknown;
+    try { value = JSON.parse(new TextDecoder().decode(await readBoundedResponse(response, response.ok ? 64 * 1024 : 4096))); }
+    catch { if (response.ok) throw new Error(invalidMemberResult); }
+    if (!response.ok) {
+      const code = workspaceMemberFailure(value, response.status);
+      if (code) throw new RemoteWorkspaceMemberError(path, code);
+      if (response.status === 404 || response.status === 405) throw new RemoteRouteUnsupportedError(path, response.status, this.apiUrl);
+      throw new RemoteRequestError(path, response.status);
+    }
+    return value;
+  }
   async listApiKeys(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/auth/keys"); }
   async createApiKey(name: string, scopes?: string[]): Promise<{ key: string; [field: string]: unknown }> {
     if (!name.trim() || name.length > 100) throw new Error("API key name must be 1-100 characters");
@@ -461,8 +498,10 @@ export class RemoteSkillsClient {
     const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/versions`, undefined, { domainNotFoundCodes: ["SKILL_NOT_FOUND"] });
     if (response.status === 404) return [];
     if (!response.ok) throw new Error(`versions request failed: ${response.status}`);
-    const body = (await response.json()) as { versions?: RemoteSkillVersion[] };
-    return Array.isArray(body.versions) ? body.versions : [];
+    const body = await readSkillVersionPayload(response);
+    if (!isVersionRecord(body) || !Array.isArray(body.versions) ||
+      (body.slug !== undefined && body.slug !== slug)) throw new Error(INVALID_SKILL_VERSION_RESPONSE);
+    return body.versions.map(entry => normalizeSkillVersion(entry, slug));
   }
 
   /** One version's manifest, or null when the slug@version was never published. */
@@ -470,7 +509,7 @@ export class RemoteSkillsClient {
     const response = await this.requestNewRoute(`/api/v1/skills/${encodeURIComponent(slug)}/versions/${encodeURIComponent(version)}`, undefined, { domainNotFoundCodes: ["SKILL_NOT_FOUND", "SKILL_VERSION_NOT_FOUND"] });
     if (response.status === 404) return null;
     if (!response.ok) throw new Error(`version request failed: ${response.status}`);
-    return (await response.json()) as RemoteSkillVersion;
+    return normalizeSkillVersion(await readSkillVersionPayload(response), slug, version);
   }
 
   /** List the pins the instance holds for this principal. */
@@ -552,6 +591,32 @@ function requireOptionalString(record: Record<string, unknown>, field: string): 
     throw new Error(`Remote payload did not match the expected contract (${field} must be a string when present)`);
   }
   return record[field] as string;
+}
+
+const INVALID_SKILL_VERSION_RESPONSE = "Remote skill version payload did not match the expected contract.";
+
+function isVersionRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function readSkillVersionPayload(response: Response): Promise<unknown> {
+  try { return await response.json(); }
+  catch { throw new Error(INVALID_SKILL_VERSION_RESPONSE); }
+}
+
+/** Validate the shared row without rewriting timestamps or dropping additive server fields. */
+function normalizeSkillVersion(entry: unknown, slug: string, version?: string): RemoteSkillVersion {
+  if (!isVersionRecord(entry) || typeof entry.slug !== "string" || !entry.slug.trim() || entry.slug !== slug ||
+    typeof entry.version !== "string" || !entry.version.trim() || (version !== undefined && entry.version !== version) ||
+    typeof entry.bundleSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(entry.bundleSha256) ||
+    typeof entry.bundleByteSize !== "number" || !Number.isSafeInteger(entry.bundleByteSize) || entry.bundleByteSize < 0 ||
+    typeof entry.createdAt !== "string" || !entry.createdAt.trim() ||
+    (entry.current !== undefined && typeof entry.current !== "boolean") ||
+    (entry.storageKind !== undefined && typeof entry.storageKind !== "string") ||
+    (entry.manifest !== undefined && !isVersionRecord(entry.manifest))) {
+    throw new Error(INVALID_SKILL_VERSION_RESPONSE);
+  }
+  return entry as unknown as RemoteSkillVersion;
 }
 
 function normalizePin(entry: unknown): RemotePin {
