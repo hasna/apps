@@ -16,8 +16,7 @@ import {
 } from "../../tui/mail-images.js";
 import { resolveMailDataSource } from "../../../lib/mail-data-source.js";
 import { useTheme } from "../context/theme.js";
-import { Button } from "../ui/primitives.js";
-import { Disclosure } from "./message-content.js";
+import { Disclosure, ReaderAction } from "./message-content.js";
 
 export function MailImagePreview(props: {
   source: MailImageSource;
@@ -75,7 +74,10 @@ export function MailImagePreview(props: {
           External image blocked. Loading contacts the sender's image host.
         </text>
         <Show when={!loading()}>
-          <Button label="Load external image" onPress={() => void load()} />
+          <ReaderAction
+            label="Load external image"
+            onPress={() => void load()}
+          />
         </Show>
       </Show>
       <Show when={loading()}>
@@ -128,6 +130,7 @@ export function MessageImages(props: {
   html?: string | null;
   messageId?: string;
   attachments?: MailImageAttachment[];
+  loadImage?: typeof loadMailImage;
 }) {
   const images = createMemo(() =>
     mailImages(props.text, props.html, props.attachments),
@@ -147,7 +150,11 @@ export function MessageImages(props: {
                     : "preview"
               }
             >
-              <MailImagePreview source={source} messageId={props.messageId} />
+              <MailImagePreview
+                source={source}
+                messageId={props.messageId}
+                load={props.loadImage}
+              />
             </Disclosure>
           )}
         </For>

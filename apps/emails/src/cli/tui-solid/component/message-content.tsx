@@ -61,6 +61,20 @@ export function ReaderControlsProvider(props: ParentProps<{ scroll: () => Scroll
   return <ReaderControls.Provider value={controls}>{props.children}</ReaderControls.Provider>;
 }
 
+/** Reader actions participate in the same Tab/Enter navigation as disclosures. */
+export function ReaderAction(props: { label: string; onPress: () => void }) {
+  const theme=useTheme();
+  const controls=useContext(ReaderControls);
+  let handle: DisclosureHandle;
+  const active=()=>controls?.focused()===handle;
+  return <box height={1} paddingLeft={1} paddingRight={1} flexShrink={0}
+    backgroundColor={active()?theme.backgroundActive:theme.backgroundElement}
+    ref={header=>{handle={header,toggle:props.onPress};onCleanup(controls?.register(handle)??(()=>{}));}}
+    onMouseUp={event=>{if(event.button!==0)return;event.stopPropagation();controls?.focus(handle);props.onPress();}}>
+    <text selectable={false} fg={active()?theme.primary:theme.text}>{props.label}</text>
+  </box>;
+}
+
 export function Disclosure(props: ParentProps<{ label: string; detail?: string; initiallyOpen?: boolean; expanded?: boolean }>) {
   const theme = useTheme();
   const renderer = useRenderer();

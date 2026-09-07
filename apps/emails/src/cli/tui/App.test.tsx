@@ -26,7 +26,7 @@ import { resolveAddressChoice } from "../tui-solid/context/emails-state.js";
 import { sidebarWidth } from "../tui-solid/component/sidebar.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 import { resolveMailDataSource } from "../../lib/mail-data-source.js";
-import { RGBA, TextRenderable, TextTableRenderable, type Renderable, type TextChunk } from "@opentui/core";
+import { RGBA, ImageRenderable, TextRenderable, TextTableRenderable, type Renderable, type TextChunk } from "@opentui/core";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {
@@ -457,6 +457,30 @@ describe("Emails Solid TUI", () => {
     expect(frame()).toContain("Earlier message text");
     await clickText("Quoted message");
     expect(frame()).not.toContain("Earlier message text");
+  });
+
+  it("expands and collapses embedded image previews with keyboard in the actual App", async () => {
+    seedMessage("Image keyboard", undefined, undefined, [], [], {
+      html: '<p>Attached chart</p><img alt="Keyboard chart" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAQCAYAAABQrvyxAAADtklEQVR4nBXPIQ7qBgAA0J1kYgKBQCAQiAoEAtEsCEQFolkQFRUIsiAQFQjyU4GoQDQLAlGBID+IigoEWRAVFQgyvWtsD/EO8H759fef//1Gjz4DhowYEzBhyoyQOQsilsSsSEhZs2HLjow9B3KOFJwoOXOh4sqNOzUND568aOl48+GXXyMBevQZMGTEmIAJU2aEzFkQsSRmRULKmg1bdmTsOZBzpOBEyZkLFVdu3KlpePDkRUvHm0/0DfwhQI8+A4aMGBMwYcqMkDkLIpbErEhIWbNhy46MPQdyjhScKDlzoeLKjTs1DQ+evGjpePP54xtIBejRZ8CQEWMCJkyZETJnQcSSmBUJKWs2bNmRsedAzpGCEyVnLlRcuXGnpuHBkxctHW8+6TfwpwA9+gwYMmJMwIQpM0LmLIhYErMiIWXNhi07MvYcyDlScKLkzIWKKzfu1DQ8ePKipePN589vIBOgR58BQ0aMCZgwZUbInAURS2JWJKSs2bBlR8aeAzlHCk6UnLlQceXGnZqGB09etHS8+WTfwA8BevQZMGTEmIAJU2aEzFkQsSRmRULKmg1bdmTsOZBzpOBEyZkLFVdu3KlpePDkRUvHm8+Pb6AQoEefAUNGjAmYMGVGyJwFEUtiViSkrNmwZUfGngM5RwpOlJy5UHHlxp2ahgdPXrR0vPkU38BfAvToM2DIiDEBE6bMCJmzIGJJzIqElDUbtuzI2HMg50jBiZIzFyqu3LhT0/DgyYuWjjefv76BSoAefQYMGTEmYMKUGSFzFkQsiVmRkLJmw5YdGXsO5BwpOFFy5kLFlRt3ahoePHnR0vHmU30DPwXo0WfAkBFjAiZMmREyZ0HEkpgVCSlrNmzZkbHnQM6RghMlZy5UXLlxp6bhwZMXLR1vPj+/gUaAHn0GDBkxJmDClBkhcxZELIlZkZCyZsOWHRl7DuQcKThRcuZCxZUbd2oaHjx50dLx5tN8A38L0KPPgCEjxgRMmDIjZM6CiCUxKxJS1mzYsiNjz4GcIwUnSs5cqLhy405Nw4MnL1o63nz+/gY6AXr0GTBkxJiACVNmhMxZELEkZkVCypoNW3Zk7DmQc6TgRMmZCxVXbtypaXjw5EVLx5tP9w38I0CPPgOGjBgTMGHKjJA5CyKWxKxISFmzYcuOjD0Hco4UnCg5c6Hiyo07NQ0Pnrxo6Xjz+ecb+FeAHn0GDBkxJmDClBkhcxZELIlZkZCyZsOWHRl7DuQcKThRcuZCxZUbd2oaHjx50dLx5sP/xj5eeU54dY8AAAAASUVORK5CYII=">',
+    });
+    await renderApp();
+    await clickText("Image keyboard");
+    await key("enter");
+    expect(frame()).toContain("Image: Keyboard chart");
+    const images = (): Renderable[] => {
+      const visit = (node: Renderable): Renderable[] => [node, ...node.getChildren().flatMap(visit)];
+      return visit(setup!.renderer.root).filter((node) => node instanceof ImageRenderable);
+    };
+    expect(images()).toHaveLength(0);
+    await key("tab");
+    await key("enter");
+    for (let attempt = 0; attempt < 20 && images().length === 0; attempt++) {
+      await Bun.sleep(10);
+      await flush();
+    }
+    expect(images()).toHaveLength(1);
+    await key(" ");
+    expect(images()).toHaveLength(0);
   });
 
   it("scrolls the entire reader with keys, preserving the selected message and reflowing after resize", async () => {

@@ -17,3 +17,5 @@ Official references checked September 7, 2026:
 - [Ghostty image storage configuration](https://ghostty.org/docs/config/reference#image-storage-limit)
 
 `bun scripts/demo-mail-images.tsx` opens a synthetic native demo. Supplying an output path instead creates text/span captures with `testRender`; no API or real email is accessed. The image tests exercise actual native decoding and block fallback, remote opt-in, and disclosure interactions.
+
+Image controls join the reader keyboard focus order: Tab/Shift+Tab focuses a preview or its load action; Enter/Space expands, loads, or collapses it. The synthetic demo uses the same focus provider and verifies expansion, loading, and collapse when writing captures.

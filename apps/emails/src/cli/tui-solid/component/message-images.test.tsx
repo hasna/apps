@@ -1,7 +1,12 @@
+import { ReaderControlsProvider } from "./message-content.js";
 import { afterEach, expect, test } from "bun:test";
 import { deflateSync } from "node:zlib";
 import { testRender, type TestRendererSetup } from "@opentui/solid";
-import { ImageRenderable, type Renderable } from "@opentui/core";
+import {
+  ImageRenderable,
+  type Renderable,
+  type ScrollBoxRenderable,
+} from "@opentui/core";
 import { ThemeProvider } from "../context/theme.js";
 import { MailImagePreview, MessageImages } from "./message-images.js";
 
@@ -152,4 +157,52 @@ test("GitHub table badge disclosures expand and collapse without loading remote 
   await setup.mockMouse.click(67, y);
   await flush();
   expect(setup.captureCharFrame()).not.toContain("Load external image");
+});
+
+test("keyboard expands, explicitly loads, and collapses image previews", async () => {
+  let scroll: ScrollBoxRenderable | undefined;
+  let loads = 0;
+  setup = await testRender(
+    () => (
+      <ThemeProvider mode="light">
+        <ReaderControlsProvider scroll={() => scroll} enabled>
+          <scrollbox
+            ref={(value) => (scroll = value)}
+            width="100%"
+            height="100%"
+          >
+            <MessageImages
+              html={
+                '<img alt="Keyboard badge" src="https://images.example/badge.png">'
+              }
+              loadImage={async () => {
+                loads++;
+                return png();
+              }}
+            />
+          </scrollbox>
+        </ReaderControlsProvider>
+      </ThemeProvider>
+    ),
+    { width: 70, height: 22 },
+  );
+  await flush();
+  setup.mockInput.pressTab();
+  setup.mockInput.pressEnter();
+  await flush();
+  expect(setup.captureCharFrame()).toContain("Load external image");
+  expect(loads).toBe(0);
+  setup.mockInput.pressTab();
+  setup.mockInput.pressEnter();
+  await flush();
+  expect(loads).toBe(1);
+  expect(
+    nodes(setup.renderer.root).some((node) => node instanceof ImageRenderable),
+  ).toBe(true);
+  setup.mockInput.pressTab();
+  setup.mockInput.pressKey(" ");
+  await flush();
+  expect(
+    nodes(setup.renderer.root).some((node) => node instanceof ImageRenderable),
+  ).toBe(false);
 });
