@@ -24,7 +24,7 @@ test("scheduler sends through shared API callback with stable identity and recor
     async (input) => {
       payload = input;
       return new Response(
-        JSON.stringify({ message: { id: "sent-fixture" }, sent: true }),
+        JSON.stringify({ message: { id: "sent-fixture", send_state: "sent" }, sent: true }),
         { status: 200 },
       );
     },
@@ -71,7 +71,7 @@ test("provider errors become failed jobs and do not prevent subsequent jobs", as
         JSON.stringify(
           calls === 1
             ? { error: "suppressed", reason: "recipient_suppressed" }
-            : { message: { id: "sent-2" } },
+            : { message: { id: "sent-2", send_state: "sent" }, sent: true },
         ),
         { status: calls === 1 ? 403 : 200 },
       );
@@ -115,7 +115,7 @@ test("lost transport acknowledgement reuses identical send identity on recovery"
     keys.push(String(body.idempotency_key));
     calls++;
     if (calls === 1) throw new Error("Acknowledgement lost");
-    return new Response(JSON.stringify({ message: { id: "existing-sent" } }));
+    return new Response(JSON.stringify({ message: { id: "existing-sent", send_state: "sent" }, sent: true }));
   };
   expect((await runScheduledBatch(store, send, 1)).scheduled.pending).toBe(1);
   expect((await runScheduledBatch(store, send, 1)).scheduled.sent).toBe(1);

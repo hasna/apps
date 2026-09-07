@@ -147,20 +147,14 @@ export async function runScheduledBatch(
           body.sent === null ||
           body.reconciliation_required === true ||
           message?.send_state === "uncertain" ||
-          message?.send_state === "sending")
+          message?.send_state === "sending" ||
+          (response.ok && body.sent !== false))
       ) {
         scheduled.pending++;
         items.push({ id, status: "processing" });
         continue;
       }
-      if (
-        !response.ok ||
-        !(
-          body.message &&
-          typeof body.message === "object" &&
-          typeof (body.message as Record<string, unknown>).id === "string"
-        )
-      ) {
+      if (!confirmed) {
         outcome = "failed";
         failure = String(
           body.reason ??

@@ -88,3 +88,22 @@ test("lost or cancelled claim never reaches the send handler", async()=>{
  const result=await runSequenceBatch(f.store,async()=>{sent=true;throw new Error("Unexpected send");});
  expect(sent).toBe(false);expect(result.sequences.pending).toBe(1);expect(f.finishes).toHaveLength(0);
 });
+
+test("a 200 response cannot advance an unsent or unconfirmed sequence step", async () => {
+  for (const body of [
+    { sent: false, message: { id: "unsent", send_state: "failed" } },
+    { message: { id: "unknown" } },
+    { sent: true, message: { id: "unknown" } },
+  ]) {
+    const f = fixture();
+    const result = await runSequenceBatch(f.store, async () => Response.json(body));
+    expect(result.sequences.sent).toBe(0);
+    if (body.sent === false) {
+      expect(result.sequences.failed).toBe(1);
+      expect(f.finishes[0]?.[2]).toBe("failed");
+    } else {
+      expect(result.sequences.pending).toBe(1);
+      expect(f.finishes).toHaveLength(0);
+    }
+  }
+});
