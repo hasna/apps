@@ -78,3 +78,20 @@ for path in ['apps/recordings/package.json','apps/recordings/src/native/Recordin
  except ValueError: pass
  else: raise RuntimeError('source mismatch accepted')
 `));
+test('real Git source verification is independent of ambient archive permission configuration',()=>run(`
+import os,pathlib,subprocess
+repository=pathlib.Path(${JSON.stringify(helper)}).resolve().parents[3]
+revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=repository,text=True).strip()
+source=subprocess.check_output(['git','-c','tar.umask=0022','archive','--format=tar',revision,'--','apps/recordings/package.json','apps/recordings/src/native/Recordings/'],cwd=repository)
+out=io.BytesIO()
+with tarfile.open(fileobj=io.BytesIO(source),mode='r:') as tree, tarfile.open(fileobj=out,mode='w:gz') as npm:
+ for member in tree:
+  if not member.isfile(): continue
+  data=tree.extractfile(member).read()
+  info=tarfile.TarInfo(member.name.replace('apps/recordings/','package/',1));info.size=len(data);info.mode=member.mode
+  npm.addfile(info,io.BytesIO(data))
+receipt=r.create_receipt(out.getvalue(),revision)
+# This process-local Git setting must not change the source comparison.
+os.environ['GIT_CONFIG_COUNT']='1';os.environ['GIT_CONFIG_KEY_0']='tar.umask';os.environ['GIT_CONFIG_VALUE_0']='0002'
+r.verify_source(receipt,repository)
+`));

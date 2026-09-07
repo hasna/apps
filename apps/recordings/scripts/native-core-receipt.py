@@ -121,7 +121,7 @@ def verify_registry(receipt, fetch=registry_bytes):
 def verify_source(receipt, repository):
     revision = receipt['source']['revision']
     prefix = 'apps/recordings/' + CORE
-    result = subprocess.run(['git', 'archive', '--format=tar', revision, '--', prefix, 'apps/recordings/package.json'],
+    result = subprocess.run(['git', '-c', 'tar.umask=0022', 'archive', '--format=tar', revision, '--', prefix, 'apps/recordings/package.json'],
                             cwd=repository, check=True, capture_output=True, timeout=30)
     with tarfile.open(fileobj=io.BytesIO(result.stdout), mode='r:') as archive:
         package = archive.extractfile('apps/recordings/package.json')
