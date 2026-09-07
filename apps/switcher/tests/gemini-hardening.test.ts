@@ -100,7 +100,7 @@ test("Gemini bridge bounds model, routes, query and auth, and cancels unfinished
     for(const[path,body,status]of [["/v1beta/models/outside:generateContent","{}",403],["/v1beta/models/fixture:delete","{}",404],["/v1beta/models/fixture:generateContent?key=outside","{}",400],["/v1beta/models/fixture:countTokens",'{"generateContentRequest":{"model":"outside"}}',403]] as const)expect((await fetch(root+path,{method:"POST",headers,body})).status).toBe(status);
     const response=await fetch(route+"?alt=sse",{method:"POST",headers:{...headers,authorization:"Bearer ignored-native-header"},body:'{"contents":[]}'});
     const reader=response.body!.getReader();expect(new TextDecoder().decode((await reader.read()).value)).toContain("done");
-    expect(calls).toEqual([{path:"/prefix/v1beta/models/fixture:streamGenerateContent",key:upstreamKey,auth:null,body:{contents:[]}}]);
+    expect(calls).toMatchObject([{path:"/prefix/v1beta/models/fixture:streamGenerateContent",key:upstreamKey,auth:null,body:{contents:[]}}]);
     const began=performance.now();await p.cleanup!();expect(performance.now()-began).toBeLessThan(1500);expect((await reader.read()).done).toBe(true);
     await new Promise(resolve=>setTimeout(resolve,30));expect(cancelled).toBe(true);await expect(fetch(route,{headers})).rejects.toThrow();
   } finally {await p?.cleanup?.();await upstream.stop(true);await rm(f.root,{recursive:true,force:true});}

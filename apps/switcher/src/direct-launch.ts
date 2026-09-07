@@ -1,7 +1,8 @@
+import { canonicalPolicyJSON } from "./model-policy-schema";
 import { createHash } from "node:crypto";
 import { createInterface } from "node:readline/promises";
 import { SwitcherClient, SwitcherError, type Provider, type Profile } from "./sdk";
-import { codingEligible, harnessEligible, Fault, CommandInterrupted, parse, providerInputSchema, profileInputSchema, type Model } from "./domain";
+import { codingEligible, harnessEligible, Fault, CommandInterrupted, parse, providerInputSchema, profileInputSchema, modelPolicySchema, type Model, type ModelPolicy } from "./domain";
 import { providerFromPreset, type PresetOptions } from "./presets";
 
 const absent = (error: unknown) => error instanceof SwitcherError && error.status === 404;
@@ -56,16 +57,18 @@ export async function selectModel(models: Model[], query = "", harness?: Profile
   }
 }
 
-export async function ensureLaunchProfile(client: SwitcherClient, provider: Provider, harness: Profile["harness"], model: string): Promise<Profile> {
-  const hash = createHash("sha256").update(JSON.stringify([provider.id, harness, model])).digest("hex").slice(0, 24);
-  const desired = parse(profileInputSchema, {id: `launch-${harness}-${hash}`, name: `${harness}: ${model}`.slice(0, 200), providerId: provider.id, harness, model});
+export async function ensureLaunchProfile(client: SwitcherClient, provider: Provider, harness: Profile["harness"], model: string, modelPolicy?: ModelPolicy): Promise<Profile> {
+  const normalizedPolicy = modelPolicy === undefined ? undefined : parse(modelPolicySchema, modelPolicy);
+  const identity=normalizedPolicy===undefined?[provider.id,harness,model]:[provider.id,harness,model,normalizedPolicy];
+  const hash = createHash("sha256").update(canonicalPolicyJSON(identity)).digest("hex").slice(0, 24);
+  const desired = parse(profileInputSchema, {id: `launch-${harness}-${hash}`, name: `${harness}: ${model}`.slice(0, 200), providerId: provider.id, harness, model, ...(normalizedPolicy ? {modelPolicy: normalizedPolicy} : {})});
   let existing: Profile | undefined;
   try { existing = await client.getProfile(desired.id); } catch (error) { if (!absent(error)) throw error; }
   if (!existing) {
     try { return await client.createProfile(desired); }
     catch (error) { if (!(error instanceof SwitcherError && error.status === 409)) throw error; existing = await client.getProfile(desired.id); }
   }
-  if (existing.providerId !== desired.providerId || existing.harness !== harness || existing.model !== model)
+  if (existing.providerId !== desired.providerId || existing.harness !== harness || existing.model !== model || canonicalPolicyJSON(existing.modelPolicy ?? null) !== canonicalPolicyJSON(desired.modelPolicy ?? null))
     throw new Fault(409, "profile_conflict", "An existing launch profile has different settings. Select a saved profile explicitly.");
   return existing;
 }

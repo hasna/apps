@@ -29,7 +29,7 @@ test("DSH composes the full exact catalog, route and persistent storage without 
     expect(text).not.toContain(input.credential!);expect(prepared.args.join(" ")).not.toContain(input.credential!);
     expect(row("llm-deepseek").disabled).toBe(true);
     const providers=row("llm-pi-ai").config.providers;const id=Object.keys(providers)[0];expect(Object.keys(providers)).toHaveLength(1);
-    expect(providers[id]).toMatchObject({api:"openai-completions",baseURL:input.baseUrl,apiKeyEnv:"SWITCHER_HARNESS_API_KEY"});
+    expect(providers[id]).toMatchObject({api:"openai-completions",baseURL:expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/v1$/),apiKeyEnv:"SWITCHER_HARNESS_API_KEY"});
     expect(providers[id].models.map((m:any)=>m.id)).toEqual(input.models.map(m=>m.id));
     expect(providers[id].models[0].input).toEqual(["text","image"]);
     expect(row("agent-default-model").config).toEqual({provider:id,model:input.model});
@@ -51,9 +51,9 @@ test("DSH bridges non-native auth without losing a deployment prefix or a stable
       const prepared=await prepareHarnessLaunch(input);
       try {
         const patch=JSON.parse(await readFile(prepared.configPaths[0],"utf8"));const providers=patch.find((row:any)=>row.id==="llm-pi-ai").config.providers;const provider=Object.values(providers)[0] as any;
-        const response=await fetch(provider.baseURL+(protocol==="anthropic-messages"?"/v1":"")+path,{method:"POST",headers:{"content-type":"application/json",[protocol==="anthropic-messages"?"x-api-key":"authorization"]:protocol==="anthropic-messages"?prepared.env.SWITCHER_HARNESS_API_KEY:"Bearer "+prepared.env.SWITCHER_HARNESS_API_KEY},body:JSON.stringify({model:input.model})});
+        const response=await fetch(provider.baseURL+(protocol==="anthropic-messages"?"/v1":"")+path,{method:"POST",headers:{"content-type":"application/json",[protocol==="anthropic-messages"?"x-api-key":"authorization"]:protocol==="anthropic-messages"?prepared.env.SWITCHER_HARNESS_API_KEY:"Bearer "+prepared.env.SWITCHER_HARNESS_API_KEY},body:JSON.stringify({model:input.model,messages:[{role:"user",content:"hello"}]})});
         expect(response.status).toBe(200);await response.body?.cancel();
-        expect(seen.at(-1)).toEqual({path:"/deployment/v1"+path,auth:credential&&authStyle==="bearer"?"Bearer "+credential:null,key:credential&&authStyle==="x-api-key"?credential:null,body:{model:input.model}});
+        expect(seen.at(-1)).toMatchObject({path:"/deployment/v1"+path,auth:credential&&authStyle==="bearer"?"Bearer "+credential:null,key:credential&&authStyle==="x-api-key"?credential:null,body:{model:input.model}});
         const again=await prepareHarnessLaunch({...input,stateDir:join(root,String(i)+"again")});
         try {const other=JSON.parse(await readFile(again.configPaths[0],"utf8")).find((row:any)=>row.id==="llm-pi-ai").config.providers;expect(Object.keys(other)).toEqual(Object.keys(providers));}finally{await again.cleanup?.();}
       } finally {await prepared.cleanup?.();}

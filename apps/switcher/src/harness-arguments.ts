@@ -64,7 +64,7 @@ const short: Partial<Record<HarnessId, { required: string; optional: string; boo
   "prime-agent": { required: "p", optional: "", boolean: "hv" },
   gemini: { required: "mpieo", optional: "rw", boolean: "shvydl" },
 };
-const providerKeys = new Set(["model", "model_provider", "model_providers", "model_catalog_json"]);
+const providerKeys = new Set(["model", "model_provider", "model_providers", "model_catalog_json", "review_model", "agents", "memories"]);
 export function geminiPolicyArguments(input: readonly string[], originalHome: string): string[] {
   const args = [...input], expand = (value: string) => value.split(",").map(part => {const path = part.trim(); return path === "~" || path.startsWith("~/") ? originalHome + path.slice(1) : part;}).join(",");
   for (let i = 0; i < args.length; i++) {
@@ -89,7 +89,7 @@ function codexProviderOverride(value: string): boolean {
   // Match the TOML key syntax, including quoted roots, rather than looking for
   // provider words in unrelated option values such as a custom system prompt.
   try { return Object.keys(Bun.TOML.parse(`${key} = 0`)).some(root => providerKeys.has(root)); }
-  catch { return /^(model|model_provider|model_providers|model_catalog_json)(?:\s*\.|\s*$)/.test(key); }
+  catch { return /^(model|model_provider|model_providers|model_catalog_json|review_model|agents|memories)(?:\s*\.|\s*$)/.test(key); }
 }
 
 export function assertHarnessArguments(harness: HarnessId, args: readonly string[], options: { additionalReserved?: readonly string[]; reserveCodexConfig?: boolean } = {}): void {

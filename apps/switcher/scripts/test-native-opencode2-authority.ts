@@ -8,7 +8,7 @@ import {fileURLToPath} from 'node:url';
 const exe=process.env.SWITCHER_TEST_NATIVE_EXECUTABLE;
 if(!exe)throw new Error('Set SWITCHER_TEST_NATIVE_EXECUTABLE to the installed OpenCode 2 executable.');
 const scratch=process.env.SWITCHER_TEST_ROOT??join(homedir(),'Workspace/scratch/switcher-native-tests');await mkdir(scratch,{recursive:true,mode:0o700});
-const root=await mkdtemp(join(scratch,'opencode2-authority-native-'));const protocol=process.argv[2]??'anthropic-messages';const attack=true;
+const root=await mkdtemp(join(scratch,'opencode2-authority-native-'));const protocol=process.argv[2]??'anthropic-messages';const attack=true;const roleAgent=process.env.SWITCHER_TEST_MODEL_POLICY_ROLE;if(roleAgent&&!['explore','plan'].includes(roleAgent))throw new Error('Model policy role fixture supports explore or plan.');
 if(!['openai-chat','openai-responses','anthropic-messages'].includes(protocol))throw new Error('Choose openai-chat, openai-responses or anthropic-messages.');
 const key='fixture-'+crypto.randomUUID();const proof='FILE_PROOF_'+crypto.randomUUID();const protectedProof='DENIED_CONTENT_'+crypto.randomUUID();const model='vendor/fixture';const other='another/namespace/model';
 await mkdir(join(root,'home'),{mode:0o700});await writeFile(join(root,'proof.txt'),proof,{mode:0o600});
@@ -40,7 +40,7 @@ const upstream=Bun.serve({hostname:'127.0.0.1',port:0,async fetch(req){
  const tools=body.tools?.map((t:any)=>t.function?.name??t.name)??[];const title=!tools.includes('read');
  const toolResults=messages.filter((m:any)=>m.role==='tool'||m.type==='function_call_output'||m.content?.some?.((c:any)=>c.type==='tool_result'));
  const denied=/denied|permission|rejected/i.test(JSON.stringify(toolResults));const protectedContent=JSON.stringify(body).includes(protectedProof);const limitedRule=JSON.stringify(body).includes('LIMITED_AGENT_RULE');
- const authMatches=req.headers.get('authorization')==='Bearer '+key&&!req.headers.has('x-api-key');calls.push({phase,path,model:body.model,authMatches,prior,toolProof,title,tools,projectRule,agentRule,stolenHeader:req.headers.has('x-stolen'),denied,protectedContent,limitedRule});
+ const authMatches=req.headers.get('authorization')==='Bearer '+key&&!req.headers.has('x-api-key');calls.push({phase,path,model:body.model,authMatches,prior,toolProof,title,tools,projectRule,agentRule,stolenHeader:req.headers.has('x-stolen'),guidance:JSON.stringify(body).includes('[Switcher model policy]'),denied,protectedContent,limitedRule});
  if(calls.length>8)return stream(body,false,'BOUNDED_FIXTURE_REQUEST_LIMIT');
  if(title)return stream(body,false,'Fixture title');
  if(phase===2)return stream(body,toolResults.length===0,denied&&!protectedContent?'DENIED_FILE_PROOF':'DENY_CHECK_FAILED');
@@ -89,8 +89,9 @@ async function invoke(args:string[],label:string){
 const report:any={root,source:cli,protocol,attack,native:exe,minimumPreview:'beta-19157',at:new Date().toISOString()};
 try{
  const add=await invoke(['providers','add','fixture','--name','Fixture','--url',upstream.url.origin+'/prefix/v1','--protocol',protocol,'--credential-env','SWITCHER_PROVIDER_FIXTURE','--auth-style','bearer'],'provider-add');assert.equal(add.code,0);
- const common=['launch','opencode2','--provider','fixture','--model',model,'--executable',exe,'--timeout','20','--'];
- const first=await invoke([...common,'run','--format','json','--title','Fixture','Read proof.txt using the read tool and report its contents.'],'first');assert.equal(first.code,0);assert(!first.deadline);
+ if(roleAgent){const result=await invoke(['profiles','add','role','--provider','fixture','--harness','opencode2','--model',model,'--role-model','subagent='+other,'--role-model','planning='+other],'profile-add');assert.equal(result.code,0);}
+ const common=roleAgent?['launch','role','--executable',exe,'--timeout','20','--']:['launch','opencode2','--provider','fixture','--model',model,'--executable',exe,'--timeout','20','--'];
+ const first=await invoke([...common,'run','--format','json',...(roleAgent?['--agent',roleAgent]:[]),'--title','Fixture','Read proof.txt using the read tool and report its contents.'],'first');assert.equal(first.code,0);assert(!first.deadline);
  { assert.equal(badRequests,0,'hostile provider configuration was used');
   assert(first.stdout.includes('READ:'+proof),'first native answer lacks file proof');const events=first.stdout.split('\n').filter(Boolean).map(s=>JSON.parse(s));const firstSession=events.find(e=>e.sessionID)?.sessionID;assert(firstSession);
   await rm(join(root,'proof.txt'));phase=1;
@@ -101,7 +102,7 @@ try{
   await writeFile(join(root,'opencode.json'),JSON.stringify({...hostile,permission:{'*':'deny',read:{'*':'deny',[join(root,'protected.txt')]:'allow',[join(root,'proof.txt')]:'allow'}}}));
   const denied=await invoke([...common,'run','--format','json','--agent','limited','--title','Denied fixture','Read protected.txt through the read tool.'],'deny');assert.equal(denied.code,0);assert(denied.stdout.includes('DENIED_FILE_PROOF'));assert(!denied.stdout.includes(protectedProof));assert(calls.some(c=>c.phase===2&&c.denied&&c.limitedRule));assert(!calls.some(c=>c.protectedContent));
   const listed=await invoke([...common,'models'],'models');assert.equal(listed.code,0);report.initialNativeList=listed.stdout;report.catalog=await nativeCatalog();report.sameSession=firstSession;
-  assert(calls.some(c=>c.phase===0&&c.toolProof));assert(calls.some(c=>c.phase===1&&c.prior&&c.toolProof));assert(calls.every(c=>c.authMatches&&c.model===model&&!c.stolenHeader));assert(calls.filter(c=>!c.title&&c.phase<2).every(c=>c.projectRule&&c.agentRule));report.passed=true;
+  assert(calls.some(c=>c.phase===0&&c.toolProof));assert(calls.some(c=>c.phase===1&&c.prior&&c.toolProof));assert(calls.every(c=>c.authMatches&&c.model===(roleAgent&&c.phase===0?other:model)&&c.guidance&&!c.stolenHeader));assert(calls.filter(c=>!c.title&&c.phase<2).every(c=>c.projectRule&&(roleAgent||c.agentRule)));const runs=await invoke(['runs','list'],'runs');assert.equal(runs.code,0);const recorded=JSON.parse(runs.stdout).data;assert.equal(recorded.length,4);const inferenceRuns=recorded.filter((run:any)=>run.routingEvents?.length>0);assert.equal(inferenceRuns.length,3);assert(recorded.every((run:any)=>run.status==='exited'&&run.exitCode===0&&run.modelPolicyVersion===1&&run.routingEventsDropped===0));assert(inferenceRuns.every((run:any)=>run.routingEvents.every((event:any)=>event.resolvedModel===model||roleAgent&&event.resolvedModel===other)));assert.equal(inferenceRuns.flatMap((run:any)=>run.routingEvents).length,calls.length);report.routingEventsPersisted=true;report.roleAgent=roleAgent;report.passed=true;
  }
  const state=join(root,'switcher/state');report.temporaryStateEmpty=!(await readdir(state)).some(name=>name.startsWith('launch-'));assert(report.temporaryStateEmpty);
 }catch(error){report.error=String(error);report.passed=false;process.exitCode=1;}

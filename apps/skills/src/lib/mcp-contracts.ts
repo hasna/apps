@@ -523,6 +523,17 @@ const toolContracts: McpToolContract[] = [
     outputSchema: objectSchema({ organization: objectSchema({ id: stringSchema("Workspace identifier."), slug: stringSchema("Stable workspace slug."), name: stringSchema("Workspace name.") }, ["id", "slug", "name"]) }, ["organization"]),
   },
   {
+    name: "list_workspace_members", title: "List Current Workspace Members", description: "Read one current-workspace roster page with fresh owner/admin email verification; saved credentials stay unchanged.",
+    params: ["email", "code", "limit?", "cursor?"], category: "execution", sideEffects: "local-process-or-remote-run", stable: true,
+    inputSchema: objectSchema({ email: { type: "string", format: "email" }, code: { type: "string", pattern: "^\\d{6}$" },
+      limit: { type: "integer", minimum: 1, maximum: 100 }, cursor: { type: "string", pattern: "^[A-Za-z0-9_-]{1,512}$" } }, ["email", "code"]),
+    outputSchema: objectSchema({ organizationId: stringSchema("Current workspace identifier."),
+      members: arraySchema(objectSchema({ membershipId: stringSchema("Membership incarnation."), userId: stringSchema("Account identifier."), email: stringSchema("Member email."),
+        displayName: { oneOf: [{ type: "string" }, { type: "null" }] }, role: { type: "string", enum: ["owner", "admin", "member", "viewer"] }, createdAt: stringSchema("Exact server timestamp including microseconds.") },
+        ["membershipId", "userId", "email", "displayName", "role", "createdAt"])),
+      nextCursor: { oneOf: [{ type: "string" }, { type: "null" }] } }, ["organizationId", "members", "nextCursor"]),
+  },
+  {
     name: "list_api_keys", title: "List API Keys", description: "List keys using fresh email OTP reauthentication.",
     params: ["email", "code"], category: "execution", sideEffects: "local-process-or-remote-run", stable: true,
     inputSchema: objectSchema({ email: { type: "string", format: "email" }, code: { type: "string", pattern: "^\\d{6}$" } }, ["email", "code"]),
