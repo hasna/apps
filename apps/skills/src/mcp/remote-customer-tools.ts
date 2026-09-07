@@ -7,6 +7,18 @@ import { createRemoteSkillsClient, RemoteCapabilityUnavailableError, type Remote
 import { mcpError, mcpJson } from "./helpers.js";
 
 export function registerRemoteCustomerTools(server: McpServer) {
+  server.registerTool("list_workspace_members", {
+    title: "List Current Workspace Members",
+    description: "Read one roster page on the selected Skills server using fresh owner/admin email verification. Saved credentials are unchanged. This does not invite, change or switch members/workspaces.",
+    inputSchema: z.object({ email: z.string().email(), code: z.string().regex(/^\d{6}$/),
+      limit: z.number().int().min(1).max(100).optional(), cursor: z.string().regex(/^[A-Za-z0-9_-]{1,512}$/).optional() }).strict(),
+  }, async ({ email, code, limit, cursor }) => {
+    try {
+      return mcpJson(await new RemoteSkillsAuthClient(getApiUrl("List workspace members")).listWorkspaceMembers(email, code, { limit, cursor }));
+    } catch {
+      return mcpError("WORKSPACE_MEMBERS_FAILED", "Unable to list workspace members. Check the selected server, owner/admin permissions, pagination and fresh verification code.");
+    }
+  });
   for (const kind of ["profile", "workspace"] as const) {
     server.registerTool(kind === "profile" ? "update_account_profile" : "update_workspace_name", {
       title: kind === "profile" ? "Update Account Display Name" : "Update Workspace Name",
