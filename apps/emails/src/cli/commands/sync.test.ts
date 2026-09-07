@@ -74,7 +74,6 @@ describe("sync CLI commands (server-only in the self-hosted client)", () => {
   const cases: Array<{ args: string[]; command: string }> = [
     { args: ["provider", "sync"], command: "emails provider sync" },
     { args: ["pull"], command: "emails pull" },
-    { args: ["monitor"], command: "emails monitor" },
   ];
 
   for (const { args, command } of cases) {

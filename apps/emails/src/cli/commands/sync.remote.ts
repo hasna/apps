@@ -5,7 +5,7 @@ import { getAnalytics, formatAnalytics } from "../../lib/analytics.js";
 import { createConfiguredEmailStore } from "../../store-resolution.js";
 import { getInboundStats, formatInboundStats } from "../../lib/inbound-stats.js";
 
-// Provider ingestion and monitoring still need their API command handlers.
+// Provider ingestion still needs its API command handlers.
 // Statistics read the same configured store as the rest of the application.
 function serverOnly(command: string): never {
   throw new Error(
@@ -67,8 +67,34 @@ export function registerSyncCommands(program: Command, output: (data: unknown, f
     .option("-j, --json", "Print JSON output", false)
     .option("--provider <id>", "Provider ID")
     .option("--interval <seconds>", "Refresh interval in seconds", "30")
-    .action(async () => {
-      try { serverOnly("emails monitor"); } catch (e) { handleError(e); }
+    .option("--once", "Print one report and exit", false)
+    .action(async (opts: { provider?: string; interval: string; once?: boolean; json?: boolean }) => {
+      let wake: (() => void) | undefined;
+      let stopped = false;
+      const stop = () => { stopped = true; wake?.(); };
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
+      try {
+        const seconds = Number(opts.interval);
+        if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 86400) {
+          throw new Error("Refresh interval must be between 0 and 86400 seconds.");
+        }
+        const store = createConfiguredEmailStore();
+        while (!stopped) {
+          const report = await getLocalStats(opts.provider, "30d", store);
+          if (stopped) break;
+          if (process.stdout.isTTY && !opts.json && !program.opts().json) process.stdout.write("\x1b[2J\x1b[H");
+          output(report, "\nEmail Monitor:\n" + formatStatsTable(report));
+          if (opts.once) break;
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(done, seconds * 1000);
+            function done() { clearTimeout(timer); wake = undefined; resolve(); }
+            wake = done;
+            if (stopped) done();
+          });
+        }
+      } catch (e) { handleError(e); }
+      finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
     });
 
   // ─── ANALYTICS ────────────────────────────────────────────────────────────────
