@@ -6,7 +6,7 @@ import {
 } from "../../storage-kit/index.js";
 import { EmailsSelfHostedStore } from "./store.js";
 import { resourceSpecForPath } from "./resources.js";
-const databaseUrl = process.env.EMAILS_SCHEDULER_TEST_POSTGRES_URL;
+const databaseUrl = process.env.EMAILS_TEST_POSTGRES_URL;
 const schema = `emails_scheduler_${crypto.randomUUID().replaceAll("-", "")}`;
 let admin: ReturnType<typeof createPgPool>;
 let pool: ReturnType<typeof createPgPool>;

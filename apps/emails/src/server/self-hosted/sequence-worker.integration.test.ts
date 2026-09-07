@@ -7,7 +7,7 @@ import {
 import { SequenceWorkerStore } from "./sequence-worker.js";
 import { EmailsSelfHostedStore } from "./store.js";
 import { resourceSpecForPath } from "./resources.js";
-const databaseUrl = process.env.EMAILS_SCHEDULER_TEST_POSTGRES_URL;
+const databaseUrl = process.env.EMAILS_TEST_POSTGRES_URL;
 const schema = `emails_sequence_${crypto.randomUUID().replaceAll("-", "")}`;
 let admin: ReturnType<typeof createPgPool>,
   pool: ReturnType<typeof createPgPool>,
