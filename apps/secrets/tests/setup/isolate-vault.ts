@@ -9,7 +9,7 @@
 // own fixtures into the production vault four times (HC-00304).
 //
 // This is the CONVENIENCE half of the fix, not the load-bearing half: with the
-// selectors gone, ordinary tests resolve LocalStore and simply work. The guarantee
+// selectors gone, fixtures explicitly choose their test library or API. The guarantee
 // lives in src/test-isolation.ts, which throws if anything reaches a non-loopback
 // vault even when this preload never ran.
 //
@@ -90,22 +90,16 @@ process.env[KEYCHAIN_STATION_ENV_KEY] = `hasna-secrets-test-${process.pid}`;
 // default-env child is not covered, so this cannot quietly drift back.
 process.env[TEST_ISOLATION_ENV_KEY] = "1";
 
-// The whole suite EXPLICITLY opts into the local vault (owner ruling
-// 2026-09-04): store resolution without the hosted API env pair now FAILS
-// CLOSED unless HASNA_SECRETS_LOCAL_VAULT=1 is present, and the local-store
-// tests need that opt-in. Setting it here, once per test process, covers
-// in-process `getStore()` calls and — through the explicit
-// `env: { ...process.env }` spreads every spawn uses — spawned CLI children.
-// A test that asserts the fail-closed DEFAULT deletes this key alongside the
-// hosted-vault selectors (see tests/cli-fail-closed.test.ts).
-process.env[LOCAL_VAULT_OPT_IN_ENV_KEY] = "1";
+// Never enable a local selector for ordinary clients. Tests that exercise the
+// local library construct LocalStore explicitly; CLI/MCP fixtures use API credentials.
+delete process.env[LOCAL_VAULT_OPT_IN_ENV_KEY];
 
 // One line per run, on the runner's own stream (never a spawned CLI child's), so the
 // isolation is observable rather than assumed. Names and paths only — no values. It
 // also names the throwaway vault any test that configures nothing will land in.
 console.error(
   `[secrets] test isolation: vault confined to ${testVaultDir()}; ` +
-    `local vault opted in via ${LOCAL_VAULT_OPT_IN_ENV_KEY}=1; ` +
+    `legacy local selector removed; ` +
     `credential tiers redirected (${HASNA_HOME_ENV_KEY}=${testHasnaHome}, ` +
     `${KEYCHAIN_STATION_ENV_KEY}=${process.env[KEYCHAIN_STATION_ENV_KEY]}); ` +
     (removed.length > 0

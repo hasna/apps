@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
-import { getStoreWithResolution } from "./store/index.js";
+import { getStoreWithResolution, assertSharedStoreArguments } from "./store/index.js";
 import type { Store } from "./store/types.js";
-import { getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import { VERSION } from "./version.js";
 import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
 import { getSecretReferenceStatus } from "./status.js";
@@ -81,8 +80,8 @@ Commands:
 
   encrypt-vault               verify/encrypt vault payloads (API: requires secrets:migrate)
   key                         verify runtime key and tenant payload encryption
-  key init                    initialize local key; API verifies existing runtime key
-  key path                    show local key path or verified API key ownership
+  key init                    verify the existing service runtime key (creates no local file)
+  key path                    show verified API key ownership
 
   aws configure               interactive AWS setup
   aws push [key]              push secret(s) to AWS Secrets Manager [--dry-run|--plan]
@@ -117,8 +116,8 @@ HASNA_SECRETS_API_KEY_REF; the macOS Keychain item hasna.credentials.secrets.api
 ~/.hasna/secrets/config/credentials; then HASNA_SECRETS_API_KEY. The API base URL
 follows HASNA_SECRETS_API_URL, the Keychain api-url item, the credentials file,
 and otherwise defaults to https://api.hasna.com/secrets. With no credential the
-CLI fails closed unless the local vault is explicitly opted into with
-HASNA_SECRETS_LOCAL_VAULT=1.
+CLI fails closed. Ordinary commands never open a local vault; migrate-vault
+requires an explicit existing --source and --key-file.
 `);
 }
 
@@ -279,10 +278,10 @@ Credentials (five tiers, resolved fresh on every call by @hasna/contracts)
   credentials file, else the fleet gateway https://api.hasna.com/secrets (the
   client appends /v1).
 
-  With NO credential from any tier the CLI FAILS CLOSED unless the local vault is
-  explicitly opted into (HASNA_SECRETS_LOCAL_VAULT=1, which prints one line
-  saying the run is local); it never silently falls back to local SQLite (owner
-  ruling 2026-09-04). A raw database URL is NEVER used on the client.
+  Without an account credential the CLI fails closed. Ordinary commands reject
+  legacy local-vault and database-path selectors. Existing vaults are opened
+  only through explicit migration or storage-library handles; raw database URLs
+  are never used on the client.
   The retired fleet-env, cloud and XDG credential locations are never read, and
   no *_MODE / *_STORAGE_MODE variable selects anything.
 
@@ -596,25 +595,20 @@ if (command === "migrate-vault") {
   process.exit(0);
 }
 
+try { assertSharedStoreArguments(rest); }
+catch (error) { console.error(error instanceof Error ? error.message : "Unsupported vault selector"); process.exit(1); }
+
 const { flags, positional } = parseArgs(rest);
 
-// Resolve the active Store (LocalStore or ApiStore) lazily and once. Only data
-// commands trigger resolution; utility commands (docs/key/mcp install) do not.
+// Resolve the shared API lazily; utility commands do not require vault access.
 let _store: Store | undefined;
 function store(): Store {
   if (_store) return _store;
   try {
     const resolved = getStoreWithResolution();
-    // A local run says so, once, on stderr. An unhosted run must never be
-    // mistaken for a hosted one that came back empty (owner ruling 2026-09-04).
-    if (resolved.notice) console.error(resolved.notice);
     _store = resolved.store;
   } catch (e: any) {
-    // FAIL CLOSED (owner ruling 2026-09-04; incident 715558): no credential from
-    // any resolver tier and no explicit local-vault opt-in, or a misconfigured
-    // authority. Exit non-zero with a clean actionable message naming every tier
-    // that was consulted — never a silent rc=0 local-vault read, never a
-    // `secrets-local-fallback` event.
+    // No credential or a retired selector is an actionable error, never local access.
     console.error(e?.message ?? String(e));
     process.exit(1);
   }
@@ -1698,68 +1692,8 @@ switch (command) {
   }
 
   case "key": {
-    const [sub] = positional;
-    if (store().mode === "api") {
-      try { await printApiKeyState(sub, positional); }
-      catch (error) { console.error(error instanceof Error ? error.message : "Key verification failed"); process.exitCode = 1; }
-      break;
-    }
-    const { statSync } = await import("fs");
-
-    if (sub === "kms") {
-      const [kmsAction] = positional.slice(1);
-      if (kmsAction === "setup") {
-        const keyId = flags["key-id"] ?? flags.key;
-        if (!keyId) { console.error("Usage: secrets key kms setup --key-id <KMS key ID or alias> [--region <region>] [--profile <profile>]"); process.exit(1); }
-        const region = flags.region ?? "us-east-1";
-        initKms(keyId, region, flags.profile);
-        console.log(`✓ KMS configured: ${keyId} (${region})`);
-        // Trigger migration if local key exists
-        getMasterKey();
-        const status = getKeyStatus();
-        if (status.mode === "kms") {
-          console.log(`✓ Data key wrapped with KMS and stored at ${status.keyPath}`);
-        }
-      } else {
-        const status = getKeyStatus();
-        if (status.mode === "kms") {
-          console.log(`Mode:       KMS (envelope encryption)`);
-          console.log(`KMS Key:    ${status.kmsKeyId}`);
-          console.log(`Data key:   ${status.keyPath} (encrypted with KMS)`);
-        } else {
-          console.log(`KMS not configured.`);
-          console.log(`\nSetup: secrets key kms setup --key-id <KMS key ID or alias> [--region us-east-1] [--profile example-aws-profile]`);
-        }
-      }
-    } else if (sub === "path") {
-      const status = getKeyStatus();
-      console.log(status.keyPath);
-    } else if (sub === "exists") {
-      const status = getKeyStatus();
-      console.log(status.exists ? "yes" : "no");
-    } else if (sub === "init") {
-      getMasterKey();
-      const status = getKeyStatus();
-      console.log(`✓ Master key ready (${status.mode} mode) at ${status.keyPath}`);
-    } else {
-      const status = getKeyStatus();
-      console.log(`Mode:       ${status.mode}`);
-      if (status.kmsKeyId) console.log(`KMS Key:    ${status.kmsKeyId}`);
-      console.log(`Key file:   ${status.keyPath}`);
-      console.log(`Exists:     ${status.exists ? "✓ yes" : "✗ no"}`);
-      if (status.exists) {
-        try {
-          const stat = statSync(status.keyPath);
-          const mode = (stat.mode & 0o777).toString(8);
-          console.log(`Permissions: ${mode}${mode === "600" ? " (correct)" : " ⚠ should be 600"}`);
-        } catch { /* skip */ }
-      }
-      console.log(`\nCommands:`);
-      console.log(`  secrets key init                     Generate/load key`);
-      console.log(`  secrets key path                     Show key file path`);
-      console.log(`  secrets key kms setup --key-id <id>  Enable KMS envelope encryption`);
-      console.log(`  secrets key kms                      Show KMS status`);
-    }
+    try { await printApiKeyState(positional[0], positional); }
+    catch (error) { console.error(error instanceof Error ? error.message : "Key verification failed"); process.exitCode = 1; }
     break;
   }
 

@@ -36,11 +36,12 @@ describe("secrets Store resolver (env flip)", () => {
     expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_API_KEY/);
     // Every tier the resolver consulted is named, and so is the local opt-in.
     expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/Keychain/);
-    expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/HASNA_SECRETS_LOCAL_VAULT/);
+    expect(() => getStore({} as NodeJS.ProcessEnv)).toThrow(/No local vault is opened/);
   });
 
-  it("resolves LocalStore only under the explicit local-vault opt-in", () => {
-    const store = getStore({ HASNA_SECRETS_LOCAL_VAULT: "1" } as NodeJS.ProcessEnv);
+  it("rejects local selection while retaining explicit LocalStore construction", () => {
+    expect(() => getStore({ HASNA_SECRETS_LOCAL_VAULT: "1" })).toThrow("no longer supported");
+    const store = new LocalStore();
     expect(store).toBeInstanceOf(LocalStore);
     expect(store.mode).toBe("local");
   });

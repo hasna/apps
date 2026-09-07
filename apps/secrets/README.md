@@ -705,54 +705,33 @@ secrets export-env --dir ~/.secrets --dry-run
 secrets export-env --dir ~/.secrets --force
 ```
 
-## Storage Sync
+## Shared storage and migration
 
-This package supports optional remote storage sync directly against a Postgres/RDS
-database. Local SQLite remains the default.
+Ordinary CLI, MCP, and default library access use the authenticated API. Clients
+never connect directly to PostgreSQL or select a local SQLite vault. The service
+owns its database and encryption configuration.
 
-```bash
-export HASNA_SECRETS_DATABASE_URL=postgres://...
-
-secrets storage status
-secrets storage push
-secrets storage pull
-secrets storage sync
-```
-
-The remote storage URL can also be provided as the short non-deprecated fallback
-`SECRETS_DATABASE_URL`.
-
-For a managed deployment, point `HASNA_SECRETS_DATABASE_URL` at your own
-Postgres/RDS database. Deployment-specific infrastructure identifiers (the
-database cluster name and the AWS Secrets Manager path that holds the runtime
-`database_url`) are supplied by your hosting layer — this package ships no real
-cluster names or secrets-manager paths. `SECRETS_DATABASE_URL` remains supported
-as a rollback/local fallback. Do not print rows or values from the database;
-status commands expose only redacted URLs, table names, and non-secret metadata.
-
-MCP exposes the same flow through `storage_status`, `storage_push`,
-`storage_pull`, and `storage_sync`.
+For an existing vault, use the explicit `migrate-vault --source ... --key-file ...`
+protocol described in [lossless migration](docs/lossless-vault-migration.md). Keep the
+source until destination verification and the separate retirement checks finish.
+This command does not delete the source.
 
 ## Data Directory
 
-This section is about the **opt-in local vault** (`HASNA_SECRETS_LOCAL_VAULT=1`);
-a hosted run creates no file under any data home. The local data home resolves
-through the in-package data-home resolver (XDG/macOS home layout; the only
-`@hasna/paths` kind this package kept). The legacy default is `~/.hasna/secrets`;
-once the resolver (XDG) data home is adopted (`HASNA_DATA_HOME` set, or the vault
-already migrated to `~/.local/share/hasna/secrets` on Linux /
-`~/Library/Application Support/Hasna/secrets` on macOS), the vault database, key
-material and the AWS sync state resolve there instead. Nothing moves on disk
-until the store is physically migrated. `HASNA_HOME` is **not** consulted here:
-it replaces `~/.hasna` only for the `@hasna/contracts` credential file
-(`<HASNA_HOME>/secrets/config/credentials`), while the local vault stays at the
-home the test-isolation guard protects; move it with `HASNA_DATA_HOME` or the
-file-level overrides. No `~/.config/hasna` (or other XDG config/state/cache)
-location is composed by this package.
-The `~/.secrets` env-file bridge (import-env/export-env) is a separate legacy
-credential store and is unchanged. File-level overrides (`HASNA_SECRETS_DB_PATH`,
-`HASNA_SECRETS_KEY_DIR`, `HASNA_SECRETS_AWS_SYNC_STATE`) still win on top of
-the effective root.
+Ordinary clients keep account credentials and necessary client configuration on
+disk, but never create or copy `vault.db` or its journal/WAL/SHM sidecars. Browser
+serve tokens and AWS client configuration use a separate config-directory helper
+that cannot migrate vault/key files.
+
+Explicit `LocalStore` construction remains a storage-library compatibility handle
+for existing local fixtures and migration tooling. Its historical data/key path
+rules are not ordinary CLI/MCP selectors. `HASNA_SECRETS_LOCAL_VAULT`,
+`HASNA_SECRETS_DB_PATH`, and `OPEN_SECRETS_DB` are rejected by ordinary store
+resolution, including when API credentials are also configured. Use an explicit
+migration source rather than deleting credentials to select a different vault.
+The scanner reads explicitly requested files as bytes and does not initialize
+SQLite. The migration reader opens an existing file read-only without schema
+upgrades or implicit key creation.
 
 ```bash
 secrets path
@@ -802,13 +781,11 @@ printf 'HASNA_SECRETS_API_KEY="%s"\n' "$KEY" > ~/.hasna/secrets/config/credentia
 chmod 600 ~/.hasna/secrets/config/credentials
 ```
 
-**With NO credential from any tier the CLI and MCP FAIL CLOSED** — non-zero exit
-with an error naming every tier that was consulted — instead of silently serving
-local SQLite (owner ruling 2026-09-04). The LOCAL vault is served only behind the
-explicit `HASNA_SECRETS_LOCAL_VAULT=1` opt-in (standalone or offline use, local
-`serve`/MCP bridges), which prints one line on stderr saying the run is local.
-The opt-in yields to a credential: a station that holds a hosted key stays
-hosted.
+**Without an account credential, ordinary CLI and MCP data access fail closed.**
+Configure the canonical API credentials or saved account credential tier. Local
+selection flags (`--local`, `--local-vault`, `--db`, `--db-path`, `--storage-mode`)
+are rejected. Utility help and explicitly sourced migration/scanning remain
+separate from ordinary store resolution.
 
 Retired and inert, never read: `~/.hasna/fleet-env`, `~/.hasna/cloud`,
 `~/.config/hasna`, `$XDG_CONFIG_HOME`, and every `*_MODE` / `*_STORAGE_MODE`
