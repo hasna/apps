@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertClientStoreConfigured, DB_PATH_ENV_KEYS } from "../db/api-mode.js";
@@ -41,6 +41,7 @@ const ENV_KEYS_TO_CLEAR: readonly string[] = Array.from(
 
 describe("assertClientStoreConfigured — fail-closed store gate", () => {
   let saved: Record<string, string | undefined> = {};
+  let hermeticConfigHome: string | null = null;
 
   beforeEach(() => {
     saved = {};
@@ -48,12 +49,31 @@ describe("assertClientStoreConfigured — fail-closed store gate", () => {
       saved[key] = process.env[key];
       delete process.env[key];
     }
+    // The disk tier reads `$HASNA_CONFIG_HOME/mementos/config/credentials`
+    // and falls back to `$HOME/.hasna/...` when the override is absent
+    // (@hasna/contracts client). The preload pins HASNA_CONFIG_HOME to a
+    // scratch dir so a plain `bun test` cannot resolve the operator's real
+    // credentials file; deleting it here (as ENV_KEYS_TO_CLEAR does for the
+    // env pointers) re-opens the REAL home fallback, and the disk tier then
+    // resolves the operator's actual ~/.hasna/mementos/config/credentials.
+    // So the same neutrality: pin HASNA_CONFIG_HOME to a fresh empty scratch
+    // dir for every in-process assertion, never the machine home.
+    hermeticConfigHome = mkdtempSync(join(tmpdir(), "mementos-failclosed-cfghome-"));
+    process.env["HASNA_CONFIG_HOME"] = hermeticConfigHome;
   });
 
   afterEach(() => {
     for (const key of ENV_KEYS_TO_CLEAR) {
       if (saved[key] === undefined) delete process.env[key];
       else process.env[key] = saved[key];
+    }
+    if (hermeticConfigHome) {
+      try {
+        rmSync(hermeticConfigHome, { recursive: true, force: true });
+      } catch {
+        // best effort — a leaked scratch dir must not fail the suite
+      }
+      hermeticConfigHome = null;
     }
   });
 
