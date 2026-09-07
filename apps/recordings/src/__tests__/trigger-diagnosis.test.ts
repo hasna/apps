@@ -36,7 +36,18 @@ const temporaryDirectories: string[] = [];
 /** `check` must make no network call, and only strace can settle that; see the test below. */
 const testWithStrace = Bun.which("strace") && Bun.spawnSync(["strace", "-V"]).exitCode === 0 ? test : test.skip;
 const repoRoot = join(import.meta.dir, "..", "..");
-const cliEntry = join("src", "cli", "index.ts");
+const cliEntry = join("src", "__tests__", "helpers", "trigger-cli-fixture.ts");
+// Independent OS backstop on Darwin: even a broken fixture launcher cannot
+// execute the real preferences writer. HOME alone does not isolate defaults.
+const sandboxProfile = `(version 1)
+(allow default)
+(deny process-exec
+  (literal "/usr/bin/defaults") (literal "/usr/bin/tccutil")
+  (literal "/usr/bin/open") (literal "/usr/bin/codesign")
+  (literal "/usr/bin/security") (literal "/usr/bin/sqlite3"))`;
+const cliCommand = process.platform === "darwin"
+  ? ["/usr/bin/sandbox-exec", "-p", sandboxProfile, process.execPath, cliEntry]
+  : [process.execPath, cliEntry];
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -346,6 +357,34 @@ function renderSwiftInterpolatedString(source: string, values: Array<[string, st
 }
 
 describe("a stored trigger that the running app has not picked up", () => {
+  test("fixture blocks macOS defaults even when production ignores the test override", () => {
+    const home = scratchHome("pinning");
+    const defaultsPath = join(home, "fake-defaults");
+    const marker = join(home, "override-ran");
+    writeFileSync(defaultsPath, `#!/bin/sh\nprintf invoked > "${marker}"\n`);
+    chmodSync(defaultsPath, 0o700);
+    const result = Bun.spawnSync([...cliCommand, "--verify-darwin-pinning"], {
+      cwd: repoRoot,
+      env: { HOME: home, TMPDIR: tmpdir(), PATH: "/usr/bin:/bin", RECORDINGS_TEST_DEFAULTS_EXECUTABLE: defaultsPath },
+    });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(JSON.parse(result.stdout.toString())).toEqual({
+      defaults: "/usr/bin/defaults", blocked: true,
+      denied: ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork", "bunSpawn", "bunSpawnSync"],
+    });
+    expect(existsSync(marker)).toBe(false);
+    if (process.platform === "darwin") {
+      // Verify the independent OS backstop without asking to read or write
+      // the installed app's domain, even if this negative control regresses.
+      const denied = Bun.spawnSync([
+        "/usr/bin/sandbox-exec", "-p", sandboxProfile,
+        "/usr/bin/defaults", "read", "org.example.recordings.fixture", "fictional-key",
+      ], { env: { HOME: home, TMPDIR: tmpdir(), PATH: "/usr/bin:/bin" } });
+      expect(denied.exitCode).not.toBe(0);
+      expect(denied.stderr.toString()).toContain("Operation not permitted");
+      expect(denied.stdout.toString()).toBe("");
+    }
+  });
   test("says the stored fn setting is not armed", () => {
     const diagnosis = diagnoseTrigger({
       trigger: storedState(STORED_F5, true),
@@ -444,18 +483,19 @@ exit 1
     writeFileSync(psPath, `#!/bin/sh\nprintf '%s\\n' "${bundle}/Contents/MacOS/Recordings"\n`);
     chmodSync(psPath, 0o755);
 
-    const result = Bun.spawnSync([process.execPath, cliEntry, "shortcut", "--fn", "on"], {
+    const result = Bun.spawnSync([...cliCommand, "shortcut", "--fn", "on"], {
       cwd: repoRoot,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
+        TMPDIR: tmpdir(),
         RECORDINGS_TEST_DEFAULTS_EXECUTABLE: defaultsPath,
         RECORDINGS_TEST_PS_EXECUTABLE: psPath,
       },
     });
     const stdout = result.stdout.toString();
     // The write itself must still have happened — this is not a refusal to write.
-    expect(readFileSync(writesPath, "utf8")).toContain("useFnKey");
+    expect(readFileSync(writesPath, "utf8")).toBe("write com.hasna.recordings useFnKey -bool true\n");
     expect(stdout).toContain("still holds the previous trigger");
     expect(stdout).toContain(bundle);
     expect(result.exitCode).toBe(1);
@@ -495,18 +535,18 @@ describe("the running-bundle scan does not re-ask questions it has answered", ()
 });
 
 /**
- * End-to-end, through the real CLI process, because the exit code is the contract. The stand-in
- * `defaults` is honoured only off macOS (`TRIGGER_DEFAULTS_EXECUTABLE`), which is the same rule
- * `scripts/macos_artifact.ts` uses for codesign — and it is the only way to exercise this at
- * all, since the fleet's one Mac is the owner's production machine.
+ * End-to-end through the real CLI command graph and host platform branches.
+ * The test-only entry point intercepts pinned macOS tools at the process
+ * boundary; production continues to ignore environment overrides on Darwin.
  */
 describe("recordings check exit contract", () => {
   const runCheck = (home: string, fake: Record<string, string> | null) => {
-    const result = Bun.spawnSync([process.execPath, cliEntry, "--json", "check"], {
+    const result = Bun.spawnSync([...cliCommand, "--json", "check"], {
       cwd: repoRoot,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
+        TMPDIR: tmpdir(),
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         RECORDINGS_AUDIO_DIR: join(home, "audio"),
         OPENAI_API_KEY: "test-openai-key",
@@ -570,15 +610,20 @@ printf '%s\\n' "$value"
     expect(report.trigger.can_fire).toBe(true);
     expect(report.trigger.hotkey.chord).toBe("F5");
     expect(report.trigger.fn.use_fn_key).toBe(false);
+    if (process.platform === "darwin") {
+      // The fixture must exercise the real Darwin diagnostic branch.
+      expect((JSON.parse(stdout) as { microphone_permission: string | null }).microphone_permission).toBe("not_determined");
+    }
   });
 
   test("the human readout names the trigger too, not only --json", () => {
     const home = scratchHome("text");
-    const result = Bun.spawnSync([process.execPath, cliEntry, "check"], {
+    const result = Bun.spawnSync([...cliCommand, "check"], {
       cwd: repoRoot,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
+        TMPDIR: tmpdir(),
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         OPENAI_API_KEY: "test-openai-key",
         ...fakeDefaults(home, "0", "0"),
@@ -659,11 +704,12 @@ printf '%s\\n' "$value"
         "microphone=allowed accessibility=allowed blocked=none\n",
     );
     // Storage now says fn is ON; the running app registered with it OFF.
-    const result = Bun.spawnSync([process.execPath, cliEntry, "--json", "app", "status"], {
+    const result = Bun.spawnSync([...cliCommand, "--json", "app", "status"], {
       cwd: repoRoot,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
+        TMPDIR: tmpdir(),
         ...fakeDefaults(home, STORED_F5, "1"),
       },
     });
@@ -705,8 +751,7 @@ printf '%s\\n' "$value"
         "trace=connect",
         "-o",
         tracePath,
-        process.execPath,
-        cliEntry,
+        ...cliCommand,
         "--json",
         "check",
       ],
@@ -715,7 +760,8 @@ printf '%s\\n' "$value"
         env: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           HOME: home,
-            HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
+          TMPDIR: tmpdir(),
+          HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
           OPENAI_API_KEY: "test-openai-key",
           ...fakeDefaults(home, STORED_F5, "1"),
         },

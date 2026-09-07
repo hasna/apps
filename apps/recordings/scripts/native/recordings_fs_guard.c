@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <signal.h>
@@ -309,6 +310,32 @@ static napi_value open_trusted_home(napi_env env, napi_callback_info info) {
     if (errno == 0) errno = EPERM;
     close(fd);
     throw_errno(env, "validate trusted home");
+    return NULL;
+  }
+  return make_handle(env, fd);
+}
+
+static napi_value duplicate_directory_descriptor(napi_env env, napi_callback_info info) {
+  napi_value argv[1];
+  size_t argc = 1;
+  double descriptor;
+  if (!check_napi(env, napi_get_cb_info(env, info, &argc, argv, NULL, NULL), "duplicateDirectoryDescriptor args") || argc != 1 ||
+      !check_napi(env, napi_get_value_double(env, argv[0], &descriptor), "read directory descriptor")) return NULL;
+  if (!(descriptor >= 0 && descriptor <= INT_MAX) || descriptor != (int)descriptor) {
+    throw_message(env, "INVALID_DESCRIPTOR", "directory descriptor must be a non-negative integer");
+    return NULL;
+  }
+  // Borrow the caller's capability, never its path or ownership of the fd.
+  int fd = fcntl((int)descriptor, F_DUPFD_CLOEXEC, 0);
+  if (fd < 0) { throw_errno(env, "duplicate directory descriptor"); return NULL; }
+  struct stat details;
+  if (fstat(fd, &details) != 0) {
+    int saved_errno = errno;
+    close(fd); errno = saved_errno; throw_errno(env, "stat duplicated directory"); return NULL;
+  }
+  if (!S_ISDIR(details.st_mode)) {
+    close(fd);
+    throw_message(env, "INVALID_DESCRIPTOR", "descriptor must reference a directory");
     return NULL;
   }
   return make_handle(env, fd);
@@ -717,7 +744,7 @@ static napi_value write_file_at(napi_env env, napi_callback_info info) {
     }
     offset += (size_t)count;
   }
-  if (fsync(fd) != 0) {
+  if (fchmod(fd, (mode_t)(mode & 0777)) != 0 || fsync(fd) != 0) {
     saved_errno = errno; close(fd); errno = saved_errno; throw_errno(env, "fsync written file"); return NULL;
   }
   if (close(fd) != 0) { throw_errno(env, "close written file"); return NULL; }
@@ -1132,6 +1159,7 @@ static napi_value unlink_file_handle_at(napi_env env, napi_callback_info info) {
 
 static napi_value init(napi_env env, napi_value exports) {
   const napi_property_descriptor properties[] = {
+    { "duplicateDirectoryDescriptor", NULL, duplicate_directory_descriptor, NULL, NULL, NULL, napi_default, NULL },
     { "openTrustedHome", NULL, open_trusted_home, NULL, NULL, NULL, napi_default, NULL },
     { "openDirAt", NULL, open_dir_at, NULL, NULL, NULL, napi_default, NULL },
     { "openRegularAt", NULL, open_regular_at, NULL, NULL, NULL, napi_default, NULL },
