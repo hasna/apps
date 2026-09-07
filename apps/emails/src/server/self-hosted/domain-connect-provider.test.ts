@@ -12,6 +12,7 @@ test("Resend registration forwards cancellation to the actual adapter HTTP reque
   ) => {
     expect(String(input)).toBe("https://api.resend.com/domains");
     expect(options?.method).toBe("POST");
+    expect(options?.redirect).toBe("error");
     expect(JSON.parse(String(options?.body))).toEqual({ name: "example.test" });
     observed = options?.signal ?? undefined;
     return await new Promise<Response>((_resolve, reject) => {
@@ -42,7 +43,11 @@ const provider = {
 } as Provider;
 test("Resend discovery paginates, preserves MX priority and excludes inbound/tracking records", async () => {
   const paths: string[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    options?: RequestInit,
+  ) => {
+    expect(options?.redirect).toBe("error");
     const url = new URL(String(input));
     paths.push(url.pathname + url.search);
     if (url.pathname === "/domains")
@@ -128,10 +133,15 @@ test("provider errors and nonadvancing pagination never become a missing-domain 
   ).rejects.toThrow("did not advance");
 });
 test("SES domain reads use the actual binding helper and only authoritative not-found permits registration", async () => {
-  const script = `import {mock} from "bun:test";let answer;const calls=[];const sdk=await import("@aws-sdk/client-sesv2");mock.module("@aws-sdk/client-sesv2",()=>({...sdk,SESv2Client:class{async send(command,options){calls.push(options);if(answer instanceof Error)throw answer;return answer;}destroy(){}},GetEmailIdentityCommand:class{constructor(input){this.input=input;}}}));const {readDomainConnection}=await import(${JSON.stringify(new URL("./domain-connect-provider.ts", import.meta.url).pathname)});const provider={type:"ses",region:"us-east-1"};const results=[];answer={IdentityType:"DOMAIN",VerifiedForSendingStatus:false,DkimAttributes:{Status:"PENDING",Tokens:["fixture"]},MailFromAttributes:{MailFromDomain:"send.example.test",MailFromDomainStatus:"PENDING"}};results.push(await readDomainConnection(provider,"example.test",AbortSignal.timeout(1000)));answer=Object.assign(new Error("missing"),{name:"NotFoundException"});results.push(await readDomainConnection(provider,"example.test",AbortSignal.timeout(1000)));answer=Object.assign(new Error("denied"),{name:"AccessDeniedException"});try{await readDomainConnection(provider,"example.test",AbortSignal.timeout(1000));results.push("unexpected");}catch{results.push("refused");}answer={};const {SESAdapter}=await import(${JSON.stringify(new URL("../../providers/ses.ts", import.meta.url).pathname)});const signal=AbortSignal.timeout(1000);await new SESAdapter(provider).addDomain("example.test",signal);results.push(calls.at(-1)?.abortSignal===signal);console.log(JSON.stringify(results));`;
+  const script = `import {mock} from "bun:test";let answer;const calls=[];const sdk=await import("@aws-sdk/client-sesv2");mock.module("@aws-sdk/client-sesv2",()=>({...sdk,SESv2Client:class{config={region:async()=>"eu-west-1"};async send(command,options){calls.push(options);if(answer instanceof Error)throw answer;return answer;}destroy(){}},GetEmailIdentityCommand:class{constructor(input){this.input=input;}}}));const {readDomainConnection}=await import(${JSON.stringify(new URL("./domain-connect-provider.ts", import.meta.url).pathname)});const provider={type:"ses"};const results=[];answer={IdentityType:"DOMAIN",VerifiedForSendingStatus:false,DkimAttributes:{Status:"PENDING",Tokens:["fixture"]},MailFromAttributes:{MailFromDomain:"send.example.test",MailFromDomainStatus:"PENDING"}};results.push(await readDomainConnection(provider,"example.test",AbortSignal.timeout(1000)));answer=Object.assign(new Error("missing"),{name:"NotFoundException"});results.push(await readDomainConnection(provider,"example.test",AbortSignal.timeout(1000)));answer=Object.assign(new Error("denied"),{name:"AccessDeniedException"});try{await readDomainConnection(provider,"example.test",AbortSignal.timeout(1000));results.push("unexpected");}catch{results.push("refused");}answer={};const {SESAdapter}=await import(${JSON.stringify(new URL("../../providers/ses.ts", import.meta.url).pathname)});const signal=AbortSignal.timeout(1000);await new SESAdapter(provider).addDomain("example.test",signal);results.push(calls.at(-1)?.abortSignal===signal);console.log(JSON.stringify(results));`;
   const child = Bun.spawnSync(
     [process.execPath, "--no-env-file", "-e", script],
-    { env: process.env, stdout: "pipe", stderr: "pipe" },
+    {
+      cwd: new URL("../../../", import.meta.url).pathname,
+      env: process.env,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
   );
   expect(child.stderr.toString()).toBe("");
   expect(child.exitCode).toBe(0);
@@ -145,6 +155,7 @@ test("SES domain reads use the actual binding helper and only authoritative not-
     type: "MX",
     priority: 10,
     name: "send.example.test",
+    value: "feedback-smtp.eu-west-1.amazonses.com",
   });
   expect(results[1]).toEqual({
     registered: false,

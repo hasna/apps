@@ -46,6 +46,7 @@ export async function readDomainConnection(
       }));
       const mailFrom = identity.MailFromAttributes?.MailFromDomain;
       if (mailFrom) {
+        const region = await client.config.region();
         const status =
           identity.MailFromAttributes?.MailFromDomainStatus === "SUCCESS"
             ? "verified"
@@ -53,7 +54,7 @@ export async function readDomainConnection(
         tasks.push({
           type: "MX",
           name: mailFrom,
-          value: `feedback-smtp.${provider.region}.amazonses.com`,
+          value: `feedback-smtp.${region}.amazonses.com`,
           priority: 10,
           purpose: "MAIL_FROM",
           status,
@@ -91,6 +92,7 @@ export async function readDomainConnection(
     const response = await fetch(`https://api.resend.com${path}`, {
       headers: { Authorization: `Bearer ${provider.api_key!}` },
       signal,
+      redirect: "error",
     });
     if (!response.ok) {
       await response.body?.cancel();

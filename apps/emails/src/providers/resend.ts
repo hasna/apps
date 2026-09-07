@@ -107,7 +107,7 @@ export class ResendAdapter implements ProviderAdapter {
     // request here, while preserving the existing no-signal adapter API.
     if (signal) {
       const response = await fetch("https://api.resend.com/domains", {
-        method: "POST", signal,
+        method: "POST", signal, redirect: "error",
         headers: { Authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
         body: JSON.stringify({ name: domain }),
       });

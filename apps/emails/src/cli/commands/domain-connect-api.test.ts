@@ -251,3 +251,28 @@ test("unknown provider failures stay blocked and redact arbitrary provider detai
   expect(JSON.stringify(result)).not.toContain("PRIVATE_PROVIDER_DETAIL");
   expect(result.connection.id).toBe("connection");
 });
+
+test("missing or malformed provider DNS evidence yields blocked receipts without a publication success claim", async () => {
+  const f = fixture();
+  for (const dns_tasks of [
+    [],
+    [
+      {
+        type: "TXT",
+        name: "selector._domainkey.example.test",
+        value: "",
+        purpose: "DKIM",
+        status: "pending",
+      },
+    ],
+  ]) {
+    f.sender.readDomainConnection = async () =>
+      ({ registered: true, verified_for_sending: false, dns_tasks }) as any;
+    const result = await connectDomain("example.test", {
+      provider: "provider",
+    });
+    expect(result.connection.status).toBe("blocked");
+    expect(result.connection.message).toContain("DNS");
+    expect(result.connection.message).not.toContain("Publish or merge");
+  }
+});

@@ -35,9 +35,10 @@ The response contains a connection ID, DNS tasks with MX priorities where needed
 and the provider's observed sending-verification status. Pending verification is
 not ready mail delivery. New domain rows remain unverified and pending until the
 explicit `domain verify` / enable operations establish the relevant capabilities.
-Connect preserves an existing domain's readiness and inbound routing. Custom
-DKIM setups that supply no provider DNS records may require operator review in
-the provider console.
+Connect preserves an existing domain's readiness and inbound routing. Empty or
+malformed DNS evidence produces a blocked receipt without publication tasks.
+Custom DKIM setups that supply no usable provider DKIM records require operator
+review in the provider console before retrying.
 
 Connection attempts are serialized by account/provider/domain. Inflight inputs
 remain frozen, and an expiring lease fences stale registry writes. Repeating

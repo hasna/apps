@@ -1,7 +1,73 @@
 import { domainToASCII } from "node:url";
 import type { TenantScopedStore, DomainRecord } from "./store.js";
 import type { SenderResolver } from "./sender.js";
-import type { DomainDnsTask } from "./domain-connect-provider.js";
+import type {
+  DomainDnsTask,
+  DomainConnectionEvidence,
+} from "./domain-connect-provider.js";
+
+function validateConnectionEvidence(evidence: DomainConnectionEvidence): void {
+  const invalid = () => {
+    throw new DomainConnectError(
+      "Provider DNS evidence is incomplete or malformed. Review the provider domain configuration and retry; no publication tasks were accepted.",
+      409,
+      "dns_evidence_invalid",
+    );
+  };
+  if (
+    !evidence ||
+    typeof evidence.registered !== "boolean" ||
+    typeof evidence.verified_for_sending !== "boolean" ||
+    !Array.isArray(evidence.dns_tasks)
+  )
+    invalid();
+  if (
+    !evidence.registered &&
+    (evidence.verified_for_sending || evidence.dns_tasks.length > 0)
+  )
+    invalid();
+  const dnsName = (value: unknown): boolean =>
+    typeof value === "string" &&
+    value.length <= 254 &&
+    value
+      .replace(/\.$/, "")
+      .split(".")
+      .every((label) =>
+        /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/i.test(label),
+      );
+  for (const task of evidence.dns_tasks) {
+    if (
+      !task ||
+      !["TXT", "CNAME", "MX"].includes(task.type) ||
+      !["DKIM", "SPF", "MAIL_FROM"].includes(task.purpose) ||
+      !["pending", "verified"].includes(task.status) ||
+      !dnsName(task.name) ||
+      typeof task.value !== "string" ||
+      !task.value.trim() ||
+      task.value.length > 16384 ||
+      /[\x00-\x1f\x7f]/.test(task.value)
+    )
+      invalid();
+    if (task.type !== "TXT" && !dnsName(task.value)) invalid();
+    if (
+      task.type === "MX" &&
+      (!Number.isInteger(task.priority) ||
+        task.priority! < 0 ||
+        task.priority! > 65535)
+    )
+      invalid();
+  }
+  if (
+    evidence.registered &&
+    !evidence.dns_tasks.some((task) => task.purpose === "DKIM")
+  ) {
+    throw new DomainConnectError(
+      "The provider has not supplied usable DKIM DNS records. Review the provider domain configuration, including custom DKIM, then retry. No publication tasks were accepted.",
+      409,
+      "dns_evidence_missing",
+    );
+  }
+}
 
 export class DomainConnectError extends Error {
   constructor(
@@ -171,6 +237,7 @@ export async function connectDomain(
   try {
     const signal = AbortSignal.timeout(25000);
     let evidence = await sender.readDomainConnection(input.domain, signal);
+    validateConnectionEvidence(evidence);
     if (!evidence.registered && input.register_provider) {
       const currentRefs = await store.resolveDomainConnect(refs.input);
       if (currentRefs.provider_type !== refs.provider_type)
@@ -182,6 +249,7 @@ export async function connectDomain(
       if (!(await store.domainConnectLeaseCurrent(claim))) return result;
       await sender.registerDomain!(input.domain, signal);
       evidence = await sender.readDomainConnection(input.domain, signal);
+      validateConnectionEvidence(evidence);
     }
     if (!evidence.registered && input.register_provider)
       throw new DomainConnectError(
