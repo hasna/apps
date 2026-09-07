@@ -1250,6 +1250,16 @@ const server = Bun.serve({
         .slice(offset, offset + limit);
       return json({ rows });
     }
+    if (resource === "domains" && parts[3] === "dns-records" && req.method === "GET") {
+      const fixture = rowsFor("dns-records").find(row => row.domain_id === sub);
+      if (fixture) return json(fixture);
+      return json({ error: "not found" }, 404);
+    }
+    if (resource === "domains" && parts[3] === "verify" && req.method === "POST") {
+      const fixture = rowsFor("dns-verifications").find(row => row.id === sub);
+      if (fixture) return json({ domain: fixture });
+      return json({ error: "not found" }, 404);
+    }
     if (resource === "messages" && sub === "send" && req.method === "POST") {
       const body = await req.json().catch(function () { return {}; });
       sendRequests.push(body);

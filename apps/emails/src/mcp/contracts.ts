@@ -77,10 +77,7 @@ export function cliEquivalentForTool(name: string, input: unknown): string {
     // agent the bare command therefore routed it straight around the guard by
     // following the guard's own advice. Say so instead: the command is still the right
     // one to name, because for a domain with no provider it is pure local computation.
-    get_dns_records: () => `emails domain dns ${domain ?? id ?? "<domain-or-id>"} --json`
-      + " # note: for a domain backed by a credentialed provider this reads the provider account with"
-      + " the AMBIENT credentials of whoever runs it — the exact call this tool is guarded against;"
-      + " it is pure local computation only for a domain with no provider",
+    get_dns_records: () => `emails domain dns ${domain ?? id ?? "<domain-or-id>"}${provider ? ` --provider ${provider}` : ""} --json`,
     verify_domain: () => `emails domain verify ${domain ?? id ?? "<domain-or-id>"} --json`,
     remove_domain: () => `emails domain remove ${id ?? domain ?? "<domain-or-id>"} --yes --json`,
     provision_status: () => `emails provision status${domain ? ` ${domain}` : ""}${flag(input, "limit")}${flag(input, "offset")} --json`,

@@ -1,16 +1,14 @@
 // MCP tool module: domains.ts
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { createDomain, listDomains, deleteDomain, findDomainsByName, getDomain, getDomainByName, updateDnsStatus } from '../../db/domains.js';
+import { createDomain, listDomains, deleteDomain, findDomainsByName, getDomain, getDomainByName } from '../../db/domains.js';
 import { createAddress, listAddressEmails, listAddresses, deleteAddress, getAddress, getAddressByEmail } from '../../db/addresses.js';
 import { suspendAddress, activateAddress, setAddressQuota } from '../../db/address-lifecycle.js';
 import { createAlias, createCatchAll, removeAlias, getAlias, listAliases, resolveAlias } from '../../db/aliases.js';
 import { createSendKey, listSendKeySummaries, revokeSendKey, getSendKey, canOwnerSendFrom } from '../../db/send-keys.js';
 import { getProvider } from '../../db/providers.js';
-import { getAdapter, providerDnsPublishing } from '../../providers/index.js';
 import { assessDomainReadiness } from '../../lib/domain-readiness.js';
-import { resolveClientMode } from '../../lib/mode.js';
-import { formatError, resolveId, DomainNotFoundError, AddressNotFoundError, ProviderNotFoundError } from '../helpers.js';
+import { formatError, resolveId, DomainNotFoundError, AddressNotFoundError } from '../helpers.js';
 import type { Domain, EmailAddress } from '../../types/index.js';
 
 const MAX_MCP_OWNER_HISTORY_LIMIT = 100;
@@ -78,49 +76,6 @@ function resolveSelfHostedAddressRef(ref: string): EmailAddress {
   throw new AddressNotFoundError(trimmed);
 }
 
-/**
- * Refuse a tool that NO mode can serve, naming the reason.
- *
- * `verify_domain` is the only remaining guard: it calls
- * `getAdapter(provider).verifyDomain`, and in self_hosted mode `getProvider`
- * returns a `/v1/providers` row whose credential columns do not exist
- * server-side (the server schema stores name/type/region/active only — the
- * operator's sending credentials live in the server environment, selected by
- * EMAILS_SEND_PROVIDER). The /v1 service exposes no domain verify route. A
- * client-side adapter call would therefore fall back to the CLIENT's own
- * ambient AWS or Cloudflare credentials — the exact call this guard exists to
- * prevent.
- *
- * `get_dns_records` is only HALF-guarded: its NO-provider path (the generic
- * SPF/DMARC pair from `src/lib/dns.ts`) is pure, credential-free local
- * computation and now runs in both configurations, exactly like its CLI twin
- * `emails domain dns`. The same guard fires only for its provider-scoped half,
- * where the credential reason applies — the call sits after the no-provider
- * return, so the order is the port.
- *
- * The CLI twins are NOT symmetric with it, and saying so is the point:
- *
- *   * `emails domain verify` refuses (`notImplementedAnywhere`) — wiring a WRITE
- *     to `.verifyDomain` behind ambient credentials is the decision nobody made.
- *   * `emails domain dns` RUNS in both configurations. It is a read, and its
- *     no-provider path needs no credentials at all; only a resolved provider
- *     reaches the adapter, and there the operator's shell is the caller. An
- *     agent that hits the provider-scoped refusal should be told to run that
- *     command — which is why `cliEquivalentForTool` still maps the tool to it.
- *
- * Every other tool that used to call this (and the alias-specific variant beside
- * it) had a working `/v1` route, a complete client arm in `src/db/*.remote.ts`, and
- * a CLI twin that already performed the same operation over the same route. Those
- * guards were the only thing refusing and are gone.
- */
-function assertMcpLocalStateAllowed(toolName: string, reason: string): void {
-  if (resolveClientMode().mode !== "self_hosted") return;
-  throw new Error(
-    `MCP tool ${toolName} is disabled in self_hosted API-only mode because ${reason}. ` +
-      "Run it in a local-database configuration instead: set HASNA_EMAILS_DB_PATH or " +
-      "EMAILS_DB_PATH to a database file, with the API settings unset.",
-  );
-}
 
 export function registerDomainTools(server: McpServer): void {
   // ─── DOMAINS ──────────────────────────────────────────────────────────────────
@@ -252,34 +207,12 @@ export function registerDomainTools(server: McpServer): void {
         return { content: [{ type: "text", text: formatDnsTable(records) }] };
       }
 
-      // Strong-reason record (reviewed, not assumed): provider-scoped DNS
-      // records are retrieved from the provider API with provider credentials.
-      // On the hosted path the /v1 providers resource has NO credential columns
-      // (the server owns them and selects the outbound provider itself), and
-      // the /v1 service exposes no domain DNS-records route — so a client-side
-      // adapter call would resolve the CALLER's ambient AWS/Cloudflare
-      // credentials. That is the exact call this surface refuses to make; an
-      // MCP client's ambient environment is not the operator's shell. Called
-      // AFTER the credential-free no-provider return above, so only this half
-      // is refused on the hosted path.
-      assertMcpLocalStateAllowed(
-        "get_dns_records",
-        "provider-scoped DNS records need provider credentials, which live only server-side: the /v1 providers "
-          + "resource carries no credential columns and the /v1 service exposes no domain DNS-records route, so a "
-          + "client-side adapter call would fall back to the ambient AWS/Cloudflare credentials of whoever runs it. "
-          + "Use 'emails domain dns <domain>' for the generic SPF/DMARC pair, or read the provider's DKIM records "
-          + "where the credentials live",
-      );
-
-      const adapter = getAdapter(provider);
-      const records = await adapter.getDnsRecords(domain);
-      const { formatDnsTable } = await import("../../lib/dns.js");
-      // Sandbox returns [] by design, so the empty case must not read as a failed
-      // lookup. Asked only when it can matter: a provider type `getAdapter()`
-      // accepts but `providerDnsPublishing()` does not would otherwise turn a
-      // perfectly good table into an error.
-      const support = records.length === 0 ? providerDnsPublishing(provider) : undefined;
-      return { content: [{ type: "text", text: formatDnsTable(records, support) }] };
+      const { providerDnsPublishing } = await import("../../providers/index.js");
+      const support = providerDnsPublishing(provider);
+      if (!support.publishes) { const { formatDnsTable } = await import("../../lib/dns.js"); return { content: [{ type: "text", text: formatDnsTable([], support) }] }; }
+      const { readRegisteredDomainDns } = await import("../../lib/domain-records-api.js");
+      const result = await readRegisteredDomainDns(domain, provider_id);
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
     } catch (e) {
       return { content: [{ type: "text", text: `Error: ${formatError(e)}` }], isError: true };
     }
@@ -295,37 +228,9 @@ export function registerDomainTools(server: McpServer): void {
   },
   async ({ domain, provider_id }) => {
     try {
-      assertMcpLocalStateAllowed(
-        "verify_domain",
-        "it calls the provider adapter's verifyDomain with credentials only the server holds: the /v1 providers "
-          + "resource carries no credential columns and the /v1 service exposes no domain verify route",
-      );
-      const found = provider_id
-        ? getDomainByName(resolveId("providers", provider_id), domain)
-        : findDomainsByName(domain)[0] ?? null;
-      if (!found) throw new DomainNotFoundError(domain);
-
-      const provider = getProvider(found.provider_id);
-      if (!provider) throw new ProviderNotFoundError(found.provider_id);
-
-      const adapter = getAdapter(provider);
-      let status = await adapter.verifyDomain(domain);
-      let reinitiated_records: unknown[] | null = null;
-      if (
-        provider.type === "ses" &&
-        adapter.reinitiateDomainVerification &&
-        (status.dkim === "failed" || status.spf === "failed")
-      ) {
-        reinitiated_records = await adapter.reinitiateDomainVerification(domain);
-        const refreshed = await adapter.verifyDomain(domain);
-        status = {
-          dkim: refreshed.dkim === "failed" ? "pending" : refreshed.dkim,
-          spf: refreshed.spf === "failed" ? "pending" : refreshed.spf,
-          dmarc: refreshed.dmarc,
-        };
-      }
-      const updated = updateDnsStatus(found.id, status.dkim, status.spf, status.dmarc);
-      return { content: [{ type: "text", text: JSON.stringify({ ...updated, reinitiated_records }, null, 2) }] };
+      const { verifyRegisteredDomain } = await import("../../lib/domain-records-api.js");
+      const result = await verifyRegisteredDomain(domain, provider_id);
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
     } catch (e) {
       return { content: [{ type: "text", text: `Error: ${formatError(e)}` }], isError: true };
     }

@@ -45,34 +45,10 @@ async function expectedDnsRecords(
   if (!provider) {
     return { records: await generic(), providerId: null, provider: null, dkimUnavailable: null };
   }
-  // The provider itself is returned, not just its id: `formatDnsTable` needs the
-  // `DnsPublishingSupport` descriptor to say anything true about an EMPTY table,
-  // and `providerDnsPublishing()` is the only producer of one.
-  //
-  // `getAdapter` throws when the row cannot configure an adapter, and one such
-  // row is NOT an operator error: `apiToProvider` in src/db/providers.remote.ts
-  // maps every credential column to null on purpose — provider secrets are never
-  // distributed to a client — so in self_hosted mode EVERY Resend provider hits
-  // `assertProviderConfig`'s "Resend provider requires an API key". Letting that
-  // escape turned a read-only question into an exit-1 whose suggested fix was to
-  // go configure a client-side key that structurally cannot live there.
-  //
-  // The domain's SPF and DMARC do not depend on the provider account at all, so
-  // answer with those and say plainly that DKIM is the part that is missing and
-  // why. A wrong-but-real credential (a rejected key, a throttled call) still
-  // surfaces from the adapter itself, which is where it belongs.
-  let adapter;
-  try {
-    adapter = getAdapter(provider);
-  } catch (e) {
-    return {
-      records: await generic(),
-      providerId: provider.id,
-      provider,
-      dkimUnavailable: e instanceof Error ? e.message : String(e),
-    };
-  }
-  return { records: await adapter.getDnsRecords(domain), providerId: provider.id, provider, dkimUnavailable: null };
+  if (!providerDnsPublishing(provider).publishes) return { records: [], providerId: provider.id, provider, dkimUnavailable: null };
+  const { readRegisteredDomainDns } = await import("../../lib/domain-records-api.js");
+  const result = await readRegisteredDomainDns(domain, providerRef);
+  return { records: result.records as DnsRecord[], providerId: provider.id, provider, dkimUnavailable: null };
 }
 
 function normalizeDomainType(value: string | undefined): DomainType | undefined {
@@ -99,10 +75,16 @@ function resolveSelfHostedDomainId(ref: string): string {
 }
 
 export function registerDomainCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
-  const lifecycle = (action: string) => (ref: string, opts: { provider?: string; force?: boolean }) => {
+  const lifecycle = (action: string) => async (ref: string, opts: { provider?: string; force?: boolean }) => {
     try {
       if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("--provider must name a provider ID.");
       if (opts.force) throw new Error("Readiness checks cannot be bypassed. Fix the reported DNS/provider prerequisites before enabling mail.");
+      if (action === "verify") {
+        const { verifyRegisteredDomain } = await import("../../lib/domain-records-api.js");
+        const result = await verifyRegisteredDomain(ref, opts.provider);
+        output(result, JSON.stringify(result, null, 2) + "\n");
+        return;
+      }
       const domainId = resolveSelfHostedDomainId(ref);
       const providerId = opts.provider ? resolveId("providers", opts.provider) : undefined;
       const result = selfHostedApiRequest("POST", `/domains/${encodeURIComponent(domainId)}/${action}`, providerId ? { provider_id: providerId } : {});

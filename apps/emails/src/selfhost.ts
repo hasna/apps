@@ -737,6 +737,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Read fresh DNS records from the tenant-bound provider without changing domain state */
+    async getDomainDnsRecords(id: string, query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": string; "domain_id": string; "provider_id": string; "source": "live_provider"; "verified_for_sending": boolean; "checked_at": string; "records": Array<{ "type": "TXT" | "CNAME" | "MX"; "name": string; "value": string; "purpose": string; "status"?: string; "priority"?: number }> }> {
+      return this.request("GET", `/v1/domains/${encodeURIComponent(String(id))}/dns-records`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
     async domainEnableInbound(id: string, body: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": Domain }> {
       return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/enable-inbound`, {
         body,

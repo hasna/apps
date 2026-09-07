@@ -8596,6 +8596,198 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "GET",
+    "operationId": "getDomainDnsRecords",
+    "path": "/v1/domains/{id}/dns-records",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "domain",
+        "domain_id",
+        "provider_id",
+        "source",
+        "verified_for_sending",
+        "checked_at",
+        "records"
+      ],
+      "properties": {
+        "domain": {
+          "type": "string"
+        },
+        "domain_id": {
+          "type": "string"
+        },
+        "provider_id": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "live_provider"
+          ]
+        },
+        "verified_for_sending": {
+          "type": "boolean"
+        },
+        "checked_at": {
+          "type": "string"
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "type",
+              "name",
+              "value",
+              "purpose"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "TXT",
+                  "CNAME",
+                  "MX"
+                ]
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              },
+              "purpose": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainDnsRecords",
+    "path": "/v1/domains/{id}/dns-records",
+    "status": 400,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainDnsRecords",
+    "path": "/v1/domains/{id}/dns-records",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainDnsRecords",
+    "path": "/v1/domains/{id}/dns-records",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainDnsRecords",
+    "path": "/v1/domains/{id}/dns-records",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainDnsRecords",
+    "path": "/v1/domains/{id}/dns-records",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainDnsRecords",
+    "path": "/v1/domains/{id}/dns-records",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainDnsRecords",
+    "path": "/v1/domains/{id}/dns-records",
+    "status": 502,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getDomainDnsRecords",
+    "path": "/v1/domains/{id}/dns-records",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
     "method": "POST",
     "operationId": "domainEnableInbound",
     "path": "/v1/domains/{id}/enable-inbound",

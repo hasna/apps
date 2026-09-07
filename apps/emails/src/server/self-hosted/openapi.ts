@@ -3513,6 +3513,17 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         responses: { "200": { description: "Server provider health", content: { "application/json": { schema: { type: "object", additionalProperties: true, required: ["provider_id", "checked", "status", "message"], properties: { provider_id: { type: "string" }, checked: { type: "boolean" }, status: { type: "string" }, message: { type: "string" } } } } } }, "404": errorResponse("Provider not found in this tenant.") },
       },
     },
+    "/v1/domains/{id}/dns-records": {
+      get: {
+        operationId: "getDomainDnsRecords",
+        summary: "Read fresh DNS records from the tenant-bound provider without changing domain state",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }, { name: "provider_id", in: "query", schema: { type: "string" } }],
+        responses: { "200": { description: "Fresh provider records and recommended DMARC", content: { "application/json": { schema: { type: "object", required: ["domain", "domain_id", "provider_id", "source", "verified_for_sending", "checked_at", "records"], properties: {
+          domain: { type: "string" }, domain_id: { type: "string" }, provider_id: { type: "string" }, source: { type: "string", enum: ["live_provider"] }, verified_for_sending: { type: "boolean" }, checked_at: { type: "string" },
+          records: { type: "array", items: { type: "object", required: ["type", "name", "value", "purpose"], properties: { type: { type: "string", enum: ["TXT", "CNAME", "MX"] }, name: { type: "string" }, value: { type: "string" }, purpose: { type: "string" }, status: { type: "string" }, priority: { type: "integer" } } } }
+        } } } } }, "400": errorResponse("Invalid selector"), "404": errorResponse("Domain not found"), "409": errorResponse("Provider registration or binding changed"), "502": errorResponse("Provider DNS read failed"), "503": errorResponse("Server binding unavailable") },
+      },
+    },
     "/v1/domains/{id}/verify": {
       post: {
         operationId: "domainVerify",

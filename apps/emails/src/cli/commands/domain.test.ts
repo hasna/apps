@@ -363,37 +363,18 @@ describe("domain dns command", () => {
     expect(unregistered.data).toMatchObject({ provider_id: null });
   });
 
-  it("answers instead of exiting 1 when the provider row cannot configure an adapter", async () => {
-    // `/v1` never distributes provider credentials — `apiToProvider` in
-    // src/db/providers.remote.ts maps every secret column to null on purpose — so in
-    // self_hosted mode EVERY Resend provider makes `getAdapter` throw "Resend
-    // provider requires an API key". That escaped, turning a read-only question into
-    // an exit-1 whose fix_commands sent the operator to configure a client-side key
-    // that structurally cannot live there.
-    //
-    // SPF and DMARC do not depend on the provider account, so they are still the
-    // honest answer; DKIM is the part that is missing, and it is named as such.
+  it("retrieves server-bound DKIM without distributing provider credentials", async () => {
+    const record = { type: "CNAME", name: "key._domainkey.nokey.example.com", value: "key.provider.example", purpose: "DKIM", status: "pending" };
     await stub.seed({
       providers: [{ id: "prov-nokey", name: "resend-nokey", type: "resend", active: true }],
       domains: [{ id: "dom-nokey", domain: "nokey.example.com", provider: "prov-nokey", verified: false }],
+      "dns-records": [{ domain_id: "dom-nokey", domain: "nokey.example.com", provider_id: "prov-nokey", source: "live_provider", verified_for_sending: false, checked_at: "2026-09-07T00:00:00Z", records: [record] }],
     });
-
     const result = await runDomainCommand(["domain", "dns", "nokey.example.com"]);
-
-    expect(result.data).toMatchObject({
-      domain: "nokey.example.com",
-      provider_id: "prov-nokey",
-      dkim_unavailable: "Resend provider requires an API key",
-    });
-    expect(result.out).toContain("v=spf1 include:amazonses.com ~all");
-    // Printing the pair silently would read as "no DKIM required", so it is stated.
-    expect(result.out).toContain("DKIM was NOT retrieved: Resend provider requires an API key.");
-    expect(result.out).toContain("do not depend on the provider account");
-    // A provider DID resolve, so the no-provider caveat must not fire, and the
-    // descriptor must NOT be produced — the table is non-empty and, more importantly,
-    // "this provider type does publish records" is not the thing that went wrong.
+    expect(result.data).toMatchObject({ domain: "nokey.example.com", provider_id: "prov-nokey", dkim_unavailable: null, records: [record] });
+    expect(result.out).toContain("key._domainkey.nokey.example.com");
+    expect(result.out).not.toContain("requires an API key");
     expect(result.out).not.toContain("No provider resolved");
-    expect(result.out).not.toContain("none are expected");
   });
 });
 

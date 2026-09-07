@@ -1,3 +1,4 @@
+import { readDomainDnsRecords, DomainDnsReadError } from "./domain-dns-read.js";
 import { normalizeFeedback } from "./feedback.js";
 import { WorkerError, workerFence, workerId } from "./worker-supervisor.js";
 import { runtimeLogQuery, withRuntimeLog } from "./runtime-log.js";
@@ -2967,6 +2968,16 @@ export async function handleSelfHostedRequest(
       if (!auth.ok) return auth.response;
       const result = await readProviderHealth(auth.store, auth.ctx.tenantId, decodeURIComponent(providerHealth[1]!), url.searchParams.get("live") === "true", deps.resolveSender);
       return result ? json(200, result) : json(404, { error: "Provider not found in this tenant." });
+    }
+
+    const domainDnsRead = path.match(/^\/v1\/domains\/([^/]+)\/dns-records$/);
+    if (domainDnsRead) {
+      if (method !== "GET") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, read);
+      if (!auth.ok) return auth.response;
+      if ([...url.searchParams.keys()].some(key => key !== "provider_id")) return json(400, { error: "Unknown DNS-record query option" });
+      try { return json(200, await readDomainDnsRecords(auth.store, auth.ctx.tenantId, decodeURIComponent(domainDnsRead[1]!), url.searchParams.has("provider_id") ? url.searchParams.get("provider_id")! : undefined, deps.resolveSender, req.signal)); }
+      catch (error) { if (error instanceof DomainDnsReadError) return json(error.status, { error: error.message }); throw error; }
     }
 
     const domainOperation = path.match(/^\/v1\/domains\/([^/]+)\/(verify|enable-outbound|disable-outbound|enable-inbound)$/);
