@@ -49,11 +49,11 @@ describe.skipIf(!pgUrl)("machine registry actual PostgreSQL and authenticated ha
   test("real API scope decisions happen before writes; invalid input and missing capabilities fail honestly", async () => {
     const dependencies: V1RequestDependencies = {
       ensureSchema: async () => {}, getStorageAdapter: () => store,
-      getVerifier: () => ({ authenticate: async (_headers: Headers, request: { requiredScopes: string[] }) => request.requiredScopes.includes("todos:write") ? { ok: false, status: 403, message: "fixture read-only", reason: "scope" } : { ok: true, principal: { agent: null, scopes: ["todos:read"] } } }) as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
+      getVerifier: () => ({ authenticate: async (_headers: Headers, request: { requiredScopes: string[] }) => request.requiredScopes.includes("todos:write") ? { ok: false, status: 403, message: "fixture read-only", reason: "scope" } : { ok: true, principal: { kid: "fixture-key-id", agent: null, scopes: ["todos:read"] } } }) as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
     };
     const url = new URL("http://fixture.test/v1/machines");
     const read = await handleV1Request(new Request(url),url,dependencies);
-    expect(read?.status).toBe(200); expect((await read!.json()).schema_version).toBe(1);
+    expect(read?.status).toBe(200); expect((await read!.json()).schema_version).toBe(2);
     const write = await handleV1Request(new Request(url, { method: "POST", body: JSON.stringify({ action: "register", name: "must-not-exist" }) }),url,dependencies);
     expect(write?.status).toBe(403);
     expect((await store.machines!.list()).some(row => row.name === "must-not-exist")).toBe(false);
@@ -82,7 +82,7 @@ describe.skipIf(!pgUrl)("machine registry actual PostgreSQL and authenticated ha
   test("real handler fences configured deployment tenant on reads, writes and snapshot imports", async () => {
     const deps = (tid: string | null): V1RequestDependencies => ({
       ensureSchema: async () => {}, getStorageAdapter: () => store, getMachineRegistryTenantId: () => "fixture-tenant-a",
-      getVerifier: () => ({ authenticate: async () => ({ ok: true, principal: { agent: null, tid, scopes: ["todos:*"] } }) }) as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
+      getVerifier: () => ({ authenticate: async () => ({ ok: true, principal: { kid: "fixture-key-id", agent: null, tid, scopes: ["todos:*"] } }) }) as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
     });
     for (const tid of ["fixture-tenant-b", null]) {
       for (const [path,method,body] of [["/v1/machines","GET",null],["/v1/machines","POST",{action:"register",name:"foreign-tenant"}],["/v1/import","POST",{machines:[fixture("foreign-import")]}]] as const) {
@@ -94,6 +94,28 @@ describe.skipIf(!pgUrl)("machine registry actual PostgreSQL and authenticated ha
     const url=new URL("http://fixture.test/v1/machines");
     expect((await handleV1Request(new Request(url),url,deps("fixture-tenant-a")))?.status).toBe(200);
     expect((await store.machines!.list()).some(row => row.name.startsWith("foreign-"))).toBe(false);
+  });
+  test("real handler rejects coherent key/tenant rotation before machine or full-snapshot writes", async () => {
+    const deps = (kid: string, tenant: string): V1RequestDependencies => ({
+      ensureSchema: async () => {}, getStorageAdapter: () => store, getMachineRegistryTenantId: () => tenant,
+      getVerifier: () => ({ authenticate: async () => ({ ok: true, principal: { kid, agent: null, tid: tenant, scopes: ["todos:*"] } }) }) as ReturnType<NonNullable<V1RequestDependencies["getVerifier"]>>,
+    });
+    const readUrl=new URL("http://fixture.test/v1/machines");
+    const preflight=await handleV1Request(new Request(readUrl),readUrl,deps("key-a","tenant-a"));
+    const expected=(await preflight!.json()).authority;
+    expect(expected).toEqual({kid:"key-a",tenant_id:"tenant-a"});
+    for(const [kid,tenant] of [["key-b","tenant-a"],["key-b","tenant-b"]]) {
+      for(const path of ["/v1/machines","/v1/import"]) {
+        const body=path.endsWith("machines") ? {action:"import",machines:[fixture("rotation-target")],expected_authority:expected} : {machines:[fixture("rotation-target")],expected_machine_authority:expected};
+        const url=new URL(`http://fixture.test${path}`);
+        const response=await handleV1Request(new Request(url,{method:"POST",body:JSON.stringify(body)}),url,deps(kid!,tenant!));
+        expect(response?.status).toBe(409);
+      }
+    }
+    expect((await store.machines!.list()).some(row=>row.id==="rotation-target")).toBe(false);
+    const response=await handleV1Request(new Request(readUrl,{method:"POST",body:JSON.stringify({action:"import",machines:[fixture("bound-target")],expected_authority:expected})}),readUrl,deps("key-a","tenant-a"));
+    expect(response?.status).toBe(200);
+    expect((await response!.json()).authority).toEqual(expected);
   });
   test("retired stable ID cannot be resurrected by import or explicit register", async () => {
     const row = (await store.machines!.execute({ action: "register", name: "retirable", id: "stable-retired" })).machine!;

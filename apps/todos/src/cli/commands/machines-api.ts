@@ -45,7 +45,9 @@ export function registerApiMachineCommands(program: Command, client: HasnaStorag
     });
   group.command("tasks <machine-name>").description("List shared tasks attributed to a machine")
     .option("--status <status>", "Task status filter").option("-j, --json", "Output JSON").action(async (name, opts) => {
-      const machine = (await cloudMachines(client)).find(row => row.name === name || row.id === name);
+      const matches = (await cloudMachines(client)).filter(row => row.name === name || row.id === name);
+      if (matches.length > 1) throw new Error("Machine selector is ambiguous between a name and another identity");
+      const machine = matches[0];
       if (!machine) throw new Error("Machine not found");
       const tasks = await cloudListTasks(client, { include_subtasks: true, ...(opts.status ? { status: opts.status } : {}) });
       emit(tasks.filter(row => row.machine_id === machine.id));

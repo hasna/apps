@@ -688,8 +688,16 @@ export async function handleV1Request(
   const subId = segments[4];
   // This deployment has one configured corpus. A tenant-bearing key must match
   // it; an untenanted legacy key is only valid for the default corpus.
+  const registryTenant = (dependencies.getMachineRegistryTenantId ?? getCloudTenantId)();
+  const machineAuthority = () => ({ tenant_id: registryTenant, kid: principal.kid });
+  const machineAuthorityMatches = (expected: unknown) => {
+    if (!expected || typeof expected !== "object" || Array.isArray(expected)) return false;
+    const target = expected as Record<string, unknown>;
+    const current = machineAuthority();
+    return typeof current.kid === "string" && current.kid.length > 0 && target.kid === current.kid && target.tenant_id === current.tenant_id;
+  };
   const machineTenantAllowed = () => {
-    const tenant = (dependencies.getMachineRegistryTenantId ?? getCloudTenantId)();
+    const tenant = registryTenant;
     return principal.tid === tenant || (principal.tid == null && tenant === "default");
   };
 
@@ -698,11 +706,13 @@ export async function handleV1Request(
     if (resource === "machines") {
       if (!machineTenantAllowed()) return error(403, "Machine registry key does not belong to this deployment tenant");
       if (!store.machines) return error(501, "Upgrade the Todos API: machine registry is unavailable");
-      if (!id && method === "GET") return json({ schema_version: 1, machines: await store.machines.list() });
+      if (!id && method === "GET") return json({ schema_version: 2, authority: machineAuthority(), machines: await store.machines.list() });
       if (!id && method === "POST") {
-        const body = await readJson<import("../storage/machine-registry.js").MachineRegistryInput>(req);
+        const body = await readJson<import("../storage/machine-registry.js").MachineRegistryInput & { expected_authority?: unknown }>(req);
         if (!body) return error(400, "A machine operation is required");
-        return json(await store.machines.execute(body));
+        if (!machineAuthorityMatches(body.expected_authority)) return error(409, "Machine authority changed or was not confirmed; reread capability before retrying");
+        const { expected_authority: _expected, ...operation } = body;
+        return json({ ...await store.machines.execute(operation), authority: machineAuthority() });
       }
       return error(405, "Use GET or POST /v1/machines");
     }
@@ -1858,6 +1868,7 @@ export async function handleV1Request(
       if (raw === null) return error(400, "invalid JSON body");
       const snapshot = normalizeImportSnapshot(raw);
       if (snapshot.machines?.length && !machineTenantAllowed()) return error(403, "Machine snapshot key does not belong to this deployment tenant");
+      if (snapshot.machines?.length && !machineAuthorityMatches((raw as Record<string, unknown>).expected_machine_authority)) return error(409, "Machine migration authority changed or was not confirmed; no records imported");
       if (snapshot.machines?.length && !store.machines) return error(501, "Upgrade the Todos API backend to support machine snapshots");
       const received = countSnapshotRecords(snapshot);
       const completionImports = validatePlanCompletionImports(raw);
@@ -1919,7 +1930,7 @@ export async function handleV1Request(
           audit_history_id: failure.auditHistoryId,
         });
       }
-      return json({ result, received });
+      return json({ result, received, ...(snapshot.machines?.length ? { machine_authority: machineAuthority() } : {}) });
     }
 
     return error(404, `unknown /v1 resource: ${resource ?? "(root)"}`);

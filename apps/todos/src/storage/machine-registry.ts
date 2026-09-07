@@ -3,10 +3,10 @@ import { isDeepStrictEqual } from "node:util";
 import type { Machine } from "../types/index.js";
 import type { TodosPostgresQueryClient } from "./postgres-sync.js";
 
-export const MACHINE_REGISTRY_VERSION = 1;
+export const MACHINE_REGISTRY_VERSION = 2;
 export type MachineAction = "register" | "heartbeat" | "set-primary" | "archive" | "unarchive" | "delete" | "import";
 export interface MachineRegistryInput { action: MachineAction; name?: string; id?: string; options?: Record<string, unknown>; machines?: Machine[] }
-export interface MachineRegistryReceipt { schema_version: 1; machines: Machine[]; machine?: Machine; inserted: number; skipped: number; deleted?: boolean }
+export interface MachineRegistryReceipt { schema_version: 2; machines: Machine[]; machine?: Machine; inserted: number; skipped: number; deleted?: boolean }
 export interface MachineRegistryStore { list(): Promise<Machine[]>; execute(input: MachineRegistryInput): Promise<MachineRegistryReceipt> }
 export class MachineRegistryError extends Error {
   constructor(message: string, readonly status = 409) { super(message); }
@@ -121,7 +121,7 @@ export function createPostgresMachineRegistry(client: TodosPostgresQueryClient, 
         await tx.query(`INSERT INTO ${table} (service,object_type,object_id,payload,updated_at,deleted_at,version) VALUES ($1,'machines',$2,$3::text::jsonb,$4,$5,1) ON CONFLICT (service,object_type,object_id) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at,deleted_at=EXCLUDED.deleted_at,version=COALESCE(${table}.version,0)+1`, [service, row.id, JSON.stringify(row), stamp, deleted && row.id === machine?.id ? stamp : null]);
       }
       const machines = await list(tx);
-      return { schema_version: 1, machines, ...(machine ? { machine } : {}), inserted: changed.filter(row => !current.some(old => old.id === row.id)).length, skipped, ...(deleted ? { deleted } : {}) };
+      return { schema_version: 2, machines, ...(machine ? { machine } : {}), inserted: changed.filter(row => !current.some(old => old.id === row.id)).length, skipped, ...(deleted ? { deleted } : {}) };
     });
   } };
 }
