@@ -12,6 +12,7 @@ import {
 } from "../db/workspaces.js";
 import { workspaceMarkerPath, writeWorkspaceMarker } from "./workspace-runtime.js";
 import { inspectLegacyProjectLayout, migrateLegacyProjectLayout } from "./project-layout-migration.js";
+import type { ProjectStore } from "../store/project-store.js";
 import type { Workspace } from "../types/workspace.js";
 
 export type WorkspaceCheckStatus = "ok" | "warn" | "error";
@@ -38,11 +39,31 @@ export interface WorkspaceDoctorResult {
   ok: boolean;
 }
 
+export type WorkspaceDoctorTransport = "local" | "http";
+
+/**
+ * The shared-registry references a HOSTED doctor run resolved through the
+ * ProjectStore (`/v1/roots`, `/v1/recipes`) before the synchronous doctor ran:
+ * `true` = found, `false` = missing, absent = not resolved in this call.
+ * {@link doctorWorkspaceWithStore} fills this in; a direct hosted call without
+ * it reports the reference as not checked rather than opening the on-box
+ * SQLite to answer a question the hosted registry owns (hasna/apps#1720).
+ */
+export interface WorkspaceDoctorReferences {
+  root?: boolean;
+  recipe?: boolean;
+}
+
 export interface WorkspaceDoctorOptions {
   fix?: boolean;
   dryRun?: boolean;
-  transport?: "local" | "http";
+  transport?: WorkspaceDoctorTransport;
+  references?: WorkspaceDoctorReferences;
 }
+
+/** The hosted transport never reads the on-box registry: every check that would is answered here. */
+const HOSTED_NOT_CHECKED =
+  "API-backed projects do not own the machine-local registry; not checked in the hosted backend";
 
 function checkPath(workspace: Workspace): WorkspaceDoctorCheck {
   if (!workspace.primary_path) {
@@ -73,22 +94,53 @@ function checkMarker(workspace: Workspace): WorkspaceDoctorCheck {
   }
 }
 
-function checkReferences(workspace: Workspace, db?: Database): WorkspaceDoctorCheck[] {
-  const checks: WorkspaceDoctorCheck[] = [];
-  if (workspace.root_id && !getRoot(workspace.root_id, db)) {
-    checks.push({ code: "WORKSPACE_ROOT_MISSING", name: "root", status: "error", message: workspace.root_id });
+/**
+ * One shared-registry reference (root or recipe). Local answers from the
+ * on-box registry; hosted answers ONLY from what the caller resolved through
+ * the store, so `getDatabase()` is unreachable on the hosted transport.
+ */
+function checkReference(
+  name: "root" | "recipe",
+  id: string | null,
+  transport: WorkspaceDoctorTransport,
+  resolved: boolean | undefined,
+  lookupLocal: (id: string) => boolean,
+): WorkspaceDoctorCheck {
+  const prefix = name === "root" ? "WORKSPACE_ROOT" : "WORKSPACE_RECIPE";
+  if (!id) return { code: `${prefix}_OK`, name, status: "ok", message: "none" };
+  let found: boolean;
+  if (transport === "http") {
+    if (resolved === undefined) {
+      return {
+        code: `${prefix}_NOT_CHECKED`,
+        name,
+        status: "warn",
+        message: `${id}: ${HOSTED_NOT_CHECKED} (resolve it through doctorWorkspaceWithStore)`,
+        fixable: false,
+      };
+    }
+    found = resolved;
   } else {
-    checks.push({ code: "WORKSPACE_ROOT_OK", name: "root", status: "ok", message: workspace.root_id ?? "none" });
+    found = lookupLocal(id);
   }
-  if (workspace.recipe_id && !getRecipe(workspace.recipe_id, db)) {
-    checks.push({ code: "WORKSPACE_RECIPE_MISSING", name: "recipe", status: "error", message: workspace.recipe_id });
-  } else {
-    checks.push({ code: "WORKSPACE_RECIPE_OK", name: "recipe", status: "ok", message: workspace.recipe_id ?? "none" });
-  }
-  return checks;
+  return found
+    ? { code: `${prefix}_OK`, name, status: "ok", message: id }
+    : { code: `${prefix}_MISSING`, name, status: "error", message: id };
 }
 
-function checkLocations(workspace: Workspace, transport: "local" | "http", db?: Database): WorkspaceDoctorCheck {
+function checkReferences(
+  workspace: Workspace,
+  transport: WorkspaceDoctorTransport,
+  references: WorkspaceDoctorReferences | undefined,
+  db?: Database,
+): WorkspaceDoctorCheck[] {
+  return [
+    checkReference("root", workspace.root_id, transport, references?.root, (id) => Boolean(getRoot(id, db))),
+    checkReference("recipe", workspace.recipe_id, transport, references?.recipe, (id) => Boolean(getRecipe(id, db))),
+  ];
+}
+
+function checkLocations(workspace: Workspace, transport: WorkspaceDoctorTransport, db?: Database): WorkspaceDoctorCheck {
   if (transport === "http") {
     return {
       code: "WORKSPACE_LOCATIONS_LOCAL_ONLY",
@@ -109,7 +161,21 @@ function checkLocations(workspace: Workspace, transport: "local" | "http", db?: 
   return { code: "WORKSPACE_LOCATIONS_OK", name: "locations", status: "ok", message: `${locations.length} location(s)` };
 }
 
-function checkAgentRuns(workspace: Workspace, db?: Database): WorkspaceDoctorCheck {
+function checkAgentRuns(workspace: Workspace, transport: WorkspaceDoctorTransport, db?: Database): WorkspaceDoctorCheck {
+  if (transport === "http") {
+    // The prompt-agent run ledger is an on-box sub-resource the projects API
+    // does not model (see ProjectStore.listAgentRuns). Reading the local file
+    // here was the hosted-read-opens-SQLite defect: it created projects.db
+    // under the app home and reported "no recent failed runs" from an empty
+    // ledger the hosted project does not own.
+    return {
+      code: "WORKSPACE_AGENT_RUNS_LOCAL_ONLY",
+      name: "agent_runs",
+      status: "warn",
+      message: `agent runs are an on-box ledger; ${HOSTED_NOT_CHECKED}`,
+      fixable: false,
+    };
+  }
   const failed = listAgentRuns({ workspace_id: workspace.id, status: "failed", limit: 20 }, db);
   if (failed.length) {
     return { code: "WORKSPACE_AGENT_RUNS_FAILED", name: "agent_runs", status: "warn", message: `${failed.length} failed run(s)` };
@@ -138,10 +204,19 @@ function checkLegacyLayout(workspace: Workspace): WorkspaceDoctorCheck {
   };
 }
 
-function checkMigrationMap(workspace: Workspace, db?: Database): WorkspaceDoctorCheck {
+function checkMigrationMap(workspace: Workspace, transport: WorkspaceDoctorTransport, db?: Database): WorkspaceDoctorCheck {
   const migratedFrom = workspace.metadata["migrated_from_project_id"];
   if (typeof migratedFrom !== "string" || migratedFrom.length === 0) {
     return { code: "WORKSPACE_MIGRATION_NOT_APPLICABLE", name: "migration", status: "ok", message: "not migrated" };
+  }
+  if (transport === "http") {
+    return {
+      code: "WORKSPACE_MIGRATION_MAP_LOCAL_ONLY",
+      name: "migration",
+      status: "warn",
+      message: `${migratedFrom}: the workspace_migration_map table is on-box; ${HOSTED_NOT_CHECKED}`,
+      fixable: false,
+    };
   }
   const d = db || getDatabase();
   if (!tableExists(d, "workspace_migration_map")) {
@@ -159,16 +234,22 @@ function checkMigrationMap(workspace: Workspace, db?: Database): WorkspaceDoctor
   return { code: "WORKSPACE_MIGRATION_MAP_OK", name: "migration", status: "ok", message: migratedFrom };
 }
 
+/**
+ * Synchronous doctor. On the hosted transport (`transport: "http"`) NOTHING
+ * here reaches the on-box registry: references come from `options.references`,
+ * and the location, agent-run and migration-map checks answer "local only".
+ * Prefer {@link doctorWorkspaceWithStore}, which resolves the references.
+ */
 export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOptions = {}, db?: Database): WorkspaceDoctorResult {
   const transport = options.transport ?? "local";
   const checks = [
     checkPath(workspace),
     checkMarker(workspace),
     checkLegacyLayout(workspace),
-    ...checkReferences(workspace, db),
+    ...checkReferences(workspace, transport, options.references, db),
     checkLocations(workspace, transport, db),
-    checkAgentRuns(workspace, db),
-    checkMigrationMap(workspace, db),
+    checkAgentRuns(workspace, transport, db),
+    checkMigrationMap(workspace, transport, db),
   ];
   const fixes: WorkspaceDoctorFix[] = [];
   const dryRun = options.dryRun === true;
@@ -205,6 +286,39 @@ export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOp
   }
 
   return { workspace, checks, fixes, ok: checks.every((check) => check.status !== "error") };
+}
+
+/** The slice of the Store the doctor needs; a test can hand in a fake. */
+export type WorkspaceDoctorStore = Pick<ProjectStore, "transport" | "getRoot" | "getRecipe">;
+
+/**
+ * Doctor a project through the active Store — the entry point the CLI, the MCP
+ * server and the prompt agent share.
+ *
+ * Hosted: the root/recipe references are resolved against the shared registry
+ * (`/v1/roots`, `/v1/recipes`) and the synchronous doctor runs with
+ * `transport: "http"`, so the on-box SQLite is never opened or created for an
+ * API-backed project (hasna/apps#1720, acceptance f). Local: the synchronous
+ * doctor, unchanged, completed synchronously (no await) so a caller holding a
+ * synchronous lock still covers the whole run.
+ */
+export async function doctorWorkspaceWithStore(
+  store: WorkspaceDoctorStore,
+  workspace: Workspace,
+  options: Omit<WorkspaceDoctorOptions, "transport" | "references"> = {},
+): Promise<WorkspaceDoctorResult> {
+  if (store.transport !== "http") {
+    return doctorWorkspace(workspace, { ...options, transport: "local" });
+  }
+  const [root, recipe] = await Promise.all([
+    workspace.root_id ? store.getRoot(workspace.root_id) : Promise.resolve(null),
+    workspace.recipe_id ? store.getRecipe(workspace.recipe_id) : Promise.resolve(null),
+  ]);
+  return doctorWorkspace(workspace, {
+    ...options,
+    transport: "http",
+    references: { root: Boolean(root), recipe: Boolean(recipe) },
+  });
 }
 
 export function doctorWorkspaces(filter: WorkspaceFilter = {}, options: WorkspaceDoctorOptions = {}, db?: Database): WorkspaceDoctorResult[] {
