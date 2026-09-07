@@ -24,7 +24,7 @@ const DB_VAR = "HASNA_CONVERSATIONS_DB_PATH";
 /** Not a credential: a syntactically plausible but deliberately invalid stub. */
 const FAKE_KEY = ["hasna", "conversations", "FAKE", "NOT", "A", "REAL", "KEY"].join("_");
 
-/** A self-hosted origin the resolver ACCEPTS (no userinfo, query, or fragment). */
+/** An arbitrary custom origin the resolver ACCEPTS (no userinfo, query, or fragment). */
 const SELF_HOSTED =
   "https://conv.example.invalid:8443";
 
@@ -172,7 +172,7 @@ describe("storeStatusLocation", () => {
     }
   });
 
-  test("legacy and self-hosted origins keep the scheme/host/port redaction", () => {
+  test("legacy and custom origins keep the scheme/host/port redaction", () => {
     const legacy = storeStatusLocation({ [URL_VAR]: "https://conversations.hasna.xyz", [KEY_VAR]: FAKE_KEY });
     expect("api_url" in legacy ? legacy.api_url : null).toBe("https://conversations.hasna.xyz");
 

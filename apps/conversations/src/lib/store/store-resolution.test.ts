@@ -246,8 +246,8 @@ describe("store resolution — errors are actionable and leak nothing", () => {
 });
 
 describe("store resolution — the ambiguity guard also protects the reporting helpers", () => {
-  // `isCloudStore()` is what `doctor`, `analytics --json` and admin redaction branch
-  // on. Answering "false" for an ambiguous config is exactly how an operator ends up
+  // `isCloudStore()` is what `status`/`doctor`/`analytics --json` branch on.
+  // Answering "false" for an ambiguous config is exactly how an operator ends up
   // believing they are reading cloud data while reading local data.
   test("isCloudStore refuses to answer for a partial API configuration", () => {
     expect(() => isCloudStore({ [URL_VAR]: API_URL })).toThrow(ConversationsStoreConfigError);

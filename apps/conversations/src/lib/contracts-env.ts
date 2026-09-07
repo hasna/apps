@@ -26,7 +26,7 @@
 // RETIRED, and inputs nowhere: `~/.hasna/fleet-env/`, `~/.hasna/cloud/`,
 // `~/.config/hasna/`, `$XDG_CONFIG_HOME` and the app's own key reads — the
 // vendored transport copy that used to read `~/.hasna/fleet-env/<app>.env` is
-// gone. No `*_MODE` / `*_STORAGE_MODE` variable is read: the transport is
+// gone. No storage-mode variable is read: the transport is
 // decided by what RESOLVES, never by a mode word.
 //
 // WHAT THIS FILE DECIDES ITSELF. Two things the shared resolver cannot know:
@@ -176,32 +176,32 @@ export function conversationsResolverInputs<T extends ConversationsLocalOptInEnv
  * happens to be empty — the false green the 2026-09-04 ruling closes. It goes
  * to STDERR so `--json` output stays a clean parseable document on stdout.
  */
-export function conversationsLocalModeNotice(dbPath: string): string {
+export function conversationsLocalStoreNotice(dbPath: string): string {
   return (
-    `conversations: LOCAL mode — using the on-box SQLite store at ${dbPath}, not the hosted fleet. ` +
+    `conversations: local store — using the on-box SQLite store at ${dbPath}, not the hosted API. ` +
     `Unset ${DB_PATH_KEYS[0]} and provide a credential via the Keychain item ` +
     `hasna.credentials.conversations.api-key, ~/.hasna/conversations/config/credentials, or ` +
-    `HASNA_CONVERSATIONS_API_KEY to work against https://api.hasna.com/conversations.`
+    `HASNA_CONVERSATIONS_API_KEY to work against the hosted API.`
   );
 }
 
 let localNoticePrinted = false;
 
-/** Reset the once-per-process local-mode notice. Test seam only. */
+/** Reset the once-per-process local-store notice. Test seam only. */
 export function __resetConversationsLocalNotice(): void {
   localNoticePrinted = false;
 }
 
 /**
- * Print the local-mode notice once per process. A no-op for hosted runs, so a
+ * Print the local-store notice once per process. A no-op for hosted runs, so a
  * hosted run's stderr stays empty. `dbPath` is the resolved on-box store path.
  */
-export function announceConversationsLocalMode(
+export function announceConversationsLocalStore(
   dbPath: string,
   write: (line: string) => void = (line) => process.stderr.write(`${line}\n`),
 ): boolean {
   if (localNoticePrinted) return false;
   localNoticePrinted = true;
-  write(conversationsLocalModeNotice(dbPath));
+  write(conversationsLocalStoreNotice(dbPath));
   return true;
 }

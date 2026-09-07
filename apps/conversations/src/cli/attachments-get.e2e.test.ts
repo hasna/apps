@@ -121,9 +121,9 @@ describe("attachments get (e2e)", () => {
     ]);
     expect(stdoutResult.exitCode, stdoutResult.stderr.toString("utf8")).toBe(0);
     expect(stdoutResult.stdout).toEqual(bytes);
-    // Local mode announces itself once on stderr (hasna/apps#1720); the binary
+    // The local store announces itself once on stderr (hasna/apps#1720). the binary
     // bytes must still land on stdout untouched.
-    expect(stdoutResult.stderr.toString("utf8")).toContain("LOCAL mode");
+    expect(stdoutResult.stderr.toString("utf8")).toContain("local store");
   });
 
   test("refuses to overwrite an existing output file", () => {

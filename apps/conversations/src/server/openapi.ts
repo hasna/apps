@@ -686,6 +686,77 @@ export const openapiSpec = {
         },
       },
     },
+    "/v1/feedback": {
+      post: {
+        operationId: "submitFeedback",
+        summary: "Persist a feedback entry (hosted path of the MCP send_feedback tool)",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["message"],
+                properties: {
+                  message: { type: "string" },
+                  email: { type: "string" },
+                  category: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "201": { description: "feedback saved", content: { "application/json": { schema: { type: "object", properties: { id: { type: "string" }, sent: { type: "boolean" }, error: { type: "string", nullable: true } } } } } },
+          "400": { description: "missing message" },
+        },
+      },
+    },
+    "/v1/events/outbox/drain": {
+      post: {
+        operationId: "drainEventOutbox",
+        summary: "Run the Conversations→Events outbox worker (hosted path of the events-drain command)",
+        description: "Transports pending outbox rows into the Events durable spool inbox on the server, marking rows spooled. Requires conversations:write.",
+        parameters: [{ name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 1000 } }],
+        responses: {
+          "200": { description: "worker counts", content: { "application/json": { schema: { type: "object", properties: { scanned: { type: "integer" }, transported: { type: "integer" }, skipped: { type: "integer" }, spooled: { type: "integer" } } } } } },
+        },
+      },
+    },
+    "/v1/admin/redact-messages": {
+      post: {
+        operationId: "redactMessages",
+        summary: "Audited admin message-redaction over the hosted store (hosted path of admin redact-messages)",
+        description: "Requires conversations:write and, to apply, the owner gates (backup confirmation, dry-run confirmation, authority). Dry-run by default.",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                required: ["ids", "actor"],
+                properties: {
+                  ids: { type: "array", items: { type: "integer", minimum: 1 } },
+                  actor: { type: "string" },
+                  reason: { type: "string" },
+                  apply: { type: "boolean" },
+                  authority: { type: "string" },
+                  backup_confirmed: { type: "boolean" },
+                  dry_run_confirmed: { type: "boolean" },
+                  purge_attachments: { type: "boolean" },
+                  replacement_content: { type: "string" },
+                  now: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "redaction result (dry-run or applied)", content: { "application/json": { schema: { type: "object" } } } },
+          "400": { description: "invalid request or missing owner gates" },
+        },
+      },
+    },
     "/v1/messages/blockers": {
       get: {
         operationId: "listUnreadBlockers",

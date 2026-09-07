@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { startApiServer, type ApiServerDeps } from "../server/api.js";
 import { mintApiKey, verifyApiKey, ApiKeyStore, type ApiKeyStatus } from "@hasna/contracts/auth";
-import { STORE_SELECTING_KEYS } from "../lib/store/isolated-test-env.js";
+import { STORE_SELECTING_KEYS, diskTierSandboxEnv } from "../lib/store/isolated-test-env.js";
 import { HERMETIC_STATION } from "../test/hermetic.js";
 
 const SIGNING = ["test", "signing", "material", "0123456789"].join("-");
@@ -98,6 +98,10 @@ async function runCli(args: string[], env: Record<string, string | undefined>) {
   // account to one no real item uses, or the operator's real key and api-url
   // items win over the fixture pair a case exports.
   childEnv.HASNA_STATION = HERMETIC_STATION;
+  // The disk tier (`~/.hasna/<app>/config/credentials`) is an ambient input:
+  // point the child's HOME at a scratch root so the station credential cannot
+  // answer beside the fixture's synthetic API URL.
+  Object.assign(childEnv, diskTierSandboxEnv());
   for (const [key, value] of Object.entries(env)) {
     if (value !== undefined) childEnv[key] = value;
   }

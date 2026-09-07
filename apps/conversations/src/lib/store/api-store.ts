@@ -63,6 +63,9 @@ import type {
   MessagePreview,
   MessagePreviewPage,
 } from "../../types.js";
+import type { DrainEventOutboxResult } from "../events-bridge.js";
+import type { SaveFeedbackResult } from "../feedback.js";
+import type { RedactMessagesResult } from "../admin-redaction.js";
 
 /**
  * The row ceiling the hosted `/messages` route clamps every read to.
@@ -1499,4 +1502,35 @@ export class ApiStore implements ConversationsStore {
       throw error;
     }
   };
+
+  // ── events outbox worker (hosted path) ────────────────────────────────────
+  // The server owns the outbox table; this asks the server to run its own
+  // outbox worker and returns the same counts the local worker reports.
+  drainEventOutbox: ConversationsStore["drainEventOutbox"] = async (opts) =>
+    this.post<DrainEventOutboxResult>("/events/outbox/drain", undefined, { limit: opts?.limit });
+
+  // ── feedback (hosted path) ────────────────────────────────────────────────
+  saveFeedback: ConversationsStore["saveFeedback"] = async (input) =>
+    this.post<SaveFeedbackResult>("/feedback", {
+      message: input.message,
+      email: input.email ?? undefined,
+      category: input.category ?? undefined,
+    });
+
+  // ── audited admin redaction (hosted path) ─────────────────────────────────
+  // Server-side mirror of the on-box redaction; report shape is identical so
+  // the CLI prints one format for both transports.
+  redactMessages: ConversationsStore["redactMessages"] = async (options) =>
+    this.post<RedactMessagesResult>("/admin/redact-messages", {
+      ids: options.ids,
+      actor: options.actor,
+      reason: options.reason,
+      apply: options.apply ?? false,
+      authority: options.authority,
+      backup_confirmed: options.backupConfirmed ?? false,
+      dry_run_confirmed: options.dryRunConfirmed ?? false,
+      purge_attachments: options.purgeAttachments,
+      replacement_content: options.replacementContent,
+      now: options.now,
+    });
 }

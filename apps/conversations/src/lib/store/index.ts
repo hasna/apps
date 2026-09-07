@@ -48,13 +48,13 @@ import {
   APP,
   DB_PATH_KEYS,
   ENV_KEYS,
-  announceConversationsLocalMode,
+  announceConversationsLocalStore,
   conversationsResolverInputs,
   isConversationsLocalOptIn,
 } from "../contracts-env.js";
 import { assertAmbientCloudAllowed } from "./test-runtime.js";
 import { normalizeChannelName } from "../channel-names.js";
-import { getDbPath, localHealthChecks } from "../db.js";
+import { getDbPath, localHealthChecks, getDb } from "../db.js";
 import { ApiStore } from "./api-store.js";
 import {
   AGENT_LIST_ORDER,
@@ -85,6 +85,9 @@ import { attachSendRedaction } from "../content-safety.js";
 import type { IncidentProjectionRecord, IncidentProjectionRequestV1, Message, MessagePreviewPage } from "../../types.js";
 import { previewAsCompatibilityMessage, COLLECTION_MAX_MAX_BYTES } from "../message-previews.js";
 import { runLocalReadWorker } from "../local-read-runner.js";
+import { drainConversationEventOutbox, type DrainEventOutboxResult } from "../events-bridge.js";
+import { saveFeedbackLocal, type SaveFeedbackInput, type SaveFeedbackResult } from "../feedback.js";
+import { redactMessagesById, type RedactMessagesOptions, type RedactMessagesResult } from "../admin-redaction.js";
 
 /**
  * App slug for the client-flip env contract.
@@ -174,7 +177,7 @@ function firstSet(env: Env, keys: readonly string[]): { key: string; value: stri
  */
 const LOCAL_ESCAPE_HATCH =
   `If you meant to use the on-box SQLite store, set ${DB_PATH_KEYS[0]} to a local database ` +
-  `file — local mode is opt-in only, it is never the default.`;
+  `file — the on-box store is used only when named, never by default.`;
 
 /**
  * Wrap a failure of the shared @hasna/contracts chain as the app's own config
@@ -188,38 +191,6 @@ const LOCAL_ESCAPE_HATCH =
 function wrapConversationsChainFailure(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
   throw new ConversationsStoreConfigError(`${message} ${LOCAL_ESCAPE_HATCH}`);
-}
-
-/**
- * The gate for the few surfaces that are LOCAL-ONLY by nature — the
- * `events-drain` worker over the on-box outbox table and the MCP feedback
- * table — which have no hosted transport and used to call `getDb()` directly.
- *
- * A direct `getDb()` is a fallback nobody asked for: on a hosted station with
- * no credential resolvable it exited 0, printed no LOCAL notice, and created
- * `messages.db` (plus WAL/SHM) under the app home, which the fail-closed
- * ruling forbids for every surface, not only the Store-routed ones. So such a
- * surface asks HERE first: the on-box store is used only when the operator
- * named it (`HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH`), it is
- * announced once on stderr exactly as `getStore()` announces it, and the
- * resolved path is returned for the caller's own reporting. Anything else is
- * the app's config refusal — exit non-zero, nothing opened, the JSON error
- * contract honoured by the CLI's error surface — naming the opt-in.
- *
- * `surface` is the command or tool name, so the refusal says what would have
- * run. Never reads or embeds a credential value.
- */
-export function requireConversationsLocalStore(surface: string, env: Env = process.env): string {
-  if (!isConversationsLocalOptIn(env)) {
-    throw new ConversationsStoreConfigError(
-      `${surface} is local-only: it works on the on-box SQLite store and has no hosted transport, ` +
-        `and neither ${DB_PATH_KEYS[0]} nor ${DB_PATH_KEYS[1]} names a local store — so nothing was opened. ` +
-        LOCAL_ESCAPE_HATCH,
-    );
-  }
-  const dbPath = getDbPath(env);
-  announceConversationsLocalMode(dbPath);
-  return dbPath;
 }
 
 /**
@@ -268,7 +239,7 @@ export function conversationsCloudEnv(env: Env = process.env): Env {
     // flip on them. Local is expressed by absence of an API pair (plus the DB
     // path). The resolver is never consulted for this env — see
     // `resolveCloudClientUnguarded` — so the copy is for callers that hold this
-    // value as a "local-only" env in its own right.
+    // value as a local-store env in its own right.
     const local: Env = { ...env };
     for (const key of ENV_KEYS.apiUrlKeys) delete local[key];
     for (const key of ENV_KEYS.apiKeyKeys) delete local[key];
@@ -617,6 +588,18 @@ export interface ConversationsStore {
 
   appendIncidentProjection: (request: IncidentProjectionRequestV1) => Promise<IncidentProjectionRecord>;
   getIncidentProjection: (eventId: string) => Promise<IncidentProjectionRecord | null>;
+
+  // events outbox worker: same command, one semantics on whichever store
+  // resolved — on-box SQLite spools into the on-box events spool inbox; the
+  // hosted API runs the server's own outbox worker.
+  drainEventOutbox: (opts?: { limit?: number }) => Promise<DrainEventOutboxResult>;
+
+  // feedback: on-box table row, or the hosted API's feedback route.
+  saveFeedback: (input: SaveFeedbackInput) => Promise<SaveFeedbackResult>;
+
+  // audited admin message redaction: on-box SQLite (secure_delete + file
+  // purge), or the hosted API's redaction route over the Postgres store.
+  redactMessages: (options: RedactMessagesOptions) => Promise<RedactMessagesResult>;
 }
 
 // ── LocalStore ────────────────────────────────────────────────────────────────
@@ -874,6 +857,15 @@ export class LocalStore implements ConversationsStore {
     incidentProjectionsLib.appendIncidentProjection(request, incidentProjectionsLib.resolveIncidentProjectorContext());
   getIncidentProjection: ConversationsStore["getIncidentProjection"] = async (eventId) =>
     incidentProjectionsLib.getIncidentProjection(eventId, incidentProjectionsLib.resolveIncidentProjectorContext());
+
+  // events outbox worker (local store): spool pending rows into the on-box
+  // events durable spool inbox.
+  drainEventOutbox: ConversationsStore["drainEventOutbox"] = async (opts) =>
+    drainConversationEventOutbox(getDb(), { limit: opts?.limit });
+
+  saveFeedback: ConversationsStore["saveFeedback"] = async (input) => saveFeedbackLocal(input);
+
+  redactMessages: ConversationsStore["redactMessages"] = async (options) => redactMessagesById(options);
 }
 
 // ── Resolver ──────────────────────────────────────────────────────────────────
@@ -928,7 +920,7 @@ export function getStore(env?: Env, options: ConversationsResolveOptions = {}): 
     // Say it out loud: a local run must never be mistakable for a hosted one
     // with an empty store (hasna/apps#1720). Once per process, on stderr, so
     // `--json` output stays a clean parseable document on stdout.
-    announceConversationsLocalMode(getDbPath(activeEnv));
+    announceConversationsLocalStore(getDbPath(activeEnv));
   }
   return localSingleton;
 }

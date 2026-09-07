@@ -25,9 +25,9 @@ afterEach(() => {
 });
 
 describe("submitChatViewMessage", () => {
-  test("blocks sensitive content without throwing, echoing, or persisting", () => {
+  test("blocks sensitive content without throwing, echoing, or persisting", async () => {
     const blocked = syntheticDatabaseUrl();
-    const result = submitChatViewMessage(
+    const result = await submitChatViewMessage(
       { agent: "tui-sender", recipient: "tui-recipient" },
       `blocked ${blocked}`
     );
@@ -40,8 +40,8 @@ describe("submitChatViewMessage", () => {
     expect(readMessages({ to: "tui-recipient" })).toHaveLength(0);
   });
 
-  test("sends safe content", () => {
-    const result = submitChatViewMessage(
+  test("sends safe content", async () => {
+    const result = await submitChatViewMessage(
       { agent: "tui-sender", recipient: "tui-recipient" },
       "safe chat message"
     );

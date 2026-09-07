@@ -16,7 +16,7 @@ type Env = Record<string, string | undefined>;
  *
  * Normalization is intentionally limited to the gateway form. Legacy origins
  * (`https://<app>.hasna.xyz`, allowed for todos until hasna/apps#1512 ships)
- * and self-hosted/custom endpoints keep the caller's existing display behavior
+ * and custom endpoints keep the caller's existing display behavior
  * (`loggableUrl`, which redacts down to scheme/host/port): this returns `null`
  * for anything that is not `https://api.hasna.com/<app>` or the
  * already-resolved `https://api.hasna.com/<app>/v1`.

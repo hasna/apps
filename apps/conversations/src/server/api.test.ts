@@ -55,6 +55,8 @@ function makeFakeClient(
   const client = {
     async many(sql: string, _p: readonly unknown[] = []): Promise<any[]> {
       manyCalls.push({ sql, params: [..._p] });
+      // Hosted events outbox: no pending rows in the fixture.
+      if (/FROM conversations_event_outbox/i.test(sql)) return [] as any[];
       if (/SELECT td\.depends_on_id, t\.subject, t\.status FROM task_dependencies/i.test(sql)) {
         // start-action blocked-dependency check: return incomplete deps of the task.
         const taskId = Number(_p[0]);
@@ -499,6 +501,8 @@ function makeFakeClient(
       return { rows: [], rowCount: 0 };
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
+      // Hosted feedback insert: RETURNING id answers through one().
+      if (/INSERT INTO feedback/i.test(sql)) return { id: "feedback-fixture-id" };
       if (/set_config\('hasna\.conversations\.channel_scope_rewrite'/i.test(sql)) {
         scopeRewriteCalls.push({ sql, params: [...p] });
       }
@@ -732,7 +736,7 @@ function makeFakeClient(
       if (/INSERT INTO messages/i.test(sql)) {
         // Destructured positionally, so this must track the column list in the
         // INSERT. metadata and reply_to are positional; a column missing from
-        // the statement is exactly how cloud-only fields were dropped.
+        // the statement is exactly how server-side fields were dropped.
         const [
           uuid,
           session_id,
@@ -837,6 +841,12 @@ function makeFakeClient(
         const [channel, agent] = p as any[];
         channelMembers.add(`${channel}:${agent}`);
       }
+    },
+    // Hosted feedback insert (and any RETURNING id path) resolves through one().
+    async one(sql: string, p: readonly unknown[] = []): Promise<any> {
+      const row = await client.get(sql, p);
+      if (!row) throw new Error("Expected exactly one row, got 0.");
+      return row;
     },
     async transaction<T>(fn: (tx: { query: (sql: string, p?: readonly unknown[]) => Promise<{ rows: any[]; rowCount: number }> }) => Promise<T>): Promise<T> {
       const waitForPrevious = transactionTail;
@@ -5167,5 +5177,105 @@ describe("emoji reactions on /v1/messages/:id/reactions", () => {
     expect(summary.map((s: any) => s.emoji).sort()).toEqual(expected);
     const show = (await (await fetch(`${base}/v1/messages/${id}`, { headers: roHeaders })).json() as any).message;
     expect(show.reactions.map((s: any) => s.emoji).sort()).toEqual(expected);
+  });
+});
+
+// Every surface has a hosted path: the exact surfaces that used to refuse
+// when the hosted API resolved — `events-drain`, `admin redact-messages` and
+// MCP `send_feedback` — now route through the server. These route tests pin
+// the wiring and the auth gates (allcmds campaign).
+describe("hosted paths for the once-gated surfaces", () => {
+  // Evaluated per call: `rwKey` is minted in beforeAll, after the describe body runs.
+  const postHeaders = () => ({ "x-api-key": rwKey, "content-type": "application/json" });
+
+  test("POST /v1/feedback writes one row and answers the stored id", async () => {
+    const response = await fetch(`${base}/v1/feedback`, {
+      method: "POST",
+      headers: postHeaders(),
+      body: JSON.stringify({ message: "hosted feedback", email: "a@b.invalid", category: "bug" }),
+    });
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ id: "feedback-fixture-id", sent: true, error: null });
+  });
+
+  test("POST /v1/feedback without a message is a 400", async () => {
+    const response = await fetch(`${base}/v1/feedback`, {
+      method: "POST",
+      headers: postHeaders(),
+      body: JSON.stringify({ email: "a@b.invalid" }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  test("POST /v1/events/outbox/drain answers the worker counts and a limit", async () => {
+    const response = await fetch(`${base}/v1/events/outbox/drain?limit=5`, {
+      method: "POST",
+      headers: postHeaders(),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ scanned: 0, transported: 0, skipped: 0, spooled: 0 });
+  });
+
+  test("POST /v1/admin/redact-messages dry-run reports credential-shaped content without mutating", async () => {
+    const leaked = {
+      id: 900001,
+      uuid: "uuid-cloud-redact",
+      session_id: "channel:cloud-redaction",
+      from_agent: "alice",
+      to_agent: "cloud-redaction",
+      channel: "cloud-redaction",
+      content: "-----BEGIN PRIVATE KEY----- placeholder",
+      metadata: null,
+      attachments: null,
+      created_at: "2026-08-01T00:00:00.000Z",
+    };
+    activeFakeClient!.__debug.messages.push(leaked);
+    try {
+      const response = await fetch(`${base}/v1/admin/redact-messages`, {
+        method: "POST",
+        headers: postHeaders(),
+        body: JSON.stringify({ ids: [900001, 424242], actor: "security", reason: "credential-shaped message remediation" }),
+      });
+      if (response.status !== 200) console.log("REDACT RESP", response.status, await response.text());
+      expect(response.status).toBe(200);
+      const result = await response.json() as any;
+      expect(result.dry_run).toBe(true);
+      expect(result.applied).toBe(false);
+      expect(result.matched_count).toBe(1);
+      expect(result.missing_ids).toEqual([424242]);
+      expect(result.messages[0].secret_classes).toContain("private_key");
+      expect(result.messages[0].before_hashes.content_sha256).toMatch(/^[0-9a-f]{64}$/);
+    } finally {
+      activeFakeClient!.__debug.messages.splice(activeFakeClient!.__debug.messages.indexOf(leaked), 1);
+    }
+  });
+
+  test("POST /v1/admin/redact-messages apply without the owner gates is a 400", async () => {
+    const response = await fetch(`${base}/v1/admin/redact-messages`, {
+      method: "POST",
+      headers: postHeaders(),
+      body: JSON.stringify({ ids: [9001], actor: "security", apply: true }),
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json() as any).error).toContain("backup confirmation");
+  });
+
+  test("a read-only key is refused on every write surface", async () => {
+    // roKey is also minted in beforeAll; the fixture descends from the same const as rwKey,
+    // which is assigned by the time the tests run, so direct use is safe here.
+    const roHeaders = { "x-api-key": roKey, "content-type": "application/json" };
+    const feedback = await fetch(`${base}/v1/feedback`, { method: "POST", headers: roHeaders, body: JSON.stringify({ message: "x" }) });
+    expect(feedback.status).toBe(403);
+    const drain = await fetch(`${base}/v1/events/outbox/drain`, { method: "POST", headers: roHeaders });
+    expect(drain.status).toBe(403);
+    const redact = await fetch(`${base}/v1/admin/redact-messages`, { method: "POST", headers: roHeaders, body: JSON.stringify({ ids: [1] }) });
+    expect(redact.status).toBe(403);
+  });
+
+  test("a missing key is refused on the new surfaces", async () => {
+    const feedback = await fetch(`${base}/v1/feedback`, { method: "POST", body: JSON.stringify({ message: "x" }) });
+    expect(feedback.status).toBe(401);
+    const redact = await fetch(`${base}/v1/admin/redact-messages`, { method: "POST", body: JSON.stringify({ ids: [1] }) });
+    expect(redact.status).toBe(401);
   });
 });

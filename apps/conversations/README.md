@@ -361,15 +361,16 @@ const where = resolveConversationsSdkTransport();  // diagnostics: sources only,
 console.log(where.baseUrl, where.apiKeySource, where.apiUrlSource);
 ```
 
-The SDK is hosted-only. With no credential resolvable anywhere it throws
+The generated SDK client speaks HTTP to the `/v1` API — it has no local-store
+transport. With no credential resolvable anywhere it throws
 `ConversationsSdkResolutionError` (`CONVERSATIONS_CREDENTIAL_MISSING`) naming
 every tier it consulted — never a silent local fallback — and the explicit
 local opt-in `HASNA_CONVERSATIONS_DB_PATH` is refused
-(`CONVERSATIONS_LOCAL_STORE_SELECTED`): an HTTP client cannot serve the on-box
-store, so use `getStore()` from `@hasna/conversations` (see
-[Credential resolution](#credential-resolution)) for local mode. Passing an
-explicit `baseUrl` to `createConversationsClient` keeps the #1794 pin: only an
-explicit `apiKey` beside it is ever sent.
+(`CONVERSATIONS_LOCAL_STORE_SELECTED`): the HTTP client cannot address the
+on-box store, so use `getStore()` from `@hasna/conversations` (see
+[Credential resolution](#credential-resolution)) for the on-box store. Passing
+an explicit `baseUrl` to `createConversationsClient` keeps the #1794 pin: only
+an explicit `apiKey` beside it is ever sent.
 
 ## Credential resolution
 
@@ -396,13 +397,13 @@ tier reaches the fleet with no URL configured.
 naming every place that was consulted, and never falls back to the on-box
 SQLite store and never emits a `*-local-fallback` event. The legacy `~/.hasna/
 fleet-env/`, `~/.hasna/cloud/` and `~/.config/hasna/` locations are inputs
-nowhere, and no `*_MODE` / `*_STORAGE_MODE` variable is read — the transport is
-decided by what resolves, never by a mode word.
+nowhere, and no storage-mode variable is read — the transport is decided by
+what resolves, never by a mode word.
 
 **Local is opt-in.** The on-box SQLite store is reachable ONLY through the
 explicit store path `HASNA_CONVERSATIONS_DB_PATH` / `CONVERSATIONS_DB_PATH`,
 which wins even when cloud credentials are exported globally — and a local run
-announces itself once on stderr (`conversations: LOCAL mode — …`) so it can
+announces itself once on stderr (`conversations: local store — …`) so it can
 never be mistaken for a hosted run with an empty store. Nothing configured at
 all is an error, never the local default.
 

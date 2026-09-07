@@ -39,6 +39,9 @@ import { normalizeExactIsoTimestamp } from "../lib/since.js";
 import { PROJECT_LIST_ORDER, pinnedOrderByClause, simpleOrderByClause } from "../lib/list-order.js";
 import { decodeAttachmentUploads } from "../lib/attachments.js";
 import { BAKED_BUILD_SHA } from "./build-sha.generated.js";
+import { drainServerEventOutbox } from "./events-outbox-pg.js";
+import { normalizeRedactMessagesBody, redactMessagesPg } from "./admin-redaction-pg.js";
+import { saveFeedbackPg } from "./feedback-pg.js";
 import {
   PROJECT_MESSAGE_LINKAGE_RECEIPTS_TABLE,
   buildProjectMessageLinkagePlan,
@@ -369,7 +372,7 @@ function remoteProjectRegistrationTarget(digest: string) {
   return {
     digest,
     withOwnedPath<T>(_consumer: (absolutePath: string) => T): T {
-      throw new Error("project registration target paths are not available to the Conversations service.");
+      throw new Error("project registration target paths cannot be materialized inside the Conversations service (digest-only target).");
     },
   };
 }
@@ -1671,6 +1674,25 @@ async function handleV1(
 ): Promise<Response> {
   const { client } = deps;
   const sub = path.slice("/v1/".length);
+
+  // ---- events outbox worker (hosted path of `conversations events-drain`) ----
+  if (sub === "events/outbox/drain" && method === "POST") {
+    const rawLimit = url.searchParams.get("limit");
+    const limit = rawLimit === null ? undefined : positiveInteger(rawLimit);
+    return json(await drainServerEventOutbox(client, limit));
+  }
+
+  // ---- feedback (hosted path of the MCP `send_feedback` tool) --------------
+  if (sub === "feedback" && method === "POST") {
+    const body = (await readJson(req)) as Record<string, unknown>;
+    return json(await saveFeedbackPg(client, body), 201);
+  }
+
+  // ---- admin: audited message redaction (hosted path of `admin redact-messages`) ----
+  if (sub === "admin/redact-messages" && method === "POST") {
+    const body = (await readJson(req)) as Record<string, unknown>;
+    return json(await redactMessagesPg(client, normalizeRedactMessagesBody(body)));
+  }
 
   // ---- package-owned project channel registration authority ----------------
   if (sub === "project-registration/channels/capability" && method === "GET") {
