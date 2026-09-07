@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -69,6 +69,18 @@ function cliSpawnOptions(
     // (e.g. "") so the opt-in is not re-added.
     HASNA_LOOPS_CONNECTION: "",
     LOOPS_MACHINE_ID: "cli-test-machine",
+    // Ambient credential isolation: the shared resolver's disk tier
+    // (`~/.hasna/loops/config/credentials`) outranks the env tier, so a
+    // spawned child that inherits the operator's real home resolves the
+    // station's REAL credential and REFUSES the fixture authority as written
+    // for a different one (green on CI, red on the station). Pointing every
+    // home-layout root at the test data dir — no credentials file can exist
+    // there — makes the disk tier consult nothing, identically on both kinds
+    // of machine. A test that passes its own HOME/HASNA_HOME still wins (env
+    // overrides are applied after this map).
+    HOME: dataDir,
+    HASNA_HOME: dataDir,
+    HASNA_CONFIG_HOME: dataDir,
   };
   const autoSourceTaskEnv = maybeAutoSourceTaskEnv(dataDir, args, env);
   const merged = {
@@ -6864,6 +6876,12 @@ describe("loops CLI", () => {
 
   test("routes schedule applies named policy defaults into explicit drain argv", () => {
     const dataDir = freshDataDir("loops-cli-route-policy-schedule-");
+    // The oss policy defaults `--project-path-prefix` from the child's own
+    // HOME (src/lib/route/policies.ts homePath). Pin it to a scratch dir so
+    // the drained argv is deterministic — the previous spelling compared the
+    // child's resolved path against THIS runner's real HOME, which silently
+    // coupled the assertion to whatever home the suite runs under.
+    const home = mkdtempSync(join(tmpdir(), "loops-cli-route-policy-home-"));
 
     const scheduled = runCli(
       dataDir,
@@ -6877,7 +6895,7 @@ describe("loops CLI", () => {
         "oss",
       ],
       undefined,
-      { PATH: "/usr/bin:/bin" },
+      { PATH: "/usr/bin:/bin", HOME: home, HASNA_HOME: home, HASNA_CONFIG_HOME: home },
     );
     expect(scheduled.status).toBe(0);
     const scheduledValue = JSON.parse(scheduled.stdout);
@@ -6893,7 +6911,7 @@ describe("loops CLI", () => {
       "--route-policy-evidence",
       "oss",
       "--project-path-prefix",
-      join(process.env.HOME ?? "", "workspace", "hasna", "opensource"),
+      join(home, "workspace", "hasna", "opensource"),
       "--max-dispatch",
       "6",
       "--max-active-scope",
@@ -6904,6 +6922,7 @@ describe("loops CLI", () => {
       "required",
       "--pr-handoff",
     ]));
+    rmSync(home, { recursive: true, force: true });
   });
 
   test("route policies reject conflicting overrides and require explicit pilot break-glass", () => {
