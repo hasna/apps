@@ -25,7 +25,12 @@
     "bin/",
     "postinstall.js",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "!dist/test/**",
+    "!dist/**/*.test.d.ts",
+    "!dist/**/*.probe.d.ts",
+    "!dist/**/*.verify.d.ts",
+    "!dist/**/isolated-test-env.d.ts"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

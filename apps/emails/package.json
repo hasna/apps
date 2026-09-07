@@ -48,7 +48,9 @@
   "files": [
     "dist",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "!dist/test-support/**",
+    "!dist/**/*test-support.d.ts"
   ],
   "scripts": {
     "clean": "rm -rf dist",

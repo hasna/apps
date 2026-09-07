@@ -36,7 +36,9 @@
     "hasna.contract.json",
     "LICENSE",
     "README.md",
-    "postinstall.mjs"
+    "postinstall.mjs",
+    "!dist/test-support/**",
+    "!dist/**/__fixtures__/**"
   ],
   "scripts": {
     "clean": "rm -rf dist",
