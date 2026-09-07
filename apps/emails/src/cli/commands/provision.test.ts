@@ -30,7 +30,6 @@ describe("unimplemented provisioning commands", () => {
   // server-only guard rather than a commander missing-option error.
   const SERVER_ONLY = [
     { name: "provision up", args: ["provision", "up", "example.com", "--provider", "ses-provider"] },
-    { name: "provision roundtrip", args: ["provision", "roundtrip", "--domain", "example.com", "--provider", "ses-provider"] },
     { name: "provision daemon", args: ["provision", "daemon", "--provider", "ses-provider"] },
     { name: "provision retry", args: ["provision", "retry", "example.com"] },
   ] as const;

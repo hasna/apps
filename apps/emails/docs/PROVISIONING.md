@@ -5,8 +5,10 @@
 > `provision_address` use authenticated API jobs with durable receipts and retry.
 > See [Address provisioning](ADDRESS_PROVISIONING.md) for requirements and limits.
 > `provision status` reads the shared registry. [Domain DNS publication](DOMAIN_DNS.md)
-> supports server-bound Cloudflare zones and SES sending setup. Domain purchase,
-> `provision up`, daemon, domain-level retry, and roundtrip remain unimplemented.
+> supports server-bound Cloudflare zones and SES sending setup. [Owned-domain setup](OWNED_DOMAIN_SETUP.md)
+> configures SES or an existing Resend identity. `provision roundtrip` runs an API-backed
+> delivery probe; see [Roundtrip checks](ROUNDTRIP.md). Purchase, `provision up`, daemon
+> and domain-level retry remain outside this implementation.
 
 ## Supported operator workflow
 
