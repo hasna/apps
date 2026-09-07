@@ -64,7 +64,7 @@ function expectCliJsonOk<T>(result: ReturnType<typeof runCli>): T {
 }
 
 beforeAll(async () => {
-  stub = await startV1Stub();
+  stub = await startV1Stub({ managedProviders: true });
 });
 afterAll(() => stub.stop());
 beforeEach(async () => {
@@ -75,61 +75,45 @@ afterEach(() => {
 });
 
 describe("CLI JSON contracts (self-hosted /v1)", () => {
-  it("prints valid credential-free JSON for provider CRUD routed to /v1", () => {
-    const env = cliEnv();
-
-    // Credentials cannot be stored by the self-hosted server, so the command
-    // must REFUSE them (and never echo them) rather than accept the flags and
-    // silently drop the values on the wire.
-    const refused = runCli([
-      "provider", "add",
-      "--name", "secret-ses",
-      "--type", "ses",
-      "--region", "us-east-1",
-      "--access-key", "AKIA_CLI_SHOULD_NOT_LEAK",
-      "--secret-key", "CLI_SECRET_SHOULD_NOT_LEAK",
-      "--skip-validation",
-    ], env);
-    expect(refused.exitCode).toBe(1);
-    const refusedText = `${stdoutText(refused)}\n${stderrText(refused)}`;
-    expect(refusedText).toContain("does not store per-provider credentials");
-    expect(refusedText).toContain("EMAILS_SES_ACCESS_KEY_ID");
-    expect(refusedText).not.toContain("AKIA_CLI_SHOULD_NOT_LEAK");
-    expect(refusedText).not.toContain("CLI_SECRET_SHOULD_NOT_LEAK");
-
-    const add = runCli([
-      "provider", "add",
-      "--name", "secret-ses",
-      "--type", "ses",
-      "--region", "us-east-1",
-      "--skip-validation",
-    ], env);
-    expect(add.exitCode, stderrText(add)).toBe(0);
-
+  it("prints credential-free managed provider receipts and CRUD JSON through the API", async () => {
+    const env = cliEnv(), providerId = crypto.randomUUID();
+    const access = "synthetic-access-" + crypto.randomUUID(), secret = "synthetic-secret-" + crypto.randomUUID();
+    const add = runCli(["--json", "provider", "add", "--id", providerId, "--name", "secret-ses", "--type", "ses",
+      "--region", "us-east-1", "--access-key", access, "--secret-key", secret, "--skip-validation"], env);
+    expect(expectCliJsonOk(add)).toMatchObject({ provider_id: providerId, status: "complete", revision: 1, checked: false });
+    expect(await stub.list("managed-provider-receipts")).toEqual([{ provider_id: providerId, revision: 1, credential_fields: ["access_key", "secret_key"], skip_validation: true }]);
     const list = runCli(["--json", "provider", "list"], env);
-    const stdout = stdoutText(list);
-    expect(list.exitCode, stderrText(list)).toBe(0);
-    expect(stderrText(list)).toBe("");
-    expect(stdout).not.toContain("AKIA_CLI_SHOULD_NOT_LEAK");
-    expect(stdout).not.toContain("CLI_SECRET_SHOULD_NOT_LEAK");
-    const parsed = JSON.parse(stdout) as Array<Record<string, unknown>>;
+    const parsed = expectCliJsonOk<Array<Record<string, unknown>>>(list);
     expect(parsed).toHaveLength(1);
-    expect(parsed[0]).toMatchObject({ name: "secret-ses" });
-    expect(parsed[0]).not.toHaveProperty("access_key");
-    expect(parsed[0]).not.toHaveProperty("secret_key");
-    expect(parsed[0]).not.toHaveProperty("oauth_refresh_token");
-    const providerId = String(parsed[0]!.id);
+    expect(parsed[0]).toMatchObject({ id: providerId, name: "secret-ses", region: "us-east-1" });
+    for (const key of ["access_key", "secret_key", "oauth_refresh_token"]) expect(parsed[0]).not.toHaveProperty(key);
 
-    const update = runCli(["provider", "update", providerId, "--name", "renamed-ses", "--skip-validation"], env);
-    expect(update.exitCode, stderrText(update)).toBe(0);
-    const updated = JSON.parse(stdoutText(runCli(["--json", "provider", "list"], env))) as Array<Record<string, unknown>>;
+    const replacement = "synthetic-replacement-" + crypto.randomUUID();
+    const update = runCli(["--json", "provider", "update", providerId, "--name", "renamed-ses", "--secret-key", replacement, "--skip-validation"], env);
+    expect(expectCliJsonOk(update)).toMatchObject({ provider_id: providerId, revision: 2, checked: false, status: "complete" });
+    expect(await stub.list("managed-provider-receipts")).toEqual([{ provider_id: providerId, revision: 2, credential_fields: ["secret_key"], skip_validation: true }]);
+    const updated = expectCliJsonOk<Array<Record<string, unknown>>>(runCli(["--json", "provider", "list"], env));
     expect(updated[0]).toMatchObject({ id: providerId, name: "renamed-ses" });
+    const evidence = [stdoutText(add), stderrText(add), stdoutText(list), stderrText(list), stdoutText(update), stderrText(update), JSON.stringify(await stub.dump())].join("\n");
+    for (const value of [access, secret, replacement]) expect(evidence.includes(value)).toBe(false);
 
     const remove = runCli(["provider", "remove", providerId, "--yes"], env);
     expect(remove.exitCode, stderrText(remove)).toBe(0);
-    const empty = runCli(["--json", "provider", "list"], env);
-    expect(empty.exitCode).toBe(0);
-    expect(JSON.parse(stdoutText(empty))).toEqual([]);
+    expect(expectCliJsonOk(runCli(["--json", "provider", "list"], env))).toEqual([]);
+  }, 20_000);
+
+  it("requires an API upgrade before submitting credentials to an older service", async () => {
+    const legacy = await startV1Stub();
+    try {
+      const env = { ...cliEnv(), EMAILS_SELF_HOSTED_URL: legacy.baseUrl, EMAILS_SELF_HOSTED_API_KEY: legacy.apiKey };
+      const secret = "synthetic-secret-" + crypto.randomUUID();
+      const result = runCli(["provider", "add", "--name", "legacy-ses", "--type", "ses", "--region", "us-east-1",
+        "--access-key", "synthetic-access", "--secret-key", secret, "--skip-validation"], env);
+      expect(result.exitCode).toBe(1);
+      expect(stderrText(result)).toContain("API needs an update");
+      expect((stdoutText(result) + stderrText(result)).includes(secret)).toBe(false);
+      expect(await legacy.list("providers")).toEqual([]);
+    } finally { legacy.stop(); }
   }, 20_000);
 
   it("prints machine-readable MCP Claude install dry-run output", () => {
@@ -145,13 +129,14 @@ describe("CLI JSON contracts (self-hosted /v1)", () => {
     });
   });
 
-  it("wraps direct human logs in stable JSON when --json is enabled", () => {
+  it("returns a structured sandbox metadata object without claiming credential validation", () => {
     const result = runCli(["--json", "provider", "add", "--name", "dev", "--type", "sandbox"], cliEnv());
     expect(result.exitCode, stderrText(result)).toBe(0);
-    const parsed = JSON.parse(stdoutText(result)) as { output: string[]; errors: string[] };
-    expect(parsed.output.join("\n")).toContain("Sandbox provider created: dev");
-    expect(parsed.output.join("\n")).not.toContain("undefined");
-    expect(parsed.errors).toEqual([]);
+    const parsed = expectCliJsonOk<Record<string, unknown>>(result);
+    expect(parsed).toMatchObject({ name: "dev", type: "sandbox", active: true });
+    expect(typeof parsed.id).toBe("string");
+    expect(parsed).not.toHaveProperty("output");
+    expect(parsed).not.toHaveProperty("checked");
   });
 
   it("prints structured JSON errors with fix commands", () => {

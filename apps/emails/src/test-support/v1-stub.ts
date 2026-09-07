@@ -131,6 +131,8 @@ export interface V1StubOptions {
    * store-seam tests.
    */
   openapi?: boolean;
+  /** Opt-in managed-provider transport fixture. Stores metadata/field names only, never credential values. */
+  managedProviders?: boolean;
 }
 
 export interface V1Stub {
@@ -1166,6 +1168,42 @@ const server = Bun.serve({
     const sub = parts[2];
     const id = sub !== undefined ? decodeURIComponent(sub) : undefined;
 
+    // Transport-only managed-provider fixture; real KMS/transaction semantics are
+    // tested by managed-provider-secrets.integration.test.ts, not simulated here.
+    if (process.env.V1_STUB_MANAGED_PROVIDERS === "1" && resource === "providers") {
+      const providers = rowsFor("providers");
+      const receipts = rowsFor("managed-provider-receipts");
+      if (sub === "secrets" && parts[3] === "status" && req.method === "GET") {
+        return json({ source: "server_managed_envelopes", complete: true, checked: false,
+          activeKeyId: "00000000-0000-4000-8000-000000000036", availableKeyIds: ["00000000-0000-4000-8000-000000000036"], referencedKeyIds: ["00000000-0000-4000-8000-000000000036"],
+          managed_envelopes: receipts.length, lifecycle_requirement: "Synthetic managed-provider fixture",
+          capabilities: { status: true, rewrap: true, rotate_root: true, revoke_root: true }, default_sender: null,
+          providers: providers.map(function (provider) {
+            const receipt = receipts.find(function (item) { return item.provider_id === provider.id; });
+            return { provider_id: provider.id, name: provider.name, type: provider.type, active: provider.active,
+              configured: !!receipt, credential_source: receipt ? "managed_envelope" : "external",
+              externally_managed: !receipt, ...(receipt ? { revision: receipt.revision } : {}) };
+          }) });
+      }
+      if (id && parts[3] === "managed" && req.method === "PUT") {
+        const body = await req.json();
+        const prior = receipts.find(function (item) { return item.provider_id === id; });
+        const provider = providers.find(function (item) { return item.id === id; });
+        if (body.expected_revision !== (prior ? prior.revision : null) || body.create === true && provider) return json({ error: "Provider revision conflict" }, 409);
+        if (!body.credentials || typeof body.credentials !== "object" || Object.values(body.credentials).some(function (value) { return typeof value !== "string" || !value.trim(); })) return json({ error: "Invalid credential fields" }, 400);
+        if (body.create === true && (!body.name || body.type !== "ses" || !body.region || !body.credentials.access_key || !body.credentials.secret_key)) return json({ error: "Fixture creation requires complete SES input" }, 400);
+        if (!provider && body.create !== true) return json({ error: "Provider not found" }, 404);
+        if (body.skip_validation !== true) return json({ error: "Synthetic fixture does not probe real providers" }, 422);
+        const now = new Date().toISOString();
+        if (!provider) providers.push(normalizeResourceRow("providers", { id: id, name: body.name, type: body.type, region: body.region, active: true, created_at: now, updated_at: now }));
+        else { if (body.name !== undefined) provider.name = body.name; if (body.region !== undefined) provider.region = body.region; provider.updated_at = now; }
+        const revision = prior ? prior.revision + 1 : 1;
+        const evidence = { provider_id: id, revision: revision, credential_fields: Object.keys(body.credentials).sort(), skip_validation: body.skip_validation };
+        if (prior) Object.assign(prior, evidence); else receipts.push(evidence);
+        return json({ provider_id: id, revision: revision, root_id: "00000000-0000-4000-8000-000000000036", status: "complete", checked: false });
+      }
+    }
+
     // Messages special endpoints.
     if (resource === "messages" && sub === "counts" && req.method === "GET") {
       return json({ counts: messageCounts() });
@@ -1600,6 +1638,7 @@ export async function startV1Stub(options: V1StubOptions = {}): Promise<V1Stub> 
     env: {
       ...process.env,
       V1_STUB_API_KEY: apiKey,
+      V1_STUB_MANAGED_PROVIDERS: options.managedProviders === true ? "1" : "",
       V1_STUB_SEED: initialSeed,
       V1_STUB_RESOURCE_SPECS: JSON.stringify(V1_STUB_RESOURCE_SPECS),
       V1_STUB_RESOURCE_DEFAULTS: JSON.stringify(V1_STUB_RESOURCE_DEFAULTS),
