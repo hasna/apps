@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { mergeRemoteRegistry } from "./remote-registry.js";
@@ -8,6 +9,26 @@ import type { SkillMeta } from "./registry.js";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
+
+// Ambient credential isolation. The remote-merge cases below drive the shared
+// resolver through the LIVE process.env, and the resolver's DISK tier
+// (~/.hasna/skills/config/credentials) outranks the env tier: on a
+// provisioned station the operator's REAL credential is refused against the
+// fixture authority ("The selected Skills API does not match this
+// credential's instance") instead of the no-credential behavior under test
+// (green on CI, red on the station). Anchoring every home-layout root at the
+// file's scratch dir — no credentials file can exist there — makes the disk
+// tier consult nothing, identically on both kinds of machine.
+const HOME_ROOT_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"] as const;
+const scratchHome = mkdtempSync(join(tmpdir(), "skills-boundary-home-"));
+
+beforeEach(() => {
+  for (const name of HOME_ROOT_KEYS) process.env[name] = scratchHome;
+});
+
+afterAll(() => {
+  rmSync(scratchHome, { recursive: true, force: true });
+});
 
 const LOCAL_ONLY_FIXTURE: SkillMeta[] = [
   {
