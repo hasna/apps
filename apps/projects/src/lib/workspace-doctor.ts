@@ -12,7 +12,7 @@ import {
 } from "../db/workspaces.js";
 import { workspaceMarkerPath, writeWorkspaceMarker } from "./workspace-runtime.js";
 import { inspectLegacyProjectLayout, migrateLegacyProjectLayout } from "./project-layout-migration.js";
-import type { Workspace } from "../types/workspace.js";
+import type { Recipe, Root, Workspace, WorkspaceLocation } from "../types/workspace.js";
 
 export type WorkspaceCheckStatus = "ok" | "warn" | "error";
 
@@ -42,6 +42,24 @@ export interface WorkspaceDoctorOptions {
   fix?: boolean;
   dryRun?: boolean;
   transport?: "local" | "http";
+  /**
+   * Registered locations from the active Store (both transports). When
+   * omitted the on-box location registry is read directly (library callers).
+   */
+  locations?: WorkspaceLocation[];
+  /**
+   * Root/recipe references resolved through the active Store (both
+   * transports). When omitted the on-box registry is consulted directly.
+   */
+  references?: { root: Root | null; recipe: Recipe | null };
+  /**
+   * Fix hook for a missing primary location. When provided it is used instead
+   * of the on-box location registry, so `doctor --fix` lands the repair on the
+   * active registry (local or hosted) instead of splitting the row.
+   */
+  fixLocation?: (
+    input: { path: string; label?: string; isPrimary?: boolean },
+  ) => WorkspaceLocation | Promise<WorkspaceLocation>;
 }
 
 function checkPath(workspace: Workspace): WorkspaceDoctorCheck {
@@ -73,14 +91,28 @@ function checkMarker(workspace: Workspace): WorkspaceDoctorCheck {
   }
 }
 
-function checkReferences(workspace: Workspace, db?: Database): WorkspaceDoctorCheck[] {
+function checkReferences(
+  workspace: Workspace,
+  options: WorkspaceDoctorOptions,
+  db?: Database,
+): WorkspaceDoctorCheck[] {
   const checks: WorkspaceDoctorCheck[] = [];
-  if (workspace.root_id && !getRoot(workspace.root_id, db)) {
+  const root = options.references?.root !== undefined
+    ? options.references.root
+    : workspace.root_id
+      ? getRoot(workspace.root_id, db)
+      : null;
+  const recipe = options.references?.recipe !== undefined
+    ? options.references.recipe
+    : workspace.recipe_id
+      ? getRecipe(workspace.recipe_id, db)
+      : null;
+  if (workspace.root_id && !root) {
     checks.push({ code: "WORKSPACE_ROOT_MISSING", name: "root", status: "error", message: workspace.root_id });
   } else {
     checks.push({ code: "WORKSPACE_ROOT_OK", name: "root", status: "ok", message: workspace.root_id ?? "none" });
   }
-  if (workspace.recipe_id && !getRecipe(workspace.recipe_id, db)) {
+  if (workspace.recipe_id && !recipe) {
     checks.push({ code: "WORKSPACE_RECIPE_MISSING", name: "recipe", status: "error", message: workspace.recipe_id });
   } else {
     checks.push({ code: "WORKSPACE_RECIPE_OK", name: "recipe", status: "ok", message: workspace.recipe_id ?? "none" });
@@ -88,17 +120,14 @@ function checkReferences(workspace: Workspace, db?: Database): WorkspaceDoctorCh
   return checks;
 }
 
-function checkLocations(workspace: Workspace, transport: "local" | "http", db?: Database): WorkspaceDoctorCheck {
-  if (transport === "http") {
-    return {
-      code: "WORKSPACE_LOCATIONS_LOCAL_ONLY",
-      name: "locations",
-      status: "warn",
-      message: "API-backed projects do not own the machine-local location registry; location repair is available only for a local project row on the machine that owns the path",
-      fixable: false,
-    };
-  }
-  const locations = listWorkspaceLocations(workspace.id, db);
+function checkLocations(workspace: Workspace, options: WorkspaceDoctorOptions, db?: Database): WorkspaceDoctorCheck {
+  // Locations are registry data modeled by BOTH transports (the shared hosted
+  // /v1 locations resource and the on-box registry), so the check always reads
+  // the active registry — `options.locations` from the Store, or the on-box
+  // collection for library callers — never a transport-gated refusal.
+  const locations = options.locations !== undefined
+    ? options.locations
+    : listWorkspaceLocations(workspace.id, db);
   if (!locations.length) {
     return { code: "WORKSPACE_LOCATIONS_MISSING", name: "locations", status: "warn", message: "no locations registered", fixable: Boolean(workspace.primary_path) };
   }
@@ -165,8 +194,8 @@ export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOp
     checkPath(workspace),
     checkMarker(workspace),
     checkLegacyLayout(workspace),
-    ...checkReferences(workspace, db),
-    checkLocations(workspace, transport, db),
+    ...checkReferences(workspace, options, db),
+    checkLocations(workspace, options, db),
     checkAgentRuns(workspace, db),
     checkMigrationMap(workspace, db),
   ];
@@ -188,8 +217,18 @@ export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOp
     }
     const locationCheck = checks.find((check) => check.code === "WORKSPACE_LOCATIONS_MISSING" && check.fixable);
     if (locationCheck && workspace.primary_path) {
-      if (!dryRun) addWorkspaceLocation({ workspace_id: workspace.id, path: workspace.primary_path, label: "main", is_primary: true }, db);
-      fixes.push({ code: "FIX_WORKSPACE_LOCATION", message: `${dryRun ? "Would add" : "Added"} primary location ${workspace.primary_path}`, changed: !dryRun, dryRun });
+      if (options.fixLocation) {
+        if (!dryRun) void options.fixLocation({ path: workspace.primary_path, label: "main", isPrimary: true });
+        fixes.push({
+          code: "FIX_WORKSPACE_LOCATION",
+          message: `${dryRun ? "Would add" : "Added"} primary location ${workspace.primary_path} through the active registry`,
+          changed: !dryRun,
+          dryRun,
+        });
+      } else {
+        if (!dryRun) addWorkspaceLocation({ workspace_id: workspace.id, path: workspace.primary_path, label: "main", is_primary: true }, db);
+        fixes.push({ code: "FIX_WORKSPACE_LOCATION", message: `${dryRun ? "Would add" : "Added"} primary location ${workspace.primary_path}`, changed: !dryRun, dryRun });
+      }
     }
     const layoutCheck = checks.find((check) => check.code === "WORKSPACE_LEGACY_LAYOUT_DIR" && check.fixable);
     if (layoutCheck) {

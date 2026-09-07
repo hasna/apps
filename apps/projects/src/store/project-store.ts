@@ -340,20 +340,6 @@ export interface AcquireLockInput {
 }
 
 /**
- * Operations that only exist on-box. Agent assignments, extra disk locations
- * and mutation locks are now modeled by the hosted /v1 API; project budgets
- * and spend remain machine-local sub-resources with no hosted routes, so any
- * budget/spend access (reads included) in the hosted transport throws this rather than
- * silently writing local sqlite or returning an empty ledger (split-brain).
- */
-class LocalOnlyOperationError extends Error {
-  constructor(operation: string) {
-    super(`${operation} is a local-only operation and is not available in the hosted backend.`);
-    this.name = "LocalOnlyOperationError";
-  }
-}
-
-/**
  * A project list plus the metadata a caller needs to know whether it is the
  * whole set. `projects list --json` used to emit a bare array that was capped
  * server-side, so a truncated read and a complete one looked identical; every
@@ -425,17 +411,16 @@ export interface ProjectStore {
   /** Record an explicit audit event. Local writes sqlite; api POSTs to /projects/:id/events. */
   recordEvent(idOrSlug: string, input: RecordEventInput): Promise<WorkspaceEvent>;
   /**
-   * Per-project agent assignments. This is an on-box sub-resource; the api
-   * transport does not model it server-side and returns an empty list.
+   * Per-project agent assignments. Readable from both registry transports.
    */
   getProjectAgents(id: string): Promise<WorkspaceAgentAssignment[]>;
-  /** Assign a registered agent to a project role. Local-only (throws in the hosted transport). */
+  /** Assign a registered agent to a project role (both registry transports). */
   assignAgent(idOrSlug: string, input: AssignAgentInput): Promise<WorkspaceAgentAssignment>;
   /** Per-project registered locations. Readable from both registry transports. */
   getProjectLocations(id: string): Promise<WorkspaceLocation[]>;
   /** Registry of canonical machines (roles: mirror-hub | assignable | avoid). */
   listMachines(): Promise<Machine[]>;
-  /** Register another on-disk location for a project. Local-only (throws in the hosted transport). */
+  /** Register another on-disk location for a project (both registry transports). */
   addLocation(idOrSlug: string, input: AddLocationInput): Promise<AddLocationResult>;
 
   // ---- Mutation locks (machine-local coordination) ----
@@ -468,11 +453,12 @@ export interface ProjectStore {
   getRecipe(idOrSlug: string): Promise<Recipe | null>;
   createRecipe(input: CreateRecipeInput): Promise<Recipe>;
 
-  // ---- Prompt-agent run ledger (on-box sub-resource) ----
-  // Agent runs are recorded on-box during local prompt-agent execution; the
-  // projects API server does not model them, so the HTTP transport returns an
-  // empty list rather than reading a local sqlite file the hosted project does
-  // not own. This keeps the runs/handoff surfaces from split-brain reads.
+  // ---- Prompt-agent run ledger (machine-local governance ledger) ----
+  // Agent runs are recorded in the on-box registry while the prompt-agent loop
+  // executes, in BOTH transports (a hosted-mode prompt run still executes on
+  // THIS machine). Both transports therefore resolve the ledger against the
+  // same machine-local store — exactly the tmux-profiles/app-store precedent —
+  // so the runs/handoff surfaces never return a vacuous empty ledger.
   listAgentRuns(filter?: AgentRunFilter): Promise<AgentRun[]>;
 
   // ---- Per-project data models & records (on-box project.db sub-resource) ----
@@ -488,7 +474,12 @@ export interface ProjectStore {
   inspectAppStore(project: Workspace): Promise<ProjectStoreSummary>;
   inspectAppStoreWithLoops(project: Workspace, options?: { includeRuns?: boolean }): Promise<ProjectStoreSummary>;
 
-  // ---- Project/run budgets & audited spend (on-box governance sub-resource) ----
+  // ---- Project/run budgets & audited spend (machine-local governance ledger) ----
+  // Budgets/spend accrue on the box that runs the agent, so they are a
+  // machine-local governance ledger with no hosted routes — resolved against
+  // on-box sqlite in BOTH transports, exactly like tmux profiles and the app
+  // store. Reads always reflect the real ledger (never a vacuous empty page),
+  // so enforcement caps apply in every transport.
   createBudget(input: CreateProjectBudgetInput): Promise<ProjectBudget>;
   listBudgets(context?: ProjectBudgetContext): Promise<ProjectBudget[]>;
   getBudgetStatuses(context?: ProjectBudgetContext): Promise<ProjectBudgetStatus[]>;
@@ -615,6 +606,27 @@ const machineLocalTmuxProfiles = {
   addTmuxProfileWindow: async (input: CreateTmuxProfileWindowInput & { profile_id: string }): Promise<TmuxProfileWindow> =>
     dbAddTmuxProfileWindow(input),
   listTmuxProfileWindows: async (profileId: string): Promise<TmuxProfileWindow[]> => dbListTmuxProfileWindows(profileId),
+} as const;
+
+/**
+ * Budgets/spend and the prompt-agent run ledger are machine-local governance
+ * ledgers: spend accrues and prompt runs execute on THIS box, and the projects
+ * API server models neither (no hosted routes). Both transports delegate here
+ * so `budgets *` and `runs *` work identically with the hosted or on-box
+ * registry — the same machine-local-in-both-transports precedent tmux profiles
+ * and the app store already establish.
+ */
+const machineLocalBudgets = {
+  createBudget: async (input: CreateProjectBudgetInput): Promise<ProjectBudget> => dbCreateProjectBudget(input),
+  listBudgets: async (context?: ProjectBudgetContext): Promise<ProjectBudget[]> => dbListProjectBudgets(context),
+  getBudgetStatuses: async (context?: ProjectBudgetContext): Promise<ProjectBudgetStatus[]> =>
+    dbGetProjectBudgetStatuses(context),
+  resetBudget: async (id: string): Promise<ProjectBudget> => dbResetProjectBudget(id),
+  recordSpend: async (input: ProjectSpendInput): Promise<ProjectBudgetSpend> => dbRecordProjectSpend(input),
+} as const;
+
+const machineLocalAgentRuns = {
+  listAgentRuns: async (filter?: AgentRunFilter): Promise<AgentRun[]> => dbListAgentRuns(filter ?? {}),
 } as const;
 
 function mutationFields(ctx?: MutationContext): Pick<UpdateWorkspaceInput, "agent_id" | "source" | "command" | "prompt"> {
@@ -1003,10 +1015,6 @@ class LocalProjectStore implements ProjectStore {
     return dbCreateRecipe(input);
   }
 
-  async listAgentRuns(filter?: AgentRunFilter): Promise<AgentRun[]> {
-    return dbListAgentRuns(filter ?? {});
-  }
-
   // ---- App store: data models/records + loop links ----
   // Shared with the HTTP transport: the app store is one machine-local sqlite
   // file in both transports, so both classes delegate to the same implementation
@@ -1021,26 +1029,15 @@ class LocalProjectStore implements ProjectStore {
   inspectAppStore = machineLocalAppStore.inspectAppStore;
   inspectAppStoreWithLoops = machineLocalAppStore.inspectAppStoreWithLoops;
 
-  // ---- Budgets & spend ----
-  async createBudget(input: CreateProjectBudgetInput): Promise<ProjectBudget> {
-    return dbCreateProjectBudget(input);
-  }
+  // ---- Budgets & spend (machine-local governance ledger; see shared impl) ----
+  createBudget = machineLocalBudgets.createBudget;
+  listBudgets = machineLocalBudgets.listBudgets;
+  getBudgetStatuses = machineLocalBudgets.getBudgetStatuses;
+  resetBudget = machineLocalBudgets.resetBudget;
+  recordSpend = machineLocalBudgets.recordSpend;
 
-  async listBudgets(context?: ProjectBudgetContext): Promise<ProjectBudget[]> {
-    return dbListProjectBudgets(context);
-  }
-
-  async getBudgetStatuses(context?: ProjectBudgetContext): Promise<ProjectBudgetStatus[]> {
-    return dbGetProjectBudgetStatuses(context);
-  }
-
-  async resetBudget(id: string): Promise<ProjectBudget> {
-    return dbResetProjectBudget(id);
-  }
-
-  async recordSpend(input: ProjectSpendInput): Promise<ProjectBudgetSpend> {
-    return dbRecordProjectSpend(input);
-  }
+  // ---- Prompt-agent run ledger (machine-local governance ledger; see shared impl) ----
+  listAgentRuns = machineLocalAgentRuns.listAgentRuns;
 
   // ---- tmux profiles (machine-local runtime resource; see shared impl) ----
   listTmuxProfiles = machineLocalTmuxProfiles.listTmuxProfiles;
@@ -1698,19 +1695,20 @@ class ApiProjectStore implements ProjectStore {
     return this.client.create<Recipe>("recipes", input);
   }
 
-  // Agent runs are an on-box ledger the projects API server does not model;
-  // returning empty avoids reading a local sqlite file the hosted project does
-  // not own (the split-brain the runs/handoff surfaces would otherwise hit).
-  async listAgentRuns(): Promise<AgentRun[]> {
-    return [];
-  }
+  // App-store and governance ledgers are machine-local files resolved in BOTH
+  // transports by the shared implementations above (data models, loop links,
+  // budgets/spend, agent runs).
 
-  // ---- App store (machine-local sqlite in BOTH transports; see shared impl) ----
-  // Budgets/spend are NOT part of this machine-local set: they are an on-box
-  // ledger (project_registry sqlite) that the hosted server does NOT model —
-  // route() dispatches projects/roots/agents/locks/recipes/machines and falls
-  // through to 404 for budgets — so every budget read/write in the hosted transport throws
-  // LocalOnlyOperationError rather than silently returning an empty ledger.
+  // ---- Budgets, spend & the prompt-agent run ledger (see machineLocalBudgets) ----
+  // Budgets/spend and the prompt-agent run ledger are also machine-local
+  // governance ledgers: spend accrues and prompt runs execute on the invoking
+  // box, and the hosted server models neither (route() dispatches
+  // projects/roots/agents/locks/recipes/machines and falls through to 404 for
+  // them). Both transports resolve these ledgers against on-box sqlite — the
+  // same machine-local-in-both-transports precedent tmux profiles and the app
+  // store already establish — so the budget/runs commands read and write the
+  // real ledger in the hosted backend too (never a vacuous empty page, never a
+  // local-only refusal).
   listDataModels = machineLocalAppStore.listDataModels;
   createDataModel = machineLocalAppStore.createDataModel;
   listDataRecords = machineLocalAppStore.listDataRecords;
@@ -1721,25 +1719,13 @@ class ApiProjectStore implements ProjectStore {
   inspectAppStore = machineLocalAppStore.inspectAppStore;
   inspectAppStoreWithLoops = machineLocalAppStore.inspectAppStoreWithLoops;
 
-  async createBudget(): Promise<ProjectBudget> {
-    throw new LocalOnlyOperationError("create project budget");
-  }
+  createBudget = machineLocalBudgets.createBudget;
+  listBudgets = machineLocalBudgets.listBudgets;
+  getBudgetStatuses = machineLocalBudgets.getBudgetStatuses;
+  resetBudget = machineLocalBudgets.resetBudget;
+  recordSpend = machineLocalBudgets.recordSpend;
 
-  async listBudgets(): Promise<ProjectBudget[]> {
-    throw new LocalOnlyOperationError("list project budgets");
-  }
-
-  async getBudgetStatuses(): Promise<ProjectBudgetStatus[]> {
-    throw new LocalOnlyOperationError("read project budget statuses");
-  }
-
-  async resetBudget(): Promise<ProjectBudget> {
-    throw new LocalOnlyOperationError("reset project budget");
-  }
-
-  async recordSpend(): Promise<ProjectBudgetSpend> {
-    throw new LocalOnlyOperationError("record project spend");
-  }
+  listAgentRuns = machineLocalAgentRuns.listAgentRuns;
 
   // tmux profiles are a machine-local runtime resource (tmux runs on THIS box),
   // so even in the hosted backend they resolve against local sqlite rather than a

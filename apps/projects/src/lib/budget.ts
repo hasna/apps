@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { customAlphabet } from "nanoid";
 import { getDatabase, now } from "../db/database.js";
-import { recordWorkspaceEvent } from "../db/workspaces.js";
+import { getWorkspace, recordWorkspaceEvent } from "../db/workspaces.js";
 import type { JsonObject } from "../types/workspace.js";
 import { env } from "../lib/env.js";
 
@@ -272,9 +272,19 @@ export function recordProjectSpend(input: ProjectSpendInput, db?: Database): Pro
   const id = `spend_${nanoid()}`;
   const totalTokens = input.total_tokens ?? (input.input_tokens ?? 0) + (input.output_tokens ?? 0);
   const costUnknown = input.cost_unknown ?? (input.usd === undefined && totalTokens > 0);
+  // `project_budget_spend.workspace_id` is FK-constrained to the machine-local
+  // `workspaces` table. The ledger is machine-local in BOTH transports, and a
+  // hosted-only project (no local registry row) must not fail the spend write:
+  // exactly the workspace_locks precedent, the association is dropped and the
+  // scope id is kept in metadata so totals still match the budget's scope_id.
+  const hasLocalWorkspaceRow = input.workspace_id !== undefined && getWorkspace(input.workspace_id) !== null;
+  const storedWorkspaceId: string | null = hasLocalWorkspaceRow && input.workspace_id ? input.workspace_id : null;
   const metadata = {
     ...(input.metadata ?? {}),
     ...(costUnknown ? { cost_unknown: true } : {}),
+    // Record the real scope id for hosted-only projects so the spend stays
+    // attributable even though the FK column cannot reference the hosted row.
+    ...(!hasLocalWorkspaceRow && input.workspace_id !== undefined ? { workspace_id: input.workspace_id } : {}),
   };
   d.run(
     `INSERT INTO project_budget_spend (
@@ -283,7 +293,7 @@ export function recordProjectSpend(input: ProjectSpendInput, db?: Database): Pro
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
-      input.workspace_id ?? null,
+      storedWorkspaceId,
       input.run_id ?? null,
       input.provider ?? null,
       input.model ?? null,
@@ -297,7 +307,7 @@ export function recordProjectSpend(input: ProjectSpendInput, db?: Database): Pro
   );
   const row = d.query("SELECT * FROM project_budget_spend WHERE id = ?").get(id) as ProjectBudgetSpendRow;
   const spend = rowToSpend(row);
-  if (input.workspace_id) {
+  if (hasLocalWorkspaceRow && input.workspace_id) {
     recordWorkspaceEvent({
       workspace_id: input.workspace_id,
       event_type: "budget_spend",
@@ -335,7 +345,7 @@ function totalsForBudget(budget: ProjectBudget, db: Database): ProjectBudgetTota
       COALESCE(SUM(total_tokens), 0) as total_tokens,
       COALESCE(SUM(CASE WHEN json_extract(metadata, '$.cost_unknown') = 1 THEN 1 ELSE 0 END), 0) as unknown_cost_events
     FROM project_budget_spend
-    WHERE workspace_id = ?
+    WHERE workspace_id = ? OR json_extract(metadata, '$.workspace_id') = ?
   `;
   const projectTotalsWindowSql = `
     SELECT
@@ -345,7 +355,7 @@ function totalsForBudget(budget: ProjectBudget, db: Database): ProjectBudgetTota
       COALESCE(SUM(total_tokens), 0) as total_tokens,
       COALESCE(SUM(CASE WHEN json_extract(metadata, '$.cost_unknown') = 1 THEN 1 ELSE 0 END), 0) as unknown_cost_events
     FROM project_budget_spend
-    WHERE workspace_id = ? AND created_at >= ?
+    WHERE (workspace_id = ? OR json_extract(metadata, '$.workspace_id') = ?) AND created_at >= ?
   `;
   const runTotalsSql = `
     SELECT
@@ -369,8 +379,8 @@ function totalsForBudget(budget: ProjectBudget, db: Database): ProjectBudgetTota
   `;
   const row = budget.scope_type === "project"
     ? startParam
-      ? db.query(projectTotalsWindowSql).get(budget.scope_id, startParam) as ProjectBudgetTotals
-      : db.query(projectTotalsSql).get(budget.scope_id) as ProjectBudgetTotals
+      ? db.query(projectTotalsWindowSql).get(budget.scope_id, budget.scope_id, startParam) as ProjectBudgetTotals
+      : db.query(projectTotalsSql).get(budget.scope_id, budget.scope_id) as ProjectBudgetTotals
     : startParam
       ? db.query(runTotalsWindowSql).get(budget.scope_id, startParam) as ProjectBudgetTotals
       : db.query(runTotalsSql).get(budget.scope_id) as ProjectBudgetTotals;

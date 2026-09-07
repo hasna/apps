@@ -8,6 +8,7 @@ import { closeDatabase } from "../db/database.js";
 import { runMigrations } from "../db/schema.js";
 import { createWorkspace } from "../db/workspaces.js";
 import { __resetProjectStore } from "../store/project-store.js";
+import { TEST_HASNA_HOME } from "../testing/spawn-env.js";
 import {
   isLoopbackReportsHost,
   listProjectsWithReports,
@@ -397,6 +398,7 @@ const REGISTRY_ENV_KEYS = [
   "PROJECTS_API_KEY",
   "HASNA_PROJECTS_DB_PATH",
   "HASNA_WORKSPACES_DB_PATH",
+  "HASNA_HOME",
 ] as const;
 
 function captureRegistryEnv(): Record<string, string | undefined> {
@@ -462,6 +464,10 @@ describe("project reports server registry transport", () => {
       process.env["HASNA_PROJECTS_DB_PATH"] = staleDbPath;
       process.env["HASNA_PROJECTS_API_URL"] = "https://projects.test.invalid";
       process.env["HASNA_PROJECTS_API_KEY"] = "test-registry-key";
+      // Silence the credential-file tier: the configured authority here is a
+      // fake registry, and an operator's real `~/.hasna/projects/config/credentials`
+      // would make the shared seam refuse the divergent authorities.
+      process.env["HASNA_HOME"] = TEST_HASNA_HOME;
       delete process.env["HASNA_WORKSPACES_DB_PATH"];
 
       globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {

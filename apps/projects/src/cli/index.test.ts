@@ -264,6 +264,29 @@ function cloudDoctorFixture() {
       if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}`) {
         return Response.json(project);
       }
+      // Locations are registry data on the hosted backend too: the doctor reads
+      // them through the Store and routes a missing-location fix through the
+      // Store (POST), never the on-box registry.
+      if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}/locations`) {
+        return Response.json({ locations: [] });
+      }
+      if (req.method === "POST" && url.pathname === `/v1/projects/${projectId}/locations`) {
+        return Response.json({
+          project,
+          location: {
+            id: "loc_clouddoctor",
+            workspace_id: projectId,
+            path: projectPath,
+            machine_id: "station01",
+            label: "main",
+            kind: "local",
+            is_primary: true,
+            exists_at_create: false,
+            metadata: {},
+            created_at: "2026-09-07 00:00:00.000",
+          },
+        });
+      }
       return Response.json({ error: "Not found" }, { status: 404 });
     },
   });
@@ -4109,7 +4132,7 @@ describe("project-first CLI surface", () => {
     }
   }, 30_000);
 
-  test("doctor --fix --dry-run does not promise a local location write for an API-backed exact target", async () => {
+  test("doctor --fix --dry-run previews every fix through the active registry for an API-backed exact target", async () => {
     const fixture = cloudDoctorFixture();
     try {
       const result = await fixture.runDoctor(["--dry-run"]);
@@ -4121,20 +4144,27 @@ describe("project-first CLI surface", () => {
       }>;
       expect(rows).toHaveLength(1);
       expect(rows[0]!.fixes).toContainEqual(expect.objectContaining({ code: "FIX_WORKSPACE_MARKER", dryRun: true }));
-      expect(rows[0]!.fixes.some((fix) => fix.code === "FIX_WORKSPACE_LOCATION")).toBe(false);
+      // Locations are registry data modeled by the hosted backend: the missing
+      // location is fixable and the preview promises the repair through the
+      // active registry — never a transport-gated LOCAL_ONLY refusal.
+      expect(rows[0]!.fixes.some((fix) => fix.code === "FIX_WORKSPACE_LOCATION")).toBe(true);
       expect(rows[0]!.checks).toContainEqual(expect.objectContaining({
-        code: "WORKSPACE_LOCATIONS_LOCAL_ONLY",
-        fixable: false,
-        message: expect.stringContaining("API-backed projects do not own the machine-local location registry"),
+        code: "WORKSPACE_LOCATIONS_MISSING",
+        fixable: true,
+        message: "no locations registered",
       }));
+      expect(rows[0]!.checks.some((check) => check.code === "WORKSPACE_LOCATIONS_LOCAL_ONLY")).toBe(false);
       expect(JSON.parse(readFileSync(join(fixture.projectPath, ".project.json"), "utf-8")).slug).toBe("monthly-accounting");
-      expect(fixture.requests).toEqual([{ method: "GET", path: `/v1/projects/${fixture.projectId}` }]);
+      expect(fixture.requests).toEqual([
+        { method: "GET", path: `/v1/projects/${fixture.projectId}` },
+        { method: "GET", path: `/v1/projects/${fixture.projectId}/locations` },
+      ]);
     } finally {
       fixture.close();
     }
   }, 30_000);
 
-  test("doctor --fix returns JSON after regenerating an API-backed marker without touching local location or event tables", async () => {
+  test("doctor --fix returns JSON after regenerating an API-backed marker and routing the location repair through the Store", async () => {
     const fixture = cloudDoctorFixture();
     try {
       const result = await fixture.runDoctor([]);
@@ -4145,7 +4175,9 @@ describe("project-first CLI surface", () => {
       }>;
       expect(rows).toHaveLength(1);
       expect(rows[0]!.fixes).toContainEqual(expect.objectContaining({ code: "FIX_WORKSPACE_MARKER", changed: true }));
-      expect(rows[0]!.fixes.some((fix) => fix.code === "FIX_WORKSPACE_LOCATION")).toBe(false);
+      // The missing primary location lands on the hosted registry through the
+      // Store (POST /v1/projects/:id/locations), never the on-box tables.
+      expect(rows[0]!.fixes.some((fix) => fix.code === "FIX_WORKSPACE_LOCATION")).toBe(true);
       const marker = JSON.parse(readFileSync(join(fixture.projectPath, ".project.json"), "utf-8")) as { id: string; slug: string; name: string };
       expect(marker).toMatchObject({ id: fixture.projectId, slug: "monthly-filing", name: "Monthly Filing" });
 
@@ -4153,7 +4185,11 @@ describe("project-first CLI surface", () => {
       expect(db.query("SELECT COUNT(*) AS count FROM workspace_locations").get()).toEqual({ count: 0 });
       expect(db.query("SELECT COUNT(*) AS count FROM workspace_events").get()).toEqual({ count: 0 });
       db.close();
-      expect(fixture.requests).toEqual([{ method: "GET", path: `/v1/projects/${fixture.projectId}` }]);
+      expect(fixture.requests).toEqual([
+        { method: "GET", path: `/v1/projects/${fixture.projectId}` },
+        { method: "GET", path: `/v1/projects/${fixture.projectId}/locations` },
+        { method: "POST", path: `/v1/projects/${fixture.projectId}/locations` },
+      ]);
     } finally {
       fixture.close();
     }

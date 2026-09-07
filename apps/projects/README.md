@@ -237,8 +237,11 @@ On the hosted backend, ensure requires the complete stable `wks_...` id, reads t
 project through the producer-bounded guarded endpoint, and uses the guarded
 conditional update/receipt path for a missing primary path. Slugs and partial
 ids are refused before transport; the station-local store is never created from
-an unbounded or mismatched registry response. `projects store migrate` remains
-local-only and is dry-run by default; it
+an unbounded or mismatched registry response. `projects store migrate` works in
+both transports: the folder move always runs on the machine that owns the
+files (the server cannot move a client's files), while the location history
+and the migration event route through the active Store — hosted location rows
+for a hosted project, the on-box registry locally. It is dry-run by default and
 requires `--apply` or `--yes` to move an existing primary folder into
 `workspaces/<id>`, writes a migration plan under `data/<id>`, preserves git
 history by moving the directory, records the old path as a non-primary location,

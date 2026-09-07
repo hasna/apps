@@ -162,6 +162,17 @@ describe("projects-mcp project-first surface", () => {
             synced_at: null,
           });
         }
+        // The doctor reads locations through the active Store in the hosted
+        // backend and routes a missing-location repair through the Store too.
+        if (req.method === "GET" && url.pathname === `/v1/projects/${projectId}/locations`) {
+          return Response.json({ locations: [] });
+        }
+        if (req.method === "POST" && url.pathname === `/v1/projects/${projectId}/locations`) {
+          return Response.json({
+            project: { id: projectId, slug: "cloud-doctor" },
+            location: { id: "loc_cloud_doctor", workspace_id: projectId },
+          });
+        }
         return Response.json({ error: "Not found" }, { status: 404 });
       },
     });
@@ -210,15 +221,24 @@ describe("projects-mcp project-first surface", () => {
         fixes: Array<{ code: string; changed: boolean }>;
       }>;
       expect(payload).toHaveLength(1);
-      expect(payload[0]!.checks.some((check) => check.code === "WORKSPACE_LOCATIONS_LOCAL_ONLY")).toBe(true);
+      // Locations are registry data modeled by the hosted backend: the doctor
+      // reports the missing location as fixable (never a LOCAL_ONLY refusal)
+      // and the approved repair lands on the hosted registry through POST.
+      expect(payload[0]!.checks.some((check) => check.code === "WORKSPACE_LOCATIONS_LOCAL_ONLY")).toBe(false);
+      expect(payload[0]!.checks.some((check) => check.code === "WORKSPACE_LOCATIONS_MISSING")).toBe(true);
       expect(payload[0]!.fixes).toContainEqual(expect.objectContaining({ code: "FIX_WORKSPACE_MARKER", changed: true }));
+      expect(payload[0]!.fixes.some((fix) => fix.code === "FIX_WORKSPACE_LOCATION")).toBe(true);
       expect(JSON.parse(readFileSync(join(projectPath, ".project.json"), "utf-8"))).toMatchObject({ id: projectId, slug: "cloud-doctor" });
 
       const localDb = new Database(dbPath);
       expect(localDb.query("SELECT COUNT(*) AS count FROM workspace_locations").get()).toEqual({ count: 0 });
       expect(localDb.query("SELECT COUNT(*) AS count FROM workspace_events").get()).toEqual({ count: 0 });
       localDb.close();
-      expect(requests).toEqual([{ method: "GET", path: `/v1/projects/${projectId}` }]);
+      expect(requests).toEqual([
+        { method: "GET", path: `/v1/projects/${projectId}` },
+        { method: "GET", path: `/v1/projects/${projectId}/locations` },
+        { method: "POST", path: `/v1/projects/${projectId}/locations` },
+      ]);
     } finally {
       server.stop(true);
       rmSync(root, { recursive: true, force: true });

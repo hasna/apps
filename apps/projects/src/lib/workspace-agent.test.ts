@@ -166,8 +166,6 @@ describe("project agent system prompt", () => {
 // result — a local-sqlite write would instead throw / miss the hosted project.
 // --------------------------------------------------------------------------
 
-const LOCAL_ONLY_SENTINEL = "is a local-only operation and is not available in the hosted backend.";
-
 function makeCloudProject(overrides: Partial<Workspace> = {}): Workspace {
   return {
     id: "wks_cloud",
@@ -256,6 +254,11 @@ function makeFakeApiStore() {
         created_at: "2026-01-01T00:00:00.000Z",
       },
     })),
+    // Doctor reads locations and root/recipe references through the Store in
+    // the hosted backend: located registry rows, not the on-box tables.
+    getProjectLocations: track("getProjectLocations", () => []),
+    getRoot: track("getRoot", () => null),
+    getRecipe: track("getRecipe", () => null),
   };
   return { store: store as unknown as ProjectStore, calls, project };
 }
@@ -304,9 +307,16 @@ describe("prompt-agent mutations route through the Store in the hosted backend",
 
     expect(result.error).toBeUndefined();
     expect((result.project as { id: string }).id).toBe(project.id);
-    expect((result.checks as Array<{ code: string }>).some((check) => check.code === "WORKSPACE_LOCATIONS_LOCAL_ONLY")).toBe(true);
-    expect((result.fixes as Array<{ code: string }>).map((fix) => fix.code)).toEqual(["FIX_WORKSPACE_MARKER"]);
+    // Locations are registry data modeled by the hosted backend, so the doctor
+    // reports the missing location as fixable (never a LOCAL_ONLY refusal) and
+    // the approved repair routes through the Store (addLocation).
+    expect((result.checks as Array<{ code: string }>).some((check) => check.code === "WORKSPACE_LOCATIONS_LOCAL_ONLY")).toBe(false);
+    expect((result.checks as Array<{ code: string }>).some((check) => check.code === "WORKSPACE_LOCATIONS_MISSING")).toBe(true);
+    expect((result.fixes as Array<{ code: string }>).map((fix) => fix.code)).toEqual(
+      expect.arrayContaining(["FIX_WORKSPACE_MARKER", "FIX_WORKSPACE_LOCATION"]),
+    );
     expect(JSON.parse(readFileSync(markerPath, "utf-8"))).toMatchObject({ id: project.id, slug: project.slug });
+    expect(calls.some((call) => call.method === "addLocation")).toBe(true);
     expect(calls.filter((call) => call.method === "resolveTarget")).toHaveLength(1);
   });
 

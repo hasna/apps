@@ -39,6 +39,7 @@ import {
 } from "../../lib/project-registration.js";
 import { productionProjectRegistrationAuthorities } from "../../lib/production-project-registration-authorities.js";
 import { doctorWorkspace } from "../../lib/workspace-doctor.js";
+import type { WorkspaceDoctorOptions } from "../../lib/workspace-doctor.js";
 import { resolveProjectStore, type ProjectStore } from "../../store/project-store.js";
 
 // Drop keys whose value is `undefined` so a hosted PATCH only carries fields the
@@ -3954,9 +3955,36 @@ function registerProjectCommands(program: Command): void {
     .action(async (idOrSlug, opts) => {
       try {
         const store = resolveProjectStore();
-        const runDoctor = (project: Workspace) => opts.fix && !opts.dryRun
-          ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, transport: store.transport }))
-          : Promise.resolve(doctorWorkspace(project, { fix: opts.fix, dryRun: opts.dryRun, transport: store.transport }));
+        // Doctor reads registry data the SAME way in both transports: locations
+        // and root/recipe references come from the active Store (shared /v1
+        // resources), and a missing-location fix lands on the active registry
+        // through the Store instead of writing an on-box row the hosted project
+        // does not own.
+        const runDoctor = async (project: Workspace) => {
+          const locations = await store.getProjectLocations(project.id);
+          const references = {
+            root: project.root_id ? await store.getRoot(project.root_id) : null,
+            recipe: project.recipe_id ? await store.getRecipe(project.recipe_id) : null,
+          };
+          const options: WorkspaceDoctorOptions = {
+            fix: opts.fix,
+            dryRun: opts.dryRun,
+            transport: store.transport,
+            locations,
+            references,
+            fixLocation: (input) => store.addLocation(project.id, {
+              path: input.path,
+              label: input.label ?? "main",
+              isPrimary: input.isPrimary,
+              agentId: mutationAgentId(store),
+              source: "cli",
+              command: process.argv.join(" "),
+            }).then((result) => result.location),
+          };
+          return opts.fix && !opts.dryRun
+            ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, options))
+            : Promise.resolve(doctorWorkspace(project, options));
+        };
         const json = wantsJson(opts);
         const limit = json ? undefined : parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);
         const results = idOrSlug

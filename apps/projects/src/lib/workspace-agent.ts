@@ -1577,7 +1577,29 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
       execute: async (input) => {
         const workspace = await resolveStoreTargetOrNull(input.project);
         if (!workspace) return { error: `Project not found: ${input.project}` };
-        const doctor = () => doctorWorkspace(workspace, { fix: Boolean(input.fix && approve), dryRun: !approve, transport: store.transport });
+        // Doctor reads locations and root/recipe references through the active
+        // Store so the checks (and the approved location fix) behave the same
+        // on a hosted or on-box row.
+        const [locations, root, recipe] = await Promise.all([
+          store.getProjectLocations(workspace.id),
+          workspace.root_id ? store.getRoot(workspace.root_id) : Promise.resolve(null),
+          workspace.recipe_id ? store.getRecipe(workspace.recipe_id) : Promise.resolve(null),
+        ]);
+        const doctor = () => doctorWorkspace(workspace, {
+          fix: Boolean(input.fix && approve),
+          dryRun: !approve,
+          transport: store.transport,
+          locations,
+          references: { root, recipe },
+          fixLocation: (locationInput) => store.addLocation(workspace.id, {
+            path: locationInput.path,
+            label: locationInput.label ?? "main",
+            isPrimary: locationInput.isPrimary,
+            agentId: mutationAgentId,
+            source: "agent",
+            command,
+          }).then((result) => result.location),
+        });
         return projectPayload(input.fix && approve && store.transport === "local"
           ? withAgentWorkspaceLock(workspace, actorAgent.id, "project doctor fix", doctor)
           : doctor());

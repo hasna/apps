@@ -49,6 +49,7 @@ import {
   unlinkProjectIntegrationFields,
 } from "../lib/project-management.js";
 import { doctorWorkspace } from "../lib/workspace-doctor.js";
+import type { WorkspaceDoctorOptions } from "../lib/workspace-doctor.js";
 import {
   buildProjectAgentContext,
   buildProjectHandoff,
@@ -1927,11 +1928,38 @@ server.tool(
   },
   async (input) => {
     const store = resolveProjectStore();
-    const options = { fix: input.fix, dryRun: input.dry_run, transport: store.transport };
+    // Doctor reads registry data the SAME way in both transports: locations
+    // and root/recipe references come from the active Store (shared /v1
+    // resources), and a missing-location fix lands on the active registry
+    // through the Store rather than writing an on-box row the hosted project
+    // does not own.
+    const doctorOptionsFor = async (project: Workspace): Promise<WorkspaceDoctorOptions> => {
+      const [locations, root, recipe] = await Promise.all([
+        store.getProjectLocations(project.id),
+        project.root_id ? store.getRoot(project.root_id) : Promise.resolve(null),
+        project.recipe_id ? store.getRecipe(project.recipe_id) : Promise.resolve(null),
+      ]);
+      return {
+        fix: input.fix,
+        dryRun: input.dry_run,
+        transport: store.transport,
+        locations,
+        references: { root, recipe },
+        fixLocation: (locationInput) => store.addLocation(project.id, {
+          path: locationInput.path,
+          label: locationInput.label ?? "main",
+          isPrimary: locationInput.isPrimary,
+          agentId: mcpMutationAgent(store),
+          source: "mcp",
+          command: "projects_doctor",
+        }).then((result) => result.location),
+      };
+    };
     if (input.id) {
       const project = await findProjectTarget(input.id, store);
       if (!project) return errorText(`Project not found: ${input.id}`);
       const owner = mcpMutationAgent(store);
+      const options = await doctorOptionsFor(project);
       const result = input.fix && !input.dry_run
         ? await withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspace(project, options))
         : doctorWorkspace(project, options);
@@ -1949,9 +1977,12 @@ server.tool(
     const owner = mcpMutationAgent(store);
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
     const projects = await store.listProjects({ limit: input.compact && !input.verbose ? limit + 1 : input.limit ?? 500 });
-    const results = await Promise.all(projects.map((project) => input.fix && !input.dry_run
-      ? withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspace(project, options))
-      : Promise.resolve(doctorWorkspace(project, options))));
+    const results = await Promise.all(projects.map(async (project) => {
+      const options = await doctorOptionsFor(project);
+      return input.fix && !input.dry_run
+        ? withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspace(project, options))
+        : Promise.resolve(doctorWorkspace(project, options));
+    }));
     if (!input.compact || input.verbose) return jsonText(results.map(projectDoctorPayload));
     const visible = results.slice(0, limit);
     return jsonText({

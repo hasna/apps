@@ -1026,21 +1026,60 @@ describe("projects store api transport (roots/agents/recipes)", () => {
 
   });
 
-  // Regression (todos 9ddd325c): budget READS in the hosted backend were hardcoded
-  // `return []` stubs, so hosted-backend callers (budgets list/remaining, the
-  // buildProjectAgentContext budget block, budget-check actions, the MCP tool)
-  // got zero statuses, zero exhaustion, rc=0, and proceeded with no cap applied
-  // while only the write path failed loudly. The hosted server models no budget
-  // resource (route() falls through to 404), so reads must reject exactly like
-  // createBudget/resetBudget/recordSpend — and must never touch the network.
-  test("budget reads reject in the hosted backend instead of returning a hardcoded [] (todos 9ddd325c)", async () => {
-    const { store, calls } = stubStore(() => ({}));
-    await expect(store.listBudgets()).rejects.toThrow(/local-only operation/i);
-    await expect(store.getBudgetStatuses()).rejects.toThrow(/local-only operation/i);
-    await expect(store.createBudget({} as never)).rejects.toThrow(/local-only operation/i);
-    await expect(store.resetBudget("wks_any")).rejects.toThrow(/local-only operation/i);
-    await expect(store.recordSpend({} as never)).rejects.toThrow(/local-only operation/i);
-    expect(calls).toHaveLength(0);
+  // Regression (todos 9ddd325c + 4c17afb1 line): budget READS in the hosted
+  // backend were hardcoded `return []` stubs, so hosted-backend callers
+  // (budgets list/remaining, the buildProjectAgentContext budget block,
+  // budget-check actions, the MCP tool) got zero statuses, zero exhaustion,
+  // rc=0, and proceeded with no cap applied while only the write path failed
+  // loudly. The hosted server models no budget resource (route() falls through
+  // to 404), so the reads were switched to the only correct resolution: budgets
+  // and spend are a machine-local governance ledger (spend accrues on the box
+  // that runs the agent) and, exactly like tmux profiles and the app store,
+  // BOTH transports resolve it against on-box sqlite — reads always reflect
+  // the real ledger, writes land in it, no command is transport-gated.
+  test("budgets & spend resolve the machine-local ledger in the hosted backend instead of refusing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "projects-api-budgets-"));
+    const previous = process.env[PROJECTS_HOME_ENV];
+    process.env[PROJECTS_HOME_ENV] = root;
+    try {
+      const { store, calls } = stubStore(() => ({}));
+      const budgetId = "project-wks_apibudget";
+      const budget = await store.createBudget({
+        id: budgetId,
+        scope_type: "project",
+        scope_id: "wks_apibudget",
+        window: "monthly",
+        mode: "hard",
+        max_usd: 100,
+      });
+      expect(budget.id).toBe(budgetId);
+
+      const spend = await store.recordSpend({
+        workspace_id: "wks_apibudget",
+        usd: 1.5,
+        input_tokens: 1_000,
+        output_tokens: 500,
+      });
+      expect(spend.id).toMatch(/^spend_/);
+
+      const statuses = await store.getBudgetStatuses({ workspace_id: "wks_apibudget" });
+      expect(statuses).toHaveLength(1);
+      expect(statuses[0]!.budget.id).toBe(budgetId);
+
+      // The reads reflect the writes above — the real ledger, never a stub.
+      expect(await store.listBudgets({ workspace_id: "wks_apibudget" })).toHaveLength(1);
+
+      const reset = await store.resetBudget(budgetId);
+      expect(reset.reset_at).not.toBeNull();
+
+      // Load-bearing in the other direction: everything came from the on-box
+      // ledger, not from the network.
+      expect(calls).toHaveLength(0);
+    } finally {
+      if (previous === undefined) delete process.env[PROJECTS_HOME_ENV];
+      else process.env[PROJECTS_HOME_ENV] = previous;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // Regression: resolving "." (or any path/marker target) in the hosted backend must NOT
