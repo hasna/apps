@@ -48,3 +48,15 @@ describe("first-party tracking",()=>{
   expect((await serveTracking(config,"invalid",()=>{throw Error("must not query");})).status).toBe(404);
  });
 });
+
+it("public tracking route matches its binary and bodyless response contracts",async()=>{
+ const {handleSelfHostedRequest}=await import("./service.js");
+ const doc=renderTracking(config,options,tenant,"message",{html:"body"});
+ const token=Object.values(doc.links)[0]!.token;
+ const deps={tracking:config,store:{forTenant:()=>({observeTracking:async()=>({kind:"opened",target:null})})}} as any;
+ const get=(value:string)=>handleSelfHostedRequest(deps,new Request(`https://track.example/v1/tracking/${value}`));
+ const pixel=(await get(token))!;expect(pixel.status).toBe(200);expect(pixel.headers.get("Content-Type")).toBe("image/gif");expect(Buffer.from(await pixel.arrayBuffer()).subarray(0,6).toString()).toBe("GIF89a");
+ const missing=(await get("invalid"))!;expect(missing.status).toBe(404);expect(await missing.text()).toBe("");expect(missing.headers.get("Content-Type")).toBeNull();
+ deps.store.forTenant=()=>{throw new Error("private database detail");};
+ const unavailable=(await get(token))!;expect(unavailable.status).toBe(503);expect(await unavailable.text()).toBe("");expect(unavailable.headers.get("Content-Type")).toBeNull();
+});

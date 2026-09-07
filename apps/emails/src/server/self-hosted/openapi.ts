@@ -4846,6 +4846,6 @@ emailsSelfHostedOpenApi.paths!["/v1/domain-connections/{id}"] = {
 emailsSelfHostedOpenApi.paths!["/v1/tracking/{token}"] = {
   get: { operationId: "observeMessageTracking", summary: "Observe a public opaque tracking capability", security: [],
     parameters: [{name:"token",in:"path",required:true,schema:{type:"string"}}],
-    responses: {"200":{description:"Transparent GIF for a valid open capability"},"302":{description:"Redirect to the stored click destination"},"404":{description:"Invalid or expired capability"},"503":{description:"Tracking persistence unavailable"}} },
+    responses: {"200":{description:"Transparent GIF for a valid open capability",content:{"image/gif":{schema:{type:"string",format:"binary"}}}},"302":{description:"Redirect to the stored click destination",headers:{Location:{description:"Stored HTTP(S) destination",schema:{type:"string",format:"uri"}}}},"404":{description:"Invalid or expired capability"},"503":{description:"Tracking persistence unavailable"}} },
 };
 addRoutineErrorParity(emailsSelfHostedOpenApi);
