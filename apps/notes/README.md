@@ -77,7 +77,8 @@ former `@hasna/paths` contract, kept in-package after that package was
 retired). Without an exact app override, the destination is the platform XDG
 data location, for example `$XDG_DATA_HOME/hasna/notes` on Linux or
 `~/Library/Application Support/Hasna/notes` on macOS. Exact overrides retain
-their precedence: `HASNA_NOTES_HOME`, `HASNA_NOTES_ROOT`, then `NOTES_HOME`.
+their precedence: `HASNA_NOTES_HOME`, then `HASNA_NOTES_ROOT` (the unprefixed
+`NOTES_HOME` is not read).
 
 Legacy roots are never selected or copied implicitly. Review a copy-only plan,
 then apply it explicitly:
