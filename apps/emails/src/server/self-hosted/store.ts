@@ -1,3 +1,4 @@
+import { SequenceWorkerStore } from "./sequence-worker.js";
 // Postgres repository for the Emails self-hosted service.
 //
 // Amendment A1 (PURE REMOTE): every method reads/writes the self_hosted Postgres
@@ -5158,6 +5159,8 @@ export class TenantScopedStore {
       params.push(encodeColumn(col, body[col.name]));
       sets.push(col.json ? `${col.name} = $${params.length}::jsonb` : `${col.name} = $${params.length}`);
     }
+    const sequenceEdit = spec.path === "sequence-enrollments";
+    const sequenceGuard = sequenceEdit ? " AND (execution_lease IS NULL OR execution_lease < now()-interval '5 minutes')" + (Object.keys(body).some(field => field !== "status") ? " AND execution_started=false" : "") : "";
     // Enqueued content is bound to its retry hash. Only lifecycle status may change.
     const scheduledContentEdit = spec.path === "scheduled" && Object.keys(body).some(field => field !== "status");
     if (sets.length === 0) return this.getResource(spec, id);
@@ -5165,7 +5168,7 @@ export class TenantScopedStore {
     return redactResourceRow(
       spec,
       await this.client.get<Record<string, unknown>>(
-        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""}${scheduledContentEdit ? " AND enqueue_key IS NULL" : ""} RETURNING *`,
+        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""}${scheduledContentEdit ? " AND enqueue_key IS NULL" : ""}${sequenceGuard} RETURNING *`,
         params,
       ),
     );
@@ -5174,7 +5177,7 @@ export class TenantScopedStore {
   async deleteResource(spec: SelfHostedResourceSpec, id: string): Promise<boolean> {
     const key = keyColumn(spec);
     const rows = await this.client.many<{ id: string }>(
-      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing' AND enqueue_key IS NULL" : ""} RETURNING ${key} AS id`,
+      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing' AND enqueue_key IS NULL" : ""}${spec.path === "sequence-enrollments" ? " AND execution_started=false AND execution_lease IS NULL" : ""} RETURNING ${key} AS id`,
       [id, this.tenantId],
     );
     return rows.length > 0;
@@ -5226,6 +5229,8 @@ export class TenantScopedStore {
     );
     return row !== null;
   }
+
+  sequenceWorker(): SequenceWorkerStore { return new SequenceWorkerStore(this.client, this.tenantId); }
 
   async getScheduledTemplate(name: string): Promise<Record<string, unknown> | null> {
     return this.client.get<Record<string, unknown>>(

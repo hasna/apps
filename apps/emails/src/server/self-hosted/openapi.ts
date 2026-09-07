@@ -2198,7 +2198,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         operationId: "runScheduledBatch",
         summary: "Claim and execute a due scheduled-send batch (tenant operator required)",
         requestBody: { required: false, content: { "application/json": { schema: {
-          type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100, default: 10 } },
+          type: "object", additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100, default: 10 }, sequence_limit: { type: "integer", minimum: 0, maximum: 100, default: 10 } },
         } } } },
         responses: {
           "200": { content: { "application/json": { schema: {
@@ -2208,8 +2208,13 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                 failed: { type: "integer", minimum: 0 }, pending: { type: "integer", minimum: 0 }, skipped: { type: "integer", minimum: 0 },
               }, required: ["attempted", "sent", "failed", "pending", "skipped"] },
               items: { type: "array", items: { type: "object", properties: { id: { type: "string" }, status: { type: "string", enum: ["sent", "failed", "processing", "lease_lost"] }, error: { type: "string" } }, required: ["id", "status"] } },
-              sequence_execution: { type: "string", enum: ["not_requested"] },
-            }, required: ["scheduled", "items", "sequence_execution"],
+              sequences: { type: "object", properties: {
+                attempted: { type: "integer", minimum: 0 }, sent: { type: "integer", minimum: 0 },
+                failed: { type: "integer", minimum: 0 }, pending: { type: "integer", minimum: 0 }, skipped: { type: "integer", minimum: 0 },
+              }, required: ["attempted", "sent", "failed", "pending", "skipped"] },
+              sequence_items: { type: "array", items: { type: "object", properties: { id: { type: "string" }, status: { type: "string", enum: ["sent", "failed", "processing", "lease_lost", "completed"] }, error: { type: "string" } }, required: ["id", "status"] } },
+              sequence_execution: { type: "string", enum: ["not_requested", "executed"] },
+            }, required: ["scheduled", "items", "sequence_execution", "sequences", "sequence_items"],
           } } } },
           "400": { description: "Invalid batch limit", content: { "application/json": { schema: errorResponseSchema } } },
           "401": { description: "Authentication required", content: { "application/json": { schema: errorResponseSchema } } },

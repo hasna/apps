@@ -220,6 +220,7 @@ export function registerSequenceCommands(program: Command, output: (data: unknow
         const lines: string[] = [chalk.bold(`\nEnrollments ${scope}:`)];
         for (const e of enrollments) {
           const statusColor = e.status === "active" ? chalk.green(e.status) : chalk.dim(e.status);
+          if (e.execution_error) lines.push(chalk.yellow(`  Last execution: ${e.execution_error}`));
           const next = e.next_send_at ? chalk.dim(` next: ${e.next_send_at}`) : "";
           const sequence = seq ? "" : `  seq:${e.sequence_id.slice(0, 8)}`;
           lines.push(`  ${chalk.cyan(e.id.slice(0, 8))}  ${e.contact_email}${sequence}  [${statusColor}]  step ${e.current_step}${next}`);

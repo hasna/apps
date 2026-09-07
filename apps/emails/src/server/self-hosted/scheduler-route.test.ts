@@ -79,7 +79,21 @@ test("operator executes bounded batch and invalid input claims nothing", async (
   expect(response!.status).toBe(200);
   expect(await response!.json()).toMatchObject({
     scheduled: { attempted: 0, sent: 0 },
-    sequence_execution: "not_requested",
+    sequence_execution: "executed",
   });
   expect(f.claims()).toBe(1);
+});
+
+test("sequence inputs require operator writes and remain readable",async()=>{
+ const f=deps();
+ for(const path of ["sequences","sequence-steps","sequence-enrollments","templates"]) {
+  expect(resourceSpecForPath(path)!.writeRequiresOperator).toBe(true);
+  for(const scope of ["emails:read","emails:write"]) {
+   const token=mintApiKey({app:"emails",scopes:[scope],signingSecret}).token;
+   const response=await handleSelfHostedRequest(f.d,new Request(`http://fixture/v1/${path}`,{method:"POST",headers:{"Content-Type":"application/json","x-api-key":token},body:"{}"}));
+   expect(response!.status).toBe(403);
+  }
+  const token=mintApiKey({app:"emails",scopes:["emails:read"],signingSecret}).token;
+  expect((await handleSelfHostedRequest(f.d,new Request(`http://fixture/v1/${path}`,{headers:{"x-api-key":token}})))!.status).toBe(200);
+ }
 });

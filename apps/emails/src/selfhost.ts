@@ -1773,7 +1773,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Claim and execute a due scheduled-send batch (tenant operator required) */
-    async runScheduledBatch(body?: { "limit"?: number }, init?: RequestInit): Promise<{ "scheduled": { "attempted": number; "sent": number; "failed": number; "pending": number; "skipped": number }; "items": Array<{ "id": string; "status": "sent" | "failed" | "processing" | "lease_lost"; "error"?: string }>; "sequence_execution": "not_requested" }> {
+    async runScheduledBatch(body?: { "limit"?: number; "sequence_limit"?: number }, init?: RequestInit): Promise<{ "scheduled": { "attempted": number; "sent": number; "failed": number; "pending": number; "skipped": number }; "items": Array<{ "id": string; "status": "sent" | "failed" | "processing" | "lease_lost"; "error"?: string }>; "sequences": { "attempted": number; "sent": number; "failed": number; "pending": number; "skipped": number }; "sequence_items": Array<{ "id": string; "status": "sent" | "failed" | "processing" | "lease_lost" | "completed"; "error"?: string }>; "sequence_execution": "not_requested" | "executed" }> {
       return this.request("POST", `/v1/scheduled/run`, {
         body,
         query: undefined,

@@ -2975,6 +2975,14 @@ const SCHEDULED_ENQUEUE_IDENTITY = defineMigration(
    ON scheduled_emails(tenant_id, enqueue_key) WHERE enqueue_key IS NOT NULL;`,
 );
 
+const SEQUENCE_EXECUTION_LEASE = defineMigration("0029_sequence_execution_lease", `
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_lease TIMESTAMPTZ;
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_payload JSONB;
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_error TEXT;
+  ALTER TABLE sequence_enrollments ADD COLUMN IF NOT EXISTS execution_started BOOLEAN NOT NULL DEFAULT false;
+  CREATE INDEX IF NOT EXISTS sequence_execution_due ON sequence_enrollments(tenant_id,next_send_at) WHERE status='active';
+`);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3012,5 +3020,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     LEGACY_GMAIL_REPLAY_PROVENANCE,
     MESSAGE_PROVIDER_PROVENANCE,
     SCHEDULED_ENQUEUE_IDENTITY,
+    SEQUENCE_EXECUTION_LEASE,
   ];
 }

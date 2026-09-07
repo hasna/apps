@@ -199,3 +199,65 @@ test("scheduler completes the actual send route durable 202 receipt in one run",
   expect(result.scheduled).toMatchObject({ sent: 1, pending: 0, failed: 0 });
   expect(finishes[0]?.[2]).toBe("sent");
 });
+
+test("sequence worker advances through the real authenticated send handler durable202", async () => {
+  const { runSequenceBatch } = await import("./sequence-worker.js");
+  const f = fixture();
+  let sends = 0;
+  let advanced = false;
+  const record = {
+    id: "sequence-message",
+    send_state: "pending",
+    status: "pending",
+    headers: {},
+    attachments: [],
+  };
+  Object.assign(f.deps.store, {
+    reserveSendIntent: async () => ({ record, created: true }),
+    evaluateOutboundPolicy: async () => ({ allowed: true }),
+    claimSendIntent: async () => ({ ...record, send_state: "sending" }),
+    getAddressByEmail: async () => null,
+    completeSendIntent: async () => ({
+      ...record,
+      send_state: "sent",
+      status: "sent",
+      provider_message_id: "fixture-proof",
+    }),
+  });
+  f.deps.sender.send = async () => {
+    sends++;
+    return "fixture-proof";
+  };
+  const row = {
+    id: "enrollment",
+    current_step: 0,
+    execution_lease: new Date().toISOString(),
+  };
+  const worker = {
+    claim: async () => [row],
+    isCurrent: async () => true,
+    prepare: async () => ({
+      id: "sequence:enrollment:0",
+      from_address: "sender@example.com",
+      to_addresses: ["recipient@example.com"],
+      subject: "Fixture",
+      text_body: "Body",
+      next_delay_hours: null,
+    }),
+    finish: async (_row: unknown, _snapshot: unknown, outcome: string) => {
+      advanced = outcome === "sent";
+      return true;
+    },
+  };
+  const result = await runSequenceBatch(worker as never, async (body) => {
+    const response = await handleSelfHostedRequest(
+      f.deps,
+      new Request("http://fixture/v1/messages/send", request(body)),
+    );
+    expect(response!.status).toBe(202);
+    return response!;
+  });
+  expect(sends).toBe(1);
+  expect(advanced).toBe(true);
+  expect(result.sequences).toMatchObject({ sent: 1, pending: 0, failed: 0 });
+});

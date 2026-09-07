@@ -14,7 +14,7 @@ import {
 
 export interface SchedulerTickResult {
   scheduled: { attempted: number; sent: number; failed: number; skipped: number; pending?: number };
-  sequences: { attempted: number; sent: number; failed: number; skipped: number };
+  sequences: { attempted: number; sent: number; failed: number; skipped: number; pending?: number };
 }
 
 interface SchedulerTickOptions {
@@ -34,28 +34,30 @@ interface ScheduleListOptions {
 // Batch sends compose API requests; schedule listing/cancellation use the
 // existing /v1/scheduled resource.
 export async function runSchedulerTick(opts: SchedulerTickOptions = {}): Promise<SchedulerTickResult> {
-  if (opts.sequenceLimit !== undefined) throw new Error("Sequence execution requires its own job runner; this endpoint runs scheduled messages");
   const { selfHostedApiRequest } = await import("../../db/self-hosted-store.js");
-  const response = selfHostedApiRequest("POST", "/scheduled/run", { limit: opts.scheduledLimit ?? 10 });
+  const response = selfHostedApiRequest("POST", "/scheduled/run", { limit: opts.scheduledLimit ?? 10, sequence_limit: opts.sequenceLimit ?? 10 });
   if (response.status < 200 || response.status >= 300) {
     const error = response.json as { error?: string };
     throw new Error(error.error ?? `Scheduler request failed (HTTP ${response.status})`);
   }
-  const result = response.json as { scheduled?: SchedulerTickResult["scheduled"] & { pending?: number }; items?: unknown[]; sequence_execution?: string };
+  const result = response.json as { scheduled?: SchedulerTickResult["scheduled"] & { pending?: number }; items?: unknown[]; sequence_execution?: string; sequences?: SchedulerTickResult["sequences"] };
   if (!result.scheduled || !Number.isSafeInteger(result.scheduled.attempted) || !Number.isSafeInteger(result.scheduled.sent) || !Number.isSafeInteger(result.scheduled.failed)) throw new Error("Scheduler API returned invalid counts");
+  if (!result.sequences || result.sequence_execution !== ((opts.sequenceLimit ?? 10) === 0 ? "not_requested" : "executed")) throw new Error("Scheduler API does not support sequence execution; update the service");
   opts.log?.(`${result.scheduled.sent} scheduled sends completed; ${result.scheduled.failed} failed; ${result.scheduled.pending ?? 0} pending`);
-  return { ...result, scheduled: result.scheduled, sequences: { attempted: 0, sent: 0, failed: 0, skipped: 0 } };
+  return { ...result, scheduled: result.scheduled, sequences: result.sequences };
 }
 
-async function runSchedulerCommand(opts: { interval?: string; once?: boolean; limit?: string }, output: (data: unknown, formatted: string) => void): Promise<void> {
+async function runSchedulerCommand(opts: { interval?: string; once?: boolean; limit?: string; sequenceLimit?: string }, output: (data: unknown, formatted: string) => void): Promise<void> {
   const interval = parseDuration(opts.interval ?? "30s");
   if (!Number.isFinite(interval) || interval < 1000) throw new Error("Scheduler interval must be at least one second");
   const limit = Number(opts.limit ?? "10");
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Scheduler limit must be 1–100");
   do {
-    const result = await runSchedulerTick({ scheduledLimit: limit });
-    output(result, `Scheduled sends: ${result.scheduled.sent} sent, ${result.scheduled.failed} failed, ${result.scheduled.pending ?? 0} processing of ${result.scheduled.attempted} attempted. Sequence execution is not included.`);
-    if (opts.once) { if (result.scheduled.failed || result.scheduled.pending) process.exitCode = 1; return; }
+    const sequenceLimit = Number(opts.sequenceLimit ?? "10");
+    if (!Number.isSafeInteger(sequenceLimit) || sequenceLimit < 0 || sequenceLimit > 100) throw new Error("Sequence limit must be 0–100");
+    const result = await runSchedulerTick({ scheduledLimit: limit, sequenceLimit });
+    output(result, `Scheduled sends: ${result.scheduled.sent} sent, ${result.scheduled.failed} failed, ${result.scheduled.pending ?? 0} processing of ${result.scheduled.attempted} attempted. Sequences: ${result.sequences.sent} sent, ${result.sequences.failed} failed, ${result.sequences.pending ?? 0} processing.`);
+    if (opts.once) { if (result.scheduled.failed || result.scheduled.pending || result.sequences.failed || result.sequences.pending) process.exitCode = 1; return; }
     await new Promise(resolve => setTimeout(resolve, interval));
   } while (true);
 }
@@ -191,8 +193,9 @@ export function registerMiscCommands(program: Command, output: (data: unknown, f
     .description("Start the scheduler daemon — sends due emails on interval")
     .option("--interval <duration>", "Poll interval (e.g. 30s, 1m)", "30s")
     .option("--once", "Process one due batch and exit")
-    .option("--limit <count>", "Maximum due jobs per batch (1–100)", "10")
-    .action(async (opts: { interval?: string; once?: boolean; limit?: string }) => {
+    .option("--limit <count>", "Maximum scheduled jobs per batch (1–100)", "10")
+    .option("--sequence-limit <count>", "Maximum sequence steps per batch (0–100)", "10")
+    .action(async (opts: { interval?: string; once?: boolean; limit?: string; sequenceLimit?: string }) => {
       try { await runSchedulerCommand(opts, output); } catch (e) { handleError(e); }
     });
 
@@ -202,8 +205,9 @@ export function registerMiscCommands(program: Command, output: (data: unknown, f
     .description("Start the email scheduler (alias: emails schedule run)")
     .option("--interval <duration>", "Poll interval (e.g. 30s, 1m, 5m)", "30s")
     .option("--once", "Process one due batch and exit")
-    .option("--limit <count>", "Maximum due jobs per batch (1–100)", "10")
-    .action(async (opts: { interval?: string; once?: boolean; limit?: string }) => {
+    .option("--limit <count>", "Maximum scheduled jobs per batch (1–100)", "10")
+    .option("--sequence-limit <count>", "Maximum sequence steps per batch (0–100)", "10")
+    .action(async (opts: { interval?: string; once?: boolean; limit?: string; sequenceLimit?: string }) => {
       try { await runSchedulerCommand(opts, output); } catch (e) { handleError(e); }
     });
 

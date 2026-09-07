@@ -155,6 +155,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   },
   {
     path: "templates",
+    writeRequiresOperator: true,
     table: "templates",
     orderBy: "created_at DESC",
     columns: [
@@ -173,6 +174,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   },
   {
     path: "sequences",
+    writeRequiresOperator: true,
     table: "sequences",
     orderBy: "created_at DESC",
     columns: [{ name: "name" }, { name: "description" }, { name: "status" }],
@@ -465,6 +467,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   {
     // Steps of a drip sequence (local table `sequence_steps`).
     path: "sequence-steps",
+    writeRequiresOperator: true,
     table: "sequence_steps",
     orderBy: "step_number ASC",
     filters: ["sequence_id"],
@@ -482,6 +485,8 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   {
     // Contact enrollments in a sequence (local table `sequence_enrollments`).
     path: "sequence-enrollments",
+    redactColumns: ["execution_payload"],
+    writeRequiresOperator: true,
     table: "sequence_enrollments",
     orderBy: "enrolled_at DESC",
     filters: ["sequence_id", "status"],

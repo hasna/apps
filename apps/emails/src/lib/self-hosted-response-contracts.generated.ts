@@ -28101,17 +28101,80 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
             ]
           }
         },
+        "sequences": {
+          "type": "object",
+          "properties": {
+            "attempted": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sent": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pending": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "skipped": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "attempted",
+            "sent",
+            "failed",
+            "pending",
+            "skipped"
+          ]
+        },
+        "sequence_items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "sent",
+                  "failed",
+                  "processing",
+                  "lease_lost",
+                  "completed"
+                ]
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "status"
+            ]
+          }
+        },
         "sequence_execution": {
           "type": "string",
           "enum": [
-            "not_requested"
+            "not_requested",
+            "executed"
           ]
         }
       },
       "required": [
         "scheduled",
         "items",
-        "sequence_execution"
+        "sequence_execution",
+        "sequences",
+        "sequence_items"
       ]
     }
   },

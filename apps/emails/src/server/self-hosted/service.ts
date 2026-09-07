@@ -2505,10 +2505,12 @@ export async function handleSelfHostedRequest(
       if (operatorError) return operatorError;
       const body = await readJsonBody(req);
       const limit = body.limit === undefined ? 10 : body.limit;
-      if (Object.keys(body).some(key => key !== "limit")) return json(400, { error: "Only limit may be specified" });
+      if (Object.keys(body).some(key => key !== "limit" && key !== "sequence_limit")) return json(400, { error: "Only limit and sequence_limit may be specified" });
+      const sequenceLimit = body.sequence_limit === undefined ? 10 : body.sequence_limit;
+      if (typeof sequenceLimit !== "number" || !Number.isSafeInteger(sequenceLimit) || sequenceLimit < 0 || sequenceLimit > 100) return json(400, { error: "sequence_limit must be an integer from 0 to 100" });
       if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) return json(400, { error: "limit must be an integer from 1 to 100" });
       const { runScheduledBatch } = await import("./scheduler.js");
-      const result = await runScheduledBatch(auth.store, async (payload) => {
+      const send = async (payload: Record<string, unknown>) => {
         const sendUrl = new URL("/v1/messages/send", req.url);
         const headers = new Headers(req.headers);
         headers.set("Content-Type", "application/json");
@@ -2516,8 +2518,11 @@ export async function handleSelfHostedRequest(
         const response = await handleSelfHostedRequest(deps, new Request(sendUrl, { method: "POST", headers, body: JSON.stringify(payload) }), context);
         if (!response) throw new Error("Send handler was not available");
         return response;
-      }, limit);
-      return json(200, result);
+      };
+      const result = await runScheduledBatch(auth.store, send, limit);
+      const { runSequenceBatch } = await import("./sequence-worker.js");
+      const sequenceResult = sequenceLimit === 0 ? { sequences: { attempted: 0, sent: 0, failed: 0, pending: 0, skipped: 0 }, sequence_items: [] } : await runSequenceBatch(auth.store.sequenceWorker(), send, sequenceLimit);
+      return json(200, { ...result, ...sequenceResult, sequence_execution: sequenceLimit === 0 ? "not_requested" : "executed" });
     }
 
     const providerHealth = path.match(/^\/v1\/providers\/([^/]+)\/health$/);
