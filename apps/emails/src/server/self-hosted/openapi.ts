@@ -4679,4 +4679,33 @@ emailsSelfHostedOpenApi.paths!["/v1/scheduled/enqueue"] = { post: {
   },
 } };
 
+const provisioningInput = { type: "object", additionalProperties: false, required: ["email","provider_id"], properties: {
+  email:{type:"string"},provider_id:{type:"string"},domain_id:{type:"string"},receive_strategy:{type:"string",enum:["ses-s3","cf-routing","resend-webhook"]},
+  forward_to:{type:"string"},owner:{type:"string"},administrator:{type:"string"},inbound_bucket:{type:"string"},
+} };
+const provisioningReceipt = {type:"object",required:["ready","code","message","checked_at"],properties:{
+  ready:{type:"boolean"},code:{type:"string"},message:{type:"string"},checked_at:{type:"string",format:"date-time"},address_id:{type:"string"},
+  checks:{type:"object",required:["provider_verified","mx_verified","receipt_route_verified","queue_route_verified"],properties:{
+    provider_verified:{type:"boolean"},mx_verified:{type:"boolean"},receipt_route_verified:{type:"boolean"},queue_route_verified:{type:"boolean"}
+  }}
+}};
+const provisioningJob = {type:"object",required:["id","kind","status","input","receipt","created_at","updated_at"],properties:{
+  id:{type:"string"},kind:{type:"string",enum:["address"]},status:{type:"string",enum:["pending","processing","blocked","ready"]},input:provisioningInput,
+  receipt:{...provisioningReceipt,nullable:true},created_at:{type:"string",format:"date-time"},updated_at:{type:"string",format:"date-time"},
+}};
+const provisioningJobResponse = {type:"object",required:["job"],properties:{job:provisioningJob}};
+const provisioningErrors = {"400":errorResponse("Invalid provisioning options"),"401":errorResponse("Authentication required"),"403":errorResponse("Tenant operator required"),"404":errorResponse("Tenant resource not found"),"409":errorResponse("Conflicting provisioning inputs or bindings")};
+emailsSelfHostedOpenApi.paths!["/v1/provision/address"]={post:{operationId:"provisionAddress",summary:"Ensure an address on a configured SES/S3 domain after fresh readiness checks",
+  requestBody:{required:true,content:{"application/json":{schema:{...provisioningInput,properties:{...provisioningInput.properties,dry_run:{type:"boolean"},idempotency_key:{type:"string",maxLength:200}}}}}},
+  responses:{...provisioningErrors,"200":{description:"Durable job receipt or a read-only plan",content:{"application/json":{schema:{oneOf:[provisioningJobResponse,
+    {type:"object",required:["dry_run","plan","receipt"],properties:{dry_run:{type:"boolean",enum:[true]},plan:{...provisioningInput,properties:{...provisioningInput.properties,owner_id:{type:"string",nullable:true},administrator_id:{type:"string",nullable:true},address_exists:{type:"boolean"}}},receipt:provisioningReceipt}}
+  ]}}}}}
+}};
+for(const run of [false,true]) emailsSelfHostedOpenApi.paths![`/v1/provision/jobs/{id}${run?"/run":""}`]={[run?"post":"get"]:{
+  operationId:run?"runProvisioningJob":"getProvisioningJob",summary:run?"Retry readiness checks for one immutable provisioning job":"Read a tenant provisioning job receipt",
+  parameters:[{name:"id",in:"path",required:true,schema:{type:"string"}}],
+  ...(run?{requestBody:{content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{}}}}}}:{}),
+  responses:{...provisioningErrors,"200":{description:"Provisioning job",content:{"application/json":{schema:provisioningJobResponse}}}},
+}};
+
 addRoutineErrorParity(emailsSelfHostedOpenApi);

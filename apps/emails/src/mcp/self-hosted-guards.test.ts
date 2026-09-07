@@ -275,13 +275,17 @@ describe("MCP self_hosted guards", () => {
     expect(payload.gaps).toEqual({});
   });
 
+  it("reports address provisioning API incompatibility without using client cloud credentials", async () => {
+    const result=await callTool("provision_address",{email:"ops@example.com",provider_id:"provider-1"});
+    expect(result.isError).toBe(true);expect(resultText(result)).toContain("POST /v1/provision/address");expect(resultText(result)).toContain("HTTP 405");
+  });
+
   it("tells the truth about provisioning tools that no mode implements", async () => {
     // The local provisioning orchestrator was unreachable dead code and is gone;
     // the self-hosted server exposes no /v1 provisioning route. Claiming these
     // "run on the self-hosted server" sent operators looking for a service that
     // does not exist, so the error names the real, runnable alternative instead.
     const cases: Array<[string, Record<string, unknown>, string]> = [
-      ["provision_address", { email: "ops@example.com", provider_id: "provider-1" }, "emails address add"],
       ["provision_status", {}, "emails domain list --json"],
       ["provision_domain", { domain: "example.com", provider_id: "provider-1" }, "emails domain adopt"],
     ];

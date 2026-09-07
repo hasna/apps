@@ -1,4 +1,5 @@
 import { executeIngestBatch, IngestApiError, type IngestApiInput, type IngestCloudFactory } from "./ingest-api.js";
+import { normalizeAddressProvisioning, planAddressProvisioning, runAddressProvisioningJob, AddressProvisioningError, type ProvisioningJob } from "./address-provisioning.js";
 import { syncProviderDelivery, ProviderSyncError } from "./provider-sync.js";
 import { readProviderHealth } from "./provider-health.js";
 import { runForwardingBatch, normalizeForwardingOptions, normalizeForwardingRule } from "./forwarding.js";
@@ -176,6 +177,7 @@ async function readinessCheck(deps: SelfHostedServiceDeps): Promise<ReadyResult>
 }
 
 export interface SelfHostedServiceDeps {
+  provisioning?: { resolveMx?: typeof import("node:dns/promises").resolveMx };
   client: TypedQueryClient;
   store: EmailsSelfHostedStore;
   verifier: ApiKeyVerifier;
@@ -1016,6 +1018,99 @@ export async function handleSelfHostedRequest(
         return (await auth.store.deleteDomain(id)) ? json(200, { deleted: true, id }) : json(404, { error: "domain not found" });
       }
       return json(405, { error: "method not allowed" });
+    }
+
+    // Provisioning orchestration is operator-owned; generic address CRUD does not execute it.
+    if (
+      path === "/v1/provision/address" ||
+      /^\/v1\/provision\/jobs\/[^/]+(?:\/run)?$/.test(path)
+    ) {
+      const auth = await authenticate(
+        deps,
+        req,
+        url,
+        method === "GET" ? read : write,
+      );
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "address provisioning");
+      if (denied) return denied;
+      const publicJob = (job: ProvisioningJob) => ({
+        id: job.id,
+        kind: job.kind,
+        status: job.status,
+        input: job.input,
+        receipt: job.receipt,
+        created_at: job.created_at,
+        updated_at: job.updated_at,
+      });
+      try {
+        if (path === "/v1/provision/address") {
+          if (method !== "POST")
+            return json(405, { error: "method not allowed" });
+          const body = await readJsonBody(req),
+            input = normalizeAddressProvisioning(body);
+          const options = {
+            resolveSender: deps.resolveSender,
+            env: deps.env,
+            mx: deps.provisioning?.resolveMx,
+          };
+          if (body.dry_run === true)
+            return json(
+              200,
+              await planAddressProvisioning(
+                auth.store,
+                auth.ctx.tenantId,
+                input,
+                options,
+              ),
+            );
+          if (typeof body.idempotency_key !== "string")
+            return json(400, { error: "idempotency_key is required" });
+          const refs = await auth.store.resolveAddressProvisioning(input);
+          const job = await auth.store.startProvisioningJob(
+            refs.input,
+            body.idempotency_key,
+            auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator",
+          );
+          const result = await runAddressProvisioningJob(
+            auth.store,
+            auth.ctx.tenantId,
+            job.id,
+            options,
+          );
+          return json(200, { job: publicJob(result) });
+        }
+        const match = path.match(/^\/v1\/provision\/jobs\/([^/]+)(\/run)?$/)!;
+        if (match[2]) {
+          if (method !== "POST")
+            return json(405, { error: "method not allowed" });
+          const body = await readJsonBody(req);
+          if (Object.keys(body).length)
+            return json(400, { error: "Provisioning job inputs are immutable" });
+          const result = await runAddressProvisioningJob(
+            auth.store,
+            auth.ctx.tenantId,
+            decodeURIComponent(match[1]!),
+            {
+              resolveSender: deps.resolveSender,
+              env: deps.env,
+              mx: deps.provisioning?.resolveMx,
+            },
+          );
+          return json(200, { job: publicJob(result) });
+        }
+        if (method !== "GET") return json(405, { error: "method not allowed" });
+        const job = await auth.store.getProvisioningJob(
+          decodeURIComponent(match[1]!),
+        );
+        return job
+          ? json(200, { job: publicJob(job) })
+          : json(404, { error: "Provisioning job not found" });
+      } catch (error) {
+        if (error instanceof AddressProvisioningError)
+          return json(error.status, { error: error.message, reason: error.code });
+        throw error;
+      }
     }
 
     // /v1/addresses

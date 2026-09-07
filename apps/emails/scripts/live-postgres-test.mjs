@@ -9,6 +9,7 @@ import { buildPrepublishTestEnv } from "./prepublish-local-test.mjs";
 // Every server integration file is required. Discovery below rejects omissions,
 // including a newly added file, rather than silently certifying an old subset.
 export const LIVE_POSTGRES_SUITES = Object.freeze([
+  "address-provisioning.integration.test.ts",
   "attachment-inventory.integration.test.ts",
   "forwarding.integration.test.ts",
   "idp.integration.test.ts",
@@ -34,11 +35,12 @@ export const OPTIONAL_SKIPS = Object.freeze({
   "idp.integration.test.ts": "live @hasna/tenants JWKS endpoint > serves a JWKS the authenticator accepts, and refuses our locally-signed token (typed unknown_kid)",
 });
 
-// Executed-case floors from the registration census (177 cases, including the
+// Executed-case floors from the registration census (193 cases, including the
 // two named optional checks). The multi-tenancy floor is the suite's own 34
 // tenancy and outbound-enforcement cases as merged onto origin/main; the
 // counts here are re-derived from the actual suites whenever main moves them.
 export const MINIMUM_PASS_COUNTS = Object.freeze({
+  "address-provisioning.integration.test.ts": 8,
   "attachment-inventory.integration.test.ts": 28,
   "forwarding.integration.test.ts": 5,
   "idp.integration.test.ts": 8,
@@ -49,9 +51,9 @@ export const MINIMUM_PASS_COUNTS = Object.freeze({
   "rls.integration.test.ts": 12,
   "scheduler.integration.test.ts": 4,
   "send-failure-semantics.integration.test.ts": 7,
-  "send-honesty-and-reconciliation.integration.test.ts": 17,
+  "send-honesty-and-reconciliation.integration.test.ts": 24,
   "sequence-worker.integration.test.ts": 4,
-  "store-conformance.integration.test.ts": 7,
+  "store-conformance.integration.test.ts": 8,
   "webhooks.integration.test.ts": 15,
 });
 

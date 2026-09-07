@@ -1673,6 +1673,33 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Ensure an address on a configured SES/S3 domain after fresh readiness checks */
+    async provisionAddress(body: { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string; "dry_run"?: boolean; "idempotency_key"?: string }, init?: RequestInit): Promise<{ "job": { "id": string; "kind": "address"; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string }; "receipt": { "ready": boolean; "code": string; "message": string; "checked_at": string; "address_id"?: string; "checks"?: { "provider_verified": boolean; "mx_verified": boolean; "receipt_route_verified": boolean; "queue_route_verified": boolean } } | null; "created_at": string; "updated_at": string } } | { "dry_run": true; "plan": { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string; "owner_id"?: string | null; "administrator_id"?: string | null; "address_exists"?: boolean }; "receipt": { "ready": boolean; "code": string; "message": string; "checked_at": string; "address_id"?: string; "checks"?: { "provider_verified": boolean; "mx_verified": boolean; "receipt_route_verified": boolean; "queue_route_verified": boolean } } }> {
+      return this.request("POST", `/v1/provision/address`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read a tenant provisioning job receipt */
+    async getProvisioningJob(id: string, init?: RequestInit): Promise<{ "job": { "id": string; "kind": "address"; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string }; "receipt": { "ready": boolean; "code": string; "message": string; "checked_at": string; "address_id"?: string; "checks"?: { "provider_verified": boolean; "mx_verified": boolean; "receipt_route_verified": boolean; "queue_route_verified": boolean } } | null; "created_at": string; "updated_at": string } }> {
+      return this.request("GET", `/v1/provision/jobs/${encodeURIComponent(String(id))}`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Retry readiness checks for one immutable provisioning job */
+    async runProvisioningJob(id: string, body: Record<string, unknown>, init?: RequestInit): Promise<{ "job": { "id": string; "kind": "address"; "status": "pending" | "processing" | "blocked" | "ready"; "input": { "email": string; "provider_id": string; "domain_id"?: string; "receive_strategy"?: "ses-s3" | "cf-routing" | "resend-webhook"; "forward_to"?: string; "owner"?: string; "administrator"?: string; "inbound_bucket"?: string }; "receipt": { "ready": boolean; "code": string; "message": string; "checked_at": string; "address_id"?: string; "checks"?: { "provider_verified": boolean; "mx_verified": boolean; "receipt_route_verified": boolean; "queue_route_verified": boolean } } | null; "created_at": string; "updated_at": string } }> {
+      return this.request("POST", `/v1/provision/jobs/${encodeURIComponent(String(id))}/run`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List tenant-scoped provisioning */
     async listResourceProvisioning(query?: { "limit"?: number; "offset"?: number; "entity_type"?: string | null; "entity_id"?: string | null; "to_state"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "entity_type": string | null; "entity_id": string | null; "from_state": string | null; "to_state": string | null; "detail_json": unknown; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
       return this.request("GET", `/v1/provisioning`, {

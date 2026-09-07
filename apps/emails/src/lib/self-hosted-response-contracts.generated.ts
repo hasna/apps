@@ -25213,6 +25213,922 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "POST",
+    "operationId": "provisionAddress",
+    "path": "/v1/provision/address",
+    "status": 200,
+    "schema": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "job"
+          ],
+          "properties": {
+            "job": {
+              "type": "object",
+              "required": [
+                "id",
+                "kind",
+                "status",
+                "input",
+                "receipt",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "address"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "processing",
+                    "blocked",
+                    "ready"
+                  ]
+                },
+                "input": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "email",
+                    "provider_id"
+                  ],
+                  "properties": {
+                    "email": {
+                      "type": "string"
+                    },
+                    "provider_id": {
+                      "type": "string"
+                    },
+                    "domain_id": {
+                      "type": "string"
+                    },
+                    "receive_strategy": {
+                      "type": "string",
+                      "enum": [
+                        "ses-s3",
+                        "cf-routing",
+                        "resend-webhook"
+                      ]
+                    },
+                    "forward_to": {
+                      "type": "string"
+                    },
+                    "owner": {
+                      "type": "string"
+                    },
+                    "administrator": {
+                      "type": "string"
+                    },
+                    "inbound_bucket": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "receipt": {
+                  "type": "object",
+                  "required": [
+                    "ready",
+                    "code",
+                    "message",
+                    "checked_at"
+                  ],
+                  "properties": {
+                    "ready": {
+                      "type": "boolean"
+                    },
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "checked_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "address_id": {
+                      "type": "string"
+                    },
+                    "checks": {
+                      "type": "object",
+                      "required": [
+                        "provider_verified",
+                        "mx_verified",
+                        "receipt_route_verified",
+                        "queue_route_verified"
+                      ],
+                      "properties": {
+                        "provider_verified": {
+                          "type": "boolean"
+                        },
+                        "mx_verified": {
+                          "type": "boolean"
+                        },
+                        "receipt_route_verified": {
+                          "type": "boolean"
+                        },
+                        "queue_route_verified": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  },
+                  "nullable": true
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "plan",
+            "receipt"
+          ],
+          "properties": {
+            "dry_run": {
+              "type": "boolean",
+              "enum": [
+                true
+              ]
+            },
+            "plan": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "email",
+                "provider_id"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "provider_id": {
+                  "type": "string"
+                },
+                "domain_id": {
+                  "type": "string"
+                },
+                "receive_strategy": {
+                  "type": "string",
+                  "enum": [
+                    "ses-s3",
+                    "cf-routing",
+                    "resend-webhook"
+                  ]
+                },
+                "forward_to": {
+                  "type": "string"
+                },
+                "owner": {
+                  "type": "string"
+                },
+                "administrator": {
+                  "type": "string"
+                },
+                "inbound_bucket": {
+                  "type": "string"
+                },
+                "owner_id": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "administrator_id": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "address_exists": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "receipt": {
+              "type": "object",
+              "required": [
+                "ready",
+                "code",
+                "message",
+                "checked_at"
+              ],
+              "properties": {
+                "ready": {
+                  "type": "boolean"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "checked_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "address_id": {
+                  "type": "string"
+                },
+                "checks": {
+                  "type": "object",
+                  "required": [
+                    "provider_verified",
+                    "mx_verified",
+                    "receipt_route_verified",
+                    "queue_route_verified"
+                  ],
+                  "properties": {
+                    "provider_verified": {
+                      "type": "boolean"
+                    },
+                    "mx_verified": {
+                      "type": "boolean"
+                    },
+                    "receipt_route_verified": {
+                      "type": "boolean"
+                    },
+                    "queue_route_verified": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "provisionAddress",
+    "path": "/v1/provision/address",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "provisionAddress",
+    "path": "/v1/provision/address",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "provisionAddress",
+    "path": "/v1/provision/address",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "provisionAddress",
+    "path": "/v1/provision/address",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "provisionAddress",
+    "path": "/v1/provision/address",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "provisionAddress",
+    "path": "/v1/provision/address",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "provisionAddress",
+    "path": "/v1/provision/address",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisioningJob",
+    "path": "/v1/provision/jobs/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "job"
+      ],
+      "properties": {
+        "job": {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "status",
+            "input",
+            "receipt",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "address"
+              ]
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "processing",
+                "blocked",
+                "ready"
+              ]
+            },
+            "input": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "email",
+                "provider_id"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "provider_id": {
+                  "type": "string"
+                },
+                "domain_id": {
+                  "type": "string"
+                },
+                "receive_strategy": {
+                  "type": "string",
+                  "enum": [
+                    "ses-s3",
+                    "cf-routing",
+                    "resend-webhook"
+                  ]
+                },
+                "forward_to": {
+                  "type": "string"
+                },
+                "owner": {
+                  "type": "string"
+                },
+                "administrator": {
+                  "type": "string"
+                },
+                "inbound_bucket": {
+                  "type": "string"
+                }
+              }
+            },
+            "receipt": {
+              "type": "object",
+              "required": [
+                "ready",
+                "code",
+                "message",
+                "checked_at"
+              ],
+              "properties": {
+                "ready": {
+                  "type": "boolean"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "checked_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "address_id": {
+                  "type": "string"
+                },
+                "checks": {
+                  "type": "object",
+                  "required": [
+                    "provider_verified",
+                    "mx_verified",
+                    "receipt_route_verified",
+                    "queue_route_verified"
+                  ],
+                  "properties": {
+                    "provider_verified": {
+                      "type": "boolean"
+                    },
+                    "mx_verified": {
+                      "type": "boolean"
+                    },
+                    "receipt_route_verified": {
+                      "type": "boolean"
+                    },
+                    "queue_route_verified": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              },
+              "nullable": true
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisioningJob",
+    "path": "/v1/provision/jobs/{id}",
+    "status": 400,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisioningJob",
+    "path": "/v1/provision/jobs/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisioningJob",
+    "path": "/v1/provision/jobs/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisioningJob",
+    "path": "/v1/provision/jobs/{id}",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisioningJob",
+    "path": "/v1/provision/jobs/{id}",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisioningJob",
+    "path": "/v1/provision/jobs/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisioningJob",
+    "path": "/v1/provision/jobs/{id}/run",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "job"
+      ],
+      "properties": {
+        "job": {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "status",
+            "input",
+            "receipt",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "address"
+              ]
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "processing",
+                "blocked",
+                "ready"
+              ]
+            },
+            "input": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "email",
+                "provider_id"
+              ],
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "provider_id": {
+                  "type": "string"
+                },
+                "domain_id": {
+                  "type": "string"
+                },
+                "receive_strategy": {
+                  "type": "string",
+                  "enum": [
+                    "ses-s3",
+                    "cf-routing",
+                    "resend-webhook"
+                  ]
+                },
+                "forward_to": {
+                  "type": "string"
+                },
+                "owner": {
+                  "type": "string"
+                },
+                "administrator": {
+                  "type": "string"
+                },
+                "inbound_bucket": {
+                  "type": "string"
+                }
+              }
+            },
+            "receipt": {
+              "type": "object",
+              "required": [
+                "ready",
+                "code",
+                "message",
+                "checked_at"
+              ],
+              "properties": {
+                "ready": {
+                  "type": "boolean"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "checked_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "address_id": {
+                  "type": "string"
+                },
+                "checks": {
+                  "type": "object",
+                  "required": [
+                    "provider_verified",
+                    "mx_verified",
+                    "receipt_route_verified",
+                    "queue_route_verified"
+                  ],
+                  "properties": {
+                    "provider_verified": {
+                      "type": "boolean"
+                    },
+                    "mx_verified": {
+                      "type": "boolean"
+                    },
+                    "receipt_route_verified": {
+                      "type": "boolean"
+                    },
+                    "queue_route_verified": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              },
+              "nullable": true
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisioningJob",
+    "path": "/v1/provision/jobs/{id}/run",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisioningJob",
+    "path": "/v1/provision/jobs/{id}/run",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisioningJob",
+    "path": "/v1/provision/jobs/{id}/run",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisioningJob",
+    "path": "/v1/provision/jobs/{id}/run",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisioningJob",
+    "path": "/v1/provision/jobs/{id}/run",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisioningJob",
+    "path": "/v1/provision/jobs/{id}/run",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisioningJob",
+    "path": "/v1/provision/jobs/{id}/run",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
     "method": "GET",
     "operationId": "listResourceProvisioning",
     "path": "/v1/provisioning",

@@ -1,3 +1,4 @@
+import { provisionAddress, formatAddressProvisioningResult, addressProvisioningReady, type ProvisionAddressOptions } from "../../lib/address-provisioning-api.js";
 import type { Command } from "commander";
 import chalk from "../../lib/chalk-lite.js";
 import { createAddress, findAddressesByEmail, listAddresses, deleteAddress, getAddress, getAddressByEmail, markVerified } from "../../db/addresses.js";
@@ -14,33 +15,6 @@ import {
   transferAddressOwnerByRef,
   unassignAddressOwnerByRef,
 } from "../../lib/address-ownership.js";
-
-// `address provision` used to throw "is not available in the self-hosted client;
-// it runs on the self-hosted server". Both halves were false: the throw was
-// unconditional, so it fired in local mode too, and there is no server route for
-// it to run on — `openapi.ts` exposes plain CRUD for `/v1/addresses` and no
-// provisioning route, and the container runs no reconciler. The orchestrator
-// this command wrapped was deleted as unreachable dead code, and nothing
-// replaced it in any configuration.
-//
-// So the refusal now says exactly that and names the two commands that DO the
-// work, matching the wording `emails provision *` and the MCP provisioning tools
-// already settled on. It must not name a deployment mode.
-//
-// Address ownership is NOT in this category: `src/db/owners.ts` has collapsed onto
-// the store seam, so its subcommands read and write whichever store this
-// installation's STORAGE configuration names — owner rows through the `owners`
-// repository, the ownership columns through `addresses`/`addressLifecycle`, and the
-// audit trail through the address-ownership ledger.
-function notImplementedAnywhere(command: string): never {
-  throw new Error(
-    `${command} is not implemented in this build: there is no address provisioning ` +
-      `orchestrator and no route that performs one. Create the address with ` +
-      `'emails address add <email> --provider <id>', record who owns it with ` +
-      `'emails address set-owner <email> --owner <name>', and wire the domain's inbound ` +
-      `route with 'emails aws setup-inbound --domain <domain>'.`,
-  );
-}
 
 /** Upper bound for `address owner-history --limit`, mirroring the repo cap. */
 const MAX_OWNER_HISTORY_LIMIT = 100;
@@ -380,7 +354,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
 
   addressCmd
     .command("provision <email>")
-    .description("Create an email address on a provisioned domain (NOT IMPLEMENTED in this build; use emails address add)")
+    .description("Provision an address on a configured domain through the authenticated API")
     .requiredOption("--provider <id>", "Provider ID")
     .option("--domain <id>", "Domain ID (defaults to the address's domain if registered)")
     .option("--receive <strategy>", "Receive strategy: ses-s3 | cf-routing | resend-webhook", "ses-s3")
@@ -389,11 +363,15 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .option("--administrator <name|id>", "Administering agent (required for human owners; defaults to owner for agents)")
     .option("--dry-run", "Resolve inputs and show the planned change without writing address, provisioning, or ownership state")
     .option("--wait", "Advance provisioning now and wait until the address is ready to receive")
-    .option("--timeout <sec>", "Max seconds to wait when --wait is used", "120")
-    .option("--interval <sec>", "Seconds between readiness checks when --wait is used", "5")
-    .option("--bucket <name>", "Inbound S3 bucket for receive validation (defaults to config inbound_s3_bucket)")
-    .action(async () => {
-      try { notImplementedAnywhere("emails address provision"); } catch (e) { handleError(e); }
+    .option("--timeout <sec>", "Max seconds to wait when --wait is used (1–300)", "120")
+    .option("--interval <sec>", "Seconds between readiness checks when --wait is used (1–60)", "5")
+    .option("--bucket <name>", "Inbound bucket assertion (must match server ingest configuration)")
+    .action(async (email: string, opts: ProvisionAddressOptions) => {
+      try {
+        const result = await provisionAddress(email, opts);
+        output(result, formatAddressProvisioningResult(result));
+        if (!addressProvisioningReady(result)) process.exitCode = 1;
+      } catch (e) { handleError(e); }
     });
 
   // `verify` READS. `set-verified` WRITES. They are separate commands, and this one
@@ -404,9 +382,8 @@ export function registerAddressCommands(program: Command, output: (data: unknown
   // gets "⚠ … is not yet verified", and reasonably concludes the tool has told them
   // what to do next — when in fact this command has no write path at all and, before
   // `set-verified` and `address add --verified` existed, neither did any other.
-  // `address provision` still refuses in every mode, so the only route left at the
-  // time was a hand-rolled PATCH /v1/addresses/{id}. The name is kept for
-  // compatibility; the description and output name the command that writes.
+  // The name is kept for compatibility; provision performs verified readiness
+  // checks, while set-verified remains an explicit manual override.
   addressCmd
     .command("verify <email>")
     .description("Check verification status of an address (READ-ONLY; use 'address set-verified' to change it)")

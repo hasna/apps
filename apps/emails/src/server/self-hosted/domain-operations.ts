@@ -13,11 +13,12 @@ export async function runDomainOperation(
   tenantId: string,
   ref: string,
   operation: DomainOperation,
-  options: { providerId?: string; resolveSender?: SenderResolver; env?: NodeJS.ProcessEnv; mx?: typeof resolveMx } = {},
+  options: { providerId?: string; resolveSender?: SenderResolver; env?: NodeJS.ProcessEnv; mx?: typeof resolveMx; dryRun?: boolean } = {},
 ) {
   const domain = await store.getDomain(ref) ?? await store.getDomainByName(ref);
   if (!domain) throw new DomainOperationError("Domain not found in this tenant.", 404);
   if (operation === "disable-outbound") {
+    if (options.dryRun) return { domain, outbound_enabled: false, planned: true };
     const updated = await store.updateDomain(domain.id, { status: "outbound_disabled" });
     return { domain: updated, outbound_enabled: false };
   }
@@ -32,7 +33,7 @@ export async function runDomainOperation(
   const dns = await sender.verifyDomain(domain.domain);
   const verified = dns.verifiedForSending ?? (dns.dkim === "verified" && dns.spf === "verified");
   if (operation !== "verify" && !verified) throw new DomainOperationError("The provider has not verified this domain for sending. Publish its required DNS records, then run domain verify.");
-  let inbound: { ready: boolean; reason: string } | undefined;
+  let inbound: { ready: boolean; reason: string; objectKeyPrefix?: string; topicArn?: string } | undefined;
   if (operation === "enable-inbound") {
     const env = options.env ?? process.env;
     const bucket = env.EMAILS_INGEST_S3_BUCKET?.trim();
@@ -46,6 +47,9 @@ export async function runDomainOperation(
     inbound = await sender.checkInboundDomain(domain.domain, bucket);
     if (!inbound.ready) throw new DomainOperationError(inbound.reason);
   }
+  // Provisioning planners reuse current provider/DNS evidence without promoting
+  // a domain or claiming its tenant route before the address transaction commits.
+  if (options.dryRun) return { domain, dns, ...(inbound ? { inbound } : {}), planned: true };
   let updated = await store.updateDomain(domain.id, {
     verified,
     ...(options.providerId ? { provider: providerId } : {}),

@@ -1,3 +1,5 @@
+import * as addressProvisioningStore from "./address-provisioning-store.js";
+import type { AddressProvisioningInput, AddressProvisioningRefs, ProvisioningJob, ProvisioningReceipt } from "./address-provisioning.js";
 import { SequenceWorkerStore } from "./sequence-worker.js";
 import type { ProviderDeliveryRead } from "./provider-delivery.js";
 // Postgres repository for the Emails self-hosted service.
@@ -2238,6 +2240,70 @@ export class TenantScopedStore {
     private readonly allowUnsafeTestTransactions = false,
     private readonly repairPolicy: AttachmentRepairPolicy = attachmentRepairPolicy(undefined),
   ) {}
+
+  resolveAddressProvisioning(input: AddressProvisioningInput) {
+    return addressProvisioningStore.resolveAddressProvisioning(
+      this.client,
+      this.tenantId,
+      input,
+    );
+  }
+  startProvisioningJob(
+    input: AddressProvisioningInput,
+    key: string,
+    actor: string,
+  ) {
+    return addressProvisioningStore.startProvisioningJob(
+      this.client,
+      this.tenantId,
+      input,
+      key,
+      actor,
+    );
+  }
+  getProvisioningJob(id: string) {
+    return addressProvisioningStore.getProvisioningJob(
+      this.client,
+      this.tenantId,
+      id,
+    );
+  }
+  claimProvisioningJob(id: string) {
+    return addressProvisioningStore.claimProvisioningJob(
+      this.client,
+      this.tenantId,
+      id,
+    );
+  }
+  blockProvisioningJob(job: ProvisioningJob, receipt: ProvisioningReceipt) {
+    return addressProvisioningStore.blockProvisioningJob(
+      this.client,
+      this.tenantId,
+      job,
+      receipt,
+    );
+  }
+  async completeAddressProvisioning(
+    job: ProvisioningJob,
+    refs: AddressProvisioningRefs,
+    receipt: ProvisioningReceipt,
+  ) {
+    if (!this.atomicClient)
+      throw new Error("Address provisioning requires a transactional store");
+    return this.atomicClient.transaction(async (tx) => {
+      await tx.execute("SELECT set_config('app.current_tenant',$1,true)", [
+        this.tenantId,
+      ]);
+      return addressProvisioningStore.completeAddressProvisioning(
+        tx,
+        new TenantScopedStore(tx, this.tenantId),
+        this.tenantId,
+        job,
+        refs,
+        receipt,
+      );
+    });
+  }
 
   private sendIntentKeyDigest(key: string): string {
     return createHash("sha256")

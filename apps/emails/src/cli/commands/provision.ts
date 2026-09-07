@@ -1,3 +1,4 @@
+import { inspectAddressProvisioningJob, provisionAddress, formatAddressProvisioningResult, addressProvisioningReady, type ProvisionAddressOptions } from "../../lib/address-provisioning-api.js";
 import type { Command } from "commander";
 import { handleError, parseCliListPage } from "../utils.js";
 import type { MxAssessment } from "../../lib/mx-ownership.js";
@@ -6,8 +7,8 @@ import type { MxAssessment } from "../../lib/mx-ownership.js";
 // actions are kept explicit until their provider operations are implemented.
 function notImplementedAnywhere(command: string): never {
   throw new Error(
-    `${command} is not implemented in this build: there is no local provisioning ` +
-      `orchestrator and the self-hosted server exposes no provisioning route. ` +
+    `${command} is not implemented in this build: this infrastructure orchestration ` +
+      `has no API workflow yet. Address provisioning requires an already-configured domain. ` +
       `Register an already-verified domain with 'emails domain adopt <domain> --provider <id>' ` +
       `and create the SES inbound bucket and receipt rules with 'emails aws setup-inbound'.`,
   );
@@ -63,11 +64,22 @@ export function registerProvisionCommands(program: Command, output: (data: unkno
     .option("--administrator <name|id>", "Administering agent (required for human owners; defaults to owner for agents)")
     .option("--dry-run", "Resolve inputs and show the planned change without writing address, provisioning, or ownership state")
     .option("--wait", "Advance provisioning now and wait until the address is ready to receive")
-    .option("--timeout <sec>", "Max seconds to wait when --wait is used", "120")
-    .option("--interval <sec>", "Seconds between readiness checks when --wait is used", "5")
-    .option("--bucket <name>", "Inbound S3 bucket for receive validation (defaults to config inbound_s3_bucket)")
-    .action(async () => {
-      try { notImplementedAnywhere("emails provision address"); } catch (e) { handleError(e); }
+    .option("--timeout <sec>", "Max seconds to wait when --wait is used (1–300)", "120")
+    .option("--interval <sec>", "Seconds between readiness checks when --wait is used (1–60)", "5")
+    .option("--bucket <name>", "Inbound bucket assertion (must match server ingest configuration)")
+    .action(async (email: string, opts: ProvisionAddressOptions) => {
+      try {
+        const result = await provisionAddress(email, opts);
+        output(result, formatAddressProvisioningResult(result));
+        if (!addressProvisioningReady(result)) process.exitCode = 1;
+      } catch (e) { handleError(e); }
+    });
+
+  cmd.command("job <id>").description("Read a durable address provisioning receipt")
+    .option("--retry", "Recheck readiness using the job's original inputs")
+    .action(async (id:string, opts:{retry?:boolean})=>{
+      try { const result=await inspectAddressProvisioningJob(id,opts.retry);output(result,formatAddressProvisioningResult(result));if(!addressProvisioningReady(result))process.exitCode=1; }
+      catch(error){handleError(error);}
     });
 
   // ── domain setup ─────────────────────────────────────────────────────────

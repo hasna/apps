@@ -1,11 +1,4 @@
-// Automated provisioning (SES identity/MAIL FROM, Cloudflare DNS, S3 inbound
-// receipt rules, the reconciler daemon and round-trip acceptance tests) ships in
-// NO mode of this package: the local orchestrator was unreachable dead code and
-// has been deleted, and the self-hosted server exposes no /v1 provisioning route
-// and runs no reconciler. Every `provision` command therefore fails loud — and
-// must say so TRUTHFULLY. The previous text ("not available in the self-hosted
-// client; it runs on the self-hosted server") was false in both modes: it sent
-// operators looking for a server-side service that does not exist.
+// Domain infrastructure creation remains explicitly unsupported; address provisioning uses its API suite.
 import { describe, expect, it } from "bun:test";
 import { Command } from "commander";
 import { registerProvisionCommands } from "./provision.js";
@@ -36,7 +29,6 @@ describe("unimplemented provisioning commands", () => {
   // Required options are supplied so the command action runs and hits the
   // server-only guard rather than a commander missing-option error.
   const SERVER_ONLY = [
-    { name: "provision address", args: ["provision", "address", "agent@example.com", "--provider", "ses-provider"] },
     { name: "provision domain", args: ["provision", "domain", "example.com", "--provider", "ses-provider"] },
     { name: "provision up", args: ["provision", "up", "example.com", "--provider", "ses-provider"] },
     { name: "provision roundtrip", args: ["provision", "roundtrip", "--domain", "example.com", "--provider", "ses-provider"] },

@@ -27,7 +27,8 @@ export interface SelfHostedSender {
   readonly credentialSource?: SelfHostedSenderCredentialSource;
   readonly region?: string;
   verifyDomain?(domain: string): Promise<{ verifiedForSending?: boolean; dkim: import("../../types/index.js").DnsStatus; spf: import("../../types/index.js").DnsStatus; dmarc: import("../../types/index.js").DnsStatus }>;
-  checkInboundDomain?(domain: string, bucket: string): Promise<{ ready: boolean; reason: string }>;
+  checkInboundDomain?(domain: string, bucket: string): Promise<{ ready: boolean; reason: string; objectKeyPrefix?: string; topicArn?: string }>;
+  checkInboundQueue?(topicArn: string, queueUrl: string): Promise<{ ready: boolean; reason: string }>;
   readDelivery?(messageId: string, signal: AbortSignal): Promise<ProviderDeliveryRead>;
   probe?(signal: AbortSignal): Promise<{ sendingEnabled?: boolean; productionAccessEnabled?: boolean }>;
   send(input: SendEmailOptions): Promise<string>;
@@ -280,12 +281,15 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
           const recipients = rule.Recipients ?? [];
           if (recipients.length && !recipients.some((recipient) => recipient.toLowerCase() === domain.toLowerCase())) continue;
           for (const action of rule.Actions ?? []) {
-            if (action.S3Action?.BucketName === bucket) return { ready: true, reason: "Active SES receipt rule delivers this domain to the configured ingest bucket." };
+            if (action.S3Action?.BucketName === bucket) return { ready: true, reason: "Active SES receipt rule delivers this domain to the configured ingest bucket.", objectKeyPrefix: action.S3Action.ObjectKeyPrefix ?? "", topicArn: action.S3Action.TopicArn };
             if (action.StopAction || action.BounceAction) return { ready: false, reason: "An earlier SES receipt action stops mail before the ingest bucket." };
           }
         }
         return { ready: false, reason: "No active SES receipt rule routes this domain to the configured ingest bucket." };
       } finally { client.destroy(); }
+    }, checkInboundQueue: async (topicArn: string, queueUrl: string) => {
+      const { checkInboundQueue } = await import("./inbound-queue-readiness.js");
+      return checkInboundQueue(provider, topicArn, queueUrl);
     } } : {}),
     send: (input) => adapter.sendEmail(input),
   };

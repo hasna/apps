@@ -1,14 +1,11 @@
 # Email-address provisioning
 
-> **Status: the stateful provisioning workflow is not implemented.** Every
-> `emails provision *` command and the MCP tools `provision_domain`,
-> `provision_address`, and `provision_status` returns an actionable error. The
-> package ships no provisioning reconciler or `/v1` provisioning route.
-
-The registered commands preserve compatibility and make the missing capability
-explicit; registration in `--help` is not a claim that they work. The internal
-provisioning records and state-machine helpers are not connected to a shipped
-orchestrator.
+> **Address provisioning is available for configured SES inbound domains.**
+> `emails address provision`, `emails provision address`, and MCP
+> `provision_address` use authenticated API jobs with durable receipts and retry.
+> See [Address provisioning](ADDRESS_PROVISIONING.md) for requirements and limits.
+> `provision status` reads the shared registry. Domain infrastructure setup,
+> `provision up`, daemon, domain-level retry, and roundtrip remain unimplemented.
 
 ## Supported operator workflow
 
@@ -66,8 +63,8 @@ Local mode also exposes direct, operator-credentialed infrastructure tools:
 - `setup_cloudflare_dns` publishes DKIM/SPF/DMARC and optional MX records;
 - `setup_ses_inbound` creates the S3 bucket and SES receipt rules.
 
-These are one-shot infrastructure helpers, not the missing resumable
-`provision_*` workflow. They are refused in `self_hosted` mode because otherwise
+These are one-shot infrastructure helpers, separate from the API address
+workflow. They are refused in `self_hosted` mode because otherwise
 they would mutate infrastructure using the client machine's ambient cloud
 credentials while recording state in the operator's shared service.
 
@@ -86,8 +83,8 @@ at that provider.
 
 ## Unimplemented target
 
-The intended resumable domain/address state machine, retry/status commands,
-daemon, and round-trip acceptance runner remain design work. Their historical
+The intended domain infrastructure state machine, daemon, and round-trip
+acceptance runner remain design work. Their historical
 design is preserved in [PLAN-PROVISIONING.md](PLAN-PROVISIONING.md); it is not an
 operator runbook and its example future commands must not be used as current
 instructions.

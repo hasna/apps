@@ -3009,6 +3009,24 @@ const FORWARDING_DELIVERY_JOBS = defineMigration(
      WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant',true),'')::uuid);`,
 );
 
+const PROVISIONING_JOBS = defineMigration(
+  "0033_provisioning_jobs",
+  `CREATE TABLE IF NOT EXISTS provisioning_jobs (
+    id TEXT PRIMARY KEY, tenant_id UUID NOT NULL, kind TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL, input_hash TEXT NOT NULL, input JSONB NOT NULL, actor TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','processing','blocked','ready')), receipt JSONB, lease UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(tenant_id,kind,idempotency_key)
+  );
+  CREATE INDEX IF NOT EXISTS provisioning_jobs_tenant_status ON provisioning_jobs(tenant_id,status,updated_at);
+  ALTER TABLE provisioning_jobs ENABLE ROW LEVEL SECURITY;
+  ALTER TABLE provisioning_jobs FORCE ROW LEVEL SECURITY;
+  DROP POLICY IF EXISTS provisioning_jobs_tenant_policy ON provisioning_jobs;
+  CREATE POLICY provisioning_jobs_tenant_policy ON provisioning_jobs
+    USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+    WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);`,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3049,5 +3067,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     SEQUENCE_EXECUTION_LEASE,
     FORWARDING_DELIVERY_JOBS,
     PROVIDER_STATUS_OBSERVATIONS,
+    PROVISIONING_JOBS,
   ];
 }
