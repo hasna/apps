@@ -4,7 +4,7 @@ import { createAddress, findAddressesByEmail, listAddresses, deleteAddress, getA
 import { suspendAddress, activateAddress, setAddressQuota } from "../../db/address-lifecycle.js";
 import { recordProvisioningEvent } from "../../db/provisioning.js";
 import { colorDnsStatus, tableRow, truncate } from "../../lib/format.js";
-import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, MAX_CLI_PAGE_LIMIT, parseCliListPage, resolveId } from "../utils.js";
+import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliPage } from "../utils.js";
 import {
   enrichAddresses,
   getAddressOwnershipDetail,
@@ -73,7 +73,7 @@ function resolveSelfHostedAddressId(ref: string): string {
   // verify, set-owner) accept the email, and `address list` prints it (task
   // 55c19dde).
   const wanted = ref.trim().toLowerCase();
-  const matches = listAddresses(undefined, { limit: 1000 })
+  const matches = listAddresses()
     .filter((address) => address.id.startsWith(ref) || address.email.toLowerCase() === wanted);
   if (matches.length === 1) return matches[0]!.id;
   if (matches.length > 1) {
@@ -116,19 +116,20 @@ export function registerAddressCommands(program: Command, output: (data: unknown
 
   const listAddressesAction = async (opts: { provider?: string; limit?: string; offset?: string; verbose?: boolean; unverified?: boolean }) => {
     try {
-      const page = parseCliListPage(opts);
+      const page = parseCliPage(opts);
       // Hydrate owner/administrator/provider_name instead of hardcoding nulls: an
       // owned address must never be reported as unowned, in the table or in --json.
       // Filter BEFORE applying the requested page. Otherwise a page containing
       // verified rows can print "No addresses" even though unverified senders are
-      // present later in the registry — precisely the default-page blind spot this
-      // option exists to remove. The address family has a documented 1,000-row CLI
-      // ceiling, so use that same bounded scan rather than an unbounded read.
+      // present later in the registry. An omitted limit means the full account
+      // registry; the repository pager either proves completion or fails closed.
       const listed = opts.unverified
-        ? listAddresses(opts.provider, { limit: MAX_CLI_PAGE_LIMIT, offset: 0 })
+        ? listAddresses(opts.provider)
             .filter((address) => !address.verified)
-            .slice(page.offset, page.offset + page.limit)
-        : listAddresses(opts.provider, page);
+            .slice(page.offset, opts.limit === undefined ? undefined : page.offset + page.limit)
+        : opts.limit === undefined
+          ? listAddresses(opts.provider).slice(page.offset)
+          : listAddresses(opts.provider, page);
       const addresses = await enrichAddresses(listed);
       if (addresses.length === 0) {
         output([], chalk.dim(opts.unverified ? "No unverified addresses." : "No addresses configured."));
@@ -179,6 +180,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
         shown: addresses.length,
         limit: page.limit,
         offset: page.offset,
+        complete: opts.limit === undefined,
         noun: "address",
         detailCommand: "use emails address owner <email-or-id> for ownership details",
         verbose,
@@ -193,7 +195,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .command("addresses")
     .description("List sender email addresses (alias: emails address list)")
     .option("--provider <id>", "Filter by provider ID")
-    .option("--limit <n>", "Maximum addresses to show (default 20 compact, 50 verbose/json)")
+    .option("--limit <n>", "Maximum addresses to show (default: all registered addresses)")
     .option("--offset <n>", "Number of addresses to skip", "0")
     .option("--unverified", "Show only addresses whose verified flag is false")
     .option("--verbose", "Show expanded owner/admin/quota fields")
@@ -250,7 +252,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .command("list")
     .description("List sender addresses")
     .option("--provider <id>", "Filter by provider ID")
-    .option("--limit <n>", "Maximum addresses to show (default 20 compact, 50 verbose/json)")
+    .option("--limit <n>", "Maximum addresses to show (default: all registered addresses)")
     .option("--offset <n>", "Number of addresses to skip", "0")
     .option("--unverified", "Show only addresses whose verified flag is false")
     .option("--verbose", "Show expanded owner/admin/quota fields")
@@ -368,7 +370,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .action((opts: { domain: string }) => {
       try {
         const domain = opts.domain.trim().toLowerCase();
-        const exists = listAddresses(undefined, { limit: 1000 }).map((address) => address.email);
+        const exists = listAddresses().map((address) => address.email);
         const suggestions = suggestAddressLocalParts(domain, exists);
         output({ domain, suggestions }, suggestions.length ? suggestions.join("\n") : chalk.dim(`No obvious suggestions left for ${domain}.`));
       } catch (e) {
@@ -507,7 +509,7 @@ export function registerAddressCommands(program: Command, output: (data: unknown
     .description("Suspend a sender address (blocks sending until reactivated)")
     .action(async (id: string) => {
       try {
-        const resolvedId = resolveId("addresses", id);
+        const resolvedId = resolveSelfHostedAddressId(id);
         if (!getAddress(resolvedId)) handleError(new Error(`Address not found: ${id}`));
         const a = await suspendAddress(resolvedId);
         output(a, chalk.yellow(`⏸ Suspended ${a.email} — sending blocked`));

@@ -70,7 +70,7 @@ beforeEach(async () => {
 afterEach(() => stub.clearEnv());
 
 describe("address list command", () => {
-  it("uses a compact implicit default and honors explicit limits", async () => {
+  it("lists all registered addresses by default and honors explicit limits", async () => {
     const addresses = [];
     for (let i = 1; i <= 25; i++) {
       const stamp = `2026-01-${String(i).padStart(2, "0")}T00:00:00.000Z`;
@@ -87,9 +87,9 @@ describe("address list command", () => {
     await stub.seed({ addresses });
 
     const compact = await runAddressCommand(["address", "list", "--provider", "prov-1"]);
-    expect(compact.data).toHaveLength(20);
+    expect(compact.data).toHaveLength(25);
     expect(compact.out).toContain("use --verbose");
-    expect(compact.out).toContain("--offset 20");
+    expect(compact.out).not.toContain("page with --offset");
 
     const explicit = await runAddressCommand(["address", "list", "--provider", "prov-1", "--limit", "25"]);
     expect(explicit.data).toHaveLength(25);

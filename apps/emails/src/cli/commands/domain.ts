@@ -9,7 +9,7 @@ import { getAdapter, providerDnsPublishing } from "../../providers/index.js";
 import { createWarmingSchedule, deleteWarmingSchedule, getWarmingSchedule, listWarmingSchedules, updateWarmingStatus } from "../../db/warming.js";
 import { describeWarmingProgress, formatWarmingStatus, generateWarmingPlan, getTodaySentCountsByDomain, type WarmingSchedule } from "../../lib/warming.js";
 import { colorDnsStatus, tableRow, truncate } from "../../lib/format.js";
-import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliListPage, resolveId } from "../utils.js";
+import { confirmDestructiveAction, formatListHint, handleError, isCliVerboseOutput, parseCliListPage, parseCliPage, resolveId } from "../utils.js";
 import { normalizeRoute53RegistrationContact } from "../../lib/route53-contact.js";
 import { resolveClientMode } from "../../lib/mode.js";
 import { now } from "../../db/runtime.js";
@@ -189,7 +189,7 @@ function resolveSelfHostedDomainId(ref: string): string {
   // takes the name, and `domain list` prints it — a remove that refused the
   // name was the family's one odd verb out (task 55c19dde).
   const wanted = ref.trim().toLowerCase();
-  const matches = listDomains(undefined, { limit: 1000 })
+  const matches = listDomains()
     .filter((domain) => domain.id.startsWith(ref) || domain.domain.toLowerCase() === wanted);
   if (matches.length === 1) return matches[0]!.id;
   if (matches.length > 1) {
@@ -204,8 +204,10 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
 
   const listDomainsAction = (opts: { provider?: string; limit?: string; offset?: string; verbose?: boolean }) => {
     try {
-      const page = parseCliListPage(opts);
-      const domains = listDomains(opts.provider, page);
+      const page = parseCliPage(opts);
+      const domains = opts.limit === undefined
+        ? listDomains(opts.provider).slice(page.offset)
+        : listDomains(opts.provider, page);
       if (domains.length === 0) {
         output([], chalk.dim("No domains configured."));
         return;
@@ -222,6 +224,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
         shown: domains.length,
         limit: page.limit,
         offset: page.offset,
+        complete: opts.limit === undefined,
         noun: "domain",
         detailCommand: "use emails domain dns <domain> for DNS details",
         verbose: opts.verbose || isCliVerboseOutput(),
@@ -240,7 +243,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
         listDomainsAction(opts);
         return;
       }
-      const match = listDomains(undefined, { limit: 1000 })
+      const match = listDomains()
         .find((d) => d.id === domainOrId || d.id.startsWith(domainOrId) || d.domain.toLowerCase() === domainOrId.toLowerCase());
       if (!match) {
         handleError(new Error(`Domain not found: ${domainOrId}`));
@@ -500,7 +503,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .command("list")
     .description("List domains with lifecycle readiness")
     .option("--provider <id>", "Filter by provider ID")
-    .option("--limit <n>", "Maximum domains to show (default 20 compact, 50 verbose/json)")
+    .option("--limit <n>", "Maximum domains to show (default: all registered domains)")
     .option("--offset <n>", "Number of domains to skip", "0")
     .option("--verbose", "Show expanded lifecycle details")
     .action(listDomainsAction);
@@ -603,7 +606,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
         const inboundConfig = getInboundConfig();
         const bucket = opts.bucket ?? inboundConfig.bucket;
         const region = opts.region ?? inboundConfig.region;
-        const registered = listDomains(undefined, { limit: 1000 });
+        const registered = listDomains();
         const registeredNames = new Set(registered.map((d) => d.domain.trim().toLowerCase()));
         const targets = domainArg ? [domainArg] : [...registeredNames];
         if (targets.length === 0) {
@@ -791,7 +794,7 @@ export function registerDomainCommands(program: Command, output: (data: unknown,
     .command("list")
     .description("List domains")
     .option("--provider <id>", "Filter by provider ID")
-    .option("--limit <n>", "Maximum domains to show (default 20 compact, 50 verbose/json)")
+    .option("--limit <n>", "Maximum domains to show (default: all registered domains)")
     .option("--offset <n>", "Number of domains to skip", "0")
     .option("--verbose", "Show expanded list hints")
     .action(listDomainsAction);
