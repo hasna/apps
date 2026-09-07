@@ -80,11 +80,21 @@ public protocol RecordingTranscriptionSession: Sendable {
     /// The final short chunk is delivered before finish. An in-flight append may race cancel;
     /// a cancelled session must ignore it.
     func appendPCM(_ data: Data)
+    /// Called once after all capture/converter PCM drains, before the fallback WAV is written.
+    /// Streaming providers may close input now and cache an early final result. Return promptly;
+    /// this does not authorize publishing text or reading audioURL before finish is called.
+    /// Must be thread-safe and idempotent, and ignore calls after cancellation.
+    func inputEnded()
     /// Called once after capture drains and the fallback WAV is safely written.
     /// File-based providers may ignore appendPCM and recognize this file locally.
     func finish(_ request: RecordingTranscriptionRequest) async throws -> RecordingProviderResult
     /// Must be thread-safe and idempotent, including cancellation during finish.
     func cancel()
+}
+
+public extension RecordingTranscriptionSession {
+    /// File providers and existing adapters keep their finish-after-WAV behavior.
+    func inputEnded() {}
 }
 
 public enum RecordingProviderError: Error, LocalizedError, Sendable {

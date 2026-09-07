@@ -19,14 +19,17 @@ private final class ProviderTestSession: RecordingTranscriptionSession, @uncheck
     private var request: RecordingTranscriptionRequest?
     private var partial: (@Sendable (String) -> Void)?
     private var cancelled = false
+    private var inputEndings: [Data] = []
     private var gate: CheckedContinuation<RecordingProviderResult, Never>?
     let delayFinish: Bool
 
     init(delayFinish: Bool = false) { self.delayFinish = delayFinish }
     var snapshot: (Data, RecordingTranscriptionRequest?, Bool) { lock.withLock { (audio, request, cancelled) } }
+    var endedPCM: [Data] { lock.withLock { inputEndings } }
     func configure(_ partial: @escaping @Sendable (String) -> Void) { lock.withLock { self.partial = partial } }
     func emitPartial(_ text: String) { lock.withLock { partial }?(text) }
     func appendPCM(_ data: Data) { lock.withLock { if !cancelled { audio.append(data) } } }
+    func inputEnded() { lock.withLock { if !cancelled { inputEndings.append(audio) } } }
     func finish(_ request: RecordingTranscriptionRequest) async throws -> RecordingProviderResult {
         if delayFinish {
             return await withCheckedContinuation { continuation in
@@ -99,6 +102,7 @@ struct RecordingProviderTests {
         #expect(await eventually { !engine.isTranscribing })
         let request = try #require(session.snapshot.1)
         #expect(session.snapshot.0 == first + tail)
+        #expect(session.endedPCM == [first + tail], "Input ends exactly once after the short tail, before file-based finish")
         #expect(request.duration == Double(6_400) / 48_000)
         let wav = try Data(contentsOf: request.audioURL)
         #expect(String(data: wav.prefix(4), encoding: .utf8) == "RIFF")

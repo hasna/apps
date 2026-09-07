@@ -939,6 +939,10 @@ public final class RecordingEngine: ObservableObject {
     private var providerSession: (any RecordingTranscriptionSession)?
     private var providerConfiguration: RecordingProviderSessionConfiguration?
     private var providerCompletionTask: Task<Void, Never>?
+    /// Injection keeps persistence ordering testable without changing the public file contract.
+    var providerAudioWriter: @Sendable (Data, URL) throws -> Void = { pcm, url in
+        try RecordingEngine.writeWAV(pcmData: pcm, sampleRate: 24_000, channelCount: 1, bitsPerSample: 16, to: url)
+    }
 
     private var nativeRecorder: PCMRecordingSource?
     private var recordingTimer: Timer?
@@ -2388,14 +2392,22 @@ public final class RecordingEngine: ObservableObject {
             let pcm = await pipe?.finish() ?? Data()
             guard !Task.isCancelled, let self,
                   self.recordingGeneration == pipelineGeneration else { return }
+            var timings = [pipelineTrace.message(stage: "pcm_drain_complete", detail: "pcm_bytes=\(pcm.count)")]
+            // Capture timestamps now, but batch their I/O after completion. Instrumentation
+            // must not add a log-file write before the early network commit or WAV write.
+            defer { self.log(timings.joined(separator: "\n")) }
             do {
                 guard !pcm.isEmpty, let audioPath else { throw RecordingProviderError.noAudio }
                 let audioURL = URL(fileURLWithPath: audioPath)
+                session.inputEnded()
+                timings.append(pipelineTrace.message(stage: "provider_input_ended"))
+                let writeAudio = self.providerAudioWriter
                 try await Task.detached(priority: .userInitiated) {
-                    try Self.writeWAV(pcmData: pcm, sampleRate: 24_000, channelCount: 1, bitsPerSample: 16, to: audioURL)
+                    try writeAudio(pcm, audioURL)
                 }.value
                 try Task.checkCancellation()
                 guard self.recordingGeneration == pipelineGeneration else { return }
+                timings.append(pipelineTrace.message(stage: "wav_write_complete"))
                 let duration = Double(pcm.count) / 48_000
                 self.recordingDuration = duration
                 let result = try await session.finish(RecordingTranscriptionRequest(
@@ -2404,6 +2416,7 @@ public final class RecordingEngine: ObservableObject {
                 ))
                 try Task.checkCancellation()
                 guard self.recordingGeneration == pipelineGeneration else { return }
+                timings.append(pipelineTrace.message(stage: "provider_finish_complete"))
                 let rawText = result.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
                 let processed = result.processedText?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let text = (processed?.isEmpty == false ? processed : nil) ?? rawText
