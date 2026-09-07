@@ -322,9 +322,16 @@ foreign or malformed markers leave the directory unmanaged. A directory with
 an unmanaged directory without `SKILL.md` is always preserved. Preview mode
 uses the same ownership decision and writes nothing.
 
-The library's `removeManagedAgentSkill` follows the same exact-owner check.
-It returns `false` and preserves a directory without valid Skills ownership;
-it has no force override.
+The library's `removeManagedAgentSkill` and `removeSkillForAgent` follow the same
+exact-owner check, including project and global agent installs. They return
+`false` and preserve a directory without valid Skills ownership; neither has a
+force override.
+
+Remote tombstones also preserve directories without exact Skills ownership.
+Registry reconciliation accepts a marker's baseline hash and version only when
+that same marker names the Skills owner. Foreign or invalid markers cannot choose
+which divergent copy wins; the existing conflict policy and explicit overrides
+still apply.
 
 ### Home drift census
 

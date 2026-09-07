@@ -7,11 +7,12 @@ import { pathToFileURL } from "node:url";
 import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
-type OwnershipApi = Pick<typeof import("./agent-sync.js"), "writeManagedSkillDir" | "removeManagedAgentSkill">;
+type OwnershipApi = Pick<typeof import("./agent-sync.js"), "writeManagedSkillDir" | "removeManagedAgentSkill">
+  & Pick<typeof import("./installer.js"), "removeSkillForAgent">;
 const installed = process.env.SKILLS_SYNC_OWNERSHIP_TEST_PACKAGE;
 const api: OwnershipApi = installed
   ? await import(pathToFileURL(join(installed, "dist/index.js")).href)
-  : await import("./agent-sync.js");
+  : { ...await import("./agent-sync.js"), ...await import("./installer.js") };
 const markerName = ".hasna-skills.json";
 const markers = {
   unmarked: undefined,
@@ -37,6 +38,31 @@ function seed(dir: string, kind: MarkerKind, withSkill = true) {
   writeFileSync(join(dir, "keep.txt"), "Existing local resource\n", { mode: 0o600 });
   if (kind === "directory") mkdirSync(join(dir, markerName));
   else if (markers[kind] !== undefined) writeFileSync(join(dir, markerName), markers[kind]!, { mode: 0o640 });
+}
+
+async function removeInFreshHome(root: string, home: string, project: string, options: Parameters<OwnershipApi["removeSkillForAgent"]>[1]) {
+  // os.homedir() may be cached by the runtime. Supply HOME before the actual
+  // source/installed module loads rather than changing an already-loaded process.
+  const guard = join(root, "guard.js"), denied = join(root, "denied.log");
+  writeFileSync(guard, `import {appendFileSync} from "node:fs";import child from "node:child_process";import {syncBuiltinESMExports} from "node:module";
+const deny=()=>{appendFileSync(process.env.QA_DENIED,"blocked\\n");throw Error("OWNED_INSTALLER_IO_REFUSED")};const original=globalThis.fetch;
+globalThis.fetch=(input,options)=>{if(/^https?:/.test(String(input instanceof Request?input.url:input)))return Promise.reject(deny());return original(input,options)};
+for(const name of["spawn","spawnSync","exec","execSync","execFile","execFileSync","fork"])child[name]=deny;syncBuiltinESMExports();Bun.spawn=deny;Bun.spawnSync=deny;`);
+  const entry = installed ? join(installed, "dist/index.js") : join(import.meta.dir, "installer.ts");
+  const script = `const api=await import(${JSON.stringify(pathToFileURL(entry).href)});const options=${JSON.stringify(options)};
+const removed=api.removeSkillForAgent("target",options);const repeated=api.removeSkillForAgent("target",options);console.log(JSON.stringify({removed,repeated}));`;
+  const before = snapshot(root);
+  const child = Bun.spawn([process.execPath, "--no-env-file", "--preload", guard, "-e", script], {
+    cwd: project, env: { HOME: home, USERPROFILE: home, PATH: "", TMPDIR: join(root, "tmp"), HASNA_SKILLS_DIR: join(root, "data"), BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", QA_DENIED: denied },
+    stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 10_000);
+  try {
+    const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    expect(timedOut).toBe(false); expect(exit).toBe(0); expect(stderr).toBe(""); expect(stdout.length).toBeLessThan(1000); expect(existsSync(denied)).toBe(false);
+    return { result: JSON.parse(stdout) as { removed: boolean; repeated: boolean }, before };
+  } finally { clearTimeout(timer); }
 }
 
 for (const kind of Object.keys(markers) as MarkerKind[]) {
@@ -80,4 +106,36 @@ for (const kind of Object.keys(markers) as MarkerKind[]) {
       else expect(api.removeManagedAgentSkill("target", "codex", home)).toBe(false);
     } finally { rmSync(home, { recursive: true, force: true }); }
   });
+
+  for (const scope of ["project", "global"] as const) {
+    test(`installer removal requires exact ownership for ${scope} ${kind} marker`, async () => {
+      const root = mkdtempSync(join(tmpdir(), "skills-installer-ownership-"));
+      const home = join(root, "home"), project = join(root, "project");
+      try {
+        mkdirSync(join(root, "tmp")); mkdirSync(join(root, "data"));
+        const globalTarget = join(home, ".codex", "skills", "target"), projectTarget = join(project, ".codex", "skills", "target");
+        seed(globalTarget, kind); seed(projectTarget, kind);
+        const target = scope === "project" ? projectTarget : globalTarget;
+        const other = scope === "project" ? home : project;
+        const unrelated = join(scope === "project" ? project : home, ".codex", "skills", "unrelated");
+        seed(unrelated, "owned");
+        const otherBefore = snapshot(other), unrelatedBefore = snapshot(unrelated);
+        const options = { agent: "codex" as const, scope, projectDir: project };
+        const { result, before } = await removeInFreshHome(root, home, project, options);
+        expect(result.removed).toBe(kind === "owned");
+        expect(result.repeated).toBe(false);
+        expect(existsSync(target)).toBe(kind !== "owned");
+        expect(snapshot(other)).toEqual(otherBefore);
+        expect(snapshot(unrelated)).toEqual(unrelatedBefore);
+        if (kind !== "owned") expect(snapshot(root)).toEqual(before);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
 }
+
+if (installed) test("shared ownership predicate is not a new public package export", () => {
+  expect(Object.hasOwn(api, "hasSkillsOwnershipMarker")).toBe(false);
+  expect(Object.hasOwn(api, "isSkillsOwnershipMarker")).toBe(false);
+});

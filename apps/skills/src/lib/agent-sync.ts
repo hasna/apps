@@ -69,14 +69,20 @@ export interface SyncMarker {
   syncedAt: string;
 }
 
-function hasSkillsOwnershipMarker(dir: string): boolean {
+/** Internal shared ownership predicate; not exported by the public package entrypoint. */
+export function isSkillsOwnershipMarker(marker: unknown): marker is Record<string, unknown> {
+  return typeof marker === "object" && marker !== null && Object.hasOwn(marker, "managedBy")
+    && (marker as { managedBy: unknown }).managedBy === SYNC_MARKER_MANAGED_BY;
+}
+
+/** Read only a regular ownership sidecar. */
+export function hasSkillsOwnershipMarker(dir: string): boolean {
   const path = join(dir, SYNC_MARKER_FILE);
   try {
     // Only parse a regular sidecar, rather than reading a directory or a pipe.
     if (!lstatSync(path).isFile()) return false;
     const marker: unknown = JSON.parse(readFileSync(path, "utf8"));
-    return typeof marker === "object" && marker !== null && Object.hasOwn(marker, "managedBy")
-      && (marker as { managedBy: unknown }).managedBy === SYNC_MARKER_MANAGED_BY;
+    return isSkillsOwnershipMarker(marker);
   } catch {
     return false;
   }
