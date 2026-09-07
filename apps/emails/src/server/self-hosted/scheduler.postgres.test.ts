@@ -30,7 +30,10 @@ beforeAll(async () => {
   client = createQueryClient(pool);
   store = new EmailsSelfHostedStore(client);
   await client.execute(
-    `CREATE TABLE scheduled_emails(id text PRIMARY KEY, tenant_id uuid NOT NULL, scheduled_at timestamptz, status text NOT NULL DEFAULT 'pending', error text, subject text DEFAULT '', updated_at timestamptz NOT NULL DEFAULT now());`,
+    `CREATE TABLE scheduled_emails(id text PRIMARY KEY, tenant_id uuid NOT NULL, scheduled_at timestamptz, status text NOT NULL DEFAULT 'pending', error text, subject text DEFAULT '', enqueue_key text, enqueue_hash text, provider_id text, from_address text, to_addresses jsonb, cc_addresses jsonb, bcc_addresses jsonb, reply_to text, text_body text, html text, attachments_json jsonb, send_options jsonb DEFAULT '{}'::jsonb, updated_at timestamptz NOT NULL DEFAULT now());`,
+  );
+  await client.execute(
+    "CREATE UNIQUE INDEX enqueue_identity ON scheduled_emails(tenant_id,enqueue_key) WHERE enqueue_key IS NOT NULL",
   );
 });
 afterAll(async () => {
@@ -124,5 +127,47 @@ pgtest(
       "SELECT status,subject FROM scheduled_emails WHERE id='a'",
     );
     expect(record).toEqual({ status: "processing", subject: "" });
+  },
+);
+
+pgtest(
+  "enqueue identities are concurrent, immutable, tenant scoped and replayable after due time",
+  async () => {
+    const scoped = store.forTenant(tenantA);
+    const input = {
+      key: "fixture",
+      hash: "same",
+      scheduledAt: new Date(Date.now() + 3600000).toISOString(),
+      payload: {
+        from: "sender@example.com",
+        to: ["recipient@example.com"],
+        subject: "Fixture",
+      },
+    };
+    const [a, b] = await Promise.all([
+      scoped.enqueueScheduled(input),
+      scoped.enqueueScheduled(input),
+    ]);
+    expect(a.id).toBe(b.id);
+    expect([a.created, b.created].sort()).toEqual([false, true]);
+    await expect(
+      scoped.enqueueScheduled({ ...input, hash: "different" }),
+    ).rejects.toThrow("different send payload");
+    const other = await store.forTenant(tenantB).enqueueScheduled(input);
+    expect(other.id).not.toBe(a.id);
+    const spec = resourceSpecForPath("scheduled")!;
+    expect(
+      await scoped.updateResource(spec, a.id, { subject: "Changed" }),
+    ).toBeNull();
+    expect(await scoped.deleteResource(spec, a.id)).toBe(false);
+    await client.execute(
+      "UPDATE scheduled_emails SET scheduled_at=now()-interval '1 hour' WHERE id=$1",
+      [a.id],
+    );
+    const past = { ...input, scheduledAt: "2001-01-01T00:00:00Z" };
+    expect((await scoped.enqueueScheduled(past)).id).toBe(a.id);
+    await expect(
+      scoped.enqueueScheduled({ ...past, key: "new-past" }),
+    ).rejects.toThrow("future");
   },
 );

@@ -9,7 +9,7 @@ This is a source implementation matrix, not a claim that the public service or n
 | `doctor delivery`, `inbox explain` | API registry/message diagnostics; optional public MX inspection | Registry evidence does not establish provider credentials or worker health |
 | `inbox realtime-status` | Registered sources and last-sync metadata, paginated beyond 500 | Worker heartbeat/queue health remains unmeasured until a service endpoint exposes it |
 | `schedule run`, `scheduler` | `/v1/scheduled/run`, atomic tenant-scoped claims, expiring leases, fenced completion, stable send-intent identity; `--once`, `--limit`, interval polling | Deploy route, then exercise installed client; sequence enrollment execution is separate |
-| `send --schedule` | Existing scheduled-resource CRUD can enqueue rows | CLI enqueue/result presentation still needs integration; this scheduler change does not remove the client's scheduled-send guard |
+| `send --schedule` | Validated `/v1/scheduled/enqueue` with immutable tenant-scoped identity, preserved attachments/options, explicit queued receipts | Deploy migration 0028 and API routes; operator credentials required; scheduler must run |
 | `stats`, `analytics`, `monitor` | Assigned separate statistics integration | Verify exact/provider-scoped counts and installed CLI |
 | `provider sync`, `pull` | Service ingestion work remains | Transactional provider event/counter updates and an authenticated trigger |
 | `provider status/check`, `doctor --live` | Service credential probe remains | Probe server-held credentials without exporting them to clients |

@@ -2966,6 +2966,15 @@ const MESSAGE_PROVIDER_PROVENANCE = defineMigration(
    ON messages (tenant_id, provider_id, sort_ts DESC, id DESC);`,
 );
 
+const SCHEDULED_ENQUEUE_IDENTITY = defineMigration(
+  "0028_scheduled_enqueue_identity",
+  `ALTER TABLE scheduled_emails ADD COLUMN IF NOT EXISTS enqueue_key TEXT;
+   ALTER TABLE scheduled_emails ADD COLUMN IF NOT EXISTS enqueue_hash TEXT;
+   ALTER TABLE scheduled_emails ADD COLUMN IF NOT EXISTS send_options JSONB NOT NULL DEFAULT '{}'::jsonb;
+   CREATE UNIQUE INDEX IF NOT EXISTS scheduled_emails_tenant_enqueue_key
+   ON scheduled_emails(tenant_id, enqueue_key) WHERE enqueue_key IS NOT NULL;`,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3002,5 +3011,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     PRIORITY_SENDER_RULES,
     LEGACY_GMAIL_REPLAY_PROVENANCE,
     MESSAGE_PROVIDER_PROVENANCE,
+    SCHEDULED_ENQUEUE_IDENTITY,
   ];
 }

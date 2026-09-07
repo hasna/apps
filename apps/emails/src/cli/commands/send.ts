@@ -343,9 +343,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           // is read as a guarantee it never made.
           console.log(chalk.dim(`  Note:    ${describeUncheckedSendPolicy(selfHosted)}`));
           if (opts.schedule) {
-            console.log(selfHosted
-              ? chalk.yellow(`  Schedule:    ${opts.schedule} — the self-hosted server does not accept a scheduled send (a real send would fail)`)
-              : chalk.dim(`  Schedule:    ${opts.schedule} — a real send enqueues this locally; use \`emails schedule list\` to inspect the queue`));
+            console.log(chalk.dim(`  Schedule: ${opts.schedule} — queues on the API; use emails schedule list to inspect it.`));
           }
           console.log(chalk.yellow("\n  [NOT SENT] Use without --dry-run to send.\n"));
           return;
@@ -360,17 +358,7 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           html: htmlBody,
           markdown: false,
           replyTo: opts.replyTo,
-          // `--provider` used to be parsed and then dropped on the floor in BOTH
-          // modes. Thread it through: local honours it, self_hosted refuses it
-          // explicitly (the server chooses the sender), so it is never silently
-          // ignored again.
           providerId: opts.provider,
-          // `--unsubscribe-url` was in the same parsed-and-dropped class: declared,
-          // typed, and never read, so bulk mail left WITHOUT the RFC 8058 one-click
-          // headers the operator relied on for compliance. Local sends inject the
-          // List-Unsubscribe / List-Unsubscribe-Post pair at the provider; the serve
-          // API's send contract cannot carry the field, so that path refuses loudly
-          // instead of mailing without the headers.
           unsubscribeUrl: opts.unsubscribeUrl,
           replyToId: (opts as Record<string, unknown>).inReplyTo as string | undefined,
           attachments: attachments.length > 0 ? attachments : undefined,
@@ -381,7 +369,11 @@ export function registerSendCommands(program: Command, output: (data: unknown, f
           // checks suppression above and ignores this field.
           allowSuppressedRecipients: opts.force,
         });
-        if (result.inProgress) {
+        if (result.scheduled) {
+          const job = result.scheduled;
+          console.log(chalk.green(`Schedule ${job.id}: ${job.status} at ${job.scheduled_at}${result.idempotentReplay ? " (existing request)" : ""}`));
+          if (job.status === "failed" || job.status === "cancelled") process.exitCode = 1;
+        } else if (result.inProgress) {
           console.log(chalk.yellow(`Send already in progress for ${toAddresses.join(", ")}; do not retry.`));
         } else {
           console.log(chalk.green(`✓ Email sent to ${toAddresses.join(", ")}`));

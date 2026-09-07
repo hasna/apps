@@ -2154,19 +2154,12 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(serve.requests.some((request) => /archive|trash|spam|remove/i.test(request))).toBe(false);
   });
 
-  it("supports explicit-id bulk mutations and rejects scheduled sends honestly", async () => {
+  it("supports explicit-id bulk mutations", async () => {
     const { ds, serve } = make([v1("2"), v1("3")]);
     const result = await ds.bulk({ action: "read", ids: ["2", "3"] });
     expect(result).toMatchObject({ affected: 2, matched: 2 });
     expect(serve.rows.get("2")?.["is_read"]).toBe(true);
     expect(serve.rows.get("3")?.["is_read"]).toBe(true);
-    await expect(ds.send({
-      to: "a@example.com",
-      from: "me@example.com",
-      subject: "later",
-      body: "body",
-      scheduledAt: "2030-01-01T00:00:00.000Z",
-    })).rejects.toThrow(/Scheduled send is not supported/);
     expect(serve.posted).toHaveLength(0);
   });
 
@@ -3606,4 +3599,17 @@ describe("SelfHostedMailDataSource — scoped mailboxCounts scan budget", () => 
     const afterClear = serve.requests.filter((request) => request.startsWith("GET /v1/messages?")).length;
     expect(afterClear).toBeGreaterThan(afterCounts);
   });
+});
+
+it("scheduled sends use enqueue and preserve payload without claiming delivery", async () => {
+ const calls: Array<{path:string;body:Record<string,unknown>}> = [];
+ const ds = new SelfHostedMailDataSource({baseUrl:"https://fixture.example/v1",apiKey:crypto.randomUUID(),fetchImpl:async (url,init) => {
+  const path = new URL(String(url)).pathname;
+  if(path.endsWith("openapi.json")) return new Response(JSON.stringify(emailsSelfHostedOpenApi),{headers:{"content-type":"application/json"}});
+  const body=JSON.parse(String(init?.body));calls.push({path,body});
+  return new Response(JSON.stringify({enqueued:true,idempotent_replay:false,scheduled:{id:"job-fixture",status:"pending",scheduled_at:body.scheduled_at}}),{status:201,headers:{"content-type":"application/json"}});
+ }});
+ const result=await ds.send({from:"sender@example.com",to:"a@example.com",subject:"Fixture",body:"Body",scheduledAt:"2030-01-01T00:00:00Z",idempotencyKey:"stable-fixture",providerId:"provider-fixture",cc:"copy@example.com",bcc:"blind@example.com",replyTo:"reply@example.com",unsubscribeUrl:"https://example.com/unsubscribe",allowSuppressedRecipients:true,attachments:[{filename:"a.txt",content:"YQ==",content_type:"text/plain"}]});
+ expect(result.messageId).toBe("");expect(result.scheduled?.id).toBe("job-fixture");expect(calls).toHaveLength(1);
+ expect(calls[0]).toMatchObject({path:"/v1/scheduled/enqueue",body:{scheduled_at:"2030-01-01T00:00:00.000Z",idempotency_key:"stable-fixture",provider_id:"provider-fixture",cc:["copy@example.com"],bcc:["blind@example.com"],reply_to:"reply@example.com",unsubscribe_url:"https://example.com/unsubscribe",allow_suppressed_recipients:true,attachments:[{filename:"a.txt",content:"YQ==",content_type:"text/plain"}]}});
 });

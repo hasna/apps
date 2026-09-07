@@ -27701,6 +27701,235 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "POST",
+    "operationId": "enqueueScheduledSend",
+    "path": "/v1/scheduled/enqueue",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "enqueued",
+        "scheduled",
+        "idempotent_replay"
+      ],
+      "properties": {
+        "enqueued": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "idempotent_replay": {
+          "type": "boolean"
+        },
+        "scheduled": {
+          "type": "object",
+          "required": [
+            "id",
+            "status",
+            "scheduled_at"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "processing",
+                "sent",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "scheduled_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "enqueueScheduledSend",
+    "path": "/v1/scheduled/enqueue",
+    "status": 201,
+    "schema": {
+      "type": "object",
+      "required": [
+        "enqueued",
+        "scheduled",
+        "idempotent_replay"
+      ],
+      "properties": {
+        "enqueued": {
+          "type": "boolean",
+          "enum": [
+            true
+          ]
+        },
+        "idempotent_replay": {
+          "type": "boolean"
+        },
+        "scheduled": {
+          "type": "object",
+          "required": [
+            "id",
+            "status",
+            "scheduled_at"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "processing",
+                "sent",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "scheduled_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "enqueueScheduledSend",
+    "path": "/v1/scheduled/enqueue",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "enqueueScheduledSend",
+    "path": "/v1/scheduled/enqueue",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "enqueueScheduledSend",
+    "path": "/v1/scheduled/enqueue",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "enqueueScheduledSend",
+    "path": "/v1/scheduled/enqueue",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "enqueueScheduledSend",
+    "path": "/v1/scheduled/enqueue",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "enqueueScheduledSend",
+    "path": "/v1/scheduled/enqueue",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
     "operationId": "runScheduledBatch",
     "path": "/v1/scheduled/run",
     "status": 200,

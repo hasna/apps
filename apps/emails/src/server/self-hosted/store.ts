@@ -5158,12 +5158,14 @@ export class TenantScopedStore {
       params.push(encodeColumn(col, body[col.name]));
       sets.push(col.json ? `${col.name} = $${params.length}::jsonb` : `${col.name} = $${params.length}`);
     }
+    // Enqueued content is bound to its retry hash. Only lifecycle status may change.
+    const scheduledContentEdit = spec.path === "scheduled" && Object.keys(body).some(field => field !== "status");
     if (sets.length === 0) return this.getResource(spec, id);
     sets.push("updated_at = now()");
     return redactResourceRow(
       spec,
       await this.client.get<Record<string, unknown>>(
-        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""} RETURNING *`,
+        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""}${scheduledContentEdit ? " AND enqueue_key IS NULL" : ""} RETURNING *`,
         params,
       ),
     );
@@ -5172,10 +5174,31 @@ export class TenantScopedStore {
   async deleteResource(spec: SelfHostedResourceSpec, id: string): Promise<boolean> {
     const key = keyColumn(spec);
     const rows = await this.client.many<{ id: string }>(
-      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""} RETURNING ${key} AS id`,
+      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing' AND enqueue_key IS NULL" : ""} RETURNING ${key} AS id`,
       [id, this.tenantId],
     );
     return rows.length > 0;
+  }
+
+  async enqueueScheduled(input: { key: string; hash: string; scheduledAt: string; payload: Record<string, unknown> }): Promise<{ id: string; status: string; scheduled_at: string; created: boolean }> {
+    const p = input.payload;
+    const params = [randomUUID(), this.tenantId, input.key, input.hash, input.scheduledAt,
+      p.provider_id ?? null, p.from, JSON.stringify(p.to), JSON.stringify(p.cc ?? []), JSON.stringify(p.bcc ?? []),
+      p.reply_to ?? null, p.subject, p.text ?? null, p.html ?? null, JSON.stringify(p.attachments ?? []),
+      JSON.stringify({ unsubscribe_url: p.unsubscribe_url, allow_suppressed_recipients: p.allow_suppressed_recipients === true })];
+    const row = await this.client.get<Record<string, unknown>>(
+      `INSERT INTO scheduled_emails(id,tenant_id,enqueue_key,enqueue_hash,scheduled_at,provider_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,text_body,html,attachments_json,send_options,status)
+       SELECT $1,$2,$3,$4,$5::timestamptz,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15::jsonb,$16::jsonb,'pending' WHERE $5::timestamptz > now()
+       ON CONFLICT(tenant_id,enqueue_key) WHERE enqueue_key IS NOT NULL DO NOTHING
+       RETURNING id,status,scheduled_at`, params,
+    );
+    const existing = row ?? await this.client.get<Record<string, unknown>>(
+      `SELECT id,status,scheduled_at,enqueue_hash FROM scheduled_emails WHERE tenant_id=$1 AND enqueue_key=$2`, [this.tenantId,input.key],
+    );
+    if (!existing) throw new RangeError("Scheduled time must be in the future");
+    if (!row && existing.enqueue_hash !== input.hash) throw new IdempotencyKeyConflictError();
+    const date = existing.scheduled_at instanceof Date ? existing.scheduled_at.toISOString() : String(existing.scheduled_at);
+    return {id:String(existing.id),status:String(existing.status),scheduled_at:date,created:row !== null};
   }
 
   /** Atomically claim due work. The timestamp is a lease fence, not a send identity. */

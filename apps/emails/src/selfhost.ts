@@ -1754,6 +1754,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Validate and enqueue an idempotent scheduled send */
+    async enqueueScheduledSend(body: { "provider_id"?: string; "unsubscribe_url"?: string; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "allow_suppressed_recipients"?: boolean; "idempotency_key": string; "scheduled_at": string }, init?: RequestInit): Promise<{ "enqueued": true; "idempotent_replay": boolean; "scheduled": { "id": string; "status": "pending" | "processing" | "sent" | "failed" | "cancelled"; "scheduled_at": string } }> {
+      return this.request("POST", `/v1/scheduled/enqueue`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Claim and execute a due scheduled-send batch (tenant operator required) */
     async runScheduledBatch(body?: { "limit"?: number }, init?: RequestInit): Promise<{ "scheduled": { "attempted": number; "sent": number; "failed": number; "pending": number; "skipped": number }; "items": Array<{ "id": string; "status": "sent" | "failed" | "processing" | "lease_lost"; "error"?: string }>; "sequence_execution": "not_requested" }> {
       return this.request("POST", `/v1/scheduled/run`, {

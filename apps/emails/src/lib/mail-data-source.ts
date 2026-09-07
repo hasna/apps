@@ -170,16 +170,11 @@ export interface MailSendInput {
   replyTo?: string;
   /** File attachments. Self-hosted JSON send enforces its documented caps. */
   attachments?: MailSendAttachment[];
-  /** ISO-8601 schedule time. Self-hosted send rejects this (no server-side scheduling). */
+  /** ISO-8601 time with timezone. Enqueues through the API with tenant operator authority. */
   scheduledAt?: string;
   /** Stable caller-provided key used to make self-hosted sends retry-safe. */
   idempotencyKey?: string;
-  /**
-   * RFC 8058 one-click unsubscribe target: local providers inject the
-   * List-Unsubscribe / List-Unsubscribe-Post header pair. The self-hosted send
-   * contract cannot carry it, so that backend REFUSES rather than mailing
-   * without the headers.
-   */
+  /** RFC 8058 unsubscribe target preserved by immediate and scheduled API sends. */
   unsubscribeUrl?: string;
   /**
    * Explicit per-send suppression override (the CLI's `--force`). The local
@@ -191,6 +186,8 @@ export interface MailSendInput {
 }
 
 export interface MailSendResult {
+  scheduled?: { id: string; status: string; scheduled_at: string };
+  idempotentReplay?: boolean;
   id: string;
   messageId: string;
   /**

@@ -4598,4 +4598,30 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
   },
 };
 
+// Reuse the immediate-send payload contract so attachment and option support cannot drift.
+const enqueueSendSchema = structuredClone((emailsSelfHostedOpenApi.paths!["/v1/messages/send"]!.post as { requestBody: { content: Record<string, { schema: unknown }> } }).requestBody.content["application/json"]!.schema) as Record<string, any>;
+delete enqueueSendSchema.properties.send_key;
+enqueueSendSchema.properties.scheduled_at = { type: "string", format: "date-time", description: "Future instant with an explicit timezone. Identical idempotent retries may replay after that time." };
+enqueueSendSchema.required = [...enqueueSendSchema.required, "scheduled_at"];
+const enqueueReceipt = {
+  type: "object", required: ["enqueued", "scheduled", "idempotent_replay"],
+  properties: {
+    enqueued: { type: "boolean", enum: [true] }, idempotent_replay: { type: "boolean" },
+    scheduled: { type: "object", required: ["id", "status", "scheduled_at"], properties: {
+      id: { type: "string" }, status: { type: "string", enum: ["pending", "processing", "sent", "failed", "cancelled"] }, scheduled_at: { type: "string", format: "date-time" },
+    } },
+  },
+};
+emailsSelfHostedOpenApi.paths!["/v1/scheduled/enqueue"] = { post: {
+  operationId: "enqueueScheduledSend", summary: "Validate and enqueue an idempotent scheduled send",
+  description: "Requires a tenant operator. Persists no delegated send keys. The scheduler rechecks sending policy at execution time. Queue content and identity are immutable; cancel using scheduled status.",
+  requestBody: { required: true, content: { "application/json": { schema: enqueueSendSchema } } },
+  responses: {
+    "200": { description: "Existing enqueue identity", content: { "application/json": { schema: enqueueReceipt } } },
+    "201": { description: "New scheduled send; no mail sent", content: { "application/json": { schema: enqueueReceipt } } },
+    "400": errorResponse("Invalid payload or nonfuture new schedule"), "401": errorResponse("Authentication required"),
+    "403": errorResponse("Tenant operator required"), "409": errorResponse("Idempotency key conflict"), "413": errorResponse("Payload too large"),
+  },
+} };
+
 addRoutineErrorParity(emailsSelfHostedOpenApi);

@@ -1297,14 +1297,35 @@ export async function handleSelfHostedRequest(
     // /v1/messages/send — the only outbound create path. It invokes the
     // operator-selected provider only after atomically persisting and claiming
     // an idempotent send intent.
-    if (path === "/v1/messages/send") {
+    if (path === "/v1/messages/send" || path === "/v1/scheduled/enqueue") {
       if (method !== "POST") return json(405, { error: "method not allowed" });
       const auth = await authenticate(deps, req, url, write);
       if (!auth.ok) return auth.response;
+      const enqueue = path === "/v1/scheduled/enqueue";
+      if (enqueue) {
+        const operatorError = requireTenantOperator(auth, "enqueuing scheduled sends");
+        if (operatorError) return operatorError;
+      }
       // The one route whose body legitimately carries base64 attachment
       // content, so it reads against the attachment-derived budget rather than
       // the 1MiB default every other route keeps.
       const body = await readJsonBody(req, MAX_SEND_JSON_BODY_BYTES);
+      let scheduledAt: string | undefined;
+      if (enqueue) {
+        try {
+          const { parseScheduledSendTime } = await import("../../lib/scheduled-send-time.js");
+          scheduledAt = parseScheduledSendTime(body.scheduled_at, Number.NEGATIVE_INFINITY);
+          for (const field of ["to", "cc", "bcc", "attachments"]) {
+            if (body[field] !== undefined && !Array.isArray(body[field])) return json(400, { error: `${field} must be an array` });
+          }
+          for (const field of ["from", "subject", "text", "html", "reply_to", "provider_id", "unsubscribe_url"]) {
+            if (body[field] !== undefined && typeof body[field] !== "string") return json(400, { error: `${field} must be a string` });
+          }
+          if (body.send_key || req.headers.get("x-emails-send-key")) return json(403, { error: "Scoped send-key delegation cannot be persisted in a scheduled job; use a tenant operator credential" });
+          if (body.allow_suppressed_recipients !== undefined && typeof body.allow_suppressed_recipients !== "boolean") return json(400, { error: "allow_suppressed_recipients must be boolean" });
+          if (body.reply_to !== undefined && (typeof body.reply_to !== "string" || body.reply_to.split(",").some(value => !canonicalSender(value)))) return json(400, { error: "reply_to must contain valid mailbox addresses" });
+        } catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid scheduled_at" }); }
+      }
       const rawFrom = String(body.from ?? "").trim();
       const rawTo = asStringArray(body.to);
       if (!rawFrom) return json(400, { error: "from is required" });
@@ -1407,6 +1428,30 @@ export async function handleSelfHostedRequest(
         ...(requestedProviderId ? { provider_id: providerId } : {}),
         ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
       };
+      if (enqueue && scheduledAt) {
+        const queuedPayload = {
+          from: rawFrom, to, cc, bcc, reply_to: payload.reply_to, subject,
+          text: payload.text, html: payload.html, attachments,
+          ...(requestedProviderId ? { provider_id: providerId } : {}),
+          ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
+          allow_suppressed_recipients: body.allow_suppressed_recipients === true,
+        };
+        try {
+          safeHeaderValue("from", rawFrom);
+          const queued = await auth.store.enqueueScheduled({
+            key: idempotencyKey, scheduledAt, payload: queuedPayload,
+            hash: sendPayloadHash({ scheduled_at: scheduledAt, payload: queuedPayload }),
+          });
+          return json(queued.created ? 201 : 200, {
+            enqueued: true, scheduled: { id: queued.id, status: queued.status, scheduled_at: queued.scheduled_at },
+            idempotent_replay: !queued.created,
+          });
+        } catch (error) {
+          if (error instanceof IdempotencyKeyConflictError) return json(409, { error: error.message, retry_safe: false });
+          if (error instanceof RangeError) return json(400, { error: error.message });
+          throw error;
+        }
+      }
       const sendKeyToken = typeof body.send_key === "string"
         ? body.send_key.trim()
         : req.headers.get("x-emails-send-key")?.trim() ?? "";

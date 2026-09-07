@@ -121,3 +121,41 @@ test("lost transport acknowledgement reuses identical send identity on recovery"
   expect((await runScheduledBatch(store, send, 1)).scheduled.sent).toBe(1);
   expect(keys[0]).toBe(keys[1]);
 });
+
+test("uncertain and finalization-warning receipts remain recoverable without claiming sent", async () => {
+  for (const [status, body] of [
+    [
+      202,
+      {
+        sent: true,
+        warning: "reconcile",
+        message: { id: "fixture", send_state: "uncertain" },
+      },
+    ],
+    [
+      502,
+      {
+        sent: null,
+        reconciliation_required: true,
+        message: { id: "fixture", send_state: "uncertain" },
+      },
+    ],
+    [409, { message: { id: "fixture", send_state: "uncertain" } }],
+  ] as const) {
+    let finished = false;
+    const result = await runScheduledBatch(
+      {
+        claimDueScheduled: async () => [job],
+        getScheduledTemplate: async () => null,
+        finishScheduled: async () => {
+          finished = true;
+          return true;
+        },
+      },
+      async () => new Response(JSON.stringify(body), { status }),
+    );
+    expect(result.scheduled.pending).toBe(1);
+    expect(result.scheduled.sent).toBe(0);
+    expect(finished).toBe(false);
+  }
+});

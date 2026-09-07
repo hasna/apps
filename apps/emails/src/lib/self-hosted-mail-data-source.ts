@@ -2266,9 +2266,6 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (input.providerId !== undefined && (typeof input.providerId !== "string" || !input.providerId.trim())) {
       throw new Error("providerId must be a non-empty provider identifier.");
     }
-    if (input.scheduledAt) {
-      throw new Error("Scheduled send is not supported on the self-hosted emails serve.");
-    }
     const to = input.to.split(",").map((v) => v.trim()).filter(Boolean);
     const useMarkdown = input.markdown !== false;
     const html = input.html ?? (useMarkdown ? renderMarkdown(input.body) : undefined);
@@ -2301,7 +2298,12 @@ export class SelfHostedMailDataSource implements MailDataSource {
     // reason.
     if (input.allowSuppressedRecipients) body["allow_suppressed_recipients"] = true;
     this.invalidate();
-    const { status, json } = await this.request("POST", "/messages/send", body);
+    const path = input.scheduledAt ? "/scheduled/enqueue" : "/messages/send";
+    if (input.scheduledAt) {
+      const { parseScheduledSendTime } = await import("./scheduled-send-time.js");
+      body["scheduled_at"] = parseScheduledSendTime(input.scheduledAt, Number.NEGATIVE_INFINITY);
+    }
+    const { status, json } = await this.request("POST", path, body);
     const payload = (json ?? {}) as {
       message?: V1Message;
       error?: unknown;
@@ -2316,7 +2318,12 @@ export class SelfHostedMailDataSource implements MailDataSource {
       const detail = typeof response["error"] === "string" && response["error"]
         ? ` — ${String(response["error"])}`
         : "";
-      throw new Error(`self-hosted Emails: POST /messages/send failed (HTTP ${status})${reason}${detail}`);
+      throw new Error(`self-hosted Emails: POST ${path} failed (HTTP ${status})${reason}${detail}`);
+    }
+    if (input.scheduledAt) {
+      const receipt = json as { enqueued?: boolean; scheduled?: { id: string; status: string; scheduled_at: string }; idempotent_replay?: boolean };
+      if (!receipt.enqueued || !receipt.scheduled?.id) throw new Error("Emails API returned an invalid scheduled receipt; retry only with the same idempotency key.");
+      return { id: receipt.scheduled.id, messageId: "", scheduled: receipt.scheduled, idempotentReplay: receipt.idempotent_replay === true };
     }
     const rec = payload.message;
     const id = rec?.id ?? "";

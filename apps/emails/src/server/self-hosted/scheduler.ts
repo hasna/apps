@@ -74,6 +74,14 @@ async function sendPayload(
       throw new Error(`Scheduled ${column} must be an array`);
     if (values.length) payload[key] = values;
   }
+  const options = jsonValue(row.send_options) ?? {};
+  if (!options || typeof options !== "object" || Array.isArray(options))
+    throw new Error("Scheduled send options must be an object");
+  const sendOptions = options as Record<string, unknown>;
+  if (sendOptions.unsubscribe_url)
+    payload.unsubscribe_url = sendOptions.unsubscribe_url;
+  if (sendOptions.allow_suppressed_recipients === true)
+    payload.allow_suppressed_recipients = true;
   if (row.reply_to) payload.reply_to = row.reply_to;
   if (row.provider_id) payload.provider_id = row.provider_id;
   return payload;
@@ -121,7 +129,26 @@ export async function runScheduledBatch(
     try {
       const response = await send(payload);
       const body = (await response.json()) as Record<string, unknown>;
-      if (response.status === 202 || body.in_progress === true) {
+      const message =
+        body.message && typeof body.message === "object"
+          ? (body.message as Record<string, unknown>)
+          : null;
+      const confirmed =
+        response.ok &&
+        body.sent === true &&
+        message?.send_state === "sent" &&
+        typeof message.id === "string";
+      if (
+        !confirmed &&
+        (response.status === 202 ||
+          response.status >= 500 ||
+          response.status === 429 ||
+          body.in_progress === true ||
+          body.sent === null ||
+          body.reconciliation_required === true ||
+          message?.send_state === "uncertain" ||
+          message?.send_state === "sending")
+      ) {
         scheduled.pending++;
         items.push({ id, status: "processing" });
         continue;
