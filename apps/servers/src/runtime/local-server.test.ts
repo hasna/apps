@@ -185,6 +185,108 @@ describe("local server lifecycle", () => {
   beforeEach(setup);
   afterEach(teardown);
 
+  it("passes transient environment without persisting it and omits inherited infrastructure values", async () => {
+    const dir = makeTempDir();
+    const port = await getFreePort();
+    const transientValue = `runtime-only-${crypto.randomUUID()}`;
+    const inheritedRef = `REVIEW_INFRA_${crypto.randomUUID().replaceAll("-", "_")}`;
+    process.env[inheritedRef] = "infrastructure-test-value";
+    let pid: number | undefined;
+    writeFileSync(join(dir, "env-server.js"), "Bun.serve({hostname:'127.0.0.1',port:Number(process.env.PORT),fetch:()=>Response.json({value:process.env.APP_RUNTIME_VALUE,inherited:process.env[process.env.INHERITED_REF]??null})});");
+    try {
+      const server = createServer({ name: "transient-env", path: dir, metadata: {
+        runtime_mode: "local", runtime_process_scope: "owned", start_command: `${process.execPath} env-server.js`, cwd: dir,
+        port, readiness_url: `http://127.0.0.1:${port}/`, env: { PORT: String(port), INHERITED_REF: inheritedRef },
+      } });
+      pid = (await startLocalServer(server.id, { wait: true, transientEnv: { APP_RUNTIME_VALUE: transientValue }, omitEnv: [inheritedRef] })).pid;
+      const response = await (await fetch(`http://127.0.0.1:${port}/`)).json() as { value: string; inherited: unknown };
+      expect(response.value === transientValue).toBe(true);
+      expect(response.inherited).toBeNull();
+      for (const table of ["servers", "server_operations", "traces"]) {
+        expect(JSON.stringify(getDatabase().query(`SELECT * FROM ${table}`).all()).includes(transientValue)).toBe(false);
+      }
+    } finally {
+      delete process.env[inheritedRef];
+      if (pid) { try { process.kill(-pid, "SIGKILL"); } catch {} }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts transient environment values from failed-start errors and database records", async () => {
+    const dir = makeTempDir();
+    const port = await getFreePort();
+    const transientValue = `runtime-failure-${crypto.randomUUID()}`;
+    writeFileSync(join(dir, "failed-env-server.js"), "console.error(process.env.APP_RUNTIME_VALUE);process.exit(1);");
+    try {
+      const server = createServer({ name: "transient-env-failed", path: dir, metadata: {
+        runtime_mode: "local", runtime_process_scope: "owned", start_command: `${process.execPath} failed-env-server.js`, cwd: dir,
+        port, readiness_url: `http://127.0.0.1:${port}/`, env: { PORT: String(port) },
+      } });
+      let message = "";
+      try { await startLocalServer(server.id, { wait: true, transientEnv: { APP_RUNTIME_VALUE: transientValue }, readyTimeoutMs: 2000, stopTimeoutMs: 1000 }); }
+      catch (error) { message = error instanceof Error ? error.message : String(error); }
+      expect(message).not.toBe("");
+      expect(message.includes(transientValue)).toBe(false);
+      expect(message).toContain("[REDACTED]");
+      for (const table of ["servers", "server_operations", "traces"]) {
+        expect(JSON.stringify(getDatabase().query(`SELECT * FROM ${table}`).all()).includes(transientValue)).toBe(false);
+      }
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  it("requires an owned listener before marking a preview ready", async () => {
+    const unrelated = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("unrelated") });
+    const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+    try {
+      const server = createServer({ name: "owned-readiness", metadata: {
+        runtime_mode: "local", runtime_process_scope: "owned", pid: sleeper.pid,
+        port: unrelated.port, readiness_url: `http://127.0.0.1:${unrelated.port}/`,
+      } });
+      expect((await getLocalServerSnapshot(server)).ready).toBe(false);
+      server.metadata.pid = 2147483647;
+      expect((await getLocalServerSnapshot(server)).ready).toBe(false);
+    } finally { unrelated.stop(true); sleeper.kill("SIGKILL"); }
+  });
+
+  it("stops one named preview without stopping the same app in another preview", async () => {
+    const dir = makeTempDir();
+    const ports = [await getFreePort(), await getFreePort()];
+    const pids: number[] = [];
+    writeFileSync(join(dir, "preview-server.js"), "Bun.serve({hostname:'127.0.0.1',port:Number(process.env.PORT),fetch:()=>new Response('ok')});");
+    try {
+      const previews = ports.map((port, index) => createServer({ name: `owned-preview-${index}`, path: dir, metadata: {
+        runtime_mode: "local", runtime_process_scope: "owned", start_command: `${process.execPath} preview-server.js`,
+        cwd: dir, port, env: { PORT: String(port) }, readiness_url: `http://127.0.0.1:${port}/`,
+      } }));
+      for (const preview of previews) pids.push((await startLocalServer(preview.id, { wait: true })).pid!);
+      await stopLocalServer(previews[0]!.id, { wait: true, stopTimeoutMs: 1000 });
+      expect((await getLocalServerSnapshot(getServer(previews[1]!.id)!)).ready).toBe(true);
+      expect(await (await fetch(`http://127.0.0.1:${ports[1]}/`)).text()).toBe("ok");
+    } finally {
+      for (const pid of pids) { try { process.kill(-pid, "SIGKILL"); } catch {} }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a sibling preview running when a same-command preview fails to start", async () => {
+    const dir = makeTempDir();
+    const ports = [await getFreePort(), await getFreePort()];
+    let firstPid: number | undefined;
+    writeFileSync(join(dir, "preview-server.js"), "if(process.env.FAIL_START)process.exit(1);Bun.serve({hostname:'127.0.0.1',port:Number(process.env.PORT),fetch:()=>new Response('ok')});");
+    try {
+      const previews = ports.map((port, index) => createServer({ name: `owned-failure-${index}`, path: dir, metadata: {
+        runtime_mode: "local", runtime_process_scope: "owned", start_command: `${process.execPath} preview-server.js`,
+        cwd: dir, port, env: { PORT: String(port), ...(index === 1 ? { FAIL_START: "1" } : {}) }, readiness_url: `http://127.0.0.1:${port}/`,
+      } }));
+      firstPid = (await startLocalServer(previews[0]!.id, { wait: true })).pid;
+      await expect(startLocalServer(previews[1]!.id, { wait: true, readyTimeoutMs: 2000, stopTimeoutMs: 1000 })).rejects.toThrow();
+      expect((await getLocalServerSnapshot(getServer(previews[0]!.id)!)).ready).toBe(true);
+    } finally {
+      if (firstPid) { try { process.kill(-firstPid, "SIGKILL"); } catch {} }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("starts, waits for, records, and stops a local app process safely", async () => {
     const dir = makeTempDir();
     const port = await getFreePort();
