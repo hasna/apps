@@ -20,4 +20,14 @@ test("actual SES setup route enforces operator authority before invoking bound c
   const response = await call(["emails:*"]);
   expect(response?.status).toBe(200); expect(await response?.json()).toMatchObject({ ok: true, verified: true, worker_started: false });
   expect(f.state.writes).toContain("CreateReceiptRule");
+  const suspended = sesSetupFixture(), send = suspended.cloud.send.bind(suspended.cloud);
+  deps.sesInboundSetupCloud = () => suspended.cloud;
+  suspended.cloud.send = async (service, operation, input) => {
+    const result = await send(service, operation, input);
+    if (operation === "GetCallerIdentity") deps.authStore.getApiKeyTenant = async () => null;
+    return result;
+  };
+  const stopped = await call(["emails:*"]);
+  expect(stopped?.status).toBe(403);
+  expect(suspended.state.writes).toEqual([]);
 });

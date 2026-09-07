@@ -18,7 +18,10 @@ and creates the bound receipt rule/set if absent. Existing buckets must already
 block public access. Conflicting policy grants, Deny policies, different active
 rule sets, incompatible rules and earlier blocking receipt actions require
 operator review instead of being overwritten. If no receipt rule set is active,
-the explicitly bound set is activated. Existing unrelated rule actions remain
+the explicitly bound set is activated only if its enabled rules are restricted to
+the bound domain. Disabled unrelated rules remain disabled. The rule inventory is
+compared again immediately before activation. Tenant/operator authorization and
+the current server binding are checked again before each mutation. Existing unrelated rule actions remain
 unchanged. Policy/rule updates use AWS read/modify/write operations, so operators
 must avoid concurrent out-of-band changes; conflicting readback fails verification.
 

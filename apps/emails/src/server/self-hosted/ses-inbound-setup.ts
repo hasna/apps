@@ -11,7 +11,7 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const missing = (error: any) => ["NotFound", "NoSuchBucket", "NoSuchBucketPolicy", "NoSuchPublicAccessBlockConfiguration", "RuleDoesNotExist", "RuleSetDoesNotExist"].includes(error?.name) || error?.$metadata?.httpStatusCode === 404;
 
 /** Configure only an operator-bound bucket and SES receipt rule; never start a worker. */
-export async function setupBoundSesInbound(scoped: TenantScopedStore, tenant: string, input: SesInboundSetupInput, env: NodeJS.ProcessEnv, factory: SesInboundSetupCloudFactory = createSesInboundSetupCloud, parentSignal?: AbortSignal) {
+export async function setupBoundSesInbound(scoped: TenantScopedStore, tenant: string, input: SesInboundSetupInput, env: NodeJS.ProcessEnv, authorize: () => Promise<boolean>, factory: SesInboundSetupCloudFactory = createSesInboundSetupCloud, parentSignal?: AbortSignal) {
   if (Object.keys(input).some(key => !["domain", "bucket", "region", "prefix", "catch_all"].includes(key)) || ["domain", "bucket"].some(key => typeof input[key as "domain"] !== "string" || !input[key as "domain"].trim()) || ["region", "prefix"].some(key => input[key as "region"] !== undefined && (typeof input[key as "region"] !== "string" || !input[key as "region"]!.trim())) || (input.catch_all !== undefined && typeof input.catch_all !== "boolean")) throw new IngestApiError("Invalid SES inbound setup options.");
   if (input.catch_all) throw new IngestApiError("Subdomain catch-all requires separately authorized inbound domain routes; this operation configures the exact bound domain only.");
   const domain = input.domain.trim().toLowerCase();
@@ -24,6 +24,9 @@ export async function setupBoundSesInbound(scoped: TenantScopedStore, tenant: st
   const queue = new URL(binding.queue_url), account = queue.pathname.split("/")[1]!;
   if (queue.hostname !== `sqs.${binding.region}.amazonaws.com${partition === "aws-cn" ? ".cn" : ""}`) throw new IngestApiError("Queue account and region must match the ingest binding.", 409);
   const validateRegistry = async () => {
+    if (!(await authorize())) throw new IngestApiError("Tenant/operator authorization changed during SES setup.", 403);
+    const currentBindings = ingestBindings(env).filter(b => b.tenant_id === tenant && b.source_id === binding.source_id);
+    if (currentBindings.length !== 1 || !same(currentBindings[0], binding)) throw new IngestApiError("The server ingest binding changed during SES setup.", 409);
     const source = await scoped.getResource(resourceSpecForPath("sources")!, binding.source_id);
     const provider = await scoped.getResource(resourceSpecForPath("providers")!, binding.provider_id!);
     const registered = await scoped.getDomainByName(domain);
@@ -71,10 +74,14 @@ export async function setupBoundSesInbound(scoped: TenantScopedStore, tenant: st
     if (!Array.isArray(rules)) throw new IngestApiError("SES rule inventory is invalid.", 409);
     const existingRules = rules.filter((r: any) => r.Name === binding.rule_name);
     if (existingRules.length > 1) throw new IngestApiError("SES rule identity is ambiguous.", 409);
-    const desired = { Name: binding.rule_name, Enabled: true, ScanEnabled: true, Recipients: [domain], Actions: [{ S3Action: { BucketName: Bucket, ObjectKeyPrefix: binding.prefix } }] };
+    const desired = { Name: binding.rule_name, Enabled: true, ScanEnabled: true, TlsPolicy: "Optional", Recipients: [domain], Actions: [{ S3Action: { BucketName: Bucket, ObjectKeyPrefix: binding.prefix } }] };
     const selected = existingRules[0] ?? desired;
     if (!selected.Enabled || !same(selected.Recipients, [domain]) || !selected.Actions?.some((a: any) => a.S3Action?.BucketName === Bucket && a.S3Action.ObjectKeyPrefix === binding.prefix)) throw new IngestApiError("Existing receipt rule conflicts with the exact domain/bucket binding.", 409);
+    const assertActivationScope = (inventory: any[]) => {
+      if (inventory.some(rule => rule.Enabled !== false && (!Array.isArray(rule.Recipients) || !rule.Recipients.length || rule.Recipients.some((recipient: unknown) => typeof recipient !== "string" || !(recipient.toLowerCase() === domain || recipient.toLowerCase().endsWith(`@${domain}`)))))) throw new IngestApiError("Activating this receipt rule set would enable recipients outside the bound domain; operator topology review is required.", 409);
+    };
     const planned = existingRules.length ? rules : [...rules, desired];
+    if (!active.Metadata?.Name) assertActivationScope(planned);
     const route = evaluateInboundReceiptRoute(planned, domain, Bucket);
     if (!route.ready || route.objectKeyPrefix !== binding.prefix) throw new IngestApiError("The planned receipt rule is blocked or targets another prefix.", 409);
     if (!head) await mutate("s3", "CreateBucket", { Bucket, ...(binding.region === "us-east-1" ? {} : { CreateBucketConfiguration: { LocationConstraint: binding.region } }), ObjectOwnership: "BucketOwnerEnforced" }, "bucket_created");
@@ -91,6 +98,9 @@ export async function setupBoundSesInbound(scoped: TenantScopedStore, tenant: st
       await mutate("ses", "CreateReceiptRule", { RuleSetName: binding.rule_set, Rule: desired, ...(rules.length ? { After: rules[rules.length - 1].Name } : {}) }, "receipt_rule_created");
     }
     if (!active.Metadata?.Name) {
+      const currentRules = await cloud.send("ses", "DescribeReceiptRuleSet", { RuleSetName: binding.rule_set });
+      if (!Array.isArray(currentRules.Rules) || !same(currentRules.Rules, planned)) throw new IngestApiError("Receipt rules changed before activation; inspect them before retrying.", 409);
+      assertActivationScope(currentRules.Rules);
       const currentActive = await cloud.send("ses", "DescribeActiveReceiptRuleSet", {});
       if (currentActive.Metadata?.Name) throw new IngestApiError("An active receipt rule set appeared during setup; inspect it before retrying.", 409);
       await mutate("ses", "SetActiveReceiptRuleSet", { RuleSetName: binding.rule_set }, "rule_set_activated");

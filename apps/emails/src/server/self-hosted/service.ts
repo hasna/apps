@@ -2903,7 +2903,10 @@ export async function handleSelfHostedRequest(
       const denied = requireTenantOperator(auth, "configuring SES inbound storage");
       if (denied) return denied;
       try {
-        const result = await setupBoundSesInbound(auth.store, auth.ctx.tenantId, await readJsonBody(req) as unknown as SesInboundSetupInput, deps.env ?? process.env, deps.sesInboundSetupCloud, req.signal);
+        const result = await setupBoundSesInbound(auth.store, auth.ctx.tenantId, await readJsonBody(req) as unknown as SesInboundSetupInput, deps.env ?? process.env, async () => {
+          const current = await authenticate(deps, req, url, write);
+          return current.ok && current.ctx.tenantId === auth.ctx.tenantId && isTenantOperator(current.ctx);
+        }, deps.sesInboundSetupCloud, req.signal);
         return json(200, result);
       } catch (error) { if (error instanceof IngestApiError) return json(error.status, { error: error.message }); throw error; }
     }

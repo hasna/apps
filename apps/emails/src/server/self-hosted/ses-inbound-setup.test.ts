@@ -3,7 +3,7 @@ import { setupBoundSesInbound, type SesInboundSetupCloud } from "./ses-inbound-s
 import type { TenantScopedStore } from "./store.js";
 const binding = { tenant_id: "tenant", source_id: "source", provider_id: "provider", bucket: "bound-inbound", prefix: "inbound/example.test/", region: "us-east-1", domain: "example.test", queue_url: "https://sqs.us-east-1.amazonaws.com/123456789012/bound", rule_set: "bound-rules", rule_name: "bound-example" };
 export function sesSetupFixture() {
-  const state = { bucket: false, policy: null as any, active: undefined as string | undefined, rules: null as any, publicBlock: null as any, writes: [] as string[], closed: false, identity: "123456789012", fail: "" };
+  const state = { bucket: false, policy: null as any, active: undefined as string | undefined, rules: null as any, publicBlock: null as any, writes: [] as string[], closed: false, authorized: true, identity: "123456789012", fail: "" };
   const notFound = () => { throw Object.assign(new Error("fixture absent"), { name: "NotFound" }); };
   const cloud: SesInboundSetupCloud = { async send(_service, op, input: any) {
     if (op === "GetCallerIdentity") return { Account: state.identity, Arn: `arn:aws:iam::${state.identity}:role/fixture` };
@@ -25,8 +25,9 @@ export function sesSetupFixture() {
     return {};
   }, close() { state.closed = true; } };
   const store = { getResource: async (spec: any) => spec.path === "sources" ? { type: "ses_s3", status: "active", provider_id: "provider" } : { type: "ses" }, getDomainByName: async () => ({ provider: "provider" }) } as unknown as TenantScopedStore;
-  const run = (input: any = { domain: binding.domain, bucket: binding.bucket }) => setupBoundSesInbound(store, binding.tenant_id, input, { EMAILS_INGEST_BINDINGS: JSON.stringify([binding]) }, () => cloud);
-  return { state, store, cloud, run };
+  const env = { EMAILS_INGEST_BINDINGS: JSON.stringify([binding]) };
+  const run = (input: any = { domain: binding.domain, bucket: binding.bucket }) => setupBoundSesInbound(store, binding.tenant_id, input, env, async () => state.authorized, () => cloud);
+  return { state, store, cloud, run, env };
 }
 test("creates only the bound bucket and rule, verifies receipt, and reruns without mutations", async () => {
   const f = sesSetupFixture();
@@ -77,5 +78,39 @@ test("cloud state changes before mutations stop stale policy, rule and active-se
     expect(await f.run()).toMatchObject({ ok: false, verified: false, changes_may_have_applied: true });
     const forbidden = target === "GetBucketPolicy" ? "PutBucketPolicy" : target === "DescribeReceiptRuleSet" ? "CreateReceiptRule" : "SetActiveReceiptRuleSet";
     expect(f.state.writes).not.toContain(forbidden);
+  }
+});
+
+test("activation refuses enabled unrelated or catch-all rules but preserves disabled unrelated rules", async () => {
+  for (const recipients of [["other.test"], [], [".example.test"]]) {
+    const f = sesSetupFixture(); f.state.rules = [{ Name: "outside", Enabled: true, Recipients: recipients, Actions: [{ BounceAction: {} }] }];
+    await expect(f.run()).rejects.toThrow(); expect(f.state.writes).toEqual([]);
+  }
+  const f = sesSetupFixture(); f.state.rules = [{ Name: "disabled", Enabled: false, Recipients: ["other.test"], Actions: [{ BounceAction: {} }] }];
+  expect(await f.run()).toMatchObject({ ok: true });
+  expect(f.state.rules[0]).toMatchObject({ Name: "disabled", Enabled: false });
+});
+test("a rule added after creation cannot become active under this request", async () => {
+  const f = sesSetupFixture(), send = f.cloud.send.bind(f.cloud);
+  f.cloud.send = async (service, op, input) => {
+    const result = await send(service, op, input);
+    if (op === "CreateReceiptRule") f.state.rules.push({ Name: "concurrent-other", Enabled: true, Recipients: ["other.test"], Actions: [{ BounceAction: {} }] });
+    return result;
+  };
+  expect(await f.run()).toMatchObject({ ok: false, verified: false, changes_may_have_applied: true });
+  expect(f.state.writes).not.toContain("SetActiveReceiptRuleSet");
+});
+test("tenant suspension or binding removal during cloud reads prevents subsequent mutations", async () => {
+  for (const change of ["authorization", "binding"]) {
+    const f = sesSetupFixture(), send = f.cloud.send.bind(f.cloud);
+    f.cloud.send = async (service, op, input) => {
+      const result = await send(service, op, input);
+      if (op === "GetCallerIdentity") {
+        if (change === "authorization") f.state.authorized = false;
+        else f.env.EMAILS_INGEST_BINDINGS = "[]";
+      }
+      return result;
+    };
+    await expect(f.run()).rejects.toThrow(); expect(f.state.writes).toEqual([]);
   }
 });
