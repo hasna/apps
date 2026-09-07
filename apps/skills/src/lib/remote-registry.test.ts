@@ -30,9 +30,22 @@ useDefaultTestTimeout();
 // tier consult nothing, identically on both kinds of machine.
 const HOME_ROOT_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"] as const;
 const scratchHome = mkdtempSync(join(tmpdir(), "skills-registry-home-"));
+// Saved once at load: this package's test script does not run --isolate, so
+// every file in the suite shares ONE process and an anchored root that is not
+// put back would redirect a later file's disk-tier resolution (e.g.
+// registry-reconcile's fixture home) and break it.
+const savedHomeRoots = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
 
 beforeEach(() => {
   for (const name of HOME_ROOT_KEYS) process.env[name] = scratchHome;
+});
+
+afterEach(() => {
+  for (const name of HOME_ROOT_KEYS) {
+    const value = savedHomeRoots.get(name);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 afterAll(() => {

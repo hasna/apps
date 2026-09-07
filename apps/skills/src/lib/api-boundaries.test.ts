@@ -21,9 +21,21 @@ useDefaultTestTimeout();
 // tier consult nothing, identically on both kinds of machine.
 const HOME_ROOT_KEYS = ["HOME", "HASNA_HOME", "HASNA_CONFIG_HOME"] as const;
 const scratchHome = mkdtempSync(join(tmpdir(), "skills-boundary-home-"));
+// Saved once at load: this package's test script does not run --isolate, so
+// an anchored root not put back would redirect later files' disk-tier
+// resolutions (this file shares one process with the whole suite).
+const savedHomeRoots = new Map(HOME_ROOT_KEYS.map((name) => [name, process.env[name]]));
 
 beforeEach(() => {
   for (const name of HOME_ROOT_KEYS) process.env[name] = scratchHome;
+});
+
+afterEach(() => {
+  for (const name of HOME_ROOT_KEYS) {
+    const value = savedHomeRoots.get(name);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 afterAll(() => {
