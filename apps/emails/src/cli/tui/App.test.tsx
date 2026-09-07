@@ -23,6 +23,7 @@ import * as mailboxData from "./data.js";
 import { toggleRead, type TuiMessage } from "./data.js";
 import { App } from "../tui-solid/App.js";
 import { resolveAddressChoice } from "../tui-solid/context/emails-state.js";
+import { sidebarWidth } from "../tui-solid/component/sidebar.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 import { resolveMailDataSource } from "../../lib/mail-data-source.js";
 import { RGBA, TextRenderable, TextTableRenderable, type Renderable, type TextChunk } from "@opentui/core";
@@ -190,6 +191,36 @@ async function typeText(value: string) {
 }
 
 describe("Emails Solid TUI", () => {
+  it("keeps comma-grouped folder, category and label counts on one sidebar row", async () => {
+    const ds = resolveMailDataSource();
+    const counts = spyOn(ds, "mailboxCounts").mockResolvedValue({
+      inbox: 132193, unread: 7, priority: 1000, starred: 999, sent: 1234567,
+      archived: 0, spam: 12, trash: 5, countsComplete: false,
+    });
+    const labels = spyOn(ds, "listLabelSummaries").mockResolvedValue([
+      { name: "category_promotions", count: 132193 },
+      { name: "Ledger operational announcements", count: 1234567890 },
+    ]);
+    try {
+      await renderApp();
+      for (const width of [120, 80, 60]) {
+        setup?.resize(width, 33);
+        await flush();
+        const sidebar = frame().split("\n").map((line) => line.slice(0, sidebarWidth(width)));
+        for (const [label, count] of [
+          ["Inbox", "≥132,193"], ["Unread", "≥7"], ["Priority", "≥1,000"],
+          ["Starred", "≥999"], ["Sent", "≥1,234,567"], ["Archived", "≥0"],
+          ["Spam", "≥12"], ["Trash", "≥5"], ["Promotions", "132,193"],
+          ["Ledger", "1,234,567,890"],
+        ]) {
+          const row = sidebar.find((line) => line.includes(label!));
+          expect(row).toBeDefined();
+          expect(row).toContain(count!);
+        }
+      }
+    } finally { counts.mockRestore(); labels.mockRestore(); }
+  });
+
   it("shows a useful empty inbox without message actions or unavailable pagination", async () => {
     await renderApp();
     await setup?.waitForFrame((value) => value.includes("Your inbox is clear"));
