@@ -13812,6 +13812,203 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "POST",
+    "operationId": "runForwardingBatch",
+    "path": "/v1/forwarding/run",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "attempted",
+        "sent",
+        "failed",
+        "skipped",
+        "pending",
+        "items"
+      ],
+      "properties": {
+        "attempted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sent": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pending": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "rule_id",
+              "inbound_email_id",
+              "target_address",
+              "status",
+              "sent_email_id",
+              "error"
+            ],
+            "properties": {
+              "rule_id": {
+                "type": "string"
+              },
+              "inbound_email_id": {
+                "type": "string"
+              },
+              "target_address": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "sent",
+                  "failed",
+                  "skipped",
+                  "processing"
+                ]
+              },
+              "sent_email_id": {
+                "type": "string",
+                "nullable": true
+              },
+              "error": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runForwardingBatch",
+    "path": "/v1/forwarding/run",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runForwardingBatch",
+    "path": "/v1/forwarding/run",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runForwardingBatch",
+    "path": "/v1/forwarding/run",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runForwardingBatch",
+    "path": "/v1/forwarding/run",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runForwardingBatch",
+    "path": "/v1/forwarding/run",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
     "method": "GET",
     "operationId": "listResourceGroupMembers",
     "path": "/v1/group-members",

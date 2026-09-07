@@ -2193,6 +2193,27 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
   paths: {
     ...genericResourcePaths,
     "/v1/mailbox-filters/{id}/apply": mailboxFilterApplyPath,
+    "/v1/forwarding/run": {
+      post: {
+        operationId: "runForwardingBatch",
+        summary: "Forward matching inbound mail with durable delivery identities (tenant operator required)",
+        requestBody: { content: { "application/json": { schema: { type: "object", additionalProperties: false, properties: {
+          limit: { type: "integer", minimum: 1, maximum: 1000 }, provider_id: { type: "string" },
+          from_address: { type: "string" }, backfill: { type: "boolean" },
+        } } } } },
+        responses: {
+          "200": { content: { "application/json": { schema: { type: "object", required: ["attempted","sent","failed","skipped","pending","items"], properties: {
+            attempted: { type: "integer", minimum: 0 }, sent: { type: "integer", minimum: 0 }, failed: { type: "integer", minimum: 0 },
+            skipped: { type: "integer", minimum: 0 }, pending: { type: "integer", minimum: 0 },
+            items: { type: "array", items: { type: "object", required: ["rule_id","inbound_email_id","target_address","status","sent_email_id","error"], properties: {
+              rule_id: { type: "string" }, inbound_email_id: { type: "string" }, target_address: { type: "string" },
+              status: { type: "string", enum: ["sent","failed","skipped","processing"] }, sent_email_id: { type: "string", nullable: true }, error: { type: "string", nullable: true },
+            } } },
+          } } } } },
+          "400": errorResponse("Invalid forwarding options"), "401": errorResponse("Authentication required"), "403": errorResponse("Tenant operator required"),
+        },
+      },
+    },
     "/v1/scheduled/run": {
       post: {
         operationId: "runScheduledBatch",

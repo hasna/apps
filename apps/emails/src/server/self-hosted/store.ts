@@ -6,6 +6,8 @@ import type { ProviderDeliveryRead } from "./provider-delivery.js";
 // directly through the product-owned storage utilities' typed query client. No cache, no
 // local mirror.
 
+import { claimForwarding, finishForwarding } from "./forwarding-store.js";
+import type { ForwardingBatchOptions, ForwardingClaim } from "./forwarding.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { QueryResult, TypedQueryClient, PoolQueryClient } from "../../storage-kit/index.js";
 import type { QueryResultRow } from "pg";
@@ -5220,12 +5222,15 @@ export class TenantScopedStore {
     const sequenceGuard = sequenceEdit ? " AND (execution_lease IS NULL OR execution_lease < now()-interval '5 minutes')" + (Object.keys(body).some(field => field !== "status") ? " AND execution_started=false" : "") : "";
     // Enqueued content is bound to its retry hash. Only lifecycle status may change.
     const scheduledContentEdit = spec.path === "scheduled" && Object.keys(body).some(field => field !== "status");
+    // Disable always fences later claims/retries. Already admitted copies may finish;
+    // changing their payload or deleting their rule is blocked until reconciled.
+    const forwardingToggleOnly = typeof body.enabled === "boolean" && Object.keys(body).every(field => field === "enabled");
     if (sets.length === 0) return this.getResource(spec, id);
     sets.push("updated_at = now()");
     return redactResourceRow(
       spec,
       await this.client.get<Record<string, unknown>>(
-        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""}${scheduledContentEdit ? " AND enqueue_key IS NULL" : ""}${sequenceGuard} RETURNING *`,
+        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""}${scheduledContentEdit ? " AND enqueue_key IS NULL" : ""}${spec.path === "forwarding" && !forwardingToggleOnly ? " AND NOT EXISTS (SELECT 1 FROM forwarding_delivery_jobs WHERE tenant_id=$2 AND rule_id=$1 AND status='processing')" : ""}${sequenceGuard} RETURNING *`,
         params,
       ),
     );
@@ -5234,7 +5239,7 @@ export class TenantScopedStore {
   async deleteResource(spec: SelfHostedResourceSpec, id: string): Promise<boolean> {
     const key = keyColumn(spec);
     const rows = await this.client.many<{ id: string }>(
-      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing' AND enqueue_key IS NULL" : ""}${spec.path === "sequence-enrollments" ? " AND execution_started=false AND execution_lease IS NULL" : ""} RETURNING ${key} AS id`,
+      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing' AND enqueue_key IS NULL" : ""}${spec.path === "forwarding" ? " AND NOT EXISTS (SELECT 1 FROM forwarding_delivery_jobs WHERE tenant_id=$2 AND rule_id=$1 AND status='processing')" : ""}${spec.path === "sequence-enrollments" ? " AND execution_started=false AND execution_lease IS NULL" : ""} RETURNING ${key} AS id`,
       [id, this.tenantId],
     );
     return rows.length > 0;
@@ -5259,6 +5264,14 @@ export class TenantScopedStore {
     if (!row && existing.enqueue_hash !== input.hash) throw new IdempotencyKeyConflictError();
     const date = existing.scheduled_at instanceof Date ? existing.scheduled_at.toISOString() : String(existing.scheduled_at);
     return {id:String(existing.id),status:String(existing.status),scheduled_at:date,created:row !== null};
+  }
+
+  claimForwarding(options: ForwardingBatchOptions): Promise<ForwardingClaim[]> {
+    return claimForwarding(this.client, this.tenantId, options);
+  }
+
+  finishForwarding(claim: ForwardingClaim, status: "sent" | "failed" | "skipped", sentId: string | null, error: string | null): Promise<boolean> {
+    return finishForwarding(this.client, this.tenantId, claim, status, sentId, error);
   }
 
   /** Atomically claim due work. The timestamp is a lease fence, not a send identity. */

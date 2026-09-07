@@ -262,6 +262,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   {
     // App-level inbound forwarding rules (local table `forwarding_rules`).
     path: "forwarding",
+    writeRequiresOperator: true,
     table: "forwarding_rules",
     orderBy: "source_address ASC, target_address ASC",
     filters: ["source_address", "target_address", "mode"],

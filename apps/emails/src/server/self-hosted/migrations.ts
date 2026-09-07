@@ -2991,6 +2991,24 @@ const PROVIDER_STATUS_OBSERVATIONS = defineMigration(
    CHECK (type IN ('delivered','bounced','complained','opened','clicked','unsubscribed','status_observed')) NOT VALID;`,
 );
 
+const FORWARDING_DELIVERY_JOBS = defineMigration(
+  "0030_forwarding_delivery_jobs",
+  `CREATE TABLE IF NOT EXISTS forwarding_delivery_jobs (
+     tenant_id UUID NOT NULL, rule_id TEXT NOT NULL, message_id TEXT NOT NULL,
+     snapshot JSONB NOT NULL, status TEXT NOT NULL CHECK(status IN ('processing','sent','failed','skipped')),
+     lease UUID NOT NULL, sent_email_id TEXT, error TEXT,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+     PRIMARY KEY(tenant_id,rule_id,message_id)
+   );
+   CREATE INDEX IF NOT EXISTS forwarding_delivery_jobs_pending ON forwarding_delivery_jobs(tenant_id,status,updated_at);
+   ALTER TABLE forwarding_delivery_jobs ENABLE ROW LEVEL SECURITY;
+   ALTER TABLE forwarding_delivery_jobs FORCE ROW LEVEL SECURITY;
+   DROP POLICY IF EXISTS forwarding_delivery_jobs_tenant_policy ON forwarding_delivery_jobs;
+   CREATE POLICY forwarding_delivery_jobs_tenant_policy ON forwarding_delivery_jobs
+     USING (tenant_id = NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+     WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant',true),'')::uuid);`,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3029,6 +3047,7 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MESSAGE_PROVIDER_PROVENANCE,
     SCHEDULED_ENQUEUE_IDENTITY,
     SEQUENCE_EXECUTION_LEASE,
+    FORWARDING_DELIVERY_JOBS,
     PROVIDER_STATUS_OBSERVATIONS,
   ];
 }

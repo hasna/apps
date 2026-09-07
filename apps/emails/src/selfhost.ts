@@ -941,6 +941,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Forward matching inbound mail with durable delivery identities (tenant operator required) */
+    async runForwardingBatch(body: { "limit"?: number; "provider_id"?: string; "from_address"?: string; "backfill"?: boolean }, init?: RequestInit): Promise<{ "attempted": number; "sent": number; "failed": number; "skipped": number; "pending": number; "items": Array<{ "rule_id": string; "inbound_email_id": string; "target_address": string; "status": "sent" | "failed" | "skipped" | "processing"; "sent_email_id": string | null; "error": string | null }> }> {
+      return this.request("POST", `/v1/forwarding/run`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Get a tenant-scoped forwarding row */
     async getResourceForwarding(id: string, init?: RequestInit): Promise<{ "source_address": string | null; "target_address": string | null; "mode": string | null; "provider_id": string | null; "from_address": string | null; "enabled": boolean; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("GET", `/v1/forwarding/${encodeURIComponent(String(id))}`, {

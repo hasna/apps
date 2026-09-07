@@ -1,5 +1,6 @@
 import { syncProviderDelivery, ProviderSyncError } from "./provider-sync.js";
 import { readProviderHealth } from "./provider-health.js";
+import { runForwardingBatch, normalizeForwardingOptions, normalizeForwardingRule } from "./forwarding.js";
 import { runDomainOperation, DomainOperationError, type DomainOperation } from "./domain-operations.js";
 // HTTP request handler for the Emails self-hosted service.
 //
@@ -870,6 +871,8 @@ export async function handleSelfHostedRequest(
   deps: SelfHostedServiceDeps,
   req: Request,
   context: SelfHostedRequestContext = {},
+  // Server-owned automation metadata; HTTP body/header fields never populate this argument.
+  trustedSendHeaders?: Record<string, string>,
 ): Promise<Response | null> {
   const url = new URL(req.url);
   // Normalize the `/api/v1` alias to `/v1` ONCE, at this single entry point that
@@ -1427,6 +1430,7 @@ export async function handleSelfHostedRequest(
         html: typeof body.html === "string" ? body.html : null,
         attachments,
         provider: sender.provider,
+        ...(trustedSendHeaders ? { headers: trustedSendHeaders } : {}),
         ...(requestedProviderId ? { provider_id: providerId } : {}),
         ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
       };
@@ -1646,6 +1650,7 @@ export async function handleSelfHostedRequest(
         messageId = await sender.send({
           provider_id: providerId,
           unsubscribe_url: unsubscribeUrl,
+          headers: trustedSendHeaders,
           from: fromForProvider,
           to,
           cc: cc.length ? cc : undefined,
@@ -2574,6 +2579,26 @@ export async function handleSelfHostedRequest(
       }
     }
 
+    if (path === "/v1/forwarding/run" || path === "/v1/forwarding-rules/run") {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "running forwarding rules");
+      if (denied) return denied;
+      let options;
+      try { options = normalizeForwardingOptions(await readJsonBody(req)); }
+      catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid forwarding options" }); }
+      const result = await runForwardingBatch(auth.store, async (payload, forwardingHeaders) => {
+        const headers = new Headers(req.headers);
+        headers.set("Content-Type", "application/json"); headers.delete("Content-Length");
+        const response = await handleSelfHostedRequest(deps,
+          new Request(new URL("/v1/messages/send",req.url), { method: "POST",headers,body: JSON.stringify(payload) }), context, forwardingHeaders);
+        if (!response) throw new Error("Forwarding send handler unavailable");
+        return response;
+      }, options);
+      return json(200, result);
+    }
+
     // ---- generic resources (contacts/providers/templates/groups/…) --------
     const resourceMatch = path.match(/^\/v1\/([^/]+)(?:\/([^/]+))?$/);
     if (resourceMatch) {
@@ -2601,7 +2626,11 @@ export async function handleSelfHostedRequest(
             if (!auth.ok) return auth.response;
             const specError = requireResourceWriteAuthority(auth, spec);
             if (specError) return specError;
-            const body = await readJsonBody(req);
+            let body = await readJsonBody(req);
+            if (spec.path === "forwarding") {
+              try { body = normalizeForwardingRule(body, true); }
+              catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid forwarding rule" }); }
+            }
             return json(201, await auth.store.createResource(spec, body));
           }
           return json(405, { error: "method not allowed" });
@@ -2617,7 +2646,11 @@ export async function handleSelfHostedRequest(
           if (!auth.ok) return auth.response;
           const specError = requireResourceWriteAuthority(auth, spec);
           if (specError) return specError;
-          const body = await readJsonBody(req);
+          let body = await readJsonBody(req);
+          if (spec.path === "forwarding") {
+            try { body = normalizeForwardingRule(body, false); }
+            catch (error) { return json(400, { error: error instanceof Error ? error.message : "invalid forwarding rule" }); }
+          }
           const rec = await auth.store.updateResource(spec, id, body);
           return rec ? json(200, rec) : json(404, { error: `${spec.path} not found` });
         }

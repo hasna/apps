@@ -95,7 +95,7 @@ describe("PostgreSQL evidence must be complete", () => {
   test("requires the exact nonempty server integration inventory", () => {
     const actual = readdirSync(resolve(packageRoot, "src/server/self-hosted"))
       .filter((name) => name.endsWith(".integration.test.ts"));
-    expect(actual.length).toBe(11);
+    expect(actual.length).toBe(12);
     expect(() => assertSuiteInventory(actual)).not.toThrow();
     expect(() => assertSuiteInventory([])).toThrow();
     expect(() => assertSuiteInventory(actual.slice(1))).toThrow();
@@ -104,8 +104,8 @@ describe("PostgreSQL evidence must be complete", () => {
     expect(LIVE_POSTGRES_SUITES).toContain(suite);
     expect(Object.keys(MINIMUM_PASS_COUNTS)).toEqual(LIVE_POSTGRES_SUITES);
     expect(MINIMUM_PASS_COUNTS["multi-tenancy.integration.test.ts"]).toBe(34);
-    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0)).toBe(162);
-    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0) + Object.keys(OPTIONAL_SKIPS).length).toBe(164);
+    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0)).toBe(167);
+    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0) + Object.keys(OPTIONAL_SKIPS).length).toBe(169);
   });
 
   test("accepts complete non-skipped successful evidence", () => {
@@ -200,7 +200,7 @@ describe("PostgreSQL evidence must be complete", () => {
     }
   });
 
-  test("attempts all eleven subprocesses after an early failure without overriding case deadlines", () => {
+  test("attempts all registered subprocesses after an early failure without overriding case deadlines", () => {
     const calls: string[] = [];
     const env = buildLivePostgresEnv({ EMAILS_TEST_DATABASE_URL: databaseUrl }, "/isolated/home");
     const results = executeSuiteProcesses(packageRoot, env, (_executable, args, options) => {
@@ -215,7 +215,7 @@ describe("PostgreSQL evidence must be complete", () => {
       return { status: 0, stderr: summary(`${passLines(passed)}${optional ? `\n(skip) ${optional}` : ""}`, passed, optional ? 1 : 0) };
     }, () => {});
     expect(calls).toEqual(LIVE_POSTGRES_SUITES);
-    expect(results.filter((result) => result.ok)).toHaveLength(10);
+    expect(results.filter((result) => result.ok)).toHaveLength(LIVE_POSTGRES_SUITES.length - 1);
     expect(results.filter((result) => !result.ok)).toHaveLength(1);
   });
 
