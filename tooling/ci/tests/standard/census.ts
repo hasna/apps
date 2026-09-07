@@ -57,6 +57,11 @@
  * member now ships ./sdk, so the recorded exception that passes was a
  * stale-entry failure under the two-sided contract (main-gate repair,
  * todos b66b3f04).
+ * 2026-09-07 (hasna/apps#1720 validation, telephony fix lane): telephony's
+ * SDK exception entry DELETED — the member now exports ./sdk
+ * (package.json exports + manifest exportSubpath), so the recorded
+ * exception that passes was a stale-entry failure under the two-sided
+ * contract.
  * 2026-08-18 (rebase repair, todos b66b3f04): the context and crawl
  * manifest-missing exception entries DELETED — both members gained
  * hasna.contract.json in the contracts-align wave 2 merges, so the
@@ -356,7 +361,6 @@ export const SDK_EXCEPTIONS: Array<{ member: string; reason: string }> = [
   { member: "snapshots", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "statusline", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "tables", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
-  { member: "telephony", reason: "SDK lane (c7ce8b75); no ./sdk export yet." },
   { member: "terminal", reason: "SDK lane (c7ce8b75); no ./sdk export yet. Imported by #88 after the original census." },
   { member: "test-guard", reason: "SDK lane (c7ce8b75); bash-only guard ships no importable Node SDK export (see the member's CONTRACTS_EXCEPTIONS entry)." },
   { member: "tickets", reason: "SDK lane (c7ce8b75); no ./sdk export yet." }
