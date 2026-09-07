@@ -12,9 +12,9 @@ builds prefer `dist/cli/ui-runtime-bundle.js`, produced by
 
 The current UI stack is:
 
-- `@opentui/core` 0.4.1;
-- `@opentui/solid` 0.4.1;
-- `@opentui/keymap` 0.4.1;
+- `@opentui/core` 0.5.10;
+- `@opentui/solid` 0.5.10;
+- `@opentui/keymap` 0.5.10;
 - `solid-js` 1.9.13.
 
 The dedicated bundle uses the OpenTUI Solid transform and keeps native

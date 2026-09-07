@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Command } from "commander";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { registerAddressCommands } from "./address.js";
@@ -14,13 +14,15 @@ import {
   testAuthDeps,
 } from "../../server/self-hosted/auth/test-support.js";
 import type { TypedQueryClient } from "../../storage-kit/index.js";
-const original = { ...process.env };
-const originalExitCode = process.exitCode;
+let original: NodeJS.ProcessEnv;
+let originalExitCode: typeof process.exitCode;
+beforeEach(() => { original = { ...process.env }; originalExitCode = process.exitCode; });
 let server: ReturnType<typeof Bun.serve> | undefined;
 afterEach(() => {
   server?.stop(true);
-  for (const key of Object.keys(process.env))
-    if (!(key in original)) delete process.env[key];
+  for (const key of Object.keys(process.env)) {
+    if (!Object.prototype.hasOwnProperty.call(original, key)) delete process.env[key];
+  }
   Object.assign(process.env, original);
   resetSelfHostedConfigCache();
   process.exitCode = originalExitCode;

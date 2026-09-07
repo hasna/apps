@@ -20,8 +20,8 @@ emails address add hello@example.com --provider <ses-id>
 ```
 
 `domain dns` prints expected records and `domain check` reads public DNS. Neither
-publishes DNS. `domain verify`, despite appearing in help for compatibility, is
-not implemented; use `domain check` for the live result.
+publishes DNS. `domain verify` checks the bound server provider and updates the
+shared domain registry; `domain check` inspects public DNS.
 
 When SES should also receive the domain, omit `--no-inbound` from `domain adopt`
 or run the explicit inbound setup:

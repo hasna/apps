@@ -127,8 +127,6 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
       "--first-name", "A", "--last-name", "B", "--phone", "+1.5551234567",
       "--address", "1 Main St", "--city", "Town", "--country", "US", "--zip", "12345",
     ],
-    "emails address provision": ["address", "provision", "ops@example.com", "--provider", "p1"],
-    "emails provision address": ["provision", "address", "ops@example.com", "--provider", "p1"],
     "emails provision domain": ["provision", "domain", "example.com", "--provider", "p1"],
     "emails provision up": ["provision", "up", "example.com", "--provider", "p1"],
     "emails provision roundtrip": ["provision", "roundtrip", "--domain", "example.com", "--provider", "p1"],
@@ -184,13 +182,8 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
   const sharedRefusals = scanCliRefusals().filter((refusal) => refusal.shared);
 
   it("has a probe for every unconditional refusal the CLI ships", () => {
-    // Positive control first: an empty or mis-parsed scan would make every
-    // assertion below pass over nothing.
-    expect(sharedRefusals.length).toBeGreaterThan(10);
-    const files = new Set(sharedRefusals.map((refusal) => refusal.file));
-    expect(files).toContain("domain.ts");
-    expect(files).toContain("address.ts");
-    expect(files).toContain("provision.ts");
+    // Scanner positive controls live in status-commands-coverage.test.ts.
+    // This real set may shrink to empty as implementations replace refusals.
 
     const unprobed = sharedRefusals
       .map((refusal) => refusal.command)
