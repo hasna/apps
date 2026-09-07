@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { hermeticChildEnv } from "../../tests/support/hermetic-store-env.js";
 
 /**
  * Machine-readable surface sweep (hasna/apps#1602): every telephony data
@@ -29,6 +30,8 @@ function scrubEnv(): Record<string, string> {
     if (value === undefined) continue;
     if (name.includes("TELEPHONY")) continue; // HASNA_TELEPHONY_* and TELEPHONY_*
     if (/^HASNA_(DATA|STATE|CONFIG|CACHE)_HOME$/.test(name)) continue;
+    if (name === "HASNA_HOME" || name === "HASNA_CONFIG_HOME") continue; // moves the credential disk tier
+    if (name === "HASNA_STATION" || name === "HASNA_PROFILE") continue; // keychain account / profile pointer
     env[name] = value;
   }
   return env;
@@ -47,7 +50,10 @@ async function runEntry(
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...scrubEnv(), HOME: home, ...extra },
+    // The Keychain account is pinned to one that cannot exist and the disk
+    // tier lands under the scratch home, so a station credential can never
+    // route a probe at the fleet (the local opt-in yields to any credential).
+    env: { ...scrubEnv(), ...hermeticChildEnv(home), ...extra },
   });
   const stdoutPromise = new Response(proc.stdout).text();
   const stderrPromise = new Response(proc.stderr).text();

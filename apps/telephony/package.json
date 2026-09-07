@@ -14,6 +14,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/sdk.d.ts",
+      "import": "./dist/sdk.js"
     }
   },
   "files": [
@@ -27,7 +31,7 @@
   ],
   "scripts": {
     "generate:sdk": "bun scripts/generate-sdk.mjs",
-    "build": "bun run generate:sdk && rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external twilio --external pg --external @hasna/contracts --external @aws-sdk/client-s3 && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external twilio --external pg --external @hasna/contracts --external @aws-sdk/client-s3 && bun build src/server/cloud-entry.ts --outdir dist/server --target bun --external twilio --external pg --external @hasna/contracts --external @aws-sdk/client-s3 && bun build src/server/index.ts --outdir dist/server --target bun --external twilio --external pg --external @hasna/contracts --external @aws-sdk/client-s3 && bun build src/index.ts --outdir dist --target bun --external twilio --external pg --external @hasna/contracts --external @aws-sdk/client-s3 && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun run generate:sdk && rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk --external twilio --external pg --external @hasna/contracts --external @aws-sdk/client-s3 && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk --external twilio --external pg --external @hasna/contracts --external @aws-sdk/client-s3 && bun build src/server/cloud-entry.ts --outdir dist/server --target bun --external twilio --external pg --external @hasna/contracts --external @aws-sdk/client-s3 && bun build src/server/index.ts --outdir dist/server --target bun --external twilio --external pg --external @hasna/contracts --external @aws-sdk/client-s3 && bun build src/index.ts src/sdk.ts --outdir dist --target bun --external twilio --external pg --external @hasna/contracts --external @aws-sdk/client-s3 && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
