@@ -51,6 +51,10 @@ try {
   await capture("settings-appearance");
   await click("Reading");
   await capture("settings-reading");
+  await click("Attachments");
+  await capture("settings-attachments");
+  await click("When selecting an attachment");
+  await capture("settings-attachments-copy-link");
   setup.resize(80, 24);
   await capture("settings-narrow");
   await click("Shortcuts");
@@ -59,6 +63,8 @@ try {
   await flush();
   await click("Priority Inbox");
   await capture("settings-priority");
+  await setup.mockInput.typeText("priority@example.com");
+  await capture("settings-priority-focused");
   await click("Appearance");
   await click("Color scheme");
   await capture("dark-settings");
