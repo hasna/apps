@@ -129,7 +129,12 @@ calendarCommand("agent-update <id>")
   .option("--role <role>", "Role")
   .action(async (id, opts) => {
     const agent = await getStore().updateAgent(id, { description: opts.description, role: opts.role });
-    output(wantsJson(opts) ? JSON.stringify(agent) : chalk.green(`Agent updated: ${agent?.name}`));
+    // ApiStore.updateAgent reports an absent agent as null (the /v1 404
+    // becomes absence), never as a successful undefined update: a missing
+    // agent must fail loudly, not print a false-green "Agent updated:
+    // undefined" with exit 0.
+    if (!agent) fail("Agent not found");
+    output(wantsJson(opts) ? JSON.stringify(agent) : chalk.green(`Agent updated: ${agent.name}`));
   });
 
 calendarCommand("agent-delete <id>")
