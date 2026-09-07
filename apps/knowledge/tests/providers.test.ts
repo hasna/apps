@@ -8,6 +8,7 @@ import {
   listModelRegistry,
   normalizeAiSdkUsage,
   providerStatus,
+  providerSettings,
   recordProviderUsage,
   resolveModelRef,
 } from '../src/providers';
@@ -40,6 +41,19 @@ describe('AI SDK provider registry metadata', () => {
       },
     });
     expect(resolveModelRef('sonnet', config)).toBe('anthropic:claude-sonnet-4-6');
+  });
+
+  test('a bare provider name resolves to that provider default model (--model openai / providers check openai)', () => {
+    expect(resolveModelRef('openai')).toBe(`openai:${providerSettings(undefined, 'openai').default_model}`);
+    expect(resolveModelRef('anthropic')).toBe(`anthropic:${providerSettings(undefined, 'anthropic').default_model}`);
+    expect(resolveModelRef('deepseek')).toBe(`deepseek:${providerSettings(undefined, 'deepseek').default_model}`);
+    // Explicit provider:model refs and unknown tokens pass through untouched.
+    expect(resolveModelRef('openai:gpt-5-mini')).toBe('openai:gpt-5-mini');
+    expect(resolveModelRef('not-a-provider')).toBe('not-a-provider');
+    // A model alias still wins over the bare-provider rule.
+    const configured = defaultKnowledgeConfig();
+    configured.providers = { aliases: { openai: 'anthropic:claude-sonnet-4-6' } };
+    expect(resolveModelRef('openai', configured)).toBe('anthropic:claude-sonnet-4-6');
   });
 
   test('checks credentials and records normalized provider usage', () => {

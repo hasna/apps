@@ -7,7 +7,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
 import { defaultStorePath, itemMatchesSearch } from './store.ts';
 import { resolveItemStore } from './item-store.ts';
-import { usesKnowledgeHttpTransport } from './http-store.ts';
+
 import { assertNoRetiredKnowledgeStorageSelector } from './client-transport.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';

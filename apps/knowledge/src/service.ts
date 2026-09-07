@@ -2750,11 +2750,13 @@ export class KnowledgeService {
         query: options.query,
         limit: options.limit,
         offset: options.offset,
-        semantic: options.semantic === true || options.fake === true,
+        semantic: options.semantic === true || options.fake === true || Boolean(options.modelRef),
       }, [], producer.total);
       // The items-level contract (hybridSearchItems) reports semantic requests
-      // over a pure item corpus as skipped; surface the same warning here.
-      if (options.semantic === true || options.fake === true) {
+      // over a pure item corpus as skipped; surface the same warning here so a
+      // request that asked for a local-catalog-only capability (semantic, fake,
+      // or an explicit model) never degrades silently.
+      if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
         result.warnings.push('semantic_search_requires_local_catalog');
       }
       return result;
@@ -2858,13 +2860,16 @@ export class KnowledgeService {
       // `--fake` and `--semantic` degrade over the HTTP item corpus instead of
       // throwing: fake generation is deterministic and offline by contract, and
       // semantic requests report `semantic_search_requires_local_catalog` from
-      // the items-level search path.
+      // the items-level search path. An explicit `--model` request is a
+      // local-catalog capability too, so it degrades with the same warning —
+      // never silently.
       const producer = await this.httpStore().search({
         query: options.prompt,
         archive: 'active',
         limit: options.limit,
         offset: options.offset,
       });
+      const requestedLocalOnly = options.semantic === true || options.fake === true || Boolean(options.modelRef);
       const producerSearch = hybridSearchFromProducerPage(
         producer.items,
         {
@@ -2873,7 +2878,7 @@ export class KnowledgeService {
           offset: options.offset,
           semantic: false,
         },
-        [],
+        requestedLocalOnly ? ['semantic_search_requires_local_catalog'] : [],
         producer.total,
       );
       return runKnowledgePromptOverItems(

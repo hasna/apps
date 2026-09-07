@@ -21450,9 +21450,9 @@ class KnowledgeService {
         query: options.query,
         limit: options.limit,
         offset: options.offset,
-        semantic: options.semantic === true || options.fake === true
+        semantic: options.semantic === true || options.fake === true || Boolean(options.modelRef)
       }, [], producer.total);
-      if (options.semantic === true || options.fake === true) {
+      if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
         result.warnings.push("semantic_search_requires_local_catalog");
       }
       return result;
@@ -21548,12 +21548,13 @@ class KnowledgeService {
         limit: options.limit,
         offset: options.offset
       });
+      const requestedLocalOnly = options.semantic === true || options.fake === true || Boolean(options.modelRef);
       const producerSearch = hybridSearchFromProducerPage(producer.items, {
         query: options.prompt,
         limit: options.limit,
         offset: options.offset,
         semantic: false
-      }, [], producer.total);
+      }, requestedLocalOnly ? ["semantic_search_requires_local_catalog"] : [], producer.total);
       return runKnowledgePromptOverItems(producer.items.map((hit) => hit.item), { ...options, config: this.config() }, producerSearch);
     }
     const workspace = this.ensureWorkspace();

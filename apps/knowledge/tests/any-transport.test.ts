@@ -209,6 +209,24 @@ describe('semantic/fake retrieval degrades over the HTTP item corpus instead of 
       expect(result.generated).toBe(true);
       expect(result.answer.startsWith('Fake generated answer')).toBe(true);
       expect(result.warnings).not.toContain('semantic_query_unavailable');
+      // The degradation is loud, not silent: a local-catalog-only capability
+      // was requested over the HTTP item corpus.
+      expect(result.warnings).toContain('semantic_search_requires_local_catalog');
+    } finally {
+      restore();
+    }
+  });
+
+  test('search --model <ref> degrades over the HTTP item corpus with the same warning (never silent)', async () => {
+    const home = tempHome('any-transport-model-');
+    const { service, restore } = serviceAt(home);
+    try {
+      const result = await service.search({ query: 'probe', modelRef: 'openai:gpt-5-mini' });
+      expect(result.results.length).toBeGreaterThan(0);
+      expect(result.results[0]!.kind).toBe('legacy_item');
+      expect(result.warnings).toContain('semantic_search_requires_local_catalog');
+      // The item corpus came from the loopback API.
+      expect(loopback.requests.some((url) => url.pathname === '/v1/notes/search')).toBe(true);
     } finally {
       restore();
     }
