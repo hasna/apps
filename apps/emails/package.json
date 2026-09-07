@@ -1,14 +1,15 @@
 {
   "name": "@hasna/emails",
   "version": "1.5.0",
-  "description": "Emails — local SQLite and self-hosted email management CLI, MCP server, and library",
+  "description": "Email management through a shared API: CLI, terminal UI, MCP server, and library",
   "keywords": [
     "email",
     "smtp",
     "ses",
     "resend",
     "cloudflare",
-    "sqlite",
+    "api",
+    "tui",
     "self-hosted",
     "cli",
     "mcp",
