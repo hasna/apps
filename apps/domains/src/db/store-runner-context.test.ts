@@ -28,6 +28,16 @@
  * fixture literal, so no real credential can reach a child and no child can
  * reach a real host. Assertions are on the OUTCOME the child reports, never on
  * whether a variable was set.
+ *
+ * HERMETIC AGAINST A PROVISIONED STATION. The shared resolver's Keychain tier
+ * is ambient: it looks up `hasna.credentials.domains.api-url` for the account
+ * named by `HASNA_STATION` (else the hostname). On a station that carries a
+ * real item, the fixture `.invalid` URL and the Keychain URL name different
+ * authorities and the resolver refuses loudly — which turned the CONTROL
+ * probe red on provisioned boxes while it stayed green on CI. Pinning
+ * `HASNA_STATION` to a sentinel account that exists nowhere makes the
+ * Keychain tier miss deterministically, so the probes see only the env they
+ * were handed.
  */
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -57,6 +67,10 @@ function runUnprotected(extra: Record<string, string>): ProbeResult {
     env: {
       PATH: process.env["PATH"] ?? "",
       HOME: process.env["HOME"] ?? "",
+      // Sentinel Keychain account: the ambient Keychain tier must miss, so a
+      // provisioned station's real `hasna.credentials.domains.*` items can
+      // neither satisfy nor contradict the fixture env (see header).
+      HASNA_STATION: "no-such-station",
       ...HOSTED_FIXTURE,
       ...extra,
     },

@@ -52,6 +52,13 @@ describe("fail closed without a resolvable credential", () => {
       expect(result.stderr).toContain("fails closed");
       expect(result.stderr).toContain("HASNA_DOMAINS_API_URL");
       expect(result.stderr).toContain("HASNA_DOMAINS_API_KEY");
+      // The refusal is reported at the CLI boundary as ONE actionable line —
+      // the FIRST stderr line names the failure, and no Bun source-context
+      // stack dump precedes or follows it.
+      const stderrLines = result.stderr.split("\n").filter((line) => line.trim() !== "");
+      expect(stderrLines[0]).toStartWith("domains fails closed:");
+      expect(result.stderr).not.toContain("at resolveDomainsHttpClient");
+      expect(result.stderr).not.toContain("Bun v");
       // Never a false green: no success-shaped portfolio output, no silent
       // fallback event pretending local storage was the answer.
       expect(result.stdout).not.toContain("No domains found.");
