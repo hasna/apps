@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Env } from "./store-interface.js";
 import {
@@ -35,6 +35,23 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// Station hygiene guard (hasna/apps#1720 validation; no-local-SQLite rule):
+// this suite must never plant ~/.hasna/shortlinks/shortlinks.db in the REAL
+// home of the machine running it. A local opt-in test used to do exactly that
+// when the resolver read process.env behind a caller-built env. Recorded
+// before the first test and re-checked after the last one, so a pre-existing
+// file on a developer box never fails the suite — only one the suite created.
+const REAL_HOME_DB = join(homedir(), ".hasna", "shortlinks", "shortlinks.db");
+let realHomeDbExistedBefore = false;
+
+beforeAll(() => {
+  realHomeDbExistedBefore = existsSync(REAL_HOME_DB);
+});
+
+afterAll(() => {
+  if (!realHomeDbExistedBefore) expect(existsSync(REAL_HOME_DB)).toBe(false);
 });
 
 /**
@@ -265,26 +282,62 @@ describe("explicit local opt-in", () => {
     expect(existsSync(dbPath)).toBe(true);
   });
 
-  test("HASNA_SHORTLINKS_LOCAL=1 opts into the on-box SQLite store without a dbPath", () => {
+  test("HASNA_SHORTLINKS_LOCAL=1 opts into the on-box SQLite store without a dbPath, in the caller's home", () => {
     const home = tempHome();
-    const previousHome = process.env.SHORTLINKS_HOME;
-    process.env.SHORTLINKS_HOME = home;
-    try {
-      const store = resolveStore(env(home, { [LOCAL_OPT_IN_ENV_KEY]: "1" }), { notice: quiet });
-      expect(store.kind).toBe("local");
-      void store.close();
-      expect(existsSync(join(home, "shortlinks.db"))).toBe(true);
-    } finally {
-      if (previousHome === undefined) delete process.env.SHORTLINKS_HOME;
-      else process.env.SHORTLINKS_HOME = previousHome;
-    }
+    const store = resolveStore(env(home, { [LOCAL_OPT_IN_ENV_KEY]: "1" }), { notice: quiet });
+    expect(store.kind).toBe("local");
+    void store.close();
+    expect(existsSync(join(home, "shortlinks.db"))).toBe(true);
   });
 
-  test("the legacy SHORTLINKS_LOCAL alias still opts in", () => {
+  test("the legacy SHORTLINKS_LOCAL alias still opts in, in the caller's home", () => {
     const home = tempHome();
     const store = resolveStore(env(home, { SHORTLINKS_LOCAL: "1" }), { notice: quiet });
     expect(store.kind).toBe("local");
     void store.close();
+    expect(existsSync(join(home, "shortlinks.db"))).toBe(true);
+  });
+
+  test("a caller-built env never leaks the local store into the live process home (#1720 validation)", () => {
+    // The live process env points the app home at a sentinel directory while
+    // the resolver is handed a DIFFERENT env. The database must follow the env
+    // the caller handed over, never process.env — the leak that used to plant
+    // ~/.hasna/shortlinks/shortlinks.db on the station from `bun test`.
+    const sentinel = tempHome();
+    const home = tempHome();
+    const previousHome = process.env.SHORTLINKS_HOME;
+    process.env.SHORTLINKS_HOME = sentinel;
+    try {
+      const store = resolveStore(env(home, { SHORTLINKS_LOCAL: "1" }), { notice: quiet });
+      expect(store.kind).toBe("local");
+      void store.close();
+    } finally {
+      if (previousHome === undefined) delete process.env.SHORTLINKS_HOME;
+      else process.env.SHORTLINKS_HOME = previousHome;
+    }
+    expect(existsSync(join(home, "shortlinks.db"))).toBe(true);
+    expect(readdirSync(sentinel)).toEqual([]);
+  });
+
+  test("HASNA_HOME relocates the app home for the local store, as it does for the credential chain", () => {
+    const home = tempHome();
+    const hasnaHome = join(home, "hasna-root");
+    const store = resolveStore(
+      { HOME: home, HASNA_HOME: hasnaHome, [LOCAL_OPT_IN_ENV_KEY]: "1" },
+      { notice: quiet },
+    );
+    expect(store.kind).toBe("local");
+    void store.close();
+    expect(existsSync(join(hasnaHome, "shortlinks", "shortlinks.db"))).toBe(true);
+    expect(existsSync(join(home, ".hasna"))).toBe(false);
+  });
+
+  test("a hosted resolution creates nothing under the app home", () => {
+    const home = tempHome();
+    const store = resolveStore(env(home, CLOUD_ENV));
+    expect(store.kind).toBe("http");
+    void store.close();
+    expect(readdirSync(home)).toEqual([]);
   });
 
   test("local opt-in is an explicit choice: 0/false/no/off do not select local", () => {
