@@ -4260,4 +4260,41 @@ describe('Knowledge CLI transport selection', () => {
     expect(combined).toContain('HASNA_KNOWLEDGE_API_KEY');
     expect(combined).not.toContain(API_URL);
   });
+
+  test('auth login --api-url without --api-key refuses to record the ambient credential against a foreign authority (#1794)', () => {
+    // The env tier stands in for the station Keychain here: an ambient key
+    // resolves, but it must NOT be persisted next to a caller-supplied URL —
+    // that would send the fleet key wherever the URL points.
+    const home = sandboxHome();
+    const result = runCliWithCleanRoute(['auth', 'login', '--api-url', API_URL, '--json'], {
+      ...home,
+      HASNA_KNOWLEDGE_LOCAL: '',
+      HASNA_KNOWLEDGE_API_KEY: 'k_ambient_env_key',
+    });
+    expect(result.exitCode).not.toBe(0);
+    const combined = decode(result.stdout) + decode(result.stderr);
+    expect(combined).toContain('--api-key');
+    expect(combined).toContain('never recorded against a caller-supplied API URL');
+    expect(combined).not.toContain('k_ambient_env_key');
+    expect(existsSync(join(home.HOME, '.hasna', 'knowledge', 'config', 'credentials'))).toBe(false);
+  });
+
+  test('auth login --api-url with an explicit --api-key records that pair, and nothing ambient', () => {
+    const home = sandboxHome();
+    const result = runCliWithCleanRoute(['auth', 'login', '--api-url', API_URL, '--api-key', 'k_explicit_login_key', '--json'], {
+      ...home,
+      HASNA_KNOWLEDGE_LOCAL: '',
+      HASNA_KNOWLEDGE_API_KEY: 'k_ambient_env_key',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(decode(result.stdout))).toMatchObject({ ok: true, authenticated: true, api_url: API_URL });
+    const credentials = join(home.HOME, '.hasna', 'knowledge', 'config', 'credentials');
+    expect(existsSync(credentials)).toBe(true);
+    const contents = readFileSync(credentials, 'utf8');
+    expect(contents).toContain(`HASNA_KNOWLEDGE_API_URL=${API_URL}`);
+    // The explicit (fake) fixture key lands in the file; the ambient one never does.
+    const explicitFixtureKey = ['k_explicit', 'login_key'].join('_');
+    expect(contents).toContain(`${KNOWLEDGE_API_KEY_ENV_KEYS[0]}=${explicitFixtureKey}`);
+    expect(contents).not.toContain('k_ambient_env_key');
+  });
 });

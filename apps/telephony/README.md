@@ -88,7 +88,15 @@ dispatch rows are written.
 The CLI, MCP and SDK surfaces resolve their credential and their service
 authority through the **one shared `@hasna/contracts` client resolver**, per
 call, fresh — a key rotation heals a long-lived shell, MCP server or agent
-without a restart:
+without a restart. The embeddable SDK is the `./sdk` export subpath (the root
+export stays for compatibility):
+
+```ts
+import { TelephonyClient } from "@hasna/telephony/sdk";
+const client = new TelephonyClient(); // resolves through the chain below, fails closed without a credential
+```
+
+The tiers, in order:
 
 | tier | credential | authority |
 |---|---|---|

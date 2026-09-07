@@ -40,6 +40,12 @@ let PORT_A = 0;
 let PORT_B = 0;
 let PORT_C = 0;
 let PORT_D = 0;
+//   SERVER_E — the static key configured under the CANONICAL name
+//              (HASNA_MEMENTOS_API_KEY) only, writes opted in, allowlist at its
+//              default: the bearer check matched the canonical name but the
+//              authenticated mark used to read only the legacy MEMENTOS_API_KEY,
+//              so every keyed request was refused by the Host allowlist.
+let PORT_E = 0;
 let BASE_A = "";
 let BASE_B = "";
 let BASE_C = "";
@@ -50,6 +56,7 @@ let serverA: ReturnType<typeof Bun.spawn>;
 let serverB: ReturnType<typeof Bun.spawn>;
 let serverC: ReturnType<typeof Bun.spawn>;
 let serverD: ReturnType<typeof Bun.spawn>;
+let serverE: ReturnType<typeof Bun.spawn>;
 
 /** Ask the OS for a free loopback port (ephemeral allocation). */
 function freePort(): number {
@@ -138,6 +145,13 @@ beforeAll(
     serverD = await spawnServer(PORT_D, {
       API_KEY_SIGNING_SECRET: CONTRACTS_SECRET,
     });
+    // Server E: the same static key as C, configured ONLY under the canonical
+    // HASNA_MEMENTOS_API_KEY name (the legacy alias stays stripped).
+    PORT_E = freePort();
+    serverE = await spawnServer(PORT_E, {
+      HASNA_MEMENTOS_API_KEY: STATIC_KEY,
+      MEMENTOS_ALLOW_UNAUTHENTICATED_WRITES: "1",
+    });
   },
   // Four servers boot sequentially; give the hook room (default is 5s).
   30000,
@@ -148,6 +162,7 @@ afterAll(() => {
   serverB.kill();
   serverC.kill();
   serverD.kill();
+  serverE.kill();
 });
 
 const MEMORY_BODY = {
@@ -458,6 +473,32 @@ describe("authenticated clients with a valid key are not refused by the Host all
       headers: AUTH,
     });
     expect(res.status).toBe(200);
+  });
+});
+
+describe("a static key configured under the canonical HASNA_MEMENTOS_API_KEY marks keyed requests authenticated (#1720 validation)", () => {
+  const AUTH = { Authorization: `Bearer ${STATIC_KEY}` };
+
+  test("FAILING INPUT: POST with a valid key and a non-allowlisted Host is accepted (201), exactly as under the legacy name", async () => {
+    // Host `127.0.0.1:<PORT_E>` is not on the default allowlist; only the
+    // authenticated mark lets a keyed client through it.
+    const res = await fetch(`http://127.0.0.1:${PORT_E}/api/memories`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH },
+      body: JSON.stringify(MEMORY_BODY),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  test("a wrong key is still refused — the mark follows a MATCH, not the key's presence", async () => {
+    // Unmarked, the request meets the Host allowlist first (403); a request
+    // that clears it is refused by the bearer check (401). Never 201.
+    const res = await fetch(`http://127.0.0.1:${PORT_E}/api/memories`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer not-the-key" },
+      body: JSON.stringify(MEMORY_BODY),
+    });
+    expect([401, 403]).toContain(res.status);
   });
 });
 

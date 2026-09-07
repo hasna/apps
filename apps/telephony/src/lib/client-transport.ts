@@ -67,11 +67,13 @@ import {
   CREDENTIAL_PROFILE_ENV_KEY,
   defaultFleetGatewayBaseUrl,
   keychainConfigValue,
+  KEYCHAIN_STATION_ENV_KEY,
   type CredentialChainOptions,
   type CredentialTier,
   type KeychainTierOptions,
 } from "@hasna/contracts/client";
 import { createHasnaStorageClient, type HasnaStorageClient } from "@hasna/contracts/client/storage";
+import { hostname as osHostname } from "node:os";
 
 /** App name used for the canonical HASNA_TELEPHONY_* env contract. */
 export const TELEPHONY_APP = "telephony";
@@ -117,18 +119,61 @@ export function isLocalModeOptIn(env: NodeJS.ProcessEnv = process.env): boolean 
   });
 }
 
+/** The Keychain item the resolver consults for the telephony credential. */
+const KEYCHAIN_CREDENTIAL_ITEM = `hasna.credentials.${TELEPHONY_APP}.api-key`;
+
+/**
+ * The Keychain account the shared resolver derives for this env — the label
+ * only, mirrored from the documented rule (`HASNA_STATION`, else `hostname -s`,
+ * else `USER`) so a fail-closed message can say WHICH account was looked up.
+ * Never a value: an account name is an address, not a credential.
+ */
+function keychainAccountLabel(env: Record<string, string | undefined>): string {
+  const station = env[KEYCHAIN_STATION_ENV_KEY]?.trim();
+  if (station) return station;
+  const host = osHostname().split(".")[0]?.trim() ?? "";
+  if (host) return host;
+  return env.USER?.trim() || "<unset>";
+}
+
+/** What the fail-closed message may say about the tiers, beyond the env it is built from. */
+export interface TelephonyStoreMisconfiguredErrorOptions {
+  /**
+   * Whether the Keychain tier was live for the failing resolution. The tier
+   * is ambient — macOS, live `process.env` (or an injected runner) only — so a
+   * caller-built env never reached it; the message says so instead of
+   * claiming a lookup that did not happen. Omitted: the tier is described
+   * without a verdict.
+   */
+  keychainTierEnabled?: boolean;
+}
+
 /**
  * The fail-closed error raised when a store-backed surface runs without any
  * resolvable credential and without the explicit local opt-in. Actionable:
- * names the required variables and the opt-in, and never offers a silent
- * local fallback.
+ * names every location the resolver reads — the Keychain item and the account
+ * it is looked up under, the credentials file path, the env variables — and
+ * the opt-in, on ONE line (the first line of stderr is what an operator or a
+ * probe reads), and never offers a silent local fallback. Names only, never a
+ * value.
  */
-export function telephonyStoreMisconfiguredError(): Error {
+export function telephonyStoreMisconfiguredError(
+  env: Record<string, string | undefined> = process.env,
+  options: TelephonyStoreMisconfiguredErrorOptions = {},
+): Error {
+  const credentialsFile = credentialDiskSources(TELEPHONY_APP, env)[0];
+  const keychainVerdict =
+    options.keychainTierEnabled === false
+      ? " — not consulted here: the Keychain tier runs only on macOS for the live process environment"
+      : "";
   return new Error(
     `No telephony API credential resolved and local mode is not enabled. ` +
-      `The telephony client fails closed instead of silently serving the local SQLite store: ` +
-      `set ${TELEPHONY_API_URL_ENV} and ${TELEPHONY_API_KEY_ENV} (unprefixed ` +
-      `TELEPHONY_API_URL / TELEPHONY_API_KEY aliases are accepted) to route CLI, MCP and SDK ` +
+      `The telephony client fails closed instead of silently serving the local SQLite store. ` +
+      `A credential is looked for, in order, in: the macOS Keychain item ${KEYCHAIN_CREDENTIAL_ITEM} for account ` +
+      `"${keychainAccountLabel(env)}" (${KEYCHAIN_STATION_ENV_KEY}, else hostname -s, else USER)${keychainVerdict}` +
+      `${credentialsFile ? `; the credentials file ${credentialsFile}` : ""}; then ${TELEPHONY_API_KEY_ENV} ` +
+      `(with ${TELEPHONY_API_URL_ENV} to pin a non-default authority; unprefixed TELEPHONY_API_URL / ` +
+      `TELEPHONY_API_KEY aliases are accepted). Put the fleet key in one of them to route CLI, MCP and SDK ` +
       `data operations through the telephony HTTP API, or set ${TELEPHONY_LOCAL_MODE_ENV}=1 ` +
       `(alias TELEPHONY_LOCAL=1) to explicitly opt in to the on-box local store.`,
   );
@@ -385,6 +430,6 @@ export function resolveTelephonyClientTransport(
         },
       };
     }
-    throw telephonyStoreMisconfiguredError();
+    throw telephonyStoreMisconfiguredError(env, { keychainTierEnabled: base.keychainTierEnabled });
   }
 }
