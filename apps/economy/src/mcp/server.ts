@@ -874,7 +874,7 @@ server.tool(
 
 // The economy_cloud_status/push/pull tools that used to be registered here were
 // removed: they existed only to sync this machine's local SQLite into a shared
-// Postgres, a pattern economy no longer has. Self-hosted mode reads and writes
+// Postgres, a pattern economy no longer has. The deployed serve reads and writes
 // Postgres directly (src/db/cloud.ts), so there is nothing to sync.
 return server
 }
