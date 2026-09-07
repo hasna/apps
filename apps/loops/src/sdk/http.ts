@@ -153,6 +153,8 @@ export interface InvalidWorkflowCancelBodyResponse { "ok": boolean; "error": str
 
 export interface InvalidWorkItemRequeueBodyResponse { "ok": boolean; "error": string }
 
+export interface WorkItemRequeueConflictResponse { "ok": boolean; "error": string }
+
 export interface LoopsClientOptions {
   /** Base URL, e.g. process.env.APP_API_URL. */
   baseUrl: string;

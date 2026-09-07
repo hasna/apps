@@ -10836,8 +10836,8 @@ describe("machine-local commands run on the local runtime under a cloud-flipped 
 
   test("machine-local runtime commands execute (not refuse) when the client is flipped", () => {
     const dataDir = freshDataDir("loops-cli-cloud-runtime-");
-    const clean = (args: string[], expectStatus: number) => {
-      const result = runCli(dataDir, args, undefined, CLOUD_ENV);
+    const clean = (args: string[], expectStatus: number, env: Record<string, string> = { ...CLOUD_ENV }) => {
+      const result = runCli(dataDir, args, undefined, env);
       expect(result.status, `${JSON.stringify(args)} -> exit ${result.status} stderr=${JSON.stringify(result.stderr.slice(0, 400))}`).toBe(expectStatus);
       // The retired flip guard must never fire, and the bearer key must never
       // leak into output.
@@ -10861,7 +10861,9 @@ describe("machine-local commands run on the local runtime under a cloud-flipped 
     }
     // route admission needs event input, so it fails on INPUT, never on the
     // retired transport gate; drains preview (dry-run) and succeed without
-    // touching a source queue.
+    // touching a source queue. The drain HERMETICALLY stubs the todos binary
+    // (empty ready queue + explicit scratch project) so the assertion never
+    // depends on a station's real `todos` binary or queue in $PATH.
     for (const args of [
       ["routes", "create", "todos-task"],
       ["events", "handle", "todos-task"],
@@ -10870,10 +10872,19 @@ describe("machine-local commands run on the local runtime under a cloud-flipped 
       const result = clean(args, 1);
       expect(result.stderr).not.toContain(FLIP_MESSAGE);
     }
+    const drainBin = fakeTodosReadyBin(dataDir);
     for (const args of [
-      ["routes", "drain", "todos-task", "--dry-run"],
+      ["routes", "drain", "todos-task", "--dry-run", "--todos-project", join(dataDir, "todos-source")],
     ]) {
-      const result = clean(args, 0);
+      const result = clean(
+        args,
+        0,
+        isolatedRouteEnv(dataDir, {
+          ...CLOUD_ENV,
+          PATH: `${drainBin}:${process.env.PATH ?? ""}`,
+          TODOS_READY_JSON: JSON.stringify([]),
+        }),
+      );
       expect(result.stderr).not.toContain(FLIP_MESSAGE);
     }
     // The live table is an interactive TTY surface; without a TTY it says so

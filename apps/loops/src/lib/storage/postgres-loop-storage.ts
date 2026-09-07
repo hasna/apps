@@ -3577,15 +3577,24 @@ export class PostgresLoopStorage implements LoopStorageContract {
    * Requeue a terminal route work item for the next task/event delivery:
    * reset its dispatch state and clear the claim lease, preserving the id and
    * the reason history. Mirrors the sqlite Store's `requeueWorkflowWorkItem`
-   * on Postgres with tenant scoping; `--keep-attempts` preserves the redispatch
-   * attempt count exactly like the local path.
+   * on Postgres with tenant scoping: attempts reset ONLY on an explicit
+   * `resetAttempts: true` (the CLI `loops routes requeue` unwedge), exactly
+   * like the local path — a `{}` body behaves identically on both transports.
    */
   async requeueWorkflowWorkItem(...args: M<"requeueWorkflowWorkItem">["args"]): Promise<M<"requeueWorkflowWorkItem">["result"]> {
     const [id, patch = {}] = args as [string, { reason?: string; resetAttempts?: boolean }?];
+    if (patch && patch.reason !== undefined && typeof patch.reason !== "string") {
+      throw new Error(`invalid requeue reason: ${String(patch.reason)}`);
+    }
     const requeueableStatuses: WorkflowWorkItemStatus[] = ["succeeded", "failed", "dead_letter", "cancelled"];
-    const reason = patch.reason?.trim() || "requeued";
     const now = nowIso();
-    const resetAttempts = patch.resetAttempts !== false;
+    // Mirror the sqlite Store exactly: attempts reset ONLY on an explicit
+    // `resetAttempts: true` (the operator unwedge), and the recorded reason
+    // names the state the item was requeued from when the caller gave none.
+    // A `{}`/absent body must behave identically on both transports — the
+    // same LoopStore call is one surface, so hosted and local defaults cannot
+    // diverge (the split the transport-mode retirement exists to kill).
+    const resetAttempts = patch?.resetAttempts === true;
     return this.client.transaction(async (c) => {
       const current = await c.get<WorkflowWorkItemRow>(
         "SELECT * FROM workflow_work_items WHERE tenant_id = open_loops_current_tenant_id() AND id=$1",
@@ -3595,6 +3604,7 @@ export class PostgresLoopStorage implements LoopStorageContract {
       if (!requeueableStatuses.includes(current.status as WorkflowWorkItemStatus)) {
         throw new Error(`workflow work item is not requeueable: ${id} status=${current.status}`);
       }
+      const reason = patch?.reason?.trim() || `requeued from ${current.status}`;
       const res = await c.query(
         `UPDATE workflow_work_items
          SET status='queued', workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,

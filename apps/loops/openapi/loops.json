@@ -2963,6 +2963,16 @@
               }
             }
           },
+          "409": {
+            "description": "Work item is not in a requeueable terminal state (e.g. queued, claimed, or in flight)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkItemRequeueConflictResponse"
+                }
+              }
+            }
+          },
           "415": {
             "description": "Supplied request body is not JSON",
             "content": {
@@ -6958,6 +6968,24 @@
           "error": {
             "type": "string",
             "const": "invalid_work_item_requeue_body"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ]
+      },
+      "WorkItemRequeueConflictResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "const": "work_item_not_requeueable"
           }
         },
         "required": [
