@@ -20,7 +20,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
-import { createPgPool, createQueryClient, MigrationLedger, type PoolQueryClient } from "../../storage-kit/index.js";
+import { createPgPool, createQueryClient, MigrationLedger, type PoolQueryClient, type TypedQueryClient } from "../../storage-kit/index.js";
 import { emailsSelfHostedMigrations } from "./migrations.js";
 import { EmailsSelfHostedStore, TenantScopedStore } from "./store.js";
 import { handleSelfHostedRequest, type SelfHostedServiceDeps } from "./service.js";
@@ -220,10 +220,106 @@ beforeAll(async () => {
   await pgClient.execute("DROP SCHEMA IF EXISTS public CASCADE");
   await pgClient.execute("CREATE SCHEMA public");
   await new MigrationLedger(pgClient, emailsSelfHostedMigrations()).migrate();
-});
+}, 60_000);
 
 afterAll(async () => {
   await pgClient?.close();
+});
+
+describe.skipIf(!pgClient)("scoped authority applies before send intent replay or mutation", () => {
+  async function fixture() {
+    let sends = 0;
+    const deps = makeDeps({ provider: "ses", send: async () => { sends++; return "scoped-provider-receipt"; } });
+    const tenant = await makeTenant(`scoped-${crypto.randomUUID()}`);
+    const domain = `${crypto.randomUUID()}.example.test`;
+    const from = `scoped@${domain}`;
+    await registerSender(deps, tenant.token, domain, from);
+    const owners = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+    for (const owner of owners) await pgClient!.execute("INSERT INTO owners (id, name, type, tenant_id) VALUES ($1, 'Fixture owner', 'agent', $2)", [owner, tenant.tenantId]);
+    await pgClient!.execute("UPDATE addresses SET owner_id = $1, administrator_id = $2 WHERE tenant_id = $3", [owners[0], owners[1], tenant.tenantId]);
+    const store = deps.store.forTenant(tenant.tenantId);
+    const keys = await Promise.all(owners.map(owner_id => store.mintSendKey({ owner_id })));
+    const member = `emss_${crypto.randomUUID()}`;
+    deps.authStore.resolveSession = async token => token === member
+      ? { tenantId: tenant.tenantId, userId: crypto.randomUUID(), role: "member", globalRole: null } : null;
+    const input = { from, to: ["recipient@example.net"], subject: "Scoped replay", text: "Fixture", idempotency_key: crypto.randomUUID() };
+    return { deps, tenant, keys, member, input, sends: () => sends };
+  }
+
+  it("rejects invalid, revoked, foreign-owner and missing member keys on a sent replay while valid owner/admin retries stay idempotent", async () => {
+    const f = await fixture();
+    const first = await call(f.deps, "POST", "/v1/messages/send", { token: f.member, body: { ...f.input, send_key: f.keys[0]!.token } });
+    expect(first.status).toBe(202);
+    expect(first.body.sent).toBe(true);
+    // Replaying historical success must not re-run current suppression/quota policy.
+    await pgClient!.execute("INSERT INTO contacts (id, email, suppressed, tenant_id) VALUES ($1, $2, true, $3)", [crypto.randomUUID(), f.input.to[0], f.tenant.tenantId]);
+    await pgClient!.execute("UPDATE addresses SET daily_quota = 0 WHERE tenant_id = $1", [f.tenant.tenantId]);
+    for (const key of f.keys.slice(0, 2)) {
+      const replay = await call(f.deps, "POST", "/v1/messages/send", { token: f.member, body: { ...f.input, send_key: key.token } });
+      expect(replay.status).toBe(200);
+      expect(replay.body).toMatchObject({ sent: true, idempotent_replay: true });
+    }
+    await pgClient!.execute("UPDATE send_keys SET revoked_at = now() WHERE id = $1", [f.keys[0]!.key.id]);
+    for (const [token, sendKey, reason] of [
+      [f.tenant.token, `esk_${crypto.randomUUID()}`, "send_key_invalid"],
+      [f.tenant.token, f.keys[0]!.token, "send_key_invalid"],
+      [f.tenant.token, f.keys[2]!.token, "send_key_forbidden"],
+      [f.member, undefined, "send_key_required"],
+    ] as const) {
+      const replay = await call(f.deps, "POST", "/v1/messages/send", { token, body: { ...f.input, ...(sendKey ? { send_key: sendKey } : {}) } });
+      expect(replay.status).toBe(403);
+      expect(replay.body).toMatchObject({ reason });
+      expect(replay.body).not.toHaveProperty("message");
+      expect(replay.body).not.toHaveProperty("provider_message_id");
+    }
+    expect(f.sends()).toBe(1);
+    expect((await ledgerRow(f.input.idempotency_key))?.send_state).toBe("sent");
+  });
+
+  it("refuses malformed keys before reserve and unauthorized retries before rearm or lease mutation", async () => {
+    const f = await fixture();
+    for (const send_key of ["", "   ", 42, null]) {
+      const response = await call(f.deps, "POST", "/v1/messages/send", { token: f.tenant.token, body: { ...f.input, send_key } });
+      expect(response.status).toBe(403);
+      expect(response.body.reason).toBe("send_key_invalid");
+      expect(await ledgerRow(f.input.idempotency_key)).toBeNull();
+    }
+    const first = await call(f.deps, "POST", "/v1/messages/send", { token: f.tenant.token, body: f.input });
+    expect(first.status).toBe(202);
+    for (const state of ["pending", "failed", "sending"]) {
+      await pgClient!.execute("UPDATE messages SET send_state = $1, send_started_at = now() - interval '1 hour', provider_message_id = NULL WHERE idempotency_key = $2", [state, f.input.idempotency_key]);
+      const response = await call(f.deps, "POST", "/v1/messages/send", { token: f.tenant.token, body: { ...f.input, send_key: f.keys[2]!.token } });
+      expect(response.status).toBe(403);
+      expect(response.body.reason).toBe("send_key_forbidden");
+      expect((await ledgerRow(f.input.idempotency_key))?.send_state).toBe(state);
+    }
+    expect(f.sends()).toBe(1);
+  });
+
+  it("does not return a key revoked between the lookup and last-used stamp", async () => {
+    const f = await fixture();
+    let revoked = false;
+    const client = new Proxy(pgClient!, { get(target, property) {
+      if (property === "transaction") return <T>(fn: (tx: TypedQueryClient) => Promise<T>) => target.transaction(tx => fn(new Proxy(tx, {
+        get(transaction, method) {
+          if (method === "get") return async (sql: string, params?: readonly unknown[]) => {
+            if (sql.includes("UPDATE send_keys SET last_used_at")) {
+              await target.execute("UPDATE send_keys SET revoked_at = now() WHERE id = $1", [f.keys[0]!.key.id]);
+              revoked = true;
+            }
+            return transaction.get(sql, params);
+          };
+          const value = Reflect.get(transaction, method, transaction);
+          return typeof value === "function" ? value.bind(transaction) : value;
+        },
+      })));
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const verified = await new EmailsSelfHostedStore(client).forTenant(f.tenant.tenantId).verifySendKey(f.keys[0]!.token);
+    expect(revoked).toBe(true);
+    expect(verified).toBeNull();
+  });
 });
 
 // ── Direction A: accepted must never read as failed ─────────────────────────

@@ -1711,9 +1711,25 @@ export async function handleSelfHostedRequest(
           throw error;
         }
       }
-      const sendKeyToken = typeof body.send_key === "string"
-        ? body.send_key.trim()
-        : req.headers.get("x-emails-send-key")?.trim() ?? "";
+      const rawSendKey = Object.hasOwn(body, "send_key") ? body.send_key : req.headers.get("x-emails-send-key");
+      const sendKeyProvided = Object.hasOwn(body, "send_key") || req.headers.has("x-emails-send-key");
+      if (sendKeyProvided && (typeof rawSendKey !== "string" || !rawSendKey.trim())) {
+        return json(403, { error: "send key is invalid or revoked", reason: "send_key_invalid", retry_safe: false });
+      }
+      const sendKeyToken = typeof rawSendKey === "string" ? rawSendKey.trim() : "";
+      const allowTenantWideSend =
+        auth.ctx.principalType === "apikey" ||
+        (auth.ctx.principalType === "idp" && hasAllScopes(auth.ctx.scopes, ["emails:write"])) ||
+        auth.ctx.role === "owner" || auth.ctx.role === "admin";
+      // A retry is still an authenticated operation. Check scoped authority
+      // before reserving, revealing a receipt, expiring a lease or rearming an
+      // intent. Historical successes do not re-run quotas or suppression.
+      if (sendKeyProvided || !allowTenantWideSend) {
+        const authority = await auth.store.evaluateSendAuthority({ from, sendKeyToken, allowTenantWideSend });
+        if (!authority.allowed) return json(authority.status, {
+          error: authority.message, reason: authority.code, retry_safe: false,
+        });
+      }
       let reserved;
       try {
         reserved = await auth.store.reserveSendIntent({
@@ -1825,10 +1841,7 @@ export async function handleSelfHostedRequest(
         // ordinary write scope — IdP principals have no role and no path to a
         // send key (minting is operator-gated), so omitting the class here
         // made every federated send an unfixable 403 send_key_required.
-        allowTenantWideSend:
-          auth.ctx.principalType === "apikey" ||
-          (auth.ctx.principalType === "idp" && hasAllScopes(auth.ctx.scopes, ["emails:write"])) ||
-          auth.ctx.role === "owner" || auth.ctx.role === "admin",
+        allowTenantWideSend,
         // Explicit per-send suppression override. The policy gate honors it
         // only together with tenant-wide authority above; a bare body field is
         // never authority on its own.

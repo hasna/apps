@@ -4831,6 +4831,23 @@ export class TenantScopedStore {
     });
   }
 
+  /** Authority-only check for both new sends and receipt replays; no quota or recipient policy. */
+  async evaluateSendAuthority(input: {
+    from: string;
+    sendKeyToken?: string | null;
+    allowTenantWideSend?: boolean;
+  }): Promise<OutboundPolicyDecision> {
+    if (!input.sendKeyToken) return input.allowTenantWideSend
+      ? { allowed: true }
+      : { allowed: false, code: "send_key_required", message: "a sender-scoped send key is required", status: 403 };
+    const key = await this.verifySendKey(input.sendKeyToken);
+    if (!key) return { allowed: false, code: "send_key_invalid", message: "send key is invalid or revoked", status: 403 };
+    if (!key.owner_id || !await this.isOwnerAuthorizedFrom(key.owner_id, input.from)) {
+      return { allowed: false, code: "send_key_forbidden", message: "send key is not authorized for this sender", status: 403 };
+    }
+    return { allowed: true };
+  }
+
   /**
    * Central outbound policy gate. It runs after the durable pending intent is
    * reserved, so that denials are auditable and quota counts include the current
@@ -5690,11 +5707,13 @@ export class TenantScopedStore {
     if (!key || key.revoked_at) return null;
     const stamped = await this.client.get<SendKeyRecord>(
       `UPDATE send_keys SET last_used_at = now(), updated_at = now()
-       WHERE id = $1 AND tenant_id = $2
+       WHERE id = $1 AND tenant_id = $2 AND revoked_at IS NULL
        RETURNING id, owner_id, prefix, label, last_used_at, revoked_at, created_at, updated_at`,
       [key.id, this.tenantId],
     );
-    return stamped ?? key;
+    // A concurrent revocation/deletion between lookup and stamp must not
+    // resurrect the stale authorization snapshot.
+    return stamped;
   }
 
   /** Whether `ownerId` may send from `fromEmail` (owns or administers a tenant address). */
