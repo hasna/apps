@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { cloudQueryTasks,taskTimestamp } from "./task-query-api.js";
 import type { HasnaStorageClient } from "@hasna/contracts/client/storage";
 
-async function fixture(run:(cli:(args:string[])=>Promise<any>,state:any)=>Promise<void>) {
+async function fixture(run:(cli:(args:string[])=>Promise<any>,state:any)=>Promise<void>, timezone?: string) {
   const root=mkdtempSync(join(tmpdir(),"todos-task-query-"));
   const now=new Date();const yesterday=new Date(now);yesterday.setDate(yesterday.getDate()-1);yesterday.setHours(12,0,0,0);
   const project=randomUUID();const other=randomUUID();
@@ -31,6 +31,7 @@ async function fixture(run:(cli:(args:string[])=>Promise<any>,state:any)=>Promis
     return Response.json({error:"missing fixture route"},{status:404});
   }});
   const env=Object.fromEntries(Object.entries(process.env).filter(([key,value])=>value!==undefined&&!/^(HASNA_|TODOS_|DATABASE_URL$|PG|XDG_)/.test(key))) as Record<string,string>;
+  if (timezone) env.TZ=timezone;
   env.HOME=root;env.HASNA_STATION=`fixture-${randomUUID()}`;env.HASNA_TODOS_DB_PATH=join(root,"trap.db");
   const config=join(root,".hasna/todos/config");mkdirSync(config,{recursive:true,mode:0o700});writeFileSync(join(config,"credentials"),`HASNA_TODOS_API_URL=${server.url.origin}\nHASNA_TODOS_API_KEY=fixture-task-query-key\n`,{mode:0o600});
   const cli=async(args:string[])=>{
@@ -67,4 +68,35 @@ test("pagination refuses old, changing, stalled, repeated or widened task pages"
     [{tasks:[]}], [{tasks:[{id:"a"}],total:2},{tasks:[],total:2}], [{tasks:[{id:"a"}],total:2},{tasks:[{id:"b"}],total:3}], [{tasks:[{id:"a"}],total:2},{tasks:[{id:"a"}],total:2}], [{tasks:[{id:"a",project_id:"wrong"}],total:1}],
   ]) {let i=0;const client={list:async()=>({raw:pages[i++]})} as unknown as HasnaStorageClient;await expect(cloudQueryTasks(client,pages.length===1&&pages[0]!.total===1?{project_id:"wanted"}:{})).rejects.toThrow();}
   expect(taskTimestamp("2026-09-07 12:00:00")).toBe(Date.parse("2026-09-07T12:00:00Z"));
+});
+
+test("Bucharest day commands include local midnight and exclude the next day", async () => {
+  const parts = new Intl.DateTimeFormat("en-CA", {timeZone:"Europe/Bucharest",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
+  const part = (type:string) => parts.find(p=>p.type===type)!.value;
+  // Noon UTC stays on the same Bucharest calendar day. Derive neighboring labels without using the host timezone.
+  const noon = new Date(`${part("year")}-${part("month")}-${part("day")}T12:00:00Z`);
+  const label = (offset:number) => {const d=new Date(noon);d.setUTCDate(d.getUTCDate()+offset);return d.toISOString().slice(0,10);};
+  const midnight = (offset:number) => {
+    const date=label(offset);
+    const zone = new Intl.DateTimeFormat("en-US",{timeZone:"Europe/Bucharest",timeZoneName:"longOffset"}).formatToParts(new Date(`${date}T00:00:00Z`)).find(p=>p.type==="timeZoneName")!.value.replace("GMT","");
+    return new Date(`${date}T00:00:00${zone}`).toISOString();
+  };
+  await fixture(async(cli,state)=>{
+    const base={...state.tasks[0],status:"completed"};
+    state.tasks.splice(0,state.tasks.length,...[-1,0,1].map(offset=>({...base,id:randomUUID(),title:`midnight-${offset}`,updated_at:midnight(offset)})));
+    for(const [command,offset] of [["today",0],["yesterday",-1]] as const) {
+      const result=await cli([command,"--json"]);expect(result.code,result.stderr).toBe(0);
+      const body=JSON.parse(result.stdout);expect(body.date).toBe(label(offset));
+      expect(body.completed.map((t:any)=>t.title)).toEqual([`midnight-${offset}`]);
+    }
+  },"Europe/Bucharest");
+},30000);
+
+test("Bucharest calendar windows follow daylight-saving day lengths", async () => {
+  const source = `import {taskDayWindow} from ${JSON.stringify(join(import.meta.dir,"task-query-api.ts"))};
+console.log(JSON.stringify(["2026-03-29T12:00:00+03:00","2026-10-25T12:00:00+02:00"].map(value=>{const w=taskDayWindow(0,new Date(value));return {date:w.date,hours:(w.end.getTime()-w.start.getTime())/3600000};})));`;
+  const proc=Bun.spawn([process.execPath,"--eval",source],{env:{PATH:process.env.PATH,TZ:"Europe/Bucharest"},stdout:"pipe",stderr:"pipe"});
+  const [stdout,stderr,code]=await Promise.all([new Response(proc.stdout).text(),new Response(proc.stderr).text(),proc.exited]);
+  expect(code,stderr).toBe(0);
+  expect(JSON.parse(stdout)).toEqual([{date:"2026-03-29",hours:23},{date:"2026-10-25",hours:25}]);
 });

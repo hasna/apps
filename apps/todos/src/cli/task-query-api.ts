@@ -54,3 +54,14 @@ export function taskTimestamp(value: unknown): number {
   if (!Number.isFinite(ms)) throw new Error("Task query contains an invalid timestamp");
   return ms;
 }
+
+/** A local calendar day; advancing the date also handles 23/25-hour DST days. */
+export function taskDayWindow(daysAgo = 0, now = new Date()): {start: Date; end: Date; date: string} {
+  const start = new Date(now);
+  start.setDate(start.getDate() - daysAgo);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  const date = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+  return {start, end, date};
+}
