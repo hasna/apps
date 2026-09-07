@@ -56,7 +56,7 @@ FROM scratch
 ARG VERSION=dev
 ARG REVISION=unknown
 
-LABEL org.opencontainers.image.source="https://github.com/hasna/emails" \
+LABEL org.opencontainers.image.source="https://github.com/hasna/apps" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$REVISION"
 

@@ -300,9 +300,14 @@ describe("self-hosted container TLS contract", () => {
   });
 
   test("locks runtime copy semantics and ownership", () => {
+    expect(packageJson.repository).toEqual({
+      type: "git",
+      url: "git+https://github.com/hasna/apps.git",
+      directory: "apps/emails",
+    });
     expect(scratchStage).toContain("ARG VERSION=dev");
     expect(scratchStage).toContain("ARG REVISION=unknown");
-    expect(scratchStage).toContain('org.opencontainers.image.source="https://github.com/hasna/emails"');
+    expect(scratchStage).toContain('org.opencontainers.image.source="https://github.com/hasna/apps"');
     expect(scratchStage).toContain('org.opencontainers.image.version="$VERSION"');
     expect(scratchStage).toContain('org.opencontainers.image.revision="$REVISION"');
     expect(scratchStage.match(/^COPY .+$/gm)).toEqual([
