@@ -8,7 +8,7 @@
 // absent. API-only view preferences live in the App session; priority rules
 // are persisted through the server. No local settings store is used.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui";
+import { createEmailsKeymap } from "../tui-solid/keymap-input.js";
 import { KeymapProvider } from "@opentui/keymap/solid";
 import { testRender, useRenderer, type TestRendererSetup } from "@opentui/solid";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -44,6 +44,7 @@ let savedHome: string | undefined;
 let tmpHome = "";
 let providerId = "";
 let setup: TestRendererSetup | null = null;
+let keymapErrors: unknown[] = [];
 
 // data.ts caches the full message scan for a short window; direct seeding does not
 // invalidate it, so bust it between tests (a data.ts mutation nulls the cache; the
@@ -58,7 +59,8 @@ function bustScanCache(): void {
 
 function Harness(props: { initialMailbox?: "inbox" | "unread" | "starred" | "sent" | "archived" | "spam" | "trash" }) {
   const renderer = useRenderer();
-  const keymap = createDefaultOpenTuiKeymap(renderer);
+  const keymap = createEmailsKeymap(renderer);
+  keymap.on("error", (error) => keymapErrors.push(error));
   onCleanup(() => keymap.clearPendingSequence());
   return (
     <KeymapProvider keymap={keymap}>
@@ -73,6 +75,7 @@ beforeAll(async () => {
 afterAll(() => stub.stop());
 
 beforeEach(async () => {
+  keymapErrors = [];
   captureInheritedProcessEnv();
   process.env["EMAILS_TUI_DISABLE_THEME_PROBE"] = "1";
   process.env["EMAILS_TUI_CLIPBOARD_DRY_RUN"] = "1";
@@ -358,6 +361,21 @@ describe("Emails Solid TUI", () => {
     expect(span).toBeDefined();
     expect(span!.fg.equals(RGBA.fromHex("#4c4f69"))).toBe(true);
     expect(span!.fg.equals(span!.bg)).toBe(false);
+  });
+
+  it("closes light settings with Escape after unnamed terminal events without logging keymap errors", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Appearance");
+    for (let attempt = 0; attempt < 3 && !frame().includes("Light ▾"); attempt++) await clickText("Color scheme");
+    await clickText("Priority Inbox");
+    await typeText("review@example.com");
+    setup!.mockInput.pressKey("\x1b[999~");
+    await flush();
+    expect(frame()).toContain("review@example.com");
+    await key("escape");
+    expect(frame()).not.toContain("Preferences");
+    expect(keymapErrors).toEqual([]);
   });
 
   it("saves the attachment default without a local mail database and restores it in a new app", async () => {
