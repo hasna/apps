@@ -88,13 +88,8 @@ describe("MCP self_hosted guards", () => {
   });
 
   it("refuses the send options this build cannot carry instead of ignoring them", async () => {
-    // Four options are declared on send_email's schema but cannot be carried by
-    // the single send path. The failure being prevented is not a refusal that is
-    // too strict — it is a send that LOOKS successful while an option was dropped.
-    // `auth_token` makes that concrete: it selects the scoped send-key check, so a
-    // silently-ignored one is an authorization decision that never happened.
+    // Accepted schema fields must either cross the API intact or refuse explicitly.
     const cases: Array<[string, unknown]> = [
-      ["auth_token", "esk_example"],
       ["headers", { "X-Thing": "1" }],
       ["tags", { campaign: "spring" }],
     ];

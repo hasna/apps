@@ -66,30 +66,11 @@ function refusal(code: string, status: number, reason: string, remedy?: string):
   return { content: [{ type: "text", text }], isError: true };
 }
 
-/**
- * Options `send_email` accepts in its schema but this build's single send path
- * cannot carry, mapped to what the caller loses by passing them.
- *
- * WHY THEY ARE REFUSED RATHER THAN DROPPED. The one send entrypoint
- * (`resolveMailDataSource().send`, the same one `emails send` uses) takes the
- * shape declared at src/lib/mail-data-source.ts:125-152, which carries none of
- * these remaining options. Passing them through would therefore mean IGNORING them, and for
- * `auth_token` that is not cosmetic: it is the scoped send-key check at
- * src/lib/send.local.ts:119-122, which decides whether the caller is allowed to
- * send from that address at all. A silently-ignored authorization check is worse
- * than a refused send, so this fails closed.
- *
- * WHY THEY ARE NOT REMOVED FROM THE SCHEMA. An MCP input schema that does not
- * declare a key drops it silently, which is the exact failure being avoided.
- * They stay declared, and passing one is answered.
- *
- * This is the one place the two arms genuinely disagreed about what the operation
- * can DO rather than about who runs it, and closing it needs the single send
- * service that phase 8 of docs/PLAN-MODE-REMOVAL.md is chartered to build. Until
- * then the honest answer is the same in every configuration.
+/** Keep unimplemented options declared so schema parsing cannot silently drop them.
+ * Scoped authorization and unsubscribe now travel through the API; custom headers
+ * and tags require their own validated public wire and persistence contracts.
  */
 const UNCARRIED_SEND_OPTIONS: ReadonlyArray<{ key: string; loses: string }> = Object.freeze([
-  { key: "auth_token", loses: "the scoped send-key authorization check would not run" },
   { key: "headers", loses: "the custom headers would not reach the message" },
   { key: "tags", loses: "the tags would not be recorded" },
 ]);
@@ -216,6 +197,7 @@ export function registerEmailOpsTools(server: McpServer): void {
         markdown: false,
         providerId: input.provider_id,
         unsubscribeUrl: input.unsubscribe_url,
+        sendKey: input.auth_token,
         attachments: input.attachments,
         idempotencyKey: input.idempotency_key,
       });

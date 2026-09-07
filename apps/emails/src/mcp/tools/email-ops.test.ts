@@ -77,17 +77,8 @@ describe("collapsed email-ops tool family", () => {
   });
 
   it("refuses each send option the one send path cannot carry, instead of ignoring it", async () => {
-    // THE REGRESSION THIS PINS. The deleted local arm passed these four straight
-    // into the provider-adapter send path, which honoured them. The one send path
-    // this family now uses cannot carry them (src/lib/mail-data-source.ts, the
-    // send input shape), so passing them through would DROP them and still report
-    // success. For `auth_token` that is an authorization check that never ran.
-    //
-    // On the module this replaced, `auth_token` was honoured and the other three
-    // were accepted and sent — so every assertion below is new behaviour, not a
-    // restatement of the old.
+    // Accepted schema fields must either cross the API intact or refuse explicitly.
     const cases: Array<[string, unknown]> = [
-      ["auth_token", "esk_this_key_does_not_exist"],
       ["headers", { "X-Custom": "1" }],
       ["tags", { campaign: "spring" }],
     ];
@@ -115,6 +106,14 @@ describe("collapsed email-ops tool family", () => {
       // And it must be a REFUSAL, not a quiet success: nothing was sent.
       expect(await stub.list("messages"), `${option} must not send`).toHaveLength(0);
     }
+  });
+
+  it("carries scoped delegation separately from the account credential", async () => {
+    const token = crypto.randomUUID();
+    const sent = await call("send_email", { from: "agent@example.test", to: "recipient@example.test", subject: "delegated", text: "hi", auth_token: token });
+    expect(sent.isError, text(sent)).not.toBe(true);
+    expect(await stub.sendRequests()).toMatchObject([{ send_key: token }]);
+    expect(await stub.list("messages")).toHaveLength(1);
   });
 
   it("carries unsubscribe_url to the authenticated send request", async () => {
