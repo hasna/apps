@@ -151,15 +151,14 @@ describe("emails send --unsubscribe-url (serve API)", () => {
     restoreInheritedProcessEnv();
   });
 
-  it("refuses the send instead of silently mailing without the headers", async () => {
+  it("refuses the send when the API cannot advertise unsubscribe support", async () => {
     const result = await runSend([
       "send", "--from", "agent@acme.com", "--to", "dest@ext.com", "--subject", "Hi", "--body", "x",
       "--unsubscribe-url", "https://acme.com/unsub",
     ]);
 
     expect(result.exited).toBe(true);
-    expect(result.errorOutput).toContain("--unsubscribe-url");
-    expect(result.errorOutput).toContain("not supported");
+    expect(result.errorOutput).toContain("/openapi.json");
     // Nothing left: a refusal that mails anyway is worse than the silent drop.
     expect(await stub.list("messages")).toHaveLength(0);
   });

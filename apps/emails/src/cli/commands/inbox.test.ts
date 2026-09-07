@@ -774,12 +774,11 @@ describe("inbox source scoping", () => {
     expect(counts.sent).toBe(1);
   });
 
-  it("refuses a provider scope with an actionable message instead of printing `No mail found`", async () => {
+  it("refuses provider-scoped reads when an older API cannot advertise the filter", async () => {
     await stub.seed({ messages: [msgRow({})] });
 
     const { stderr } = await runInboxCommandExpectingExit(["inbox", "list", "--provider", "cred-1"]);
-    expect(stderr).toContain("no ingestion-source or provider provenance");
-    expect(stderr).toContain("--address <email> or --domain <domain>");
+    expect(stderr).toContain("/openapi.json");
     expect(stderr).not.toContain("No mail found");
   });
 
