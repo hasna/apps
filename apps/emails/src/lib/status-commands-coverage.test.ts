@@ -133,8 +133,16 @@ describe("refusal registry covers every CLI refusal call site", () => {
   it("declares what the scan cannot see", () => {
     const inbox = readFileSync(join(COMMANDS_DIR, "inbox.remote.ts"), "utf8");
     // Real refusals in the file, invisible because the literal omits the `emails ` prefix.
-    expect(inbox).toContain('serverOnly("sync-s3")');
-    expect(refusals.map((r) => r.command)).not.toContain("emails inbox sync-s3");
+    for (const operation of ["setup-realtime", "listen"]) {
+      expect(inbox).toContain(`serverOnly("${operation}")`);
+      expect(refusals.map((r) => r.command)).not.toContain(`emails inbox ${operation}`);
+      expect(isCommandAvailableInMode(`emails inbox ${operation}`, "self_hosted")).toBe(false);
+    }
+    for (const operation of ["sync-s3", "watch"]) {
+      expect(inbox).not.toContain(`serverOnly("${operation}")`);
+      expect(inbox).toContain(`.action(ingestAction("${operation}"))`);
+      expect(isCommandAvailableInMode(`emails inbox ${operation}`, "self_hosted")).toBe(true);
+    }
     // `inbox unread-count --by-address` USED to be a flag-conditional refusal here;
     // it is now served by the /v1 endpoint, so the refusal literal must be gone and
     // the flag form must never appear on any refusal-derived suggestion list.
