@@ -4,12 +4,12 @@ title: "Switcher full adapter and installed CLI delivery checklist"
 type: "task-checklist"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T17:11:49.882018+00:00"
+updated_at: "2026-09-07T04:00:19.108311+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-# Active goal: complete adapters and installed CLI delivery
+# Completed adapter release: 0.1.2
 
 User directive, 2026-09-05: “create TODOS.md and let's add full todos for all the missing adapters everything must be built in full and start a goal to ship and test live”. Tracking task: `1fb71b94-93b1-466f-a44b-0bcdaa710804`. Owner: `01a07181-ca8d-70c1-99a2-b276dc5770f3`. Canonical directive: `~/Workspace/scratch/universal-harness-switcher/directives/2026-09-05-01a07181-complete-switcher-adapters.md`.
 
@@ -22,6 +22,19 @@ The published source passed **167 package tests / 1,799 assertions**, including 
 Registry live acceptance and native catalog observations are recorded in [COMPATIBILITY.md](COMPATIBILITY.md). The [evidence index](docs/verification-evidence.json) distinguishes published bytes from historical candidates and provider access limits. Evidence files live under `~/Workspace/scratch/universal-harness-switcher`; these are local provenance locators, not files included in the npm archive. The user's original `switcher-deepseek` session on `deepseek.sock` remains preserved.
 
 The rejected archive `453bc3d6180a523286ab10f0a0154316cbf75672` was never published. Its SDK error reflection finding was corrected and independently rechecked before this release. Earlier baseline and 0.1.1 reports retain their original artifact identities; their provider observations are not relabeled as 0.1.2 registry tests.
+
+# Active model-policy release
+
+- [x] M01 Capture the shipping directive, verify the previous release, and establish isolated ownership from fetched main.
+- [x] M02 Add typed profile policy, CLI flags, SDK/OpenAPI contracts, catalog validation, plan binding, and older-launcher upgrade rejection.
+- [x] M03 Inject idempotent model guidance in all four protocol families; preserve native instructions and content metadata.
+- [x] M04 Enforce allowed models/aliases and explicit pre-stream transient fallbacks through a credential-isolating loopback gateway; reject unmanaged routing overrides.
+- [x] M05 Verify and wire native child/utility roles for every supported harness; handle Ori's hardcoded child endpoints through verified prepared native launches.
+- [x] M06 Persist bounded, secret-safe requested/resolved/provider-reported model traces on success, failure, cancellation and fallback.
+- [x] M07 Pass real native role fixtures, full package tests, SQLite/PostgreSQL, generated contracts, affected builds and repository gates.
+- [ ] M08 Complete docs/versioning and independent exact-commit review; merge a passing PR.
+- [ ] M09 Publish the reviewed npm artifact, verify registry bytes, install the normal station CLI and repeat surface/upgrade checks.
+- [ ] M10 Run the installed 14-native/two-Ori live matrix and targeted child-model tests in owned ephemeral tmux; preserve evidence and finish the task only after acceptance.
 
 ## Completion contract
 

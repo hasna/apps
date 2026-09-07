@@ -9,7 +9,7 @@ const harnesses = ["claude", "codex", "grok", "opencode", "opencode2", "pi", "om
 
 test("every native harness has actionable, version-aware installation metadata", () => {
   const requirements = {
-    claude: ">=2.1.242", codex: ">=0.153.0", grok: ">=1.0.13", opencode: ">=1.18.0",
+    claude: ">=2.1.257", codex: ">=0.153.0", grok: ">=1.0.13", opencode: ">=1.18.0",
     opencode2: "beta-19157 or newer (including stable >=2.0.0)", pi: ">=0.85.1", omp: ">=18.1.11", dsh: ">=0.1.2-rc.1",
     cline: ">=3.0.61", hermes: ">=0.21.0", "prime-agent": ">=0.9.2", gemini: "exactly 0.58.0",
     aider: "exactly 0.86.2", kilo: ">=7.5.15",

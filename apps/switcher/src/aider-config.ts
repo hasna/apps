@@ -104,9 +104,10 @@ export async function prepareAider(input:HarnessLaunchInput):Promise<PreparedLau
   const originalHistoryLength=(await readFile(history,"utf8")).length;
   await writeFile(inputHistory,"",{mode:0o600,flag:"wx"});
   const model=aiderModelName(input.protocol,input.model);
+  const weakModel=aiderModelName(input.protocol,input.compiledPolicy?.roles.weak??input.model),editorModel=aiderModelName(input.protocol,input.compiledPolicy?.roles.editor??input.model);
   const extra={api_base:input.protocol==="anthropic-messages"?input.baseUrl.replace(/\/v1$/i,""):input.baseUrl,api_key:`os.environ/${KEY}`};
   const settings=join(input.stateDir,"aider-model-settings.json"),metadata=join(input.stateDir,"aider-model-metadata.json"),config=join(input.stateDir,"aider-config.json"),empty=join(input.stateDir,"aider-empty.env");
-  const definitions=input.models.map(m=>({name:aiderModelName(input.protocol,m.id),edit_format:"whole",use_repo_map:true,weak_model_name:aiderModelName(input.protocol,m.id),editor_model_name:aiderModelName(input.protocol,m.id),extra_params:extra}));
+  const definitions=input.models.map(m=>({name:aiderModelName(input.protocol,m.id),edit_format:"whole",use_repo_map:true,weak_model_name:weakModel,editor_model_name:editorModel,extra_params:extra}));
   await writeFile(settings,JSON.stringify([...definitions,{name:"aider/extra_params",extra_params:extra}]),{mode:0o600,flag:"wx"});
   await writeFile(metadata,JSON.stringify(Object.fromEntries(input.models.map(m=>[aiderModelName(input.protocol,m.id),{
     ...(m.contextWindow?{max_input_tokens:m.contextWindow}:{}),...(m.maxOutputTokens?{max_output_tokens:m.maxOutputTokens,max_tokens:m.maxOutputTokens}:{}),
@@ -117,13 +118,13 @@ export async function prepareAider(input:HarnessLaunchInput):Promise<PreparedLau
   // credentials, history and startup controls are owned by this launch.
   const ignored=new Set(`model weak-model editor-model openai-api-key anthropic-api-key openai-api-base openai-api-type openai-api-version openai-api-deployment-id openai-organization-id set-env api-key alias config env-file model-settings-file model-metadata-file input-history-file chat-history-file llm-history-file restore-chat-history load analytics analytics-log analytics-posthog-host analytics-posthog-project-api-key analytics-disable check-update show-release-notes`.split(" "));
   const preserved=Object.fromEntries(Object.entries(global).filter(([key])=>!ignored.has(key)&&!startup.includes(key)));
-  await writeFile(config,JSON.stringify({...preserved,model,"weak-model":model,"editor-model":model,"model-settings-file":settings,"model-metadata-file":metadata,"env-file":empty,"input-history-file":inputHistory,"chat-history-file":history,"llm-history-file":"","restore-chat-history":parsed.restore,"load":"","analytics":false,"check-update":false,"show-release-notes":false,"openai-api-key":"","anthropic-api-key":"","openai-api-base":input.baseUrl,"openai-api-type":"","openai-api-version":"","openai-api-deployment-id":"","openai-organization-id":""}),{mode:0o600,flag:"wx"});
+  await writeFile(config,JSON.stringify({...preserved,model,"weak-model":weakModel,"editor-model":editorModel,"model-settings-file":settings,"model-metadata-file":metadata,"env-file":empty,"input-history-file":inputHistory,"chat-history-file":history,"llm-history-file":"","restore-chat-history":parsed.restore,"load":"","analytics":false,"check-update":false,"show-release-notes":false,"openai-api-key":"","anthropic-api-key":"","openai-api-base":input.baseUrl,"openai-api-type":"","openai-api-version":"","openai-api-deployment-id":"","openai-organization-id":""}),{mode:0o600,flag:"wx"});
   await writeFile(empty,"",{mode:0o600,flag:"wx"});
   // One explicit alias suppresses inherited append-list aliases. A random
   // unused name avoids parsing provider IDs containing colons as alias syntax.
   const aliases=["--alias",`switcher-${id}:${model}`];
   let cleaned=false;
-  return {executable:input.executable??"aider",args:["--config",config,"--model",model,"--weak-model",model,"--editor-model",model,"--set-env","PYTHON_DOTENV_DISABLED=1","--api-key","SWITCHER_UNUSED=unused",...aliases,...parsed.args],
+  return {executable:input.executable??"aider",args:["--config",config,"--model",model,"--weak-model",weakModel,"--editor-model",editorModel,"--set-env","PYTHON_DOTENV_DISABLED=1","--api-key","SWITCHER_UNUSED=unused",...aliases,...parsed.args],
     env:{HOME:home,XDG_CONFIG_HOME:join(home,"config"),XDG_CACHE_HOME:join(home,"cache"),XDG_DATA_HOME:join(home,"data"),PYTHON_DOTENV_DISABLED:"1",LITELLM_LOCAL_MODEL_COST_MAP:"True",[KEY]:input.credential!,[input.protocol==="anthropic-messages"?"ANTHROPIC_API_KEY":"OPENAI_API_KEY"]:input.credential!},
     configPaths:[config,settings,metadata,empty,gitConfig],warnings:[
       ...(input.protocol==="openai-responses"?["Aider 0.86.2 with LiteLLM 1.81.10 uses buffered Responses requests even when native streaming is requested; incremental upstream Responses output is unavailable through this adapter."]:[]),

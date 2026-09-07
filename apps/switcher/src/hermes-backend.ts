@@ -1,3 +1,4 @@
+import {compileHermesModelPolicy} from "./hermes-model-policy";
 import { authHeader } from "./auth";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
@@ -192,7 +193,11 @@ export async function prepareHermesLaunch(input: HarnessLaunchInput): Promise<Pr
   await symlink(sessionsDir, join(input.stateDir, "sessions"));
 
   const bridge = createHermesBridge(input);
+  let policy:ReturnType<typeof compileHermesModelPolicy>;
+  try{policy=compileHermesModelPolicy(input.model,input.compiledPolicy?.roles??{},bridge.baseUrl,apiMode[input.protocol]);}catch(error){await bridge.cleanup();throw error;}
   const config = {
+    auxiliary:policy.auxiliary,delegation:policy.delegation,
+    fallback_providers:[],
     model: {
       provider: "custom",
       default: input.model,
@@ -221,6 +226,10 @@ export async function prepareHermesLaunch(input: HarnessLaunchInput): Promise<Pr
     env: {
       HERMES_HOME: input.stateDir,
       SWITCHER_HARNESS_API_KEY: bridge.token,
+      SWITCHER_HERMES_AUX_API_KEY:bridge.token,
+      OPENAI_API_KEY:bridge.token,
+      OPENAI_BASE_URL:bridge.baseUrl,
+      CODEX_HOME:join(input.stateDir,"codex-home"),
     },
     configPaths: [configPath],
     warnings: [

@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Switcher API",
-    "version": "0.1.2",
+    "version": "0.1.3",
     "description": "Authenticated provider/profile/catalog control plane. Launches run locally; the API never returns provider credentials."
   },
   "security": [
@@ -1676,6 +1676,105 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 300
+          },
+          "modelPolicy": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "enum": [
+                  1
+                ],
+                "default": 1
+              },
+              "roles": {
+                "type": "object",
+                "properties": {
+                  "subagent": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "fast": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "planning": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "review": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "compaction": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "weak": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "editor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "allowedModels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "maxItems": 500
+              },
+              "aliases": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                }
+              },
+              "fallbacks": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "maxItems": 20
+                }
+              }
+            },
+            "additionalProperties": false
           }
         },
         "required": [
@@ -1726,6 +1825,105 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 300
+          },
+          "modelPolicy": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "enum": [
+                  1
+                ],
+                "default": 1
+              },
+              "roles": {
+                "type": "object",
+                "properties": {
+                  "subagent": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "fast": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "planning": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "review": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "compaction": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "weak": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "editor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "allowedModels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "maxItems": 500
+              },
+              "aliases": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                }
+              },
+              "fallbacks": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "maxItems": 20
+                }
+              }
+            },
+            "additionalProperties": false
           },
           "version": {
             "type": "integer",
@@ -1814,6 +2012,175 @@
         "required": [
           "id",
           "name"
+        ],
+        "additionalProperties": false
+      },
+      "ModelPolicy": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [
+              1
+            ],
+            "default": 1
+          },
+          "roles": {
+            "type": "object",
+            "properties": {
+              "subagent": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "fast": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "planning": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "review": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "compaction": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "weak": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "editor": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              }
+            },
+            "additionalProperties": false
+          },
+          "allowedModels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            },
+            "maxItems": 500
+          },
+          "aliases": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+            }
+          },
+          "fallbacks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+              },
+              "maxItems": 20
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "RoutingEvent": {
+        "type": "object",
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "requestId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+          },
+          "requestedModel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "resolvedModel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "reportedModel": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "alias",
+              "reject",
+              "fallback"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "main",
+              "subagent",
+              "fast",
+              "planning",
+              "review",
+              "summary",
+              "compaction",
+              "weak",
+              "editor"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          },
+          "upstreamStatus": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          }
+        },
+        "required": [
+          "at",
+          "requestId",
+          "requestedModel",
+          "decision"
         ],
         "additionalProperties": false
       },
@@ -2236,6 +2603,105 @@
                 "minLength": 1,
                 "maxLength": 300
               },
+              "modelPolicy": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "number",
+                    "enum": [
+                      1
+                    ],
+                    "default": 1
+                  },
+                  "roles": {
+                    "type": "object",
+                    "properties": {
+                      "subagent": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      },
+                      "fast": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      },
+                      "planning": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      },
+                      "review": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      },
+                      "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      },
+                      "compaction": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      },
+                      "weak": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      },
+                      "editor": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "allowedModels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 300,
+                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                    },
+                    "maxItems": 500
+                  },
+                  "aliases": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 300,
+                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                    }
+                  },
+                  "fallbacks": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                      },
+                      "maxItems": 20
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
               "version": {
                 "type": "integer",
                 "exclusiveMinimum": true,
@@ -2372,6 +2838,12 @@
       "RunInput": {
         "type": "object",
         "properties": {
+          "modelPolicyVersion": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
           "profileId": {
             "type": "string",
             "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$"
@@ -2400,12 +2872,112 @@
             "minLength": 1,
             "maxLength": 300
           },
+          "modelPolicy": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "enum": [
+                  1
+                ],
+                "default": 1
+              },
+              "roles": {
+                "type": "object",
+                "properties": {
+                  "subagent": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "fast": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "planning": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "review": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "compaction": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "weak": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "editor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "allowedModels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "maxItems": 500
+              },
+              "aliases": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                }
+              },
+              "fallbacks": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "maxItems": 20
+                }
+              }
+            },
+            "additionalProperties": false
+          },
           "planToken": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
           }
         },
         "required": [
+          "modelPolicyVersion",
           "profileId",
           "harness",
           "model",
@@ -2428,6 +3000,85 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 255
+          },
+          "routingEvents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "requestId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                "requestedModel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "resolvedModel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "reportedModel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "alias",
+                    "reject",
+                    "fallback"
+                  ]
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "main",
+                    "subagent",
+                    "fast",
+                    "planning",
+                    "review",
+                    "summary",
+                    "compaction",
+                    "weak",
+                    "editor"
+                  ]
+                },
+                "reason": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                },
+                "upstreamStatus": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 599
+                }
+              },
+              "required": [
+                "at",
+                "requestId",
+                "requestedModel",
+                "decision"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          },
+          "routingEventsDropped": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
           }
         },
         "required": [
@@ -2439,6 +3090,12 @@
       "Run": {
         "type": "object",
         "properties": {
+          "modelPolicyVersion": {
+            "type": "number",
+            "enum": [
+              1
+            ]
+          },
           "profileId": {
             "type": "string",
             "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$"
@@ -2466,6 +3123,105 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 300
+          },
+          "modelPolicy": {
+            "type": "object",
+            "properties": {
+              "version": {
+                "type": "number",
+                "enum": [
+                  1
+                ],
+                "default": 1
+              },
+              "roles": {
+                "type": "object",
+                "properties": {
+                  "subagent": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "fast": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "planning": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "review": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "summary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "compaction": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "weak": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "editor": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "allowedModels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "maxItems": 500
+              },
+              "aliases": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                }
+              },
+              "fallbacks": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                  },
+                  "maxItems": 20
+                }
+              }
+            },
+            "additionalProperties": false
           },
           "planToken": {
             "type": "string",
@@ -2514,6 +3270,85 @@
           },
           "exitCode": {
             "type": "integer"
+          },
+          "routingEvents": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "requestId": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+                },
+                "requestedModel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "resolvedModel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "reportedModel": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 300,
+                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "alias",
+                    "reject",
+                    "fallback"
+                  ]
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "main",
+                    "subagent",
+                    "fast",
+                    "planning",
+                    "review",
+                    "summary",
+                    "compaction",
+                    "weak",
+                    "editor"
+                  ]
+                },
+                "reason": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                },
+                "upstreamStatus": {
+                  "type": "integer",
+                  "minimum": 100,
+                  "maximum": 599
+                }
+              },
+              "required": [
+                "at",
+                "requestId",
+                "requestedModel",
+                "decision"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 1000
+          },
+          "routingEventsDropped": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
           }
         },
         "required": [

@@ -61,7 +61,7 @@ test("Aider bridges all protocols/auth styles and keeps provider values out of n
         for(const path of prepared.configPaths)expect(await readFile(path,"utf8")).not.toContain(input.credential);
         bridge=settings[0].extra_params.api_base+(protocol==="anthropic-messages"?"/v1":"");
         const route={"openai-chat":"/chat/completions","openai-responses":"/responses","anthropic-messages":"/messages"}[protocol];
-        const request=(model:string)=>fetch(bridge+route,{method:"POST",headers:{authorization:`Bearer ${prepared.env.SWITCHER_HARNESS_API_KEY}`,"content-type":"application/json"},body:JSON.stringify({model})});
+        const request=(model:string)=>fetch(bridge+route,{method:"POST",headers:{authorization:`Bearer ${prepared.env.SWITCHER_HARNESS_API_KEY}`,"content-type":"application/json"},body:JSON.stringify({model,messages:[{role:"user",content:"hello"}]})});
         expect((await request(input.model)).status).toBe(200);
         expect((await request("outside")).status).toBe(403);
         expect(calls.at(-1).path).toBe("/prefix/v1"+route);expect(calls.at(-1).body.model).toBe(input.model);

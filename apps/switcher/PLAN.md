@@ -4,12 +4,22 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-06T17:11:49.882018+00:00"
+updated_at: "2026-09-07T04:00:19.108311+00:00"
 status: "active"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-# Current delivery
+# Active model-policy release
+
+The next patch adds automatic model guidance to every managed Messages, Chat, Responses, and Gemini request, including auxiliary and child-agent requests. A per-launch loopback gateway owns the upstream credential and validates exact model IDs before forwarding. Native role settings prevent known harness defaults from choosing another provider model. The catalog remains visible; selecting a catalog entry requires that it also belongs to the launch policy.
+
+Default policy assigns every supported native role to the selected main model. Explicit role models, allowed IDs, aliases, and ordered transient-error fallbacks are stored in the profile and bound to its launch-plan token. An upgraded API rejects older launchers that cannot declare policy support. This cannot enforce a downgrade to an older local CLI/server, provider-internal routing, or requests made by user extensions/tools outside Switcher's managed endpoint.
+
+Acceptance requires protocol-level rejection/injection/fallback tests, native role and catalog tests, persisted request-routing evidence, SQLite/PostgreSQL and package checks, independent review of the exact release commit, PR/CI merge, npm publication and installed-CLI live tests in owned ephemeral tmux sessions. The original DeepSeek session remains preserved. No next-version registry or live evidence is claimed until those steps finish.
+
+Owning branch: `codex/fixer/2026-09-06-switcher-model-policy`; worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/model-policy`; fetched base: `e43a4d18c25121afe72ff0d4e8f1c9f6181a98c8`. Canonical directive: `~/Workspace/scratch/universal-harness-switcher/directives/2026-09-06-01a07181-ship-model-policy.md`. Tasks are tracked as M01–M10 in TODOS.md.
+
+# Previous delivery: 0.1.2
 
 Switcher **0.1.2 is published and installed**. [PR #1836](https://github.com/hasna/apps/pull/1836) merged reviewed source `61c0ca1b241043567bd7349a2810012db9c41b46` as `24681fa7552584c39c6bbcf7107faa6dd2f885e3` after all nine checks passed (the optional external review was skipped). npm publication at `2026-09-06T16:47:17.965Z` has SHA-1 `3952926c933700c8e5a56130bc3cb3c56bb01969`. All **50 installed package files** match the reviewed archive. The normal station `switcher`, `switcher-serve` and `switcher-mcp` commands resolve to 0.1.2; the previous installation and quarantine policy are preserved.
 
