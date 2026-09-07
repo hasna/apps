@@ -287,12 +287,17 @@ describe("requireLocalStore / localStoreIfAvailable", () => {
     }
   });
 
-  test("localStoreIfAvailable mirrors the data plane: null on HTTP, local store otherwise", () => {
+  test("localStoreIfAvailable mirrors the data plane: null on HTTP and on a declared-but-un-honourable authority", () => {
     const restore = scrub();
     try {
       expect(localStoreIfAvailable(API_ENV)).toBeNull();
       expect(localStoreIfAvailable({})).toBeInstanceOf(LocalStore);
       expect(localStoreIfAvailable({ HASNA_LOGS_LOCAL: "1" })).toBeInstanceOf(LocalStore);
+      // A declared authority that cannot be honoured is a misconfiguration,
+      // never a local store: self-telemetry is skipped exactly like on HTTP.
+      expect(
+        localStoreIfAvailable({ HASNA_LOGS_API_URL: "https://logs.example.test/v1" }),
+      ).toBeNull();
     } finally {
       restore();
     }

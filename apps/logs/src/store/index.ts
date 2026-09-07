@@ -99,11 +99,15 @@ export function resetLogsLocalModeNotice(): void {
   localModeAnnounced = false;
 }
 
-function announceLocalMode(env: NodeJS.ProcessEnv): void {
+function writeLocalAnnouncement(line: string): void {
   if (localModeAnnounced) return;
   localModeAnnounced = true;
+  process.stderr.write(line);
+}
+
+function announceLocalMode(env: NodeJS.ProcessEnv): void {
   const keys = clientTransportEnvKeys(LOGS_APP_SLUG);
-  process.stderr.write(
+  writeLocalAnnouncement(
     "logs: local store — data plane traffic goes to the on-box SQLite store " +
       `(~/.hasna/logs/logs.db) (${LOGS_LOCAL_OPT_IN_ENV_KEYS[0]} opt-in or no fleet credential). To go hosted, put the key ` +
       `in the Keychain item hasna.credentials.${LOGS_APP_SLUG}.api-key or ~/.hasna/${LOGS_APP_SLUG}/config/credentials, ` +
@@ -290,15 +294,27 @@ export function requireLocalStore(
   operation: string,
   env: NodeJS.ProcessEnv = process.env,
 ): LocalStore {
-  announceLocalMode(env);
+  // The subject of these operations — the raw JSONL segments and SQLite
+  // projections — always lives on the box, so a run that reaches this store
+  // is local work even when the data plane resolved to the hosted API. Say so
+  // once, accurately, on every transport; it is never silent.
+  writeLocalAnnouncement(
+    "logs: local store — raw-store maintenance on the on-box SQLite store " +
+      `(~/.hasna/logs/logs.db): the raw JSONL segments and SQLite projections it maintains live on this ` +
+      `box on every transport (${LOGS_LOCAL_OPT_IN_ENV_KEYS[0]}=1 or no fleet credential route the data plane here too).\n`,
+  );
   return new LocalStore();
 }
 
 /**
  * Best-effort {@link LocalStore} for internal self-telemetry: returns a store
  * when the data plane is local (explicit opt-in or the no-credential default),
- * or `null` on the HTTP transport. Callers must treat telemetry as optional
- * and never let it change behavior.
+ * or `null` on the HTTP transport. A DECLARED authority or credential that
+ * cannot be honoured (blank variable, URL without a key, disagreeing aliases,
+ * unreadable credentials file) also returns `null`: a misconfiguration is
+ * never silently opened as the local store — the data-plane command fails
+ * loud instead. Callers must treat telemetry as optional and never let it
+ * change behavior.
  */
 export function localStoreIfAvailable(
   env: NodeJS.ProcessEnv = process.env,
@@ -309,6 +325,7 @@ export function localStoreIfAvailable(
     return null;
   } catch (error) {
     if (!isClientTransportConfigurationError(error)) return null;
-    return new LocalStore();
+    if (nothingConfiguredRefusal(error)) return new LocalStore();
+    return null;
   }
 }
