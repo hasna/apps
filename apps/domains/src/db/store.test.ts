@@ -282,12 +282,10 @@ describe("store resolution", () => {
     expect(() => isCloudStore({})).toThrow(/HASNA_DOMAINS_API_URL/);
   });
 
-  test("an explicit local path opt-in still resolves a LocalStore", () => {
-    // Local mode survives strictly as an explicit opt-in: a local path var
-    // names the database the operator actually wants.
-    expect(getStore({ DOMAINS_DB_PATH: "/tmp/scratch.db" })).toBeInstanceOf(LocalStore);
-    expect(getStore({ HASNA_DOMAINS_DIR: "/tmp/domains" })).toBeInstanceOf(LocalStore);
-    expect(isCloudStore({ DOMAINS_DB_PATH: "/tmp/scratch.db" })).toBe(false);
+  test("an explicit local path cannot select SQLite", () => {
+    expect(() => getStore({ DOMAINS_DB_PATH: "/tmp/scratch.db" })).toThrow(/no longer supported/);
+    expect(() => getStore({ HASNA_DOMAINS_DIR: "/tmp/domains" })).toThrow(/no longer supported/);
+    expect(() => isCloudStore({ DOMAINS_DB_PATH: "/tmp/scratch.db" })).toThrow(/no longer supported/);
   });
 
   test("the unprefixed DOMAINS_API_URL/key aliases resolve through the shared resolver", () => {

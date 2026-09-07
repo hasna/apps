@@ -1,3 +1,5 @@
+import { startPortfolioFixture } from "../test/portfolio-client-fixture.test-support.js";
+const apiFixtures = new Map<string, Awaited<ReturnType<typeof startPortfolioFixture>>>();
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
@@ -103,24 +105,8 @@ describe("domains --json over a pipe", () => {
    * A store the CLI itself created and migrated, so the fixture cannot drift
    * from the real schema, then filled directly for speed.
    */
-  function seedStore(dbPath: string, rows: number, bundle: string): void {
-    const boot = Bun.spawnSync({
-      cmd: ["bun", bundle, "domain", "list", "--json"],
-      cwd: REPO_ROOT,
-      stdout: "pipe",
-      stderr: "pipe",
-      env: cliEnv(dbPath),
-    });
-    // The boot is an explicit local-mode run (DOMAINS_DB_PATH), so stderr
-    // carries the required one-line "LOCAL mode" notice and nothing else.
-    const bootStderr = boot.stderr.toString();
-    const noticeOnly = bootStderr
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .every((line) => line.includes("LOCAL mode"));
-    expect({ step: "boot", code: boot.exitCode, stderr: bootStderr, noticeOnly })
-      .toEqual({ step: "boot", code: 0, stderr: bootStderr, noticeOnly: true });
-
+  async function seedStore(dbPath: string, rows: number): Promise<void> {
+    apiFixtures.set(dbPath, await startPortfolioFixture(dbPath));
     if (rows === 0) return;
     const db = new Database(dbPath);
     const insert = db.prepare(
@@ -144,21 +130,7 @@ describe("domains --json over a pipe", () => {
   }
 
   function cliEnv(dbPath: string): Record<string, string | undefined> {
-    return {
-      ...process.env,
-      DOMAINS_DB_PATH: dbPath,
-      // Any API pointer flips the client onto the HTTP store, which would
-      // measure the wrong process and write to the shared fleet store.
-      HASNA_DOMAINS_API_URL: undefined,
-      HASNA_DOMAINS_API_KEY: undefined,
-      DOMAINS_API_URL: undefined,
-      DOMAINS_API_KEY: undefined,
-      // Colour differs between the file run and the pipe run by inherited TTY
-      // state, which would defeat byte equality for a reason unrelated to this
-      // defect.
-      FORCE_COLOR: "0",
-      NO_COLOR: "1",
-    };
+    return apiFixtures.get(dbPath)!.env;
   }
 
   /**
@@ -183,7 +155,7 @@ describe("domains --json over a pipe", () => {
 
   const listJson = (bundle: string) => `bun ${JSON.stringify(bundle)} domain list --all --json`;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     const dir = mkdtempSync(join(tmpdir(), "domains-stdout-pipe-"));
     // Inside the repo, for external resolution; removed in afterAll.
     const bundleDir = join(REPO_ROOT, ".pipe-e2e-fixture");
@@ -191,12 +163,14 @@ describe("domains --json over a pipe", () => {
     const bundle = buildBundle(bundleDir);
     const bigDb = join(dir, "big.db");
     const smallDb = join(dir, "small.db");
-    seedStore(bigDb, DOMAIN_ROWS, bundle);
-    seedStore(smallDb, 2, bundle);
+    await seedStore(bigDb, DOMAIN_ROWS);
+    await seedStore(smallDb, 2);
     fixture = { dir, bigDb, smallDb, bundle };
   }, SPAWN_TIMEOUT_MS);
 
   afterAll(() => {
+    for (const api of apiFixtures.values()) api.stop();
+    apiFixtures.clear();
     if (!fixture) return;
     rmSync(fixture.dir, { recursive: true, force: true });
     rmSync(join(REPO_ROOT, ".pipe-e2e-fixture"), { recursive: true, force: true });
