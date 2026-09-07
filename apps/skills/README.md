@@ -221,11 +221,12 @@ of app folders, and `XDG_CONFIG_HOME` is not consulted at all.
 | `skills self-update` | | Update this package to the latest version |
 | `skills completion <shell>` | | Generate shell completions (bash, zsh, fish) |
 
-`self-update` reports success only after the installer succeeds and the available
-`skills --version` command exits successfully with one semantic version. If that
-verification fails, it exits nonzero and explains that installation may already
-have completed; it does not automatically reinstall. This check does not prove
-that the command found on your PATH belongs to the installation just performed.
+`self-update` asks the same Bun executable for its global bin directory after a
+successful installation. It reports success only when the `skills` command on
+your PATH resolves to that installed command and exits successfully with one
+semantic version. If discovery or verification fails, it exits nonzero and
+explains that installation may already have completed. It does not automatically
+reinstall or change your PATH.
 
 ### Local environment assignments
 

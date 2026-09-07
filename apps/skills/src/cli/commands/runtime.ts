@@ -3,8 +3,8 @@
  */
 
 import chalk from "chalk";
-import { lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { basename, dirname, join } from "path";
+import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
+import { basename, dirname, isAbsolute, join } from "path";
 import { createInterface } from "readline";
 import type { Command } from "commander";
 import { getSkill, findSimilarSkills } from "../../lib/registry.js";
@@ -169,7 +169,8 @@ export function registerRuntime(parent: Command) {
       }
       const name = "@hasna/skills";
       if (!options.json) console.log(chalk.bold(`\nUpdating ${name}...\n`));
-      const proc = Bun.spawn(["bun", "add", "-g", `${name}@latest`], {
+      const bunExecutable = Bun.which("bun") ?? "bun";
+      const proc = Bun.spawn([bunExecutable, "add", "-g", `${name}@latest`], {
         stdout: options.json ? "pipe" : "inherit",
         stderr: options.json ? "pipe" : "inherit",
       });
@@ -181,7 +182,7 @@ export function registerRuntime(parent: Command) {
       if (exitCode === 0) {
         let version: string;
         try {
-          version = await readUpdatedVersion();
+          version = await readUpdatedVersion(bunExecutable);
         } catch {
           const error = "The available Skills version could not be verified. Installation may have completed; inspect your Skills command before retrying.";
           if (options.json) console.log(JSON.stringify({ updated: false, stage: "verification", error, stdout, stderr }));
@@ -202,14 +203,27 @@ export function registerRuntime(parent: Command) {
     });
 }
 
-/** Verify the command available after installation; this is not PATH ownership proof. */
-async function readUpdatedVersion(): Promise<string> {
-  const proc = Bun.spawn(["skills", "--version"], { stdout: "pipe" });
+/** Ask the installer for its global bin, then verify the command selected on PATH. */
+async function readUpdatedVersion(bunExecutable: string): Promise<string> {
+  const output = await readUpdateCommand([bunExecutable, "pm", "bin", "-g"]);
+  const globalBin = output.replace(/\r?\n$/, "");
+  if (!globalBin || !isAbsolute(globalBin) || /[\r\n\0]/.test(globalBin)) throw new Error("Update bin discovery failed");
+  const installed = Bun.which("skills", { PATH: globalBin, cwd: globalBin });
+  const selected = Bun.which("skills");
+  if (!installed || !selected) throw new Error("Updated command is unavailable");
+  const selectedPath = realpathSync(selected);
+  if (selectedPath !== realpathSync(installed)) throw new Error("Updated command is shadowed on PATH");
+  const version = (await readUpdateCommand([selectedPath, "--version"])).trim();
+  if (!new RegExp(SEMVER_PATTERN).test(version)) throw new Error("Update version verification failed");
+  return version;
+}
+
+async function readUpdateCommand(command: string[]): Promise<string> {
+  const proc = Bun.spawn(command, { stdout: "pipe" });
   try {
     const [output, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    const version = output.trim();
-    if (exitCode !== 0 || !new RegExp(SEMVER_PATTERN).test(version)) throw new Error("Update version verification failed");
-    return version;
+    if (exitCode !== 0) throw new Error("Update verification command failed");
+    return output;
   } finally {
     // A failed stdout read must not leave this owned verification child running.
     if (proc.exitCode === null) proc.kill("SIGKILL");
