@@ -21,6 +21,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { prepareSignedBuildFixture, configureSignedBuildFixture } from "./helpers/signed-build-fixture";
+import { signingFixtureCommand } from "./helpers/signing-fixture";
 import { ensureNativeFsGuardAddon } from "./helpers/native-fs-guard";
 import { expectOrder, sliceBetween, sliceBetweenUnique } from "./helpers/source-assertions";
 
@@ -3920,8 +3922,93 @@ if [ "$pid" = "$state_pid" ]; then printf 'p%s\\nn%s\\n' "$pid" "$executable"; f
 });
 
 describe("macOS signed artifact build", () => {
+  const darwinSigningTest = process.platform === "darwin" ? test : test.skip;
+  test("native guard build readback accepts exactly the generated public exports", () => {
+    const root = realpathSync(temporaryDirectory("recordings-guard-exports-"));
+    const source = readFileSync(join(repositoryRoot, "src/native/Recordings/build.sh"), "utf8");
+    const region = sliceBetweenUnique(source, "generate_and_verify_native_fs_guard() {", "RUN_BUN_TEST_ENVIRONMENT=()");
+    const match = region.match(/run_bun -e '([\s\S]*?)' "\$addon"/);
+    expect(match).not.toBeNull();
+    const result = Bun.spawnSync(signingFixtureCommand(root, [process.execPath, "-e", match![1]!,
+      ensureNativeFsGuardAddon(repositoryRoot)]), { cwd: root, env: { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin" } });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    const extraExport = Bun.spawnSync(signingFixtureCommand(root, [process.execPath, "-e",
+      'require(process.argv[1]).fixtureUnexpectedExport = () => {};\n' + match![1]!,
+      ensureNativeFsGuardAddon(repositoryRoot)]), { cwd: root, env: { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin" } });
+    expect(extraExport.exitCode).toBe(66);
+    expect(extraExport.stderr.toString()).toContain("fixtureUnexpectedExport");
+  });
+
+  darwinSigningTest("signing fixture refuses host tools and writes outside its owned root", () => {
+    const root = realpathSync(temporaryDirectory("recordings-signing-boundary-"));
+    const outside = realpathSync(temporaryDirectory("recordings-signing-outside-"));
+    const run = (args: string[]) => Bun.spawnSync(signingFixtureCommand(root, args), {
+      cwd: root, env: { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin" },
+    });
+    for (const tool of ["/usr/bin/codesign", "/usr/bin/security", "/usr/bin/defaults", "/usr/bin/tccutil", "/usr/bin/open"]) {
+      const result = run([tool, "--help"]);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr.toString()).toMatch(/Operation not permitted|EPERM/);
+    }
+    const marker = join(outside, "must-not-exist");
+    run([bunExecutable, "-e", `require("fs").writeFileSync(${JSON.stringify(marker)},"forbidden")`]);
+    expect(existsSync(marker)).toBe(false);
+    const allowed = join(root, "allowed");
+    const positive = run([bunExecutable, "-e", `require("fs").writeFileSync(${JSON.stringify(allowed)},"owned")`]);
+    expect(positive.exitCode).toBe(0);
+    expect(readFileSync(allowed, "utf8")).toBe("owned");
+    const legacyRead = run([bunExecutable, "-e", 'try { require("fs").statSync("/Applications/Hasna Recordings.app"); process.exit(2); } catch (error) { console.log(error.code); }']);
+    expect(legacyRead.stdout.toString().trim()).toBe("EPERM");
+  });
+
+  darwinSigningTest("signing supervisor terminates only its owned process group at the deadline", async () => {
+    const fixture = createBuildFixture();
+    const supervisor = join(fixture.bin, "build-supervisor.ts");
+    const original = readFileSync(supervisor, "utf8");
+    expect(original.split("25000")).toHaveLength(2);
+    writeFileSync(supervisor, original.replace("25000", "300"));
+    const blocked = join(fixture.root, "blocked-child.sh");
+    writeExecutable(blocked, `#!/bin/bash\nexec '${bunExecutable}' -e 'console.log("fixture child started"); setInterval(() => {}, 1000);'\n`);
+    const foreign = Bun.spawn([bunExecutable, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+    try {
+      const deniedSignal = Bun.spawnSync(signingFixtureCommand(fixture.root, [bunExecutable, "-e",
+        `try { process.kill(${foreign.pid}, "SIGTERM"); console.log("escaped"); } catch (error) { console.log(error.code); }`]),
+        { cwd: fixture.root, env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: "/usr/bin:/bin" } });
+      expect(deniedSignal.stdout.toString().trim()).toBe("EPERM");
+      const result = Bun.spawnSync(signingFixtureCommand(fixture.root, [bunExecutable, supervisor, blocked]), {
+        cwd: fixture.root, env: { HOME: fixture.root, TMPDIR: fixture.root, PATH: "/usr/bin:/bin" },
+      });
+      expect(result.exitCode).toBe(124);
+      expect(result.stdout.toString()).toContain("fixture child started");
+      expect(result.stderr.toString()).toContain("signing fixture deadline exceeded");
+      expect(foreign.exitCode).toBeNull();
+    } finally { foreign.kill(); await foreign.exited; }
+  });
+
+  darwinSigningTest("Darwin signing rejects absent or dirty Git provenance before fixture signing", async () => {
+    for (const defect of ["dirty", "absent"]) {
+      const fixture = createBuildFixture();
+      if (defect === "dirty") writeFileSync(join(fixture.native, "RecordingsLib/Info.plist"), "changed source");
+      else rmSync(join(fixture.root, ".git"), { recursive: true });
+      const result = await runBuild(fixture);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stderr).toContain(defect === "dirty" ? "Source worktree must be clean" : "Could not resolve the source git revision");
+      expect(existsSync(join(fixture.markers, "codesign.log"))).toBe(false);
+    }
+  });
+
+  darwinSigningTest("Darwin signing enforces its isolated-builder attestation", async () => {
+    const fixture = createBuildFixture();
+    const attestation = join(fixture.root, "build-trust/isolated-builder-v1");
+    chmodSync(attestation, 0o600); writeFileSync(attestation, "untrusted fixture attestation"); chmodSync(attestation, 0o444);
+    const result = await runBuild(fixture);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("Managed isolated-builder attestation content is invalid");
+    expect(existsSync(join(fixture.markers, "codesign.log"))).toBe(false);
+  });
+
   function createBuildFixture() {
-    const root = temporaryDirectory("recordings-build-");
+    const root = realpathSync(temporaryDirectory("recordings-build-"));
     const native = join(root, "src", "native", "Recordings");
     const bin = join(root, "bin");
     const markers = join(root, "markers");
@@ -4408,17 +4495,10 @@ else
 fi
 `,
     );
-    return {
-      root,
-      native,
-      bin,
-      markers,
-      tailscaleApp,
-      envelopePrivateKey,
-      envelopePublicKey,
-      compatibleCohortManifest,
-      releaseBuildRoot,
-    };
+    return prepareSignedBuildFixture({
+      root, native, bin, markers, tailscaleApp, envelopePrivateKey,
+      envelopePublicKey, compatibleCohortManifest, releaseBuildRoot,
+    }, repositoryRoot);
   }
 
   function buildToolOverrides(fixture: ReturnType<typeof createBuildFixture>) {
@@ -4440,13 +4520,14 @@ fi
     subtype = "initial-bootstrap",
   ) {
     rmSync(join(fixture.releaseBuildRoot, "release-output"), { recursive: true, force: true });
-    const process = Bun.spawn(
-      ["bash", join(fixture.native, "build.sh"), "release", subtype],
+    configureSignedBuildFixture(fixture, environment);
+    const child = Bun.spawn(
+      signingFixtureCommand(fixture.root, [...(process.platform === "darwin" ? [bunExecutable, join(fixture.bin, "build-supervisor.ts")] : ["/bin/bash"]), join(fixture.native, "build.sh"), "release", subtype]),
       {
       cwd: fixture.native,
       env: {
-        ...Bun.env,
-        PATH: `${fixture.bin}:${Bun.env.PATH ?? ""}`,
+        HOME: fixture.root, TMPDIR: fixture.root,
+        PATH: `${fixture.bin}:/usr/bin:/bin:/usr/sbin:/sbin`,
         MARKER_DIRECTORY: fixture.markers,
         PLIST_BUDDY: join(fixture.bin, "plistbuddy"),
         PLUTIL: join(fixture.bin, "plutil"),
@@ -4469,9 +4550,9 @@ fi
       },
     );
     const [exitCode, stdout, stderr] = await Promise.all([
-      process.exited,
-      new Response(process.stdout).text(),
-      new Response(process.stderr).text(),
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
     ]);
     return { exitCode, stdout, stderr };
   }
@@ -4804,7 +4885,8 @@ fi
     const fixture = createBuildFixture();
     const missingIdentity = await runBuild(fixture, { RECORDINGS_CODESIGN_IDENTITY: "" });
     expect(missingIdentity.exitCode).not.toBe(0);
-    expect(missingIdentity.stderr).toContain("Release builds require RECORDINGS_CODESIGN_IDENTITY");
+    expect(missingIdentity.stderr).toContain("RECORDINGS_CODESIGN_IDENTITY");
+    expect(missingIdentity.stderr).toContain("Developer ID Application");
 
     const missingNotary = await runBuild(fixture, { RECORDINGS_NOTARY_KEYCHAIN_PROFILE: "" });
     expect(missingNotary.exitCode).not.toBe(0);
@@ -4838,7 +4920,7 @@ fi
     );
     expect(updateWithoutCohortOrInstaller.exitCode).not.toBe(0);
     expect(updateWithoutCohortOrInstaller.stderr).toContain(
-      "App-update test fixture requires one regular compatible-cohort manifest",
+      process.platform === "darwin" ? "root-preauthorized RECORDINGS_RELEASE_COMPATIBLE_COHORT_MANIFEST" : "App-update test fixture requires one regular compatible-cohort manifest",
     );
     expect(updateWithoutCohortOrInstaller.stderr).not.toContain(
       "RECORDINGS_INSTALLER_CODESIGN_IDENTITY",
@@ -4953,7 +5035,9 @@ fi
     expect(result.exitCode, result.stderr).toBe(0);
     const codesignLog = readFileSync(join(fixture.markers, "codesign.log"), "utf8");
     expect(codesignLog).toContain("--options runtime --timestamp");
-    expect(codesignLog).toContain("--entitlements RecordingsLib/RecordingsCLI.entitlements");
+    if (process.platform === "darwin") {
+      expect(codesignLog).toMatch(/--entitlements \S+\/source\/src\/native\/Recordings\/RecordingsLib\/RecordingsCLI\.entitlements /);
+    } else expect(codesignLog).toContain("--entitlements RecordingsLib/RecordingsCLI.entitlements");
     expect(codesignLog).toContain("Contents/Helpers/recordings");
     const bunLog = readFileSync(join(fixture.markers, "bun.log"), "utf8");
     expect(bunLog).toContain("provenance");

@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { signingFixtureCommand, replaceFixtureText } from "./helpers/signing-fixture";
 import { ensureNativeFsGuardAddon } from "./helpers/native-fs-guard";
 import {
   type MacOSArtifactManifest,
@@ -228,8 +229,8 @@ function developerIdLocalFixture(approvedTarget = "station03") {
   return result;
 }
 
-function requirementDigestFixture() {
-  const root = mkdtempSync(join(tmpdir(), "recordings-requirement-digest-"));
+function requirementDigestFixture(remapTools = true) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "recordings-requirement-digest-")));
   temporaryDirectories.push(root);
   const bin = join(root, "bin");
   const app = join(root, "Hasna Recordings.app");
@@ -241,6 +242,7 @@ function requirementDigestFixture() {
       "codesign",
       `#!/usr/bin/env bash
 set -euo pipefail
+printf '%s\\n' "$*" >> "$HOME/codesign.log"
 if [[ "$*" == --verify* ]]; then
   [ "\${FAIL_CODESIGN_VERIFY:-0}" = 0 ]
 elif [[ "$*" == *"--entitlements :-"* ]]; then
@@ -259,30 +261,41 @@ fi
     writeFileSync(path, contents);
     chmodSync(path, 0o755);
   }
-  return { app, bin };
+  let source = readFileSync(join(import.meta.dir, "../../scripts/macos_artifact.ts"), "utf8");
+  if (remapTools) {
+    for (const tool of ["codesign", "lipo", "plutil"]) {
+      source = replaceFixtureText(source, `"/usr/bin/${tool}"`, JSON.stringify(join(bin, tool)));
+    }
+  }
+  const entry = join(root, "macos_artifact.ts");
+  writeFileSync(entry, source);
+  writeFileSync(join(root, "native_fs_guard.ts"), readFileSync(join(import.meta.dir, "../../scripts/native_fs_guard.ts")));
+  return { root, app, bin, entry };
 }
 
 function runRequirementDigest(
   policy: "release" | "local_only",
   environment: Record<string, string> = {},
   extraArguments: string[] = [],
+  remapTools = true,
 ) {
-  const { app, bin } = requirementDigestFixture();
+  const { root, app, bin, entry } = requirementDigestFixture(remapTools);
   return Bun.spawnSync(
-    [
+    signingFixtureCommand(root, [
       process.execPath,
-      join(import.meta.dir, "../../scripts/macos_artifact.ts"),
+      entry,
       "requirement-digest",
       "--app",
       app,
       "--artifact-policy",
       policy,
       ...extraArguments,
-    ],
+    ]),
     {
+      cwd: root,
       env: {
-        ...Bun.env,
-        PATH: `${bin}:${Bun.env.PATH ?? ""}`,
+        HOME: root, TMPDIR: root,
+        PATH: `${bin}:/usr/bin:/bin`,
         SIGNING_DETAILS: strictAdHocDetails,
         ENTITLEMENTS_JSON: appEntitlements,
         ...environment,
@@ -294,6 +307,13 @@ function runRequirementDigest(
 }
 
 describe("macOS artifact manifest", () => {
+  const darwinSigningTest = process.platform === "darwin" ? test : test.skip;
+  darwinSigningTest("requirement fixture keeps Darwin pinning and blocks an unmapped real signing tool", () => {
+    const result = runRequirementDigest("local_only", {}, [], false);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr.toString()).toMatch(/EPERM|Operation not permitted/);
+  });
+
   test.each([
     ["thin", "feedfacf"],
     ["fat", "cafebabe"],
