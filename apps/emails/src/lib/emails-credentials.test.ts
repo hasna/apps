@@ -251,7 +251,7 @@ describe("fail-closed resolution (owner ruling 2026-09-04)", () => {
       }
       const message = String(thrown);
       expect(message).toContain("no API credential resolved");
-      expect(message).toContain("refusing to run locally");
+      expect(message).toContain("refusing to start");
       // The plan throws the same refusal rather than serving SQLite.
       expect(() => planEmailStore(env)).toThrow("refusing");
     } finally {

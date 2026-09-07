@@ -91,7 +91,7 @@ async function main(): Promise<void> {
 
   program
     .name("emails")
-    .description("Emails email management CLI - send, receive, sync, and manage email locally or in your AWS account")
+    .description("Send, receive, sync, and manage email through your authenticated Emails API")
     .version(version)
     .option("--json", "Output JSON instead of formatted text")
     .option("-q, --quiet", "Suppress info output")

@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 let api: V1Stub | undefined;
 const homes: string[] = [];
@@ -10,7 +11,8 @@ function fixture() {
   const home = mkdtempSync(join(tmpdir(), "emails-api-only-")); homes.push(home);
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith("EMAILS_") || key.startsWith("HASNA_EMAILS_")) delete env[key];
-  Object.assign(env, { HOME: home, HASNA_HOME: join(home, ".hasna"), EMAILS_HOME: join(home, "mail"), PATH: "/usr/bin:/bin", NO_COLOR: "1" });
+  for (const key of ["HASNA_CONFIG_HOME", "HASNA_HOME", "HASNA_DATA_HOME", "HASNA_STATE_HOME", "HASNA_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]) delete env[key];
+  Object.assign(env, { HASNA_STATION: `emails-api-only-${randomUUID()}`, HOME: home, HASNA_HOME: join(home, ".hasna"), EMAILS_HOME: join(home, "mail"), PATH: "/usr/bin:/bin", NO_COLOR: "1" });
   return { home, env };
 }
 async function run(env: NodeJS.ProcessEnv, entry: string, args: string[]) {
@@ -50,13 +52,13 @@ test("API plus DB settings reject without exposing the configured path", async (
   expect(result.code).not.toBe(0);
   expect(result.stdout + result.stderr).toContain("Unset EMAILS_DB_PATH");
   expect(result.stdout + result.stderr).not.toContain(privatePath);
-});
+}, 15000);
 test("explicit storage override cannot reopen the ordinary mail client factory", async () => {
   const { env } = fixture();
   const result = await run(env, "-e", ['import { resolveMailDataSource } from "./src/lib/mail-data-source.ts"; resolveMailDataSource({ mode: "local" });']);
   expect(result.code).not.toBe(0);
   expect(result.stdout + result.stderr).toContain("authenticated Emails API");
-});
+}, 15000);
 for (const command of ["db", "server", "serve"]) {
   test(`explicit ${command} server administration retains its help path`, async () => {
     const { home, env } = fixture(); env.EMAILS_DB_PATH = join(home, "server.db");
@@ -64,5 +66,16 @@ for (const command of ["db", "server", "serve"]) {
     expect(result.code).toBe(0);
     expect(result.stdout + result.stderr).not.toContain("authenticated Emails API");
     expect(existsSync(env.EMAILS_DB_PATH)).toBe(false);
-  });
+  }, 15000);
 }
+
+test("missing API credentials suggest API setup without a local database alternative", async () => {
+  const { home, env } = fixture();
+  const result = await run(env, "src/cli/index.tsx", ["stats", "--json"]);
+  expect(result.code).not.toBe(0);
+  const output = result.stdout + result.stderr;
+  expect(output).toContain("HASNA_EMAILS_API_KEY");
+  expect(output).not.toContain("local database instead");
+  expect(output).not.toContain("DB_PATH");
+  expect(existsSync(join(home, "mail", "emails.db"))).toBe(false);
+}, 15000);

@@ -427,7 +427,7 @@ export function resolveEmailsHostedTransport(
       throw new ClientTransportConfigurationError(
         EMAILS_APP,
         `${configured.source} points this client at an Emails service but no API credential ` +
-          `resolved — refusing to run locally instead. Looked in the Keychain item ` +
+          `resolved — refusing to start. Looked in the Keychain item ` +
           `${keychainService("api-key")}${emailsCredentialFiles(snapshot).length > 0 ? `, in ` +
           `${emailsCredentialFiles(snapshot).join(" or ")}` : ""}, and in ${EMAILS_API_KEY_ENV} ` +
           `(or its alias ${EMAILS_SELF_HOSTED_API_KEY_ENV}). ` +
@@ -442,8 +442,7 @@ export function resolveEmailsHostedTransport(
       `No Emails API credential resolved and no authority is configured — refusing to start. ` +
         `Set ${EMAILS_API_KEY_ENV} and ${EMAILS_API_URL_ENV} (or ${EMAILS_SELF_HOSTED_API_KEY_ENV} and ` +
         `${EMAILS_SELF_HOSTED_URL_ENV}), store the key in the Keychain item ` +
-        `${keychainService("api-key")}, or write ~/.hasna/${EMAILS_APP}/config/credentials. ` +
-        `To use the local database instead, choose it explicitly by setting a database path.`,
+        `${keychainService("api-key")}, or write ~/.hasna/${EMAILS_APP}/config/credentials.`,
       [EMAILS_API_KEY_ENV, EMAILS_API_URL_ENV],
     );
   }
