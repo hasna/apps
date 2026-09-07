@@ -1,83 +1,6 @@
-// Delivery statistics, measured on THE ONE STORE this installation configured.
-//
-// WHAT THIS FILE USED TO BE, and why it is not that any more. Until this change it was
-// a three-module family: this facade plus two sibling implementations picked at runtime
-// by a deployment word. The two differed by WHO RAN THE READ, not by what a statistic
-// means — one issued `COUNT(*)` / `SUM(CASE …)` against a local database, the other threw
-// — so `emails stats` was either an exact aggregate or a hard refusal depending on a
-// variable, with nothing in between and no way for a caller to tell a real zero from an
-// unasked question. That axis is what `docs/PLAN-MODE-REMOVAL.md` deletes. Both sibling
-// modules are gone; this is the whole implementation, and it reads through the store seam
-// (`src/store/`), whose implementation the operator's STORAGE configuration selects
-// (`src/store-resolution.ts`).
-//
-// THE ONE RULE THIS MODULE IS HELD TO, and it is the entire difficulty of a statistics
-// family: THE SEAM PUBLISHES NO PERIOD-SCOPED AGGREGATE. `src/store/repositories.ts`
-// offers list operations plus two whole-table counts (`messageCounts`, `getUnreadCount`),
-// neither of which admits a time window or a provider. So every number below that the
-// deleted local sibling got from one exact SQL aggregate is now a CLIENT-SIDE BOUNDED
-// ENUMERATION, over either store, and therefore carries the completeness of the
-// enumeration that produced it:
-//
-//   * a number that was fully enumerated is a TOTAL.
-//   * a number whose enumeration ran out of budget, or whose paging window moved, is a
-//     LOWER BOUND. It is published with `*_availability.complete === false`, and
-//     `formatStatsTable` renders it `≥N` — the same convention `emails status` and
-//     `daemon status` already use for exactly this reason.
-//   * a number that was never read — the store refused, or the read threw, or no store
-//     could be resolved — is `null` with a machine-readable reason in `gaps`. NEVER a
-//     zero: a zero is type-valid and reads as an authoritative count, which is how "I
-//     did not look" gets published as "nothing happened".
-//
-// A RATE IS HELD TO A STRICTER RULE THAN A COUNT, and this is the one place a plausible
-// wrong answer is easiest to ship. A ratio of two independently-bounded counts is not a
-// rate at all — it is the quotient of two arbitrary prefixes of two tables, and it can
-// land anywhere including above 100%. There is no `≥` form for it either: bounding a
-// numerator and bounding a denominator move a ratio in OPPOSITE directions. So every rate
-// here is `null` unless every count it divides is a total.
-//
-// WHAT COLLAPSING THE TWO SIBLINGS CHANGED. Stated here rather than left for a reader to
-// discover by diffing them; one is a loss recorded as a named gap, two are corrections:
-//
-//   1. THE PROVIDER FILTER NO LONGER SCOPES `sent`, and it is refused rather than
-//      ignored. The deleted local sibling counted
-//      `emails WHERE sent_at >= ? AND provider_id = ?`. The seam's outbound message
-//      stream carries NO provider: `ListMessagesOptions` has no such filter and
-//      `MessageListRecord` has no such field (src/store/records.ts), deliberately —
-//      src/store-sqlite/messages-sql.ts records that `emails.provider_id` is exactly the
-//      column this refactor declines to lift. Answering with the UNFILTERED count would
-//      be a superset presented as a filtered result, which is the defect
-//      src/store-http/resources.ts already refuses for list filters. So with a provider
-//      named, `sent` is null and the two rates that divide by it are null. `open_rate`
-//      survives, because it divides two event counts and event rows DO carry
-//      `provider_id` in both schemas.
-//   2. `sent` NOW COUNTS ALL OUTBOUND MAIL, not only the legacy provider-scoped ledger,
-//      and this is a correction rather than a loss. The deleted sibling counted one table;
-//      the seam's `direction: "outbound"` reads the unified stream, which unions that
-//      ledger with the outbound rows of the inbound table
-//      (src/store-sqlite/messages-sql.ts: `is_sent = 1`). Mail sent through the newer path
-//      was simply missing from the old number.
-//   3. A ZERO DENOMINATOR IS NO LONGER A ZERO RATE. The deleted sibling returned
-//      `delivery_rate: 0` when nothing was sent, i.e. it published "0% of your mail was
-//      delivered" for an installation that has sent nothing. 0/0 has no value; the field
-//      is null with a `not_applicable` reason.
-//
-// WHY THE PERIOD WINDOW IS APPLIED IN THIS PROCESS. No list operation on the seam filters
-// events by time — `ResourceRepository.list` takes EQUALITY filters only
-// (src/store-sqlite/resources.ts, src/store-http/resources.ts) — so the window is a
-// predicate over enumerated rows. Two consequences are load-bearing. The enumeration
-// walks the store's own list order (`created_at DESC` locally, `occurred_at DESC` over the
-// API), which locally is NOT the window's column, so an exhausted budget can miss a row
-// that is inside the window; that is why exhaustion bounds the counts instead of being
-// ignored. And a row whose timestamp cannot be parsed cannot be placed inside or outside
-// the window, so those rows bound the counts too rather than being silently dropped.
-//
-// WHY NO SERVER-SIDE FILTER IS PUSHED for the provider, even though both stores could
-// take one: the API store validates a filter against the service's PUBLISHED contract and
-// faults when it cannot read `/v1/openapi.json` (src/store-http/resources.ts). The window
-// predicate would still have to run here regardless, so a pushed filter would reduce row
-// volume without changing a single published number's completeness — and would buy that
-// with a second failure mode on the read that reports failures.
+// Delivery statistics over the configured store. Message/provider provenance and filters
+// are shared by API and database stores. Counts come from bounded enumerations;
+// incomplete reads remain lower bounds and rates require complete denominators.
 
 import {
   enumerateStorePages,
@@ -201,9 +124,9 @@ interface OutboundEnumeration {
  * exists. Only the SHAPE differs here — this caller wants a count of distinct ids and
  * throws the rows away — so the fields are re-projected rather than re-derived.
  */
-async function countOutboundSince(store: EmailStore, since: string): Promise<OutboundEnumeration> {
+async function countOutboundSince(store: EmailStore, since: string, providerId?: string): Promise<OutboundEnumeration> {
   const enumeration = await enumerateStorePages<MessageListRecord>(
-    (opts) => store.messages.listMessages({ direction: "outbound", since, ...opts }),
+    (opts) => store.messages.listMessages({ direction: "outbound", since, provider_id: providerId, ...opts }),
     { idOf: (row) => row.id },
   );
   return {
@@ -423,23 +346,10 @@ export async function getLocalStats(
 
   let sentAvailability: StatusAvailability;
   let sent: number | null = null;
-  if (providerId !== undefined) {
-    // The read is not ATTEMPTED with a provider named, because there is no filter to
-    // attempt it with. An unfiltered count answered to a filtered question is worse than a
-    // refusal: nothing downstream can tell it apart from a real one.
-    sentAvailability = statusUnavailable(
-      "not_modelled_on_store",
-      "no_provider_on_message_stream",
-      `${kind}:messages`,
-      "the store's outbound message stream carries no provider — ListMessagesOptions has no provider "
-        + "filter and MessageListRecord has no provider field (src/store/records.ts) — so a "
-        + "provider-scoped count of sent mail cannot be measured. The unfiltered count is NOT reported "
-        + "in its place, because that would be a superset presented as a filtered result",
-    );
-  } else if (resolved === null) {
+  if (resolved === null) {
     sentAvailability = unresolvedAvailability("outbound messages", unresolvedMessage);
   } else {
-    const outbound = await countOutboundSince(resolved, since);
+    const outbound = await countOutboundSince(resolved, since, providerId);
     sentAvailability = availabilityFor(
       `${kind}:messages`,
       "outbound messages",

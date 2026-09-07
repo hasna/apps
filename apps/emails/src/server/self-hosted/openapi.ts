@@ -687,6 +687,7 @@ const messageSchema = {
     body_text: { type: "string", nullable: true },
     body_html: { type: "string", nullable: true },
     status: { type: "string" },
+    provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
     provider_message_id: { type: "string", nullable: true },
     message_id: { type: "string", nullable: true, description: "RFC 5322 Message-ID" },
     in_reply_to: { type: "string", nullable: true },
@@ -873,6 +874,7 @@ const messageListItemSchema = {
     subject: { type: "string", nullable: true },
     snippet: { type: "string", nullable: true, description: "Short text preview (<=140 chars); full bodies are available only from GET /v1/messages/{id}." },
     status: { type: "string" },
+    provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
     provider_message_id: { type: "string", nullable: true },
     message_id: { type: "string", nullable: true, description: "RFC 5322 Message-ID" },
     in_reply_to: { type: "string", nullable: true },
@@ -3392,6 +3394,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
       get: {
         operationId: "listMessages",
         parameters: [
+          { name: "provider_id", in: "query", required: false, schema: { type: "string" } },
           ...listParams,
           { name: "cursor", in: "query", required: false, schema: { type: "string" }, description: "Opaque keyset cursor from a previous page's next_cursor. Takes precedence over offset; pages are ordered by (received_at || created_at, id) descending." },
           { name: "direction", in: "query", required: false, schema: { type: "string", enum: ["inbound", "outbound"] } },
@@ -3462,6 +3465,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   labels: { type: "array", items: { type: "string" } },
                   headers: { type: "object", additionalProperties: true },
                   attachments: { type: "array", items: { type: "object", additionalProperties: true } },
+                  provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
                   provider_message_id: { type: "string", nullable: true },
                   source_id: { type: "string", description: "Stable upstream id; enables idempotent upsert" },
                 },
@@ -3861,6 +3865,7 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                   labels: { type: "array", items: { type: "string" } },
                   headers: { type: "object", additionalProperties: true },
                   attachments: { type: "array", items: { type: "object", additionalProperties: true } },
+                  provider_id: { type: "string", nullable: true, description: "Recorded provider identifier; null when historical provenance is unknown." },
                   provider_message_id: { type: "string", nullable: true },
                   source_id: {
                     type: "string",

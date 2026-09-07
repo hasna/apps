@@ -673,6 +673,7 @@ function messageWriteInput(body: Record<string, unknown>): { input: MessageInput
       body_text: body.text === undefined ? asOptStringOrNull(body.body_text) : asOptStringOrNull(body.text),
       body_html: body.html === undefined ? asOptStringOrNull(body.body_html) : asOptStringOrNull(body.html),
       status: body.status ? String(body.status) : undefined,
+      provider_id: asOptStringOrNull(body.provider_id),
       provider_message_id: asOptStringOrNull(body.provider_message_id),
       direction,
       message_id: asOptStringOrNull(body.message_id),
@@ -1683,6 +1684,7 @@ export async function handleSelfHostedRequest(
           return json(400, { error: "offset is limited to 100000; use cursor pagination for deep pages" });
         }
         const page = await auth.store.listMessages({
+          provider_id: url.searchParams.get("provider_id") ?? undefined,
           limit: queryInt(url, "limit"),
           offset,
           direction,

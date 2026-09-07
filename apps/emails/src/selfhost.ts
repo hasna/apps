@@ -40,9 +40,9 @@ export interface Address { "id": string; "email": string; "domain"?: string | nu
 
 export interface SendKey { "id": string; "owner_id": string | null; "prefix": string | null; "label": string | null; "last_used_at": string | null; "revoked_at": string | null; "created_at": string; "updated_at": string }
 
-export interface MessageListItem { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "snippet": string | null; "status": string; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "attachment_count": number; "source_id": string | null; "send_state": string; "policy_denial"?: string | null; "send_started_at": string | null; "created_at": string; "updated_at": string }
+export interface MessageListItem { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "snippet": string | null; "status": string; "provider_id"?: string | null; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "attachment_count": number; "source_id": string | null; "send_state": string; "policy_denial"?: string | null; "send_started_at": string | null; "created_at": string; "updated_at": string }
 
-export interface Message { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "body_text": string | null; "body_html": string | null; "status": string; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "headers": Record<string, unknown>; "attachments": Array<AttachmentMeta | null>; "source_id": string | null; "send_state": string; "send_started_at": string | null; "created_at": string; "updated_at": string }
+export interface Message { "id": string; "direction": string; "from_addr": string; "to_addrs": Array<string>; "cc_addrs": Array<string>; "subject": string | null; "body_text": string | null; "body_html": string | null; "status": string; "provider_id"?: string | null; "provider_message_id": string | null; "message_id": string | null; "in_reply_to": string | null; "received_at": string | null; "is_read": boolean; "is_starred": boolean; "labels": Array<string>; "headers": Record<string, unknown>; "attachments": Array<AttachmentMeta | null>; "source_id": string | null; "send_state": string; "send_started_at": string | null; "created_at": string; "updated_at": string }
 
 export interface MessageCounts { "inbox": number; "unread": number; "priority"?: number; "starred": number; "sent": number; "archived": number; "spam": number; "trash": number; "total": number; "latest_received_at": string | null }
 
@@ -168,7 +168,14 @@ export class EmailsSelfHostClient {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
@@ -1280,7 +1287,7 @@ export class EmailsSelfHostClient {
       });
     }
 
-    async listMessages(query?: { "limit"?: number; "offset"?: number; "cursor"?: string; "direction"?: "inbound" | "outbound"; "folder"?: "inbox" | "starred" | "sent" | "archived" | "spam" | "trash"; "domain"?: Array<string>; "to"?: string; "from"?: string; "subject"?: string; "q"?: string; "search"?: string; "since"?: string; "until"?: string; "read"?: boolean; "unread"?: boolean; "starred"?: boolean; "archived"?: boolean; "address"?: string; "label"?: string }, init?: RequestInit): Promise<{ "messages": Array<MessageListItem>; "next_cursor": string | null }> {
+    async listMessages(query?: { "provider_id"?: string; "limit"?: number; "offset"?: number; "cursor"?: string; "direction"?: "inbound" | "outbound"; "folder"?: "inbox" | "starred" | "sent" | "archived" | "spam" | "trash" | "priority"; "domain"?: Array<string>; "to"?: string; "from"?: string; "subject"?: string; "q"?: string; "search"?: string; "since"?: string; "until"?: string; "read"?: boolean; "unread"?: boolean; "starred"?: boolean; "archived"?: boolean; "address"?: string; "label"?: string }, init?: RequestInit): Promise<{ "messages": Array<MessageListItem>; "next_cursor": string | null }> {
       return this.request("GET", `/v1/messages`, {
         body: undefined,
         query,
@@ -1289,7 +1296,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Import an inbound message. Supplying source_id makes the write idempotent. Scope emails:write. */
-    async createMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "subject"?: string | null; "text"?: string | null; "html"?: string | null; "status"?: string; "direction": "inbound"; "received_at"?: string | null; "message_id"?: string | null; "in_reply_to"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "labels"?: Array<string>; "headers"?: Record<string, unknown>; "attachments"?: Array<Record<string, unknown>>; "provider_message_id"?: string | null; "source_id"?: string }, init?: RequestInit): Promise<{ "message": Message }> {
+    async createMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "subject"?: string | null; "text"?: string | null; "html"?: string | null; "status"?: string; "direction": "inbound"; "received_at"?: string | null; "message_id"?: string | null; "in_reply_to"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "labels"?: Array<string>; "headers"?: Record<string, unknown>; "attachments"?: Array<Record<string, unknown>>; "provider_id"?: string | null; "provider_message_id"?: string | null; "source_id"?: string }, init?: RequestInit): Promise<{ "message": Message }> {
       return this.request("POST", `/v1/messages`, {
         body,
         query: undefined,
@@ -1316,7 +1323,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Record a message in either direction WITHOUT sending it. Supplying source_id makes the write idempotent. Scope emails:write. */
-    async recordMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "subject"?: string | null; "text"?: string | null; "html"?: string | null; "status"?: string; "direction"?: "inbound" | "outbound"; "received_at"?: string | null; "message_id"?: string | null; "in_reply_to"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "labels"?: Array<string>; "headers"?: Record<string, unknown>; "attachments"?: Array<Record<string, unknown>>; "provider_message_id"?: string | null; "source_id"?: string }, init?: RequestInit): Promise<{ "message": Message }> {
+    async recordMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "subject"?: string | null; "text"?: string | null; "html"?: string | null; "status"?: string; "direction"?: "inbound" | "outbound"; "received_at"?: string | null; "message_id"?: string | null; "in_reply_to"?: string | null; "is_read"?: boolean; "is_starred"?: boolean; "labels"?: Array<string>; "headers"?: Record<string, unknown>; "attachments"?: Array<Record<string, unknown>>; "provider_id"?: string | null; "provider_message_id"?: string | null; "source_id"?: string }, init?: RequestInit): Promise<{ "message": Message }> {
       return this.request("POST", `/v1/messages/record`, {
         body,
         query: undefined,
@@ -1325,7 +1332,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Send through the configured SES or Resend provider and persist the resulting ledger row */
-    async sendMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "send_key"?: string; "idempotency_key": string }, init?: RequestInit): Promise<{ "message": Message; "provider": string; "idempotent_replay": true; "sent": true; "provider_message_id": string } | { "message": Message; "provider": string; "in_progress": true } | { "message": Message; "provider": string; "sent": true; "provider_message_id": string; "warning"?: string; "retry_safe"?: false }> {
+    async sendMessage(body: { "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "send_key"?: string; "allow_suppressed_recipients"?: boolean; "idempotency_key": string }, init?: RequestInit): Promise<{ "message": Message; "provider": string; "idempotent_replay": true; "sent": true; "provider_message_id": string } | { "message": Message; "provider": string; "in_progress": true } | { "message": Message; "provider": string; "sent": true; "provider_message_id": string; "warning"?: string; "retry_safe"?: false }> {
       return this.request("POST", `/v1/messages/send`, {
         body,
         query: undefined,

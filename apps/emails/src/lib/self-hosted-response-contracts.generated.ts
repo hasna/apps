@@ -38784,6 +38784,11 @@ export const SELF_HOSTED_RESPONSE_COMPONENTS: Readonly<Record<string, unknown>> 
       "status": {
         "type": "string"
       },
+      "provider_id": {
+        "type": "string",
+        "nullable": true,
+        "description": "Recorded provider identifier; null when historical provenance is unknown."
+      },
       "provider_message_id": {
         "type": "string",
         "nullable": true
@@ -38969,6 +38974,11 @@ export const SELF_HOSTED_RESPONSE_COMPONENTS: Readonly<Record<string, unknown>> 
       },
       "status": {
         "type": "string"
+      },
+      "provider_id": {
+        "type": "string",
+        "nullable": true,
+        "description": "Recorded provider identifier; null when historical provenance is unknown."
       },
       "provider_message_id": {
         "type": "string",

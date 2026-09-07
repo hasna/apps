@@ -20,9 +20,8 @@ it("does not turn transport failure into an empty inbox", async () => {
   await expect(getInboundStats("30d", undefined, store)).rejects.toThrow("network offline");
 });
 
-it("does not invent provider scope or accept malformed periods", async () => {
+it("rejects malformed periods", async () => {
   const store = {} as EmailStore;
-  await expect(getInboundStats("30d", "provider-a", store)).rejects.toThrow("omit --provider");
   await expect(getInboundStats("7garbage", undefined, store)).rejects.toThrow("positive number of days");
 });
 

@@ -2949,6 +2949,23 @@ const LEGACY_GMAIL_REPLAY_PROVENANCE = defineMigration(
   `,
 );
 
+// Provider provenance is nullable: unknown historical sources must remain unknown.
+const MESSAGE_PROVIDER_PROVENANCE = defineMigration(
+  "0027_message_provider_provenance",
+  `ALTER TABLE messages ADD COLUMN IF NOT EXISTS provider_id TEXT;
+   -- Only one unambiguous provider recorded on events for this exact tenant/message
+   -- is evidence. Conflicting or absent historical provenance stays NULL.
+   UPDATE messages m SET provider_id = evidence.provider_id
+   FROM (
+     SELECT tenant_id, email_id, min(provider_id) AS provider_id
+     FROM events WHERE provider_id IS NOT NULL AND provider_id <> '' AND email_id IS NOT NULL
+     GROUP BY tenant_id, email_id HAVING count(DISTINCT provider_id) = 1
+   ) evidence
+   WHERE m.tenant_id = evidence.tenant_id AND m.id = evidence.email_id AND m.provider_id IS NULL;
+   CREATE INDEX IF NOT EXISTS messages_tenant_provider_ts_idx
+   ON messages (tenant_id, provider_id, sort_ts DESC, id DESC);`,
+);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -2984,5 +3001,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     MAILBOX_FILTERS,
     PRIORITY_SENDER_RULES,
     LEGACY_GMAIL_REPLAY_PROVENANCE,
+    MESSAGE_PROVIDER_PROVENANCE,
   ];
 }

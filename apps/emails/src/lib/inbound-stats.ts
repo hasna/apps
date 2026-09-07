@@ -13,10 +13,9 @@ export interface InboundStats {
 /** Count the unified inbound stream, following API cursors instead of opening a client DB. */
 export async function getInboundStats(period = "30d", providerId?: string, store: EmailStore = createConfiguredEmailStore()): Promise<InboundStats> {
   if (!/^[1-9]\d*d$/.test(period)) throw new Error("Period must be a positive number of days, for example 7d or 30d.");
-  if (providerId) throw new Error("Inbound messages do not carry a provider ID; omit --provider to report all inbound mail.");
   const since = new Date(Date.now() - Number(period.slice(0, -1)) * 86_400_000).toISOString();
   const result = await enumerateStorePages(
-    (page) => store.messages.listMessages({ ...page, direction: "inbound", since }),
+    (page) => store.messages.listMessages({ ...page, direction: "inbound", since, provider_id: providerId }),
     { idOf: (row) => row.id },
   );
   if (result.refusal) throw new Error(result.refusal.message);
