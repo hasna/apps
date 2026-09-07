@@ -50907,6 +50907,14 @@ export const SELF_HOSTED_RESPONSE_COMPONENTS: Readonly<Record<string, unknown>> 
         "nullable": true,
         "description": "Recorded provider identifier; null when historical provenance is unknown."
       },
+      "tags": {
+        "type": "object",
+        "nullable": true,
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Persisted outbound tags; null when not recorded."
+      },
       "provider_message_id": {
         "type": "string",
         "nullable": true
@@ -51097,6 +51105,14 @@ export const SELF_HOSTED_RESPONSE_COMPONENTS: Readonly<Record<string, unknown>> 
         "type": "string",
         "nullable": true,
         "description": "Recorded provider identifier; null when historical provenance is unknown."
+      },
+      "tags": {
+        "type": "object",
+        "nullable": true,
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Persisted outbound tags; null when not recorded."
       },
       "provider_message_id": {
         "type": "string",

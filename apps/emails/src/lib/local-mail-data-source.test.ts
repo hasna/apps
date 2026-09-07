@@ -313,6 +313,18 @@ describe("SqliteMailDataSource", () => {
       .toMatchObject({ state: "content_unavailable", index: 0 });
   });
 
+  it("refuses API send metadata before any compatibility lookup or send", async () => {
+    const ds = new SqliteMailDataSource();
+    let reads = 0;
+    ds.getMessage = async () => { reads++; throw new Error("unexpected lookup"); };
+    const before = await getSandboxCount();
+    for (const metadata of [{ headers: { "X-Campaign": "spring" } }, { tags: { campaign: "spring" } }, { headers: {} }, { tags: {} }]) {
+      await expect(ds.send({ to: "user@example.com", subject: "fixture", body: "body", replyToId: "must-not-read", ...metadata })).rejects.toThrow("require the authenticated Emails API");
+    }
+    expect(reads).toBe(0);
+    expect(await getSandboxCount()).toBe(before);
+  });
+
   it("sends through a local sandbox provider and records the sent ledger", async () => {
     const provider = createProvider({ name: "local-sandbox", type: "sandbox" });
     const result = await new SqliteMailDataSource().send({

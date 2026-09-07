@@ -371,6 +371,7 @@ function toEmail(
     | "subject"
     | "status"
     | "provider_id"
+    | "tags"
     | "provider_message_id"
     | "received_at"
     | "created_at"
@@ -396,7 +397,7 @@ function toEmail(
     status: emailStatusOf(row.status, row.id),
     has_attachments: attachmentCount > 0,
     attachment_count: attachmentCount,
-    tags: null,
+    tags: row.tags ?? null,
     // The unified projection maps the ledger's `sent_at` onto `received_at`
     // (src/store-sqlite/messages-sql.ts), and a row written through the seam has no separate
     // sent column. `created_at` is the fallback both arms already used.

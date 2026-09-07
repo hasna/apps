@@ -66,15 +66,6 @@ function refusal(code: string, status: number, reason: string, remedy?: string):
   return { content: [{ type: "text", text }], isError: true };
 }
 
-/** Keep unimplemented options declared so schema parsing cannot silently drop them.
- * Scoped authorization and unsubscribe now travel through the API; custom headers
- * and tags require their own validated public wire and persistence contracts.
- */
-const UNCARRIED_SEND_OPTIONS: ReadonlyArray<{ key: string; loses: string }> = Object.freeze([
-  { key: "headers", loses: "the custom headers would not reach the message" },
-  { key: "tags", loses: "the tags would not be recorded" },
-]);
-
 /** Split an address option into trimmed, non-empty addresses. */
 function addressList(value: string | string[] | undefined): string[] {
   if (value === undefined) return [];
@@ -118,26 +109,15 @@ export function registerEmailOpsTools(server: McpServer): void {
       .optional()
       .describe("Email attachments"),
     tags: z.record(z.string()).optional().describe("Key-value tags"),
-    headers: z.record(z.string()).optional().describe("Custom email headers"),
+    headers: z.record(z.string()).optional().describe("Up to 20 nonreserved custom X-* headers with printable ASCII values"),
     unsubscribe_url: z.string().optional().describe("Auto-inject List-Unsubscribe headers (RFC 8058 one-click)"),
     idempotency_key: z.string().optional().describe("Prevent duplicate sends — returns existing email if key was used before"),
     auth_token: z.string().optional().describe("Scoped send key (esk_…) — restricts sending to addresses the key's owner owns or administers"),
   },
   async (input) => {
     try {
-      // 1. Options this build's send path cannot carry are answered, not ignored.
-      const uncarried = UNCARRIED_SEND_OPTIONS.filter(
-        (option) => (input as Record<string, unknown>)[option.key] !== undefined,
-      );
-      if (uncarried.length > 0) {
-        return refusal(
-          "option_not_carried",
-          422,
-          `send_email cannot carry ${uncarried.map((option) => option.key).join(", ")}: ` +
-            `${uncarried.map((option) => option.loses).join("; ")}. Sending anyway would ignore ` +
-            "them without saying so, so this send is refused instead. Remove the option(s) to send.",
-        );
-      }
+      const { normalizeSendMetadata } = await import("../../lib/send-metadata.js");
+      const metadata = normalizeSendMetadata(input.headers, input.tags);
 
       // 2. Templates. Resolved through the templates FACADE, so a template lives
       //    wherever this installation keeps its templates.
@@ -186,6 +166,7 @@ export function registerEmailOpsTools(server: McpServer): void {
       //    body the caller never wrote.
       const { resolveMailDataSource } = await import('../../lib/mail-data-source.js');
       const result = await resolveMailDataSource().send({
+        ...metadata,
         from: input.from,
         to: addressCsv(input.to) ?? "",
         cc: addressCsv(input.cc),

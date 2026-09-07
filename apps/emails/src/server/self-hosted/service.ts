@@ -1,4 +1,5 @@
 import { readDomainDnsRecords, DomainDnsReadError } from "./domain-dns-read.js";
+import { normalizeSendMetadata } from "../../lib/send-metadata.js";
 import { normalizeFeedback } from "./feedback.js";
 import { WorkerError, workerFence, workerId } from "./worker-supervisor.js";
 import { runtimeLogQuery, withRuntimeLog } from "./runtime-log.js";
@@ -1564,6 +1565,10 @@ export async function handleSelfHostedRequest(
       // content, so it reads against the attachment-derived budget rather than
       // the 1MiB default every other route keeps.
       const body = await readJsonBody(req, MAX_SEND_JSON_BODY_BYTES);
+      let metadata: ReturnType<typeof normalizeSendMetadata>;
+      try { metadata = normalizeSendMetadata(body.headers, body.tags); }
+      catch (error) { return json(400, { error: error instanceof Error ? error.message : "Invalid send metadata", reason: "invalid_send_metadata" }); }
+      const sendHeaders = metadata.headers || trustedSendHeaders ? { ...metadata.headers, ...trustedSendHeaders } : undefined;
       let scheduledAt: string | undefined;
       if (enqueue) {
         try {
@@ -1683,7 +1688,8 @@ export async function handleSelfHostedRequest(
         html: typeof body.html === "string" ? body.html : null,
         attachments,
         provider: sender.provider,
-        ...(trustedSendHeaders ? { headers: trustedSendHeaders } : {}),
+        ...(sendHeaders ? { headers: sendHeaders } : {}),
+        ...(metadata.tags ? { tags: metadata.tags } : {}),
         ...(requestedProviderId ? { provider_id: providerId } : {}),
         ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
       };
@@ -1694,6 +1700,7 @@ export async function handleSelfHostedRequest(
           text: payload.text, html: payload.html, attachments,
           ...(requestedProviderId ? { provider_id: providerId } : {}),
           ...(unsubscribeUrl ? { unsubscribe_url: unsubscribeUrl } : {}),
+          ...metadata,
           allow_suppressed_recipients: body.allow_suppressed_recipients === true,
         };
         try {
@@ -1742,6 +1749,8 @@ export async function handleSelfHostedRequest(
           subject,
           body_text: payload.text,
           body_html: payload.html,
+          headers: sendHeaders,
+          tags: metadata.tags,
           attachments: attachments.map(({ filename, content_type, content }) => ({
             filename,
             content_type,
@@ -1929,7 +1938,8 @@ export async function handleSelfHostedRequest(
         messageId = await sender.send({
           provider_id: providerId,
           unsubscribe_url: unsubscribeUrl,
-          headers: trustedSendHeaders,
+          headers: sendHeaders,
+          tags: metadata.tags,
           from: fromForProvider,
           to,
           cc: cc.length ? cc : undefined,

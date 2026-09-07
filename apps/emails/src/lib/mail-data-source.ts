@@ -147,6 +147,8 @@ export interface MailSendAttachment {
 }
 
 export interface MailSendInput {
+  headers?: Record<string, string>;
+  tags?: Record<string, string>;
   from?: string;
   /** Comma-separated recipient list. */
   to: string;
@@ -558,6 +560,7 @@ export class SqliteMailDataSource implements MailDataSource {
 
   async send(input: MailSendInput): Promise<MailSendResult> {
     if (input.sendKey !== undefined) throw new Error("Scoped send keys require the authenticated Emails API");
+    if (input.headers !== undefined || input.tags !== undefined) throw new Error("Custom send headers and tags require the authenticated Emails API");
     if (input.trackOpens || input.trackClicks || input.trackingUrl !== undefined) throw new Error("Tracking is provided by the Emails API; configure API credentials before sending.");
     if (input.scheduledAt) {
       throw new Error("Scheduled sends must use the local schedule command; immediate mail-data-source send does not enqueue jobs.");

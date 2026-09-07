@@ -1005,4 +1005,47 @@ describe.skipIf(!pgClient)("first-party tracking API",()=>{
   await pgClient!.execute("UPDATE scheduled_emails SET scheduled_at=now()-interval '1 minute' WHERE tenant_id=$1 AND id=$2",[owner.tenantId,enqueued.body.scheduled.id]);
   const run=await call(deps,"POST","/v1/scheduled/run",{token:owner.token,body:{limit:5}});expect(run.status).toBe(200);expect(captured).toHaveLength(1);expect(captured[0].html).toContain("/v1/tracking/");
  });
+ it("validates metadata before provider I/O and preserves hashed headers/tags in tenant readback", async () => {
+  const owner = await makeTenant("send-metadata"), other = await makeTenant("send-metadata-other");
+  const captured: any[] = [];
+  const deps = makeDeps({ provider: "ses", send: async input => { captured.push(input); return "metadata-receipt"; } });
+  await registerSender(deps, owner.token, "metadata.example", "sender@metadata.example");
+  const input = { from: "sender@metadata.example", to: ["reader@example.com"], subject: "Metadata", text: "hello", idempotency_key: "metadata-send", headers: { "X-Campaign": "spring" }, tags: { campaign: "spring" }, unsubscribe_url: "https://metadata.example/unsubscribe" };
+  for (const headers of [{ From: "spoof@example.com" }, { "X-Hasna-Inbound-Id": "forged" }, { "X-SES-CONFIGURATION-SET": "forged" }, { "X-Campaign": "ok\r\nBcc: hidden@example.com" }]) {
+    expect((await call(deps, "POST", "/v1/messages/send", { token: owner.token, body: { ...input, headers } })).status).toBe(400);
+  }
+  expect(captured).toHaveLength(0);
+  const sent = await call(deps, "POST", "/v1/messages/send", { token: owner.token, body: input });
+  expect(sent.status).toBe(202); expect(sent.body.sent).toBe(true); expect(captured).toHaveLength(1);
+  expect(captured[0]).toMatchObject({ headers: { "x-campaign": "spring" }, tags: { campaign: "spring" }, unsubscribe_url: input.unsubscribe_url });
+  expect(sent.body.message).toMatchObject({ headers: { "x-campaign": "spring" }, tags: { campaign: "spring" } });
+  const id = sent.body.message.id;
+  expect((await call(deps, "GET", `/v1/messages/${id}`, { token: owner.token })).body.message.tags).toEqual({ campaign: "spring" });
+  expect((await call(deps, "GET", `/v1/messages/${id}`, { token: other.token })).status).toBe(404);
+  const replay = await call(deps, "POST", "/v1/messages/send", { token: owner.token, body: { ...input, headers: { "x-campaign": "spring" } } });
+  expect(replay.body.idempotent_replay).toBe(true); expect(captured).toHaveLength(1);
+  for (const delta of [{ tags: { campaign: "winter" } }, { headers: { "X-Campaign": "winter" } }]) {
+    expect((await call(deps, "POST", "/v1/messages/send", { token: owner.token, body: { ...input, ...delta } })).status).toBe(409);
+  }
+  expect(captured).toHaveLength(1);
+ });
+ it("preserves metadata with tracking through scheduled enqueue and shared worker dispatch", async () => {
+  const { randomBytes } = await import("node:crypto");
+  const owner = await makeTenant("metadata-scheduled"), captured: any[] = [];
+  const deps = makeDeps({ provider: "ses", send: async input => { captured.push(input); return "metadata-scheduled-receipt"; } });
+  deps.tracking = { activeKey: "current", keys: { current: randomBytes(32) }, tenants: { [owner.tenantId]: ["https://tracking.example"] }, ttlSeconds: 3600 };
+  await registerSender(deps, owner.token, "metadata-scheduled.example", "sender@metadata-scheduled.example");
+  const body = { from: "sender@metadata-scheduled.example", to: ["reader@example.com"], subject: "Scheduled metadata", text: "hello", html: "<p>hello</p>", headers: { "X-Campaign": "scheduled" }, tags: { campaign: "scheduled" }, track_opens: true, tracking_url: "https://tracking.example", idempotency_key: "metadata-scheduled", scheduled_at: new Date(Date.now()+60000).toISOString() };
+  const queued = await call(deps, "POST", "/v1/scheduled/enqueue", { token: owner.token, body });
+  expect(queued.status).toBe(201); expect(captured).toHaveLength(0);
+  expect((await call(deps, "POST", "/v1/scheduled/enqueue", { token: owner.token, body: { ...body, tags: { campaign: "changed" } } })).status).toBe(409);
+  await pgClient!.execute("UPDATE scheduled_emails SET scheduled_at=now()-interval '1 minute' WHERE tenant_id=$1 AND id=$2", [owner.tenantId, queued.body.scheduled.id]);
+  const ran = await call(deps, "POST", "/v1/scheduled/run", { token: owner.token, body: { limit: 5 } });
+  expect(ran.status).toBe(200); expect(captured).toHaveLength(1);
+  expect(captured[0]).toMatchObject({ headers: { "x-campaign": "scheduled" }, tags: { campaign: "scheduled" } });
+  expect(captured[0].html).toContain("/v1/tracking/");
+  const recorded = await pgClient!.get<{ tags: unknown }>("SELECT tags FROM messages WHERE tenant_id=$1 AND provider_message_id='metadata-scheduled-receipt'", [owner.tenantId]);
+  expect(recorded?.tags).toEqual({ campaign: "scheduled" });
+ });
+
 });

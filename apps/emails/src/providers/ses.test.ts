@@ -987,6 +987,18 @@ describe("SESAdapter.sendEmail", () => {
     expect(id).toBe("");
   });
 
+  it("preserves tags on raw MIME sends with custom and unsubscribe headers", async () => {
+    const adapter = new SESAdapter(makeProvider());
+    await adapter.sendEmail({ from: "sender@example.com", to: "recipient@example.com", subject: "Test", text: "Body",
+      headers: { "X-Campaign": "spring" }, unsubscribe_url: "https://example.com/unsubscribe", tags: { campaign: "spring" } });
+    const input = mockSend.mock.calls[0]![0].input as { EmailTags: Array<{ Name: string; Value: string }>; Content: { Raw: { Data: Uint8Array } } };
+    expect(input.EmailTags).toEqual([{ Name: "campaign", Value: "spring" }]);
+    const mime = Buffer.from(input.Content.Raw.Data).toString();
+    expect(mime).toContain("X-Campaign: spring");
+    expect(mime).toContain("List-Unsubscribe: <https://example.com/unsubscribe>");
+    expect(mime).toContain("List-Unsubscribe-Post: List-Unsubscribe=One-Click");
+  });
+
   it("includes email tags", async () => {
     const adapter = new SESAdapter(makeProvider());
     await adapter.sendEmail({

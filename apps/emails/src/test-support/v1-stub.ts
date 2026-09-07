@@ -1335,6 +1335,8 @@ const server = Bun.serve({
         body_html: typeof body.html === "string" ? body.html : null,
         status: "sent",
         provider_id: body.provider_id ?? null,
+        headers: body.headers ?? {},
+        tags: body.tags ?? null,
         provider_message_id: providerMessageId,
         message_id: "stub-" + (rowsFor("messages").length + 1),
         is_read: true,

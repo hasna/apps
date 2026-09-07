@@ -104,8 +104,8 @@ describe("PostgreSQL evidence must be complete", () => {
     expect(LIVE_POSTGRES_SUITES).toContain(suite);
     expect(Object.keys(MINIMUM_PASS_COUNTS)).toEqual(LIVE_POSTGRES_SUITES);
     expect(MINIMUM_PASS_COUNTS["multi-tenancy.integration.test.ts"]).toBe(34);
-    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0)).toBe(259);
-    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0) + Object.keys(OPTIONAL_SKIPS).length).toBe(261);
+    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0)).toBe(261);
+    expect(Object.values(MINIMUM_PASS_COUNTS).reduce((a, b) => a + b, 0) + Object.keys(OPTIONAL_SKIPS).length).toBe(263);
   });
 
   test("accepts complete non-skipped successful evidence", () => {

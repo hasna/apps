@@ -381,6 +381,7 @@ export class SESAdapter implements ProviderAdapter {
           Content: {
             Raw: { Data: Buffer.from(rawMessage) },
           },
+          EmailTags: opts.tags ? Object.entries(opts.tags).map(([Name, Value]) => ({ Name, Value })) : undefined,
           ...(this.configurationSetName ? { ConfigurationSetName: this.configurationSetName } : {}),
         }),
         ...(signal ? [{ abortSignal: signal }] : []),

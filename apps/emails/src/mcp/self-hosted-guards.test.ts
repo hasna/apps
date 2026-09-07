@@ -87,7 +87,7 @@ describe("MCP self_hosted guards", () => {
     expect(await stub.list("messages")).toHaveLength(0);
   });
 
-  it("refuses the send options this build cannot carry instead of ignoring them", async () => {
+  it("refuses metadata sends when API capability cannot be verified", async () => {
     // Accepted schema fields must either cross the API intact or refuse explicitly.
     const cases: Array<[string, unknown]> = [
       ["headers", { "X-Thing": "1" }],
@@ -104,10 +104,8 @@ describe("MCP self_hosted guards", () => {
       });
       expect(result.isError, `${option} must be refused`).toBe(true);
       const text = resultText(result);
-      expect(text).toContain("option_not_carried");
-      expect(text).toContain(option);
-      // A refusal must not teach the caller how to defeat it. No setting, no
-      // variable, no "run it the other way" — only the option to remove.
+      expect(text).toMatch(/openapi|API needs an update/);
+      // A missing capability document must not cause a fallback to client adapters.
       expect(text).not.toMatch(/[A-Z][A-Z0-9]*_[A-Z0-9_]*=/);
       // ...and nothing may have been sent on the way to the refusal.
       expect(await stub.list("messages"), `${option} must not send`).toHaveLength(0);

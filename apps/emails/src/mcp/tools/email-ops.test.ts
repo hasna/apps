@@ -76,36 +76,15 @@ describe("collapsed email-ops tool family", () => {
     expect(FAMILY_TOOLS.length).toBe(17);
   });
 
-  it("refuses each send option the one send path cannot carry, instead of ignoring it", async () => {
-    // Accepted schema fields must either cross the API intact or refuse explicitly.
-    const cases: Array<[string, unknown]> = [
-      ["headers", { "X-Custom": "1" }],
-      ["tags", { campaign: "spring" }],
-    ];
-
-    for (const [option, value] of cases) {
-      const result = await call("send_email", {
-        from: "agent@example.test",
-        to: "recipient@example.test",
-        subject: "uncarried",
-        text: "hi",
-        provider_id: providerId,
-        [option]: value,
-      });
-
-      expect(result.isError, `${option} must be refused`).toBe(true);
-      const message = text(result);
-      // Machine-readable: the caller can branch on the code without matching prose.
-      expect(message).toContain("option_not_carried");
-      expect(message).toContain("status=422");
-      // Actionable: it names the option at fault.
-      expect(message).toContain(option);
-      // A refusal must never teach its own circumvention. No setting, no
-      // variable assignment, no "run it the other way".
-      expect(message).not.toMatch(/[A-Z][A-Z0-9]*_[A-Z0-9_]*=/);
-      // And it must be a REFUSAL, not a quiet success: nothing was sent.
-      expect(await stub.list("messages"), `${option} must not send`).toHaveLength(0);
-    }
+  it("carries safe headers and tags through the API and records them for readback", async () => {
+    const sent = await call("send_email", { from: "agent@example.test", to: "recipient@example.test", subject: "metadata", text: "hi", headers: { "X-Campaign": "spring" }, tags: { campaign: "spring" } });
+    expect(sent.isError, text(sent)).not.toBe(true);
+    expect(await stub.sendRequests()).toMatchObject([{ headers: { "x-campaign": "spring" }, tags: { campaign: "spring" } }]);
+    const id = JSON.parse(text(sent)).email_id;
+    expect(JSON.parse(text(await call("get_email", { email_id: id })))).toMatchObject({ tags: { campaign: "spring" } });
+    const rejected = await call("send_email", { from: "agent@example.test", to: "recipient@example.test", subject: "bad", text: "hi", headers: { "X-Hasna-Inbound-Id": "forged" } });
+    expect(rejected.isError).toBe(true);
+    expect(await stub.sendRequests()).toHaveLength(1);
   });
 
   it("carries scoped delegation separately from the account credential", async () => {

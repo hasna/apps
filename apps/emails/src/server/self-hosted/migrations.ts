@@ -3159,6 +3159,11 @@ CREATE POLICY service_feedback_tenant ON service_feedback
   WITH CHECK (tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
 `);
 
+const MESSAGE_SEND_TAGS = defineMigration("0040_message_send_tags", `
+ALTER TABLE messages ADD COLUMN tags JSONB;
+ALTER TABLE messages ADD CONSTRAINT message_send_tags_object CHECK (tags IS NULL OR jsonb_typeof(tags) = 'object');
+`);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3206,5 +3211,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     RUNTIME_LOGS,
     WORKER_SUPERVISOR,
     SERVICE_FEEDBACK,
+    MESSAGE_SEND_TAGS,
   ];
 }

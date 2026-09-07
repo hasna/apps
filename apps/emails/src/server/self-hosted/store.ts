@@ -228,6 +228,7 @@ export interface MessageRecord {
   body_html: string | null;
   status: string;
   provider_id?: string | null;
+  tags?: Record<string, string> | null;
   provider_message_id: string | null;
   message_id: string | null;
   in_reply_to: string | null;
@@ -543,6 +544,7 @@ export interface MessageInput {
   body_html?: string | null;
   status?: string;
   provider_id?: string | null;
+  tags?: Record<string, string> | null;
   provider_message_id?: string | null;
   direction?: string;
   message_id?: string | null;
@@ -579,7 +581,7 @@ export interface WebhookDeliveryEventInput {
 /** Columns selected for a message row (explicit so new columns are intentional). */
 const MESSAGE_COLUMNS =
   "id, direction, from_addr, to_addrs, cc_addrs, subject, body_text, body_html, status, " +
-  "provider_id, provider_message_id, message_id, in_reply_to, received_at, is_read, is_starred, labels, " +
+  "provider_id, tags, provider_message_id, message_id, in_reply_to, received_at, is_read, is_starred, labels, " +
   "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at, " +
   "created_at, updated_at";
 
@@ -593,7 +595,7 @@ const MESSAGE_SNIPPET_CHARS = 140;
 // they were ~73% of a 459KB page payload; the detail read keeps them.
 const MESSAGE_LIST_COLUMNS =
   "m.id, m.direction, m.from_addr, m.to_addrs, m.cc_addrs, m.subject, m.status, " +
-  "m.provider_id, m.provider_message_id, m.message_id, m.in_reply_to, m.received_at, m.is_read, m.is_starred, m.labels, " +
+  "m.provider_id, m.tags, m.provider_message_id, m.message_id, m.in_reply_to, m.received_at, m.is_read, m.is_starred, m.labels, " +
   "m.source_id, m.send_state, m.send_started_at, m.created_at, m.updated_at, " +
   `NULLIF(left(regexp_replace(COALESCE(m.body_text, ''), '\\s+', ' ', 'g'), ${MESSAGE_SNIPPET_CHARS}), '') AS snippet, ` +
   "CASE WHEN jsonb_typeof(m.attachments) = 'array' THEN jsonb_array_length(m.attachments) ELSE 0 END AS attachment_count, " +
@@ -1496,17 +1498,17 @@ async function reconcileAttachmentRepairRun(
 // Extracted from the store classes so the unscoped base and the TenantScopedStore
 // share ONE implementation of encoding/SQL-shaping (no duplication drift).
 
-/** 24-column message insert list (tenant_id is appended by the scoped variant). */
+/** 25-column message insert list (tenant_id is appended by the scoped variant). */
 const MESSAGE_INSERT_COLS =
   "id, direction, from_addr, to_addrs, cc_addrs, subject, body_text, body_html, status, " +
   "provider_message_id, message_id, in_reply_to, received_at, is_read, is_starred, labels, " +
-  "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at, provider_id";
+  "headers, attachments, source_id, idempotency_key, send_payload_hash, send_state, send_started_at, provider_id, tags";
 
 const MESSAGE_INSERT_VALUES =
   "$1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, " +
-  "$16::jsonb, $17::jsonb, $18::jsonb, $19, $20, $21, $22, $23, $24";
+  "$16::jsonb, $17::jsonb, $18::jsonb, $19, $20, $21, $22, $23, $24, $25::jsonb";
 
-/** Positional insert params (24) shared by createMessage/upsertMessage/reserveSendIntent. */
+/** Positional insert params (25) shared by createMessage/upsertMessage/reserveSendIntent. */
 function messageInsertParams(input: MessageInput): unknown[] {
   return [
     randomUUID(),
@@ -1533,6 +1535,7 @@ function messageInsertParams(input: MessageInput): unknown[] {
     input.send_state ?? "none",
     input.send_started_at ?? null,
     input.provider_id?.trim() || null,
+    input.tags == null ? null : JSON.stringify(input.tags),
   ];
 }
 
@@ -2532,7 +2535,7 @@ export class TenantScopedStore {
       if (receipt?.resource_id) return { id: receipt.resource_id, receiptRecorded: true as const };
       await this.lockInboundPersistenceFence(tx, { recipients: input.to_addrs, providerId: input.provider_id!, providerType: "resend" });
       const params = messageInsertParams(input);
-      const inserted = await tx.get<{ id: string }>(`INSERT INTO messages(${MESSAGE_INSERT_COLS},tenant_id) VALUES(${MESSAGE_INSERT_VALUES},$25) ON CONFLICT(tenant_id,source_id) WHERE source_id IS NOT NULL DO NOTHING RETURNING id`, [...params, this.tenantId]);
+      const inserted = await tx.get<{ id: string }>(`INSERT INTO messages(${MESSAGE_INSERT_COLS},tenant_id) VALUES(${MESSAGE_INSERT_VALUES},$26) ON CONFLICT(tenant_id,source_id) WHERE source_id IS NOT NULL DO NOTHING RETURNING id`, [...params, this.tenantId]);
       const message = inserted ?? await tx.one<{ id: string }>(`SELECT id FROM messages WHERE tenant_id=$1 AND source_id=$2 AND provider_id=$3`, [this.tenantId, input.source_id, input.provider_id]);
       await tx.execute(`INSERT INTO webhook_receipts(id,tenant_id,provider,event_id,resource_id) VALUES($1,$2,$3,$4,$5)`, [randomUUID(), this.tenantId, provider, eventId, message.id]);
       return { id: message.id, receiptRecorded: true as const };
@@ -4649,7 +4652,7 @@ export class TenantScopedStore {
         [this.tenantId, transactionId, payloadHash, params[0]],
       );
       if (inserted) {
-        await tx.execute(`INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id) VALUES (${MESSAGE_INSERT_VALUES}, $25)`, [...params, this.tenantId]);
+        await tx.execute(`INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id) VALUES (${MESSAGE_INSERT_VALUES}, $26)`, [...params, this.tenantId]);
         return { stored: true as const, id: inserted.message_id, duplicate: false };
       }
       const existing = await tx.get<{ message_id: string; payload_hash: string }>(
@@ -4663,7 +4666,7 @@ export class TenantScopedStore {
   async createMessage(input: MessageInput): Promise<MessageRecord> {
     const row = await this.client.one<Record<string, unknown>>(
       `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-       VALUES (${MESSAGE_INSERT_VALUES}, $25)
+       VALUES (${MESSAGE_INSERT_VALUES}, $26)
        RETURNING ${MESSAGE_COLUMNS}`,
       [...messageInsertParams(input), this.tenantId],
     );
@@ -4699,7 +4702,7 @@ export class TenantScopedStore {
       if (fence) await this.lockInboundPersistenceFence(tx, fence);
       const insertedRow = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-         VALUES (${MESSAGE_INSERT_VALUES}, $25)
+         VALUES (${MESSAGE_INSERT_VALUES}, $26)
          ON CONFLICT (tenant_id, source_id) WHERE source_id IS NOT NULL DO NOTHING
          RETURNING ${MESSAGE_COLUMNS}`,
         [...messageInsertParams(input), this.tenantId],
@@ -5018,7 +5021,7 @@ export class TenantScopedStore {
       }
       const inserted = await client.get<Record<string, unknown>>(
         `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-         VALUES (${MESSAGE_INSERT_VALUES}, $25)
+         VALUES (${MESSAGE_INSERT_VALUES}, $26)
          ON CONFLICT (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
          RETURNING ${MESSAGE_COLUMNS}`,
         [...messageInsertParams({ ...input, direction: "outbound", status: "queued", send_state: "pending" }), this.tenantId],
@@ -5268,7 +5271,7 @@ export class TenantScopedStore {
     }
     const row = await this.client.one<Record<string, unknown>>(
       `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
-       VALUES (${MESSAGE_INSERT_VALUES}, $25)
+       VALUES (${MESSAGE_INSERT_VALUES}, $26)
        ON CONFLICT (tenant_id, source_id) WHERE source_id IS NOT NULL DO UPDATE SET
          ${messageUpsertAssignments(input)}
        RETURNING ${MESSAGE_COLUMNS}, (xmax = 0) AS inserted`,
@@ -5585,7 +5588,7 @@ export class TenantScopedStore {
     const params = [randomUUID(), this.tenantId, input.key, input.hash, input.scheduledAt,
       p.provider_id ?? null, p.from, JSON.stringify(p.to), JSON.stringify(p.cc ?? []), JSON.stringify(p.bcc ?? []),
       p.reply_to ?? null, p.subject, p.text ?? null, p.html ?? null, JSON.stringify(p.attachments ?? []),
-      JSON.stringify({ track_opens: p.track_opens, track_clicks: p.track_clicks, tracking_url: p.tracking_url, unsubscribe_url: p.unsubscribe_url, allow_suppressed_recipients: p.allow_suppressed_recipients === true })];
+      JSON.stringify({ headers: p.headers, tags: p.tags, track_opens: p.track_opens, track_clicks: p.track_clicks, tracking_url: p.tracking_url, unsubscribe_url: p.unsubscribe_url, allow_suppressed_recipients: p.allow_suppressed_recipients === true })];
     const row = await this.client.get<Record<string, unknown>>(
       `INSERT INTO scheduled_emails(id,tenant_id,enqueue_key,enqueue_hash,scheduled_at,provider_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,text_body,html,attachments_json,send_options,status)
        SELECT $1,$2,$3,$4,$5::timestamptz,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15::jsonb,$16::jsonb,'pending' WHERE $5::timestamptz > now()

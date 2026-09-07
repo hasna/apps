@@ -2028,7 +2028,7 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(calls).toBe(0);
   });
 
-  for (const options of [{ sendKey: crypto.randomUUID() }, { providerId: "some-provider-id" }, { unsubscribeUrl: "https://example.com/unsubscribe" }, {trackOpens:true}, {trackClicks:true,trackingUrl:"https://track.example"}]) {
+  for (const options of [{ headers: { "X-Campaign": "spring" } }, { tags: { campaign: "spring" } }, { sendKey: crypto.randomUUID() }, { providerId: "some-provider-id" }, { unsubscribeUrl: "https://example.com/unsubscribe" }, {trackOpens:true}, {trackClicks:true,trackingUrl:"https://track.example"}]) {
     it(`refuses unsupported ${Object.keys(options)[0]} on an older server without sending`, async () => {
       const paths: string[] = [];
       const serve: SelfHostedFetch = async (url) => {
@@ -3618,7 +3618,7 @@ it("scheduled sends use enqueue and preserve payload without claiming delivery",
   const body=JSON.parse(String(init?.body));calls.push({path,body});
   return new Response(JSON.stringify({enqueued:true,idempotent_replay:false,scheduled:{id:"job-fixture",status:"pending",scheduled_at:body.scheduled_at}}),{status:201,headers:{"content-type":"application/json"}});
  }});
- const result=await ds.send({from:"sender@example.com",to:"a@example.com",subject:"Fixture",body:"Body",trackOpens:true,trackClicks:true,trackingUrl:"https://track.example",scheduledAt:"2030-01-01T00:00:00Z",idempotencyKey:"stable-fixture",providerId:"provider-fixture",cc:"copy@example.com",bcc:"blind@example.com",replyTo:"reply@example.com",unsubscribeUrl:"https://example.com/unsubscribe",allowSuppressedRecipients:true,attachments:[{filename:"a.txt",content:"YQ==",content_type:"text/plain"}]});
+ const result=await ds.send({from:"sender@example.com",to:"a@example.com",subject:"Fixture",body:"Body",trackOpens:true,trackClicks:true,trackingUrl:"https://track.example",scheduledAt:"2030-01-01T00:00:00Z",idempotencyKey:"stable-fixture",headers:{"X-Campaign":"spring"},tags:{campaign:"spring"},providerId:"provider-fixture",cc:"copy@example.com",bcc:"blind@example.com",replyTo:"reply@example.com",unsubscribeUrl:"https://example.com/unsubscribe",allowSuppressedRecipients:true,attachments:[{filename:"a.txt",content:"YQ==",content_type:"text/plain"}]});
  expect(result.messageId).toBe("");expect(result.scheduled?.id).toBe("job-fixture");expect(calls).toHaveLength(1);
- expect(calls[0]).toMatchObject({path:"/v1/scheduled/enqueue",body:{track_opens:true,track_clicks:true,tracking_url:"https://track.example",scheduled_at:"2030-01-01T00:00:00.000Z",idempotency_key:"stable-fixture",provider_id:"provider-fixture",cc:["copy@example.com"],bcc:["blind@example.com"],reply_to:"reply@example.com",unsubscribe_url:"https://example.com/unsubscribe",allow_suppressed_recipients:true,attachments:[{filename:"a.txt",content:"YQ==",content_type:"text/plain"}]}});
+ expect(calls[0]).toMatchObject({path:"/v1/scheduled/enqueue",body:{headers:{"x-campaign":"spring"},tags:{campaign:"spring"},track_opens:true,track_clicks:true,tracking_url:"https://track.example",scheduled_at:"2030-01-01T00:00:00.000Z",idempotency_key:"stable-fixture",provider_id:"provider-fixture",cc:["copy@example.com"],bcc:["blind@example.com"],reply_to:"reply@example.com",unsubscribe_url:"https://example.com/unsubscribe",allow_suppressed_recipients:true,attachments:[{filename:"a.txt",content:"YQ==",content_type:"text/plain"}]}});
 });
