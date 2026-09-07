@@ -1,3 +1,6 @@
+import { workspaceContext, parseAccountWorkspaces, parseWorkspaceIdentity, parseWorkspaceSession,
+  workspaceSelectionFailure, workspaceSelectionFailures, invalidWorkspaceResult, WorkspaceIdentityMismatchError,
+  workspaceExpectedUserId, type RemoteWorkspaceIdentity, type RemoteWorkspaceContext, type RemoteAccountWorkspaces, type RemoteWorkspaceSession, type RemoteWorkspaceSelectionErrorCode } from "./remote-workspace-selection.js";
 import { parseWorkspaceMembersPage, workspaceMembersQuery, type RemoteWorkspaceMembersOptions, type RemoteWorkspaceMembersPage } from "./remote-workspace.js";
 import { workspaceMemberRoleInput, workspaceMemberRemovalInput, parseWorkspaceMemberRoleResult, parseWorkspaceMemberRemovalResult,
   workspaceMemberFailure, workspaceMemberFailures, invalidMemberResult, type RemoteWorkspaceMemberErrorCode,
@@ -50,6 +53,15 @@ export class RemoteWorkspaceMemberError extends RemoteRequestError {
     super(path, workspaceMemberFailures[code][0]);
     this.name = "RemoteWorkspaceMemberError";
     this.message = workspaceMemberFailures[code][1];
+  }
+}
+
+/** Fixed text for recognized workspace refusals; no reflected server error payload. */
+export class RemoteWorkspaceSelectionError extends RemoteRequestError {
+  constructor(path: string, readonly code: RemoteWorkspaceSelectionErrorCode) {
+    super(path, workspaceSelectionFailures[code][0]);
+    this.name = "RemoteWorkspaceSelectionError";
+    this.message = workspaceSelectionFailures[code][1];
   }
 }
 
@@ -118,6 +130,7 @@ export class RemoteSkillsClient {
     return fetch(`${this.apiUrl}${path}`, {
       ...options,
       redirect: "error",
+      credentials: "omit", // Explicit bearer transport never borrows browser cookie authority.
       signal: options?.signal ?? AbortSignal.timeout(15_000),
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
@@ -258,6 +271,58 @@ export class RemoteSkillsClient {
 
   async getIdentity(): Promise<Record<string, unknown>> {
     return (await this.requestNewRoute("/api/auth/whoami")).json();
+  }
+  /** List memberships with the current interactive session; never writes credentials. */
+  async listAccountWorkspaces(expectedUserId?: string): Promise<RemoteAccountWorkspaces> {
+    const expected = expectedUserId === undefined ? undefined : workspaceExpectedUserId(expectedUserId);
+    const connection = new RemoteSkillsClient(this.apiKey, this.apiUrl);
+    let identity: RemoteWorkspaceIdentity | undefined;
+    if (expected !== undefined) {
+      const value = await connection.requestWorkspaceSelection("/api/auth/whoami");
+      if (!value || typeof value !== "object" || (value as Record<string, unknown>).authMethod !== "jwt")
+        throw new RemoteWorkspaceSelectionError("/api/v1/account/workspaces", "INTERACTIVE_SESSION_REQUIRED");
+      identity = parseWorkspaceIdentity(value, expected);
+    }
+    const result = parseAccountWorkspaces(await connection.requestWorkspaceSelection("/api/v1/account/workspaces"));
+    const current = result.workspaces.find(workspace => workspace.current)!;
+    if (identity && (current.membershipId !== identity.user.membershipId || current.organization.id !== identity.organization.id))
+      throw new WorkspaceIdentityMismatchError();
+    return result;
+  }
+  /** Return a new ephemeral session; this client and any saved key/profile stay unchanged. */
+  async switchWorkspace(context: RemoteWorkspaceContext): Promise<RemoteWorkspaceSession> {
+    const target = workspaceContext(context);
+    const connection = new RemoteSkillsClient(this.apiKey, this.apiUrl);
+    const value = await connection.requestWorkspaceSelection("/api/auth/whoami");
+    if (!value || typeof value !== "object" || (value as Record<string, unknown>).authMethod !== "jwt")
+      throw new RemoteWorkspaceSelectionError("/api/v1/account/workspaces/switch", "INTERACTIVE_SESSION_REQUIRED");
+    parseWorkspaceIdentity(value, target.userId);
+    const selected = parseWorkspaceSession(await connection.requestWorkspaceSelection("/api/v1/account/workspaces/switch", {
+      method: "POST", body: JSON.stringify({ membershipId: target.membershipId }),
+    }), target);
+    // Validate the returned token against the server, not merely its adjacent JSON metadata.
+    const verified = await new RemoteSkillsClient(selected.token, connection.apiUrl).requestWorkspaceSelection("/api/auth/whoami");
+    if (!verified || typeof verified !== "object" || (verified as Record<string, unknown>).authMethod !== "jwt")
+      throw new RemoteWorkspaceSelectionError("/api/v1/account/workspaces/switch", "INTERACTIVE_SESSION_REQUIRED");
+    const identity = parseWorkspaceIdentity(verified, target.userId);
+    if (identity.user.membershipId !== target.membershipId || identity.organization.id !== selected.organization.id)
+      throw new WorkspaceIdentityMismatchError();
+    return { token: selected.token, ...identity };
+  }
+  private async requestWorkspaceSelection(path: string, options?: RequestInit): Promise<unknown> {
+    let response: Response;
+    try { response = await this.request(path, { ...options, credentials: "omit" }); }
+    catch { throw new Error("Unable to reach the Skills workspace API."); }
+    let value: unknown;
+    try { value = JSON.parse(new TextDecoder().decode(await readBoundedResponse(response, response.ok ? 1024 * 1024 : 4096))); }
+    catch { if (response.ok) throw new Error(invalidWorkspaceResult); }
+    if (!response.ok) {
+      const code = workspaceSelectionFailure(value, response.status);
+      if (code) throw new RemoteWorkspaceSelectionError(path, code);
+      if (response.status === 404 || response.status === 405) throw new RemoteRouteUnsupportedError(path, response.status, this.apiUrl);
+      throw new RemoteRequestError(path, response.status);
+    }
+    return value;
   }
   /** Requires a customer session; API keys and support impersonation cannot edit names. */
   async updateProfile(input: UpdateRemoteProfile) {

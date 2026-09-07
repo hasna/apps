@@ -889,3 +889,47 @@ The client never refreshes, changes the precondition, or retries automatically.
 Known refusals expose a fixed message and code through `RemoteWorkspaceMemberError`;
 unsupported routes remain errors. Invitations, workspace switching and leaving
 your own workspace are separate capabilities.
+
+### Workspace profiles
+
+Discover the workspaces available to your account using a fresh verification code:
+
+```sh
+skills workspace list --email you@example.com --code-stdin --json
+```
+
+Pipe the six-digit code to stdin. Interactive terminal requests can omit
+`--code-stdin` to request and enter a masked code. Discovery saves no credential.
+The current marker identifies the workspace initially chosen by sign-in; it does
+not change your account's default workspace.
+
+To enroll a workspace, choose its exact membership ID from that list and name
+the destination credential profile explicitly:
+
+```sh
+HASNA_PROFILE=team-b skills auth login --membership-id <membership-id> --email you@example.com --code-stdin --json
+HASNA_PROFILE=team-b skills auth whoami --json
+```
+
+This fresh sign-in creates one ordinary CLI API key in that workspace, verifies
+its identity, and saves it only in the named profile. Existing keys and other
+profiles stay bound to their original workspaces. Viewer memberships cannot
+create keys. Session JWTs are never saved. Remove injected API-key overrides
+before enrolling a profile so that later commands use the saved credential.
+A profile belonging to a different account requires a different profile name
+or an ordinary replacement login. New accounts must finish ordinary account
+login before workspace enrollment; the server's existing signup policy applies.
+
+Named-profile account/workspace name updates, roster/member actions, and API-key
+management retain that profile's live workspace identity through fresh OTP
+verification. A revoked key, unavailable membership, or inconsistent profile
+metadata refuses the operation; it does not fall back to the default workspace.
+The CLI cannot change your parent shell: keep `HASNA_PROFILE=team-b` on subsequent
+commands or configure it explicitly in that shell. Existing MCP fresh-auth
+account, member and key tools retain the same named profile authority for each
+invocation. Changing an MCP host’s selected profile
+through a tool remains a separate follow-up.
+
+If enrollment reports that key issuance was attempted but not confirmed, inspect
+the selected profile and workspace keys before retrying. A lost response can
+still have created a server key; the CLI does not retry issuance automatically.
