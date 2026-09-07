@@ -50,6 +50,15 @@ describe("tenant-bound inbox ingestion", () => {
     const report = await f.run("sync-s3", { cursor: "page-start" });
     expect(report.sources[0]).toMatchObject({ ingested: 1, error: 1, next_cursor: "page-start", complete: false });
   });
+  it("retains a resumed page cursor when listing fails before returning any keys", async () => {
+    const f = fixture();
+    f.cloud.list = async () => { throw new Error("temporary listing failure"); };
+    const report = await f.run("sync-s3", { cursor: "resume-page" });
+    expect(report.ok).toBe(false);
+    expect(report.sources[0]).toMatchObject({ scanned: 0, error: 1, next_cursor: "resume-page", complete: false, retry_from_start: false });
+    expect(f.writes).toEqual([]);
+    expect(f.updates()).toBe(0);
+  });
   it("rejects mixed-tenant SES envelopes before fetching or storing MIME", async () => {
     const f = fixture(); f.cloud.receive = async () => [{ receipt: "receipt", body: JSON.stringify({ notificationType: "Received", mail: { messageId: "one" }, receipt: { recipients: ["ok@example.com", "foreign@other.test"], action: { type: "S3", bucketName: binding.bucket, objectKey: binding.prefix + "one" } } }) }];
     const report = await f.run("watch"); expect(report.ok).toBe(false); expect(f.fetched).toEqual([]); expect(f.writes).toEqual([]); expect(f.acknowledgements).toEqual([]);

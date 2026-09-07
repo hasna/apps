@@ -92,7 +92,7 @@ export async function executeIngestBatch(store: EmailsSelfHostedStore, scoped: T
       forTenant: id => { if (id !== tenantId) throw new Error("Tenant scope mismatch"); return scoped; },
     };
     const deps: IngestDeps = { store: restricted, fetchObject: async (bucket, key) => { if (bucket !== binding.bucket || !key.startsWith(prefix)) throw new Error("Object is outside binding"); return cloud.fetch(key); }, now: () => new Date().toISOString(), prefixDomainMappings: [{ prefix: binding.prefix, domain: binding.domain }], providerId: binding.provider_id };
-    let cursor: string | null = null;
+    let cursor: string | null = operation === "sync-s3" ? input.cursor ?? null : null;
     let queue: { visible: number | null; in_flight: number | null } | null = null;
     async function ingest(note: InboundNotification) {
       if (!note.objectKey?.startsWith(prefix) || (note.bucket !== undefined && note.bucket !== binding.bucket) || (note.recipients !== undefined && (!Array.isArray(note.recipients) || note.recipients.some(value => typeof value !== "string")))) { counts.error++; return false; }
