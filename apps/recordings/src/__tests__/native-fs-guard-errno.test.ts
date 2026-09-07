@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { confinedShellCommand } from "./helpers/confined-shell-fixture";
 
 const packageRoot = resolve(import.meta.dir, "../..");
 
-function fixtureCommand(root: string, command: string[], tools: string[] = []): string[] {
+function fixtureCommand(root: string, command: string[], tools: string[] = [], toolchainReads: string[] = []): string[] {
   const confined = confinedShellCommand(root, command, tools);
   if (process.platform === "darwin") {
     // The release runner deliberately changes HOME. Keep the real host paths
@@ -16,6 +16,9 @@ function fixtureCommand(root: string, command: string[], tools: string[] = []): 
   (regex #"^/Users/[^/]+/Applications(/|$)")
   (regex #"^/Users/[^/]+/Library/(Keychains|Preferences|Application Support/com.apple.TCC)(/|$)")
   (regex #"^/Users/[^/]+/[.]hasna/recordings(/|$)"))`;
+    // xcrun may select Xcode.app rather than CommandLineTools. Grant reads
+    // only to its selected compiler support tree and SDK, never other apps.
+    if (toolchainReads.length) confined[2] += `\n(allow file-read* ${toolchainReads.map(path => `(subpath ${JSON.stringify(path)})`).join(" ")})`;
   }
   return confined;
 }
@@ -81,11 +84,14 @@ static struct dirent *fixture_readdir(DIR *stream) {
     const compiler = process.platform === "darwin"
       ? Bun.spawnSync(["/usr/bin/xcrun", "--find", "clang"]).stdout.toString().trim() : "/usr/bin/cc";
     expect(compiler.startsWith("/")).toBeTrue();
-    const flags = process.platform === "darwin" ? ["-bundle", "-undefined", "dynamic_lookup", "-isysroot",
-      realpathSync(Bun.spawnSync(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"]).stdout.toString().trim())] : ["-shared", "-fPIC"];
+    const sdk = process.platform === "darwin"
+      ? realpathSync(Bun.spawnSync(["/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path"]).stdout.toString().trim()) : undefined;
+    const linker = process.platform === "darwin" ? realpathSync(join(dirname(compiler), "ld")) : "/usr/bin/ld";
+    const flags = sdk ? ["-bundle", "-undefined", "dynamic_lookup", "-isysroot", sdk, `--ld-path=${linker}`] : ["-shared", "-fPIC"];
     const compile = Bun.spawnSync(fixtureCommand(root, [compiler, ...flags, "-std=c11", "-Wall", "-Wextra", "-Werror",
       "-DNAPI_VERSION=9", "-DNODE_GYP_MODULE_NAME=recordings_fs_guard", "-I", join(root, "include"), source, "-o", addon],
-      [realpathSync(compiler), "/Library/Developer/CommandLineTools/usr/bin/ld"]), { cwd: root, env, timeout: 30_000 });
+      [realpathSync(compiler), linker], sdk ? [dirname(dirname(realpathSync(compiler))), sdk] : []),
+      { cwd: root, env, timeout: 30_000 });
     expect(compile.exitCode, compile.stderr.toString()).toBe(0);
     chmodSync(addon, 0o700);
     mkdirSync(join(root, "entries"), { mode: 0o700 });
