@@ -1,4 +1,5 @@
 import type { RuntimeLogEntry, RuntimeComponent } from "./runtime-log.js";
+import { DomainDnsJobs } from "./domain-dns-store.js";
 import * as domainConnectStore from "./domain-connect-store.js";
 import type { DomainConnectInput, DomainConnectClaim, DomainConnectResult } from "./domain-connect.js";
 import type { TrackingDocument } from "./tracking.js";
@@ -2269,6 +2270,7 @@ export class TenantScopedStore {
       input,
     );
   }
+  domainDnsJobs() { return new DomainDnsJobs(this.client, this.tenantId, this.atomicClient); }
   claimDomainConnect(
     input: DomainConnectInput,
     providerType: "ses" | "resend",

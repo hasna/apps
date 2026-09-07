@@ -280,6 +280,12 @@ describe("MCP self_hosted guards", () => {
     expect(result.isError).toBe(true);expect(resultText(result)).toContain("POST /v1/provision/address");expect(resultText(result)).toContain("HTTP 405");
   });
 
+  it("reports domain provisioning API incompatibility without using client cloud credentials", async () => {
+    const result = await callTool("provision_domain", { domain: "example.com", provider_id: "provider-1" });
+    expect(result.isError).toBe(true);
+    expect(resultText(result)).toContain("POST /v1/domains/provision failed: 405");
+  });
+
   it("tells the truth about provisioning tools that no mode implements", async () => {
     // The local provisioning orchestrator was unreachable dead code and is gone;
     // the self-hosted server exposes no /v1 provisioning route. Claiming these
@@ -287,7 +293,6 @@ describe("MCP self_hosted guards", () => {
     // does not exist, so the error names the real, runnable alternative instead.
     const cases: Array<[string, Record<string, unknown>, string]> = [
       ["provision_status", {}, "emails domain list --json"],
-      ["provision_domain", { domain: "example.com", provider_id: "provider-1" }, "emails domain adopt"],
     ];
 
     for (const [name, args, alternative] of cases) {

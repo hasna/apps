@@ -343,10 +343,10 @@ describe("MCP CLI equivalents", () => {
     expect(cliRefusalFor("emails replies msg-1 --json", "self_hosted")).toBeNull();
   });
 
-  it("still admits that a guarded tool names a refused command", () => {
-    // Provisioning still lacks its execution service; domain verification now runs.
+  it("advertises the restored provisioning and verification commands", () => {
+    // Both commands execute through the authenticated API.
     expect(cliRefusalFor(cliEquivalentForTool("provision_domain", { domain: "acme.example" }), "self_hosted"))
-      .toBe("emails provision domain");
+      .toBeNull();
     expect(cliRefusalFor(cliEquivalentForTool("verify_domain", { domain: "acme.example" }), "self_hosted"))
       .toBeNull();
   });

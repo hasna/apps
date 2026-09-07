@@ -6,7 +6,7 @@ import type {
   DomainConnectionEvidence,
 } from "./domain-connect-provider.js";
 
-function validateConnectionEvidence(evidence: DomainConnectionEvidence): void {
+export function validateConnectionEvidence(evidence: DomainConnectionEvidence): void {
   const invalid = () => {
     throw new DomainConnectError(
       "Provider DNS evidence is incomplete or malformed. Review the provider domain configuration and retry; no publication tasks were accepted.",
@@ -197,6 +197,8 @@ export async function connectDomain(
   dryRun: boolean,
   resolveSender?: SenderResolver,
   actor = "operator",
+  parentSignal?: AbortSignal,
+  beforeWrite?: () => Promise<void>,
 ): Promise<DomainConnectResult> {
   const refs = await store.resolveDomainConnect(input);
   const sender = await resolveSender?.(tenant, refs.input.provider_id);
@@ -235,7 +237,8 @@ export async function connectDomain(
   if (!claim.lease)
     return { ...result, connection: { ...result.connection, ...claim.input } };
   try {
-    const signal = AbortSignal.timeout(25000);
+    const deadline = AbortSignal.timeout(25000);
+    const signal = parentSignal ? AbortSignal.any([parentSignal, deadline]) : deadline;
     let evidence = await sender.readDomainConnection(input.domain, signal);
     validateConnectionEvidence(evidence);
     if (!evidence.registered && input.register_provider) {
@@ -247,6 +250,7 @@ export async function connectDomain(
           "provider_mismatch",
         );
       if (!(await store.domainConnectLeaseCurrent(claim))) return result;
+      await beforeWrite?.();
       await sender.registerDomain!(input.domain, signal);
       evidence = await sender.readDomainConnection(input.domain, signal);
       validateConnectionEvidence(evidence);
@@ -268,6 +272,7 @@ export async function connectDomain(
       : evidence.verified_for_sending
         ? "The provider reports sending verification. DNS tasks and shared registry are recorded; inbound routing is unchanged."
         : "The provider domain is registered. Publish or merge the returned DNS records, then run domain verify. No DNS was published.";
+    await beforeWrite?.();
     const completed = await store.completeDomainConnect(claim, result);
     return (
       completed ?? {

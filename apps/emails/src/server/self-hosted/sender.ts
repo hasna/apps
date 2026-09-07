@@ -34,6 +34,7 @@ export interface SelfHostedSender {
   checkInboundDomain?(domain: string, bucket: string, mailbox?: string): Promise<{ ready: boolean; reason: string; objectKeyPrefix?: string; topicArn?: string }>;
   checkInboundQueue?(topicArn: string, queueUrl: string): Promise<{ ready: boolean; reason: string }>;
   registerDomain?(domain: string, signal?: AbortSignal): Promise<void>;
+  setMailFrom?(domain: string, mailFrom: string, signal: AbortSignal): Promise<string>;
   readDomainConnection?(domain: string, signal: AbortSignal): Promise<DomainConnectionEvidence>;
   readDelivery?(messageId: string, signal: AbortSignal): Promise<ProviderDeliveryRead>;
   probe?(signal: AbortSignal): Promise<{ sendingEnabled?: boolean; productionAccessEnabled?: boolean }>;
@@ -210,6 +211,7 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
       : "api_key",
     region: provider.region ?? undefined,
     registerDomain: (domain, signal) => adapter.addDomain(domain, signal),
+    ...(adapter.setMailFrom ? { setMailFrom: (domain: string, mailFrom: string, signal: AbortSignal) => adapter.setMailFrom!(domain, mailFrom, signal) } : {}),
     readDomainConnection: async (domain, signal) => {
       const { readDomainConnection } = await import("./domain-connect-provider.js");
       return readDomainConnection(provider, domain, signal);

@@ -92,7 +92,6 @@ describe("refusal registry covers every CLI refusal call site", () => {
     expect(refusals.length).toBeGreaterThan(0);
     expect(refusals.filter((r) => r.shared).length).toBeGreaterThan(0);
     expect(refusals.filter((r) => !r.shared)).toEqual([]); // All namespaced API-only refusals are restored.
-    expect(new Set(refusals.map((r) => r.file))).toContain("domain.ts");
     expect(new Set(refusals.map((r) => r.file))).toContain("provision.ts");
   });
 
@@ -160,7 +159,7 @@ describe("refusal registry covers every CLI refusal call site", () => {
     expect(shared).not.toContain("emails domain status");
     expect(shared).not.toContain("emails domain verify");
     expect(shared).not.toContain("emails address provision");
-    expect(shared).toContain("emails provision domain");
+    expect(shared).not.toContain("emails provision domain");
     expect(isCommandAvailableInMode("emails address provision ops@example.com", "self_hosted")).toBe(true);
     expect(isCommandAvailableInMode("emails provision address ops@example.com", "self_hosted")).toBe(true);
   });

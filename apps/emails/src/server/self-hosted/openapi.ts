@@ -4876,6 +4876,142 @@ emailsSelfHostedOpenApi.paths!["/v1/providers/secrets/jobs/{id}"]={get:{operatio
 emailsSelfHostedOpenApi.paths!["/v1/providers/secrets/jobs/{id}/advance"]={post:{operationId:"advanceProviderSecretJob",summary:"Advance at most twenty provider data keys atomically",security:[{apiKeyAuth:[]},{bearerAuth:[]}],parameters:[{name:"id",in:"path",required:true,schema:{type:"string",format:"uuid"}}],requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,properties:{limit:{type:"integer",minimum:1,maximum:20}}}}}},responses:providerSecretJobResponses}};
 emailsSelfHostedOpenApi.paths!["/v1/providers/{id}/credentials"]={put:{operationId:"installProviderCredentials",summary:"Install encrypted tenant provider credentials with a revision fence",security:[{apiKeyAuth:[]},{bearerAuth:[]}],parameters:[{name:"id",in:"path",required:true,schema:{type:"string"}}],requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["credentials","expected_revision"],properties:{expected_revision:{type:"integer",minimum:1,nullable:true},credentials:{type:"object",additionalProperties:false,required:["type"],properties:{type:{type:"string",enum:["ses","resend"]},api_key:{type:"string",writeOnly:true},access_key:{type:"string",writeOnly:true},secret_key:{type:"string",writeOnly:true}}}}}}}},responses:{"200":{description:"Stored encrypted credential revision; provider validity has not been probed",content:{"application/json":{schema:{type:"object",required:["provider_id","revision","root_id","status","checked"],properties:{provider_id:{type:"string"},revision:{type:"integer",minimum:1},root_id:{type:"string",format:"uuid"},status:{type:"string",enum:["complete"]},checked:{type:"boolean",enum:[false]}}}}}},"400":errorResponse("Invalid credentials or expected revision."),"404":errorResponse("Active tenant provider not found."),"409":errorResponse("Credential revision changed; inspect status before updating."),"503":errorResponse("Credential installation could not be confirmed; inspect status.")}}};
 emailsSelfHostedOpenApi.paths!["/v1/providers/{id}/managed"]={put:{operationId:"writeManagedProvider",summary:"Atomically write provider metadata and encrypted credentials after server validation",security:[{apiKeyAuth:[]},{bearerAuth:[]}],parameters:[{name:"id",in:"path",required:true,schema:{type:"string",format:"uuid"}}],requestBody:{required:true,content:{"application/json":{schema:{type:"object",additionalProperties:false,required:["credentials","expected_revision"],properties:{create:{type:"boolean"},name:{type:"string"},type:{type:"string",enum:["ses","resend"]},region:{type:"string",nullable:true},skip_validation:{type:"boolean"},expected_revision:{type:"integer",minimum:1,nullable:true},credentials:{type:"object",additionalProperties:false,properties:{api_key:{type:"string",writeOnly:true},access_key:{type:"string",writeOnly:true},secret_key:{type:"string",writeOnly:true}}}}}}}},responses:{"200":{description:"Atomic provider and credential write confirmed",content:{"application/json":{schema:{type:"object",required:["provider_id","revision","root_id","status","checked"],properties:{provider_id:{type:"string"},revision:{type:"integer",minimum:1},root_id:{type:"string",format:"uuid"},status:{type:"string",enum:["complete"]},checked:{type:"boolean"}}}}}},"400":errorResponse("Invalid provider fields."),"404":errorResponse("Active provider not found in this tenant."),"409":errorResponse("Provider already exists or credential revision changed."),"422":errorResponse("Server credential validation failed; nothing was saved."),"503":errorResponse("Provider write could not be confirmed; inspect its ID and credential revision before retrying.")}}};
+const domainDnsRecordSchema = {
+  type: "object",
+  required: ["type", "name", "content"],
+  properties: {
+    id: { type: "string" },
+    type: { type: "string" },
+    name: { type: "string" },
+    content: { type: "string" },
+    priority: { type: "integer" },
+    proxied: { type: "boolean" },
+    ttl: { type: "integer" },
+  },
+};
+const domainDnsResultSchema = {
+  type: "object",
+  required: ["dry_run", "job"],
+  properties: {
+    dry_run: { type: "boolean" },
+    job: {
+      type: "object",
+      required: [
+        "id",
+        "domain",
+        "provider_id",
+        "zone_id",
+        "status",
+        "phase",
+        "dns_published",
+        "verified_for_sending",
+        "requires_reconciliation",
+        "plan",
+        "message",
+      ],
+      properties: {
+        id: { type: "string", nullable: true },
+        domain: { type: "string" },
+        provider_id: { type: "string" },
+        zone_id: { type: "string" },
+        status: {
+          type: "string",
+          enum: [
+            "planned",
+            "processing",
+            "blocked",
+            "pending_verification",
+            "verified",
+          ],
+        },
+        phase: { type: "string" },
+        dns_published: { type: "boolean" },
+        verified_for_sending: { type: "boolean" },
+        requires_reconciliation: { type: "boolean" },
+        message: { type: "string" },
+        plan: {
+          type: "object",
+          nullable: true,
+          required: ["creates", "deletes", "existing"],
+          properties: {
+            creates: { type: "array", items: domainDnsRecordSchema },
+            deletes: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["id"],
+                properties: { id: { type: "string" } },
+              },
+            },
+            existing: { type: "array", items: domainDnsRecordSchema },
+          },
+        },
+      },
+    },
+  },
+};
+const domainDnsResponses = {
+  "200": {
+    description:
+      "Durable DNS publication receipt or a plan without provider calls",
+    content: { "application/json": { schema: domainDnsResultSchema } },
+  },
+  "400": errorResponse("Invalid DNS options"),
+  "401": errorResponse("Authentication required"),
+  "403": errorResponse("Tenant operator required"),
+  "404": errorResponse("Tenant reference or job not found"),
+  "405": errorResponse("Unsupported method or older server route"),
+  "409": errorResponse("DNS plan or binding conflict"),
+  "502": errorResponse("DNS provider did not confirm the request"),
+  "503": errorResponse("Server binding or service unavailable"),
+};
+for (const [path, operationId] of [
+  ["/v1/domains/setup", "setupOwnedDomain"],
+  ["/v1/domains/setup-cloudflare", "setupDomainCloudflare"],
+  ["/v1/domains/provision", "provisionSendingDomain"],
+])
+  emailsSelfHostedOpenApi.paths![path!] = {
+    post: {
+      operationId,
+      summary:
+        "Publish sending DNS using an explicit tenant/provider/zone server binding",
+      security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["domain", "provider_id"],
+              properties: {
+                domain: { type: "string" },
+                provider_id: { type: "string" },
+                dry_run: { type: "boolean" },
+                ...(path === "/v1/domains/setup" ? {} : {register_provider: { type: "boolean" }}),
+                add_mx: { type: "boolean" },
+                force_mx_switch: { type: "boolean" },
+                ...(path === "/v1/domains/setup" ? {} : {mail_from: { type: "string" }, send: { type: "string", enum: ["ses"] }}),
+                mx_server: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+      responses: domainDnsResponses,
+    },
+  };
+emailsSelfHostedOpenApi.paths!["/v1/domain-dns-jobs/{id}"] = {
+  get: {
+    operationId: "getDomainDnsJob",
+    summary: "Inspect a tenant operator's durable DNS publication receipt",
+    security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
+    parameters: [
+      { name: "id", in: "path", required: true, schema: { type: "string" } },
+    ],
+    responses: domainDnsResponses,
+  },
+};
 addRoutineErrorParity(emailsSelfHostedOpenApi);
 
 

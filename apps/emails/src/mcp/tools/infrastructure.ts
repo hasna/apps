@@ -1,3 +1,4 @@
+import { provisionSendingDomain, domainDnsSucceeded } from "../../lib/domain-dns-api.js";
 import { provisionAddress, addressProvisioningReady } from "../../lib/address-provisioning-api.js";
 // MCP tool module: infrastructure.ts
 import { z } from 'zod';
@@ -419,15 +420,24 @@ export function registerInfrastructureTools(server: McpServer): void {
       send_provider: z.string().optional(),
       add_mx: z.boolean().optional().describe("Also publish inbound MX (ses-s3 receive)"),
       force_mx_switch: z.boolean().optional().describe("Allow adding inbound MX when an existing provider already owns root MX"),
+      dry_run: z.boolean().optional().describe("Return a plan without changing DNS or provider state"),
+      wait: z.boolean().optional().describe("Wait for sending verification"),
+      timeout_seconds: z.number().int().positive().max(MAX_MCP_PROVISION_WAIT_SECONDS).optional(),
+      mail_from: z.string().optional().describe("Custom SES MAIL FROM subdomain"),
     },
-    async () => {
-      // No provisioning orchestrator ships in ANY mode: the local one was
-      // unreachable dead code and has been removed, and the self-hosted server
-      // exposes no /v1 provisioning route. Fail loud with the truth (rule 6).
-      return {
-        content: [{ type: "text" as const, text: "Error: provision_domain is not implemented in this build: there is no local provisioning orchestrator and the self-hosted server exposes no provisioning route. Register an already-verified domain with `emails domain adopt <domain> --provider <id>` and create the SES inbound bucket and receipt rules with `emails aws setup-inbound`." }],
-        isError: true,
-      };
+    async (args) => {
+      try {
+        const result = await provisionSendingDomain(args.domain, {
+          provider: args.provider_id, send: args.send_provider,
+          addMx: args.add_mx, forceMxSwitch: args.force_mx_switch,
+          dryRun: args.dry_run, wait: args.wait, mailFrom: args.mail_from,
+          timeout: (args.timeout_seconds ?? MAX_MCP_PROVISION_WAIT_SECONDS).toString(),
+        });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result) }],
+          ...(!domainDnsSucceeded(result, args.wait) ? { isError: true } : {}) };
+      } catch (error) {
+        return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : "Domain provisioning failed" }], isError: true };
+      }
     },
   );
 

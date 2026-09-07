@@ -80,7 +80,7 @@ update_provider(id, ...)                  → update credentials
 add_domain(provider_id, domain)           → register domain with provider
 get_dns_records(domain)                   → get DKIM/SPF/DMARC records
 verify_domain(domain)                     → re-check DNS status
-provision_domain(domain, provider_id, add_mx?) → NOT IMPLEMENTED in this build; use `emails domain adopt` + `emails aws setup-inbound`
+provision_domain(domain, provider_id, add_mx?, dry_run?, wait?) → publish sending DNS through server-bound Cloudflare zones
 create_warming_schedule(domain, target)   → start gradual volume ramp-up
 get_warming_status(domain)                → check today's limit
 ```
@@ -181,7 +181,7 @@ emails://recent-errors     → latest provisioning/source errors
 ```
 
 ### Existing mailbox provider + SES sending
-> `emails address provision` and `emails provision address` use authenticated API jobs for addresses on configured SES inbound domains. `emails provision status` reads shared registry state; `emails provision job` inspects and retries durable jobs. See `docs/ADDRESS_PROVISIONING.md` for server bindings and readiness checks. Domain/up/daemon/roundtrip orchestration remains unimplemented.
+> `emails address provision` and `emails provision address` use authenticated API jobs for addresses on configured SES inbound domains. `emails provision status` reads shared registry state; `emails provision job` inspects and retries durable jobs. See `docs/ADDRESS_PROVISIONING.md` for server bindings and readiness checks. `domain setup-cloudflare` and `provision domain` publish sending DNS through server-bound Cloudflare zones; see `docs/DOMAIN_DNS.md`. Domain purchase/up/daemon/roundtrip orchestration remains unimplemented.
 ```
 1. Run `emails domain check example.com` to detect current root MX ownership.
 2. Use `emails domain adopt example.com --provider <ses-id>` for an already-registered, SES-verified domain.

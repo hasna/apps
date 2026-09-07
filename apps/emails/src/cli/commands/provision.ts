@@ -94,8 +94,12 @@ export function registerProvisionCommands(program: Command, output: (data: unkno
     .option("--dry-run", "Resolve inputs and show the planned change without calling providers or writing to the DB")
     .option("--wait", "Poll SES until the domain is verified for sending")
     .option("--timeout <sec>", "Max seconds to wait for verification", "600")
-    .action(async () => {
-      try { notImplementedAnywhere("emails provision domain"); } catch (e) { handleError(e); }
+    .action(async (domain: string, opts: import("../../lib/domain-dns-api.js").DomainDnsOptions) => {
+      try {
+        const { provisionSendingDomain, formatDomainDns, domainDnsSucceeded } = await import("../../lib/domain-dns-api.js");
+        const result = await provisionSendingDomain(domain, opts); output(result, formatDomainDns(result));
+        if (!domainDnsSucceeded(result, opts.wait)) process.exitCode = 1;
+      } catch (error) { handleError(error); }
     });
 
   // ── up: full end-to-end orchestrator ─────────────────────────────────────

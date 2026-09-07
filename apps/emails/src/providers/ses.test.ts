@@ -4,7 +4,7 @@ import type { Provider } from "../types/index.js";
 // ─── Mocks for @aws-sdk/client-sesv2 ─────────────────────────────────────────
 
 // Track the most-recent command sent to client.send()
-const mockSend = mock(async (_command: unknown) => ({}));
+const mockSend = mock(async (_command: unknown, _options?: { abortSignal?: AbortSignal }) => ({}));
 const mockClassicSend = mock(async (_command: unknown) => ({}));
 
 // We track command instances via their constructor names
@@ -113,6 +113,16 @@ beforeEach(() => {
 });
 
 // ─── Constructor ─────────────────────────────────────────────────────────────
+
+it("passes the DNS workflow deadline to the actual SES MAIL FROM mutation", async () => {
+  mockSend.mockReset();
+  mockSend.mockImplementation(async () => ({}));
+  const signal = AbortSignal.timeout(1000);
+  const adapter = new SESAdapter(makeProvider());
+  expect(await adapter.setMailFrom("example.test", "mail.example.test", signal)).toBe("mail.example.test");
+  expect(mockSend.mock.calls[0]?.[0]).toBeInstanceOf(MockPutEmailIdentityMailFromAttributesCommand);
+  expect(mockSend.mock.calls[0]?.[1]?.abortSignal).toBe(signal);
+});
 
 describe("SESAdapter constructor", () => {
   it("constructs successfully with region set", () => {
