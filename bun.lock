@@ -1101,7 +1101,7 @@
     },
     "apps/telephony": {
       "name": "@hasna/telephony",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "bin": {
         "telephony": "dist/cli/index.js",
         "telephony-mcp": "dist/mcp/index.js",
