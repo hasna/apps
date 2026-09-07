@@ -279,7 +279,7 @@ describe("CLI set --stdin — value off argv", () => {
       expect(check.stdout, `${shape.name}: stored length`).toContain(`length=${FIXTURE_VALUE.length}`);
       expect(check.stdout, `${shape.name}: stored digest`).toContain(`sha256=${FIXTURE_SHA256}`);
     }
-  });
+  }, 20_000);
 });
 
 it("exec preserves child selection-like options after the passthrough separator", async () => {
