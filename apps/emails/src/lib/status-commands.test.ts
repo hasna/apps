@@ -17,12 +17,12 @@ describe("command suggestion availability", () => {
       "emails doctor --json", "emails export emails --format json", "emails export events --format json",
       "emails schedule list", "emails scheduled list", "emails schedule cancel abc",
       "emails daemon status", "emails daemon restart", "emails logs tail --component scheduler",
-      "emails inbox source list", "emails send --to-group ops --subject s",
+      "emails inbox listen --port 2525", "emails inbox source list", "emails send --to-group ops --subject s",
     ]) expect(isCommandAvailableInMode(command, "self_hosted"), command).toBe(true);
   });
 
   it("continues suppressing the actual unimplemented API listener and setup paths", () => {
-    for (const command of ["emails inbox listen --port 2525", "emails webhook listen"])
+    for (const command of ["emails webhook listen"])
       expect(isCommandAvailableInMode(command, "self_hosted"), command).toBe(false);
   });
 

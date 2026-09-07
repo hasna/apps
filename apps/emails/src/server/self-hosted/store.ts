@@ -4474,6 +4474,35 @@ export class TenantScopedStore {
     return row ? row.id : null;
   }
 
+  /** Atomic SMTP acceptance. The receipt survives message edits/deletion and never recreates mail on replay. */
+  async submitSmtpMessage(input: MessageInput, transactionId: string, payloadHash: string): Promise<{ stored: true; id: string; duplicate: boolean }> {
+    if (!this.atomicClient || !/^[0-9a-f-]{36}$/i.test(transactionId) || !/^[0-9a-f]{64}$/.test(payloadHash)) throw new Error("SMTP persistence requires a valid identity and transactional store");
+    return this.atomicClient.transaction(async tx => {
+      await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      // Lock the route and active tenant through commit so reassignment cannot race acceptance.
+      const domains = [...new Set(input.to_addrs.map(address => address.slice(address.lastIndexOf("@") + 1).toLowerCase()))];
+      const routes = await tx.many<{ domain: string; tenant_id: string }>(
+        `SELECT r.domain, r.tenant_id FROM inbound_domain_routes r JOIN tenants t ON t.id = r.tenant_id
+         WHERE r.domain = ANY($1::text[]) AND t.status = 'active' FOR SHARE OF r, t`, [domains]);
+      if (!domains.length || routes.length !== domains.length || routes.some(route => route.tenant_id !== this.tenantId)) throw new Error("SMTP recipient routing changed before durable acceptance");
+      const params = messageInsertParams(input);
+      const inserted = await tx.get<{ message_id: string }>(
+        `INSERT INTO smtp_submission_receipts (tenant_id, transaction_id, payload_hash, message_id)
+         VALUES ($1::uuid, $2::uuid, $3, $4) ON CONFLICT DO NOTHING RETURNING message_id`,
+        [this.tenantId, transactionId, payloadHash, params[0]],
+      );
+      if (inserted) {
+        await tx.execute(`INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id) VALUES (${MESSAGE_INSERT_VALUES}, $25)`, [...params, this.tenantId]);
+        return { stored: true as const, id: inserted.message_id, duplicate: false };
+      }
+      const existing = await tx.get<{ message_id: string; payload_hash: string }>(
+        `SELECT message_id, payload_hash FROM smtp_submission_receipts WHERE tenant_id = $1::uuid AND transaction_id = $2::uuid`, [this.tenantId, transactionId]);
+      if (!existing) throw new Error("SMTP receipt could not be read");
+      if (existing.payload_hash !== payloadHash) throw new Error("SMTP transaction identity conflicts with the original content");
+      return { stored: true as const, id: existing.message_id, duplicate: true };
+    });
+  }
+
   async createMessage(input: MessageInput): Promise<MessageRecord> {
     const row = await this.client.one<Record<string, unknown>>(
       `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)

@@ -1,3 +1,4 @@
+import { importSmtpMessage, smtpImportCapability, SmtpImportError, SMTP_IMPORT_JSON_BYTES } from "./smtp-import.js";
 import { setupBoundRealtime, type RealtimeSetupCloudFactory, type RealtimeSetupInput } from "./realtime-setup.js";
 import { normalizeDomainConnect, connectDomain, DomainConnectError } from "./domain-connect.js";
 import { executeIngestBatch, IngestApiError, type IngestApiInput, type IngestCloudFactory } from "./ingest-api.js";
@@ -2677,6 +2678,19 @@ export async function handleSelfHostedRequest(
       const { runSequenceBatch } = await import("./sequence-worker.js");
       const sequenceResult = sequenceLimit === 0 ? { sequences: { attempted: 0, sent: 0, failed: 0, pending: 0, skipped: 0 }, sequence_items: [] } : await runSequenceBatch(auth.store.sequenceWorker(), send, sequenceLimit);
       return json(200, { ...result, ...sequenceResult, sequence_execution: sequenceLimit === 0 ? "not_requested" : "executed" });
+    }
+
+    if (path === "/v1/inbox/smtp") {
+      if (method !== "GET" && method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "importing SMTP messages");
+      if (denied) return denied;
+      try {
+        if (method === "GET") return json(200, await smtpImportCapability(auth.store, url.searchParams.has("provider_id") ? url.searchParams.get("provider_id") : undefined));
+        const result = await importSmtpMessage(deps.store, auth.store, auth.ctx.tenantId, await readJsonBody(req, SMTP_IMPORT_JSON_BYTES));
+        return json(result.duplicate ? 200 : 201, result);
+      } catch (error) { if (error instanceof SmtpImportError) return json(error.status, { error: error.message }); throw error; }
     }
 
     if (path === "/v1/inbox/setup-realtime") {

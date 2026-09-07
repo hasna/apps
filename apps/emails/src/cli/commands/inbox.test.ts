@@ -1734,20 +1734,20 @@ describe("inbox unread-count --by-address", () => {
   });
 });
 
-describe("server-only ingestion/diagnostic subcommands", () => {
-  const cases: Array<{ label: string; args: string[]; command: string }> = [
-    { label: "listen", args: ["inbox", "listen", "--port", "2526"], command: "emails inbox listen" },
-  ];
-
-  for (const { label, args, command } of cases) {
-    it(`${label} fails closed with a server-only message`, async () => {
-      const result = await runInboxCommandExpectingExit(args);
+describe("SMTP API capability preflight", () => {
+  it("fails before binding when the configured API does not implement SMTP import", async () => {
+    const result = await runInboxCommandExpectingExit(["inbox", "listen", "--port", "2526"]);
+    expect(result.error).toBe("process.exit:1");
+    expect(result.stderr).toContain("SMTP API");
+    expect(result.stderr).not.toContain("self-hosted client");
+  });
+  it("rejects malformed port and blank provider before starting a listener", async () => {
+    for (const args of [["--port", "2525junk"], ["--provider", ""]]) {
+      const result = await runInboxCommandExpectingExit(["inbox", "listen", ...args]);
       expect(result.error).toBe("process.exit:1");
-      expect(result.stderr).toContain(command);
-      expect(result.stderr).toContain("is not available in the self-hosted client");
-      expect(result.stderr).toContain("it runs on the self-hosted server");
-    });
-  }
+      expect(result.stderr).toMatch(/SMTP (port|provider)/);
+    }
+  });
 });
 
 // Source registry persists through the authenticated API.

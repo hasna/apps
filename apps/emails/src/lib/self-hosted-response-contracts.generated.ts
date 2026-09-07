@@ -17211,6 +17211,307 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "GET",
+    "operationId": "getSmtpImportCapability",
+    "path": "/v1/inbox/smtp",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "available",
+        "durable_receipts",
+        "max_raw_bytes",
+        "provider_id"
+      ],
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "durable_receipts": {
+          "type": "boolean"
+        },
+        "max_raw_bytes": {
+          "type": "integer"
+        },
+        "provider_id": {
+          "type": "string",
+          "nullable": true
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getSmtpImportCapability",
+    "path": "/v1/inbox/smtp",
+    "status": 400,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getSmtpImportCapability",
+    "path": "/v1/inbox/smtp",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getSmtpImportCapability",
+    "path": "/v1/inbox/smtp",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getSmtpImportCapability",
+    "path": "/v1/inbox/smtp",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getSmtpImportCapability",
+    "path": "/v1/inbox/smtp",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "importSmtpMessage",
+    "path": "/v1/inbox/smtp",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "stored",
+        "id",
+        "duplicate"
+      ],
+      "properties": {
+        "stored": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "duplicate": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "importSmtpMessage",
+    "path": "/v1/inbox/smtp",
+    "status": 201,
+    "schema": {
+      "type": "object",
+      "required": [
+        "stored",
+        "id",
+        "duplicate"
+      ],
+      "properties": {
+        "stored": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "duplicate": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "importSmtpMessage",
+    "path": "/v1/inbox/smtp",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "importSmtpMessage",
+    "path": "/v1/inbox/smtp",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "importSmtpMessage",
+    "path": "/v1/inbox/smtp",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "importSmtpMessage",
+    "path": "/v1/inbox/smtp",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "importSmtpMessage",
+    "path": "/v1/inbox/smtp",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "importSmtpMessage",
+    "path": "/v1/inbox/smtp",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "importSmtpMessage",
+    "path": "/v1/inbox/smtp",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
     "method": "POST",
     "operationId": "syncInboxS3",
     "path": "/v1/inbox/sync-s3",

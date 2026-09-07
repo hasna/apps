@@ -1166,6 +1166,24 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Check operator SMTP import capability before binding a local listener */
+    async getSmtpImportCapability(query?: { "provider_id"?: string }, init?: RequestInit): Promise<{ "available": boolean; "durable_receipts": boolean; "max_raw_bytes": number; "provider_id": string | null }> {
+      return this.request("GET", `/v1/inbox/smtp`, {
+        body: undefined,
+        query,
+        init,
+      });
+    }
+
+    /** Import bounded MIME with an immutable DATA transaction receipt (operator only) */
+    async importSmtpMessage(body: { "transaction_id": string; "raw_base64": string; "provider_id"?: string; "envelope": { "from": string; "to": Array<string> } }, init?: RequestInit): Promise<{ "stored": boolean; "id": string; "duplicate": boolean }> {
+      return this.request("POST", `/v1/inbox/smtp`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Run a bounded server-bound tenant ingestion batch */
     async syncInboxS3(body: { "source_id"?: string; "bucket"?: string; "prefix"?: string; "region"?: string; "provider_id"?: string; "queue_url"?: string; "profile"?: string; "cursor"?: string; "force"?: boolean; "all_buckets"?: boolean; "limit"?: number }, init?: RequestInit): Promise<{ "ok": boolean; "sources": Array<Record<string, unknown>> }> {
       return this.request("POST", `/v1/inbox/sync-s3`, {

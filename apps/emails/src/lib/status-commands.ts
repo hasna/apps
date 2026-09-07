@@ -74,7 +74,6 @@ export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
 
 /** Remaining API-client command stubs; implemented operations must stay suggestible. */
 export const SELF_HOSTED_REFUSED_COMMANDS: readonly string[] = [
-  "emails inbox listen",
   "emails webhook listen",
 ];
 

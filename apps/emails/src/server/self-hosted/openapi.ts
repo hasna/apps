@@ -3440,6 +3440,21 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         responses: { "200": { content: { "application/json": { schema: deleteReceiptSchema } } } },
       },
     },
+    "/v1/inbox/smtp": {
+      get: {
+        operationId: "getSmtpImportCapability", summary: "Check operator SMTP import capability before binding a local listener",
+        parameters: [{ name: "provider_id", in: "query", required: false, schema: { type: "string" } }],
+        responses: { "200": jsonResponse("SMTP import capability", { type: "object", required: ["available", "durable_receipts", "max_raw_bytes", "provider_id"], properties: { available: { type: "boolean" }, durable_receipts: { type: "boolean" }, max_raw_bytes: { type: "integer" }, provider_id: { type: "string", nullable: true } } }), "400": errorResponse("Invalid selector"), "403": errorResponse("Operator required"), "404": errorResponse("Provider not found") },
+      },
+      post: {
+        operationId: "importSmtpMessage", summary: "Import bounded MIME with an immutable DATA transaction receipt (operator only)",
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", additionalProperties: false, required: ["transaction_id", "raw_base64", "envelope"], properties: { transaction_id: { type: "string", format: "uuid" }, raw_base64: { type: "string", maxLength: 13981016 }, provider_id: { type: "string" }, envelope: { type: "object", additionalProperties: false, required: ["from", "to"], properties: { from: { type: "string" }, to: { type: "array", minItems: 1, maxItems: 100, items: { type: "string" } } } } } } } } },
+        responses: Object.fromEntries([
+          ...["200", "201"].map(status => [status, jsonResponse("Durably stored SMTP transaction receipt", { type: "object", required: ["stored", "id", "duplicate"], properties: { stored: { type: "boolean" }, id: { type: "string" }, duplicate: { type: "boolean" } } })]),
+          ...["400", "403", "404", "409", "413"].map(status => [status, errorResponse("Invalid, forbidden, conflicting or oversized SMTP submission")]),
+        ]),
+      },
+    },
     "/v1/inbox/setup-realtime": { post: {
       operationId: "setupInboxRealtime", summary: "Configure and read back a tenant-bound SES/SNS/SQS notification path (operator only)", tags: ["inbox"],
       requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["domain"], additionalProperties: false, properties: { domain: { type: "string" }, source_id: { type: "string" }, rule_set: { type: "string" }, rule_name: { type: "string" }, region: { type: "string" }, profile: { type: "string", description: "Rejected: cloud credentials belong to the API server" } } } } } },

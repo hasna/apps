@@ -3027,6 +3027,19 @@ const PROVISIONING_JOBS = defineMigration(
     WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);`,
 );
 
+const SMTP_SUBMISSION_RECEIPTS = defineMigration("0034_smtp_submission_receipts", `
+CREATE TABLE smtp_submission_receipts (
+  tenant_id UUID NOT NULL, transaction_id UUID NOT NULL, payload_hash TEXT NOT NULL,
+  message_id TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, transaction_id), CHECK (payload_hash ~ '^[0-9a-f]{64}$')
+);
+ALTER TABLE smtp_submission_receipts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE smtp_submission_receipts FORCE ROW LEVEL SECURITY;
+CREATE POLICY smtp_submission_receipts_tenant_policy ON smtp_submission_receipts
+  USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
+`);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3068,5 +3081,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     FORWARDING_DELIVERY_JOBS,
     PROVIDER_STATUS_OBSERVATIONS,
     PROVISIONING_JOBS,
+    SMTP_SUBMISSION_RECEIPTS,
   ];
 }

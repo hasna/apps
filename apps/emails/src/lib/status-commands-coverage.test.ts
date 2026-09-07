@@ -132,12 +132,9 @@ describe("refusal registry covers every CLI refusal call site", () => {
   // src/lib/status-commands.test.ts pins those by name instead.
   it("declares what the scan cannot see", () => {
     const inbox = readFileSync(join(COMMANDS_DIR, "inbox.remote.ts"), "utf8");
-    // Real refusals in the file, invisible because the literal omits the `emails ` prefix.
-    for (const operation of ["listen"]) {
-      expect(inbox).toContain(`serverOnly("${operation}")`);
-      expect(refusals.map((r) => r.command)).not.toContain(`emails inbox ${operation}`);
-      expect(isCommandAvailableInMode(`emails inbox ${operation}`, "self_hosted")).toBe(false);
-    }
+    expect(inbox).not.toContain('serverOnly("listen")');
+    expect(inbox).toContain("startApiSmtpListener(Number(opts.port), opts.provider)");
+    expect(isCommandAvailableInMode("emails inbox listen", "self_hosted")).toBe(true);
     for (const operation of ["sync-s3", "watch"]) {
       expect(inbox).not.toContain(`serverOnly("${operation}")`);
       expect(inbox).toContain(`.action(ingestAction("${operation}"))`);

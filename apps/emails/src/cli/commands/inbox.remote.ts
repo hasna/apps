@@ -210,11 +210,6 @@ async function runAutoPull(_opts: { s3?: boolean; limit?: number }) {
 // what this comment named. It has collapsed to one implementation: it was never
 // storage, so the deployment word had nothing to decide between the two copies. The
 // ingestion is still mode-routed.
-function serverOnly(command: string): never {
-  throw new Error(
-    `emails inbox ${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
-  );
-}
 
 interface CodeOptions {
   from?: string;
@@ -1154,8 +1149,17 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("-j, --json", "Print JSON output", false)
     .option("--port <port>", "SMTP port to listen on", "2525")
     .option("--provider <id>", "Associate received emails with this provider ID")
-    .action(() => {
-      try { serverOnly("listen"); } catch (e) { handleError(e); }
+    .action(async (opts: { port: string; provider?: string }) => {
+      try {
+        if (!/^\d+$/.test(opts.port)) throw new Error("SMTP port must be an integer between 0 and 65535.");
+        const { startApiSmtpListener } = await import("../../lib/smtp-api.js");
+        const listener = await startApiSmtpListener(Number(opts.port), opts.provider);
+        output({ listening: true, host: "127.0.0.1", port: listener.port, provider_id: opts.provider ?? null, storage: "api", foreground: true }, `SMTP listening on 127.0.0.1:${listener.port}; messages persist through the Emails API. Press Ctrl-C to stop.`);
+        await new Promise<void>(resolve => {
+          const stop = () => { process.off("SIGINT", stop); process.off("SIGTERM", stop); void listener.stop().finally(resolve); };
+          process.once("SIGINT", stop); process.once("SIGTERM", stop);
+        });
+      } catch (e) { handleError(e); }
     });
 
   // ─── OPEN HTML ────────────────────────────────────────────────────────────
