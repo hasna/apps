@@ -12,25 +12,37 @@ interface SessionListProps {
 }
 
 export function SessionList({ agent, onSelect, onSelectChannel, onNew }: SessionListProps) {
-  const store = getStore();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [channelUnread, setChannelUnread] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // The TUI is Store-backed like every other surface: whichever store the
-  // resolver selected (hosted API or the on-box SQLite store) answers these
-  // lists, so the same UI works in either transport.
+  // Resolve current credentials for each refresh, without tying the effect
+  // lifecycle to a newly constructed client on every render.
   useEffect(() => {
     let cancelled = false;
+    let refreshing = false;
     const refresh = async () => {
+      if (refreshing || cancelled) return;
+      refreshing = true;
       try {
-        const [sessionList, channelList, unreadRows] = await Promise.all([
+        const store = getStore();
+        const results = await Promise.allSettled([
           store.listSessions(agent),
           store.listChannels(),
           store.listUnreadCounts(agent),
         ]);
         if (cancelled) return;
+        // A fast failure must not release the refresh gate while sibling
+        // requests are still running.
+        const [sessionResult, channelResult, unreadResult] = results;
+        if (sessionResult.status === "rejected") throw sessionResult.reason;
+        if (channelResult.status === "rejected") throw channelResult.reason;
+        if (unreadResult.status === "rejected") throw unreadResult.reason;
+        const sessionList = sessionResult.value;
+        const channelList = channelResult.value;
+        const unreadRows = unreadResult.value;
         setSessions(sessionList);
         setChannels(channelList);
         const byChannel: Record<string, number> = {};
@@ -39,11 +51,13 @@ export function SessionList({ agent, onSelect, onSelectChannel, onNew }: Session
           byChannel[row.channel] = Number(row.unread_count) || 0;
         }
         setChannelUnread(byChannel);
+        setError(null);
       } catch (error) {
+        if (!cancelled) setError(error instanceof Error ? error.message : "Unable to load conversations.");
+      } finally {
+        refreshing = false;
         if (!cancelled) setLoading(false);
-        return;
       }
-      if (!cancelled) setLoading(false);
     };
     void refresh();
     const timer = setInterval(refresh, 1000);
@@ -51,7 +65,7 @@ export function SessionList({ agent, onSelect, onSelectChannel, onNew }: Session
       cancelled = true;
       clearInterval(timer);
     };
-  }, [store, agent]);
+  }, [agent]);
 
   useInput((input) => {
     if (input === "n") onNew();
@@ -79,6 +93,14 @@ export function SessionList({ agent, onSelect, onSelectChannel, onNew }: Session
   });
 
   const allItems = [...channelItems, ...sessionItems];
+
+  if (error && allItems.length === 0) {
+    return <Box flexDirection="column" padding={1}>
+      <Text bold color="cyan">Conversations</Text>
+      <Text color="red">Unable to load conversations: {error}</Text>
+      <Text dimColor>Retrying… Press q to quit.</Text>
+    </Box>;
+  }
 
   if (loading && allItems.length === 0) {
     return (
@@ -114,6 +136,7 @@ export function SessionList({ agent, onSelect, onSelectChannel, onNew }: Session
         <Text bold color="cyan">Conversations</Text>
         <Text dimColor>  as <Text color="yellow">{agent}</Text>  (n: new, q: quit)</Text>
       </Box>
+      {error && <Text color="red">Refresh failed: {error} — retrying…</Text>}
       <SelectInput
         items={allItems}
         onSelect={(item) => {
