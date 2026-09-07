@@ -15,7 +15,7 @@ npm install -g @hasna/recordings
 
 **Hasna Recordings** is a native macOS 26 app with a companion menu bar control.
 The app opens a compact glass recorder with a microphone/stop/play control and timer.
-The clock opens a separate searchable history panel; the gear opens Settings.
+The clock opens searchable history and the gear opens Settings inside the same retained app window. A shared title bar and back navigation keep the recorder, transcripts, and settings together. The recorder uses a compact 224 × 244 point layout; normal interface text uses macOS-sized 11–13 point type. Glass backgrounds use one live native blur per surface, with matching translucent controls.
 A floating transcription bar shows live words, the microphone waveform, pause/resume,
 playback, and an Auto-paste switch. Recent pastes show delivery evidence from this session.
 There is no sidebar or project UI. New app recordings are unassigned; existing recordings and their metadata

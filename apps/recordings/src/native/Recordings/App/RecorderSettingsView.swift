@@ -12,21 +12,21 @@ struct RecorderSettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Settings").font(.system(size: 20, weight: .regular))
+                Button(action: close) { Image(systemName: "chevron.left").font(.system(size: 12)) }
+                    .buttonStyle(GlassButtonStyle()).accessibilityLabel("Back to recorder")
+                Text("Settings").font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Button(action: close) { Image(systemName: "xmark").font(.system(size: 16)) }
-                    .buttonStyle(.plain).accessibilityLabel("Close settings")
-            }.frame(height: 24)
-            Spacer().frame(height: 41)
+            }.frame(height: 18)
+            Spacer().frame(height: 18)
             HStack {
                 Text("Audio Input")
                 Spacer()
                 Button { showsAudioInput.toggle() } label: {
                     HStack {
-                        Image(systemName: "mic").font(.system(size: 21))
+                        Image(systemName: "mic").font(.system(size: 14))
                         Text(AVCaptureDevice.default(for: .audio)?.localizedName ?? "System microphone").lineLimit(1)
                         Spacer(); Image(systemName: "chevron.down").font(.system(size: 12))
-                    }.padding(.horizontal, 15).frame(width: 324, height: 44).background(field)
+                    }.padding(.horizontal, 10).frame(width: 230, height: 30).background(field)
                 }.buttonStyle(.plain)
                 .popover(isPresented: $showsAudioInput) {
                     VStack(alignment: .leading, spacing: 14) {
@@ -34,25 +34,25 @@ struct RecorderSettingsView: View {
                         Button("Sound Settings…") {
                             if let url = URL(string: "x-apple.systempreferences:com.apple.Sound-Settings.extension") { NSWorkspace.shared.open(url) }
                         }
-                    }.padding(18)
+                    }.font(.system(size: 13)).padding(12).background(FrostedBackground())
                 }
 
             }
-            Spacer().frame(height: 26)
+            Spacer().frame(height: 16)
             HStack {
                 Text("Audio Quality")
                 Spacer()
                 HStack { Text("High (24 kHz PCM)"); Spacer() }
-                    .padding(.horizontal, 15).frame(width: 324, height: 44).background(field)
+                    .padding(.horizontal, 10).frame(width: 230, height: 30).background(field)
                     .help("Uncompressed audio at the native transcription sample rate.")
             }
-            Spacer().frame(height: 34)
+            Spacer().frame(height: 20)
             settingToggle("Auto-paste transcriptions", isOn: Binding(get: { store.engine.autoPasteEnabled }, set: { store.engine.autoPasteEnabled = $0 }))
-            Spacer().frame(height: 24)
+            Spacer().frame(height: 18)
             settingToggle("Play notification sound", isOn: $notificationSound)
-            Spacer().frame(height: 24)
+            Spacer().frame(height: 18)
             settingToggle("Show in menu bar", isOn: $store.showMenuBar)
-            Spacer().frame(height: 17)
+            Spacer().frame(height: 16)
             HStack {
                 Text("Recordings save automatically.").foregroundStyle(.secondary)
                 Spacer()
@@ -60,17 +60,16 @@ struct RecorderSettingsView: View {
             }.font(.system(size: 11))
             Spacer(minLength: 0)
         }
-        .font(.system(size: 15)).toggleStyle(.switch)
-        .padding(.horizontal, 28).padding(.top, 25)
-        .frame(width: 534, height: 434)
-        .background(FrostedBackground(radius: 19))
+        .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+        .padding(.horizontal, 16).padding(.top, 8)
+        .frame(width: 420, height: 314)
+
     }
 
     private var field: some View {
-        RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.45))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(.gray.opacity(0.22), lineWidth: 1))
+        GlassInset()
     }
     private func settingToggle(_ label: String, isOn: Binding<Bool>) -> some View {
-        HStack { Text(label); Spacer(); Toggle(label, isOn: isOn).labelsHidden() }.frame(height: 30)
+        HStack { Text(label); Spacer(); Toggle(label, isOn: isOn).labelsHidden() }.frame(height: 26)
     }
 }

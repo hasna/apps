@@ -19,7 +19,9 @@ public struct SettingsView: View {
             generalTab.tabItem { Label("General", systemImage: "gear") }
             shortcutsTab.tabItem { Label("Voice Shortcuts", systemImage: "text.badge.star") }
         }
-        .frame(width: 520, height: 500)
+        .font(.system(size: 13))
+        .controlSize(.small)
+        .frame(width: 520, height: 460)
         .alert("Settings Error", isPresented: Binding(
             get: { preferences.persistenceError != nil },
             set: { if !$0 { preferences.clearPersistenceError() } }
@@ -173,7 +175,7 @@ public struct SettingsView: View {
                     try? preferences.save()
                 }
                 TextEditor(text: $preferences.settings.globalSystemPrompt)
-                    .frame(height: 80)
+                    .frame(height: 80).scrollContentBackground(.hidden)
                     .onChange(of: preferences.settings.globalSystemPrompt) {
                         try? preferences.save()
                     }
@@ -182,7 +184,7 @@ public struct SettingsView: View {
             }
             .disabled(!preferences.canMutateProjects)
         }
-        .formStyle(.grouped).padding()
+        .formStyle(.grouped).scrollContentBackground(.hidden).padding(8)
     }
 
     // MARK: - Voice Shortcuts

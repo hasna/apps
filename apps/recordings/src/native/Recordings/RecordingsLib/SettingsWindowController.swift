@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 
 /// Settings must also open from an accessory app with no SwiftUI workspace scene.
 /// Retain the window so repeated menu actions and closing/reopening preserve its state.
@@ -25,7 +26,15 @@ public final class SettingsWindowController {
             )
             settings.title = "Hasna Recordings Settings"
             settings.isReleasedWhenClosed = false
-            settings.contentView = makeContent()
+            settings.isOpaque = false
+            settings.backgroundColor = .clear
+            settings.titlebarAppearsTransparent = true
+            let content = makeContent()
+            let backdrop = NSHostingView(rootView: RecordingGlassBackground())
+            backdrop.frame = content.bounds
+            backdrop.autoresizingMask = [.width, .height]
+            content.addSubview(backdrop, positioned: .below, relativeTo: nil)
+            settings.contentView = content
             settings.center()
             window = settings
         }

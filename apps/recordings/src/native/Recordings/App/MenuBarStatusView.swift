@@ -5,7 +5,7 @@ import RecordingsLib
 struct MenuBarStatusLabel: View {
     @ObservedObject var store: RecordingsStore
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 4) {
             Image(systemName: store.engine.captureIsActive ? (store.engine.isPaused ? "play.fill" : "record.circle.fill") : store.isPlaying ? "play.fill" : "mic.fill")
                 .symbolRenderingMode(.palette)
                 .foregroundStyle(store.engine.captureIsActive && !store.engine.isPaused ? .red : .primary)
@@ -31,38 +31,38 @@ struct MenuBarStatusView: View {
     var closeBar: (() -> Void)? = nil
     let barOnly: Bool
     @State private var showsActions = false
-    private var width: CGFloat { min(1140, (NSScreen.main?.visibleFrame.width ?? 1200) - 48) }
+    private var width: CGFloat { min(820, (NSScreen.main?.visibleFrame.width ?? 1200) - 48) }
 
     var body: some View {
         VStack(spacing: 16) {
-            HStack(spacing: 20) {
+            HStack(spacing: 12) {
                 Button {
                     if store.engine.captureIsActive { store.engine.stopAndTranscribe() }
                     else { store.beginRecording() }
                 } label: {
-                    GlassCircle(symbol: store.engine.captureIsActive ? "stop.fill" : "mic.fill", size: 50, red: store.engine.captureIsActive)
+                    GlassCircle(symbol: store.engine.captureIsActive ? "stop.fill" : "mic.fill", size: 34, red: store.engine.captureIsActive)
                 }
                 .buttonStyle(.plain).disabled(!presentation.primaryActionEnabled)
                 .accessibilityLabel(store.engine.captureIsActive ? "Stop and transcribe" : "Start recording")
                 AudioWaveform(level: store.engine.audioLevel, recording: store.engine.captureIsActive && !store.engine.isPaused)
-                    .frame(width: 155, height: 46).accessibilityLabel("Microphone level")
-                Divider().frame(height: 46)
-                VStack(alignment: .leading, spacing: 7) {
-                    Text("Live Transcript").font(.system(size: 12)).foregroundStyle(.secondary)
-                    Text(transcript).font(.system(size: 17)).lineLimit(1)
+                    .frame(width: 84, height: 30).accessibilityLabel("Microphone level")
+                Divider().frame(height: 30)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Live Transcript").font(.system(size: 11)).foregroundStyle(.secondary)
+                    Text(transcript).font(.system(size: 13)).lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                Divider().frame(height: 42)
+                Divider().frame(height: 28)
                 GlassIconButton(symbol: store.engine.isPaused ? "play.fill" : "pause.fill", label: store.engine.isPaused ? "Resume recording" : "Pause recording") { store.engine.togglePause() }
                     .disabled(!store.engine.isRecording)
                 GlassIconButton(symbol: store.isPlaying ? "pause.fill" : "play.fill", label: "Playback and recent pastes") {
                     if store.hasPlayback && !store.engine.captureIsActive { store.toggleLatestPlayback() }
                     openRecent()
                 }
-                Divider().frame(height: 42)
-                Toggle("Auto-paste", isOn: Binding(get: { store.engine.autoPasteEnabled }, set: { store.engine.autoPasteEnabled = $0 })).toggleStyle(.switch).fixedSize().font(.system(size: 14))
-                GlassIconButton(symbol: "ellipsis", label: "More", size: 34) { showsActions.toggle() }
+                Divider().frame(height: 28)
+                Toggle("Auto-paste", isOn: Binding(get: { store.engine.autoPasteEnabled }, set: { store.engine.autoPasteEnabled = $0 })).toggleStyle(.switch).controlSize(.small).fixedSize().font(.system(size: 12))
+                GlassIconButton(symbol: "ellipsis", label: "More", size: 26) { showsActions.toggle() }
                     .popover(isPresented: $showsActions, arrowEdge: .bottom) {
                         VStack(alignment: .leading, spacing: 14) {
                             if let openBar { Button("Keep bar visible", action: openBar) }
@@ -75,14 +75,14 @@ struct MenuBarStatusView: View {
                             if store.engine.captureIsActive { Button("Discard recording") { store.engine.cancelRecording() } }
                             Divider()
                             Button("Quit Hasna Recordings") { NSApplication.shared.terminate(nil) }
-                        }.buttonStyle(.plain).padding(18).frame(width: 210, alignment: .leading)
+                        }.buttonStyle(GlassButtonStyle()).font(.system(size: 13)).padding(12).frame(width: 200, alignment: .leading).background(FrostedBackground())
                     }
             }
-            .padding(.horizontal, 20).padding(.vertical, 17)
-            .frame(width: width, height: 84)
-            .background(FrostedBackground(radius: 20, cool: true))
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .frame(width: width, height: 60)
+            .background(FrostedBackground(radius: 16, cool: true))
         }
-        .padding(12)
+        .padding(8)
     }
 
     private var transcript: String {
@@ -119,26 +119,25 @@ struct RecentPastesView: View {
     @ObservedObject var store: RecordingsStore
     let close: () -> Void
     var body: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 12) {
             HStack {
-                Text("Recent pastes").font(.system(size: 21, weight: .medium))
+                Text("Recent pastes").font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Button("Clear all") { store.engine.clearRecentPastes() }
-                    .buttonStyle(.plain).font(.system(size: 12)).padding(.horizontal, 14).padding(.vertical, 8)
-                    .background(.white.opacity(0.5), in: RoundedRectangle(cornerRadius: 9))
-                    .overlay(RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.9)))
-                Button(action: close) { Image(systemName: "xmark").font(.system(size: 16)) }
+                    .buttonStyle(.plain).font(.system(size: 11)).padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(GlassInset())
+                Button(action: close) { Image(systemName: "xmark").font(.system(size: 12)) }
                     .buttonStyle(.plain).padding(.leading, 10).accessibilityLabel("Close recent pastes")
             }.padding(.horizontal, 10)
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
-                    Text("App").frame(width: 120, alignment: .leading)
-                    Text("Location").frame(width: 140, alignment: .leading)
+                    Text("App").frame(width: 100, alignment: .leading)
+                    Text("Location").frame(width: 100, alignment: .leading)
                     Text("Pasted content").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Time").frame(width: 112, alignment: .leading)
-                    Text("Status").frame(width: 100, alignment: .leading)
+                    Text("Time").frame(width: 76, alignment: .leading)
+                    Text("Status").frame(width: 92, alignment: .leading)
                     Spacer().frame(width: 24)
-                }.font(.system(size: 13)).foregroundStyle(.secondary).padding(14)
+                }.font(.system(size: 11)).foregroundStyle(.secondary).padding(10)
                 Divider().opacity(0.5)
                 if store.engine.recentPastes.isEmpty {
                     Spacer(); Text("Your pastes from this session appear here.").foregroundStyle(.secondary); Spacer()
@@ -148,14 +147,14 @@ struct RecentPastesView: View {
                             ForEach(store.engine.recentPastes) { paste in
                                 HStack(spacing: 0) {
                                     HStack(spacing: 10) {
-                                        Image(nsImage: appIcon(paste.bundleIdentifier)).resizable().frame(width: 28, height: 28)
+                                        Image(nsImage: appIcon(paste.bundleIdentifier)).resizable().frame(width: 22, height: 22)
                                         Text(paste.appName).lineLimit(1)
-                                    }.frame(width: 120, alignment: .leading)
-                                    Text(paste.location).foregroundStyle(.secondary).frame(width: 140, alignment: .leading)
+                                    }.frame(width: 100, alignment: .leading)
+                                    Text(paste.location).foregroundStyle(.secondary).frame(width: 100, alignment: .leading)
                                     Text(paste.text).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
-                                    Text(paste.timestamp.relativeDescription).foregroundStyle(.secondary).frame(width: 112, alignment: .leading)
+                                    Text(paste.timestamp.relativeDescription).foregroundStyle(.secondary).frame(width: 76, alignment: .leading)
                                     Label(paste.status, systemImage: paste.verified ? "checkmark.circle.fill" : "questionmark.circle")
-                                        .labelStyle(PasteStatusStyle(verified: paste.verified)).frame(width: 100, alignment: .leading)
+                                        .labelStyle(PasteStatusStyle(verified: paste.verified)).frame(width: 92, alignment: .leading)
                                     Menu {
                                         Button("Copy pasted text") {
                                             NSPasteboard.general.clearContents()
@@ -163,14 +162,14 @@ struct RecentPastesView: View {
                                         }
                                     } label: { Image(systemName: "ellipsis") }
                                     .menuStyle(.borderlessButton).menuIndicator(.hidden).frame(width: 24)
-                                }.font(.system(size: 13)).padding(.horizontal, 14).padding(.vertical, 17)
+                                }.font(.system(size: 12)).padding(.horizontal, 10).padding(.vertical, 10)
                                 Divider().opacity(0.35)
                             }
                         }
                     }
                 }
-            }.background(.white.opacity(0.28), in: RoundedRectangle(cornerRadius: 13))
-        }.padding(22).background(FrostedBackground(radius: 17, cool: true))
+            }.background(GlassInset(radius: 10))
+        }.padding(14).background(FrostedBackground(radius: 17, cool: true))
     }
     private func appURL(_ id: String?) -> URL? { id.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) } }
     private func appName(_ id: String?) -> String { appURL(id)?.deletingPathExtension().lastPathComponent ?? "Application" }
@@ -183,7 +182,7 @@ private struct PasteStatusStyle: LabelStyle {
     let verified: Bool
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 8) {
-            configuration.icon.foregroundStyle(verified ? .green : .orange).font(.system(size: 21))
+            configuration.icon.foregroundStyle(verified ? .green : .orange).font(.system(size: 15))
             configuration.title.foregroundStyle(.secondary)
         }
     }

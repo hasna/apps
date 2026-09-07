@@ -3,7 +3,7 @@ import AppKit
 import RecordingsLib
 
 enum Theme {
-    static let accent = Color(red: 0.19, green: 0.20, blue: 0.22)
+    static let accent = Color.primary
     static let recordRed = Color(red: 1, green: 0.24, blue: 0.25)
     static let cornerLarge: CGFloat = 22
     static let cornerMedium: CGFloat = 14
@@ -15,36 +15,28 @@ enum Theme {
     }
 }
 
-/// One native blur behind each window. The animated controls use cheap gradients rather
-/// than creating new Liquid Glass rendering surfaces on every microphone tick.
+/// A single native backdrop per window; controls share lightweight glass highlights.
 struct FrostedBackground: View {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    var radius: CGFloat = 20
+    var radius: CGFloat = 16
     var cool = false
+    var body: some View { RecordingGlassBackground(radius: radius) }
+}
+
+struct GlassInset: View {
+    var radius: CGFloat = 8
     var body: some View {
-        ZStack {
-            if ChromeSurface.forReducedTransparency(reduceTransparency) == .opaque {
-                Color(NSColor.windowBackgroundColor)
-            } else {
-                Color(red: cool ? 0.92 : 0.84, green: cool ? 0.93 : 0.83, blue: cool ? 0.96 : 0.81)
-                NativeFrost().opacity(cool ? 0.14 : 0.3)
-                LinearGradient(colors: [.white.opacity(0.45), .white.opacity(0.10), .white.opacity(0.20)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: radius))
-        .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(.white.opacity(0.78), lineWidth: 1))
+        RoundedRectangle(cornerRadius: radius)
+            .fill(LinearGradient(colors: [.white.opacity(0.26), .white.opacity(0.06)], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(.white.opacity(0.45), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.04), radius: 2, y: 1)
     }
 }
 
-private struct NativeFrost: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .hudWindow
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
+struct GlassButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.padding(6).background(GlassInset())
+            .opacity(configuration.isPressed ? 0.65 : 1)
     }
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 struct GlassCircle: View {
@@ -54,7 +46,7 @@ struct GlassCircle: View {
     var progress: Double? = nil
     var body: some View {
         ZStack {
-            Circle().fill(.white.opacity(0.20)).padding(-7)
+            Circle().fill(.white.opacity(0.20)).padding(-3)
             Circle()
                 .fill(LinearGradient(colors: red
                     ? [Color(red: 1, green: 0.38, blue: 0.38), Color(red: 0.94, green: 0.18, blue: 0.19)]
@@ -79,7 +71,7 @@ struct GlassCircle: View {
 struct GlassIconButton: View {
     let symbol: String
     let label: String
-    var size: CGFloat = 40
+    var size: CGFloat = 28
     let action: () -> Void
     var body: some View {
         Button(action: action) { GlassCircle(symbol: symbol, size: size) }

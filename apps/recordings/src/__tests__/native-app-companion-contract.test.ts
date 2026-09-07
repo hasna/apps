@@ -532,11 +532,12 @@ describe("native app companion contract", () => {
     expect(chrome).toContain("reduceTransparency ? .opaque : .liquidGlass");
     expect(workspace).not.toContain(".glassEffect(");
     expect(workspace).not.toContain("GlassEffectContainer");
-    expect(theme).toContain("ChromeSurface.forReducedTransparency(reduceTransparency)");
+    const glass = readFileSync("src/native/Recordings/RecordingsLib/RecordingGlassBackground.swift", "utf8");
+    expect(glass).toContain("ChromeSurface.forReducedTransparency(reduceTransparency)");
     expect(workspace).not.toContain("ultraThinMaterial");
     expect(theme).not.toContain("ultraThinMaterial");
     expect(workspace).toContain("GlassCircle(");
-    expect(theme).toContain("Color(NSColor.windowBackgroundColor)");
+    expect(glass).toContain("Color(NSColor.windowBackgroundColor)");
   });
 
   test("the menu bar reports the true start gate and the Record hero is dimensionally stable", () => {
@@ -550,7 +551,7 @@ describe("native app companion contract", () => {
     expect(presentation).toContain("canStartRecording: Bool");
     expect(menuView).toContain("canStartRecording: store.engine.canStartRecording");
     expect(menuView).toContain(".disabled(!presentation.primaryActionEnabled)");
-    expect(workspace).toContain(".frame(width: 304, height: 374)");
+    expect(workspace).toContain(".frame(maxWidth: .infinity, maxHeight: .infinity)");
     expect(workspace).toContain(".disabled(busy)");
     expect(workspace).toContain("engine.cancelIntentProcessing()");
   });

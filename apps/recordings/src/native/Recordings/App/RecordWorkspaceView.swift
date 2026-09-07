@@ -13,14 +13,14 @@ struct RecordWorkspaceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Spacer().frame(height: 104)
+            Spacer().frame(height: 16)
             Button {
                 if engine.isPaused { engine.togglePause() }
                 else if engine.captureIsActive { engine.stopAndTranscribe() }
                 else if store.hasPlayback { store.toggleLatestPlayback() }
                 else { store.beginRecording() }
             } label: {
-                GlassCircle(symbol: symbol, size: 136,
+                GlassCircle(symbol: symbol, size: 88,
                             red: engine.captureIsActive && !engine.isPaused,
                             progress: store.hasPlayback && !engine.captureIsActive ? store.playbackProgress : nil)
             }
@@ -37,9 +37,9 @@ struct RecordWorkspaceView: View {
                 }
             }
             Text(Theme.clock(store.hasPlayback && !engine.captureIsActive ? store.playbackTime : engine.recordingDuration))
-                .font(.system(size: 22, weight: .regular)).monospacedDigit()
+                .font(.system(size: 17, weight: .regular)).monospacedDigit()
                 .foregroundStyle(.secondary).shadow(color: .white.opacity(0.85), radius: 0, y: 1)
-                .padding(.top, 28)
+                .padding(.top, 12)
             if busy {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.mini)
@@ -61,6 +61,6 @@ struct RecordWorkspaceView: View {
             }
             Spacer(minLength: 0)
         }
-        .frame(width: 304, height: 374)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

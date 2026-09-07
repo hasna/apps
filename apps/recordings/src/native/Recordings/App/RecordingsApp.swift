@@ -69,6 +69,7 @@ final class RecordingsAppState: ObservableObject {
     private let runtimeSmokeOutputPath: String?
     private let runtimeSmokeAcknowledgementPath: String?
     private let runtimeSmokeCompletionPath: String?
+    @Published var page: RecorderPage = .recorder
     private var mainWindow: NSWindow?
     private var settingsWindowController: SettingsWindowController?
     private var historyWindow: NSWindow?
@@ -122,6 +123,8 @@ final class RecordingsAppState: ObservableObject {
     }
 
     func openRecordings() {
+        page = .recorder
+        resizeDesktop()
         // Bar launches never create the workspace window — on any path, including the
         // reopen handler and the runtime smoke. Keyed on declaresWindow (NOT on
         // declaresMainWindow, which excludes every runtime smoke): a full build's
@@ -131,10 +134,24 @@ final class RecordingsAppState: ObservableObject {
         // deterministically on every build.
         guard declaresWindow else { return }
         if let store {
-            showWindow(contentView: NSHostingView(rootView: ContentView(store: store, openSettings: openSettings, openHistory: openHistory, windowAction: performWindowAction)))
+            showWindow(contentView: NSHostingView(rootView: ContentView(store: store, state: self, windowAction: performWindowAction)))
         } else if runtimeSmokeMode == "normal" {
             showWindow(contentView: NSHostingView(rootView: Text("Recordings runtime smoke")))
         }
+    }
+
+    private func showPage(_ destination: RecorderPage) {
+        if mainWindow == nil { openRecordings() }
+        page = destination
+        resizeDesktop()
+        activate(mainWindow)
+    }
+
+    private func resizeDesktop() {
+        guard let mainWindow else { return }
+        mainWindow.contentMinSize = page.size
+        mainWindow.contentMaxSize = page.size
+        mainWindow.setContentSize(page.size)
     }
 
     private func performWindowAction(_ kind: NSWindow.ButtonType) {
@@ -150,8 +167,8 @@ final class RecordingsAppState: ObservableObject {
         guard let store else { return }
         if transcriptionBar == nil {
             let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
-            let width = min(1140, screen.width - 48) + 24
-            let panel = RecorderPanel(contentRect: NSRect(x: screen.midX - width / 2, y: screen.maxY - 120, width: width, height: 108),
+            let width = min(820, screen.width - 48) + 16
+            let panel = RecorderPanel(contentRect: NSRect(x: screen.midX - width / 2, y: screen.maxY - 84, width: width, height: 76),
                 styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             panel.title = "Hasna Recordings — Live Transcript"
             panel.isOpaque = false; panel.backgroundColor = .clear
@@ -170,28 +187,31 @@ final class RecordingsAppState: ObservableObject {
     func openRecent() {
         guard let store else { return }
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
-        let width = min(980, screen.width - 208)
+        let width = min(760, screen.width - 48)
         if recentPastesWindow == nil {
-            recentPastesWindow = makePanel(title: "Recent pastes", width: width, height: 462,
+            recentPastesWindow = makePanel(title: "Recent pastes", width: width, height: 350,
                 content: NSHostingView(rootView: VStack(spacing: 0) {
                     PanelPointer().fill(Color(red: 0.94, green: 0.95, blue: 0.97))
                         .frame(width: 26, height: 12).offset(x: width * 0.34)
                     RecentPastesView(store: store, close: { [weak self] in self?.recentPastesWindow?.close() })
-                        .frame(width: width, height: 450)
+                        .frame(width: width, height: 338)
                 }))
             recentPastesWindow?.level = .floating
         }
-        let barBottom = transcriptionBar?.frame.minY ?? (screen.maxY - 120)
-        recentPastesWindow?.setFrameOrigin(NSPoint(x: screen.midX - width / 2, y: barBottom - 472))
+        let barBottom = transcriptionBar?.frame.minY ?? (screen.maxY - 84)
+        recentPastesWindow?.setFrameOrigin(NSPoint(x: screen.midX - width / 2, y: barBottom - 356))
         activate(recentPastesWindow)
     }
 
     func openHistory() {
         guard let store else { return }
+        store.selection = nil
+        store.searchText = ""
+        if !barOnly { showPage(.history); return }
         store.searchText = ""
         if historyWindow == nil {
-            historyWindow = makePanel(title: "Recordings", width: 610, height: 430,
-                content: NSHostingView(rootView: RecordingsListView(store: store, close: { [weak self] in self?.historyWindow?.close() })))
+            historyWindow = makePanel(title: "Recordings", width: 500, height: 354,
+                content: NSHostingView(rootView: RecordingsListView(store: store, close: { [weak self] in self?.historyWindow?.close() }).background(FrostedBackground())))
         }
         store.loadLibrary()
         activate(historyWindow)
@@ -199,10 +219,11 @@ final class RecordingsAppState: ObservableObject {
 
     func openSettings() {
         guard let store else { return }
+        if !barOnly { showPage(.settings); return }
         if compactSettingsWindow == nil {
-            compactSettingsWindow = makePanel(title: "Hasna Recordings Settings", width: 534, height: 434,
+            compactSettingsWindow = makePanel(title: "Hasna Recordings Settings", width: 420, height: 314,
                 content: NSHostingView(rootView: RecorderSettingsView(store: store,
-                    close: { [weak self] in self?.compactSettingsWindow?.close() }, advanced: openAdvancedSettings)))
+                    close: { [weak self] in self?.compactSettingsWindow?.close() }, advanced: openAdvancedSettings).background(FrostedBackground())))
         }
         activate(compactSettingsWindow)
     }
@@ -227,6 +248,7 @@ final class RecordingsAppState: ObservableObject {
 
     func openAdvancedSettings() {
         guard let store, !store.isVisualPreview else { return }
+        if !barOnly { showPage(.advanced); return }
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController {
                 NSHostingView(rootView: SettingsView(
@@ -250,7 +272,7 @@ final class RecordingsAppState: ObservableObject {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 304, height: 374),
+            contentRect: NSRect(x: 0, y: 0, width: 224, height: 244),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -264,8 +286,8 @@ final class RecordingsAppState: ObservableObject {
         window.appearance = NSAppearance(named: .aqua)
         window.isReleasedWhenClosed = false
         window.contentView = contentView
-        window.contentMinSize = NSSize(width: 304, height: 374)
-        window.contentMaxSize = NSSize(width: 304, height: 374)
+        window.contentMinSize = NSSize(width: 224, height: 244)
+        window.contentMaxSize = NSSize(width: 224, height: 244)
         window.center()
         mainWindow = window
         windowCreationCount += 1

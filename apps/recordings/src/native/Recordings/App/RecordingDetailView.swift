@@ -26,7 +26,7 @@ struct RecordingDetailView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Text(rec.createdDate.map { dateLabel($0) } ?? "Recording")
-                    .font(.system(.title2, design: .rounded).weight(.semibold))
+                    .font(.system(size: 13, weight: .semibold))
                 Spacer()
                 toolbar(rec)
             }
@@ -35,7 +35,7 @@ struct RecordingDetailView: View {
 
             ScrollView {
                 Text(rec.displayText.isEmpty ? "No transcript" : rec.displayText)
-                    .font(.system(.title3, design: .rounded))
+                    .font(.system(size: 13))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 18).padding(.top, 14)
@@ -80,7 +80,7 @@ struct RecordingDetailView: View {
 
     private func iconButton(_ name: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) { Image(systemName: name).frame(width: 24, height: 24) }
-            .buttonStyle(.plain).help(help)
+            .buttonStyle(GlassButtonStyle()).help(help)
     }
 
     private func metadata(_ rec: Recording) -> some View {
