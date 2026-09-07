@@ -62,29 +62,44 @@ type ProbeResult = {
  * NOT spread in, so this box's real domains credentials cannot leak into it.
  */
 function runUnprotected(extra: Record<string, string>): ProbeResult {
-  const result = Bun.spawnSync({
-    cmd: ["bun", PROBE],
-    env: {
-      PATH: process.env["PATH"] ?? "",
-      HOME: process.env["HOME"] ?? "",
-      // Sentinel Keychain account: the ambient Keychain tier must miss, so a
-      // provisioned station's real `hasna.credentials.domains.*` items can
-      // neither satisfy nor contradict the fixture env (see header).
-      HASNA_STATION: "no-such-station",
-      ...HOSTED_FIXTURE,
-      ...extra,
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const stdout = result.stdout.toString().trim();
-  const line = stdout.split("\n").filter(Boolean).at(-1) ?? "";
-  if (!line.startsWith("{")) {
-    throw new Error(
-      `probe produced no JSON (exit ${result.exitCode}). stdout=${stdout} stderr=${result.stderr.toString().slice(0, 400)}`,
-    );
+  // HERMETIC DISK TIER. The child inherits no credential file: the shared
+  // resolver reads the disk tier at `~/.hasna/domains/config/credentials`
+  // rooted at the env's HOME/HASNA_HOME/HASNA_CONFIG_HOME, and this box's
+  // real file would outrank the fixture env — the CONTROL probe then refuses
+  // as "different service authorities" instead of resolving what it was
+  // handed. Pointing every home-layout root at a scratch dir (no credentials
+  // file can exist there) makes the tier consult nothing, identically on a
+  // provisioned station and a clean runner.
+  const scratch = mkdtempSync(join(tmpdir(), "domains-guard-home-"));
+  try {
+    const result = Bun.spawnSync({
+      cmd: ["bun", PROBE],
+      env: {
+        PATH: process.env["PATH"] ?? "",
+        HOME: scratch,
+        HASNA_HOME: scratch,
+        HASNA_CONFIG_HOME: scratch,
+        // Sentinel Keychain account: the ambient Keychain tier must miss, so a
+        // provisioned station's real `hasna.credentials.domains.*` items can
+        // neither satisfy nor contradict the fixture env (see header).
+        HASNA_STATION: "no-such-station",
+        ...HOSTED_FIXTURE,
+        ...extra,
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = result.stdout.toString().trim();
+    const line = stdout.split("\n").filter(Boolean).at(-1) ?? "";
+    if (!line.startsWith("{")) {
+      throw new Error(
+        `probe produced no JSON (exit ${result.exitCode}). stdout=${stdout} stderr=${result.stderr.toString().slice(0, 400)}`,
+      );
+    }
+    return JSON.parse(line) as ProbeResult;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
   }
-  return JSON.parse(line) as ProbeResult;
 }
 
 describe("store resolution outside a test run (plain bun subprocess)", () => {
