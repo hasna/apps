@@ -18,7 +18,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -30,24 +30,18 @@ import {
   readAppLogTail,
   resolveHotkeyBinding,
 } from "../cli/trigger-probe.js";
+import { signingFixtureCommand } from "./helpers/signing-fixture";
 import { sliceBetweenUnique } from "./helpers/source-assertions";
 
 const temporaryDirectories: string[] = [];
 /** `check` must make no network call, and only strace can settle that; see the test below. */
 const testWithStrace = Bun.which("strace") && Bun.spawnSync(["strace", "-V"]).exitCode === 0 ? test : test.skip;
 const repoRoot = join(import.meta.dir, "..", "..");
-const cliEntry = join("src", "__tests__", "helpers", "trigger-cli-fixture.ts");
-// Independent OS backstop on Darwin: even a broken fixture launcher cannot
-// execute the real preferences writer. HOME alone does not isolate defaults.
-const sandboxProfile = `(version 1)
-(allow default)
-(deny process-exec
-  (literal "/usr/bin/defaults") (literal "/usr/bin/tccutil")
-  (literal "/usr/bin/open") (literal "/usr/bin/codesign")
-  (literal "/usr/bin/security") (literal "/usr/bin/sqlite3"))`;
-const cliCommand = process.platform === "darwin"
-  ? ["/usr/bin/sandbox-exec", "-p", sandboxProfile, process.execPath, cliEntry]
-  : [process.execPath, cliEntry];
+const cliEntry = join(import.meta.dir, "helpers", "trigger-cli-fixture.ts");
+// A child sandbox is necessary: an outer release-gate sandbox cannot nest it.
+// Deny network, signals to outside processes, writes outside HOME, and actual
+// host apps/preferences/Keychain/TCC reads as well as pinned native commands.
+const cliCommand = (home: string) => signingFixtureCommand(home, [process.execPath, cliEntry]);
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -56,7 +50,8 @@ afterEach(() => {
 });
 
 function scratchHome(label: string): string {
-  const home = mkdtempSync(join(tmpdir(), `recordings-trigger-${label}-`));
+  const home = realpathSync(mkdtempSync(join(tmpdir(), `recordings-trigger-${label}-`)));
+  chmodSync(home, 0o700);
   temporaryDirectories.push(home);
   return home;
 }
@@ -363,8 +358,8 @@ describe("a stored trigger that the running app has not picked up", () => {
     const marker = join(home, "override-ran");
     writeFileSync(defaultsPath, `#!/bin/sh\nprintf invoked > "${marker}"\n`);
     chmodSync(defaultsPath, 0o700);
-    const result = Bun.spawnSync([...cliCommand, "--verify-darwin-pinning"], {
-      cwd: repoRoot,
+    const result = Bun.spawnSync([...cliCommand(home), "--verify-darwin-pinning"], {
+      cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
       env: { HOME: home, TMPDIR: tmpdir(), PATH: "/usr/bin:/bin", RECORDINGS_TEST_DEFAULTS_EXECUTABLE: defaultsPath },
     });
     expect(result.exitCode, result.stderr.toString()).toBe(0);
@@ -376,10 +371,9 @@ describe("a stored trigger that the running app has not picked up", () => {
     if (process.platform === "darwin") {
       // Verify the independent OS backstop without asking to read or write
       // the installed app's domain, even if this negative control regresses.
-      const denied = Bun.spawnSync([
-        "/usr/bin/sandbox-exec", "-p", sandboxProfile,
+      const denied = Bun.spawnSync(signingFixtureCommand(home, [
         "/usr/bin/defaults", "read", "org.example.recordings.fixture", "fictional-key",
-      ], { env: { HOME: home, TMPDIR: tmpdir(), PATH: "/usr/bin:/bin" } });
+      ]), { env: { HOME: home, TMPDIR: tmpdir(), PATH: "/usr/bin:/bin" } });
       expect(denied.exitCode).not.toBe(0);
       expect(denied.stderr.toString()).toContain("Operation not permitted");
       expect(denied.stdout.toString()).toBe("");
@@ -483,8 +477,8 @@ exit 1
     writeFileSync(psPath, `#!/bin/sh\nprintf '%s\\n' "${bundle}/Contents/MacOS/Recordings"\n`);
     chmodSync(psPath, 0o755);
 
-    const result = Bun.spawnSync([...cliCommand, "shortcut", "--fn", "on"], {
-      cwd: repoRoot,
+    const result = Bun.spawnSync([...cliCommand(home), "shortcut", "--fn", "on"], {
+      cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
@@ -541,8 +535,8 @@ describe("the running-bundle scan does not re-ask questions it has answered", ()
  */
 describe("recordings check exit contract", () => {
   const runCheck = (home: string, fake: Record<string, string> | null) => {
-    const result = Bun.spawnSync([...cliCommand, "--json", "check"], {
-      cwd: repoRoot,
+    const result = Bun.spawnSync([...cliCommand(home), "--json", "check"], {
+      cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
@@ -552,9 +546,9 @@ describe("recordings check exit contract", () => {
         OPENAI_API_KEY: "test-openai-key",
         // `check` fails closed (report "none", exit 1) when no credential
         // resolves, so these spawns pin an env-tier fixture key against a
-        // sentinel station: the exit code answers only the trigger question
-        // on any host, with no Keychain or disk-tier dependency.
-        HASNA_STATION: "no-such-station",
+        // fixture station: the exact native Keychain lookup is intercepted
+        // as item-not-found, so the real resolver reaches this env tier.
+        HASNA_STATION: "recordings-fixture",
         HASNA_RECORDINGS_API_KEY: "fixture-check-trigger-key",
         ...(fake ?? {}),
       },
@@ -610,6 +604,7 @@ printf '%s\\n' "$value"
     // useFnKey=0 with bare F5 bound — the state station03 was in. Reported, not failed.
     const { exitCode, stdout } = runCheck(home, fakeDefaults(home, STORED_F5, "0"));
     expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout).active_store.transport).toBe("http");
     const report = JSON.parse(stdout) as {
       trigger: { can_fire: boolean; hotkey: { chord: string }; fn: { use_fn_key: boolean } };
     };
@@ -624,15 +619,15 @@ printf '%s\\n' "$value"
 
   test("the human readout names the trigger too, not only --json", () => {
     const home = scratchHome("text");
-    const result = Bun.spawnSync([...cliCommand, "check"], {
-      cwd: repoRoot,
+    const result = Bun.spawnSync([...cliCommand(home), "check"], {
+      cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
         TMPDIR: tmpdir(),
         HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
         OPENAI_API_KEY: "test-openai-key",
-        HASNA_STATION: "no-such-station",
+        HASNA_STATION: "recordings-fixture",
         HASNA_RECORDINGS_API_KEY: "fixture-check-trigger-key",
         ...fakeDefaults(home, "0", "0"),
       },
@@ -712,8 +707,8 @@ printf '%s\\n' "$value"
         "microphone=allowed accessibility=allowed blocked=none\n",
     );
     // Storage now says fn is ON; the running app registered with it OFF.
-    const result = Bun.spawnSync([...cliCommand, "--json", "app", "status"], {
-      cwd: repoRoot,
+    const result = Bun.spawnSync([...cliCommand(home), "--json", "app", "status"], {
+      cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
       env: {
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         HOME: home,
@@ -759,12 +754,12 @@ printf '%s\\n' "$value"
         "trace=connect",
         "-o",
         tracePath,
-        ...cliCommand,
+        ...cliCommand(home),
         "--json",
         "check",
       ],
       {
-        cwd: repoRoot,
+        cwd: home, timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 64 * 1024,
         env: {
           PATH: process.env.PATH ?? "/usr/bin:/bin",
           HOME: home,
@@ -775,7 +770,7 @@ printf '%s\\n' "$value"
           // "none", exit 1 — when nothing resolves); the assertion is that
           // the command makes NO connect(2) syscall even though it resolves
           // the hosted store.
-          HASNA_STATION: "no-such-station",
+          HASNA_STATION: "recordings-fixture",
           HASNA_RECORDINGS_API_KEY: "fixture-check-trigger-key",
           ...fakeDefaults(home, STORED_F5, "1"),
         },

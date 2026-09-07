@@ -4,6 +4,7 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { fixtureKeychainResult } from "./credential-command-fixture";
 
 const args = process.argv.slice(2);
 const pinningProbe = args.length === 1 && args[0] === "--verify-darwin-pinning";
@@ -16,7 +17,7 @@ if (!pinningProbe && !allowedCommands.some((command) => JSON.stringify(command) 
 }
 const home = process.env.HOME ?? "";
 const details = fs.lstatSync(home);
-if (!details.isDirectory() || details.isSymbolicLink() || details.uid !== process.getuid?.() ||
+if (fs.realpathSync(home) !== home || !details.isDirectory() || details.isSymbolicLink() || details.uid !== process.getuid?.() ||
     (details.mode & 0o777) !== 0o700 ||
     !basename(home).startsWith("recordings-trigger-") ||
     !fs.realpathSync(home).startsWith(`${fs.realpathSync(tmpdir())}/`)) {
@@ -47,6 +48,8 @@ const realSpawnSync = childProcess.spawnSync;
 const realExistsSync = fs.existsSync;
 const realStatSync = fs.statSync;
 const guardedSpawnSync = (...parameters: Parameters<typeof childProcess.spawnSync>) => {
+  const keychain = !pinningProbe ? fixtureKeychainResult(parameters[0], (parameters[1] ?? []) as string[], home) : undefined;
+  if (keychain) return keychain;
   if (!pinningProbe) {
     if (parameters[0] === "/usr/bin/defaults") parameters[0] = process.env.RECORDINGS_TEST_DEFAULTS_EXECUTABLE ?? "";
     if (parameters[0] === "/bin/ps") parameters[0] = process.env.RECORDINGS_TEST_PS_EXECUTABLE ?? "";
@@ -71,10 +74,9 @@ mock.module("node:fs", () => ({
     return realStatSync(...parameters);
   },
 }));
-const spawn = Bun.spawn.bind(Bun);
-Bun.spawn = ((command: string[], options: unknown) => {
+Bun.spawn = ((command: string[]) => {
   if (JSON.stringify(command) !== JSON.stringify(["which", "rec"])) return rejectProcess();
-  return spawn(command, options as never);
+  return { exited: Promise.resolve(0), exitCode: 0 };
 }) as typeof Bun.spawn;
 const spawnSync = Bun.spawnSync.bind(Bun);
 Bun.spawnSync = ((...parameters: Parameters<typeof Bun.spawnSync>) => {

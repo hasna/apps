@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { signingFixtureCommand } from "./helpers/signing-fixture";
+import { runStartupFixture, startupFixtureEnv } from "./helpers/startup-fixture";
 import {
   chmodSync,
   existsSync,
@@ -146,27 +147,10 @@ describe("recordings CLI", () => {
   });
 
   test("without hosted env or the local opt-in the CLI fails closed and creates no local db", async () => {
-    const home = join(tmpdir(), `open-recordings-cli-failclosed-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    tempDirs.push(home);
-    mkdirSync(home, { recursive: true });
-
-    const proc = Bun.spawn(
-      [process.execPath, cliEntry, "--json", "list", "--limit", "1"],
-      {
-        cwd: home,
-        // No hosted vars AND no local opt-in: the on-box file must never
-        // become a silent default, so this process fails closed.
-        env: { ...isolatedCliEnv(home), HASNA_RECORDINGS_LOCAL: "" },
-        stdout: "pipe",
-        stderr: "pipe",
-      }
-    );
-
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
+    const home = appFixtureHome();
+    const { stdout, stderr, exitCode } = await runStartupFixture(home,
+      [process.execPath, join(import.meta.dir, "helpers/cli-app-fixture.ts"), "--json", "list", "--limit", "1"],
+      startupFixtureEnv(home, { HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db") }));
 
     expect(exitCode).toBe(1);
     expect(stderr).toContain("ERROR:");
@@ -1085,31 +1069,15 @@ describe("recordings CLI", () => {
   test("--json check emits machine-readable dependency status", async () => {
     const home = appFixtureHome();
 
-    const proc = Bun.spawn(
-      appFixtureCommand(home, ["--json", "check"]),
-      {
-        cwd: process.cwd(),
-        env: {
-          ...isolatedCliEnv(home),
-          OPENAI_API_KEY: "test-openai-key",
-          RECORDINGS_ENHANCEMENT_KEY: "test-enhancement-key",
-          // `check` now fails closed with no credential (report "none", exit
-          // 1) instead of rendering the on-box file as live, so this test
-          // pins an env-tier fixture credential and a sentinel station: the
-          // report is deterministic on any host, with no Keychain touch.
-          HASNA_STATION: "no-such-station",
-          HASNA_RECORDINGS_API_KEY: "fixture-check-env-key",
-        },
-        stdout: "pipe",
-        stderr: "pipe",
-      }
-    );
-
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
+    const { stdout, stderr, exitCode } = await runStartupFixture(home,
+      [process.execPath, join(import.meta.dir, "helpers/cli-app-fixture.ts"), "--json", "check"],
+      startupFixtureEnv(home, {
+        HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"), RECORDINGS_AUDIO_DIR: join(home, "audio"),
+        OPENAI_API_KEY: "test-openai-key", RECORDINGS_ENHANCEMENT_KEY: "test-enhancement-key",
+        // The exact native Keychain lookup returns item-not-found; the real
+        // resolver must then choose the env key, even with local opt-in set.
+        HASNA_RECORDINGS_LOCAL: "1", HASNA_RECORDINGS_API_KEY: "fixture-check-env-key",
+      }));
 
     expect(exitCode, stderr).toBe(0);
     expect(stderr).toBe("");
@@ -1143,33 +1111,12 @@ describe("recordings CLI", () => {
   });
 
   test("check with no credential fails closed: exit 1, reports 'none', creates no local db", async () => {
-    const home = join(tmpdir(), `open-recordings-check-failclosed-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    tempDirs.push(home);
-    mkdirSync(home, { recursive: true });
-
-    const proc = Bun.spawn([process.execPath, cliEntry, "check"], {
-      cwd: home,
-      env: {
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        HOME: home,
-        HASNA_STATION: "no-such-station",
-        HASNA_HOME: home,
-        HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
-        RECORDINGS_AUDIO_DIR: join(home, "audio"),
-        OPENAI_API_KEY: "test-openai-key",
-        HASNA_RECORDINGS_API_URL: "",
-        HASNA_RECORDINGS_API_KEY: "",
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-
+    const home = appFixtureHome();
+    const { stdout, stderr, exitCode } = await runStartupFixture(home,
+      [process.execPath, join(import.meta.dir, "helpers/cli-app-fixture.ts"), "check"],
+      startupFixtureEnv(home, { HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
+        RECORDINGS_AUDIO_DIR: join(home, "audio"), OPENAI_API_KEY: "test-openai-key" }));
+    expect(stderr).toBe("");
     expect(exitCode).toBe(1);
     // The fail-closed line must read as a FAIL, never a green sqlite store.
     expect(stdout).toContain("✗ Active store: none — fail-closed");
@@ -1180,33 +1127,12 @@ describe("recordings CLI", () => {
   });
 
   test("--json check with no credential reports active_store transport 'none' and exits 1", async () => {
-    const home = join(tmpdir(), `open-recordings-check-json-failclosed-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    tempDirs.push(home);
-    mkdirSync(home, { recursive: true });
-
-    const proc = Bun.spawn([process.execPath, cliEntry, "--json", "check"], {
-      cwd: home,
-      env: {
-        PATH: process.env.PATH ?? "/usr/bin:/bin",
-        HOME: home,
-        HASNA_STATION: "no-such-station",
-        HASNA_HOME: home,
-        HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
-        RECORDINGS_AUDIO_DIR: join(home, "audio"),
-        OPENAI_API_KEY: "test-openai-key",
-        HASNA_RECORDINGS_API_URL: "",
-        HASNA_RECORDINGS_API_KEY: "",
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-
+    const home = appFixtureHome();
+    const { stdout, stderr, exitCode } = await runStartupFixture(home,
+      [process.execPath, join(import.meta.dir, "helpers/cli-app-fixture.ts"), "--json", "check"],
+      startupFixtureEnv(home, { HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
+        RECORDINGS_AUDIO_DIR: join(home, "audio"), OPENAI_API_KEY: "test-openai-key" }));
+    expect(stderr).toBe("");
     expect(exitCode).toBe(1);
     const report = JSON.parse(stdout) as {
       active_store: {
@@ -1222,6 +1148,25 @@ describe("recordings CLI", () => {
     expect(report.active_store.base_url).toBeNull();
     expect(report.active_store.local_db_present).toBe(false);
     expect(report.active_store.local_db_recordings).toBeNull();
+    // This refusal must come from credential resolution, not another failure.
+    expect(JSON.parse(stdout).recording.available).toBe(true);
+    if (process.platform === "darwin") expect(JSON.parse(stdout).trigger.can_fire).toBe(true);
+    expect(existsSync(join(home, "recordings.db"))).toBe(false);
+  });
+
+  (process.platform === "darwin" ? test : test.skip)("--json check preserves terminal Keychain denial with an env credential", async () => {
+    const home = appFixtureHome();
+    const { stdout, stderr, exitCode } = await runStartupFixture(home,
+      [process.execPath, join(import.meta.dir, "helpers/cli-app-fixture.ts"), "--json", "check"],
+      startupFixtureEnv(home, { HASNA_RECORDINGS_DB_PATH: join(home, "recordings.db"),
+        OPENAI_API_KEY: "test-openai-key", HASNA_RECORDINGS_API_KEY: "fixture-check-env-key",
+        RECORDINGS_TEST_KEYCHAIN_MODE: "locked" }));
+    expect(exitCode).toBe(1);
+    expect(stderr).toBe("");
+    const report = JSON.parse(stdout);
+    expect(report.active_store.transport).toBe("none");
+    expect(stdout).toContain("never resolved around");
+    expect(stdout).not.toContain("fixture-check-env-key");
     expect(existsSync(join(home, "recordings.db"))).toBe(false);
   });
 
