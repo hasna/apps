@@ -132,6 +132,55 @@ describe('bin runtime contract', () => {
     expect(stdout).toContain('Usage:');
   });
 
+  test('pure markdown helpers run offline: zero configuration, hostile env, no transport resolution', () => {
+    // Headline contract: `markdown commands` and `markdown apply-command` are
+    // pure Markdown transforms that must run BEFORE any transport resolution —
+    // no URL, no key, no credentials file, no network — so they work in any
+    // environment. The env carries a client-forbidden DSN and every retired
+    // storage-mode selector: the old code refused on the DSN alone (client
+    // environment) and on the selectors alone (retired ratchet), so success
+    // here proves the offline branch precedes resolution.
+    const hostile = {
+      HASNA_NOTES_DATABASE_URL: 'postgresql://not-for-clients.example.test/notes',
+      PERSONALNOTES_MODE: 'local',
+      HASNA_NOTES_STORAGE_MODE: 'sqlite',
+      HASNA_NOTES_MODE: 'cloud',
+      NOTES_STORAGE_MODE: 'legacy',
+      NOTES_MODE: 'local',
+    };
+    const commands = directExec('bin/notes.mjs', ['markdown', 'commands', '--json'], hostile);
+    expect(commands.stderr).toBe('');
+    expect(commands.rc).toBe(0);
+    const listed = JSON.parse(commands.stdout);
+    expect(Array.isArray(listed.commands)).toBe(true);
+    expect(listed.commands.some((command) => command.id === 'bold')).toBe(true);
+    expect(commands.created).toEqual([]);
+
+    const applied = directExec('bin/notes.mjs', [
+      'markdown', 'apply-command', 'bold', '--text', 'hello',
+      '--selection-start', '0', '--selection-end', '5', '--json',
+    ], hostile);
+    expect(applied.stderr).toBe('');
+    expect(applied.rc).toBe(0);
+    expect(JSON.parse(applied.stdout).markdown).toBe('**hello**');
+    expect(applied.created).toEqual([]);
+  });
+
+  test('network markdown helpers still fail closed without a credential', () => {
+    // `markdown render <id>` reads a note: it needs the transport, so a
+    // retired selector must not smuggle it through and the failure stays
+    // transport-neutral (no retired ratchet, no canonical-API phrasing, no
+    // local-mode hint).
+    const rendered = directExec('bin/notes.mjs', [
+      'markdown', 'render', '00000000-0000-0000-0000-000000000000', '--json',
+    ], { PERSONALNOTES_MODE: 'local' });
+    expect(rendered.rc).toBe(1);
+    expect(rendered.stdout).toBe('');
+    expect(rendered.stderr).toContain('HASNA_NOTES_API_URL');
+    expect(rendered.stderr).not.toMatch(/retired|canonical|local-fallback|local mode/i);
+    expect(rendered.created).toEqual([]);
+  });
+
   test('bin/notes.mjs fails closed rather than opening a local store', () => {
     const { rc, stdout, stderr, created } = directExec('bin/notes.mjs', ['list', '--limit', '1']);
     expect(rc).toBe(1);
