@@ -1,4 +1,7 @@
 import { parseWorkspaceMembersPage, workspaceMembersQuery, type RemoteWorkspaceMembersOptions, type RemoteWorkspaceMembersPage } from "./remote-workspace.js";
+import { workspaceMemberRoleInput, workspaceMemberRemovalInput, parseWorkspaceMemberRoleResult, parseWorkspaceMemberRemovalResult,
+  workspaceMemberFailure, workspaceMemberFailures, invalidMemberResult, type RemoteWorkspaceMemberErrorCode,
+  type SetRemoteWorkspaceMemberRole, type RemoveRemoteWorkspaceMember, type RemoteWorkspaceMemberRoleResult, type RemoteWorkspaceMemberRemovalResult } from "./remote-workspace.js";
 import { getApiUrl } from "./auth-store.js";
 import { normalizeSkillsApiOrigin, resolveSkillsConnection } from "./fleet-credentials.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
@@ -38,6 +41,15 @@ export class RemoteRequestError extends Error {
     // Keep the optional argument for existing SDK callers without displaying it.
     super(`Remote request to ${path} failed: HTTP ${status}`);
     this.name = "RemoteRequestError";
+  }
+}
+
+/** A recognized membership refusal, with fixed text and no server payload. */
+export class RemoteWorkspaceMemberError extends RemoteRequestError {
+  constructor(path: string, readonly code: RemoteWorkspaceMemberErrorCode) {
+    super(path, workspaceMemberFailures[code][0]);
+    this.name = "RemoteWorkspaceMemberError";
+    this.message = workspaceMemberFailures[code][1];
   }
 }
 
@@ -267,6 +279,31 @@ export class RemoteSkillsClient {
     const page = parseWorkspaceMembersPage(value);
     if (requestedCursor !== undefined && page.nextCursor === requestedCursor) throw new Error("The server returned an invalid workspace roster.");
     return page;
+  }
+  /** Exact incarnation and expected role; no refresh or retry. Server enforces current authority. */
+  async setWorkspaceMemberRole(membershipId: string, input: SetRemoteWorkspaceMemberRole): Promise<RemoteWorkspaceMemberRoleResult> {
+    const captured = workspaceMemberRoleInput(membershipId, input);
+    const value = await this.requestWorkspaceMember(captured.membershipId, "PATCH", captured.body);
+    return parseWorkspaceMemberRoleResult(value, captured.membershipId, captured.body.role);
+  }
+  /** Removes only this incarnation. A successful tombstone replay is returned unchanged. */
+  async removeWorkspaceMember(membershipId: string, input: RemoveRemoteWorkspaceMember): Promise<RemoteWorkspaceMemberRemovalResult> {
+    const captured = workspaceMemberRemovalInput(membershipId, input);
+    return parseWorkspaceMemberRemovalResult(await this.requestWorkspaceMember(captured.membershipId, "DELETE", captured.body), captured.membershipId);
+  }
+  private async requestWorkspaceMember(membershipId: string, method: "PATCH" | "DELETE", body: RemoveRemoteWorkspaceMember | SetRemoteWorkspaceMemberRole): Promise<unknown> {
+    const path = `/api/v1/workspace/members/${membershipId}`;
+    const response = await this.request(path, { method, body: JSON.stringify(body) });
+    let value: unknown;
+    try { value = JSON.parse(new TextDecoder().decode(await readBoundedResponse(response, response.ok ? 64 * 1024 : 4096))); }
+    catch { if (response.ok) throw new Error(invalidMemberResult); }
+    if (!response.ok) {
+      const code = workspaceMemberFailure(value, response.status);
+      if (code) throw new RemoteWorkspaceMemberError(path, code);
+      if (response.status === 404 || response.status === 405) throw new RemoteRouteUnsupportedError(path, response.status, this.apiUrl);
+      throw new RemoteRequestError(path, response.status);
+    }
+    return value;
   }
   async listApiKeys(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/auth/keys"); }
   async createApiKey(name: string, scopes?: string[]): Promise<{ key: string; [field: string]: unknown }> {

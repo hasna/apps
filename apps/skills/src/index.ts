@@ -195,6 +195,7 @@ export {
   createRemoteSkillsClient,
   RemoteRouteUnsupportedError,
   RemoteRequestError,
+  RemoteWorkspaceMemberError,
   RemoteCapabilityUnavailableError,
   type RemotePin,
   type RemoteSkillSummary,
@@ -474,4 +475,5 @@ export { RemoteCreditApprovalError, type RemoteRunApproval, type RemoteRunQuote,
 
 export { RemoteSkillsAuthClient, HostedApiError } from "./lib/remote-auth.js";
 export type { RemoteWorkspaceMember, RemoteWorkspaceMembersPage, RemoteWorkspaceMembersOptions } from "./lib/remote-workspace.js";
+export type { SetRemoteWorkspaceMemberRole, RemoveRemoteWorkspaceMember, RemoteWorkspaceMemberRoleResult, RemoteWorkspaceMemberRemovalResult, RemoteWorkspaceMemberErrorCode } from "./lib/remote-workspace.js";
 export type { RemoteCustomerRole, RemoteCustomerProfile, RemoteCurrentWorkspace, UpdateRemoteProfile, UpdateRemoteWorkspace } from "./lib/remote-profile.js";
