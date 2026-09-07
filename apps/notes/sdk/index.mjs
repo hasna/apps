@@ -24,11 +24,8 @@ import {
   NOTES_DATABASE_URL_ENV,
   NOTES_API_URL_ENV_KEYS,
   NOTES_API_KEY_ENV_KEYS,
-  RETIRED_SELECTOR_ENV_KEYS,
   NOTES_CLIENT_TRANSPORTS,
   resolveNotesClientTransport,
-  assertNoRetiredNotesStorageSelector,
-  RetiredNotesStorageSelectorError,
 } from '../client/transport.mjs';
 
 export {
@@ -38,11 +35,8 @@ export {
   NOTES_DATABASE_URL_ENV,
   NOTES_API_URL_ENV_KEYS,
   NOTES_API_KEY_ENV_KEYS,
-  RETIRED_SELECTOR_ENV_KEYS,
   NOTES_CLIENT_TRANSPORTS,
   resolveNotesClientTransport,
-  assertNoRetiredNotesStorageSelector,
-  RetiredNotesStorageSelectorError,
 };
 
 import {

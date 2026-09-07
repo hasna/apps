@@ -45,10 +45,12 @@ call:
                           ~/.hasna/notes/config/credentials are consulted
                           first)
 
-A resolved credential is required; the CLI never opens a local
-SQLite/markdown store, never accepts a database DSN, and has no local
-fallback. Legacy path migration is an explicit, copy-only maintenance action;
-source data is preserved.`;
+A resolved credential is required — the CLI connects to the configured
+service over HTTPS (or exact loopback HTTP for local dev). It never opens a
+local SQLite/markdown store and never accepts a database DSN. Every command
+works against the hosted fleet and against a self-hosted notes-serve
+(PostgreSQL) alike. Legacy path migration is an explicit, copy-only
+maintenance action; source data is preserved.`;
 }
 
 function parseArgs(argv) {
@@ -129,7 +131,7 @@ async function collectNotes(http, { includeDeleted = false, maxPages = 100 } = {
 
 async function commandList(http, opts) {
   for (const unsupported of ['offset', 'query', 'machine', 'status']) {
-    if (opts[unsupported] !== undefined) throw new Error(`notes list does not support --${unsupported} on the canonical API.`);
+    if (opts[unsupported] !== undefined) throw new Error(`notes list does not support --${unsupported}; use --cursor for pagination.`);
   }
   const result = await http.listNotes({
     limit: Number(opts.limit || DEFAULT_LIMIT),
@@ -205,7 +207,7 @@ async function commandLabels(http, action, args, opts) {
     lineOut(noteSummary(updated));
     return;
   }
-  throw new Error('notes: the canonical API supports labels list, assign, and unassign only.');
+  throw new Error('notes: labels supports list, assign, and unassign only.');
 }
 
 async function commandMarkdown(http, action, args, opts) {
@@ -297,6 +299,11 @@ async function main() {
 
   if (cmd === 'storage' && opts._[0] === 'migrate-legacy-path') return commandLocalMigration(opts);
   if (cmd === 'storage' && opts._[0] !== 'status') throw new Error('unknown_storage_action');
+  // Pure Markdown helpers run offline: no transport, no credential, no
+  // network — they must work in any environment, configured or not.
+  if (cmd === 'markdown' && (opts._[0] === 'commands' || opts._[0] === 'apply-command')) {
+    return commandMarkdown(null, opts._[0], opts._.slice(1), opts);
+  }
   if (!new Set(['list', 'get', 'create', 'update', 'delete', 'archive', 'restore', 'labels', 'markdown', 'storage']).has(cmd)) {
     throw new Error(`unknown_command: ${cmd}`);
   }
@@ -344,7 +351,7 @@ async function main() {
   }
   if (cmd === 'labels') return commandLabels(http, opts._[0], opts._.slice(1), opts);
   if (cmd === 'markdown') return commandMarkdown(http, opts._[0], opts._.slice(1), opts);
-  throw new Error(`notes: ${cmd} is not available on the canonical HTTPS client.`);
+  throw new Error(`notes: ${cmd} is not implemented.`);
 }
 
 main().catch((error) => {

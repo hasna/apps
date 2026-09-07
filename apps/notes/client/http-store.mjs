@@ -26,7 +26,6 @@
 import { HasnaHttpError } from '@hasna/contracts/client';
 import {
   assertNoClientDatabaseDsn,
-  assertNoRetiredNotesStorageSelector,
   createNotesClientTransport,
   createNotesExplicitTransport,
   readPlainClientValue,
@@ -95,7 +94,6 @@ function redactCredential(value, apiKey) {
  */
 export function createNotesHttpStore(env = process.env, fetchImpl = fetch) {
   assertNoClientDatabaseDsn(env);
-  assertNoRetiredNotesStorageSelector(env);
   const bound = createNotesClientTransport(env, fetchImpl);
   // One extra chain walk at construction: this value exists only so a hostile
   // server or transport error that ECHOES credential material can be redacted

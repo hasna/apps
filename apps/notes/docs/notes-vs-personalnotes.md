@@ -17,7 +17,7 @@ protocol that both products already implement.
 | external desktop/SaaS product | merged PR #934 (`20804a7c`) | `hasna-products/personalnotes` / PersonalNotes | Preserve as an external product reference; do not rename or absorb it. |
 | wire protocol | merged PRs #287 (`913fa460`) and #934 (`20804a7c`) | `personalnotes/v1` | Preserve verbatim. It is a compatibility protocol name, not this package's product identity. |
 | external GitHub/npm/domain/AWS resources | outside this package's source authority | existing published identifiers | Do not rename from this repository. |
-| retired client selector | `client/transport.mjs` | `PERSONALNOTES_MODE` | Keep only as a fail-loud retired variable; it is not a supported PersonalNotes compatibility mode. |
+| retired client selector | `client/transport.mjs` | `PERSONALNOTES_MODE` | Inert: the storage-mode axis was retired (owner directive 2026-08-15); the variable selects nothing and gates nothing. It is not a supported PersonalNotes compatibility mode. |
 
 The package therefore must not rename the `personalnotes/v1` paths or the
 external `hasna-products/personalnotes` link while normalizing its own client,

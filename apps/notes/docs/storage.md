@@ -10,7 +10,7 @@ The CLI, MCP server, and SDK resolve exactly one client connection in
 - The URL must be absolute HTTPS without credentials, query, or fragment.
 - Missing configuration never selects SQLite, Markdown files, or localhost.
 - `HASNA_NOTES_DATABASE_URL` is rejected in a client environment.
-- Retired mode selectors fail loud even when blank.
+- Retired mode selectors are inert: they select nothing and gate nothing.
 - Authenticated API and title-sidecar requests use `redirect: error`; 301, 302,
   303, 307, and 308 are never followed, even to the same HTTPS origin.
 

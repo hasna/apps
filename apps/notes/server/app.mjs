@@ -38,8 +38,8 @@ export function resolveConfig(env = process.env, argv = []) {
   };
   const host = flagValue('--host') ?? (flag('--host') ? '0.0.0.0' : undefined) ?? serverEnv(env, 'HOST') ?? '127.0.0.1';
   const port = Number(flagValue('--port') ?? serverEnv(env, 'PORT') ?? env.PORT ?? DEFAULT_PORT);
-  if (argv.some((arg) => arg === '--db' || arg.startsWith('--db=')) || Object.hasOwn(env, 'HASNA_NOTES_SERVER_DB')) {
-    throw new Error('notes-server: --db and HASNA_NOTES_SERVER_DB were removed; configure server PostgreSQL with HASNA_NOTES_DATABASE_URL.');
+  if (argv.some((arg) => arg === '--db' || arg.startsWith('--db='))) {
+    throw new Error('notes-server: --db was removed; configure server PostgreSQL with HASNA_NOTES_DATABASE_URL.');
   }
   return {
     host,

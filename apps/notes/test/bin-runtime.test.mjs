@@ -111,6 +111,21 @@ describe('bin runtime contract', () => {
     expect(created).toEqual([]);
   });
 
+  test('retired storage-mode selectors are inert at the CLI: status still resolves', () => {
+    const { rc, stdout, stderr } = directExec('bin/notes.mjs', ['storage', 'status', '--json'], {
+      HASNA_NOTES_API_URL: 'https://notes.example.test',
+      HASNA_NOTES_API_KEY: 'secret',
+      PERSONALNOTES_MODE: 'local',
+      HASNA_NOTES_STORAGE_MODE: 'sqlite',
+      HASNA_NOTES_MODE: 'cloud',
+      NOTES_STORAGE_MODE: 'legacy',
+      NOTES_MODE: 'local',
+    });
+    expect(stderr).toBe('');
+    expect(rc).toBe(0);
+    expect(JSON.parse(stdout).client.transport).toBe('http');
+  });
+
   test('bin/notes.mjs help runs through the shebang', () => {
     const { rc, stdout } = directExec('bin/notes.mjs', ['--help']);
     expect(rc).toBe(0);

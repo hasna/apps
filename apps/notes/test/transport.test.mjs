@@ -7,7 +7,6 @@ import {
   NOTES_API_KEY_ENV,
   NOTES_API_URL_ENV,
   NOTES_DATABASE_URL_ENV,
-  RETIRED_SELECTOR_ENV_KEYS,
   resolveNotesClientTransport,
 } from '../client/transport.mjs';
 
@@ -15,7 +14,7 @@ const REPO = join(import.meta.dir, '..');
 
 // The credential chain the resolver consults lives in @hasna/contracts; these
 // tests pin the NOTES side of that seam: the report shape, the fail-closed
-// surface, safe-URL enforcement, the retired-selector ratchet, and process
+// surface, safe-URL enforcement, retired-selector inertness, and process
 // behaviour. The chain tiers themselves (Keychain, disk file, env, default
 // gateway) are exercised hermetically in test/resolver.test.mjs.
 function cleanProcessEnv(extra = {}) {
@@ -29,7 +28,6 @@ function cleanProcessEnv(extra = {}) {
     'HASNA_PROFILE',
     'HASNA_HOME',
     'HASNA_CONFIG_HOME',
-    ...RETIRED_SELECTOR_ENV_KEYS,
   ]) {
     if (!(key in extra)) delete env[key];
   }
@@ -117,9 +115,17 @@ describe('canonical Notes client transport', () => {
       .toThrow(/no API key could be resolved/);
   });
 
-  test('retired selectors fail loud even when blank', () => {
-    for (const key of RETIRED_SELECTOR_ENV_KEYS) {
-      expect(() => resolveNotesClientTransport({ [key]: '' })).toThrow(/retired/i);
+  test('retired storage-mode selectors are inert and gate nothing', () => {
+    // The storage-mode axis was retired: *_MODE / *_STORAGE_MODE selectors
+    // (and the pre-rename PERSONALNOTES_MODE) select no transport and refuse
+    // nothing. A process that still exports one resolves exactly as it would
+    // without it — every command keeps working.
+    const retiredKeys = ['PERSONALNOTES_MODE', 'HASNA_NOTES_STORAGE_MODE', 'HASNA_NOTES_MODE', 'NOTES_STORAGE_MODE', 'NOTES_MODE'];
+    const base = { [NOTES_API_URL_ENV]: 'https://notes.example.test', [NOTES_API_KEY_ENV]: 'secret' };
+    for (const key of retiredKeys) {
+      for (const value of ['local', 'cloud', 'sqlite', 'postgresql', '']) {
+        expect(resolveNotesClientTransport({ ...base, [key]: value }).transport).toBe('http');
+      }
     }
   });
 

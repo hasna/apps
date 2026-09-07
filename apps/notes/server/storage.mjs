@@ -1,25 +1,41 @@
 // Hasna Notes server — PostgreSQL-only storage boundary.
 //
-// HASNA_NOTES_DATABASE_URL is mandatory. Missing, non-canonical, or malformed
+// HASNA_NOTES_DATABASE_URL (or its NOTES_DATABASE_URL alias, per the vendored
+// storage kit) is mandatory. Missing, non-canonical, or malformed
 // configuration fails closed before the server binds. The resolved DSN is
 // never logged, printed, or echoed in errors. SQLite remains available only as
 // an explicitly injected test/import adapter; notes-serve never selects it.
+// Retired storage-mode variables (*_MODE / *_STORAGE_MODE) are INERT — the
+// storage-mode axis was retired and nothing selects a mode anymore.
 
 import { openPgAdapter } from './pg-adapter.mjs';
 
 export const SERVER_APP_NAME = 'notes';
 
+/** Canonical DSN key first, then the vendored kit's alias. */
+const DSN_ENV_KEYS = ['HASNA_NOTES_DATABASE_URL', 'NOTES_DATABASE_URL'];
+
+function databaseUrlEntries(env) {
+  return DSN_ENV_KEYS
+    .filter((key) => Object.prototype.hasOwnProperty.call(env, key))
+    .map((key) => ({ key, value: typeof env[key] === 'string' ? env[key] : '' }));
+}
+
 export function requirePostgresDsn(env) {
-  const retired = ['HASNA_NOTES_STORAGE_MODE', 'HASNA_NOTES_MODE', 'NOTES_STORAGE_MODE', 'NOTES_MODE',
-    'NOTES_DATABASE_URL', 'HASNA_NOTES_SERVER_DB', 'HASNA_NOTES_DB_PATH'];
-  if (retired.some((key) => Object.hasOwn(env, key))) {
-    throw new Error('notes-server: retired database selectors are not supported; configure only HASNA_NOTES_DATABASE_URL.');
-  }
-  const connectionString = Object.hasOwn(env, 'HASNA_NOTES_DATABASE_URL') && typeof env.HASNA_NOTES_DATABASE_URL === 'string'
-    ? env.HASNA_NOTES_DATABASE_URL.trim() : '';
-  if (!connectionString) {
+  const entries = databaseUrlEntries(env);
+  if (entries.length === 0) {
     throw new Error('notes-server: HASNA_NOTES_DATABASE_URL is required; notes-serve is PostgreSQL-only.');
   }
+  const blank = entries.filter((entry) => entry.value.trim().length === 0);
+  if (blank.length > 0) {
+    throw new Error('notes-server: a PostgreSQL database URL is required and must not be blank.');
+  }
+  const normalized = entries.map((entry) => ({ key: entry.key, value: entry.value.trim() }));
+  if (normalized.length > 1 && new Set(normalized.map((entry) => entry.value)).size > 1) {
+    throw new Error('notes-server: HASNA_NOTES_DATABASE_URL and NOTES_DATABASE_URL disagree; only one may be set or they must match.');
+  }
+  const selected = normalized[0];
+  const connectionString = selected.value;
   let parsed;
   try { parsed = new URL(connectionString); }
   catch { throw new Error('notes-server: HASNA_NOTES_DATABASE_URL must be a valid PostgreSQL URL.'); }
@@ -27,8 +43,8 @@ export function requirePostgresDsn(env) {
     || parsed.hash || /[\u0000-\u0020]/.test(connectionString)) {
     throw new Error('notes-server: HASNA_NOTES_DATABASE_URL must be a valid PostgreSQL URL.');
   }
-  return { connectionString, resolution: { backend: 'postgresql', source: 'HASNA_NOTES_DATABASE_URL',
-    databaseUrlPresent: true, databaseUrlSource: 'HASNA_NOTES_DATABASE_URL' } };
+  return { connectionString, resolution: { backend: 'postgresql', source: selected.key,
+    databaseUrlPresent: true, databaseUrlSource: selected.key } };
 }
 
 /** Open the mandatory server-side PostgreSQL store. */

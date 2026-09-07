@@ -15,9 +15,11 @@
 //               credentials file, and finally the fleet gateway
 //               https://api.hasna.com/notes (the client appends /v1).
 //
-// Missing or partial configuration FAILS CLOSED before any local
-// SQLite/markdown store is opened: hosted with no credential is a non-zero
-// exit, never a fallback, and there is no local mode to opt into and no
+// Every command resolves through this one chain in ANY transport: the hosted
+// fleet gateway, a self-hosted notes-serve (PostgreSQL), or any other service
+// that speaks the personalnotes/v1 dialect. Missing or partial configuration
+// FAILS CLOSED before any local SQLite/markdown store is opened: hosted with
+// no credential is a non-zero exit, never a fallback, and there is no
 // `*-local-fallback` event anywhere in the client path.
 //
 // Server database configuration (HASNA_NOTES_DATABASE_URL) is a server-side
@@ -30,6 +32,11 @@
 // variables are left where they are and the resolver refuses them itself.
 // SAFETY (#1794): an explicit authority pins the credential to itself; the
 // ambient fleet credential is never attached to an explicit baseUrl.
+//
+// Retired storage-mode selectors (PERSONALNOTES_MODE, *_STORAGE_MODE, *_MODE)
+// are INERT: the storage-mode axis was retired (owner directive 2026-08-15);
+// they select nothing, gate nothing, and are ignored exactly like the shared
+// resolver ignores them.
 //
 // This is the ONE transport resolver for the CLI, MCP server, and SDK.
 
@@ -50,21 +57,6 @@ export const NOTES_DATABASE_URL_ENV = 'HASNA_NOTES_DATABASE_URL';
 export const NOTES_API_URL_ENV_KEYS = [NOTES_API_URL_ENV];
 export const NOTES_API_KEY_ENV_KEYS = [NOTES_API_KEY_ENV];
 
-/**
- * Removed selector names. They remain here only as a fail-loud ratchet so a
- * stale station fragment cannot be silently ignored. PERSONALNOTES_MODE is the
- * retired mode-enum selector (deployment modes were removed); the storage-mode
- * family is the retired mode-enum class every app retired in the two-backend
- * transition. None of them selects anything — their presence is a refusal.
- */
-export const RETIRED_SELECTOR_ENV_KEYS = [
-  'PERSONALNOTES_MODE',
-  'HASNA_NOTES_STORAGE_MODE',
-  'HASNA_NOTES_MODE',
-  'NOTES_STORAGE_MODE',
-  'NOTES_MODE',
-];
-
 export const NOTES_CLIENT_TRANSPORTS = ['http'];
 
 /** Read data properties only: credential getters must not be invoked on config. */
@@ -81,32 +73,6 @@ export function readPlainClientValue(object, key) {
 export function isPresent(env, key) {
   if (!Object.prototype.hasOwnProperty.call(env, key)) return false;
   return (env[key] ?? '').trim().length > 0;
-}
-
-function firstDefined(env, keys) {
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(env, key) && env[key] !== undefined) return key;
-  }
-  return null;
-}
-
-export class RetiredNotesStorageSelectorError extends Error {
-  constructor(envKey) {
-    super(
-      `notes: ${envKey} was retired and must be unset. `
-        + `Clients resolve their configuration through @hasna/contracts (${NOTES_API_URL_ENV} / `
-        + `${NOTES_API_KEY_ENV}, the Keychain, or the credentials file); `
-        + `local SQLite/markdown client fallback is no longer supported.`,
-    );
-    this.name = 'RetiredNotesStorageSelectorError';
-    this.code = 'retired_notes_storage_selector';
-  }
-}
-
-/** Reject stale selector variables even when their value is blank. */
-export function assertNoRetiredNotesStorageSelector(env = process.env) {
-  const retired = firstDefined(env, RETIRED_SELECTOR_ENV_KEYS);
-  if (retired) throw new RetiredNotesStorageSelectorError(retired);
 }
 
 /**
@@ -133,7 +99,6 @@ export function assertNoClientDatabaseDsn(env = process.env) {
  */
 export function resolveNotesClientTransport(env = process.env, credentials = {}) {
   assertNoClientDatabaseDsn(env);
-  assertNoRetiredNotesStorageSelector(env);
   const resolution = resolveClientTransport(NOTES_APP_SLUG, env, { credentials });
   const protocol = new URL(resolution.baseUrl).protocol;
   return {
@@ -167,7 +132,6 @@ export function resolveNotesClientTransport(env = process.env, credentials = {})
  */
 export function createNotesClientTransport(env = process.env, fetchImpl, credentials = {}) {
   assertNoClientDatabaseDsn(env);
-  assertNoRetiredNotesStorageSelector(env);
   const overrides = { retry: false };
   if (fetchImpl !== undefined) overrides.fetchImpl = fetchImpl;
   overrides.credentials = credentials;

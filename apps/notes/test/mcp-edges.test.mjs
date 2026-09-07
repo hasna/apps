@@ -30,6 +30,11 @@ function cleanEnv(extra = {}) {
   ]) {
     if (!(key in extra)) delete env[key];
   }
+  // Hermetic: a fresh HOME keeps the machine's ambient credentials file
+  // (e.g. the station's ~/.hasna/notes/config/credentials) out of the child.
+  if (!Object.hasOwn(extra, 'HOME')) {
+    env.HOME = mkdtempSync(join(tmpdir(), 'notes-mcp-home-'));
+  }
   return env;
 }
 

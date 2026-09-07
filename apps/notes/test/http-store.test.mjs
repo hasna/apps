@@ -15,7 +15,7 @@ import {
   NotesHttpStoreError,
   createNotesHttpStore,
 } from '../client/http-store.mjs';
-import { RetiredNotesStorageSelectorError, resolveNotesClientTransport } from '../client/transport.mjs';
+import { resolveNotesClientTransport } from '../client/transport.mjs';
 import { NotesClient } from '../sdk/index.mjs';
 
 const API_URL = 'https://notes.example.test';
@@ -220,10 +220,17 @@ test('construction fails closed: URL without key and key without URL both throw'
     () => createNotesHttpStore({ HASNA_NOTES_API_URL: API_URL }),
     /HASNA_NOTES_API_KEY/,
   );
-  assert.throws(
-    () => createNotesHttpStore({ HASNA_NOTES_API_URL: API_URL, HASNA_NOTES_API_KEY: API_KEY, HASNA_NOTES_STORAGE_MODE: 'local' }),
-    (err) => err instanceof RetiredNotesStorageSelectorError,
-  );
+});
+
+test('retired storage-mode selectors are inert: construction succeeds with them set', () => {
+  const store = createNotesHttpStore({
+    HASNA_NOTES_API_URL: API_URL,
+    HASNA_NOTES_API_KEY: API_KEY,
+    PERSONALNOTES_MODE: 'local',
+    HASNA_NOTES_STORAGE_MODE: 'local',
+    NOTES_MODE: 'sqlite',
+  });
+  assert.equal(store.transport, 'http');
 });
 
 test('trailing slash on the API URL is stripped and never doubled in paths', () => {
