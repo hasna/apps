@@ -1,17 +1,19 @@
 import type { Command } from "commander";
 import { handleError } from "../utils.js";
+import { getLocalStats, formatStatsTable } from "../../lib/stats.js";
+import { getAnalytics, formatAnalytics } from "../../lib/analytics.js";
+import { createConfiguredEmailStore } from "../../store-resolution.js";
+import { getInboundStats, formatInboundStats } from "../../lib/inbound-stats.js";
 
-// Provider event ingestion, local sent-log stats/analytics and the local
-// monitor are owned by the self-hosted server. This client is self-hosted-only,
-// so these commands are kept for CLI discoverability but fail loud: there is no
-// local island to sync/aggregate and no /v1 equivalent to route them through.
+// Provider ingestion and monitoring still need their API command handlers.
+// Statistics read the same configured store as the rest of the application.
 function serverOnly(command: string): never {
   throw new Error(
     `${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
   );
 }
 
-export function registerSyncCommands(program: Command, _output: (data: unknown, formatted: string) => void): void {
+export function registerSyncCommands(program: Command, output: (data: unknown, formatted: string) => void): void {
   // ─── PROVIDER SYNC ────────────────────────────────────────────────────────────
   const providerCmd = program.commands.find(c => c.name() === "provider");
   if (providerCmd) {
@@ -45,8 +47,17 @@ export function registerSyncCommands(program: Command, _output: (data: unknown, 
     .option("--provider <id>", "Provider ID")
     .option("--period <period>", "Period: 7d, 30d, 90d", "30d")
     .option("--inbox", "Show inbound email stats instead of outbound")
-    .action(() => {
-      try { serverOnly("emails stats"); } catch (e) { handleError(e); }
+    .action(async (opts: { provider?: string; period: string; inbox?: boolean }) => {
+      try {
+        const store = createConfiguredEmailStore();
+        if (opts.inbox) {
+          const report = await getInboundStats(opts.period, opts.provider, store);
+          output(report, formatInboundStats(report));
+        } else {
+          const report = await getLocalStats(opts.provider, opts.period, store);
+          output(report, "\nEmail Stats:\n" + formatStatsTable(report));
+        }
+      } catch (e) { handleError(e); }
     });
 
   // ─── MONITOR ──────────────────────────────────────────────────────────────────
@@ -67,7 +78,11 @@ export function registerSyncCommands(program: Command, _output: (data: unknown, 
     .option("-j, --json", "Print JSON output", false)
     .option("--provider <id>", "Filter by provider ID")
     .option("--period <period>", "Time period (e.g. 30d, 7d, 90d)", "30d")
-    .action(() => {
-      try { serverOnly("emails analytics"); } catch (e) { handleError(e); }
+    .action(async (opts: { provider?: string; period: string }) => {
+      try {
+        const store = createConfiguredEmailStore();
+        const report = await getAnalytics(opts.provider, opts.period, { store });
+        output(report, formatAnalytics(report));
+      } catch (e) { handleError(e); }
     });
 }

@@ -1,7 +1,5 @@
-// Self-hosted-ONLY: provider event ingestion, sent-log stats/analytics and the
-// live monitor are owned by the self-hosted server. This client keeps the
-// commands for discoverability but fails loud — there is no local island to
-// sync/aggregate and no /v1 equivalent to route them through.
+// Statistics use the configured API store; remaining ingestion handlers are
+// exercised separately until their API replacements land.
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Command } from "commander";
 import { registerSyncCommands } from "./sync.js";
@@ -76,10 +74,7 @@ describe("sync CLI commands (server-only in the self-hosted client)", () => {
   const cases: Array<{ args: string[]; command: string }> = [
     { args: ["provider", "sync"], command: "emails provider sync" },
     { args: ["pull"], command: "emails pull" },
-    { args: ["stats"], command: "emails stats" },
-    { args: ["stats", "--inbox"], command: "emails stats" },
     { args: ["monitor"], command: "emails monitor" },
-    { args: ["analytics"], command: "emails analytics" },
   ];
 
   for (const { args, command } of cases) {
