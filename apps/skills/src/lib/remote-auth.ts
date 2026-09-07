@@ -1,3 +1,4 @@
+import { workspaceLeaveInput, type LeaveRemoteWorkspace } from "./remote-workspace-leave.js";
 import { workspaceContext, workspaceExpectedUserId, parseWorkspaceLogin,
   type RemoteWorkspaceContext, type RemoteWorkspaceSession, type RemoteAccountWorkspaceDiscovery } from "./remote-workspace-selection.js";
 import { readBoundedResponse } from "./remote-files.js";
@@ -170,6 +171,11 @@ export class RemoteSkillsAuthClient {
   async setWorkspaceMemberRole(email: string, code: string, membershipId: string, input: SetRemoteWorkspaceMemberRole, context?: RemoteWorkspaceContext) {
     const captured = workspaceMemberRoleInput(membershipId, input);
     return (await this.sessionClient(email, code, context)).setWorkspaceMemberRole(captured.membershipId, captured.body);
+  }
+  /** Fresh verification binds the exact observed incarnation before a single confirmed leave. */
+  async leaveWorkspace(email: string, code: string, context: RemoteWorkspaceContext, input: LeaveRemoteWorkspace) {
+    const captured = workspaceLeaveInput(context, input);
+    return (await this.sessionClient(email, code, captured.context)).leaveWorkspace(captured.context, captured.input);
   }
   async removeWorkspaceMember(email: string, code: string, membershipId: string, input: RemoveRemoteWorkspaceMember, context?: RemoteWorkspaceContext) {
     const captured = workspaceMemberRemovalInput(membershipId, input);
