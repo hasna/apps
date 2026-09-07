@@ -1,5 +1,6 @@
 import * as domainConnectStore from "./domain-connect-store.js";
 import type { DomainConnectInput, DomainConnectClaim, DomainConnectResult } from "./domain-connect.js";
+import type { TrackingDocument } from "./tracking.js";
 import * as addressProvisioningStore from "./address-provisioning-store.js";
 import type { AddressProvisioningInput, AddressProvisioningRefs, ProvisioningJob, ProvisioningReceipt } from "./address-provisioning.js";
 import { SequenceWorkerStore } from "./sequence-worker.js";
@@ -2464,6 +2465,35 @@ export class TenantScopedStore {
         [randomUUID(), this.tenantId, provider, eventId, event.id],
       );
       return event;
+    });
+  }
+
+  async prepareTracking(message: string, candidate: TrackingDocument): Promise<TrackingDocument> {
+    await this.client.execute(`INSERT INTO message_tracking(tenant_id,message_id,document)
+      SELECT $1,$2,$3::jsonb FROM messages WHERE tenant_id=$1 AND id=$2 AND direction='outbound'
+      ON CONFLICT(tenant_id,message_id) DO NOTHING`, [this.tenantId,message,JSON.stringify(candidate)]);
+    const row = await this.client.get<{document: TrackingDocument}>(`SELECT document FROM message_tracking WHERE tenant_id=$1 AND message_id=$2`, [this.tenantId,message]);
+    if (!row) throw new Error("Tracking message does not exist in this tenant");
+    return row.document;
+  }
+
+  async observeTracking(message: string, link: string, token: string): Promise<{kind: "opened" | "clicked"; target: string | null} | null> {
+    if (!this.atomicClient) throw new Error("Tracking observations require a transactional store");
+    return this.atomicClient.transaction(async tx => {
+      await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+      const row = await tx.get<{document: TrackingDocument; provider_id: string | null}>(`SELECT t.document,m.provider_id FROM message_tracking t JOIN messages m ON m.tenant_id=t.tenant_id AND m.id=t.message_id
+        WHERE t.tenant_id=$1 AND t.message_id=$2 AND m.send_state IN ('sending','sent')`, [this.tenantId,message]);
+      const item = row?.document.links[link];
+      if (!item || item.token !== token || row!.document.expires <= Date.now()) return null;
+      if (item.kind === 'clicked') {
+        let url: URL; try { url = new URL(item.target!); } catch { return null; }
+        if (!['http:','https:'].includes(url.protocol) || url.username || url.password) return null;
+      }
+      await tx.execute(`INSERT INTO events(id,tenant_id,email_id,provider_id,provider_event_id,type,recipient,metadata,occurred_at)
+        VALUES($1,$2,$3,$4,$5,$6,NULL,$7::jsonb,now())
+        ON CONFLICT(tenant_id,provider_event_id) WHERE provider_event_id IS NOT NULL DO NOTHING`,
+        [randomUUID(),this.tenantId,message,row!.provider_id,`first-party:${message}:${item.kind}`,item.kind,JSON.stringify({source:'first_party_tracking',evidence:'request_observed',link_id:link,unique_message_event:true})]);
+      return {kind:item.kind,target:item.target};
     });
   }
 
@@ -5409,7 +5439,7 @@ export class TenantScopedStore {
     const params = [randomUUID(), this.tenantId, input.key, input.hash, input.scheduledAt,
       p.provider_id ?? null, p.from, JSON.stringify(p.to), JSON.stringify(p.cc ?? []), JSON.stringify(p.bcc ?? []),
       p.reply_to ?? null, p.subject, p.text ?? null, p.html ?? null, JSON.stringify(p.attachments ?? []),
-      JSON.stringify({ unsubscribe_url: p.unsubscribe_url, allow_suppressed_recipients: p.allow_suppressed_recipients === true })];
+      JSON.stringify({ track_opens: p.track_opens, track_clicks: p.track_clicks, tracking_url: p.tracking_url, unsubscribe_url: p.unsubscribe_url, allow_suppressed_recipients: p.allow_suppressed_recipients === true })];
     const row = await this.client.get<Record<string, unknown>>(
       `INSERT INTO scheduled_emails(id,tenant_id,enqueue_key,enqueue_hash,scheduled_at,provider_id,from_address,to_addresses,cc_addresses,bcc_addresses,reply_to,subject,text_body,html,attachments_json,send_options,status)
        SELECT $1,$2,$3,$4,$5::timestamptz,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11,$12,$13,$14,$15::jsonb,$16::jsonb,'pending' WHERE $5::timestamptz > now()

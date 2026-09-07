@@ -1436,7 +1436,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Send through the configured SES or Resend provider and persist the resulting ledger row */
-    async sendMessage(body: { "provider_id"?: string; "unsubscribe_url"?: string; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "send_key"?: string; "allow_suppressed_recipients"?: boolean; "idempotency_key": string }, init?: RequestInit): Promise<{ "message": Message; "provider": string; "idempotent_replay": true; "sent": true; "provider_message_id": string } | { "message": Message; "provider": string; "in_progress": true } | { "message": Message; "provider": string; "sent": true; "provider_message_id": string; "warning"?: string; "retry_safe"?: false }> {
+    async sendMessage(body: { "provider_id"?: string; "track_opens"?: boolean; "track_clicks"?: boolean; "tracking_url"?: string; "unsubscribe_url"?: string; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "send_key"?: string; "allow_suppressed_recipients"?: boolean; "idempotency_key": string }, init?: RequestInit): Promise<{ "message": Message; "provider": string; "idempotent_replay": true; "sent": true; "provider_message_id": string } | { "message": Message; "provider": string; "in_progress": true } | { "message": Message; "provider": string; "sent": true; "provider_message_id": string; "warning"?: string; "retry_safe"?: false }> {
       return this.request("POST", `/v1/messages/send`, {
         body,
         query: undefined,
@@ -1872,7 +1872,7 @@ export class EmailsSelfHostClient {
     }
 
     /** Validate and enqueue an idempotent scheduled send */
-    async enqueueScheduledSend(body: { "provider_id"?: string; "unsubscribe_url"?: string; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "allow_suppressed_recipients"?: boolean; "idempotency_key": string; "scheduled_at": string }, init?: RequestInit): Promise<{ "enqueued": true; "idempotent_replay": boolean; "scheduled": { "id": string; "status": "pending" | "processing" | "sent" | "failed" | "cancelled"; "scheduled_at": string } }> {
+    async enqueueScheduledSend(body: { "provider_id"?: string; "track_opens"?: boolean; "track_clicks"?: boolean; "tracking_url"?: string; "unsubscribe_url"?: string; "from": string; "to": Array<string>; "cc"?: Array<string>; "bcc"?: Array<string>; "reply_to"?: string; "subject": string; "text"?: string; "html"?: string; "attachments"?: Array<{ "filename"?: string; "content": string; "content_type"?: string }>; "allow_suppressed_recipients"?: boolean; "idempotency_key": string; "scheduled_at": string }, init?: RequestInit): Promise<{ "enqueued": true; "idempotent_replay": boolean; "scheduled": { "id": string; "status": "pending" | "processing" | "sent" | "failed" | "cancelled"; "scheduled_at": string } }> {
       return this.request("POST", `/v1/scheduled/enqueue`, {
         body,
         query: undefined,
@@ -2340,6 +2340,15 @@ export class EmailsSelfHostClient {
     /** List tenant memberships; owner or admin role required */
     async listTenantMembers(id: string, init?: RequestInit): Promise<{ "members": Array<Membership> }> {
       return this.request("GET", `/v1/tenants/${encodeURIComponent(String(id))}/members`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Observe a public opaque tracking capability */
+    async observeMessageTracking(token: string, init?: RequestInit): Promise<undefined> {
+      return this.request("GET", `/v1/tracking/${encodeURIComponent(String(token))}`, {
         body: undefined,
         query: undefined,
         init,

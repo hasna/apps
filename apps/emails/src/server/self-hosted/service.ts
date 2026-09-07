@@ -4,6 +4,7 @@ import { normalizeDomainConnect, connectDomain, DomainConnectError } from "./dom
 import { executeIngestBatch, IngestApiError, type IngestApiInput, type IngestCloudFactory } from "./ingest-api.js";
 import { normalizeAddressProvisioning, planAddressProvisioning, runAddressProvisioningJob, AddressProvisioningError, type ProvisioningJob } from "./address-provisioning.js";
 import { syncProviderDelivery, ProviderSyncError } from "./provider-sync.js";
+import { resolveTracking, renderTracking, serveTracking, openTrackingToken, type TrackingConfig } from "./tracking.js";
 import { readProviderHealth } from "./provider-health.js";
 import { runForwardingBatch, normalizeForwardingOptions, normalizeForwardingRule } from "./forwarding.js";
 import { runDomainOperation, DomainOperationError, type DomainOperation } from "./domain-operations.js";
@@ -180,6 +181,7 @@ async function readinessCheck(deps: SelfHostedServiceDeps): Promise<ReadyResult>
 }
 
 export interface SelfHostedServiceDeps {
+  tracking?: TrackingConfig;
   provisioning?: { resolveMx?: typeof import("node:dns/promises").resolveMx };
   client: TypedQueryClient;
   store: EmailsSelfHostedStore;
@@ -892,6 +894,12 @@ export async function handleSelfHostedRequest(
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = req.method.toUpperCase();
 
+  const trackingMatch = path.match(/^\/v1\/tracking\/([\w.-]+)$/);
+  if (trackingMatch && method === "GET") {
+    try { return await serveTracking(deps.tracking, trackingMatch[1]!, tenant => deps.store.forTenant(tenant)); }
+    catch { return new Response(null, {status:503,headers:{"Cache-Control":"no-store"}}); }
+  }
+
   // ---- operational probes (unauthenticated) ------------------------------
   if (path === "/health") {
     const health = await checkHealth(deps.client);
@@ -1559,6 +1567,9 @@ export async function handleSelfHostedRequest(
         sender = bound;
         providerId = requestedProviderId;
       }
+      let tracking;
+      try { tracking = resolveTracking(body, auth.ctx.tenantId, deps.tracking); }
+      catch(error) { return json(400,{error:error instanceof Error ? error.message : "Invalid tracking options",reason:"tracking_configuration_required"}); }
       let unsubscribeUrl: string | undefined;
       if (body.unsubscribe_url !== undefined) {
         if (typeof body.unsubscribe_url !== "string" || /[\r\n<>]/.test(body.unsubscribe_url)) return json(400, { error: "unsubscribe_url must be an HTTP(S) URL", reason: "invalid_unsubscribe_url" });
@@ -1569,6 +1580,7 @@ export async function handleSelfHostedRequest(
         } catch { return json(400, { error: "unsubscribe_url must be an HTTP(S) URL", reason: "invalid_unsubscribe_url" }); }
       }
       const payload = {
+        ...(tracking ?? {}),
         from,
         to,
         cc,
@@ -1585,6 +1597,7 @@ export async function handleSelfHostedRequest(
       };
       if (enqueue && scheduledAt) {
         const queuedPayload = {
+          ...(tracking ?? {}),
           from: rawFrom, to, cc, bcc, reply_to: payload.reply_to, subject,
           text: payload.text, html: payload.html, attachments,
           ...(requestedProviderId ? { provider_id: providerId } : {}),
@@ -1740,6 +1753,18 @@ export async function handleSelfHostedRequest(
         });
       }
 
+      let trackedHtml: string | undefined;
+      if (tracking) {
+        try {
+          const document = await auth.store.prepareTracking(reserved.record.id, renderTracking(deps.tracking!, tracking, auth.ctx.tenantId, reserved.record.id, {
+            html: typeof body.html === "string" ? body.html : undefined,
+            text: typeof body.text === "string" ? body.text : undefined,
+            unsubscribe: unsubscribeUrl,
+          }));
+          if (document.expires <= Date.now() || Object.values(document.links).some(link => !openTrackingToken(deps.tracking!, link.token))) return json(409,{error:"Prepared tracking links expired or their signing key was retired; restore retained keys or create a new send intent",reason:"tracking_expired"});
+          trackedHtml = document.html;
+        } catch { return json(503,{error:"Tracking preparation failed; retry only with the same idempotency key",reason:"tracking_preparation_failed"}); }
+      }
       const claimed = await auth.store.claimSendIntent(reserved.record.id);
       if (!claimed) {
         const latest = await auth.store.getMessage(reserved.record.id);
@@ -1807,7 +1832,7 @@ export async function handleSelfHostedRequest(
           reply_to: typeof body.reply_to === "string" ? body.reply_to : undefined,
           subject,
           text: typeof body.text === "string" ? body.text : undefined,
-          html: typeof body.html === "string" ? body.html : undefined,
+          html: trackedHtml ?? (typeof body.html === "string" ? body.html : undefined),
           attachments: attachments.length ? attachments : undefined,
         });
       } catch (error) {

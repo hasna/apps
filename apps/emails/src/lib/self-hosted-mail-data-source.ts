@@ -2278,13 +2278,21 @@ export class SelfHostedMailDataSource implements MailDataSource {
       html,
       idempotency_key: input.idempotencyKey ?? crypto.randomUUID(),
     };
-    if (input.providerId || input.unsubscribeUrl) {
+    const trackingRequested = input.trackOpens === true || input.trackClicks === true;
+    for (const value of [input.trackOpens,input.trackClicks]) if (value !== undefined && typeof value !== "boolean") throw new Error("Tracking switches must be boolean");
+    if (input.trackingUrl !== undefined && (typeof input.trackingUrl !== "string" || !input.trackingUrl.trim() || !trackingRequested)) throw new Error("trackingUrl requires a nonempty URL and trackOpens or trackClicks");
+    if (input.providerId || input.unsubscribeUrl || trackingRequested) {
       const contract = await this.request("GET", "/openapi.json");
       const doc = contract.json as { paths?: Record<string, { post?: { requestBody?: { content?: Record<string, { schema?: { properties?: Record<string, unknown> } }> } } }> };
-      const properties = doc?.paths?.["/v1/messages/send"]?.post?.requestBody?.content?.["application/json"]?.schema?.properties;
+      const properties = doc?.paths?.[input.scheduledAt ? "/v1/scheduled/enqueue" : "/v1/messages/send"]?.post?.requestBody?.content?.["application/json"]?.schema?.properties;
+      if (trackingRequested && (!properties?.track_opens || !properties?.track_clicks || !properties?.tracking_url)) throw new Error("The Emails API needs an update to support tracking; no message was sent.");
       if (contract.status !== 200 || (input.providerId && !properties?.provider_id) || (input.unsubscribeUrl && !properties?.unsubscribe_url)) {
         throw new Error("The Emails API needs an update to support provider selection and unsubscribe headers; no message was sent.");
       }
+    }
+    if (trackingRequested) {
+      body.track_opens = input.trackOpens === true; body.track_clicks = input.trackClicks === true;
+      if (input.trackingUrl !== undefined) body.tracking_url = input.trackingUrl;
     }
     if (input.providerId) body["provider_id"] = input.providerId;
     if (input.unsubscribeUrl) body["unsubscribe_url"] = input.unsubscribeUrl;

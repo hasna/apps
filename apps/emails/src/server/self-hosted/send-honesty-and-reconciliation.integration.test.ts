@@ -852,3 +852,61 @@ describe.skipIf(!pgClient)("shared API source registry CLI", () => {
     } finally { server.stop(true); }
   }, 30000);
 });
+
+describe.skipIf(!pgClient)("first-party tracking API",()=>{
+ it("preserves original content, isolates tokens and deduplicates concurrent engagement without altering provider evidence",async()=>{
+  const {randomBytes}=await import("node:crypto");
+  const {openTrackingToken}=await import("./tracking.js");
+  const owner=await makeTenant("tracking-owner"), other=await makeTenant("tracking-other");
+  const captured:any[]=[];
+  const deps=makeDeps({provider:"ses",send:async input=>{captured.push(input);return "tracking-provider-receipt";}});
+  deps.tracking={activeKey:"current",keys:{current:randomBytes(32)},tenants:{[owner.tenantId]:["https://tracking.example"]},ttlSeconds:3600};
+  await registerSender(deps,owner.token,"tracking.example","sender@tracking.example");
+  const original='<a href="https://example.com/path">go</a>';
+  const input={from:"sender@tracking.example",to:["reader@example.com"],subject:"Tracked fixture",html:original,idempotency_key:"tracking-idempotent",track_opens:true,track_clicks:true};
+  const first=await call(deps,"POST","/v1/messages/send",{token:owner.token,body:input});expect(first.status).toBe(202);expect(first.body.sent).toBe(true);
+  const message=first.body.message.id;
+  expect(captured).toHaveLength(1);expect(captured[0].html).toContain("/v1/tracking/");expect(first.body.message.body_html).toBe(original);
+  const ledger=await pgClient!.get<{document:any}>("SELECT document FROM message_tracking WHERE tenant_id=$1 AND message_id=$2",[owner.tenantId,message]);
+  const links=Object.values(ledger!.document.links) as Array<{kind:string;token:string}>;
+  const opened=links.find(x=>x.kind==="opened")!,clicked=links.find(x=>x.kind==="clicked")!;
+  expect(openTrackingToken(deps.tracking,opened.token)?.tenant).toBe(owner.tenantId);
+  expect(await deps.store.forTenant(other.tenantId).observeTracking(message,Object.keys(ledger!.document.links)[0]!,opened.token)).toBeNull();
+  const get=(token:string)=>handleSelfHostedRequest(deps,new Request(`https://tracking.example/v1/tracking/${token}`));
+  const requests=await Promise.all(Array.from({length:12},()=>get(opened.token)));expect(requests.every(r=>r?.status===200)).toBe(true);
+  expect((await get(clicked.token))?.status).toBe(302);expect((await get(clicked.token))?.headers.get("Location")).toBe("https://example.com/path");
+  expect((await get(opened.token.slice(0,-8)+"tampered"))?.status).toBe(404);
+  const events=await pgClient!.many<{type:string;recipient:string|null}>("SELECT type,recipient FROM events WHERE tenant_id=$1 AND email_id=$2",[owner.tenantId,message]);
+  expect(events).toHaveLength(2);expect(events.every(e=>e.recipient===null)).toBe(true);
+  expect((await deps.store.forTenant(owner.tenantId).getMessage(message))?.status).toBe(first.body.message.status);
+  await deps.store.forTenant(owner.tenantId).createWebhookDeliveryEvent("ses","native-open-fixture",{email_id:message,type:"opened",recipient:"reader@example.com",metadata:{source:"provider_webhook"},occurred_at:new Date().toISOString()});
+  await get(opened.token);
+  expect((await pgClient!.get<{count:string}>("SELECT count(*)::text AS count FROM events WHERE tenant_id=$1 AND email_id=$2",[owner.tenantId,message]))?.count).toBe("3");
+  const role="tracking_rls_"+crypto.randomUUID().replaceAll("-","");
+  await pgClient!.execute(`CREATE ROLE "${role}" NOLOGIN; GRANT USAGE ON SCHEMA public TO "${role}"; GRANT SELECT,INSERT,UPDATE ON message_tracking TO "${role}"`);
+  try {
+    await pgClient!.transaction(async tx=>{
+      await tx.execute(`SET LOCAL ROLE "${role}"`); await tx.execute("SELECT set_config('app.current_tenant',$1,true)",[other.tenantId]);
+      expect(await tx.many("SELECT message_id FROM message_tracking WHERE message_id=$1",[message])).toEqual([]);
+      expect(await tx.many("UPDATE message_tracking SET document=document WHERE message_id=$1 RETURNING message_id",[message])).toEqual([]);
+    });
+    await expect(pgClient!.transaction(async tx=>{
+      await tx.execute(`SET LOCAL ROLE "${role}"`); await tx.execute("SELECT set_config('app.current_tenant',$1,true)",[other.tenantId]);
+      await tx.execute("INSERT INTO message_tracking(tenant_id,message_id,document) VALUES($1,$2,'{}')",[owner.tenantId,"forged-message"]);
+    })).rejects.toThrow(/row.level security/i);
+  } finally { await pgClient!.execute(`DROP OWNED BY "${role}"; DROP ROLE "${role}"`); }
+  deps.tracking.activeKey="new";deps.tracking.keys.new=randomBytes(32);
+  const replay=await call(deps,"POST","/v1/messages/send",{token:owner.token,body:input});expect(replay.body.idempotent_replay).toBe(true);expect(captured).toHaveLength(1);expect((await get(opened.token))?.status).toBe(200);
+  expect((await call(deps,"POST","/v1/messages/send",{token:owner.token,body:{...input,idempotency_key:"bad-url",tracking_url:"https://evil.example"}})).status).toBe(400);expect(captured).toHaveLength(1);
+ });
+ it("persists tracking choices across scheduled enqueue and worker execution",async()=>{
+  const {randomBytes}=await import("node:crypto");const owner=await makeTenant("tracking-schedule");const captured:any[]=[];
+  const deps=makeDeps({provider:"ses",send:async input=>{captured.push(input);return "tracking-scheduled-receipt";}});
+  deps.tracking={activeKey:"current",keys:{current:randomBytes(32)},tenants:{[owner.tenantId]:["https://tracking.example"]},ttlSeconds:3600};
+  await registerSender(deps,owner.token,"tracking-schedule.example","sender@tracking-schedule.example");
+  const enqueued=await call(deps,"POST","/v1/scheduled/enqueue",{token:owner.token,body:{from:"sender@tracking-schedule.example",to:["reader@example.com"],subject:"Scheduled tracking",text:"hello",track_opens:true,tracking_url:"https://tracking.example",idempotency_key:"tracking-scheduled",scheduled_at:new Date(Date.now()+60000).toISOString()}});
+  expect(enqueued.status).toBe(201);expect(captured).toHaveLength(0);
+  await pgClient!.execute("UPDATE scheduled_emails SET scheduled_at=now()-interval '1 minute' WHERE tenant_id=$1 AND id=$2",[owner.tenantId,enqueued.body.scheduled.id]);
+  const run=await call(deps,"POST","/v1/scheduled/run",{token:owner.token,body:{limit:5}});expect(run.status).toBe(200);expect(captured).toHaveLength(1);expect(captured[0].html).toContain("/v1/tracking/");
+ });
+});

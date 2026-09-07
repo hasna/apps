@@ -3040,6 +3040,19 @@ CREATE POLICY smtp_submission_receipts_tenant_policy ON smtp_submission_receipts
   WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 `);
 
+const MESSAGE_TRACKING = defineMigration("0035_message_tracking", `
+CREATE TABLE IF NOT EXISTS message_tracking (
+  tenant_id UUID NOT NULL, message_id TEXT NOT NULL, document JSONB NOT NULL,
+  PRIMARY KEY(tenant_id,message_id),
+  FOREIGN KEY(tenant_id,message_id) REFERENCES messages(tenant_id,id) ON DELETE CASCADE
+);
+ALTER TABLE message_tracking ENABLE ROW LEVEL SECURITY;
+ALTER TABLE message_tracking FORCE ROW LEVEL SECURITY;
+CREATE POLICY message_tracking_tenant ON message_tracking
+  USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+  WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
+`);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3082,5 +3095,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     PROVIDER_STATUS_OBSERVATIONS,
     PROVISIONING_JOBS,
     SMTP_SUBMISSION_RECEIPTS,
+    MESSAGE_TRACKING,
   ];
 }

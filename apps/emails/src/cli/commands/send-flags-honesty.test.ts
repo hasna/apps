@@ -3,13 +3,8 @@
 // RFC 8058 List-Unsubscribe headers and without tracking, then printed a green
 // checkmark and exited 0. A parsed-and-ignored option is a false capability.
 //
-// What honesty requires here:
-//   * --unsubscribe-url is a REAL capability of the local provider adapters
-//     (they inject List-Unsubscribe / List-Unsubscribe-Post) — so it must be
-//     THREADED through the send seam, and REFUSED where the send API cannot
-//     carry it (POST /v1/messages/send has no unsubscribe_url field).
-//   * the tracking flags have no working send-path implementation in this build,
-//     so they must be a typed refusal — never a silent drop with exit 0.
+// Options must reach a capable API or fail before sending. Local unsubscribe
+// adapters remain covered; tracking is provided only through the server API.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { Command } from "commander";
 import { closeDatabase, getDatabase, resetDatabase } from "../../db/database.js";
@@ -164,47 +159,18 @@ describe("emails send --unsubscribe-url (serve API)", () => {
   });
 });
 
-// ---- tracking flags: a typed refusal, never a silent drop --------------------
-
-describe("emails send tracking flags refuse rather than silently dropping", () => {
-  let providerId: string;
-
-  beforeEach(() => {
-    captureInheritedProcessEnv();
-    for (const setting of [API_BASE_URL_SETTING, API_SETTINGS_POINTER, ...API_CREDENTIAL_SETTINGS]) {
-      delete process.env[setting];
-    }
-    for (const setting of DATABASE_PATH_SETTINGS) delete process.env[setting];
-    process.env["EMAILS_DB_PATH"] = ":memory:";
-    resetDatabase();
-    resetMailDataSource();
-    providerId = createProvider({ name: "sandbox", type: "sandbox", active: true }).id;
+// Tracking options must reach a capable server; older APIs never receive a send.
+describe("emails send tracking API contract", () => {
+  let stub: V1Stub;
+  beforeAll(async()=>{stub=await startV1Stub();}); afterAll(()=>stub.stop());
+  beforeEach(async()=>{captureInheritedProcessEnv();await stub.reset();stub.applyEnv();resetMailDataSource();});
+  afterEach(()=>{stub.clearEnv();resetMailDataSource();restoreInheritedProcessEnv();});
+  for (const flag of ["--track-opens","--track-clicks"]) it(`refuses ${flag} when the server cannot advertise support`,async()=>{
+    const result=await runSend(["send","--from","agent@acme.com","--to","dest@ext.com","--subject","Hi","--body","x",flag]);
+    expect(result.exited).toBe(true); expect(result.errorOutput).toMatch(/openapi|update/); expect(await stub.list("messages")).toHaveLength(0);
   });
-
-  afterEach(() => {
-    closeDatabase();
-    resetMailDataSource();
-    restoreInheritedProcessEnv();
+  it("requires a tracking switch with --tracking-url",async()=>{
+    const result=await runSend(["send","--from","agent@acme.com","--to","dest@ext.com","--subject","Hi","--body","x","--tracking-url","https://track.example"]);
+    expect(result.exited).toBe(true);expect(result.errorOutput).toContain("--tracking-url requires");expect(await stub.list("messages")).toHaveLength(0);
   });
-
-  const cases: Array<{ flag: string; args: string[] }> = [
-    { flag: "--track-opens", args: ["--track-opens"] },
-    { flag: "--track-clicks", args: ["--track-clicks"] },
-    { flag: "--tracking-url", args: ["--tracking-url", "https://track.acme.com"] },
-  ];
-
-  for (const { flag, args } of cases) {
-    it(`refuses ${flag} and sends nothing`, async () => {
-      const result = await runSend([
-        "send", "--from", "agent@acme.com", "--to", "dest@ext.com", "--subject", "Hi", "--body", "x",
-        "--provider", providerId, ...args,
-      ]);
-
-      expect(result.exited).toBe(true);
-      expect(result.errorOutput).toContain(flag);
-      expect(result.errorOutput).toContain("not supported in this build");
-      // The refusal must precede the send: no message may leave.
-      expect(await listSandboxEmails(providerId, 10, 0)).toHaveLength(0);
-    });
-  }
 });

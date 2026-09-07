@@ -38594,6 +38594,34 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
   },
   {
     "method": "GET",
+    "operationId": "observeMessageTracking",
+    "path": "/v1/tracking/{token}",
+    "status": 200,
+    "schema": null
+  },
+  {
+    "method": "GET",
+    "operationId": "observeMessageTracking",
+    "path": "/v1/tracking/{token}",
+    "status": 302,
+    "schema": null
+  },
+  {
+    "method": "GET",
+    "operationId": "observeMessageTracking",
+    "path": "/v1/tracking/{token}",
+    "status": 404,
+    "schema": null
+  },
+  {
+    "method": "GET",
+    "operationId": "observeMessageTracking",
+    "path": "/v1/tracking/{token}",
+    "status": 503,
+    "schema": null
+  },
+  {
+    "method": "GET",
     "operationId": "listResourceTriage",
     "path": "/v1/triage",
     "status": 200,

@@ -3746,6 +3746,9 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
                 type: "object",
                 properties: {
                   provider_id: { type: "string", description: "Active tenant provider with a server sender binding." },
+                  track_opens: {type:"boolean",description:"Observe unique message open requests using configured server tracking."},
+                  track_clicks: {type:"boolean",description:"Observe unique message click requests using configured server tracking."},
+                  tracking_url: {type:"string",format:"uri",description:"Exact tenant-approved HTTPS tracking base; requires a tracking switch."},
                   unsubscribe_url: { type: "string", format: "uri", description: "HTTP(S) unsubscribe URL emitted as List-Unsubscribe headers." },
                   from: { type: "string" },
                   to: { type: "array", items: { type: "string" } },
@@ -4840,4 +4843,9 @@ emailsSelfHostedOpenApi.paths!["/v1/domain-connections/{id}"] = {
   },
 };
 
+emailsSelfHostedOpenApi.paths!["/v1/tracking/{token}"] = {
+  get: { operationId: "observeMessageTracking", summary: "Observe a public opaque tracking capability", security: [],
+    parameters: [{name:"token",in:"path",required:true,schema:{type:"string"}}],
+    responses: {"200":{description:"Transparent GIF for a valid open capability"},"302":{description:"Redirect to the stored click destination"},"404":{description:"Invalid or expired capability"},"503":{description:"Tracking persistence unavailable"}} },
+};
 addRoutineErrorParity(emailsSelfHostedOpenApi);
