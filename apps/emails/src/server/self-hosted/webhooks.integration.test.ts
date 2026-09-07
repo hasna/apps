@@ -12,7 +12,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { verifyApiKey } from "@hasna/contracts/auth";
+import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { createPgPool, createQueryClient, MigrationLedger, type PoolQueryClient } from "../../storage-kit/index.js";
 import { emailsSelfHostedMigrations } from "./migrations.js";
 import { EmailsSelfHostedStore } from "./store.js";
@@ -611,5 +611,86 @@ describe.skipIf(!pgClient)("authenticated relay persistence", () => {
     const replies = await Promise.all(Array.from({ length: 8 }, () => store.createRelayDelivery(namespace, "event", id, "upstream", event)));
     expect(new Set(replies.map(reply => reply.id)).size).toBe(1); expect(await count("events", tenant)).toBe(1); expect(await count("webhook_receipts", tenant)).toBe(1);
     const row = await pgClient!.one("SELECT email_id,provider_id FROM events WHERE id=$1", [replies[0]!.id]); expect(row).toEqual({ email_id: message.id, provider_id: id });
+  });
+});
+
+async function relayRequest(tenant: string, provider: string, kind: "ses" | "resend", body: unknown, id = randomUUID()): Promise<Request> {
+  const minted = mintApiKey({ app: "emails", scopes: ["emails:*"], signingSecret: SIGNING_SECRET });
+  await pgClient!.execute("INSERT INTO api_key_tenants(kid,tenant_id) VALUES($1,$2)", [minted.kid, tenant]);
+  const signed = kind === "resend" ? await resendPost(body, { id }) : snsPost(body);
+  return new Request(`http://svc/v1/webhooks/relay/${kind}?provider_id=${provider}`, {
+    method: "POST", headers: { "x-api-key": minted.token, "content-type": "application/json" },
+    body: JSON.stringify({ raw_body_base64: Buffer.from(await signed.arrayBuffer()).toString("base64"), signature_headers: Object.fromEntries(signed.headers) }),
+  });
+}
+
+describe.skipIf(!pgClient)("relay authorization and atomic lifecycle regressions", () => {
+  it("the actual signed handler accepts send-only outcomes once without any inbound domain route", async () => {
+    for (const kind of ["resend", "ses"] as const) {
+      const domain = `relay-send-only-${kind}.test`, tenant = await makeRoutedTenant(`relay-send-only-${kind}`, domain);
+      await pgClient!.execute("DELETE FROM inbound_domain_routes WHERE tenant_id=$1", [tenant]);
+      const { deps } = makeDeps(); const store = deps.store.forTenant(tenant);
+      const provider = String((await store.createResource(resourceSpecForPath("providers")!, { name: "send-only", type: kind })).id);
+      const message = await store.createMessage({ direction: "outbound", from_addr: `sender@${domain}`, to_addrs: ["recipient@example.net"], provider_id: provider, provider_message_id: "outbound-only", status: "sent", send_state: "sent" });
+      deps.env = { ...deps.env, FIXTURE_RELAY_SECRET: RESEND_SECRET, FIXTURE_RECEIVING_KEY: "fixture-only", EMAILS_WEBHOOK_BINDINGS: JSON.stringify([{ tenant_id: tenant, provider_id: provider, type: kind, ...(kind === "resend" ? { secret_env: "FIXTURE_RELAY_SECRET", api_key_env: "FIXTURE_RECEIVING_KEY" } : { topic_arn: TOPIC_ARN }) }]) };
+      deps.webhookRelay = { verifySns: alwaysVerified, fetch: async () => { throw new Error("Delivery must not fetch Receiving content"); } };
+      const body = kind === "resend" ? { type: "email.delivered", data: { email_id: "outbound-only", from: `sender@${domain}`, to: ["recipient@example.net"] } }
+        : snsEnvelope({ Type: "Notification", Message: JSON.stringify({ notificationType: "Delivery", mail: { messageId: "outbound-only", source: `sender@${domain}` }, delivery: { recipients: ["recipient@example.net"], timestamp: new Date().toISOString() } }) });
+      const eventId = randomUUID();
+      for (let i = 0; i < 2; i++) {
+        const result = await handleSelfHostedRequest(deps, await relayRequest(tenant, provider, kind, body, eventId));
+        expect(result!.status).toBe(200); expect(await json(result)).toMatchObject({ completed: true });
+      }
+      expect(await count("events", tenant)).toBe(1); expect(await count("webhook_receipts", tenant)).toBe(1);
+      expect(await pgClient!.one("SELECT email_id FROM events WHERE tenant_id=$1", [tenant])).toEqual({ email_id: message.id });
+      // An already recorded event still needs a currently owned outbound identity.
+      await pgClient!.execute("UPDATE messages SET provider_message_id='other' WHERE id=$1", [message.id]);
+      expect((await handleSelfHostedRequest(deps, await relayRequest(tenant, provider, kind, body, eventId)))!.status).toBe(403);
+      expect(await count("events", tenant)).toBe(1);
+    }
+  });
+  it("SES persistence accepts a sending-disabled provider but fences route, tenant and receive lifecycle changes", async () => {
+    for (const mutation of ["none", "route", "tenant", "source-status", "source-type", "source-provider", "provider-type"] as const) {
+      const domain = `relay-fence-${mutation}.test`, tenant = await makeRoutedTenant(`relay-fence-${mutation}`, domain);
+      const foreign = await makeRoutedTenant(`relay-foreign-${mutation}`, `foreign-${mutation}.test`);
+      const { deps } = makeDeps(); const store = deps.store.forTenant(tenant);
+      const provider = String((await store.createResource(resourceSpecForPath("providers")!, { name: "SES receive", type: "ses", active: false })).id);
+      const source = String((await store.createResource(resourceSpecForPath("sources")!, { name: "bound", mailbox_id: "inbox", type: "s3", status: "active", provider_id: provider })).id);
+      await store.createDomain({ domain });
+      deps.env = { ...deps.env, EMAILS_WEBHOOK_BINDINGS: JSON.stringify([{ tenant_id: tenant, provider_id: provider, type: "ses", topic_arn: TOPIC_ARN, source_id: source }]), EMAILS_INGEST_BINDINGS: JSON.stringify([{ tenant_id: tenant, source_id: source, provider_id: provider, domain, bucket: BUCKET, prefix: PREFIX, region: "us-east-1", topic_arn: TOPIC_ARN }]) };
+      let fetched = 0;
+      deps.webhookRelay = { verifySns: alwaysVerified, fetchObject: async () => {
+        fetched++;
+        if (mutation === "route") await pgClient!.execute("UPDATE inbound_domain_routes SET tenant_id=$1 WHERE domain=$2", [foreign, domain]);
+        if (mutation === "tenant") await pgClient!.execute("UPDATE tenants SET status='suspended' WHERE id=$1", [tenant]);
+        if (mutation === "source-status") await pgClient!.execute("UPDATE mailbox_sources SET status='retired' WHERE id=$1", [source]);
+        if (mutation === "source-type") await pgClient!.execute("UPDATE mailbox_sources SET type='imap' WHERE id=$1", [source]);
+        if (mutation === "source-provider") await pgClient!.execute("UPDATE mailbox_sources SET provider_id='changed' WHERE id=$1", [source]);
+        if (mutation === "provider-type") await pgClient!.execute("UPDATE self_hosted_providers SET type='resend' WHERE id=$1", [provider]);
+        return Buffer.from(rawEmail("must not persist"));
+      } };
+      const body = snsEnvelope({ Type: "Notification", Message: JSON.stringify({ notificationType: "Received", mail: { messageId: `upstream-${mutation}`, destination: [`inbox@${domain}`] }, receipt: { recipients: [`inbox@${domain}`], action: { type: "S3", bucketName: BUCKET, objectKey: `${PREFIX}${mutation}` } } }) });
+      const response = await handleSelfHostedRequest(deps, await relayRequest(tenant, provider, "ses", body));
+      expect(fetched).toBe(1);
+      if (mutation === "none") { expect(response!.status).toBe(200); expect(await json(response)).toMatchObject({ completed: true }); }
+      else expect(response!.status).toBeGreaterThanOrEqual(400);
+      const expected = mutation === "none" ? 1 : 0;
+      expect(await count("messages", tenant)).toBe(expected); expect(await count("inbound_message_sources", tenant)).toBe(expected); expect(await count("webhook_receipts", tenant)).toBe(expected);
+    }
+  });
+  it("Resend provider type changes during raw content fetch are fenced before persistence", async () => {
+    const domain = "relay-resend-fence.test", tenant = await makeRoutedTenant("relay-resend-fence", domain);
+    const { deps } = makeDeps(); const store = deps.store.forTenant(tenant);
+    const provider = String((await store.createResource(resourceSpecForPath("providers")!, { name: "receive", type: "resend" })).id);
+    deps.env = { ...deps.env, FIXTURE_RELAY_SECRET: RESEND_SECRET, FIXTURE_RECEIVING_KEY: "fixture-only", EMAILS_WEBHOOK_BINDINGS: JSON.stringify([{ tenant_id: tenant, provider_id: provider, type: "resend", secret_env: "FIXTURE_RELAY_SECRET", api_key_env: "FIXTURE_RECEIVING_KEY" }]) };
+    deps.webhookRelay = { fetch: async (url: any) => {
+      if (String(url).startsWith("https://api.resend.com/")) return Response.json({ id: "inbound", raw: { download_url: "https://cdn.resend.com/raw" } });
+      await pgClient!.execute("UPDATE self_hosted_providers SET type='ses' WHERE id=$1", [provider]);
+      return new Response(rawEmail("must not persist"));
+    } };
+    const body = { type: "email.received", data: { email_id: "inbound", from: "sender@example.net", to: [`inbox@${domain}`] } };
+    const response = await handleSelfHostedRequest(deps, await relayRequest(tenant, provider, "resend", body));
+    expect(response!.status).toBeGreaterThanOrEqual(400);
+    expect(await count("messages", tenant)).toBe(0); expect(await count("webhook_receipts", tenant)).toBe(0);
   });
 });

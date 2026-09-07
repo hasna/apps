@@ -56,3 +56,7 @@ provider outcomes as events and does not claim to update contact suppression.
 
 Provider references: [email.received payload](https://resend.com/docs/webhooks/emails/received),
 [retrieve received email and raw content](https://resend.com/docs/api-reference/emails/retrieve-received-email).
+
+Delivery outcomes are authorized against an existing outbound message with the exact tenant, provider, upstream message ID and envelope sender. Sending-only domains do not need an inbound domain route. Signed duplicate deliveries repeat this ownership check before consulting the receipt. An SES delivery-only binding can omit `source_id`; receiving mail still requires the configured, active ingest source.
+
+Inbound persistence locks the active tenant's current recipient routes and the selected provider type in the same transaction as the message and provenance insert. SES also locks and checks the source's receive type, active status and provider identity. A route reassignment, tenant suspension, source retirement or provider type change during the awaited raw-content fetch therefore cannot store mail under the old binding. Provider `active` controls sending and does not disable receive ingestion. The immutable server environment binding remains authoritative when a source has no registry provider assignment.

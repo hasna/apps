@@ -10,12 +10,15 @@ const signingSecret = crypto.randomUUID(), secret = randomBytes(32), apiKey = cr
 function fixture() {
   const client = { query: async () => ({ rows: [], rowCount: 0 }), many: async () => [], get: async () => null, one: async () => ({}), execute: async () => {} } as TypedQueryClient;
   const store = selfScopedStore(client), calls: any[] = [], fetches: any[] = [];
-  const state = { tenant: DEFAULT_TENANT_ID, unresolved: [] as string[], receipt: false, missingRaw: false, cdn: "https://cdn.resend.com/raw", fail: false, type: "resend" };
+  const state = { tenant: DEFAULT_TENANT_ID, unresolved: [] as string[], receipt: false, outboundOwned: true, missingRaw: false, cdn: "https://cdn.resend.com/raw", fail: false, type: "resend" };
   const binding: any = { tenant_id: DEFAULT_TENANT_ID, provider_id: "provider", type: "resend", secret_env: "FIXTURE_WEBHOOK_SECRET", api_key_env: "FIXTURE_RECEIVING_KEY" };
   const env = { EMAILS_WEBHOOK_BINDINGS: JSON.stringify([binding]), FIXTURE_WEBHOOK_SECRET: `whsec_${secret.toString("base64")}`, FIXTURE_RECEIVING_KEY: apiKey };
   Object.assign(store, {
     resolveInboundRecipients: async (to: string[]) => ({ groups: [{ tenantId: state.tenant, recipients: to }], unresolved: state.unresolved }),
     getResource: async () => ({ id: "provider", type: state.type }),
+    authorizeRelayDelivery: async () => state.outboundOwned,
+    withInboundPersistenceFence: () => store,
+    recordFencedRelayReceipt: async (...args: any[]) => (store as any).recordRelayReceipt(...args),
     findRelayReceipt: async () => state.receipt ? { resourceId: "durable" } : null,
     recordRelayReceipt: async (...args: any[]) => { calls.push(args); },
     createRelayInbound: async (...args: any[]) => { if (state.fail) throw new Error("database unavailable"); calls.push(args); state.receipt = true; return { id: "durable", receiptRecorded: true }; },
@@ -107,4 +110,20 @@ test("SDK relay envelope preserves arbitrary bytes and rejects noncanonical, ove
     { raw_body_base64: "", signature_headers: { authorization: "not-allowed" } },
     { raw_body_base64: "", signature_headers: { "svix-id": "bad\r\nheader" } },
   ]) expect(() => providerWebhookRequest("http://fixture/relay", envelope)).toThrow();
+});
+
+test("signed delivery events authorize the outbound identity without consulting inbound routes, including duplicates", async () => {
+  const f = fixture();
+  Object.assign(f.deps.store, { resolveInboundRecipients: async () => { throw new Error("Send-only domain has no inbound route"); } });
+  const event = { type: "email.delivered", data: { email_id: "outbound-id", from: "sender@example.com", to: ["recipient@example.net"] } };
+  expect((await f.request(event, undefined, false))!.status).toBe(401);
+  expect(f.calls).toHaveLength(0);
+  expect((await f.request(event))!.status).toBe(200);
+  f.state.receipt = true;
+  expect((await f.request(event))!.status).toBe(200);
+  expect(f.calls).toHaveLength(1);
+  f.state.outboundOwned = false;
+  expect((await f.request(event))!.status).toBe(403);
+  expect(f.calls).toHaveLength(1);
+  expect(f.fetches).toHaveLength(0);
 });

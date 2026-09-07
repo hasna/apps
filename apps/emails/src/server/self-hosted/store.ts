@@ -520,6 +520,14 @@ export class AttachmentRepairQuotaExceededError extends Error {
   }
 }
 
+/** Server-verified receive binding revalidated atomically at persistence. */
+export interface InboundPersistenceFence {
+  recipients: string[];
+  providerId: string;
+  providerType: "ses" | "resend";
+  sourceId?: string;
+}
+
 /** Fields a caller may supply when writing a message (outbound or inbound). */
 export interface MessageInput {
   from_addr: string;
@@ -2430,6 +2438,43 @@ export class TenantScopedStore {
     const routes = await tx.many<{ tenant_id: string }>(`SELECT r.tenant_id FROM inbound_domain_routes r JOIN tenants t ON t.id=r.tenant_id WHERE r.domain=ANY($1::text[]) AND t.status='active' FOR SHARE OF r,t`, [domains]);
     if (!domains.length || routes.length !== domains.length || routes.some(route => route.tenant_id !== this.tenantId)) throw new Error("Webhook recipient routing changed before durable acceptance");
   }
+  async authorizeRelayDelivery(providerId: string, upstreamId: string, sender: string): Promise<boolean> {
+    const message = await this.client.get<{ from_addr: string }>(`SELECT from_addr FROM messages WHERE tenant_id=$1 AND provider_id=$2 AND provider_message_id=$3 AND direction='outbound'`, [this.tenantId, providerId, upstreamId]);
+    return Boolean(message && canonicalSender(sender) && canonicalSender(sender) === canonicalSender(message.from_addr));
+  }
+  private async lockInboundPersistenceFence(tx: TypedQueryClient, fence: InboundPersistenceFence): Promise<void> {
+    await this.lockRelayRecipients(tx, fence.recipients);
+    const provider = await tx.get<{ type: string }>(`SELECT type FROM self_hosted_providers WHERE tenant_id=$1 AND id=$2 FOR SHARE`, [this.tenantId, fence.providerId]);
+    if (provider?.type !== fence.providerType) throw new Error("Webhook provider type changed before durable acceptance");
+    if (fence.sourceId) {
+      const source = await tx.get<{ type: string; status: string; provider_id: string | null }>(`SELECT type,status,provider_id FROM mailbox_sources WHERE tenant_id=$1 AND id=$2 FOR SHARE`, [this.tenantId, fence.sourceId]);
+      if (!source || !["s3", "ses_s3"].includes(source.type) || source.status !== "active" || (source.provider_id !== null && source.provider_id !== fence.providerId)) throw new Error("Webhook source changed before durable acceptance");
+    }
+  }
+  /** Reusable bounded ingest adapter: the lifecycle check and each write share one SQL transaction. */
+  withInboundPersistenceFence(fence: InboundPersistenceFence) {
+    return {
+      findMessageIdByKey: (key: string) => this.findMessageIdByKey(key),
+      getInboundSourceProvenance: (id: string) => this.getInboundSourceProvenance(id),
+      createInboundMessageWithProvenance: (input: MessageInput, provenance: Parameters<TenantScopedStore["createInboundMessageWithProvenance"]>[1]) => this.createInboundMessageWithProvenance(input, provenance, fence),
+      recordInboundSourceProvenance: async (input: Parameters<TenantScopedStore["recordInboundSourceProvenance"]>[0]) => {
+        if (!this.atomicClient) throw new Error("Fenced ingestion requires a transactional store");
+        return this.atomicClient.transaction(async tx => {
+          await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+          await this.lockInboundPersistenceFence(tx, fence);
+          return new TenantScopedStore(tx, this.tenantId).recordInboundSourceProvenance(input);
+        });
+      },
+    };
+  }
+  async recordFencedRelayReceipt(provider: string, eventId: string, resourceId: string | null, fence: InboundPersistenceFence): Promise<void> {
+    if (!this.atomicClient) throw new Error("Fenced ingestion requires a transactional store");
+    await this.atomicClient.transaction(async tx => {
+      await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+      await this.lockInboundPersistenceFence(tx, fence);
+      await new TenantScopedStore(tx, this.tenantId).recordRelayReceipt(provider, eventId, resourceId);
+    });
+  }
   async findRelayReceipt(provider: string, eventId: string): Promise<{ resourceId: string | null } | null> {
     const row = await this.client.get<{ resource_id: string | null }>(`SELECT resource_id FROM webhook_receipts WHERE tenant_id=$1 AND provider=$2 AND event_id=$3`, [this.tenantId, provider, eventId]);
     return row ? { resourceId: row.resource_id } : null;
@@ -2445,9 +2490,7 @@ export class TenantScopedStore {
       await tx.execute(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [`webhook:${this.tenantId}:${provider}:${eventId}`]);
       const receipt = await tx.get<{ resource_id: string }>(`SELECT resource_id FROM webhook_receipts WHERE tenant_id=$1 AND provider=$2 AND event_id=$3`, [this.tenantId, provider, eventId]);
       if (receipt?.resource_id) return { id: receipt.resource_id, receiptRecorded: true as const };
-      await this.lockRelayRecipients(tx, input.to_addrs);
-      const providerRow = await tx.get(`SELECT id FROM self_hosted_providers WHERE tenant_id=$1 AND id=$2 FOR SHARE`, [this.tenantId, input.provider_id]);
-      if (!providerRow) throw new Error("Webhook provider changed before durable acceptance");
+      await this.lockInboundPersistenceFence(tx, { recipients: input.to_addrs, providerId: input.provider_id!, providerType: "resend" });
       const params = messageInsertParams(input);
       const inserted = await tx.get<{ id: string }>(`INSERT INTO messages(${MESSAGE_INSERT_COLS},tenant_id) VALUES(${MESSAGE_INSERT_VALUES},$25) ON CONFLICT(tenant_id,source_id) WHERE source_id IS NOT NULL DO NOTHING RETURNING id`, [...params, this.tenantId]);
       const message = inserted ?? await tx.one<{ id: string }>(`SELECT id FROM messages WHERE tenant_id=$1 AND source_id=$2 AND provider_id=$3`, [this.tenantId, input.source_id, input.provider_id]);
@@ -4600,6 +4643,7 @@ export class TenantScopedStore {
       rawSha256: string;
       establishedVia: "normal_ingest";
     },
+    fence?: InboundPersistenceFence,
   ): Promise<{
     record: MessageRecord;
     inserted: boolean;
@@ -4612,6 +4656,7 @@ export class TenantScopedStore {
     }
     return this.atomicClient.transaction(async (tx) => {
       await tx.execute(`SELECT set_config('app.current_tenant', $1, true)`, [this.tenantId]);
+      if (fence) await this.lockInboundPersistenceFence(tx, fence);
       const insertedRow = await tx.get<Record<string, unknown>>(
         `INSERT INTO messages (${MESSAGE_INSERT_COLS}, tenant_id)
          VALUES (${MESSAGE_INSERT_VALUES}, $25)
