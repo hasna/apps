@@ -1190,6 +1190,9 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
         apiKey: { type: "apiKey", in: "header", name: "x-api-key" },
       },
       schemas: {
+        Machine: { type: "object", additionalProperties: false, required: ["id", "name", "hostname", "platform", "last_seen_at", "metadata", "created_at", "ssh_address", "is_primary", "archived_at"], properties: {
+          id: { type: "string" }, name: { type: "string" }, hostname: { type: ["string", "null"] }, platform: { type: ["string", "null"] }, last_seen_at: { type: "string", format: "date-time" }, metadata: { type: "object", additionalProperties: true }, created_at: { type: "string", format: "date-time" }, ssh_address: { type: ["string", "null"] }, is_primary: { type: "boolean" }, archived_at: { type: ["string", "null"] },
+        } },
         Task: taskSchema,
         Project: projectSchema,
         TaskManifestBounds: taskManifestBoundsSchema,
@@ -2007,6 +2010,16 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
     },
     security: [{ apiKey: [] }],
     paths: {
+      "/v1/machines": {
+        get: { operationId: "listMachines", summary: "Read the complete shared machine registry", responses: {
+          "200": { description: "Registry capability and complete machine records", content: { "application/json": { schema: { type: "object", required: ["schema_version", "machines"], properties: { schema_version: { type: "integer", enum: [1] }, machines: { type: "array", items: { $ref: "#/components/schemas/Machine" } } } } } } },
+        } },
+        post: { operationId: "mutateMachineRegistry", summary: "Apply an atomic machine registry operation", requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["action"], properties: {
+          action: { type: "string", enum: ["register", "heartbeat", "set-primary", "archive", "unarchive", "delete", "import"] }, name: { type: "string" }, id: { type: "string" }, options: { type: "object" }, machines: { type: "array", maxItems: 10000, items: { $ref: "#/components/schemas/Machine" } },
+        } } } } }, responses: {
+          "200": { description: "Committed registry receipt", content: { "application/json": { schema: { type: "object", required: ["schema_version", "machines", "inserted", "skipped"], properties: { schema_version: { type: "integer", enum: [1] }, machines: { type: "array", items: { $ref: "#/components/schemas/Machine" } }, machine: { $ref: "#/components/schemas/Machine" }, inserted: { type: "integer" }, skipped: { type: "integer" }, deleted: { type: "boolean" } } } } } },
+        } },
+      },
       "/v1/project-registration/capability": {
         get: {
           operationId: "getProjectRegistrationCapability",
@@ -3379,6 +3392,7 @@ export function buildV1OpenApiDocument(version = getPackageVersion()) {
                     tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } },
                     projects: { type: "array", items: { $ref: "#/components/schemas/Project" } },
                     projectMachinePaths: { type: "array", items: { type: "object" } },
+                    machines: { type: "array", maxItems: 10000, items: { $ref: "#/components/schemas/Machine" } },
                     plans: { type: "array", items: { type: "object" } },
                     agents: { type: "array", items: { type: "object" } },
                     taskLists: { type: "array", items: { type: "object" } },

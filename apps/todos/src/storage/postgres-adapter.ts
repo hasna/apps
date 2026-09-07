@@ -1,3 +1,4 @@
+import { createPostgresMachineRegistry, validateMachines } from "./machine-registry.js";
 import { randomUUID } from "node:crypto";
 import { LockError, PlanNotFoundError, PlanRevisionConflictError, ProjectNotFoundError, ResourceConflictError, TaskNotFoundError, TaskNotStartableError, TaskReferenceAmbiguousError, VersionConflictError, isTerminalStatus } from "../types/index.js";
 import type {
@@ -109,7 +110,7 @@ import {
 } from "./audit-history-import.js";
 import { deterministicUuid } from "../task-manifest/canonical.js";
 
-type RemoteObjectType = TodosPostgresSyncRecordType | "comments" | "plan_comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
+type RemoteObjectType = "machines" | TodosPostgresSyncRecordType | "comments" | "plan_comments" | "dependencies" | "verifications" | "commits" | "refs" | "template_tasks" | "plan_project_link_receipts" | "plan_project_link_rollback_receipts";
 
 export interface CreatePostgresTodosStorageAdapterOptions {
   client: TodosPostgresQueryClient;
@@ -308,10 +309,11 @@ export function createPostgresTodosStorageAdapter(
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .slice(0, limit),
     },
+    machines: createPostgresMachineRegistry(options.client, options.service ?? "todos", options.tableName ?? DEFAULT_TODOS_POSTGRES_SYNC_TABLE, () => store.ensureSchema()),
     sync: {
       getTasksChangedSince: (since, filters) => getChangedSince(since, filters, store),
       exportSnapshot: () => exportSnapshot(store),
-      importSnapshot: (snapshot, context) => importSnapshot(snapshot, store, context),
+      importSnapshot: (snapshot, context) => importSnapshot(snapshot, store, context, adapter.machines),
     },
     integrity: {
       report: () => store.integrityReport(),
@@ -3332,6 +3334,7 @@ async function exportSnapshot(store: PostgresJsonRecordStore): Promise<TodosStor
   return {
     exportedAt: new Date().toISOString(),
     source: "postgres",
+    machines: await store.list<import("../types/index.js").Machine>("machines"),
     tasks: await store.list<Task>("tasks"),
     projects: await store.list<Project>("projects"),
     projectMachinePaths: await store.list<NonNullable<TodosStorageSnapshot["projectMachinePaths"]>[number]>("project_machine_paths"),
@@ -3349,8 +3352,11 @@ async function importSnapshot(
   snapshot: TodosStorageSnapshot,
   store: PostgresJsonRecordStore,
   context?: TodosStorageContext,
+  machines?: import("./machine-registry.js").MachineRegistryStore,
 ): Promise<TodosStorageImportResult> {
   const result: TodosStorageImportResult = { inserted: 0, updated: 0, deleted: 0, skipped: 0, errors: [] };
+  if ((snapshot.tombstones ?? []).some(row => (row.object_type as string) === "machines")) { result.errors.push("Machine tombstones require explicit registry lifecycle operations"); return result; }
+  try { if (snapshot.machines !== undefined) validateMachines(snapshot.machines); } catch (e) { result.errors.push(e instanceof Error ? e.message : String(e)); return result; }
   result.errors.push(...validateSnapshotRoutingRecords(snapshot.projects, snapshot.taskLists));
   if (result.errors.length > 0) return result;
   const [existingProjects, existingTaskLists] = await Promise.all([
@@ -3367,6 +3373,14 @@ async function importSnapshot(
   const auditHistory = await preflightAuditHistoryImport(snapshot.auditHistory, snapshot.tombstones ?? [], store);
   result.errors.push(...auditHistory.errors);
   if (result.errors.length > 0) return result;
+  if (snapshot.machines?.length) {
+    try {
+      if (!machines) throw new Error("Machine registry import is unavailable");
+      const receipt = await machines.execute({ action: "import", machines: snapshot.machines });
+      result.inserted += receipt.inserted;
+      result.skipped += receipt.skipped;
+    } catch (error) { result.errors.push(error instanceof Error ? error.message : String(error)); return result; }
+  }
   result.skipped += auditHistory.identical;
   const entries: ReadonlyArray<readonly [
     RemoteObjectType,

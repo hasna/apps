@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { getTodosCloudClient as machineStartupCloudClient } from "../cli/cloud-router.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { getAgent, getAgentByName } from "../db/agents.js";
@@ -99,6 +100,8 @@ function getAgentFocus(agentId: string): AgentFocus | undefined {
   // Session focus takes priority
   const sessionFocus = agentFocusMap.get(agentId);
   if (sessionFocus) return sessionFocus;
+  // API calls use explicit/session focus; never consult a different local dataset.
+  if (machineStartupCloudClient()) return undefined;
   // Fall back to DB active_project_id
   try {
     const agent = getAgentByName(agentId) || getAgent(agentId);
@@ -162,7 +165,7 @@ function formatError(error: unknown): string {
   if (error instanceof Error) {
     const msg = error.message;
     // Wrap SQLite constraint errors with agent-friendly messages
-    if (msg.includes("UNIQUE constraint failed: projects.path")) {
+    if (msg.includes("UNIQUE constraint failed: projects.path") && !machineStartupCloudClient()) {
       const db = getDatabase();
       const existing = db.prepare("SELECT id, name FROM projects WHERE path = ?").get(msg.match(/'([^']+)'$/)?.[1] ?? "") as any;
       return JSON.stringify({ code: "DUPLICATE_PROJECT", message: `Project already exists at this path${existing ? ` (id: ${existing.id}, name: ${existing.name})` : ""}. Use list_projects to find it.`, suggestion: "Use list_projects or get_project to retrieve the existing project." });
@@ -188,6 +191,7 @@ function formatError(error: unknown): string {
 }
 
 function resolveId(partialId: string, table = "tasks"): string {
+  if (machineStartupCloudClient()) throw new Error("API operations must resolve identifiers against the shared API");
   const db = getDatabase();
   const id = resolvePartialId(db, table, partialId);
   if (!id) {
@@ -320,7 +324,7 @@ async function main() {
     // Durable dual-write shadow: long-running stdio MCP drains the outbox.
     try {
       const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
-      startRuntimeShadowDrain(getDatabase());
+      if (!machineStartupCloudClient()) startRuntimeShadowDrain(getDatabase());
     } catch { /* shadow disabled or unavailable — local writes stay durable */ }
     const transport = new StdioServerTransport();
     await server.connect(transport);

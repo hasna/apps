@@ -4,7 +4,9 @@
 import { assertTodosPriorRegistrationAdoptionValidationEnvelope } from "../project-registration/adoption-validation.js";
 
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: Todos V1 API 0.15.35
+// Source: Todos V1 API 0.16.0
+
+export interface Machine { "id": string; "name": string; "hostname": string; "platform": string; "last_seen_at": string; "metadata": Record<string, unknown>; "created_at": string; "ssh_address": string; "is_primary": boolean; "archived_at": string }
 
 export interface Task { "id"?: string; "title"?: string; "description"?: string; "status"?: "pending" | "in_progress" | "completed" | "failed" | "cancelled"; "priority"?: "low" | "medium" | "high" | "critical"; "project_id"?: string | null; "parent_id"?: string | null; "assigned_to"?: string | null; "agent_id"?: string | null; "created_by"?: string | null; "reason"?: string | null; "tags"?: Array<string>; "version"?: number; "locked_by"?: string | null; "locked_at"?: string | null; "created_at"?: string; "updated_at"?: string }
 
@@ -220,7 +222,14 @@ export class TodosV1Client {
     const url = new URL(this.baseUrl + path);
     if (opts.query) {
       for (const [key, value] of Object.entries(opts.query)) {
-        if (value !== undefined && value !== null) url.searchParams.set(key, String(value));
+        if (value === undefined || value === null) continue;
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null) url.searchParams.append(key, String(item));
+          }
+        } else {
+          url.searchParams.set(key, String(value));
+        }
       }
     }
     const headers: Record<string, string> = { Accept: "application/json", ...this.baseHeaders, ...(opts.init?.headers as Record<string, string> | undefined) };
@@ -240,8 +249,33 @@ export class TodosV1Client {
   }
 
     /** Bulk-ingest a snapshot or atomically complete one observed plan */
-    async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "templateTasks"?: Array<TemplateTask>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>>; "planCompletions"?: Array<{ "id": string; "expected_updated_at": string; "status": "completed" }> }, init?: RequestInit): Promise<{ "received"?: number; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> }; "planCompletions"?: Array<{ "id": string; "status": "completed"; "expected_updated_at": string; "result_updated_at": string; "applied": boolean }> }> {
+    async importSnapshot(body: { "exportedAt"?: string; "source"?: string; "tasks"?: Array<Task>; "projects"?: Array<Project>; "projectMachinePaths"?: Array<Record<string, unknown>>; "machines"?: Array<Machine>; "plans"?: Array<Record<string, unknown>>; "agents"?: Array<Record<string, unknown>>; "taskLists"?: Array<Record<string, unknown>>; "templates"?: Array<Record<string, unknown>>; "templateTasks"?: Array<TemplateTask>; "auditHistory"?: Array<Record<string, unknown>>; "tombstones"?: Array<Record<string, unknown>>; "planCompletions"?: Array<{ "id": string; "expected_updated_at": string; "status": "completed" }> }, init?: RequestInit): Promise<{ "received"?: number; "result"?: { "inserted"?: number; "updated"?: number; "deleted"?: number; "skipped"?: number; "errors"?: Array<string> }; "planCompletions"?: Array<{ "id": string; "status": "completed"; "expected_updated_at": string; "result_updated_at": string; "applied": boolean }> }> {
+      if (body.machines !== undefined && !Array.isArray(body.machines)) throw new Error("Invalid machine snapshot array; no snapshot was posted");
+      if (body.machines?.length) {
+        let capability;
+        try { capability = await this.listMachines(init); }
+        catch { throw new Error("REMOTE_API_INCOMPATIBLE: machine import requires an upgraded Todos server; no snapshot was posted"); }
+        if (capability?.schema_version !== 1 || !Array.isArray(capability.machines)) throw new Error("REMOTE_API_INCOMPATIBLE: machine registry capability is missing; no snapshot was posted");
+      }
       return this.request("POST", `/v1/import`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Read the complete shared machine registry */
+    async listMachines(init?: RequestInit): Promise<{ "schema_version": 1; "machines": Array<Machine> }> {
+      return this.request("GET", `/v1/machines`, {
+        body: undefined,
+        query: undefined,
+        init,
+      });
+    }
+
+    /** Apply an atomic machine registry operation */
+    async mutateMachineRegistry(body: { "action": "register" | "heartbeat" | "set-primary" | "archive" | "unarchive" | "delete" | "import"; "name"?: string; "id"?: string; "options"?: Record<string, unknown>; "machines"?: Array<Machine> }, init?: RequestInit): Promise<{ "schema_version": 1; "machines": Array<Machine>; "machine"?: Machine; "inserted": number; "skipped": number; "deleted"?: boolean }> {
+      return this.request("POST", `/v1/machines`, {
         body,
         query: undefined,
         init,
