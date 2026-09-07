@@ -28,10 +28,13 @@ breaks for each one.
 
 The hosted Emails API client resolves its URL and key through the shared
 `@hasna/contracts` 1.0.2 resolver (apps/emails/src/lib/emails-credentials.ts) —
-the same five tiers every hosted Hasna CLI uses, FRESH on every request:
-`--api-key`/`--profile`, `HASNA_EMAILS_API_KEY_REF` pointers, the macOS
-Keychain items for this app (`api-key`, `api-url`), the
-`~/.hasna/emails/config/credentials` file, then `HASNA_EMAILS_API_KEY`. The
+the same tiers every hosted Hasna CLI uses, FRESH on every request: the
+deliberate `HASNA_EMAILS_API_KEY_OVERRIDE` / `HASNA_PROFILE` selections (a
+blank override or an absent profile refuses; a `HASNA_EMAILS_API_KEY_REF` vault
+pointer is refused by name — this client cannot complete it per request), the
+macOS Keychain items for this app (`api-key`, `api-url`), the
+`~/.hasna/emails/config/credentials` file, then `HASNA_EMAILS_API_KEY`. There
+are no `--api-key` / `--profile` resolver flags on the CLI. The
 canonical env names are `HASNA_EMAILS_API_URL` / `HASNA_EMAILS_API_KEY`; the
 legacy `EMAILS_SELF_HOSTED_URL` / `EMAILS_SELF_HOSTED_API_KEY` spellings stay
 accepted as aliases for one release. A live `EMAILS_SESSION_TOKEN` / agent

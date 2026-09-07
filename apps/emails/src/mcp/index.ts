@@ -60,7 +60,24 @@ async function main(): Promise<void> {
   await server.connect(transport);
 }
 
-main().catch((err) => {
-  console.error("MCP server error:", err);
+/**
+ * The typed refusals of the storage/credential seam. Their MESSAGE is the whole
+ * diagnostic (which Keychain item, which file, which env key), so a source
+ * frame or a stack after it only buries the line an operator has to read.
+ */
+const CONFIGURATION_REFUSALS = new Set([
+  "StoreConfigurationError",
+  "ClientTransportConfigurationError",
+  "CredentialResolutionError",
+]);
+
+main().catch((err: unknown) => {
+  // The FIRST stderr line names what is missing — never a Bun source frame
+  // (#1720 validation). An unexpected failure keeps its stack on the lines after.
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`emails-mcp: ${message}`);
+  if (err instanceof Error && !CONFIGURATION_REFUSALS.has(err.name) && err.stack) {
+    console.error(err.stack);
+  }
   process.exit(1);
 });
