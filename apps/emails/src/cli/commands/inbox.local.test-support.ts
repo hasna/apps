@@ -1,3 +1,4 @@
+// Test-only historical command fixture. Never imported by a shipped entrypoint.
 import type { Command } from "commander";
 import { formatInboxSyncStatus } from "../../lib/inbox-sync-status-format.js";
 import chalk from "../../lib/chalk-lite.js";
@@ -22,7 +23,7 @@ import { listAddressProvisioningByIds, listDomainProvisioningByIds, listReadyAdd
 import { assessDomainReadiness } from "../../lib/domain-readiness.js";
 import { domainInboundReadinessSignals } from "../../lib/domain-inbound-evidence.js";
 import { resolveClientMode } from "../../lib/mode.js";
-import { resolveMailDataSource, type MailDataSource } from "../../lib/mail-data-source.js";
+import { SqliteMailDataSource, type MailDataSource } from "../../lib/mail-data-source.js";
 import { readableMessageText, renderReadableEmailDocument } from "../tui/format.js";
 import { renderEmailToPdfBytes } from "../tui/pdf.js";
 import { registerMailboxFilterCommands } from "./mailbox-filter-commands.js";
@@ -184,8 +185,8 @@ function mailboxSourceFromOptions(opts: { source?: string; provider?: string; ad
 async function runAutoPull(opts: { s3?: boolean; limit?: number }) {
   // Auto-pull is LOCAL S3 ingestion. In self_hosted mode the API is the source of truth and
   // each poll re-reads it through the seam, so there is nothing to pull.
-  if (resolveMailDataSource().mode !== "local") return { pulled: 0, ok: true, configured: false, reason: "self_hosted mode" };
-  const { autoPull } = await import("../tui/autopull.js");
+  if (new SqliteMailDataSource().mode !== "local") return { pulled: 0, ok: true, configured: false, reason: "self_hosted mode" };
+  const { autoPull } = await import("../tui/autopull.test-support.js");
   return autoPull(opts);
 }
 
@@ -222,7 +223,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
   registerMailboxFilterCommands(inboxCmd, output);
 
   async function getInboundLinks(emailId: string, opts?: { all?: boolean }): Promise<InboundLinksResult> {
-    const ds = resolveMailDataSource();
+    const ds = new SqliteMailDataSource();
     const fullId = await resolveMailId(ds, emailId);
     const msg = await ds.getMessage(fullId);
     if (!msg) handleError(new Error(`Email not found: ${emailId}`));
@@ -259,7 +260,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     const intervalMs = Math.max(1, parseInt(opts.interval ?? "5", 10) || 5) * 1000;
     const deadline = Date.now() + timeoutMs;
 
-    const ds = resolveMailDataSource();
+    const ds = new SqliteMailDataSource();
     const findMatch = () => ds.findLatest(normalized, {
       limit,
       since: opts.since,
@@ -365,7 +366,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     const intervalMs = Math.max(1, parseInt(opts.interval ?? "5", 10) || 5) * 1000;
     const deadline = Date.now() + timeoutMs;
 
-    const ds = resolveMailDataSource();
+    const ds = new SqliteMailDataSource();
     const findEmail = async (): Promise<SeamMailDetail | null> => {
       const [latest] = await ds.verificationCandidates(normalized, {
         limit: 1,
@@ -426,7 +427,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
       try {
         const normalized = address.trim().toLowerCase();
         if (opts.refresh) await runAutoPull({ s3: true, limit: Math.max(1000, parsePositiveIntOption(opts.limit, 50)) });
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const [latest] = await ds.verificationCandidates(normalized, {
           limit: 1,
           since: opts.since,
@@ -469,7 +470,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
       try {
         const limit = parsePositiveIntOption(opts.limit, 20);
         const offset = parseNonNegativeIntOption(opts.offset);
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         if (opts.filter) {
           const applied = await ds.applyMailboxFilter(opts.filter, { limit, offset });
           output(applied.items, formatMailboxMessages(applied.items, `Saved filter: ${applied.filter.name}`));
@@ -528,7 +529,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--offset <n>", "Number of grouped addresses to skip", "0")
     .action(async (opts: { byAddress?: boolean; limit?: string; offset?: string }) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         if (!opts.byAddress) {
           const counts = await ds.mailboxCounts();
           output({ unread: counts.unread }, String(counts.unread));
@@ -669,7 +670,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
         const limit = parsePositiveIntOption(opts.limit, 20);
         const offset = parseNonNegativeIntOption(opts.offset);
         const folder = normalizeCliMailbox(opts.folder);
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const rows = await ds.listMailbox(folder, {
           source: mailboxSourceFromOptions(opts),
           label: opts.label,
@@ -700,7 +701,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--limit <n>", "Max sources", "100")
     .action(async (opts: { search?: string; limit?: string }) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const sources = await ds.listMailboxSources({
           search: opts.search,
           limit: parsePositiveIntOption(opts.limit, 100),
@@ -722,7 +723,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .action(async (opts: { source?: string; provider?: string; address?: string; domain?: string }) => {
       try {
         const source = mailboxSourceFromOptions(opts);
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const status = await ds.listMailboxStatus({ source });
         output({ source: source ?? null, ...status }, formatMailboxStatus(status));
       } catch (e) {
@@ -851,7 +852,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--keep-unread", "Do not mark the email as read")
     .action(async (id: string, opts: { keepUnread?: boolean }) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const fullId = await resolveMailId(ds, id);
         const msg = await ds.getMessage(fullId);
         if (!msg) {
@@ -911,7 +912,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--unread", "Mark as unread instead")
     .action(async (emailId: string, opts: { unread?: boolean }) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const msg = await requireMessage(ds, emailId);
         await ds.setRead(msg.id, !opts.unread);
         const updated = (await ds.getMessage(msg.id)) ?? { ...msg, is_read: !opts.unread };
@@ -926,7 +927,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--undo", "Unarchive (restore to inbox) instead")
     .action(async (emailId: string, opts: { undo?: boolean }) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const msg = await requireMessage(ds, emailId);
         await ds.setArchived(msg.id, !opts.undo);
         output(msg, chalk.green(`✓ ${opts.undo ? "Unarchived" : "Archived"}: ${msg.subject.slice(0, 40)}`));
@@ -940,7 +941,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--undo", "Unstar instead")
     .action(async (emailId: string, opts: { undo?: boolean }) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const msg = await requireMessage(ds, emailId);
         await ds.setStarred(msg.id, !opts.undo);
         const updated = (await ds.getMessage(msg.id)) ?? { ...msg, is_starred: !opts.undo };
@@ -955,7 +956,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--remove", "Remove the label instead of adding")
     .action(async (emailId: string, label: string, opts: { remove?: boolean }) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const msg = await requireMessage(ds, emailId);
         const labels = opts.remove ? await ds.removeLabel(msg.id, label) : await ds.addLabel(msg.id, label);
         output({ id: msg.id, subject: msg.subject, label_ids: labels }, chalk.green(`✓ ${opts.remove ? "Removed" : "Added"} label "${label}": ${labels.join(", ") || "(none)"}`));
@@ -974,7 +975,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--max-bytes <n>", `Maximum decoded bytes per attachment (hard cap ${MAX_ATTACHMENT_DOWNLOAD_BYTES})`)
     .action(async (emailId: string, opts: { filename?: string; index?: string; download?: boolean; outputDir?: string; maxBytes?: string }) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const msg = opts.download ? await ds.getMessage(emailId) : await requireMessage(ds, emailId);
         if (!msg || (opts.download && msg.id !== emailId)) {
           throw new Error("attachment download requires the exact full message id");
@@ -1040,7 +1041,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .action(async (id: string, opts: { yes?: boolean }) => {
       try {
         await confirmDestructiveAction(`Delete inbox email ${id}?`, opts.yes);
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const fullId = await resolveMailId(ds, id);
         const existing = await ds.getMessage(fullId);
         if (!existing) {
@@ -1062,7 +1063,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--yes", "Skip confirmation prompt")
     .action(async (opts: { provider?: string; yes?: boolean }) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const target = opts.provider ? `for provider ${opts.provider}` : "for all providers";
         // Self-hosted mode deletes on the server (scoped to the inbox folder), so drop the
         // "local" wording; confirmation semantics are otherwise unchanged.
@@ -1158,7 +1159,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
         const inbound = getInboundConfig();
         const profile = opts.profile ?? inbound.profile;
         if (profile) process.env["AWS_PROFILE"] = profile;
-        const { setupRealtimeInbound } = await import("../../lib/inbound-realtime-aws.js");
+        const { setupRealtimeInbound } = await import("../../lib/inbound-realtime-aws.test-support.js");
         const ruleName = opts.rule ?? `inbound-${domain.replace(/\./g, "-")}`;
         console.log(chalk.dim(`Wiring real-time inbound for ${domain} (rule ${opts.ruleSet}/${ruleName})...`));
         const result = await setupRealtimeInbound({
@@ -1243,7 +1244,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
         if (!queueUrl) { handleError(new Error("No SQS queue: run 'emails inbox setup-realtime <domain>' first or pass --queue-url")); return; }
         if (!bucket) { handleError(new Error("No S3 bucket: pass --bucket or set inbound_s3_bucket")); return; }
 
-        const { makeSqsAdapter } = await import("../../lib/inbound-realtime-aws.js");
+        const { makeSqsAdapter } = await import("../../lib/inbound-realtime-aws.test-support.js");
         const { watchInboundOnce, watchPollConfigPatch, pullOutcomeToWatchSync } = await import("../../lib/inbound-realtime.js");
         const { syncS3Inbox } = await import("../../lib/s3-sync.local.js");
         const sqs = makeSqsAdapter({ queueUrl, region });
@@ -1335,7 +1336,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("-j, --json", "Print JSON output", false)
     .action(async (id: string) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const resolvedId = await resolveMailId(ds, id);
         const msg = await ds.getMessage(resolvedId);
         if (!msg) handleError(new Error(`Email not found: ${id}`));
@@ -1372,7 +1373,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--out <path>", "Output PDF path (default: ./emails-inbox-<id8>.pdf in the working directory)")
     .action(async (id: string, opts: { out?: string }) => {
       try {
-        const ds = resolveMailDataSource();
+        const ds = new SqliteMailDataSource();
         const resolvedId = await resolveMailId(ds, id);
         const msg = await ds.getMessage(resolvedId);
         if (!msg) handleError(new Error(`Email not found: ${id}`));

@@ -2,8 +2,9 @@
 // exercised separately until their API replacements land.
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { Command } from "commander";
+import { startV1Stub } from "../../test-support/v1-stub.js";
 import { registerSyncCommands } from "./sync.js";
-import { registerSyncCommands as registerLocalSyncCommands } from "./sync.local.js";
+import { registerSyncCommands as registerLocalSyncCommands } from "./sync.local.test-support.js";
 import { registerSyncCommands as registerRemoteSyncCommands } from "./sync.remote.js";
 
 const MODE_ENV_KEYS = [
@@ -81,18 +82,10 @@ describe("sync CLI provider selection", () => {
 
 describe("sync JSON output", () => {
   it("prints one parseable stats document when -j follows the command", async () => {
-    const env = {
-      ...process.env,
-      EMAILS_DB_PATH: ":memory:",
-      NO_COLOR: "1",
-    };
-    // Local is chosen by the explicit database path alone; every API and
-    // retired deployment-mode key is scrubbed so the child sees one store.
-    delete env[MODE_ENV_KEYS[0]];
-    delete env[MODE_ENV_KEYS[1]];
-    delete env[MODE_ENV_KEYS[2]];
-    delete env.EMAILS_SELF_HOSTED_API_KEY;
-
+    const api = await startV1Stub({ openapi: true });
+    api.applyEnv();
+    try {
+    const env = { ...process.env, NO_COLOR: "1" };
     const child = Bun.spawn({
       cmd: [process.execPath, "run", "src/cli/index.tsx", "stats", "-j"],
       cwd: process.cwd(),
@@ -109,6 +102,7 @@ describe("sync JSON output", () => {
     expect(exitCode).toBe(0);
     expect(stderr).toBe("");
     expect(JSON.parse(stdout)).toMatchObject({ provider_id: "all", period: "30d", sent: 0 });
+    } finally { api.clearEnv(); api.stop(); }
   });
 
   it("prints parseable JSON errors with a non-zero exit", async () => {
