@@ -172,13 +172,36 @@ describe("ApiStore route mapping", () => {
     expect(calls.some((c) => c[0] === "POST" && c[1] === "/feedback")).toBe(true);
   });
 
-  it("encryptVault throws in api mode (server owns encryption)", async () => {
-    const store = new ApiStore(fakeClient({}).client);
-    await expect(store.encryptVault()).rejects.toThrow(/api mode/);
+  it("encryptVault reports the hosted at-rest state (nothing to migrate — every value is encrypted on write)", async () => {
+    const store = new ApiStore(fakeClient({
+      "GET /secrets": {
+        secrets: [
+          { key: "a/b", type: "other", created_at: "t", updated_at: "t" },
+          { key: "c/d", type: "api_key", created_at: "t", updated_at: "t" },
+        ],
+      },
+    }).client);
+    const result = await store.encryptVault();
+    expect(result).toEqual({ migrated: 0, alreadyEncrypted: 2 });
   });
 
-  it("pruneExpired is a no-op in api mode", async () => {
-    expect(await new ApiStore(fakeClient({}).client).pruneExpired()).toBe(0);
+  it("pruneExpired deletes lapsed rows through the API (no silent no-op)", async () => {
+    const { client, calls } = fakeClient({
+      "GET /secrets": {
+        secrets: [
+          { key: "expired/1", type: "other", expires_at: "2020-01-01T00:00:00.000Z", created_at: "t", updated_at: "t" },
+          { key: "expired/2", type: "other", expires_at: "2021-01-01T00:00:00.000Z", created_at: "t", updated_at: "t" },
+          { key: "live/1", type: "other", expires_at: "2999-01-01T00:00:00.000Z", created_at: "t", updated_at: "t" },
+          { key: "no-ttl/1", type: "other", created_at: "t", updated_at: "t" },
+        ],
+      },
+      "DELETE /secrets": { deleted: true },
+    });
+    const store = new ApiStore(client);
+    expect(await store.pruneExpired()).toBe(2);
+    const deletes = calls.filter((c) => c[0] === "DELETE");
+    expect(deletes).toHaveLength(2);
+    expect(deletes.map((d) => d[2])).toEqual([{ key: "expired/1" }, { key: "expired/2" }]);
   });
 
   it("versioning: listVersions reads { versions }, checkVersion reads { check }, restoreVersion POSTs /secrets/restore", async () => {

@@ -140,8 +140,10 @@ export interface Store {
   /** Describe the transport and its (key-free) location. */
   describe(): StoreDescriptor;
   /**
-   * Encrypt any plaintext rows in the local vault. Local-only maintenance; in
-   * api mode the server owns encryption, so this throws instead of pretending.
+   * Encrypt any plaintext rows in the ACTIVE vault. Local: re-encrypts plaintext
+   * rows with the local master key. Api: the server already encrypts every value
+   * at rest on write, so the store reports the at-rest state (0 migrated, N
+   * already encrypted) rather than failing the command.
    */
   encryptVault(): Promise<EncryptVaultResult>;
 }

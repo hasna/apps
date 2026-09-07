@@ -108,23 +108,23 @@ secrets audit example/anthropic/test/api_key
 `agent` is the **issued-to subject of the credential that made the call**, not
 the process, session, host, or person behind it.
 
-In cloud mode the server derives it once per request from the verified API-key
-claims, and never from request input:
+When served by the hosted API the server derives it once per request from the
+verified API-key claims, and never from request input:
 
 ```ts
 const actor = decision.principal.agent ?? decision.principal.kid;
 ```
 
 That subject is fixed at issuance — `issue-key --agent <name>`, see
-[Cloud service](#cloud-service-self_hosted) — and is covered by the token
+[Hosted service](#hosted-service) — and is covered by the token
 signature, so a caller can neither assert nor override it. No endpoint accepts an
 agent *identity* parameter: `/v1/secrets/get` takes `key` and nothing else, and
 an unknown `agent` query parameter or header is ignored rather than rejected.
 (`POST /v1/users` does take a `type` of `human` or `agent`; that is a user record
-kind, not the identity of the caller.) In local mode the same column is instead
-filled from `AGENT_ID ?? USER ?? hostname()`, which *is* self-asserted. The two
-modes populate one column from two sources with different trust properties; read
-the mode before reading the value.
+kind, not the identity of the caller.) In the local vault the same column is
+instead filled from `AGENT_ID ?? USER ?? hostname()`, which *is* self-asserted.
+The two transports populate one column from two sources with different trust
+properties; read which transport served the row before reading the value.
 
 The consequence that matters when interpreting a row: **every caller sharing one
 key collapses to one `agent` value.** A deployment in which many callers share a
@@ -135,9 +135,9 @@ narrow the access to a machine either, so it must not be described as
 machine-attributed; that claims a narrowing the record does not contain.
 
 Distinct per-caller attribution therefore comes from distinct credentials, each
-issued with its own `--agent`. In cloud mode it is not reachable by any
+issued with its own `--agent`. Against the hosted API it is not reachable by any
 client-side change, because the client does not supply this value at all; in
-local mode the value is whatever the calling process asserts, which is a
+the local vault the value is whatever the calling process asserts, which is a
 different property and not a substitute for it.
 
 Inspect metadata-only secret reference health:
@@ -294,9 +294,10 @@ values copied from request context.
 
 The `agent` field below describes the intended contract for these grant-aware
 events. On the existing `get` / `set` / `delete` rows it is not a per-caller
-identity but the identity resolved for the caller by the active mode — the
-credential's issued-to subject in cloud mode, the process environment in local
-mode — and it carries exactly the attribution that source carries; see
+identity but the identity resolved for the caller by the active transport — the
+credential's issued-to subject against the hosted API, the process environment
+in the local vault — and it carries exactly the attribution that source
+carries; see
 [What the `agent` column attributes](#what-the-agent-column-attributes).
 A resolver implementing these events inherits that limit: it cannot narrow an
 access below the granularity of the identity available to it.
@@ -816,6 +817,13 @@ variable — the transport is decided by the credential and the authority alone.
 release**; the canonical `HASNA_SECRETS_*` names are the supported spelling and
 no longer shadowed by them.
 
+Every command works in every transport. Maintenance commands act on the ACTIVE
+vault: `key` / `key init` / `key path` and `encrypt-vault` manage the on-box
+master key and plaintext rows in local mode, and report the hosted vault's
+server-owned at-rest encryption (creating nothing) in hosted mode; `gc` prunes
+expired secrets through whichever transport is active instead of being a silent
+no-op.
+
 ## Safety Notes
 
 - `list`, `search`, `export`, and `scan` do not decrypt or print secret values
@@ -880,7 +888,7 @@ Notes:
 - A test that genuinely needs to exercise the hosted transport should inject a
   fake `fetchImpl`, not point a real one at a remote host.
 
-## Cloud service (`self_hosted`)
+## Hosted service
 
 Beyond the local vault, `@hasna/secrets` ships a deployable HTTP service and a
 typed SDK. Four surfaces cover the same core:
@@ -897,7 +905,7 @@ typed SDK. Four surfaces cover the same core:
   exports the same API. The client resolves its credential and base URL through
   the shared [`@hasna/contracts` resolver](#credentials-five-tiers) — never a DSN.
 
-Storage is **PURE REMOTE (Amendment A1)** in cloud mode: `secrets-serve` reads
+Storage is **PURE REMOTE (Amendment A1)** on the hosted service: `secrets-serve` reads
 and writes the shared Postgres directly (no cache, no local mirror). Secret and
 vault-item values are **encrypted at rest** (AES-256-GCM) with a master key
 injected via `HASNA_SECRETS_MASTER_KEY` — the service fails closed without it.

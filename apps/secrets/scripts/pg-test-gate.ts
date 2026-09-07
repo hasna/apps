@@ -45,20 +45,23 @@ const client = createQueryClient(pool);
 const store = new CloudSecretsStore(client);
 const probeKey = `pg-gate-${randomUUID().slice(0, 8)}/api_key`;
 const probeValue = `probe-${randomUUID().slice(0, 8)}`;
+// Tenant context flows from api_keys.tenant_id in the real server (a UUID);
+// the probe must be UUID-shaped or the column's uuid type refuses the row.
+const probeTenant = randomUUID();
 
 try {
   const ledger = new MigrationLedger(client, SECRETS_MIGRATIONS);
   await ledger.migrate();
 
-  await store.setSecret(probeKey, probeValue, "api_key", "pg-gate-probe", undefined, "pg-test-gate", "pg-test-gate");
-  const readBack = await store.getSecret(probeKey, "pg-test-gate", "pg-test-gate");
+  await store.setSecret(probeKey, probeValue, "api_key", "pg-gate-probe", undefined, "pg-test-gate", probeTenant);
+  const readBack = await store.getSecret(probeKey, "pg-test-gate", probeTenant);
   if (!readBack) {
     fail("getSecret returned no row after setSecret");
   }
   if (readBack.key !== probeKey) {
     fail("getSecret read back a different key than setSecret wrote");
   }
-  await store.deleteSecret(probeKey, "pg-test-gate", "pg-test-gate");
+  await store.deleteSecret(probeKey, "pg-test-gate", probeTenant);
   console.log("[pg-test-gate] ok — migrations + CloudSecretsStore write/read round-trip");
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
