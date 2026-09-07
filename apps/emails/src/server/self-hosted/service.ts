@@ -2450,6 +2450,29 @@ export async function handleSelfHostedRequest(
       }
     }
 
+    if (path === "/v1/scheduled/run") {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const operatorError = requireTenantOperator(auth, "running scheduled sends");
+      if (operatorError) return operatorError;
+      const body = await readJsonBody(req);
+      const limit = body.limit === undefined ? 10 : body.limit;
+      if (Object.keys(body).some(key => key !== "limit")) return json(400, { error: "Only limit may be specified" });
+      if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) return json(400, { error: "limit must be an integer from 1 to 100" });
+      const { runScheduledBatch } = await import("./scheduler.js");
+      const result = await runScheduledBatch(auth.store, async (payload) => {
+        const sendUrl = new URL("/v1/messages/send", req.url);
+        const headers = new Headers(req.headers);
+        headers.set("Content-Type", "application/json");
+        headers.delete("Content-Length");
+        const response = await handleSelfHostedRequest(deps, new Request(sendUrl, { method: "POST", headers, body: JSON.stringify(payload) }), context);
+        if (!response) throw new Error("Send handler was not available");
+        return response;
+      }, limit);
+      return json(200, result);
+    }
+
     // ---- generic resources (contacts/providers/templates/groups/…) --------
     const resourceMatch = path.match(/^\/v1\/([^/]+)(?:\/([^/]+))?$/);
     if (resourceMatch) {

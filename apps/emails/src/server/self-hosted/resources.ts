@@ -218,6 +218,7 @@ export const SELF_HOSTED_RESOURCES: SelfHostedResourceSpec[] = [
   },
   {
     path: "scheduled",
+    writeRequiresOperator: true,
     table: "scheduled_emails",
     orderBy: "scheduled_at ASC",
     filters: ["status"],

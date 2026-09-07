@@ -5160,7 +5160,7 @@ export class TenantScopedStore {
     return redactResourceRow(
       spec,
       await this.client.get<Record<string, unknown>>(
-        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2 RETURNING *`,
+        `UPDATE ${spec.table} SET ${sets.join(", ")} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""} RETURNING *`,
         params,
       ),
     );
@@ -5169,10 +5169,43 @@ export class TenantScopedStore {
   async deleteResource(spec: SelfHostedResourceSpec, id: string): Promise<boolean> {
     const key = keyColumn(spec);
     const rows = await this.client.many<{ id: string }>(
-      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2 RETURNING ${key} AS id`,
+      `DELETE FROM ${spec.table} WHERE ${key} = $1 AND tenant_id = $2${spec.path === "scheduled" ? " AND status <> 'processing'" : ""} RETURNING ${key} AS id`,
       [id, this.tenantId],
     );
     return rows.length > 0;
+  }
+
+  /** Atomically claim due work. The timestamp is a lease fence, not a send identity. */
+  async claimDueScheduled(limit: number): Promise<Record<string, unknown>[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new RangeError("Scheduler limit must be 1–100");
+    return this.client.many<Record<string, unknown>>(
+      `WITH due AS (
+         SELECT id FROM scheduled_emails
+         WHERE tenant_id = $1 AND scheduled_at <= now()
+           AND (status = 'pending' OR (status = 'processing' AND updated_at < now() - interval '5 minutes'))
+         ORDER BY scheduled_at, id FOR UPDATE SKIP LOCKED LIMIT $2
+       )
+       UPDATE scheduled_emails s SET status = 'processing', error = NULL,
+         updated_at = date_trunc('milliseconds', clock_timestamp())
+       FROM due WHERE s.id = due.id AND s.tenant_id = $1 RETURNING s.*`,
+      [this.tenantId, limit],
+    );
+  }
+
+  async finishScheduled(id: string, lease: string, status: "sent" | "failed", error: string | null): Promise<boolean> {
+    const row = await this.client.get<{ id: string }>(
+      `UPDATE scheduled_emails SET status = $4, error = $5, updated_at = now()
+       WHERE id = $1 AND tenant_id = $2 AND status = 'processing' AND updated_at = $3::timestamptz
+       RETURNING id`, [id, this.tenantId, lease, status, error],
+    );
+    return row !== null;
+  }
+
+  async getScheduledTemplate(name: string): Promise<Record<string, unknown> | null> {
+    return this.client.get<Record<string, unknown>>(
+      `SELECT subject_template, html_template, text_template FROM templates WHERE tenant_id = $1 AND name = $2 LIMIT 1`,
+      [this.tenantId, name],
+    );
   }
 
   // ---- scoped send keys (mint / verify / authorization) -------------------

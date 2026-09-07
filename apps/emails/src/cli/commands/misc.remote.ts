@@ -9,10 +9,11 @@ import {
   parseCliListPage,
   resolveId,
   parseScheduledStatusFilter,
+  parseDuration,
 } from "../utils.js";
 
 export interface SchedulerTickResult {
-  scheduled: { attempted: number; sent: number; failed: number; skipped: number };
+  scheduled: { attempted: number; sent: number; failed: number; skipped: number; pending?: number };
   sequences: { attempted: number; sent: number; failed: number; skipped: number };
 }
 
@@ -32,14 +33,31 @@ interface ScheduleListOptions {
 // Scheduler execution and ingestion diagnostics still need service operations.
 // Batch sends compose API requests; schedule listing/cancellation use the
 // existing /v1/scheduled resource.
-function serverOnly(command: string): never {
-  throw new Error(
-    `${command} is not available in the self-hosted client; it runs on the self-hosted server.`,
-  );
+export async function runSchedulerTick(opts: SchedulerTickOptions = {}): Promise<SchedulerTickResult> {
+  if (opts.sequenceLimit !== undefined) throw new Error("Sequence execution requires its own job runner; this endpoint runs scheduled messages");
+  const { selfHostedApiRequest } = await import("../../db/self-hosted-store.js");
+  const response = selfHostedApiRequest("POST", "/scheduled/run", { limit: opts.scheduledLimit ?? 10 });
+  if (response.status < 200 || response.status >= 300) {
+    const error = response.json as { error?: string };
+    throw new Error(error.error ?? `Scheduler request failed (HTTP ${response.status})`);
+  }
+  const result = response.json as { scheduled?: SchedulerTickResult["scheduled"] & { pending?: number }; items?: unknown[]; sequence_execution?: string };
+  if (!result.scheduled || !Number.isSafeInteger(result.scheduled.attempted) || !Number.isSafeInteger(result.scheduled.sent) || !Number.isSafeInteger(result.scheduled.failed)) throw new Error("Scheduler API returned invalid counts");
+  opts.log?.(`${result.scheduled.sent} scheduled sends completed; ${result.scheduled.failed} failed; ${result.scheduled.pending ?? 0} pending`);
+  return { ...result, scheduled: result.scheduled, sequences: { attempted: 0, sent: 0, failed: 0, skipped: 0 } };
 }
 
-export async function runSchedulerTick(_opts: SchedulerTickOptions = {}): Promise<SchedulerTickResult> {
-  serverOnly("emails schedule run");
+async function runSchedulerCommand(opts: { interval?: string; once?: boolean; limit?: string }, output: (data: unknown, formatted: string) => void): Promise<void> {
+  const interval = parseDuration(opts.interval ?? "30s");
+  if (!Number.isFinite(interval) || interval < 1000) throw new Error("Scheduler interval must be at least one second");
+  const limit = Number(opts.limit ?? "10");
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Scheduler limit must be 1–100");
+  do {
+    const result = await runSchedulerTick({ scheduledLimit: limit });
+    output(result, `Scheduled sends: ${result.scheduled.sent} sent, ${result.scheduled.failed} failed, ${result.scheduled.pending ?? 0} processing of ${result.scheduled.attempted} attempted. Sequence execution is not included.`);
+    if (opts.once) { if (result.scheduled.failed || result.scheduled.pending) process.exitCode = 1; return; }
+    await new Promise(resolve => setTimeout(resolve, interval));
+  } while (true);
 }
 
 function scheduledStatusOf(opts: ScheduleListOptions) {
@@ -71,7 +89,7 @@ export function registerMiscCommands(program: Command, output: (data: unknown, f
   scheduledCmd
     .command("list")
     .description("List scheduled emails")
-    .option("--status <status>", "Filter by status: pending|sent|cancelled|failed")
+    .option("--status <status>", "Filter by status: pending|processing|sent|cancelled|failed")
     .option("--limit <n>", "Maximum scheduled emails to show (default 20 compact, 50 verbose/json)")
     .option("--offset <n>", "Number of scheduled emails to skip", "0")
     .option("--verbose", "Show expanded list hints")
@@ -125,7 +143,7 @@ export function registerMiscCommands(program: Command, output: (data: unknown, f
   scheduleCmd
     .command("list")
     .description("List scheduled emails")
-    .option("--status <status>", "Filter: pending|sent|cancelled|failed")
+    .option("--status <status>", "Filter: pending|processing|sent|cancelled|failed")
     .option("--limit <n>", "Maximum scheduled emails to show (default 20 compact, 50 verbose/json)")
     .option("--offset <n>", "Number of scheduled emails to skip", "0")
     .option("--verbose", "Show expanded list hints")
@@ -172,8 +190,10 @@ export function registerMiscCommands(program: Command, output: (data: unknown, f
     .command("run")
     .description("Start the scheduler daemon — sends due emails on interval")
     .option("--interval <duration>", "Poll interval (e.g. 30s, 1m)", "30s")
-    .action(async () => {
-      try { serverOnly("emails schedule run"); } catch (e) { handleError(e); }
+    .option("--once", "Process one due batch and exit")
+    .option("--limit <count>", "Maximum due jobs per batch (1–100)", "10")
+    .action(async (opts: { interval?: string; once?: boolean; limit?: string }) => {
+      try { await runSchedulerCommand(opts, output); } catch (e) { handleError(e); }
     });
 
   // ─── SCHEDULER (alias) ───────────────────────────────────────────────────────
@@ -181,8 +201,10 @@ export function registerMiscCommands(program: Command, output: (data: unknown, f
     .command("scheduler")
     .description("Start the email scheduler (alias: emails schedule run)")
     .option("--interval <duration>", "Poll interval (e.g. 30s, 1m, 5m)", "30s")
-    .action(async () => {
-      try { serverOnly("emails scheduler"); } catch (e) { handleError(e); }
+    .option("--once", "Process one due batch and exit")
+    .option("--limit <count>", "Maximum due jobs per batch (1–100)", "10")
+    .action(async (opts: { interval?: string; once?: boolean; limit?: string }) => {
+      try { await runSchedulerCommand(opts, output); } catch (e) { handleError(e); }
     });
 
   // ─── BATCH ──────────────────────────────────────────────────────────────────

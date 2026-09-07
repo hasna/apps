@@ -27120,6 +27120,213 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "POST",
+    "operationId": "runScheduledBatch",
+    "path": "/v1/scheduled/run",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "properties": {
+        "scheduled": {
+          "type": "object",
+          "properties": {
+            "attempted": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sent": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "pending": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "skipped": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "attempted",
+            "sent",
+            "failed",
+            "pending",
+            "skipped"
+          ]
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "sent",
+                  "failed",
+                  "processing",
+                  "lease_lost"
+                ]
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "status"
+            ]
+          }
+        },
+        "sequence_execution": {
+          "type": "string",
+          "enum": [
+            "not_requested"
+          ]
+        }
+      },
+      "required": [
+        "scheduled",
+        "items",
+        "sequence_execution"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runScheduledBatch",
+    "path": "/v1/scheduled/run",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runScheduledBatch",
+    "path": "/v1/scheduled/run",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runScheduledBatch",
+    "path": "/v1/scheduled/run",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runScheduledBatch",
+    "path": "/v1/scheduled/run",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runScheduledBatch",
+    "path": "/v1/scheduled/run",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
     "method": "GET",
     "operationId": "listResourceSendKeys",
     "path": "/v1/send-keys",

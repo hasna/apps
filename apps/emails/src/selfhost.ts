@@ -1722,6 +1722,15 @@ export class EmailsSelfHostClient {
       });
     }
 
+    /** Claim and execute a due scheduled-send batch (tenant operator required) */
+    async runScheduledBatch(body?: { "limit"?: number }, init?: RequestInit): Promise<{ "scheduled": { "attempted": number; "sent": number; "failed": number; "pending": number; "skipped": number }; "items": Array<{ "id": string; "status": "sent" | "failed" | "processing" | "lease_lost"; "error"?: string }>; "sequence_execution": "not_requested" }> {
+      return this.request("POST", `/v1/scheduled/run`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** Get a tenant-scoped scheduled row */
     async getResourceScheduled(id: string, init?: RequestInit): Promise<{ "provider_id": string | null; "from_address": string | null; "to_addresses": unknown; "cc_addresses": unknown; "bcc_addresses": unknown; "reply_to": string | null; "subject": string | null; "html": string | null; "text_body": string | null; "attachments_json": unknown; "template_name": string | null; "template_vars": unknown; "scheduled_at": string | null; "status": string | null; "error": string | null; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> {
       return this.request("GET", `/v1/scheduled/${encodeURIComponent(String(id))}`, {
