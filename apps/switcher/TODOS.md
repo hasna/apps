@@ -4,12 +4,12 @@ title: "Switcher full adapter and installed CLI delivery checklist"
 type: "task-checklist"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-07T06:36:46.853455+00:00"
-status: "active"
+updated_at: "2026-09-07T08:13:43.858234+00:00"
+status: "release-accepted"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-# Active canonical credential fix: 0.1.4
+# Completed canonical credential fix: 0.1.4
 
 Task: `c3194755-e8e2-4467-a0c8-0c09c1f42f49`; new user directive 2026-09-07 after ordinary-shell `vault_operator_unavailable`.
 
@@ -19,10 +19,12 @@ Task: `c3194755-e8e2-4467-a0c8-0c09c1f42f49`; new user directive 2026-09-07 afte
 - [x] C04 Add canonical Secrets operator bindings; preserve explicit env/account semantics and give useful failure diagnostics.
 - [x] C05 Cover canonical files, Keychain, roots, rotation, conflicts, locked-account recovery and ordinary CLI launch with no API-key env.
 - [x] C06 Complete package/type/generated/artifact checks and fresh-candidate Node/Bun surface checks on SQLite/PostgreSQL. Repeat against registry bytes under C08–C09.
-- [ ] C07 Independent review against the final source commit; resolve every blocking finding.
-- [ ] C08 Merge through PR after required CI; publish/install the next patch with registry byte verification.
-- [ ] C09 Live-test the exact installed command from an ordinary shell without manually injected credentials; preserve failures and report limits honestly.
-- [ ] C10 Update release evidence and close the goal/tracking task after owned-resource cleanup.
+- [x] C07 Independent review against the final source commit; resolve every blocking finding.
+- [x] C08 Merge through PR after required CI; publish/install the next patch with registry byte verification.
+- [x] C09 Live-test the exact installed command from an ordinary shell without manually injected credentials; preserve failures and report limits honestly.
+- [x] C10 Record registry acceptance, independent review and owned-resource cleanup in the release evidence. Terminal task/goal closure follows documentation CI and merge.
+
+Published `2026-09-07T08:07:11.878Z`; [PR #1913](https://github.com/hasna/apps/pull/1913), SHA-1 `0875b4da0b15267d191f7d8f0eee6cc1fc7fe0bf`. All 60 installed files match. The exact interactive command and a real Claude/DeepSeek Read passed without injected credentials; all four Node/Bun × SQLite/PostgreSQL surface checks passed. Three existing vault bindings now use Contracts. The original user tmux session and previous installation are preserved. See [PLAN.md](PLAN.md) and the [evidence index](docs/verification-evidence.json) for review records, test counts and the unreproduced transient-error boundary.
 
 # Completed model-policy delivery: 0.1.3
 

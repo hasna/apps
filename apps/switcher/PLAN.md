@@ -4,20 +4,30 @@ title: "Switcher implementation and release plan"
 type: "implementation-plan"
 owner: "codex-fixer"
 created_at: "2026-09-05T12:35:04.768Z"
-updated_at: "2026-09-07T06:36:46.853455+00:00"
-status: "active"
+updated_at: "2026-09-07T08:13:43.858234+00:00"
+status: "release-accepted"
 source_task: "01a07181-ca8d-70c1-99a2-b276dc5770f3"
 ---
 
-# Active canonical credential fix: 0.1.4
+# Completed canonical credential release: 0.1.4
 
-Tracking task: `c3194755-e8e2-4467-a0c8-0c09c1f42f49`. The user reported `vault_operator_unavailable` from the ordinary station03 terminal. The same pinned Keychain lookup later succeeded in the agent session, so the transient failure is not attributed to a proven Keychain cause. The deterministic defect is that Switcher bypassed canonical Contracts URL/credential sources and could select local data despite configured remote credentials.
+Switcher **0.1.4 is published, installed and live-tested on station03**. [PR #1913](https://github.com/hasna/apps/pull/1913) merged reviewed source `cc01ba5dfbee7d7bf871e20906d5d5743a05fad2` as `79e72e7a89ef55ee46745029d058e78bc70b3ab1` after all nine required checks passed. npm published at `2026-09-07T08:07:11.878Z` with SHA-1 `0875b4da0b15267d191f7d8f0eee6cc1fc7fe0bf`. All **60 installed package files** match the reviewed archive; the normal CLI, server and MCP binaries report 0.1.4. The previous installation and Bun quarantine policy are preserved.
 
-Use `@hasna/contracts/client` for Switcher API transport and fresh canonical vault-operator resolution, preserving explicit legacy account selections and rejecting authority changes. Support `config/credentials`, Keychain, aliases, overrides and shared root controls. New vault bindings default to canonical Secrets configuration. No credential value belongs in provider bindings, run records, reports or logs.
+Switcher now uses Contracts for canonical API URL/key resolution, transport and fresh vault operator credentials, following the shared conventions also used by Conversations. It supports canonical `config/credentials`, Keychain, environment aliases, overrides and shared roots. Configured remote credentials no longer silently select local data. Explicit account selections remain terminal on failure; new vault bindings use canonical Secrets resolution. The station's DeepSeek, Gemini and OpenRouter bindings were migrated through the installed CLI, retaining the same vault references and provider origins. Actual Mac credential values remain in Keychain and the secrets vault; no real credentials file was created.
 
-Worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/canonical-credentials`; branch `codex/fixer/2026-09-07-switcher-canonical-credentials`; base `d84e253e7be2921f9af101c0f1c3b423a656cc2d`; owner `codex-fixer`. Acceptance requires meaningful regressions, package/root gates, independent review, PR-first release, registry installation and the exact ordinary-shell Claude/DeepSeek launch in ephemeral tmux. Preserve the original user session. Prior 0.1.3 live results below remain historical evidence, not proof of this fix.
+The exact ordinary-shell command opened Claude Code 2.1.263 with `deepseek-v4-flash` selected, without injected API keys or a Switcher home override:
 
-Candidate validation: 223 package tests passed (4 optional native checks skipped), followed by the final seven canonical-transport tests passing. All 43 affected builds, 147 repository standard tests, frozen-lock and packed-artifact gates passed. The 60 packed files match the fresh installation. Node and Bun API/CLI/SDK/standalone MCP checks passed on SQLite and PostgreSQL. A fresh candidate Claude session performed a real Read through DeepSeek; all three policy-version-1 requests used `deepseek-v4-flash`, with no dropped events. Independent candidate audit passed. Registry publication and ordinary installed-shell acceptance remain pending under C07–C10.
+```sh
+switcher launch claude --provider deepseek --model deepseek-v4-flash
+```
+
+That interactive session exited normally through `/exit`. A separate registry-installed Claude task performed a real Read and returned its random proof exactly: three routing events requested, resolved and reported `deepseek-v4-flash`, all allowed with HTTP 200 and zero dropped events. Node 26.8.1 and Bun 1.3.14 CLI/API/SDK/server/standalone MCP checks passed on SQLite and PostgreSQL 16.15, including wrong-key rejection and recovery on the same client. No Hasna MCP server was registered. Temporary sessions, child processes, database schemas and the owned PostgreSQL server were stopped; the original user `switcher-deepseek` session remains alive.
+
+Current-head Linux CI passed **221 package tests / 2,109 assertions**, with ten optional checks skipped, **43 affected builds** and **88 affected build/test tasks**. The final test-fixture correction also passed **22 targeted tests / 244 assertions** locally with PostgreSQL. The preceding full macOS verification on `e1482891` passed **225 tests / 2,151 assertions**, with four optional native checks skipped; its only subsequent changes permit Linux Bun's `.bun` cache in empty-home test assertions. Repository gates, 147 standard tests, generated files, lockfiles, artifact checks and independent source/registry review passed. Prior failed CI attempts remain recorded: the Linux cache fixture was corrected; an unchanged Automations timing test passed on the single requested failed-job rerun.
+
+The original transient Keychain error did not recur on the old installation, so its operating-system cause is unproven. The canonical integration defects were reproduced and fixed. Synthetic canonical-file fixtures establish portable path behavior; the live station test establishes Keychain-backed vault resolution. Earlier all-harness/provider matrices remain historical, not a new 0.1.4 live replay. See the [verification evidence index](docs/verification-evidence.json) for artifact identities, independent audits and scope boundaries.
+
+Tracking task: `c3194755-e8e2-4467-a0c8-0c09c1f42f49`. Evidence worktree: `~/Workspace/scratch/universal-harness-switcher/worktrees/canonical-credentials`; branch `codex/fixer/2026-09-07-switcher-canonical-credentials-evidence`; base `79e72e7a89ef55ee46745029d058e78bc70b3ab1`; owner `codex-fixer`. This follow-up changes only files excluded from the npm package. Terminal task/goal closure follows this documentation PR's required CI and merge.
 
 # Completed model-policy release: 0.1.3
 
