@@ -167,3 +167,57 @@ test("forwarding rule and run selectors reject invalid or unsupported data", () 
     "boolean",
   );
 });
+
+test("HTML-only forwarding preserves visible content and stored attachments", async () => {
+  const input = claim();
+  input.snapshot.message.body_text = " ";
+  input.snapshot.message.body_html = '<p>Invoice &amp; receipt</p><script>do not copy</script>';
+  input.snapshot.message.attachments = [{ filename: "invoice.txt", content_type: "text/plain", size: 7, content_base64: Buffer.from("invoice").toString("base64") }];
+  let sent: Record<string, unknown> | undefined;
+  const result = await runForwardingBatch({ claimForwarding: async () => [input], finishForwarding: async () => true }, async body => {
+    sent = body;
+    return Response.json({ sent: true, message: { id: "copy", send_state: "sent", provider_message_id: "proof" } }, { status: 202 });
+  });
+  expect(result.sent).toBe(1);
+  expect(sent!.text).toContain("Invoice & receipt");
+  expect(sent!.html).toContain("Invoice &amp; receipt");
+  expect(sent!.text).not.toContain("do not copy");
+  expect(sent!.attachments).toEqual([{ filename: "invoice.txt", content_type: "text/plain", content: Buffer.from("invoice").toString("base64") }]);
+});
+
+test("missing, malformed and excessive attachments refuse forwarding before I/O", async () => {
+  for (const attachments of [
+    [{ filename: "missing.txt", content_type: "text/plain", size: 1 }],
+    [{ filename: "invalid.txt", content_type: "text/plain", size: 1, content_base64: "not base64" }],
+    Array.from({ length: 6 }, () => ({ filename: "extra.txt", content_type: "text/plain", size: 1, content_base64: "YQ==" })),
+    [{ forwarding_content_oversize: true }],
+    [{ filename: "oversize.txt", content_type: "text/plain", size: 11 * 1024 * 1024, content_base64: "YQ==" }],
+  ]) {
+    const input = claim();
+    input.snapshot.message.attachments = attachments;
+    let calls = 0;
+    const result = await runForwardingBatch({ claimForwarding: async () => [input], finishForwarding: async () => true }, async () => { calls++; throw new Error("must not send"); });
+    expect(calls).toBe(0);
+    expect(result.failed).toBe(1);
+    expect(result.items[0]!.error).toContain("Forwarding");
+  }
+});
+
+test("unknown successful HTTP receipts remain pending until reconciled", async () => {
+  let finishes = 0;
+  const result = await runForwardingBatch({ claimForwarding: async () => [claim()], finishForwarding: async () => { finishes++; return true; } }, async () => Response.json({ message: { id: "unknown" } }));
+  expect(result.pending).toBe(1);
+  expect(finishes).toBe(0);
+});
+
+
+test("total attachment byte cap refuses otherwise valid files before a forwarding send", async () => {
+  const input = claim();
+  const content = Buffer.alloc(8 * 1024 * 1024).toString("base64");
+  input.snapshot.message.attachments = Array.from({length:3}, () => ({filename:"large.bin",content_type:"application/octet-stream",size:8*1024*1024,content_base64:content}));
+  let sent = false;
+  const result = await runForwardingBatch({claimForwarding:async()=>[input],finishForwarding:async()=>true},async()=>{sent=true;throw new Error("must not send");});
+  expect(sent).toBe(false);
+  expect(result.failed).toBe(1);
+  expect(result.items[0]!.error).toContain("send limits");
+});

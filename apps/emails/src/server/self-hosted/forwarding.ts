@@ -1,3 +1,6 @@
+import { htmlToPlainText } from "../../lib/mail-types.js";
+import { decodeAttachmentPayload } from "../../lib/attachment-download.js";
+import { SELF_HOSTED_SEND_ATTACHMENT_LIMITS } from "../../lib/send-attachment-limits.js";
 import { canonicalSender } from "../../lib/email-address.js";
 import type {
   ForwardingRunResult,
@@ -111,6 +114,30 @@ export function normalizeForwardingRule(
   return { ...(create ? { mode: "app-copy", enabled: true } : {}), ...result };
 }
 
+class ForwardingContentError extends Error {}
+function copyAttachments(message: Record<string, unknown>): Array<Record<string, unknown>> {
+  const values = message.attachments ?? [];
+  const limits = SELF_HOSTED_SEND_ATTACHMENT_LIMITS;
+  if (!Array.isArray(values) || values.length > limits.maxFiles)
+    throw new ForwardingContentError(`Forwarding requires at most ${limits.maxFiles} stored attachments; no copy was sent`);
+  let total = 0;
+  return values.map((value, index) => {
+    if (value?.forwarding_content_oversize)
+      throw new ForwardingContentError("Forwarding attachments exceed the stored payload limit; no copy was sent");
+    if (typeof value?.content_base64 !== "string")
+      throw new ForwardingContentError(`Forwarding attachment ${index + 1} content is unavailable; repair stored attachments and create a new delivery before forwarding`);
+    try {
+      const attachment = decodeAttachmentPayload({ attachment: value }, index, limits.maxBytesPerFile);
+      if (attachment.state !== "available") throw new Error("unavailable");
+      total += attachment.bytes;
+      if (total > limits.maxTotalBytes) throw new Error("total exceeds limit");
+      return { filename: attachment.filename, content_type: attachment.content_type, content: Buffer.from(attachment.data).toString("base64") };
+    } catch {
+      throw new ForwardingContentError(`Forwarding attachment ${index + 1} is invalid or exceeds send limits; no copy was sent`);
+    }
+  });
+}
+
 const cleanLine = (value: unknown) =>
   String(value ?? "").replace(/[\x00-\x1f\x7f]/g, " ");
 function copyPayload(
@@ -150,9 +177,10 @@ function copyPayload(
     `From: ${cleanLine(message.from_addr)}`,
     `Date: ${cleanLine(message.received_at ?? message.created_at)}`,
     "",
-    String(message.body_text ?? ""),
+    String(message.body_text ?? "").trim() ? String(message.body_text) : htmlToPlainText(String(message.body_html ?? "")),
   ].join("\n");
   const html = `<pre>${text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</pre>`;
+  const attachments = copyAttachments(message);
   const provider = options.providerId ?? rule.provider_id;
   const headers = {
     "X-Hasna-Forwarded-For": source,
@@ -166,6 +194,7 @@ function copyPayload(
       subject,
       text,
       html,
+      ...(attachments.length ? { attachments } : {}),
       idempotency_key: `forward:${claim.rule_id}:${claim.message_id}`,
       ...(provider ? { provider_id: provider } : {}),
     },
@@ -198,10 +227,10 @@ export async function runForwardingBatch(
     let payload: ReturnType<typeof copyPayload>;
     try {
       payload = copyPayload(claim);
-    } catch {
+    } catch (cause) {
       payload = null;
       status = "failed";
-      error = "Invalid forwarding snapshot";
+      error = cause instanceof ForwardingContentError ? cause.message : "Invalid forwarding snapshot";
     }
     if (!payload && !error) {
       status = "skipped";
@@ -230,7 +259,8 @@ export async function runForwardingBatch(
           body.in_progress === true ||
           body.reconciliation_required === true ||
           message?.send_state === "uncertain" ||
-          message?.send_state === "sending"
+          message?.send_state === "sending" ||
+          (response.ok && body.sent !== false)
         ) {
           status = "processing";
         } else {

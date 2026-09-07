@@ -36,7 +36,9 @@ function fixture() {
       message: {
         from_addr: "original@example.com",
         subject: "Fixture",
-        body_text: "Original <script>",
+        body_text: "",
+        body_html: "<p>Original &lt;script&gt;</p>",
+        attachments: [{ filename: "invoice.txt", content_type: "text/plain", size: 7, content_base64: Buffer.from("invoice").toString("base64") }],
         headers: {},
       },
       options: {},
@@ -164,6 +166,7 @@ test("forwarding runs the actual authenticated send handler and replays its dura
     },
   });
   expect(f.calls[0].html).toContain("&lt;script&gt;");
+  expect(f.calls[0].attachments).toEqual([{ filename: "invoice.txt", content_type: "text/plain", content: Buffer.from("invoice").toString("base64") }]);
   expect(f.reservations.map((r) => r.idempotency_key)).toEqual([
     "forward:rule-fixture:inbound-fixture",
     "forward:rule-fixture:inbound-fixture",

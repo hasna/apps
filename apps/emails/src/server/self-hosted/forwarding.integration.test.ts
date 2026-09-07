@@ -124,12 +124,15 @@ pgtest(
   "stale lease retries retain their first payload and only the current tenant lease can complete",
   async () => {
     await seed();
+    await client.execute("UPDATE messages SET body_html='<p>Original HTML</p>',attachments=$1::jsonb", [JSON.stringify([{filename:"original.txt",content_type:"text/plain",size:1,content_base64:"YQ=="}])]);
     const scoped = store.forTenant(tenantA);
     const [original] = await scoped.claimForwarding({
       fromAddress: "original@example.test",
     });
+    expect(original!.snapshot.message.body_html).toBe("<p>Original HTML</p>");
+    expect(original!.snapshot.message.attachments).toEqual([{filename:"original.txt",content_type:"text/plain",size:1,content_base64:"YQ=="}]);
     await client.execute(
-      "UPDATE forwarding_delivery_jobs SET updated_at=now()-interval '6 minutes'; UPDATE messages SET body_text='changed'; UPDATE forwarding_rules SET target_address='changed@example.test'",
+      "UPDATE forwarding_delivery_jobs SET updated_at=now()-interval '6 minutes'; UPDATE messages SET body_text='changed',body_html='changed',attachments='[]'::jsonb; UPDATE forwarding_rules SET target_address='changed@example.test'",
     );
     const [retry] = await scoped.claimForwarding({
       fromAddress: "changed@example.test",

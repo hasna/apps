@@ -1,3 +1,4 @@
+import { SELF_HOSTED_SEND_ATTACHMENT_LIMITS, base64EncodedBytes } from "../../lib/send-attachment-limits.js";
 import { randomUUID } from "node:crypto";
 import type { TypedQueryClient } from "../../storage-kit/index.js";
 import type { ForwardingBatchOptions, ForwardingClaim } from "./forwarding.js";
@@ -15,7 +16,9 @@ export async function claimForwarding(
        SELECT r.id AS rule_id, m.id AS message_id,
          jsonb_build_object('rule', jsonb_build_object('source_address',r.source_address,'target_address',r.target_address,
            'from_address',r.from_address,'provider_id',r.provider_id,'mode',r.mode),
-           'message',jsonb_build_object('from_addr',m.from_addr,'subject',m.subject,'body_text',m.body_text,
+           'message',jsonb_build_object('from_addr',m.from_addr,'subject',m.subject,'body_text',m.body_text,'body_html',m.body_html,
+             'attachments',CASE WHEN octet_length(m.attachments::text)<=$6 THEN m.attachments
+               ELSE '[{"forwarding_content_oversize":true}]'::jsonb END,
              'received_at',m.received_at,'created_at',m.created_at,'headers',m.headers), 'options',$4::jsonb) AS snapshot
        FROM forwarding_rules r
        JOIN message_recipients recipient ON recipient.tenant_id=r.tenant_id AND recipient.email=lower(r.source_address)
@@ -39,6 +42,7 @@ export async function claimForwarding(
       options.backfill === true,
       JSON.stringify(options),
       randomUUID(),
+      base64EncodedBytes(SELF_HOSTED_SEND_ATTACHMENT_LIMITS.maxTotalBytes) + 65536,
     ],
   );
 }
