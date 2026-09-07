@@ -1,3 +1,4 @@
+import type {ManagedProviderSecrets} from "./managed-provider-secrets.js";
 import {readProviderSecretStatus} from "./provider-secret-status.js";
 import { importSmtpMessage, smtpImportCapability, SmtpImportError, SMTP_IMPORT_JSON_BYTES } from "./smtp-import.js";
 import { relayWebhook, resolveWebhookRelay, providerWebhookRequest, WebhookRelayError, type WebhookRelayDeps } from "./webhook-relay.js";
@@ -183,6 +184,7 @@ async function readinessCheck(deps: SelfHostedServiceDeps): Promise<ReadyResult>
 }
 
 export interface SelfHostedServiceDeps {
+  managedProviderSecrets?: (tenant:string)=>ManagedProviderSecrets;
   tracking?: TrackingConfig;
   webhookRelay?: WebhookRelayDeps;
   provisioning?: { resolveMx?: typeof import("node:dns/promises").resolveMx };
@@ -2785,7 +2787,7 @@ export async function handleSelfHostedRequest(
       if(method!=="GET") return json(405,{error:"method not allowed"});
       const auth=await authenticate(deps,req,url,read);if(!auth.ok)return auth.response;
       const denied=requireTenantOperator(auth,"reading provider credential status");if(denied)return denied;
-      return json(200,await readProviderSecretStatus(auth.store,auth.ctx.tenantId,deps.resolveSender,deps.sender));
+      return json(200,await readProviderSecretStatus(auth.store,auth.ctx.tenantId,deps.resolveSender,deps.sender,deps.managedProviderSecrets?.(auth.ctx.tenantId)));
     }
 
     const providerHealth = path.match(/^\/v1\/providers\/([^/]+)\/health$/);

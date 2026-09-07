@@ -3053,6 +3053,43 @@ CREATE POLICY message_tracking_tenant ON message_tracking
   WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid);
 `);
 
+const MANAGED_PROVIDER_CREDENTIALS = defineMigration("0036_managed_provider_credentials", `
+CREATE UNIQUE INDEX IF NOT EXISTS providers_tenant_id_id_unique ON self_hosted_providers(tenant_id,id);
+CREATE TABLE provider_secret_roots (
+ tenant_id UUID NOT NULL REFERENCES tenants(id), id UUID NOT NULL, wrapped_root TEXT,
+ state TEXT NOT NULL CHECK(state IN ('active','available','revoked')), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), revoke_after TIMESTAMPTZ,
+ PRIMARY KEY(tenant_id,id), CHECK((state='revoked')=(wrapped_root IS NULL))
+);
+CREATE UNIQUE INDEX provider_secret_one_active_root ON provider_secret_roots(tenant_id) WHERE state='active';
+CREATE TABLE provider_secret_state (
+ tenant_id UUID PRIMARY KEY REFERENCES tenants(id), active_root_id UUID, generation BIGINT NOT NULL DEFAULT 0,
+ FOREIGN KEY(tenant_id,active_root_id) REFERENCES provider_secret_roots(tenant_id,id)
+);
+CREATE TABLE provider_credential_envelopes (
+ tenant_id UUID NOT NULL, provider_id TEXT NOT NULL, root_id UUID NOT NULL, revision INTEGER NOT NULL CHECK(revision>0),
+ payload JSONB NOT NULL, wrapped_dek JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,provider_id),
+ FOREIGN KEY(tenant_id,provider_id) REFERENCES self_hosted_providers(tenant_id,id) ON DELETE CASCADE,
+ FOREIGN KEY(tenant_id,root_id) REFERENCES provider_secret_roots(tenant_id,id)
+);
+CREATE TABLE provider_secret_jobs (
+ tenant_id UUID NOT NULL, id UUID NOT NULL, idempotency_key UUID NOT NULL, input_hash TEXT NOT NULL,
+ operation TEXT NOT NULL CHECK(operation IN ('rewrap','rotate-root','revoke-root')),
+ status TEXT NOT NULL CHECK(status IN ('pending','complete')), root_id UUID NOT NULL, processed INTEGER NOT NULL DEFAULT 0, actor TEXT NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ PRIMARY KEY(tenant_id,id),UNIQUE(tenant_id,idempotency_key),FOREIGN KEY(tenant_id,root_id) REFERENCES provider_secret_roots(tenant_id,id)
+);
+CREATE TABLE provider_credential_audit(tenant_id UUID NOT NULL REFERENCES tenants(id),id UUID NOT NULL,provider_id TEXT NOT NULL,root_id UUID NOT NULL,revision INTEGER NOT NULL,actor TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT now(),PRIMARY KEY(tenant_id,id));
+CREATE UNIQUE INDEX provider_secret_one_pending_job ON provider_secret_jobs(tenant_id) WHERE status='pending';
+DO $$ DECLARE tab TEXT; BEGIN
+ FOREACH tab IN ARRAY ARRAY['provider_secret_roots','provider_secret_state','provider_credential_envelopes','provider_secret_jobs','provider_credential_audit'] LOOP
+  EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',tab);
+  EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',tab);
+  EXECUTE format($policy$CREATE POLICY provider_secret_tenant ON %I USING(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid) WITH CHECK(tenant_id=NULLIF(current_setting('app.current_tenant',true),'')::uuid)$policy$,tab);
+ END LOOP;
+END $$;
+`);
+
 /** All migrations, in order: api-keys table (auth), the core schema, inbound. */
 export function emailsSelfHostedMigrations(): Migration[] {
   const authMigrations = apiKeyMigrations().map((m) => defineMigration(m.id, m.sql));
@@ -3096,5 +3133,6 @@ export function emailsSelfHostedMigrations(): Migration[] {
     PROVISIONING_JOBS,
     SMTP_SUBMISSION_RECEIPTS,
     MESSAGE_TRACKING,
+    MANAGED_PROVIDER_CREDENTIALS,
   ];
 }
