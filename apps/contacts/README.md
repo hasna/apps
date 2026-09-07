@@ -47,6 +47,9 @@ contacts connection --json
 
 An absent URL and key fails closed: operations exit non-zero and never open a
 local store; `contacts connection` reports `transport: "unconfigured"`.
+The fail-closed message starts on the FIRST stderr line — it names what is
+missing and where the credential should live (`HASNA_CONTACTS_API_KEY`, the
+Keychain item, the credentials-file path), never a value.
 `HASNA_CONTACTS_STORAGE_MODE`, `CONTACTS_STORAGE_MODE`, contacts DB-path
 variables, and contacts database URLs are rejected in client processes.
 PostgreSQL URLs belong only to `contacts-serve` and the migration task.
@@ -119,6 +122,15 @@ suppressed addresses; the audience `--policy` (`opt_in`, `opt_out`,
 ```bash
 contacts-mcp
 ```
+
+`contacts-mcp` fails closed at startup: with no credential resolvable through
+the chain above it exits non-zero BEFORE the stdio transport is connected or
+the HTTP port is bound — an `initialize` request is never answered by an
+unauthenticated server — and creates nothing under the app home. The first
+stderr line names where the credential should live (the Keychain item, the
+credentials-file path, `HASNA_CONTACTS_API_KEY`), never a value.
+`--help` / `--version` answer ahead of the gate; every tool still re-resolves
+the credential per request once the server is up.
 
 ## HTTP mode
 

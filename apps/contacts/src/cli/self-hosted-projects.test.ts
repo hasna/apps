@@ -64,10 +64,16 @@ describe("contacts project client transport", () => {
     expect(result.stdout).toBe("");
   });
 
-  test("fails closed with no credential: non-zero exit, no data, nothing written under HASNA_HOME", async () => {
+  test("fails closed with no credential: non-zero exit, first stderr line names where the credential should live, no data, nothing written under HASNA_HOME", async () => {
     const result = await runContacts(["projects", "list", "contact-1", "--json"], {});
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("CONTACTS_API_NOT_CONFIGURED");
+    // The message starts on the FIRST stderr line (a leading blank line would
+    // hide the fail-closed diagnosis — hasna/apps#1720).
+    const [firstLine] = result.stderr.split("\n");
+    expect(firstLine).toContain("CONTACTS_API_NOT_CONFIGURED");
+    expect(firstLine).toContain("HASNA_CONTACTS_API_KEY");
+    expect(firstLine).toContain(join(result.tempHome, "contacts", "config", "credentials"));
     expect(result.stderr).not.toContain("local-fallback");
     expect(result.stdout).toBe("");
     expect(readdirSync(result.tempHome)).toEqual([]);
