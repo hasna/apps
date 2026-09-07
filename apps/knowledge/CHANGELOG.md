@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Patch Changes
+
+- Every command works in ANY transport (owner directive 2026-08-15: the
+  storage-mode axis is retired). The local-catalog guard
+  (`assertSqliteClientTransport`) is deleted: the machine-local derived
+  catalog (`knowledge db/ingest/source/embeddings/wiki/machines/sync/safety/web`
+  plus catalog search) now runs whenever it is invoked, regardless of whether a
+  credential resolves to the HTTP API — the item transport only selects where
+  the shared item corpus lives. `search --semantic|--fake` and
+  `ask --generate --fake` degrade over the HTTP item corpus with a
+  `semantic_search_requires_local_catalog` warning instead of throwing
+  `semantic_query_unavailable`; `embeddings search` reads the local vector
+  index in every transport; the MCP `knowledge_get` tool reads catalog record
+  kinds from the machine-local catalog under HTTP; and
+  `inventory --store <path>` stays an explicit on-box override under HTTP.
+  `providers check openai|anthropic|deepseek` (and `--model <provider>` refs)
+  resolve a bare provider name to its default model, and the `webhooks`
+  command group (shared @hasna/events channels contract) is wired up:
+  `knowledge webhooks add|list|status|remove` work end to end.
+
 ## 0.3.1
 
 ### Patch Changes

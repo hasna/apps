@@ -5,10 +5,13 @@ import { runKnowledgePromptOverItems } from '../src/agent';
 import type { KnowledgeItem } from '../src/store';
 
 /**
- * The HTTP client has no on-box sqlite catalog — the shared corpus
+ * The HTTP item transport has no server-side RAG catalog — the shared corpus
  * is the cloud knowledge-items fetched through the item Store. These tests prove
  * that search / context / ask route over that in-memory item corpus and return
- * cited results instead of throwing (the pre-fix behaviour via assertSqliteClientTransport).
+ * cited results instead of throwing (the old transport guard on the local
+ * catalog was removed per owner directive 2026-08-15; catalog commands now run
+ * on the machine-local derived catalog in every transport, see
+ * tests/any-transport.test.ts).
  */
 const now = new Date().toISOString();
 const CORPUS: KnowledgeItem[] = [

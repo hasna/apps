@@ -359,10 +359,6 @@ export type KnowledgeSyncConflictResolveResult = {
     audit_event_id: string;
     message: string;
 };
-export declare class KnowledgeSemanticSearchUnavailableError extends Error {
-    readonly code = "semantic_query_unavailable";
-    constructor();
-}
 export declare class KnowledgeService {
     private readonly options;
     private ensuredWorkspace?;

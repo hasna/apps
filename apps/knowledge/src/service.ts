@@ -46,7 +46,7 @@ import {
   type EmbeddingSearchOptions,
 } from './embeddings';
 import { consumeOpenFilesOutbox } from './outbox-consume';
-import { assertSqliteClientTransport, getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { ingestOpenFilesManifest } from './manifest-ingest';
 import {
   discoverKnowledgeMachineTopology,
@@ -1645,15 +1645,6 @@ function assertRemoteSyncApplyResult(machine: string, value: unknown): asserts v
   }
 }
 
-export class KnowledgeSemanticSearchUnavailableError extends Error {
-  readonly code = 'semantic_query_unavailable';
-
-  constructor() {
-    super('semantic_query_unavailable: the HTTP Knowledge item store has no configured vector index.');
-    this.name = 'KnowledgeSemanticSearchUnavailableError';
-  }
-}
-
 export class KnowledgeService {
   private ensuredWorkspace?: KnowledgeWorkspace;
   private cachedConfig?: KnowledgeConfig;
@@ -1783,6 +1774,11 @@ export class KnowledgeService {
    * and SDK all call this so no surface reads a divergent store.
    */
   async resolveInventory(options: KnowledgeInventoryOptions = {}): Promise<KnowledgeInventoryResult> {
+    // An explicit store path is an explicit on-box choice (the same rule
+    // resolveItemStore applies to item commands): the on-box item inventory and
+    // the local catalog apply even when a credential would otherwise route
+    // items through the server API.
+    if (options.storePath) return this.inventory(options);
     if (this.usesHttpTransport()) return this.httpInventory(options);
     return this.inventory(options);
   }
@@ -1973,9 +1969,6 @@ export class KnowledgeService {
   }
 
   dbStats() {
-    // Refuse over HTTP even when no local db exists yet, so `db stats` never
-    // reports the on-box catalog as authoritative while HTTP transport is active.
-    assertSqliteClientTransport('reading knowledge.db stats');
     const workspace = this.workspace;
     if (!existsSync(workspace.knowledgeDbPath)) return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
@@ -2723,9 +2716,6 @@ export class KnowledgeService {
 
   async semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
-    if (this.usesHttpTransport()) {
-      throw new KnowledgeSemanticSearchUnavailableError();
-    }
     if (!existsSync(workspace.knowledgeDbPath)) {
       return {
         provider: 'openai' as const,
@@ -2745,16 +2735,29 @@ export class KnowledgeService {
   async search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
     const workspace = this.workspace;
     if (this.usesHttpTransport()) {
-      if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
-        throw new KnowledgeSemanticSearchUnavailableError();
-      }
+      // Semantic/fake/model requests degrade over the HTTP item corpus: the
+      // server keyword page ranks the shared corpus and the items-level search
+      // reports `semantic_search_requires_local_catalog` instead of throwing
+      // (see tests/cloud-catalog.test.ts). The local derived catalog remains
+      // available to any command that opens it directly.
       const producer = await this.httpStore().search({
         query: options.query,
         archive: 'active',
         limit: options.limit,
         offset: options.offset,
       });
-      return hybridSearchFromProducerPage(producer.items, options, [], producer.total);
+      const result = hybridSearchFromProducerPage(producer.items, {
+        query: options.query,
+        limit: options.limit,
+        offset: options.offset,
+        semantic: options.semantic === true || options.fake === true,
+      }, [], producer.total);
+      // The items-level contract (hybridSearchItems) reports semantic requests
+      // over a pure item corpus as skipped; surface the same warning here.
+      if (options.semantic === true || options.fake === true) {
+        result.warnings.push('semantic_search_requires_local_catalog');
+      }
+      return result;
     }
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
     if (!existsSync(workspace.knowledgeDbPath)) {
@@ -2852,9 +2855,10 @@ export class KnowledgeService {
 
   async runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>) {
     if (this.usesHttpTransport()) {
-      if (options.semantic === true || options.fake === true || Boolean(options.modelRef)) {
-        throw new KnowledgeSemanticSearchUnavailableError();
-      }
+      // `--fake` and `--semantic` degrade over the HTTP item corpus instead of
+      // throwing: fake generation is deterministic and offline by contract, and
+      // semantic requests report `semantic_search_requires_local_catalog` from
+      // the items-level search path.
       const producer = await this.httpStore().search({
         query: options.prompt,
         archive: 'active',

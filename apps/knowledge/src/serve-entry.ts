@@ -34,7 +34,7 @@ export function getPackageVersion(): string {
 export function printHelp(): void {
   console.log(`usage: knowledge-serve [--port <n>]
 
-knowledge-serve — self-hosted HTTP API for @hasna/knowledge.
+knowledge-serve — the package's HTTP API server for @hasna/knowledge.
 
 options:
   --help                show this help and exit

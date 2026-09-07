@@ -6386,7 +6386,7 @@ function getPackageVersion() {
 function printHelp() {
   console.log(`usage: knowledge-serve [--port <n>]
 
-knowledge-serve \u2014 self-hosted HTTP API for @hasna/knowledge.
+knowledge-serve \u2014 the package's HTTP API server for @hasna/knowledge.
 
 options:
   --help                show this help and exit

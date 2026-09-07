@@ -5,6 +5,12 @@ import type { KnowledgeConfig } from './workspace';
 
 export type AiProviderId = 'openai' | 'anthropic' | 'deepseek';
 
+const AI_PROVIDER_IDS: readonly AiProviderId[] = ['openai', 'anthropic', 'deepseek'];
+
+function isAiProviderId(value: string): value is AiProviderId {
+  return (AI_PROVIDER_IDS as readonly string[]).includes(value);
+}
+
 export interface AiProviderSettings {
   api_key_env: string;
   base_url?: string;
@@ -161,7 +167,14 @@ export function parseModelRef(modelRef: string): { provider: AiProviderId; model
 
 export function resolveModelRef(aliasOrRef: string, config?: KnowledgeConfig): string {
   const aliases = modelAliases(config);
-  return aliases[aliasOrRef] ?? aliasOrRef;
+  const resolved = aliases[aliasOrRef] ?? aliasOrRef;
+  // A bare provider name (no ':') resolves to that provider's default model so
+  // `--model openai` / `knowledge providers check openai` work without forcing
+  // callers to spell a model id (help documents `check [provider|model-alias]`).
+  if (!resolved.includes(':') && isAiProviderId(resolved)) {
+    return `${resolved}:${providerSettings(config, resolved).default_model}`;
+  }
+  return resolved;
 }
 
 export function listModelRegistry(config?: KnowledgeConfig): ModelRegistryEntry[] {

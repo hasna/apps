@@ -454,7 +454,7 @@ export async function runKnowledgePromptOverItems(
     approved: options.approveWrite === true,
     durable_writes_performed: false as const,
     reason: options.approveWrite
-      ? 'Approval flag recorded; durable wiki writes require the on-box catalog (wiki compile) and are not available through the HTTP client.'
+      ? 'Approval flag recorded; durable wiki writes are deferred to an approval-gated wiki compile step (knowledge wiki compile --approve-write).'
       : 'Dry-run mode: proposed wiki updates require approval before durable writes.',
   };
 

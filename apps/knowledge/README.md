@@ -1191,11 +1191,14 @@ chunks, wiki/index catalog rows, and optional vector results. Keyword search
 over the shared item corpus routes through the server API when HTTP transport
 is active (`HASNA_KNOWLEDGE_API_URL` set). The on-box catalog — `chunks_fts`,
 wiki/catalog rows, and vector results — is served by the local sqlite catalog
-pipeline, which is not available in the HTTP client (the refusal is explicit,
-see `docs/architecture/catalog-transport-boundary.md` for the recorded reason
-and boundary). `--semantic` embeds the query and merges vector results from
-`vector_index_entries`, preserving source refs, artifact URIs, citations,
-revision/hash metadata, and provenance in each structured result. JSON notes
+pipeline, which remains available in every transport (the item transport only
+selects where the shared item corpus lives; the machine-local derived catalog
+is not transport-gated, owner directive 2026-08-15). `--semantic` embeds the
+query and merges vector results from `vector_index_entries`, preserving source
+refs, artifact URIs, citations, revision/hash metadata, and provenance in each
+structured result. When a semantic request runs over the HTTP item corpus
+without a local vector index, keyword results come back with a
+`semantic_search_requires_local_catalog` warning instead of failing. JSON notes
 are keyword-only results with `kind: legacy_item` and
 `knowledge://item/<id>` source refs.
 
@@ -1385,9 +1388,10 @@ The stable agent-facing MCP tools are:
   proposals with citations and explicit approval gating.
 - `knowledge_sync_peer`: dry-run, pull, push, or bidirectionally sync with a
   local peer workspace.
-- `storage_status`, `storage_push`, `storage_pull`, `storage_sync`: inspect or
-  sync the SQLite catalog with PostgreSQL using the standard open-core storage
-  env contract.
+- `storage_status`: inspect the local knowledge.db catalog storage status and
+  sync history. (The old `storage_push` / `storage_pull` / `storage_sync`
+  Postgres-DSN tools were removed — a raw database DSN is never distributed to
+  clients; cross-machine sharing uses the HTTP API.)
 
 Compatibility and lower-level tools remain available with the `ok_*` prefix:
 item tools (`ok_add`, `ok_list`, `ok_get`, `ok_update`, `ok_delete`,

@@ -495,24 +495,11 @@ function decisionSnapshot(id, service = projectService()) {
 async function getKnowledgeRecord(kind, id, options = {}) {
   const normalized = kind ?? 'auto';
   const service = createKnowledgeService({ scope: options.scope });
-  // With the HTTP API the shared corpus is the server knowledge-items; the local
-  // sqlite catalog record kinds (source/wiki_page/run/index/decision) have no
-  // cloud counterpart and would throw the local-catalog guard. Only the `item`
-  // kind is cloud-backed, so restrict `auto` to it and refuse an explicit
-  // catalog kind with a clear message rather than the raw sqlite refusal.
-  if (usesKnowledgeHttpTransport()) {
-    if (normalized !== 'auto' && normalized !== 'item') {
-      throw new Error(
-        `knowledge: reading a '${normalized}' record targets the on-box sqlite RAG catalog, which is not available to the HTTP client `
-          + `(a credential resolved through the @hasna/contracts chain). The shared corpus is the server `
-          + `knowledge-items; use kind 'item' (or 'auto'), or pass an explicit store_path to read the full `
-          + `local catalog.`,
-      );
-    }
-    const store = itemStoreFor(options.store_path, options.scope);
-    const item = await store.get(id);
-    return item ? { kind: 'item', item, store_path: store.location } : null;
-  }
+  // One code path for every transport. The `item` kind resolves through the
+  // transport-appropriate item Store (server API when a credential resolves,
+  // on-box store otherwise); the catalog kinds (source/wiki_page/run/index/
+  // decision) read the machine-local derived catalog, which exists in both
+  // item transports (owner directive 2026-08-15: no storage-mode axis).
   const attempts = normalized === 'auto'
     ? ['item', 'source', 'wiki_page', 'run', 'index', 'decision']
     : [normalized];
@@ -805,7 +792,7 @@ export function buildServer() {
       const inventory = await service.resolveInventory({
         limit,
         includeArchived: include_archived,
-        storePath: usesKnowledgeHttpTransport() ? undefined : store_path,
+        storePath: store_path,
       });
       return jsonText(inventory);
     } catch (error) {

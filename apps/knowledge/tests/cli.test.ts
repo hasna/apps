@@ -356,7 +356,7 @@ describe('knowledge cli', () => {
     expect(out).toContain('knowledge - local agent knowledge store');
     expect(out).toContain('Commands:');
     expect(out).toContain('events emit|list|replay');
-    expect(out).toContain('webhooks add|list|remove|test');
+    expect(out).toContain('webhooks add|list|status|remove');
     expect(out).toContain('inventory');
     expect(out).toContain('context pack <query>');
     expect(out).toContain('proposals context');

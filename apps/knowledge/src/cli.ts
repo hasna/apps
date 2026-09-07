@@ -417,14 +417,34 @@ function invokedAsKnowledge(): boolean {
 }
 
 async function runEventsCommand(argv: string[]): Promise<boolean> {
-  if (!EVENTS_COMMANDS.includes(argv[0] ?? '')) return false;
+  const first = argv[0] ?? '';
+  if (!EVENTS_COMMANDS.includes(first)) return false;
   const eventsProgram = new Command();
   eventsProgram
     .name('knowledge')
-    .description('Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions');
-  registerEventsCommands(eventsProgram, { source: 'knowledge' });
-  await eventsProgram.parseAsync(argv, { from: 'user' });
-  return true;
+    .description('Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions')
+    .exitOverride();
+  // The knowledge CLI documents the shared event-channel surface as `webhooks`
+  // (add|list|status|remove — the README example `knowledge webhooks add loops
+  // --id ... --transport command` is the shared channels contract), so the
+  // channels group is renamed only for the webhooks spelling.
+  registerEventsCommands(eventsProgram, {
+    source: 'knowledge',
+    channelsCommandName: first === 'webhooks' ? 'webhooks' : undefined,
+  });
+  try {
+    await eventsProgram.parseAsync(argv, { from: 'user' });
+    return true;
+  } catch (error) {
+    if (error instanceof Error && (error as { code?: string }).code === 'commander.helpDisplayed') {
+      process.exitCode = 0;
+      return true;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`error: ${message}`);
+    process.exitCode = 1;
+    return true;
+  }
 }
 
 function printGlobalHelp(): void {
@@ -485,7 +505,7 @@ Commands:
   providers status|models|check Inspect AI SDK provider config and credentials
   safety status|check|approve|audit|redact
   events emit|list|replay        Emit, list, and replay Hasna events
-  webhooks add|list|remove|test  Manage Hasna event webhook subscriptions
+  webhooks add|list|status|remove Manage Hasna event channel subscriptions (webhook/command targets)
   help [command]               Show help
 
 Global Options:
@@ -626,7 +646,7 @@ function printCommandHelp(command: string): void {
   if (command === 'providers') { console.log('Usage: knowledge providers status|models|check [provider|model-alias] [--scope local|global|project] [--json]'); return; }
   if (command === 'safety') { console.log('Usage: knowledge safety status|check|approve|audit|redact [args] [--scope local|global|project] [--json]'); return; }
   if (command === 'events') { console.log('Usage: knowledge events emit|list|replay [args] [--json]'); return; }
-  if (command === 'webhooks') { console.log('Usage: knowledge webhooks add|list|remove|test [args] [--json]'); return; }
+  if (command === 'webhooks') { console.log('Usage: knowledge webhooks add|list|status|remove [args] [--json]'); return; }
   printGlobalHelp();
 }
 
@@ -1548,12 +1568,13 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'inventory') {
     // Single dispatch shared with the MCP + SDK: the shared item corpus through
-    // HTTP when selected, otherwise the full on-box
-    // inventory across json + sqlite. No surface reads a divergent store.
+    // HTTP when selected (unless --store pins the on-box store), otherwise the
+    // full on-box inventory across json + sqlite. No surface reads a divergent
+    // store.
     const inventory = await service.resolveInventory({
       limit: flags.limit,
       includeArchived: flags.includeArchived || flags.archived,
-      storePath: usesKnowledgeHttpTransport() ? undefined : storePath,
+      storePath,
     });
     output(flags.json || flags.verbose ? inventory : formatInventory(inventory), flags.json, flags);
     return;
@@ -1563,8 +1584,9 @@ async function run(argv: string[]): Promise<void> {
     const projectRef = flags.project ?? positional[1];
     if (!projectRef) throw new Error('Usage: knowledge project-panel --project <id|name|slug> [--json|--contract]');
     // Only resolve the project's registered collection over the hosted route.
-    // In local mode the cwd-derived inventory is the intended source and the
-    // local project-links authority would create a knowledge.db as a side effect.
+    // On the on-box transport the cwd-derived inventory is the intended source
+    // and the local project-links authority would create a knowledge.db as a
+    // side effect.
     const panel = await createKnowledgeProjectPanel(projectRef, {
       service,
       projectLinksAuthority: usesKnowledgeHttpTransport() ? projectLinksAuthority() : undefined,

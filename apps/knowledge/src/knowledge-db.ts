@@ -1,32 +1,21 @@
 import { Database } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
-import { usesKnowledgeHttpTransport } from './http-store';
-import { KNOWLEDGE_API_URL_ENV } from './client-transport.js';
 
 /**
- * The single choke point for every client-side sqlite catalog open. With the
- * HTTP transport selected, the on-box knowledge.db is NOT
- * the source of truth, and writing to it would be the split-brain the mission
- * forbids. Rather than silently touch local sqlite, we refuse loudly. Knowledge
- * items (notes) still flow through the server API; the local catalog subsystem
- * belongs to the on-box transport.
- * The HTTP server (src/serve) never calls this — it reads PostgreSQL
- * directly — so this guard applies to CLI/MCP/SDK clients only.
- * Recorded boundary decision (local-only-capability review, 2026-08-18):
- * docs/architecture/catalog-transport-boundary.md — the hosted half of the
- * catalog is a wrapper build with no server-side implementation at ea43dd336;
- * do not remove this guard without that build landing.
+ * The single choke point for every client-side sqlite catalog open. The on-box
+ * knowledge.db is the derived-catalog store (sources, chunks, wiki pages,
+ * indexes, runs, sync ledgers, machine registry) and it exists in BOTH item
+ * transports: a credential resolving to the HTTP API routes the shared item
+ * corpus through the server, while the machine-local derived catalog stays the
+ * machine-local store. There is no storage-mode axis anymore (owner directive
+ * 2026-08-15): no command may be blocked because an API credential is
+ * configured. The HTTP server (src/serve) never calls this — it reads
+ * PostgreSQL directly — so this module is CLI/MCP/SDK client-side only.
+ *
+ * Superseded decision record: docs/architecture/catalog-transport-boundary.md
+ * (the previous local-only-capability review that gated this module behind the
+ * HTTP-transport guard was overturned by the owner directive).
  */
-export function assertSqliteClientTransport(operation = 'catalog'): void {
-  if (usesKnowledgeHttpTransport()) {
-    throw new Error(
-      `knowledge: ${operation} builds/reads the on-box sqlite RAG catalog (source ingestion, chunk embeddings, `
-        + `wiki compilation, cross-machine sync, machine registry). That local indexing pipeline is not available in `
-        + `the HTTP client. Shared item commands route through the server API. Unset ${KNOWLEDGE_API_URL_ENV} `
-        + `to use the full on-box catalog pipeline; run 'knowledge transport' to inspect the current route.`,
-    );
-  }
-}
 
 export const CURRENT_SCHEMA_VERSION = 10;
 
@@ -565,7 +554,6 @@ VALUES (10, datetime('now'));
 `;
 
 export function openKnowledgeDb(path: string): Database {
-  assertSqliteClientTransport('opening the local knowledge.db catalog');
   ensureParentDir(path);
   const db = new Database(path);
   db.exec('PRAGMA foreign_keys = ON;');
@@ -574,14 +562,11 @@ export function openKnowledgeDb(path: string): Database {
 }
 
 /**
- * Read-only open of the on-box knowledge.db, gated by the same HTTP-transport guard
- * as {@link openKnowledgeDb}. This is the ONLY sanctioned read-only sqlite entry
- * point (used by the workspace-migration integrity/summary tooling) so that every
- * client-side `new Database(...)` lives in this module behind the gate — no path
- * can silently read the local catalog while HTTP transport is active.
+ * Read-only open of the on-box knowledge.db — the ONLY sanctioned read-only
+ * sqlite entry point (used by the workspace-migration integrity/summary
+ * tooling) so that every client-side `new Database(...)` lives in this module.
  */
 export function openKnowledgeDbReadonly(path: string): Database {
-  assertSqliteClientTransport('reading the local knowledge.db catalog');
   return new Database(path, { readonly: true });
 }
 
