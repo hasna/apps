@@ -38,9 +38,9 @@ let adminRedactKey: string;
 beforeAll(() => {
   server = startApiServer({ port: 0, host: "127.0.0.1", deps: makeDeps() });
   base = `http://127.0.0.1:${server.port}`;
-  rwKey = mintApiKey({ app: "conversations", agent: "test", scopes: ["conversations:read", "conversations:write"], signingSecret: SIGNING }).token;
-  roKey = mintApiKey({ app: "conversations", agent: "ro", scopes: ["conversations:read"], signingSecret: SIGNING }).token;
-  adminRedactKey = mintApiKey({ app: "conversations", agent: "security", scopes: ["conversations:admin-redact"], signingSecret: SIGNING }).token;
+  rwKey = mintApiKey({ tid: "default", app: "conversations", agent: "test", scopes: ["conversations:read", "conversations:write"], signingSecret: SIGNING }).token;
+  roKey = mintApiKey({ tid: "default", app: "conversations", agent: "ro", scopes: ["conversations:read"], signingSecret: SIGNING }).token;
+  adminRedactKey = mintApiKey({ tid: "default", app: "conversations", agent: "security", scopes: ["conversations:admin-redact"], signingSecret: SIGNING }).token;
 });
 
 afterAll(() => { server.stop(true); });
@@ -110,7 +110,7 @@ describe("conversations-serve", () => {
       deps: { client: projectClient as any, keys: projectKeys, verifier: projectVerifier },
     });
     const projectBase = `http://127.0.0.1:${projectServer.port}`;
-    const projectKey = mintApiKey({
+    const projectKey = mintApiKey({ tid: "default",
       app: "conversations",
       agent: "project-reader",
       scopes: ["conversations:read"],
@@ -435,7 +435,7 @@ describe("conversations-serve", () => {
       deps: { client: lockClient as any, keys: lockKeys, verifier: lockVerifier },
     });
     const lockBase = `http://127.0.0.1:${lockServer.port}`;
-    const lockKey = mintApiKey({
+    const lockKey = mintApiKey({ tid: "default",
       app: "conversations",
       agent: "severianus",
       scopes: ["conversations:read", "conversations:write"],
@@ -521,7 +521,7 @@ describe("conversations-serve", () => {
       deps: { client: lockClient as any, keys: lockKeys, verifier: lockVerifier },
     });
     const lockBase = `http://127.0.0.1:${lockServer.port}`;
-    const lockKey = mintApiKey({
+    const lockKey = mintApiKey({ tid: "default",
       app: "conversations",
       agent: "severianus",
       scopes: ["conversations:read", "conversations:write"],
@@ -3424,7 +3424,7 @@ describe("H4b blockers declared-agent scoping", () => {
   afterAll(() => { blockerServer.stop(true); });
 
   test("a fleet-claim key reading agent=<seat> is accepted and scopes the query to the seat", async () => {
-    const fleetKey = mintApiKey({
+    const fleetKey = mintApiKey({ tid: "default",
       app: "conversations",
       agent: "fleet",
       scopes: ["conversations:read"],
@@ -3446,7 +3446,7 @@ describe("H4b blockers declared-agent scoping", () => {
   });
 
   test("an omitted agent falls back to the key claim (401 without a key)", async () => {
-    const fleetKey = mintApiKey({
+    const fleetKey = mintApiKey({ tid: "default",
       app: "conversations",
       agent: "fleet",
       scopes: ["conversations:read"],
@@ -3500,7 +3500,7 @@ describe("H4c inbox declared-agent scoping", () => {
     // Fleet-claim key (agent 'fleet') reading agent=watcher: the key
     // authorizes, the byline scopes. Before the fix this deterministically
     // 403'd before any query ran — the clean-empty-inbox failure.
-    const fleetKey = mintApiKey({
+    const fleetKey = mintApiKey({ tid: "default",
       app: "conversations",
       agent: "fleet",
       scopes: ["conversations:read"],
@@ -3521,7 +3521,7 @@ describe("H4c inbox declared-agent scoping", () => {
   });
 
   test("an inbox without an agent is refused 400, and without a key 401", async () => {
-    const fleetKey = mintApiKey({
+    const fleetKey = mintApiKey({ tid: "default",
       app: "conversations",
       agent: "fleet",
       scopes: ["conversations:read"],

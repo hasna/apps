@@ -1,3 +1,4 @@
+import { adoptCorpus, inspectCorpus } from "../server/corpus-binding.js";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -70,13 +71,15 @@ beforeAll(async () => {
   const setup = new Pool({ connectionString: dsn, options: `-csearch_path=${schema}`, max: 1 });
   try {
     for (const sql of PG_MIGRATIONS) await setup.query(sql);
+    const ownerClient = createQueryClient(setup);
+    await adoptCorpus(ownerClient, { ...await inspectCorpus(ownerClient), tenant_id: "default", authority_id: "conversations", actor: "fixture-operator" });
     await admin.query(`CREATE ROLE ${role} NOLOGIN NOSUPERUSER NOBYPASSRLS`);
     await admin.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role}`);
     await admin.query(`GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${role}`);
     await admin.query(`GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${role}`);
   } finally { await setup.end(); }
   const signingSecret = randomBytes(32);
-  const minted = mintApiKey({ app: "conversations", agent: "registration-fixture", scopes: ["conversations:read", "conversations:write"], signingSecret });
+  const minted = mintApiKey({ app: "conversations", tid: "default", agent: "registration-fixture", scopes: ["conversations:read", "conversations:write"], signingSecret });
   clientEnv = isolatedEnv(CLIENT_HOME);
   startBackend = async () => {
     pool = new Pool({ connectionString: dsn, options: `-csearch_path=${schema} -crole=${role}`, max: 4 });

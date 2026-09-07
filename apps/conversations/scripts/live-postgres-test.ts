@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
 export const REQUIRED_SUITES = Object.freeze({
+  "src/server/corpus-binding.pg.test.ts": 6,
   "src/cli/project-registration.e2e.test.ts": 2,
   "src/server/admin-redaction-transaction.pg.test.ts": 3,
   "src/server/project-json-fields.pg.test.ts": 4,

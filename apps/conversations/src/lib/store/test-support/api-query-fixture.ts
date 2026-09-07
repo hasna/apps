@@ -7,6 +7,9 @@ export function makeFakeClient(
   ],
   opts: { messageCreatedAtAsDate?: boolean } = {},
 ) {
+  // Explicit synthetic owner for this in-memory corpus; real PostgreSQL tests
+  // initialize ownership with the administrative adoption transaction.
+  const corpusBinding = { corpus_id: `cor_${crypto.randomUUID().replaceAll("-", "")}`, tenant_id: "default", authority_id: "conversations", receipt_id: crypto.randomUUID(), actor: "fixture-operator", adopted_at: new Date().toISOString(), legacy_receipt_count: 0, legacy_receipt_digest: "0".repeat(64) };
   const channels: Record<string, any> = {};
   const channelAliases: Record<string, string> = {};
   const channelMembers = new Set<string>();
@@ -585,6 +588,7 @@ export function makeFakeClient(
       return { rows: [], rowCount: 0 };
     },
     async get(sql: string, p: readonly unknown[] = []): Promise<any> {
+      if (sql.includes("FROM conversations_corpus_binding b JOIN project_channel_registration_identity")) return { ...corpusBinding };
       const taskResult = taskProject.get(sql, p);
       if (taskResult !== undefined) return taskResult;
       if (/SELECT count\(\*\)::bigint AS n FROM messages/i.test(sql)) return {n:messageRows(sql,p).length};

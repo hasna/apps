@@ -1,3 +1,5 @@
+import { authorizeCorpus, readCorpusBinding, corpusExpectationFromEnv, CorpusBindingError, type CorpusExpectation } from "./corpus-binding.js";
+import type { ApiKeyPrincipal } from "@hasna/contracts/auth";
 /**
  * conversations-serve — the HTTP API surface.
  *
@@ -175,6 +177,7 @@ export interface ApiServerDeps {
   keys: ApiKeyStore;
   verifier: ApiKeyVerifier;
   incidentProjector?: IncidentProjectorContext | null;
+  corpusExpectation?: CorpusExpectation;
 }
 
 function incidentProjectorContextFromEnv(): IncidentProjectorContext | null {
@@ -213,7 +216,7 @@ export function buildDeps(): ApiServerDeps {
       }
     },
   });
-  return { client, keys, verifier, incidentProjector: incidentProjectorContextFromEnv() };
+  return { client, keys, verifier, incidentProjector: incidentProjectorContextFromEnv(), corpusExpectation: corpusExpectationFromEnv() };
 }
 
 // ---- helpers ----------------------------------------------------------------
@@ -1570,9 +1573,10 @@ export function startApiServer(options: StartApiServerOptions = {}) {
         if (path === "/ready" && method === "GET") {
           try {
             await client.get<{ ok: number }>("SELECT 1 AS ok");
+            await readCorpusBinding(client, deps.corpusExpectation);
             return json({ status: "ok", version: pkgVersion, app: APP });
           } catch (e) {
-            return json({ status: "unavailable", version: pkgVersion, error: (e as Error).message }, 503);
+            return json({ status: "unavailable", version: pkgVersion, error: e instanceof CorpusBindingError ? e.message : "Corpus readiness check failed." }, 503);
           }
         }
 
@@ -1591,11 +1595,13 @@ export function startApiServer(options: StartApiServerOptions = {}) {
               "WWW-Authenticate": "Bearer",
             });
           }
-          return await handleV1(path, method, req, url, deps, decision.principal.agent, decision.principal.kid);
+          await authorizeCorpus(client, decision.principal, deps.corpusExpectation);
+          return await handleV1(path, method, req, url, deps, decision.principal);
         }
 
         return json({ error: "Not found" }, 404);
       } catch (e) {
+        if (e instanceof CorpusBindingError) return json({error:e.message,code:"CORPUS_BINDING"},e.status);
         if (isProjectChannelCollectionChangedError(e)) {
           return json({
             error: e.message,
@@ -1707,9 +1713,9 @@ async function handleV1(
   req: Request,
   url: URL,
   deps: ApiServerDeps,
-  agent: string | null,
-  keyId: string,
+  principal: ApiKeyPrincipal,
 ): Promise<Response> {
+  const { agent, kid: keyId } = principal;
   const { client } = deps;
   const sub = path.slice("/v1/".length);
 
