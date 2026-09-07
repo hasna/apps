@@ -23,6 +23,16 @@ const ENV_KEYS = [
   "HASNA_FILES_DB_PATH",
   "HASNA_FILES_API_URL",
   "HASNA_FILES_API_KEY",
+  // Ambient credential roots: the api-mode describe below pins a FAKE
+  // authority while driving the resolver through the live `process.env`, and
+  // the resolver's disk tier outranks the env tier — a real station file at
+  // `~/.hasna/files/config/credentials` would be refused as written for a
+  // different authority and drown the guard under test. Pointing every
+  // home-layout root at the scratch dir (no credentials file inside it) keeps
+  // the suite hermetic wherever it runs.
+  "HOME",
+  "HASNA_HOME",
+  "HASNA_CONFIG_HOME",
 ] as const;
 
 const savedEnv = new Map<string, string | undefined>();
@@ -34,6 +44,10 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "files-organization-mcp-"));
   process.env.HASNA_FILES_DATA_DIR = testDir;
   process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
+  // Ambient credential isolation (see ENV_KEYS).
+  process.env.HOME = testDir;
+  process.env.HASNA_HOME = testDir;
+  process.env.HASNA_CONFIG_HOME = testDir;
   delete process.env.HASNA_FILES_API_URL;
   delete process.env.HASNA_FILES_API_KEY;
 });
