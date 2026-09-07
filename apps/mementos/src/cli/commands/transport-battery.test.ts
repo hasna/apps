@@ -97,6 +97,32 @@ describe("hosted transport arms — commands that must not open a local store in
     }
   });
 
+  test("`backup` to an existing destination path overwrites it like the local arm (no UNIQUE conflict)", async () => {
+    const backupPath = join(tmpdir(), `mementos-tb-backup-overwrite-${Date.now()}-${Math.random()}.db`);
+    const first = scratchFiles("backup-ow-1");
+    const second = scratchFiles("backup-ow-2");
+    const r1 = await runCli(["backup", backupPath], first.out, first.err);
+    first.cleanup();
+    expect(r1.exitCode).toBe(0);
+    expect(existsSync(backupPath)).toBe(true);
+    try {
+      const r2 = await runCli(["backup", backupPath], second.out, second.err);
+      second.cleanup();
+      expect(r2.exitCode).toBe(0);
+      expect(r2.stderr).not.toContain("UNIQUE constraint");
+      expect(r2.stdout).toContain("Backed up to");
+      const db = new Database(backupPath, { readonly: true });
+      try {
+        const count = (db.query("SELECT COUNT(*) as c FROM memories").get() as { c: number }).c;
+        expect(count).toBe(5);
+      } finally {
+        db.close();
+      }
+    } finally {
+      unlinkSync(backupPath);
+    }
+  });
+
   test("`synthesis run --dry-run` routes to the server and prints the run id", async () => {
     const files = scratchFiles("synth-run");
     const { exitCode, stdout, stderr } = await runCli(

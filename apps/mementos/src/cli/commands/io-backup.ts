@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { join, resolve, dirname } from "node:path";
-import { existsSync, statSync, copyFileSync, mkdirSync, readdirSync } from "node:fs";
+import { existsSync, statSync, copyFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { getDbPath } from "../../db/database.js";
 import { isApiMode } from "../../db/api-mode.js";
 import { listMemoriesBounded } from "../../db/memories.js";
@@ -26,6 +26,13 @@ function writeMemoriesBackupFile(
   rows: Array<Record<string, unknown>>,
 ): number {
   const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+  // The local arm overwrites an existing destination via copyFileSync; the
+  // hosted arm must match, or a second `backup <same-path>` run would hit a
+  // UNIQUE conflict on the re-opened file's primary key. Delete a pre-existing
+  // destination first (an EISDIR on a directory mirrors copyFileSync's error).
+  if (existsSync(dest)) {
+    unlinkSync(dest);
+  }
   const backupDb = new Database(dest);
   try {
     backupDb.run(`
