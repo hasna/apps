@@ -658,7 +658,7 @@ skills/                      # Public skill contracts and local OSS skills
 |---|---|---|
 | Catalog skills | 86 | `SKILLS.length` (`src/lib/registry-data/`) |
 | Categories | 17 | `CATEGORIES` (`src/lib/registry-types.ts`) |
-| MCP tools | 58 | `tools/list` against a live `buildServer()` |
+| MCP tools | 59 | `tools/list` against a live `buildServer()` |
 
 Every number in this table is re-derived from the source tree on each test run by
 `src/lib/readme-derived-counts.test.ts`, so a drifted figure fails a test rather
@@ -810,3 +810,33 @@ filter lists active members of that workspace. Role assignment still requires a
 concrete role and targets the default membership; a missing default membership
 does not select a different workspace automatically. Active organization rosters
 and role-mutation responses continue to require non-null roles.
+
+## Current workspace roster on a compatible server
+
+`skills workspace members --email you@example.com` requests fresh email
+verification and reads one page of the current workspace roster. The selected
+server requires a current owner/admin session; API keys and support
+impersonation do not grant roster access. It never replaces saved credentials
+or changes the selected profile.
+
+For noninteractive use, request a code with the existing auth flow, then supply
+it on stdin (never as a command argument):
+
+```sh
+skills workspace members --email you@example.com --code-stdin --limit 25 --json
+```
+
+JSON includes `organizationId`, `members`, and required `nextCursor` (null on the
+last page). Pass a returned cursor unchanged with `--cursor` to read the next
+page; limits are 1–100 with server default 50. Timestamps retain the server's
+microsecond strings. Human output also includes a continuation cursor when one
+exists. Empty pages are distinct from denied, unsupported or malformed responses,
+which fail the command.
+
+SDK callers with an authorized customer session can use
+`RemoteSkillsClient.listWorkspaceMembers({ limit, cursor })`. For fresh email
+verification, use `RemoteSkillsAuthClient.listWorkspaceMembers(email, code,
+options)`. The MCP tool `list_workspace_members` takes `email`, `code`, and
+optional `limit`/`cursor` and calls the same fresh-auth client. These are read-only
+roster adapters; invitations, membership changes and workspace switching are
+separate server capabilities.

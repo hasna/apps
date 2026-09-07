@@ -9,7 +9,8 @@ import { dirname, join, resolve } from "node:path";
 const root = resolve(import.meta.dir, "..");
 const workspace = await mkdtemp(join(tmpdir(), "skills-consumer-types-"));
 const env = { PATH: `${dirname(process.execPath)}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-  TMPDIR: workspace, NO_COLOR: "1" };
+  HOME: workspace, TMPDIR: workspace, NO_COLOR: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+  NPM_CONFIG_USERCONFIG: join(workspace, "user.npmrc"), NPM_CONFIG_GLOBALCONFIG: join(workspace, "global.npmrc") };
 
 async function run(command: string[], cwd: string) {
   const child = Bun.spawn(command, { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
@@ -72,6 +73,30 @@ declare const workspace: Awaited<ReturnType<typeof auth.updateCurrentWorkspace>>
 const workspaceName: string = workspace.organization.name;
 // @ts-expect-error Workspace identity cannot be changed through this method.
 auth.updateCurrentWorkspace("reader@example.test", "000000", { name: "Example", id: "other" });
+declare const roster: Awaited<ReturnType<typeof client.listWorkspaceMembers>>;
+declare const freshRoster: Awaited<ReturnType<typeof auth.listWorkspaceMembers>>;
+const rosterIdentity: string = roster.organizationId;
+const rosterMember: import("@hasna/skills/sdk").RemoteWorkspaceMember = roster.members[0]!;
+const rosterRootMember: import("@hasna/skills").RemoteWorkspaceMember = rosterMember;
+const rosterPage: import("@hasna/skills/sdk").RemoteWorkspaceMembersPage = freshRoster;
+const rosterRole: "owner" | "admin" | "member" | "viewer" = rosterMember.role;
+const rosterDisplayName: string | null = rosterMember.displayName;
+const rosterCursor: string | null = roster.nextCursor;
+const rosterTimestamp: string = rosterMember.createdAt;
+client.listWorkspaceMembers({ limit: 1, cursor: "opaque_cursor" });
+auth.listWorkspaceMembers("reader@example.test", "000000", { limit: 100 });
+// @ts-expect-error The current roster does not select a different workspace.
+client.listWorkspaceMembers({ organizationId: "other" });
+// @ts-expect-error Pagination limit stays numeric.
+auth.listWorkspaceMembers("reader@example.test", "000000", { limit: "1" });
+// @ts-expect-error A roster role must retain concrete inference, not any.
+const inventedRosterRole: "superuser" = rosterMember.role;
+// @ts-expect-error Exact timestamps remain strings; Date would lose precision.
+const roundedRosterTimestamp: Date = rosterMember.createdAt;
+// @ts-expect-error Complete pages require handling a null continuation.
+const alwaysRosterCursor: string = roster.nextCursor;
+// @ts-expect-error Auth metadata is not part of the safe member projection.
+rosterMember.otpCodeHash;
 const unavailable = new RemoteCapabilityUnavailableError();
 const rootError: RemoteCapabilityUnavailableError = new RootCapabilityError();
 const requestError: RemoteRequestError = unavailable;
