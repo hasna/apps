@@ -1,18 +1,7 @@
 import { inspectAddressProvisioningJob, provisionAddress, formatAddressProvisioningResult, addressProvisioningReady, type ProvisionAddressOptions } from "../../lib/address-provisioning-api.js";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { handleError, parseCliListPage } from "../utils.js";
 import type { MxAssessment } from "../../lib/mx-ownership.js";
-
-// Status reads the shared domain/address registry. The remaining orchestration
-// actions are kept explicit until their provider operations are implemented.
-function notImplementedAnywhere(command: string): never {
-  throw new Error(
-    `${command} is not implemented in this build: this infrastructure orchestration ` +
-      `has no API workflow yet. Address provisioning requires an already-configured domain. ` +
-      `Register an already-verified domain with 'emails domain adopt <domain> --provider <id>' ` +
-      `and create the SES inbound bucket and receipt rules with 'emails aws setup-inbound'.`,
-  );
-}
 
 export interface ProvisionCommandDeps {
   inspectMx?: (domain: string) => Promise<MxAssessment>;
@@ -105,20 +94,35 @@ export function registerProvisionCommands(program: Command, output: (data: unkno
   // ── up: full end-to-end orchestrator ─────────────────────────────────────
   cmd
     .command("up <domain>")
-    .description("One command: SES identity + MAIL FROM → publish DNS (Cloudflare) → wait verify → inbound → addresses → round-trip test")
+    .description("Configure an owned domain, verify existing inbound infrastructure, create addresses and checkpoint delivery tests")
     .requiredOption("--provider <id>", "SES provider ID")
     .option("--addresses <list>", "Comma-separated local parts to create", "one,two,three")
     .option("--bucket <name>", "Inbound S3 bucket (defaults to config inbound_s3_bucket)")
-    .option("--add-mx", "Publish inbound MX (ses-s3 receive)", true)
+    .option("--add-mx", "Explicitly publish inbound MX (existing MX is preserved by default)", false)
     .option("--no-add-mx", "Preserve existing root MX and skip SES inbound MX publishing")
     .option("--force-mx-switch", "Allow adding SES inbound MX even when existing root MX belongs to another provider")
     .option("--count <n>", "Round-trip messages per pair (0 = skip test)", "1")
     .option("--timeout <sec>", "Max seconds to wait for SES verification", "600")
     .option("--no-test", "Skip the final round-trip test")
-    .option("--buy-if-needed", "Buy + delegate the domain first (via @hasna/domains SDK) if not already owned")
-    .option("--purchase-profile <profile>", "AWS profile for the purchase (defaults to the current AWS_PROFILE or ambient credentials)")
-    .action(async () => {
-      try { notImplementedAnywhere("emails provision up"); } catch (e) { handleError(e); }
+     .option("--source <id>", "Poll this bound S3 source for test receipts")
+    .option("--dry-run", "Inspect the plan without creating a job or making provider changes")
+    .option("--idempotency-key <key>", "Explicit new run identity; reuse it to resume the same intent")
+    .addOption(new Option("--buy-if-needed", "Legacy purchase selector").hideHelp())
+    .addOption(new Option("--purchase-profile <profile>", "Legacy purchase profile").hideHelp())
+    .action(async (domain: string, opts: import("../../lib/provision-up-api.js").ProvisionUpOptions) => {
+      const controller = new AbortController(), stop = () => controller.abort();
+      let checkpoint: import("../../lib/provision-up-api.js").ProvisionUpResult | undefined;
+      process.once("SIGINT", stop); process.once("SIGTERM", stop);
+      try {
+        const api = await import("../../lib/provision-up-api.js");
+        const result = await api.runProvisionUp(domain, opts, controller.signal, value => { checkpoint = value; });
+        output(result, api.formatProvisionUp(result));
+        if (!api.provisionUpSucceeded(result)) process.exitCode = 1;
+      } catch (error) {
+        if (checkpoint) { const api = await import("../../lib/provision-up-api.js"); output(checkpoint, api.formatProvisionUp(checkpoint)); }
+        if (controller.signal.aborted) { process.exitCode = 130; if (!checkpoint) output({ interrupted: true }, "Provisioning interrupted. Inspect existing runs before starting another identity."); }
+        else handleError(error);
+      } finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
     });
 
   // ── roundtrip (acceptance test) ─────────────────────────────────────────
@@ -169,24 +173,37 @@ export function registerProvisionCommands(program: Command, output: (data: unkno
   // ── daemon (reconciler loop) ─────────────────────────────────────────────
   cmd
     .command("daemon")
-    .description("Run the provisioning reconciler: advance due domains/addresses toward ready")
+    .description("Advance existing authorized provisioning runs one bounded step per tick")
     .requiredOption("--provider <id>", "SES provider ID")
     .option("--bucket <name>", "Inbound S3 bucket (defaults to config inbound_s3_bucket)")
-    .option("--add-mx", "Publish inbound MX when setting up domains")
+    .option("--add-mx", "Only advance saved runs that explicitly requested MX publication")
     .option("--force-mx-switch", "Allow adding SES inbound MX even when existing root MX belongs to another provider")
     .option("--once", "Run a single reconcile tick and exit")
     .option("--interval <sec>", "Seconds between ticks", "30")
     .option("--max-ticks <n>", "Stop after N ticks (default: unlimited)")
-    .action(async () => {
-      try { notImplementedAnywhere("emails provision daemon"); } catch (e) { handleError(e); }
+    .action(async (opts) => {
+      const controller = new AbortController(), stop = () => controller.abort();
+      process.once("SIGINT", stop); process.once("SIGTERM", stop);
+      try {
+        const { runProvisionDaemon } = await import("../../lib/provision-up-api.js");
+        await runProvisionDaemon(opts, controller.signal, result => {
+          output(result, result.jobs.map(job => `${job.input.domain}: ${job.status} (${job.id}, ${job.receipt?.phase ?? "pending"})`).join("\n") || "No matching provisioning runs are due.");
+          if (result.jobs.some(job => job.status === "blocked")) process.exitCode = 1;
+        });
+      } catch (error) { if (controller.signal.aborted) process.exitCode = 130; else handleError(error); }
+      finally { process.removeListener("SIGINT", stop); process.removeListener("SIGTERM", stop); }
     });
 
   // ── retry ───────────────────────────────────────────────────────────────
   cmd
     .command("retry <domain>")
-    .description("Re-queue a domain for the provisioning daemon (clear error, check now)")
+    .description("Resume a saved provisioning intent while retaining its evidence and send identities")
     .option("--provider <id>", "Provider ID")
-    .action(() => {
-      try { notImplementedAnywhere("emails provision retry"); } catch (e) { handleError(e); }
+    .option("--job <id>", "Exact saved run ID (required if multiple runs match)")
+    .action(async (domain: string, opts: { provider?: string; job?: string }) => {
+      try { const api = await import("../../lib/provision-up-api.js"); const result = await api.retryProvisionUp(domain, opts); output(result, api.formatProvisionUp(result)); }
+      catch (error) { handleError(error); }
     });
+  cmd.command("run <id>").description("Inspect a durable full provisioning run and its delivery evidence")
+    .action(async (id: string) => { try { const api = await import("../../lib/provision-up-api.js"); const result = await api.inspectProvisionUp(id); output(result, api.formatProvisionUp(result)); } catch (error) { handleError(error); } });
 }

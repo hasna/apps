@@ -5,6 +5,8 @@ import { runProviderSecretOperation } from "./provider-secret-operations.js";
 import { ManagedProviderSecretError } from "./managed-provider-secrets.js";
 import { ManagedSenderUnavailableError } from "./managed-provider-sender.js";
 import type {ManagedProviderSecrets} from "./managed-provider-secrets.js";
+import { provisionUpApi } from "./provision-up-api.js";
+import { ProvisionUpError } from "./provision-up.js";
 import { publishDomainDns, normalizeDomainDns } from "./domain-dns.js";
 import { DomainDnsError, type DomainDnsBinding, type BoundDnsClient } from "./domain-dns-provider.js";
 import {readProviderSecretStatus} from "./provider-secret-status.js";
@@ -1134,6 +1136,31 @@ export async function handleSelfHostedRequest(
         return (await auth.store.deleteDomain(id)) ? json(200, { deleted: true, id }) : json(404, { error: "domain not found" });
       }
       return json(405, { error: "method not allowed" });
+    }
+
+    if (["/v1/provision/up", "/v1/provision/tick", "/v1/provision/retry"].includes(path) || /^\/v1\/provision\/runs\/[^/]+(?:\/run)?$/.test(path)) {
+      const auth = await authenticate(deps, req, url, method === "GET" ? read : write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "provisioning orchestration");
+      if (denied) return denied;
+      try {
+        const body = method === "POST" ? await readJsonBody(req) : {};
+        return json(200, await provisionUpApi(path, method, body, { deps, store: auth.store, tenant: auth.ctx.tenantId,
+          actor: auth.ctx.userId ?? auth.ctx.sub ?? auth.ctx.kid ?? "operator",
+          request: async (internalPath, payload, boundSender) => {
+            const allowed = internalPath === "/v1/messages/send" || internalPath === "/v1/inbox/sync-s3" || /^\/v1\/messages(?:\?|\/)/.test(internalPath);
+            if (!allowed) throw new ProvisionUpError("Unexpected provisioning subrequest.");
+            const headers = new Headers(req.headers); headers.delete("Content-Length"); headers.set("Content-Type", "application/json");
+            const internalDeps = boundSender ? { ...deps, resolveSender: (tenant: string, provider: string) => tenant === auth.ctx.tenantId && provider === payload?.provider_id ? boundSender : null } : deps;
+            const response = await handleSelfHostedRequest(internalDeps, new Request(new URL(internalPath, req.url), { method: payload ? "POST" : "GET", headers, ...(payload ? { body: JSON.stringify(payload) } : {}) }), context);
+            if (!response) throw new ProvisionUpError("Provisioning subrequest unavailable.", 503);
+            return response;
+          }
+        }));
+      } catch (error) {
+        if (error instanceof ProvisionUpError || error instanceof DomainDnsError || error instanceof DomainConnectError) return json(error.status, { error: error.message });
+        return json(503, { error: "Provisioning did not confirm completion. Inspect the durable run before retrying." });
+      }
     }
 
     // Provisioning orchestration is operator-owned; generic address CRUD does not execute it.

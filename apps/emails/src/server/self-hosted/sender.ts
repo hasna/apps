@@ -30,15 +30,15 @@ export interface SelfHostedSender {
   readonly region?: string;
   /** Tenant/provider envelope generation, never credential material. */
   readonly credentialRevision?: number;
-  verifyDomain?(domain: string): Promise<{ verifiedForSending?: boolean; dkim: import("../../types/index.js").DnsStatus; spf: import("../../types/index.js").DnsStatus; dmarc: import("../../types/index.js").DnsStatus }>;
-  checkInboundDomain?(domain: string, bucket: string, mailbox?: string): Promise<{ ready: boolean; reason: string; objectKeyPrefix?: string; topicArn?: string }>;
-  checkInboundQueue?(topicArn: string, queueUrl: string): Promise<{ ready: boolean; reason: string }>;
+  verifyDomain?(domain: string, signal?: AbortSignal): Promise<{ verifiedForSending?: boolean; dkim: import("../../types/index.js").DnsStatus; spf: import("../../types/index.js").DnsStatus; dmarc: import("../../types/index.js").DnsStatus }>;
+  checkInboundDomain?(domain: string, bucket: string, mailbox?: string, signal?: AbortSignal): Promise<{ ready: boolean; reason: string; objectKeyPrefix?: string; topicArn?: string }>;
+  checkInboundQueue?(topicArn: string, queueUrl: string, signal?: AbortSignal): Promise<{ ready: boolean; reason: string }>;
   registerDomain?(domain: string, signal?: AbortSignal): Promise<void>;
   setMailFrom?(domain: string, mailFrom: string, signal: AbortSignal): Promise<string>;
   readDomainConnection?(domain: string, signal: AbortSignal): Promise<DomainConnectionEvidence>;
   readDelivery?(messageId: string, signal: AbortSignal): Promise<ProviderDeliveryRead>;
   probe?(signal: AbortSignal): Promise<{ sendingEnabled?: boolean; productionAccessEnabled?: boolean }>;
-  send(input: SendEmailOptions): Promise<string>;
+  send(input: SendEmailOptions, signal?: AbortSignal): Promise<string>;
 }
 
 /**
@@ -260,13 +260,13 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
       await response.body?.cancel();
       return {};
     },
-    verifyDomain: async (domain) => {
+    verifyDomain: async (domain, signal) => {
       if (raw === "ses") {
         const { SESv2Client, GetEmailIdentityCommand } = await import("@aws-sdk/client-sesv2");
         const credentials = resolveSesCredentials(provider).credentials;
         const client = new SESv2Client({ region: provider.region ?? undefined, ...(credentials ? { credentials } : {}) });
         try {
-          const identity = await client.send(new GetEmailIdentityCommand({ EmailIdentity: domain }));
+          const identity = await client.send(new GetEmailIdentityCommand({ EmailIdentity: domain }), ...(signal ? [{ abortSignal: signal }] : []));
           return { verifiedForSending: identity.VerifiedForSendingStatus === true && identity.DkimAttributes?.Status === "SUCCESS", dkim: identity.DkimAttributes?.Status === "SUCCESS" ? "verified" : "pending", spf: "pending", dmarc: "pending" };
         } finally { client.destroy(); }
       }
@@ -283,20 +283,20 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
       const status = detail.data?.status === "verified" ? "verified" : "pending";
       return { dkim: status, spf: status, dmarc: "pending" };
     },
-    ...(raw === "ses" ? { checkInboundDomain: async (domain: string, bucket: string, mailbox?: string) => {
+    ...(raw === "ses" ? { checkInboundDomain: async (domain: string, bucket: string, mailbox?: string, signal?: AbortSignal) => {
       const { SESClient, DescribeActiveReceiptRuleSetCommand } = await import("@aws-sdk/client-ses");
       const credentials = resolveSesCredentials(provider).credentials;
       const client = new SESClient({ region: provider.region ?? undefined, ...(credentials ? { credentials } : {}) });
       try {
-        const rules = await client.send(new DescribeActiveReceiptRuleSetCommand({}));
+        const rules = await client.send(new DescribeActiveReceiptRuleSetCommand({}), ...(signal ? [{ abortSignal: signal }] : []));
         const { evaluateInboundReceiptRoute } = await import("./inbound-receipt-route.js");
         return evaluateInboundReceiptRoute(rules.Rules ?? [], domain, bucket, mailbox);
       } finally { client.destroy(); }
-    }, checkInboundQueue: async (topicArn: string, queueUrl: string) => {
+    }, checkInboundQueue: async (topicArn: string, queueUrl: string, signal?: AbortSignal) => {
       const { checkInboundQueue } = await import("./inbound-queue-readiness.js");
-      return checkInboundQueue(provider, topicArn, queueUrl);
+      return checkInboundQueue(provider, topicArn, queueUrl, signal);
     } } : {}),
-    send: (input) => adapter.sendEmail(input),
+    send: (input, signal) => adapter.sendEmail(input, signal),
   };
 }
 

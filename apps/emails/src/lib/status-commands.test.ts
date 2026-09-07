@@ -28,12 +28,12 @@ describe("command suggestion availability", () => {
   it("narrows incomplete provisioning to its missing actions while allowing status", () => {
     for (const mode of ["local", "self_hosted"] as const) {
       for (const command of ["emails provision up example.com", "emails provision daemon"])
-        expect(isCommandAvailableInMode(command, mode), command).toBe(false);
+        expect(isCommandAvailableInMode(command, mode), command).toBe(true);
       expect(isCommandAvailableInMode("emails provision domain example.com", mode)).toBe(true);
       expect(isCommandAvailableInMode("emails provision status", mode)).toBe(true);
       expect(isCommandAvailableInMode("emails provision roundtrip", mode)).toBe(true);
       expect(keepAvailableCommands(["emails provision status", "emails provision up example.com", "emails domain list --json"], mode))
-        .toEqual(["emails provision status", "emails domain list --json"]);
+        .toEqual(["emails provision status", "emails provision up example.com", "emails domain list --json"]);
     }
   });
 

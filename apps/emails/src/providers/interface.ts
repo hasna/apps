@@ -34,7 +34,7 @@ export interface ProviderAdapter {
   listAddresses(): Promise<RemoteAddress[]>;
   addAddress(email: string): Promise<void>;
   verifyAddress(email: string): Promise<boolean>;
-  sendEmail(opts: SendEmailOptions): Promise<string>;
+  sendEmail(opts: SendEmailOptions, signal?: AbortSignal): Promise<string>;
   pullEvents(since?: string): Promise<RemoteEvent[]>;
   getStats(period?: string): Promise<Stats>;
 }

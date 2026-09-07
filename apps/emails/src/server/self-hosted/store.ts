@@ -1,5 +1,6 @@
 import { WorkerSupervisorStore, WORKER_CLAIM_CTE, type WorkerFence } from "./worker-supervisor.js";
 import type { RuntimeLogEntry, RuntimeComponent } from "./runtime-log.js";
+import { ProvisionUpJobs } from "./provision-up-store.js";
 import { DomainDnsJobs } from "./domain-dns-store.js";
 import * as domainConnectStore from "./domain-connect-store.js";
 import type { DomainConnectInput, DomainConnectClaim, DomainConnectResult } from "./domain-connect.js";
@@ -2280,6 +2281,7 @@ export class TenantScopedStore {
       input,
     );
   }
+  provisionUpJobs() { return new ProvisionUpJobs(this.client, this.tenantId, this.atomicClient); }
   domainDnsJobs() { return new DomainDnsJobs(this.client, this.tenantId, this.atomicClient); }
   claimDomainConnect(
     input: DomainConnectInput,

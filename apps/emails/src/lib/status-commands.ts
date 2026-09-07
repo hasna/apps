@@ -45,9 +45,6 @@ import type { ClientMode } from "./mode.js";
  */
 export const NEVER_AVAILABLE_COMMANDS: readonly string[] = [
   // src/cli/commands/provision.ts — notImplementedAnywhere()
-  "emails provision up",
-  "emails provision daemon",
-  "emails provision retry",
   // src/cli/commands/address.ts — notImplementedAnywhere()
   // src/cli/commands/domain.ts — notImplementedAnywhere(). Both the singular
   // `domain` and the plural `domains` alias refuse, and `emails domain status`

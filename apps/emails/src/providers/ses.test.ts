@@ -117,7 +117,7 @@ beforeEach(() => {
 it("passes the DNS workflow deadline to the actual SES MAIL FROM mutation", async () => {
   mockSend.mockReset();
   mockSend.mockImplementation(async () => ({}));
-  const signal = AbortSignal.timeout(1000);
+  const signal = new AbortController().signal;
   const adapter = new SESAdapter(makeProvider());
   expect(await adapter.setMailFrom("example.test", "mail.example.test", signal)).toBe("mail.example.test");
   expect(mockSend.mock.calls[0]?.[0]).toBeInstanceOf(MockPutEmailIdentityMailFromAttributesCommand);
@@ -1141,5 +1141,33 @@ describe("SESAdapter.getStats", () => {
 
     expect(stats.sent).toBe(0);
     expect(stats.delivery_rate).toBe(0);
+  });
+});
+
+describe("bounded provision sends", () => {
+  it("passes the actual abort signal to both SES simple and raw sends", async () => {
+    const adapter = new SESAdapter(makeProvider()), controller = new AbortController();
+    mockSend.mockResolvedValue({ MessageId: "fixture" } as never);
+    const input = { from: "one@example.test", to: "two@example.test", subject: "fixture", text: "fixture" };
+    await adapter.sendEmail(input, controller.signal);
+    expect(mockSend.mock.calls.at(-1)?.[1]?.abortSignal).toBe(controller.signal);
+    await adapter.sendEmail({ ...input, headers: { "X-Fixture": "yes" } }, controller.signal);
+    expect(mockSend.mock.calls.at(-1)?.[1]?.abortSignal).toBe(controller.signal);
+    const calls = mockSend.mock.calls.length;
+    controller.abort();
+    await expect(adapter.sendEmail(input, controller.signal)).rejects.toThrow();
+    expect(mockSend.mock.calls).toHaveLength(calls);
+  });
+});
+
+describe("lazy provider deadlines", () => {
+  it("retains the caller deadline through lazy registration and MAIL FROM dispatch", async () => {
+    const { getAdapter } = await import("./index.js");
+    const adapter = getAdapter(makeProvider()), signal = new AbortController().signal;
+    mockSend.mockResolvedValue({} as never);
+    await adapter.addDomain("example.test", signal);
+    expect(mockSend.mock.calls.at(-1)?.[1]?.abortSignal).toBe(signal);
+    await adapter.setMailFrom!("example.test", "mail.example.test", signal);
+    expect(mockSend.mock.calls.at(-1)?.[1]?.abortSignal).toBe(signal);
   });
 });

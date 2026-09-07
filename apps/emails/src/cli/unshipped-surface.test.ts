@@ -119,9 +119,6 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
   // against "required option not specified" instead of the refusal. The table is
   // asserted to COVER the scan, so adding a refusal without a probe fails here.
   const PROBES: Record<string, string[]> = {
-    "emails provision up": ["provision", "up", "example.com", "--provider", "p1"],
-    "emails provision daemon": ["provision", "daemon", "--provider", "p1"],
-    "emails provision retry": ["provision", "retry", "example.com"],
   };
 
   // The CLAIMS that made the old message a lie — not the words. Naming a mode is

@@ -350,7 +350,8 @@ export class SESAdapter implements ProviderAdapter {
     }
   }
 
-  async sendEmail(opts: SendEmailOptions): Promise<string> {
+  async sendEmail(opts: SendEmailOptions, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     assertSafeEmailHeaders(opts);
     const toArr = Array.isArray(opts.to) ? opts.to : [opts.to];
     const ccArr = opts.cc ? (Array.isArray(opts.cc) ? opts.cc : [opts.cc]) : [];
@@ -382,6 +383,7 @@ export class SESAdapter implements ProviderAdapter {
           },
           ...(this.configurationSetName ? { ConfigurationSetName: this.configurationSetName } : {}),
         }),
+        ...(signal ? [{ abortSignal: signal }] : []),
       );
       return result.MessageId ?? "";
     }
@@ -409,6 +411,7 @@ export class SESAdapter implements ProviderAdapter {
           : undefined,
         ...(this.configurationSetName ? { ConfigurationSetName: this.configurationSetName } : {}),
       }),
+      ...(signal ? [{ abortSignal: signal }] : []),
     );
 
     return result.MessageId ?? "";

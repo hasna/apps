@@ -5012,6 +5012,257 @@ emailsSelfHostedOpenApi.paths!["/v1/domain-dns-jobs/{id}"] = {
     responses: domainDnsResponses,
   },
 };
+const provisionUpInputSchema = {
+  type: "object",
+  required: [
+    "domain",
+    "provider_id",
+    "addresses",
+    "test_count",
+    "add_mx",
+    "force_mx_switch",
+  ],
+  properties: {
+    domain: { type: "string" },
+    provider_id: { type: "string" },
+    addresses: { type: "array", items: { type: "string" } },
+    test_count: { type: "integer" },
+    add_mx: { type: "boolean" },
+    force_mx_switch: { type: "boolean" },
+    bucket: { type: "string" },
+    source_id: { type: "string" },
+  },
+};
+const provisionUpItemSchema = {
+  type: "object",
+  required: ["from", "to", "subject", "token", "send_key", "state"],
+  properties: {
+    from: { type: "string" },
+    to: { type: "string" },
+    subject: { type: "string" },
+    token: { type: "string" },
+    send_key: { type: "string" },
+    state: {
+      type: "string",
+      enum: ["not_attempted", "uncertain", "failed", "sent", "received"],
+    },
+    outbound_id: { type: "string" },
+    inbound_id: { type: "string" },
+    received_at: { type: "string" },
+    replayed: { type: "boolean" },
+    error: { type: "string" },
+  },
+};
+const provisionUpJobSchema = {
+  type: "object",
+  required: ["id", "status", "input", "receipt", "created_at", "updated_at"],
+  properties: {
+    id: { type: "string" },
+    status: {
+      type: "string",
+      enum: ["pending", "processing", "blocked", "ready"],
+    },
+    input: provisionUpInputSchema,
+    created_at: { type: "string" },
+    updated_at: { type: "string" },
+    receipt: {
+      type: "object",
+      nullable: true,
+      required: [
+        "phase",
+        "address_cursor",
+        "dns",
+        "addresses",
+        "roundtrip",
+        "next_attempt_ms",
+        "complete",
+        "delivery_tested",
+        "errors",
+      ],
+      properties: {
+        phase: {
+          type: "string",
+          enum: ["dns", "addresses", "roundtrip", "complete"],
+        },
+        address_cursor: { type: "integer" },
+        dns: { ...domainDnsResultSchema, nullable: true },
+        addresses: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            required: ["id", "status", "receipt"],
+            properties: {
+              id: { type: "string" },
+              status: { type: "string" },
+              receipt: {
+                type: "object",
+                nullable: true,
+                additionalProperties: true,
+              },
+            },
+          },
+        },
+        roundtrip: {
+          type: "object",
+          required: [
+            "run_id",
+            "items",
+            "poll_cursor",
+            "poll_pass",
+            "preflight",
+          ],
+          properties: {
+            run_id: { type: "string" },
+            items: { type: "array", items: provisionUpItemSchema },
+            poll_cursor: { type: "integer" },
+            poll_pass: { type: "integer" },
+            preflight: { type: "boolean" },
+            sync_cursor: { type: "string", nullable: true },
+          },
+        },
+        next_attempt_ms: { type: "integer" },
+        complete: { type: "boolean" },
+        delivery_tested: { type: "boolean" },
+        errors: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["code", "at"],
+            properties: { code: { type: "string" }, at: { type: "string" } },
+          },
+        },
+      },
+    },
+  },
+};
+const provisionUpResponse = {
+  type: "object",
+  required: ["job"],
+  properties: {
+    dry_run: { type: "boolean" },
+    job: { ...provisionUpJobSchema, nullable: true },
+    plan: { type: "object", additionalProperties: true },
+  },
+};
+const provisionUpResponses = (schema: unknown) => ({
+  "200": {
+    description:
+      "Durable authorized run checkpoint; pending does not imply readiness",
+    content: { "application/json": { schema } },
+  },
+  "400": errorResponse("Invalid inputs"),
+  "401": errorResponse("Authentication required"),
+  "403": errorResponse("Tenant operator required"),
+  "404": errorResponse("Run or reference not found"),
+  "405": errorResponse("Method not allowed"),
+  "409": errorResponse("Saved intent or binding conflict"),
+  "503": errorResponse("Step completion not confirmed"),
+});
+for (const [path, operationId, required, properties] of [
+  [
+    "/v1/provision/up",
+    "startProvisionUp",
+    ["domain", "provider_id"],
+    {
+      domain: { type: "string" },
+      provider_id: { type: "string" },
+      addresses: { type: "string" },
+      count: { type: "integer", minimum: 0, maximum: 100 },
+      test: { type: "boolean" },
+      bucket: { type: "string" },
+      source_id: { type: "string" },
+      add_mx: { type: "boolean" },
+      force_mx_switch: { type: "boolean" },
+      dry_run: { type: "boolean" },
+      idempotency_key: { type: "string" },
+    },
+  ],
+  [
+    "/v1/provision/retry",
+    "retryProvisionUp",
+    ["domain"],
+    {
+      domain: { type: "string" },
+      provider_id: { type: "string" },
+      job_id: { type: "string" },
+    },
+  ],
+  [
+    "/v1/provision/tick",
+    "tickProvisionUp",
+    ["provider_id"],
+    {
+      provider_id: { type: "string" },
+      bucket: { type: "string" },
+      add_mx: { type: "boolean" },
+      force_mx_switch: { type: "boolean" },
+    },
+  ],
+] as const)
+  emailsSelfHostedOpenApi.paths![path] = {
+    post: {
+      operationId,
+      summary:
+        "Advance operator-authorized provisioning with frozen inputs and durable evidence",
+      security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: [...required],
+              properties,
+            },
+          },
+        },
+      },
+      responses: provisionUpResponses(
+        path.endsWith("/tick")
+          ? {
+              type: "object",
+              required: ["jobs", "advanced"],
+              properties: {
+                jobs: { type: "array", items: provisionUpJobSchema },
+                advanced: { type: "integer" },
+              },
+            }
+          : provisionUpResponse,
+      ),
+    },
+  };
+for (const [path, method, operationId] of [
+  ["/v1/provision/runs/{id}", "get", "getProvisionUp"],
+  ["/v1/provision/runs/{id}/run", "post", "runProvisionUp"],
+] as const)
+  emailsSelfHostedOpenApi.paths![path] = {
+    [method]: {
+      operationId,
+      summary: "Read or advance one saved provisioning step",
+      security: [{ apiKeyAuth: [] }, { bearerAuth: [] }],
+      parameters: [
+        { name: "id", in: "path", required: true, schema: { type: "string" } },
+      ],
+      ...(method === "post"
+        ? {
+            requestBody: {
+              required: true,
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    additionalProperties: false,
+                    properties: {},
+                  },
+                },
+              },
+            },
+          }
+        : {}),
+      responses: provisionUpResponses(provisionUpResponse),
+    },
+  };
 addRoutineErrorParity(emailsSelfHostedOpenApi);
 
 

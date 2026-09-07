@@ -20,6 +20,7 @@ export const LIVE_POSTGRES_SUITES = Object.freeze([
   "message-id-resolution.integration.test.ts",
   "multi-tenancy.integration.test.ts",
   "postgres.integration.test.ts",
+  "provision-up.integration.test.ts",
   "rls.integration.test.ts",
   "runtime-log.integration.test.ts",
   "scheduler.integration.test.ts",
@@ -41,7 +42,7 @@ export const OPTIONAL_SKIPS = Object.freeze({
   "idp.integration.test.ts": "live @hasna/tenants JWKS endpoint > serves a JWKS the authenticator accepts, and refuses our locally-signed token (typed unknown_kid)",
 });
 
-// Executed-case floors from the registration census (239 cases, including the
+// Executed-case floors from the registration census (247 cases, including the
 // two named optional checks). The multi-tenancy floor is the suite's own 34
 // tenancy and outbound-enforcement cases as merged onto origin/main; the
 // counts here are re-derived from the actual suites whenever main moves them.
@@ -57,6 +58,7 @@ export const MINIMUM_PASS_COUNTS = Object.freeze({
   "message-id-resolution.integration.test.ts": 5,
   "multi-tenancy.integration.test.ts": 34,
   "postgres.integration.test.ts": 22,
+  "provision-up.integration.test.ts": 8,
   "rls.integration.test.ts": 12,
   "runtime-log.integration.test.ts": 3,
   "scheduler.integration.test.ts": 4,

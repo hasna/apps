@@ -30283,6 +30283,2822 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "POST",
+    "operationId": "retryProvisionUp",
+    "path": "/v1/provision/retry",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "job"
+      ],
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "job": {
+          "type": "object",
+          "required": [
+            "id",
+            "status",
+            "input",
+            "receipt",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "processing",
+                "blocked",
+                "ready"
+              ]
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "domain",
+                "provider_id",
+                "addresses",
+                "test_count",
+                "add_mx",
+                "force_mx_switch"
+              ],
+              "properties": {
+                "domain": {
+                  "type": "string"
+                },
+                "provider_id": {
+                  "type": "string"
+                },
+                "addresses": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "test_count": {
+                  "type": "integer"
+                },
+                "add_mx": {
+                  "type": "boolean"
+                },
+                "force_mx_switch": {
+                  "type": "boolean"
+                },
+                "bucket": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string"
+                }
+              }
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            },
+            "receipt": {
+              "type": "object",
+              "nullable": true,
+              "required": [
+                "phase",
+                "address_cursor",
+                "dns",
+                "addresses",
+                "roundtrip",
+                "next_attempt_ms",
+                "complete",
+                "delivery_tested",
+                "errors"
+              ],
+              "properties": {
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "dns",
+                    "addresses",
+                    "roundtrip",
+                    "complete"
+                  ]
+                },
+                "address_cursor": {
+                  "type": "integer"
+                },
+                "dns": {
+                  "type": "object",
+                  "required": [
+                    "dry_run",
+                    "job"
+                  ],
+                  "properties": {
+                    "dry_run": {
+                      "type": "boolean"
+                    },
+                    "job": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "domain",
+                        "provider_id",
+                        "zone_id",
+                        "status",
+                        "phase",
+                        "dns_published",
+                        "verified_for_sending",
+                        "requires_reconciliation",
+                        "plan",
+                        "message"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "domain": {
+                          "type": "string"
+                        },
+                        "provider_id": {
+                          "type": "string"
+                        },
+                        "zone_id": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "planned",
+                            "processing",
+                            "blocked",
+                            "pending_verification",
+                            "verified"
+                          ]
+                        },
+                        "phase": {
+                          "type": "string"
+                        },
+                        "dns_published": {
+                          "type": "boolean"
+                        },
+                        "verified_for_sending": {
+                          "type": "boolean"
+                        },
+                        "requires_reconciliation": {
+                          "type": "boolean"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "plan": {
+                          "type": "object",
+                          "nullable": true,
+                          "required": [
+                            "creates",
+                            "deletes",
+                            "existing"
+                          ],
+                          "properties": {
+                            "creates": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "type",
+                                  "name",
+                                  "content"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "content": {
+                                    "type": "string"
+                                  },
+                                  "priority": {
+                                    "type": "integer"
+                                  },
+                                  "proxied": {
+                                    "type": "boolean"
+                                  },
+                                  "ttl": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            },
+                            "deletes": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "id"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            "existing": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "type",
+                                  "name",
+                                  "content"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "content": {
+                                    "type": "string"
+                                  },
+                                  "priority": {
+                                    "type": "integer"
+                                  },
+                                  "proxied": {
+                                    "type": "boolean"
+                                  },
+                                  "ttl": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "nullable": true
+                },
+                "addresses": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "status",
+                      "receipt"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "receipt": {
+                        "type": "object",
+                        "nullable": true,
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                },
+                "roundtrip": {
+                  "type": "object",
+                  "required": [
+                    "run_id",
+                    "items",
+                    "poll_cursor",
+                    "poll_pass",
+                    "preflight"
+                  ],
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "from",
+                          "to",
+                          "subject",
+                          "token",
+                          "send_key",
+                          "state"
+                        ],
+                        "properties": {
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          },
+                          "subject": {
+                            "type": "string"
+                          },
+                          "token": {
+                            "type": "string"
+                          },
+                          "send_key": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "not_attempted",
+                              "uncertain",
+                              "failed",
+                              "sent",
+                              "received"
+                            ]
+                          },
+                          "outbound_id": {
+                            "type": "string"
+                          },
+                          "inbound_id": {
+                            "type": "string"
+                          },
+                          "received_at": {
+                            "type": "string"
+                          },
+                          "replayed": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "poll_cursor": {
+                      "type": "integer"
+                    },
+                    "poll_pass": {
+                      "type": "integer"
+                    },
+                    "preflight": {
+                      "type": "boolean"
+                    },
+                    "sync_cursor": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                },
+                "next_attempt_ms": {
+                  "type": "integer"
+                },
+                "complete": {
+                  "type": "boolean"
+                },
+                "delivery_tested": {
+                  "type": "boolean"
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "code",
+                      "at"
+                    ],
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "at": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "nullable": true
+        },
+        "plan": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "retryProvisionUp",
+    "path": "/v1/provision/retry",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "retryProvisionUp",
+    "path": "/v1/provision/retry",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "retryProvisionUp",
+    "path": "/v1/provision/retry",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "retryProvisionUp",
+    "path": "/v1/provision/retry",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "retryProvisionUp",
+    "path": "/v1/provision/retry",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "retryProvisionUp",
+    "path": "/v1/provision/retry",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "retryProvisionUp",
+    "path": "/v1/provision/retry",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "retryProvisionUp",
+    "path": "/v1/provision/retry",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "retryProvisionUp",
+    "path": "/v1/provision/retry",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisionUp",
+    "path": "/v1/provision/runs/{id}",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "job"
+      ],
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "job": {
+          "type": "object",
+          "required": [
+            "id",
+            "status",
+            "input",
+            "receipt",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "processing",
+                "blocked",
+                "ready"
+              ]
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "domain",
+                "provider_id",
+                "addresses",
+                "test_count",
+                "add_mx",
+                "force_mx_switch"
+              ],
+              "properties": {
+                "domain": {
+                  "type": "string"
+                },
+                "provider_id": {
+                  "type": "string"
+                },
+                "addresses": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "test_count": {
+                  "type": "integer"
+                },
+                "add_mx": {
+                  "type": "boolean"
+                },
+                "force_mx_switch": {
+                  "type": "boolean"
+                },
+                "bucket": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string"
+                }
+              }
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            },
+            "receipt": {
+              "type": "object",
+              "nullable": true,
+              "required": [
+                "phase",
+                "address_cursor",
+                "dns",
+                "addresses",
+                "roundtrip",
+                "next_attempt_ms",
+                "complete",
+                "delivery_tested",
+                "errors"
+              ],
+              "properties": {
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "dns",
+                    "addresses",
+                    "roundtrip",
+                    "complete"
+                  ]
+                },
+                "address_cursor": {
+                  "type": "integer"
+                },
+                "dns": {
+                  "type": "object",
+                  "required": [
+                    "dry_run",
+                    "job"
+                  ],
+                  "properties": {
+                    "dry_run": {
+                      "type": "boolean"
+                    },
+                    "job": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "domain",
+                        "provider_id",
+                        "zone_id",
+                        "status",
+                        "phase",
+                        "dns_published",
+                        "verified_for_sending",
+                        "requires_reconciliation",
+                        "plan",
+                        "message"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "domain": {
+                          "type": "string"
+                        },
+                        "provider_id": {
+                          "type": "string"
+                        },
+                        "zone_id": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "planned",
+                            "processing",
+                            "blocked",
+                            "pending_verification",
+                            "verified"
+                          ]
+                        },
+                        "phase": {
+                          "type": "string"
+                        },
+                        "dns_published": {
+                          "type": "boolean"
+                        },
+                        "verified_for_sending": {
+                          "type": "boolean"
+                        },
+                        "requires_reconciliation": {
+                          "type": "boolean"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "plan": {
+                          "type": "object",
+                          "nullable": true,
+                          "required": [
+                            "creates",
+                            "deletes",
+                            "existing"
+                          ],
+                          "properties": {
+                            "creates": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "type",
+                                  "name",
+                                  "content"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "content": {
+                                    "type": "string"
+                                  },
+                                  "priority": {
+                                    "type": "integer"
+                                  },
+                                  "proxied": {
+                                    "type": "boolean"
+                                  },
+                                  "ttl": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            },
+                            "deletes": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "id"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            "existing": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "type",
+                                  "name",
+                                  "content"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "content": {
+                                    "type": "string"
+                                  },
+                                  "priority": {
+                                    "type": "integer"
+                                  },
+                                  "proxied": {
+                                    "type": "boolean"
+                                  },
+                                  "ttl": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "nullable": true
+                },
+                "addresses": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "status",
+                      "receipt"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "receipt": {
+                        "type": "object",
+                        "nullable": true,
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                },
+                "roundtrip": {
+                  "type": "object",
+                  "required": [
+                    "run_id",
+                    "items",
+                    "poll_cursor",
+                    "poll_pass",
+                    "preflight"
+                  ],
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "from",
+                          "to",
+                          "subject",
+                          "token",
+                          "send_key",
+                          "state"
+                        ],
+                        "properties": {
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          },
+                          "subject": {
+                            "type": "string"
+                          },
+                          "token": {
+                            "type": "string"
+                          },
+                          "send_key": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "not_attempted",
+                              "uncertain",
+                              "failed",
+                              "sent",
+                              "received"
+                            ]
+                          },
+                          "outbound_id": {
+                            "type": "string"
+                          },
+                          "inbound_id": {
+                            "type": "string"
+                          },
+                          "received_at": {
+                            "type": "string"
+                          },
+                          "replayed": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "poll_cursor": {
+                      "type": "integer"
+                    },
+                    "poll_pass": {
+                      "type": "integer"
+                    },
+                    "preflight": {
+                      "type": "boolean"
+                    },
+                    "sync_cursor": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                },
+                "next_attempt_ms": {
+                  "type": "integer"
+                },
+                "complete": {
+                  "type": "boolean"
+                },
+                "delivery_tested": {
+                  "type": "boolean"
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "code",
+                      "at"
+                    ],
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "at": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "nullable": true
+        },
+        "plan": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisionUp",
+    "path": "/v1/provision/runs/{id}",
+    "status": 400,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisionUp",
+    "path": "/v1/provision/runs/{id}",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisionUp",
+    "path": "/v1/provision/runs/{id}",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisionUp",
+    "path": "/v1/provision/runs/{id}",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisionUp",
+    "path": "/v1/provision/runs/{id}",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisionUp",
+    "path": "/v1/provision/runs/{id}",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisionUp",
+    "path": "/v1/provision/runs/{id}",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "GET",
+    "operationId": "getProvisionUp",
+    "path": "/v1/provision/runs/{id}",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisionUp",
+    "path": "/v1/provision/runs/{id}/run",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "job"
+      ],
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "job": {
+          "type": "object",
+          "required": [
+            "id",
+            "status",
+            "input",
+            "receipt",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "processing",
+                "blocked",
+                "ready"
+              ]
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "domain",
+                "provider_id",
+                "addresses",
+                "test_count",
+                "add_mx",
+                "force_mx_switch"
+              ],
+              "properties": {
+                "domain": {
+                  "type": "string"
+                },
+                "provider_id": {
+                  "type": "string"
+                },
+                "addresses": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "test_count": {
+                  "type": "integer"
+                },
+                "add_mx": {
+                  "type": "boolean"
+                },
+                "force_mx_switch": {
+                  "type": "boolean"
+                },
+                "bucket": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string"
+                }
+              }
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            },
+            "receipt": {
+              "type": "object",
+              "nullable": true,
+              "required": [
+                "phase",
+                "address_cursor",
+                "dns",
+                "addresses",
+                "roundtrip",
+                "next_attempt_ms",
+                "complete",
+                "delivery_tested",
+                "errors"
+              ],
+              "properties": {
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "dns",
+                    "addresses",
+                    "roundtrip",
+                    "complete"
+                  ]
+                },
+                "address_cursor": {
+                  "type": "integer"
+                },
+                "dns": {
+                  "type": "object",
+                  "required": [
+                    "dry_run",
+                    "job"
+                  ],
+                  "properties": {
+                    "dry_run": {
+                      "type": "boolean"
+                    },
+                    "job": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "domain",
+                        "provider_id",
+                        "zone_id",
+                        "status",
+                        "phase",
+                        "dns_published",
+                        "verified_for_sending",
+                        "requires_reconciliation",
+                        "plan",
+                        "message"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "domain": {
+                          "type": "string"
+                        },
+                        "provider_id": {
+                          "type": "string"
+                        },
+                        "zone_id": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "planned",
+                            "processing",
+                            "blocked",
+                            "pending_verification",
+                            "verified"
+                          ]
+                        },
+                        "phase": {
+                          "type": "string"
+                        },
+                        "dns_published": {
+                          "type": "boolean"
+                        },
+                        "verified_for_sending": {
+                          "type": "boolean"
+                        },
+                        "requires_reconciliation": {
+                          "type": "boolean"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "plan": {
+                          "type": "object",
+                          "nullable": true,
+                          "required": [
+                            "creates",
+                            "deletes",
+                            "existing"
+                          ],
+                          "properties": {
+                            "creates": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "type",
+                                  "name",
+                                  "content"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "content": {
+                                    "type": "string"
+                                  },
+                                  "priority": {
+                                    "type": "integer"
+                                  },
+                                  "proxied": {
+                                    "type": "boolean"
+                                  },
+                                  "ttl": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            },
+                            "deletes": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "id"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            "existing": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "type",
+                                  "name",
+                                  "content"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "content": {
+                                    "type": "string"
+                                  },
+                                  "priority": {
+                                    "type": "integer"
+                                  },
+                                  "proxied": {
+                                    "type": "boolean"
+                                  },
+                                  "ttl": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "nullable": true
+                },
+                "addresses": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "status",
+                      "receipt"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "receipt": {
+                        "type": "object",
+                        "nullable": true,
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                },
+                "roundtrip": {
+                  "type": "object",
+                  "required": [
+                    "run_id",
+                    "items",
+                    "poll_cursor",
+                    "poll_pass",
+                    "preflight"
+                  ],
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "from",
+                          "to",
+                          "subject",
+                          "token",
+                          "send_key",
+                          "state"
+                        ],
+                        "properties": {
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          },
+                          "subject": {
+                            "type": "string"
+                          },
+                          "token": {
+                            "type": "string"
+                          },
+                          "send_key": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "not_attempted",
+                              "uncertain",
+                              "failed",
+                              "sent",
+                              "received"
+                            ]
+                          },
+                          "outbound_id": {
+                            "type": "string"
+                          },
+                          "inbound_id": {
+                            "type": "string"
+                          },
+                          "received_at": {
+                            "type": "string"
+                          },
+                          "replayed": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "poll_cursor": {
+                      "type": "integer"
+                    },
+                    "poll_pass": {
+                      "type": "integer"
+                    },
+                    "preflight": {
+                      "type": "boolean"
+                    },
+                    "sync_cursor": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                },
+                "next_attempt_ms": {
+                  "type": "integer"
+                },
+                "complete": {
+                  "type": "boolean"
+                },
+                "delivery_tested": {
+                  "type": "boolean"
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "code",
+                      "at"
+                    ],
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "at": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "nullable": true
+        },
+        "plan": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisionUp",
+    "path": "/v1/provision/runs/{id}/run",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisionUp",
+    "path": "/v1/provision/runs/{id}/run",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisionUp",
+    "path": "/v1/provision/runs/{id}/run",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisionUp",
+    "path": "/v1/provision/runs/{id}/run",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisionUp",
+    "path": "/v1/provision/runs/{id}/run",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisionUp",
+    "path": "/v1/provision/runs/{id}/run",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisionUp",
+    "path": "/v1/provision/runs/{id}/run",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisionUp",
+    "path": "/v1/provision/runs/{id}/run",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "runProvisionUp",
+    "path": "/v1/provision/runs/{id}/run",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "tickProvisionUp",
+    "path": "/v1/provision/tick",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "jobs",
+        "advanced"
+      ],
+      "properties": {
+        "jobs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "status",
+              "input",
+              "receipt",
+              "created_at",
+              "updated_at"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "processing",
+                  "blocked",
+                  "ready"
+                ]
+              },
+              "input": {
+                "type": "object",
+                "required": [
+                  "domain",
+                  "provider_id",
+                  "addresses",
+                  "test_count",
+                  "add_mx",
+                  "force_mx_switch"
+                ],
+                "properties": {
+                  "domain": {
+                    "type": "string"
+                  },
+                  "provider_id": {
+                    "type": "string"
+                  },
+                  "addresses": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "test_count": {
+                    "type": "integer"
+                  },
+                  "add_mx": {
+                    "type": "boolean"
+                  },
+                  "force_mx_switch": {
+                    "type": "boolean"
+                  },
+                  "bucket": {
+                    "type": "string"
+                  },
+                  "source_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "created_at": {
+                "type": "string"
+              },
+              "updated_at": {
+                "type": "string"
+              },
+              "receipt": {
+                "type": "object",
+                "nullable": true,
+                "required": [
+                  "phase",
+                  "address_cursor",
+                  "dns",
+                  "addresses",
+                  "roundtrip",
+                  "next_attempt_ms",
+                  "complete",
+                  "delivery_tested",
+                  "errors"
+                ],
+                "properties": {
+                  "phase": {
+                    "type": "string",
+                    "enum": [
+                      "dns",
+                      "addresses",
+                      "roundtrip",
+                      "complete"
+                    ]
+                  },
+                  "address_cursor": {
+                    "type": "integer"
+                  },
+                  "dns": {
+                    "type": "object",
+                    "required": [
+                      "dry_run",
+                      "job"
+                    ],
+                    "properties": {
+                      "dry_run": {
+                        "type": "boolean"
+                      },
+                      "job": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "domain",
+                          "provider_id",
+                          "zone_id",
+                          "status",
+                          "phase",
+                          "dns_published",
+                          "verified_for_sending",
+                          "requires_reconciliation",
+                          "plan",
+                          "message"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "domain": {
+                            "type": "string"
+                          },
+                          "provider_id": {
+                            "type": "string"
+                          },
+                          "zone_id": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "planned",
+                              "processing",
+                              "blocked",
+                              "pending_verification",
+                              "verified"
+                            ]
+                          },
+                          "phase": {
+                            "type": "string"
+                          },
+                          "dns_published": {
+                            "type": "boolean"
+                          },
+                          "verified_for_sending": {
+                            "type": "boolean"
+                          },
+                          "requires_reconciliation": {
+                            "type": "boolean"
+                          },
+                          "message": {
+                            "type": "string"
+                          },
+                          "plan": {
+                            "type": "object",
+                            "nullable": true,
+                            "required": [
+                              "creates",
+                              "deletes",
+                              "existing"
+                            ],
+                            "properties": {
+                              "creates": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "type",
+                                    "name",
+                                    "content"
+                                  ],
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "content": {
+                                      "type": "string"
+                                    },
+                                    "priority": {
+                                      "type": "integer"
+                                    },
+                                    "proxied": {
+                                      "type": "boolean"
+                                    },
+                                    "ttl": {
+                                      "type": "integer"
+                                    }
+                                  }
+                                }
+                              },
+                              "deletes": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "id"
+                                  ],
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    }
+                                  }
+                                }
+                              },
+                              "existing": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "required": [
+                                    "type",
+                                    "name",
+                                    "content"
+                                  ],
+                                  "properties": {
+                                    "id": {
+                                      "type": "string"
+                                    },
+                                    "type": {
+                                      "type": "string"
+                                    },
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "content": {
+                                      "type": "string"
+                                    },
+                                    "priority": {
+                                      "type": "integer"
+                                    },
+                                    "proxied": {
+                                      "type": "boolean"
+                                    },
+                                    "ttl": {
+                                      "type": "integer"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "nullable": true
+                  },
+                  "addresses": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "status",
+                        "receipt"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string"
+                        },
+                        "receipt": {
+                          "type": "object",
+                          "nullable": true,
+                          "additionalProperties": true
+                        }
+                      }
+                    }
+                  },
+                  "roundtrip": {
+                    "type": "object",
+                    "required": [
+                      "run_id",
+                      "items",
+                      "poll_cursor",
+                      "poll_pass",
+                      "preflight"
+                    ],
+                    "properties": {
+                      "run_id": {
+                        "type": "string"
+                      },
+                      "items": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "from",
+                            "to",
+                            "subject",
+                            "token",
+                            "send_key",
+                            "state"
+                          ],
+                          "properties": {
+                            "from": {
+                              "type": "string"
+                            },
+                            "to": {
+                              "type": "string"
+                            },
+                            "subject": {
+                              "type": "string"
+                            },
+                            "token": {
+                              "type": "string"
+                            },
+                            "send_key": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string",
+                              "enum": [
+                                "not_attempted",
+                                "uncertain",
+                                "failed",
+                                "sent",
+                                "received"
+                              ]
+                            },
+                            "outbound_id": {
+                              "type": "string"
+                            },
+                            "inbound_id": {
+                              "type": "string"
+                            },
+                            "received_at": {
+                              "type": "string"
+                            },
+                            "replayed": {
+                              "type": "boolean"
+                            },
+                            "error": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      "poll_cursor": {
+                        "type": "integer"
+                      },
+                      "poll_pass": {
+                        "type": "integer"
+                      },
+                      "preflight": {
+                        "type": "boolean"
+                      },
+                      "sync_cursor": {
+                        "type": "string",
+                        "nullable": true
+                      }
+                    }
+                  },
+                  "next_attempt_ms": {
+                    "type": "integer"
+                  },
+                  "complete": {
+                    "type": "boolean"
+                  },
+                  "delivery_tested": {
+                    "type": "boolean"
+                  },
+                  "errors": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "at"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "at": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "advanced": {
+          "type": "integer"
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "tickProvisionUp",
+    "path": "/v1/provision/tick",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "tickProvisionUp",
+    "path": "/v1/provision/tick",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "tickProvisionUp",
+    "path": "/v1/provision/tick",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "tickProvisionUp",
+    "path": "/v1/provision/tick",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "tickProvisionUp",
+    "path": "/v1/provision/tick",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "tickProvisionUp",
+    "path": "/v1/provision/tick",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "tickProvisionUp",
+    "path": "/v1/provision/tick",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "tickProvisionUp",
+    "path": "/v1/provision/tick",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "tickProvisionUp",
+    "path": "/v1/provision/tick",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "startProvisionUp",
+    "path": "/v1/provision/up",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "required": [
+        "job"
+      ],
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "job": {
+          "type": "object",
+          "required": [
+            "id",
+            "status",
+            "input",
+            "receipt",
+            "created_at",
+            "updated_at"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "processing",
+                "blocked",
+                "ready"
+              ]
+            },
+            "input": {
+              "type": "object",
+              "required": [
+                "domain",
+                "provider_id",
+                "addresses",
+                "test_count",
+                "add_mx",
+                "force_mx_switch"
+              ],
+              "properties": {
+                "domain": {
+                  "type": "string"
+                },
+                "provider_id": {
+                  "type": "string"
+                },
+                "addresses": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "test_count": {
+                  "type": "integer"
+                },
+                "add_mx": {
+                  "type": "boolean"
+                },
+                "force_mx_switch": {
+                  "type": "boolean"
+                },
+                "bucket": {
+                  "type": "string"
+                },
+                "source_id": {
+                  "type": "string"
+                }
+              }
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "updated_at": {
+              "type": "string"
+            },
+            "receipt": {
+              "type": "object",
+              "nullable": true,
+              "required": [
+                "phase",
+                "address_cursor",
+                "dns",
+                "addresses",
+                "roundtrip",
+                "next_attempt_ms",
+                "complete",
+                "delivery_tested",
+                "errors"
+              ],
+              "properties": {
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "dns",
+                    "addresses",
+                    "roundtrip",
+                    "complete"
+                  ]
+                },
+                "address_cursor": {
+                  "type": "integer"
+                },
+                "dns": {
+                  "type": "object",
+                  "required": [
+                    "dry_run",
+                    "job"
+                  ],
+                  "properties": {
+                    "dry_run": {
+                      "type": "boolean"
+                    },
+                    "job": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "domain",
+                        "provider_id",
+                        "zone_id",
+                        "status",
+                        "phase",
+                        "dns_published",
+                        "verified_for_sending",
+                        "requires_reconciliation",
+                        "plan",
+                        "message"
+                      ],
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "domain": {
+                          "type": "string"
+                        },
+                        "provider_id": {
+                          "type": "string"
+                        },
+                        "zone_id": {
+                          "type": "string"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "planned",
+                            "processing",
+                            "blocked",
+                            "pending_verification",
+                            "verified"
+                          ]
+                        },
+                        "phase": {
+                          "type": "string"
+                        },
+                        "dns_published": {
+                          "type": "boolean"
+                        },
+                        "verified_for_sending": {
+                          "type": "boolean"
+                        },
+                        "requires_reconciliation": {
+                          "type": "boolean"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "plan": {
+                          "type": "object",
+                          "nullable": true,
+                          "required": [
+                            "creates",
+                            "deletes",
+                            "existing"
+                          ],
+                          "properties": {
+                            "creates": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "type",
+                                  "name",
+                                  "content"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "content": {
+                                    "type": "string"
+                                  },
+                                  "priority": {
+                                    "type": "integer"
+                                  },
+                                  "proxied": {
+                                    "type": "boolean"
+                                  },
+                                  "ttl": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            },
+                            "deletes": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "id"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            },
+                            "existing": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": [
+                                  "type",
+                                  "name",
+                                  "content"
+                                ],
+                                "properties": {
+                                  "id": {
+                                    "type": "string"
+                                  },
+                                  "type": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "content": {
+                                    "type": "string"
+                                  },
+                                  "priority": {
+                                    "type": "integer"
+                                  },
+                                  "proxied": {
+                                    "type": "boolean"
+                                  },
+                                  "ttl": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "nullable": true
+                },
+                "addresses": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "status",
+                      "receipt"
+                    ],
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      },
+                      "receipt": {
+                        "type": "object",
+                        "nullable": true,
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                },
+                "roundtrip": {
+                  "type": "object",
+                  "required": [
+                    "run_id",
+                    "items",
+                    "poll_cursor",
+                    "poll_pass",
+                    "preflight"
+                  ],
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "from",
+                          "to",
+                          "subject",
+                          "token",
+                          "send_key",
+                          "state"
+                        ],
+                        "properties": {
+                          "from": {
+                            "type": "string"
+                          },
+                          "to": {
+                            "type": "string"
+                          },
+                          "subject": {
+                            "type": "string"
+                          },
+                          "token": {
+                            "type": "string"
+                          },
+                          "send_key": {
+                            "type": "string"
+                          },
+                          "state": {
+                            "type": "string",
+                            "enum": [
+                              "not_attempted",
+                              "uncertain",
+                              "failed",
+                              "sent",
+                              "received"
+                            ]
+                          },
+                          "outbound_id": {
+                            "type": "string"
+                          },
+                          "inbound_id": {
+                            "type": "string"
+                          },
+                          "received_at": {
+                            "type": "string"
+                          },
+                          "replayed": {
+                            "type": "boolean"
+                          },
+                          "error": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "poll_cursor": {
+                      "type": "integer"
+                    },
+                    "poll_pass": {
+                      "type": "integer"
+                    },
+                    "preflight": {
+                      "type": "boolean"
+                    },
+                    "sync_cursor": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                },
+                "next_attempt_ms": {
+                  "type": "integer"
+                },
+                "complete": {
+                  "type": "boolean"
+                },
+                "delivery_tested": {
+                  "type": "boolean"
+                },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "code",
+                      "at"
+                    ],
+                    "properties": {
+                      "code": {
+                        "type": "string"
+                      },
+                      "at": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "nullable": true
+        },
+        "plan": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "startProvisionUp",
+    "path": "/v1/provision/up",
+    "status": 400,
+    "schema": {
+      "anyOf": [
+        {
+          "$ref": "#/components/schemas/ErrorResponse"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "error"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "startProvisionUp",
+    "path": "/v1/provision/up",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "startProvisionUp",
+    "path": "/v1/provision/up",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "startProvisionUp",
+    "path": "/v1/provision/up",
+    "status": 404,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "startProvisionUp",
+    "path": "/v1/provision/up",
+    "status": 405,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "startProvisionUp",
+    "path": "/v1/provision/up",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "startProvisionUp",
+    "path": "/v1/provision/up",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "startProvisionUp",
+    "path": "/v1/provision/up",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "startProvisionUp",
+    "path": "/v1/provision/up",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
     "method": "GET",
     "operationId": "listResourceProvisioning",
     "path": "/v1/provisioning",
