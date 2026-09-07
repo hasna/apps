@@ -1,7 +1,7 @@
 import { ingestS3Object, parseInboundPrefixDomainMap, type IngestDeps, type IngestStore } from "./ingest-worker.js";
 import { parseSesNotification, type InboundNotification } from "../../lib/inbound-realtime.js";
 import { resourceSpecForPath } from "./resources.js";
-import type { EmailsSelfHostedStore, TenantScopedStore } from "./store.js";
+import type { EmailsSelfHostedStore, TenantScopedStore, InboundPersistenceFence } from "./store.js";
 
 export class IngestApiError extends Error { constructor(message: string, readonly status = 400) { super(message); } }
 export interface IngestBinding { tenant_id: string; source_id: string; bucket: string; prefix: string; region: string; domain: string; queue_url?: string; provider_id?: string; topic_arn?: string; rule_set?: string; rule_name?: string }
@@ -68,6 +68,7 @@ export async function executeIngestBatch(store: EmailsSelfHostedStore, scoped: T
   const selected = input.source_id ? available.filter(binding => binding.source_id === input.source_id) : input.all_buckets && operation === "watch" ? available : available.length === 1 ? available : [];
   if (!selected.length) throw new IngestApiError(input.source_id ? "Source has no ingest binding in this tenant." : "Choose --source when the tenant has multiple ingest bindings.", input.source_id ? 404 : 400);
   if (selected.length > 10) throw new IngestApiError("Select one source; a batch can poll at most ten bindings.");
+  const fences = new Map<string, Omit<InboundPersistenceFence, "recipients">>();
   // Validate every selected source before performing any cloud operation.
   for (const binding of selected) {
     matches(binding, input);
@@ -77,7 +78,15 @@ export async function executeIngestBatch(store: EmailsSelfHostedStore, scoped: T
     if (source.status !== "active" && !input.force) throw new IngestApiError("The source is disabled or retired. Use --force only to perform an intentional historical recovery.", 409);
     if (operation === "watch" && source.settings_json && typeof source.settings_json === "object" && (source.settings_json as Record<string, unknown>).live_sync_enabled === false) throw new IngestApiError("Live sync is disabled for this source. Enable it in the API source registry before watching.", 409);
     if (operation === "watch" && !binding.queue_url) throw new IngestApiError("Configure a dedicated queue_url in this server ingest binding before watching.", 503);
-    if (binding.provider_id && !(await scoped.getResource(resourceSpecForPath("providers")!, binding.provider_id))) throw new IngestApiError("The ingest provider is not registered in this tenant.", 503);
+    if (binding.provider_id && source.provider_id != null && source.provider_id !== binding.provider_id) throw new IngestApiError("The source provider does not match its server binding.", 409);
+    const providerId = binding.provider_id ?? (typeof source.provider_id === "string" ? source.provider_id : undefined);
+    const provider = providerId ? await scoped.getResource(resourceSpecForPath("providers")!, providerId) : null;
+    if (providerId && (!provider || typeof provider.type !== "string")) throw new IngestApiError("The ingest provider is not registered in this tenant.", 503);
+    fences.set(binding.source_id, {
+      sourceId: binding.source_id,
+      sourceSnapshot: { type: String(source.type), status: String(source.status), providerId: typeof source.provider_id === "string" ? source.provider_id : null, watch: operation === "watch" },
+      ...(providerId ? { providerId, providerType: String(provider!.type) } : {}),
+    });
   }
   // One shared deadline keeps multi-source requests below the client timeout.
   const signal = AbortSignal.timeout(25000);
@@ -92,7 +101,7 @@ export async function executeIngestBatch(store: EmailsSelfHostedStore, scoped: T
         return route;
       },
       quarantineInbound: async () => { throw new Error("Notification has no authorized tenant route"); },
-      forTenant: id => { if (id !== tenantId) throw new Error("Tenant scope mismatch"); return scoped; },
+      forTenant: (id, recipients) => { if (id !== tenantId || !recipients?.length) throw new Error("Tenant scope mismatch"); return scoped.withInboundPersistenceFence({ ...fences.get(binding.source_id)!, recipients }); },
     };
     const deps: IngestDeps = { store: restricted, fetchObject: async (bucket, key) => { if (bucket !== binding.bucket || !key.startsWith(prefix)) throw new Error("Object is outside binding"); return cloud.fetch(key); }, now: () => new Date().toISOString(), prefixDomainMappings: [{ prefix: binding.prefix, domain: binding.domain }], providerId: binding.provider_id };
     let cursor: string | null = operation === "sync-s3" ? input.cursor ?? null : null;

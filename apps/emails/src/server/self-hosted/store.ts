@@ -523,9 +523,10 @@ export class AttachmentRepairQuotaExceededError extends Error {
 /** Server-verified receive binding revalidated atomically at persistence. */
 export interface InboundPersistenceFence {
   recipients: string[];
-  providerId: string;
-  providerType: "ses" | "resend";
+  providerId?: string;
+  providerType?: string;
   sourceId?: string;
+  sourceSnapshot?: { type: string; status: string; providerId: string | null; watch: boolean };
 }
 
 /** Fields a caller may supply when writing a message (outbound or inbound). */
@@ -2444,16 +2445,29 @@ export class TenantScopedStore {
   }
   private async lockInboundPersistenceFence(tx: TypedQueryClient, fence: InboundPersistenceFence): Promise<void> {
     await this.lockRelayRecipients(tx, fence.recipients);
-    const provider = await tx.get<{ type: string }>(`SELECT type FROM self_hosted_providers WHERE tenant_id=$1 AND id=$2 FOR SHARE`, [this.tenantId, fence.providerId]);
-    if (provider?.type !== fence.providerType) throw new Error("Webhook provider type changed before durable acceptance");
+    if (fence.providerId) {
+      const provider = await tx.get<{ type: string }>(`SELECT type FROM self_hosted_providers WHERE tenant_id=$1 AND id=$2 FOR SHARE`, [this.tenantId, fence.providerId]);
+      if (!fence.providerType || provider?.type !== fence.providerType) throw new Error("Ingest provider type changed before durable acceptance");
+    }
     if (fence.sourceId) {
-      const source = await tx.get<{ type: string; status: string; provider_id: string | null }>(`SELECT type,status,provider_id FROM mailbox_sources WHERE tenant_id=$1 AND id=$2 FOR SHARE`, [this.tenantId, fence.sourceId]);
-      if (!source || !["s3", "ses_s3"].includes(source.type) || source.status !== "active" || (source.provider_id !== null && source.provider_id !== fence.providerId)) throw new Error("Webhook source changed before durable acceptance");
+      const source = await tx.get<{ type: string; status: string; provider_id: string | null; settings_json: Record<string, unknown> }>(`SELECT type,status,provider_id,settings_json FROM mailbox_sources WHERE tenant_id=$1 AND id=$2 FOR SHARE`, [this.tenantId, fence.sourceId]);
+      if (!source || !["s3", "ses_s3"].includes(source.type)) throw new Error("Ingest source changed before durable acceptance");
+      if (fence.sourceSnapshot) {
+        const expected = fence.sourceSnapshot;
+        if (source.type !== expected.type || source.status !== expected.status || source.provider_id !== expected.providerId || (expected.watch && source.settings_json?.live_sync_enabled === false)) throw new Error("Ingest source lifecycle changed before durable acceptance");
+      } else if (source.status !== "active" || (source.provider_id !== null && source.provider_id !== fence.providerId)) throw new Error("Webhook source changed before durable acceptance");
     }
   }
   /** Reusable bounded ingest adapter: the lifecycle check and each write share one SQL transaction. */
   withInboundPersistenceFence(fence: InboundPersistenceFence) {
     return {
+      validateInboundAcceptance: async () => {
+        if (!this.atomicClient) throw new Error("Fenced ingestion requires a transactional store");
+        await this.atomicClient.transaction(async tx => {
+          await tx.execute(`SELECT set_config('app.current_tenant',$1,true)`, [this.tenantId]);
+          await this.lockInboundPersistenceFence(tx, fence);
+        });
+      },
       findMessageIdByKey: (key: string) => this.findMessageIdByKey(key),
       getInboundSourceProvenance: (id: string) => this.getInboundSourceProvenance(id),
       createInboundMessageWithProvenance: (input: MessageInput, provenance: Parameters<TenantScopedStore["createInboundMessageWithProvenance"]>[1]) => this.createInboundMessageWithProvenance(input, provenance, fence),

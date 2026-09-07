@@ -15,6 +15,7 @@ function fixture() {
     getInboundSourceProvenance: async () => null,
     createInboundMessageWithProvenance: async (input: MessageInput) => { writes.push(input); return { record: { ...input, id: `row-${writes.length}` }, inserted: true, provenance: "recorded" }; },
   } as unknown as TenantScopedStore;
+  scoped.withInboundPersistenceFence = () => scoped as any;
   const store = {
     resolveInboundRecipients: async (recipients: string[]) => ({ groups: recipients.map(recipient => ({ tenantId: recipient.endsWith("@example.com") ? "tenant-a" : "tenant-b", recipients: [recipient] })), unresolved: [] }),
   } as unknown as EmailsSelfHostedStore;

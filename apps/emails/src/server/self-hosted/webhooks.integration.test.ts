@@ -11,7 +11,7 @@
 // tenant-scoped store `/v1` serves. A 200 from the handler proves nothing here.
 
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mintApiKey, verifyApiKey } from "@hasna/contracts/auth";
 import { createPgPool, createQueryClient, MigrationLedger, type PoolQueryClient } from "../../storage-kit/index.js";
 import { emailsSelfHostedMigrations } from "./migrations.js";
@@ -692,5 +692,74 @@ describe.skipIf(!pgClient)("relay authorization and atomic lifecycle regressions
     const response = await handleSelfHostedRequest(deps, await relayRequest(tenant, provider, "resend", body));
     expect(response!.status).toBeGreaterThanOrEqual(400);
     expect(await count("messages", tenant)).toBe(0); expect(await count("webhook_receipts", tenant)).toBe(0);
+  });
+});
+
+async function ingestFenceFixture(operation: "sync-s3" | "watch", mutation: string, options: { force?: boolean; existing?: "legacy" | "provenanced" } = {}) {
+  const suffix = randomUUID(), domain = `ingest-${suffix}.test`, tenant = await makeRoutedTenant(`ingest-${suffix}`, domain);
+  const foreign = await makeRoutedTenant(`foreign-${suffix}`, `foreign-${suffix}.test`);
+  const { deps } = makeDeps(); const store = deps.store.forTenant(tenant);
+  const provider = String((await store.createResource(resourceSpecForPath("providers")!, { name: "receive", type: "ses", active: false })).id);
+  const source = String((await store.createResource(resourceSpecForPath("sources")!, { name: "source", mailbox_id: "inbox", type: "s3", status: options.force ? "retired" : "active", provider_id: provider })).id);
+  const key = `${PREFIX}${suffix}`, raw = Buffer.from(rawEmail("preserved"));
+  if (options.existing) {
+    const input = { from_addr: "sender@example.net", to_addrs: [`catchall@${domain}`], source_id: key, direction: "inbound" as const, status: "received", body_text: "User edited", provider_id: provider };
+    if (options.existing === "legacy") await store.createMessage(input);
+    else await store.createInboundMessageWithProvenance(input, { bucket: BUCKET, objectKey: key, rawSha256: createHash("sha256").update(raw).digest("hex"), establishedVia: "normal_ingest" });
+  }
+  deps.env = { ...deps.env, EMAILS_INGEST_BINDINGS: JSON.stringify([{ tenant_id: tenant, source_id: source, provider_id: provider, domain, bucket: BUCKET, prefix: PREFIX, region: "us-east-1", queue_url: "https://sqs.us-east-1.amazonaws.com/123456789012/fixture" }]) };
+  let fetched = 0, acknowledged = 0;
+  deps.ingestCloud = () => ({
+    list: async () => ({ keys: [key] }),
+    receive: async () => [{ receipt: "receipt", body: JSON.stringify({ Records: [{ s3: { bucket: { name: BUCKET }, object: { key } } }] }) }],
+    fetch: async () => {
+      fetched++;
+      if (mutation === "route") await pgClient!.execute("UPDATE inbound_domain_routes SET tenant_id=$1 WHERE domain=$2", [foreign, domain]);
+      if (mutation === "tenant") await pgClient!.execute("UPDATE tenants SET status='suspended' WHERE id=$1", [tenant]);
+      if (mutation === "source-status") await pgClient!.execute("UPDATE mailbox_sources SET status='paused' WHERE id=$1", [source]);
+      if (mutation === "source-type") await pgClient!.execute("UPDATE mailbox_sources SET type='imap' WHERE id=$1", [source]);
+      if (mutation === "source-provider") await pgClient!.execute("UPDATE mailbox_sources SET provider_id=NULL WHERE id=$1", [source]);
+      if (mutation === "provider-type") await pgClient!.execute("UPDATE self_hosted_providers SET type='resend' WHERE id=$1", [provider]);
+      if (mutation === "watch-disabled") await pgClient!.execute(`UPDATE mailbox_sources SET settings_json='{"live_sync_enabled":false}'::jsonb WHERE id=$1`, [source]);
+      return raw;
+    },
+    acknowledge: async () => { acknowledged++; },
+    queueState: async () => ({ visible: 0, in_flight: 1 }), close: () => {},
+  });
+  const minted = mintApiKey({ app: "emails", scopes: ["emails:*"], signingSecret: SIGNING_SECRET });
+  await pgClient!.execute("INSERT INTO api_key_tenants(kid,tenant_id) VALUES($1,$2)", [minted.kid, tenant]);
+  const response = await handleSelfHostedRequest(deps, new Request(`http://svc/v1/inbox/${operation}`, { method: "POST", headers: { "x-api-key": minted.token, "content-type": "application/json" }, body: JSON.stringify({ source_id: source, force: options.force ?? false }) }));
+  expect(response!.status).toBe(200); expect(fetched).toBe(1);
+  return { tenant, acknowledged, result: await json(response) };
+}
+
+describe.skipIf(!pgClient)("authenticated S3/watch persistence fences", () => {
+  it("actual sync-s3 and watch handlers reject fetch-time routing and lifecycle changes without persistence or ACK", async () => {
+    for (const operation of ["sync-s3", "watch"] as const) for (const mutation of ["none", "route", "tenant", "source-status", "source-type", "source-provider", "provider-type", ...(operation === "watch" ? ["watch-disabled"] : [])]) {
+      const f = await ingestFenceFixture(operation, mutation);
+      const accepted = mutation === "none";
+      expect(f.result.ok).toBe(accepted);
+      expect(await count("messages", f.tenant)).toBe(accepted ? 1 : 0);
+      expect(await count("inbound_message_sources", f.tenant)).toBe(accepted ? 1 : 0);
+      expect(f.acknowledged).toBe(accepted && operation === "watch" ? 1 : 0);
+    }
+  });
+  it("force authorizes the original inactive source snapshot but never a subsequent lifecycle change", async () => {
+    for (const operation of ["sync-s3", "watch"] as const) for (const mutation of ["none", "source-status", "route"]) {
+      const f = await ingestFenceFixture(operation, mutation, { force: true });
+      const accepted = mutation === "none";
+      expect(f.result.ok).toBe(accepted); expect(await count("messages", f.tenant)).toBe(accepted ? 1 : 0);
+      expect(f.acknowledged).toBe(accepted && operation === "watch" ? 1 : 0);
+    }
+  });
+  it("legacy provenance backfill and completed duplicates revalidate current routing without rewriting user mail", async () => {
+    for (const existing of ["legacy", "provenanced"] as const) for (const mutation of ["none", "route", "watch-disabled"]) {
+      const f = await ingestFenceFixture("watch", mutation, { existing });
+      const accepted = mutation === "none";
+      expect(f.result.ok).toBe(accepted); expect(f.acknowledged).toBe(accepted ? 1 : 0);
+      expect(await count("messages", f.tenant)).toBe(1);
+      expect(await count("inbound_message_sources", f.tenant)).toBe(existing === "provenanced" || accepted ? 1 : 0);
+      expect(await pgClient!.one("SELECT body_text FROM messages WHERE tenant_id=$1", [f.tenant])).toEqual({ body_text: "User edited" });
+    }
   });
 });

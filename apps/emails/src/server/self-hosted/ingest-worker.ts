@@ -42,6 +42,10 @@ import {
   type AttachmentRepairResult,
 } from "./attachment-repair.js";
 
+type IngestTenantStore = Pick<TenantScopedStore,
+  "findMessageIdByKey" | "getInboundSourceProvenance" | "recordInboundSourceProvenance" | "createInboundMessageWithProvenance"
+> & { validateInboundAcceptance?: () => Promise<void> };
+
 /** Minimal store surface the worker needs (kept narrow for testability). */
 export interface IngestStore {
   resolveInboundRecipients(recipients: string[]): Promise<InboundRouteResolution>;
@@ -53,10 +57,7 @@ export interface IngestStore {
     reason: string;
     detail?: string | null;
   }): Promise<void>;
-  forTenant(tenantId: string): Pick<
-    TenantScopedStore,
-    "findMessageIdByKey" | "getInboundSourceProvenance" | "recordInboundSourceProvenance" | "createInboundMessageWithProvenance"
-  >;
+  forTenant(tenantId: string, recipients?: string[]): IngestTenantStore;
 }
 
 export interface IngestDeps {
@@ -202,15 +203,12 @@ export async function ingestS3Object(
 
     const targets: Array<{
       group: InboundRouteResolution["groups"][number];
-      scoped: Pick<
-        TenantScopedStore,
-        "findMessageIdByKey" | "getInboundSourceProvenance" | "recordInboundSourceProvenance" | "createInboundMessageWithProvenance"
-      >;
+      scoped: IngestTenantStore;
       existing: string | null;
       provenance: InboundSourceProvenance | null;
     }> = [];
     for (const group of route.groups) {
-      const scoped = deps.store.forTenant(group.tenantId);
+      const scoped = deps.store.forTenant(group.tenantId, group.recipients);
       const existing = await scoped.findMessageIdByKey(key);
       targets.push({
         group,
@@ -236,6 +234,7 @@ export async function ingestS3Object(
     // Preserve the fast exit here: matching duplicates are never parsed or
     // passed through any message/provenance write path.
     if (targets.every((target) => target.existing !== null && target.provenance !== null)) {
+      for (const target of targets) await target.scoped.validateInboundAcceptance?.();
       return {
         status: "duplicate",
         key,
