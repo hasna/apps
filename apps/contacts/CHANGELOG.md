@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- b9626c0: Adopt the @hasna/contracts 1.0.2 credential resolver (owner directive, hasna/apps#1720): CLI, MCP server and store resolve the contacts API key and authority through the shared client chain on every request — explicit argument, deliberate pointers (`HASNA_CONTACTS_API_KEY_OVERRIDE`, `HASNA_PROFILE`, `HASNA_CONTACTS_API_KEY_REF`), macOS Keychain (`hasna.credentials.contacts.api-key` / `.api-url`, account `HASNA_STATION` → short hostname → `$USER`), `~/.hasna/contacts/config/credentials` (0400/0600), then `HASNA_CONTACTS_API_KEY` — with the authority defaulting to the fleet gateway `https://api.hasna.com/contacts` once any credential resolves. No credential fails closed: non-zero exit, no SQLite, no local-fallback event, and the Keychain tier stays ambient across per-request env snapshots (#1788). The SDK keeps an explicit HTTPS `baseUrl` + `apiKey` contract and never attaches an ambient fleet key to an explicit authority (#1794). Legacy client selectors (`HASNA_CONTACTS_STORAGE_MODE`, `CONTACTS_STORAGE_MODE`, DB paths/URLs) are rejected in client processes; the own env/disk chain is gone, and the vendored storage kit is regenerated for 1.0.2.
+
+### Patch Changes
+
+- 998cc91: Resolver validation fixes (hasna/apps#1720): the MCP connection-status and CLI transport tests are hermetic against a populated station Keychain (`HASNA_STATION` pinned to an absent account, `HASNA_HOME` to an empty temporary root, pointer/profile names cleared), the #1788 Keychain-gate test observes the tier through an injected account derivation instead of the machine's Keychain; `contacts status` reports the RESOLVED `/v1` authority plus `api_url_source` / `api_key_source` / `api_key_tier` (names only, never values) and the resolver's `issue` when unconfigured; `contacts-mcp --version` / `--help` and `contacts-serve --help` answer without starting a server or binding a port; `./sdk` gains `createContactsClient()` — the @hasna/contracts chain resolved through the same seam as the CLI and MCP server, the key re-resolved per request with the authority pinned, while an explicit `baseUrl` still requires an explicit `apiKey` (#1794) — and `ContactsV1Client` accepts a gateway path prefix such as `https://api.hasna.com/contacts`; the retired `~/.config/hasna` path shape no longer ships in the client bundle.
+
 ## 0.7.0
 
 - **Breaking (pre-1.0 minor):** CLI, MCP, SDK and package-root data operations require an explicitly configured authenticated HTTPS authority. Missing credentials, retired storage selectors and client database URLs fail closed; there is no automatic local SQLite fallback.

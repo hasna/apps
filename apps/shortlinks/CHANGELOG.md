@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- 176802f: Adopt the @hasna/contracts 1.0.2 client credential resolver for every hosted
+  surface (CLI, MCP server, and `./sdk`) (hasna/apps#1720).
+
+  - `@hasna/contracts` is pinned to exact `1.0.2` (still build-time: `bun build
+--target bun` inlines it, so consumers install nothing extra). The published
+    `.d.ts` no longer imports `@hasna/contracts`: crossing types are spelled
+    locally in `src/client-types.ts` and asserted against the real contracts
+    declarations at compile time (hasna/apps#1782).
+  - The app's own env chain is deleted. The resolver decides: the Keychain item
+    `hasna.credentials.shortlinks.api-key` (macOS), the disk credential
+    `~/.hasna/shortlinks/config/credentials` (0400/0600), or
+    `HASNA_SHORTLINKS_API_KEY` (legacy alias `SHORTLINKS_API_KEY`), with the
+    authority following `HASNA_SHORTLINKS_API_URL` or defaulting to the fleet
+    gateway `https://api.hasna.com/shortlinks` — URLs never need configuring. A
+    credential alone (any tier) selects the hosted `/v1` API, resolved fresh per
+    request.
+  - Fail-closed semantics (owner ruling 2026-09-04): hosted with no credential
+    exits non-zero, creates no SQLite, and never emits a `*-local-fallback`
+    event. Local mode is reachable ONLY by explicit opt-in
+    (`HASNA_SHORTLINKS_LOCAL=1`, alias `SHORTLINKS_LOCAL`, or `--db <path>`) and
+    announces "local" on stderr. A URL without a credential, a declared-but-blank
+    variable, disagreeing authorities, or an unreadable credential file all
+    throw.
+  - Never hands @hasna/contracts a copied env object (hasna/apps#1788):
+    declared-but-blank authority variables are normalised at the app seam, with
+    the Keychain tier's ambient gate carried across the copy when one is forced.
+  - SDK (#1794): an explicit `baseUrl` with no `apiKey` never attaches the
+    ambient fleet key — the credential is pinned to the authority it resolved
+    with. `createShortlinksApiClient` refreshes the credential on every request.
+  - New hermetic tests (fake HOME/HASNA_HOME, injected `security` runner):
+    credential resolution (env/disk/keychain/argument tiers), fail-closed
+    guarantees, and the transport report.
+
+### Patch Changes
+
+- abefc15: Resolver validation fixes for the `@hasna/contracts` credential chain adoption
+  (hasna/apps#1720, round-1 validator findings).
+
+  - `shortlinks-mcp` fails closed at startup: with no shortlinks credential
+    resolvable (Keychain item, `~/.hasna/shortlinks/config/credentials`,
+    `HASNA_SHORTLINKS_API_KEY`) and no explicit `HASNA_SHORTLINKS_LOCAL=1`, the
+    bin now exits non-zero naming the credential chain BEFORE any transport
+    starts. Previously it announced "stdio ready" and exited 0 when stdin closed
+    — a server whose every tool would have refused. Hosted startup touches
+    nothing on disk; the explicit local opt-in announces local mode at startup
+    and opens the on-box database in the caller's home.
+  - `shortlinks-mcp --version` / `--help` and `shortlinks-serve --version` /
+    `--help` answer on stdout with rc=0 without starting a transport, resolving a
+    backend, or binding a port (they used to fall through to the stdio loop and
+    the PostgreSQL pool factory respectively). The MCP server now reports the
+    package version instead of a hard-coded `1.0.0`.
+  - The app home is derived from the environment each surface was handed, never
+    from a silent `process.env` read behind a caller-built env: `LocalStore`,
+    `ShortlinksStore`, and every config/machine-id/click-salt helper take the
+    env they were resolved with. A local opt-in test used to plant
+    `~/.hasna/shortlinks/shortlinks.db` in the REAL home on every `bun test`
+    (station no-local-SQLite rule); the suite now guards against that. Path
+    lookups (`getConfigPath`, `getDatabasePath`) create nothing — only a write
+    creates the app home — so a hosted-mode `doctor` or MCP startup leaves no
+    directory behind. `HASNA_HOME` relocates the app home
+    (`$HASNA_HOME/shortlinks`) exactly as it does for the credential chain.
+  - Removed the stray `sdk/` scaffold that declared an unpublished
+    `@hasna/shortlinks-sdk` split package (one package per app; the resolver-
+    backed client ships at the `./sdk` export subpath). `bun run sdk:generate`
+    writes `src/sdk/generated.ts` only.
+
 ## 0.2.10
 
 ### Patch Changes

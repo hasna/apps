@@ -84,7 +84,7 @@
     },
     "apps/calendar": {
       "name": "@hasna/calendar",
-      "version": "0.3.9",
+      "version": "0.4.0",
       "bin": {
         "calendar": "dist/cli/index.js",
         "calendar-mcp": "dist/mcp/bin.js",
@@ -174,7 +174,7 @@
     },
     "apps/contacts": {
       "name": "@hasna/contacts",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "bin": {
         "contacts": "dist/cli/index.js",
         "contacts-mcp": "dist/mcp/index.js",
@@ -237,7 +237,7 @@
     },
     "apps/conversations": {
       "name": "@hasna/conversations",
-      "version": "0.7.14",
+      "version": "0.8.0",
       "bin": {
         "conversations": "bin/index.js",
         "conversations-inbox": "bin/inbox",
@@ -970,7 +970,7 @@
     },
     "apps/shortlinks": {
       "name": "@hasna/shortlinks",
-      "version": "0.2.10",
+      "version": "0.3.0",
       "bin": {
         "shortlinks": "dist/cli/index.js",
         "shortlinks-mcp": "dist/mcp/index.js",
