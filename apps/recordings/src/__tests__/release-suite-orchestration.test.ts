@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { planReleaseSuite, validateReleaseRun, groupEnvironment, type GroupReport } from "../../scripts/release-suite-gate";
+import { planReleaseSuite, validateReleaseRun, groupEnvironment, failureDiagnostics, type GroupReport } from "../../scripts/release-suite-gate";
 
 const lifecycle = "src/__tests__/macos-app-lifecycle.test.ts";
 const publication = "src/__tests__/release-output-publication-contract.test.ts";
@@ -24,6 +24,23 @@ function receipts(): GroupReport[] {
   ];
 }
 describe("release suite orchestration", () => {
+  test("failure diagnostics retain early assertions and late summary with bounded prefixed output", () => {
+    const child = { ...receipts()[0]!, status: 1, output: [
+      "src/fictional.test.ts:", "Expected: 0", "Received: 1", "\u001b[31m(fail) fictional startup refusal\u001b[0m",
+      "::error::fictional workflow command", ...Array(5000).fill("(pass) later fictional test"),
+      "1 fail", "Ran 5001 tests across 1 file.",
+    ].join("\n") };
+    const text = failureDiagnostics(child);
+    expect(text).toContain("Expected: 0");
+    expect(text).toContain("Received: 1");
+    expect(text).toContain("(fail) fictional startup refusal");
+    expect(text).toContain("1 fail");
+    expect(text).toContain("recordings gate | ::error::fictional workflow command");
+    expect(text).not.toContain("\u001b");
+    expect(text.length).toBeLessThan(25_000);
+    expect(failureDiagnostics({ ...child, output: "error: " + "x".repeat(100_000) }).length).toBeLessThan(2000);
+    expect(() => validateReleaseRun(planReleaseSuite(files, "darwin"), [child, ...receipts().slice(1)])).toThrow();
+  });
   test("the all-tests plan retains quarantined files through the actual discovery CLI", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "recordings-gate-inventory-")));
     try {

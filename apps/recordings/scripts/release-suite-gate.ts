@@ -184,6 +184,27 @@ export function groupCommand(group: SuiteGroup, junitPath: string): string[] {
     : [process.execPath, "test", "--no-orphans", "--timeout", "120000", ...group.files.map(f => `./${f}`), ...(group.pattern ? ["--test-name-pattern", group.pattern] : []), "--reporter=junit", "--reporter-outfile", junitPath];
 }
 
+/** Keep the first failing assertions and the runner summary visible in CI even
+ * when a disposable runner's complete logs cannot be recovered. Prefix every
+ * line so fixture output cannot be interpreted as a workflow command.
+ */
+export function failureDiagnostics(report: GroupReport): string {
+  const lines = report.output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "").split("\n");
+  const selected = new Set<number>();
+  let failures = 0;
+  for (let index = 0; index < lines.length && failures < 8; index++) {
+    if (!/^\s*(?:\(fail\)|error:|Error:|AssertionError:|TimeoutError:)/.test(lines[index]!)) continue;
+    failures++;
+    for (let context = Math.max(0, index - 12); context <= Math.min(lines.length - 1, index + 6); context++) selected.add(context);
+  }
+  const tailStart = Math.max(0, lines.length - 20);
+  const output = [...selected].filter(index => index < tailStart).sort((a, b) => a - b)
+    .map(index => "recordings gate | " + lines[index]!.slice(0, 1000)).join("\n").slice(0, 14_000);
+  const summary = lines.slice(tailStart).map(line => "recordings gate | " + line.slice(0, 350)).join("\n");
+  return `release-suite-gate: ${report.id} status=${report.status} signal=${report.signal ?? "none"}\n`
+    + output + "\n" + summary;
+}
+
 export function releaseMain(): number {
   const args = process.argv.slice(2);
   if (new Set(args).size !== args.length || args.some(arg => arg !== "--all" && arg !== "--plan")) fail("usage: release-suite-gate.ts [--all] [--plan]; arbitrary test filters would invalidate coverage");
@@ -212,7 +233,15 @@ export function releaseMain(): number {
     reports.push({ id: group.id, status: child.status, signal: child.signal, error: child.error?.message, output, junit });
   }
   writeFileSync(join(logDir, "suite.log"), reports.map(r => `=== ${r.id} ===\n${r.output}`).join("\n"));
-  const result = validateReleaseRun(groups, reports);
+  let result: ReturnType<typeof validateReleaseRun>;
+  try { result = validateReleaseRun(groups, reports); }
+  catch (error) {
+    const failed = reports.filter(report => report.status !== 0 || report.signal || report.error);
+    // Exit-zero truncated receipts also need diagnostics. Coverage validation
+    // remains authoritative; printing evidence never changes its result.
+    for (const report of failed.length ? failed : reports) console.error(failureDiagnostics(report));
+    throw error;
+  }
   console.log(`release-suite-gate: PASS - ${result.passed} pass, ${result.skipped} skip, 0 fail; ${result.tests} tests across ${result.files} files, each selected once`);
   return 0;
 }

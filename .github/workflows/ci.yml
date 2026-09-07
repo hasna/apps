@@ -301,6 +301,17 @@ jobs:
         env:
           TURBO_SCM_BASE: ${{ steps.affected.outputs.base }}
 
+      - name: Retain Recordings release diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: recordings-release-diagnostics-${{ github.run_attempt }}
+          path: |
+            /tmp/recordings-release-gate-*/*.log
+            /tmp/recordings-release-gate-*/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
   # ---------------------------------------------------------------------------------
   # verify-generated: the committed byte-reproducibility gate, one step per
   # member that commits build output. apps/knowledge commits its build output
