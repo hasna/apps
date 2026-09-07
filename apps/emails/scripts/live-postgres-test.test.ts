@@ -95,7 +95,7 @@ describe("PostgreSQL evidence must be complete", () => {
   test("requires the exact nonempty server integration inventory", () => {
     const actual = readdirSync(resolve(packageRoot, "src/server/self-hosted"))
       .filter((name) => name.endsWith(".integration.test.ts"));
-    expect(actual.length).toBe(16);
+    expect(actual.length).toBe(17);
     expect(() => assertSuiteInventory(actual)).not.toThrow();
     expect(() => assertSuiteInventory([])).toThrow();
     expect(() => assertSuiteInventory(actual.slice(1))).toThrow();
