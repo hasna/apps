@@ -212,7 +212,7 @@ async function checkReadiness(
       409,
       "bucket_mismatch",
     );
-  const sender = deps.resolveSender?.(tenantId, refs.provider_id);
+  const sender = await deps.resolveSender?.(tenantId, refs.provider_id);
   if (!sender || sender.provider !== "ses" || !sender.checkInboundQueue)
     throw new AddressProvisioningError(
       "Configure an SES provider binding with inbound queue verification capability.",

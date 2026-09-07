@@ -1,3 +1,4 @@
+import {buildManagedSenderResolver} from "./managed-provider-sender.js";
 import {ManagedProviderSecrets} from "./managed-provider-secrets.js";
 import {buildProviderRootKms} from "./provider-root-kms.js";
 // Bootstraps and runs the Emails self-hosted service (Bun.serve).
@@ -67,6 +68,8 @@ export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
   );
   const sender = buildSelfHostedSender();
   const providerRootKms = buildProviderRootKms();
+  const managedProviderSecrets = providerRootKms ? (tenant: string) => new ManagedProviderSecrets(client,tenant,providerRootKms) : undefined;
+  const externalSender = buildSenderResolver(sender);
   // Secret-free boot line: WHICH identity outbound mail is signed with. Without
   // it, "the SES credentials are configured" was unverifiable from the running
   // service — the 2026-07-25 sends went out under the deployment role while an
@@ -79,8 +82,9 @@ export function buildSelfHostedService(version: string): SelfHostedServiceDeps {
     store: new EmailsSelfHostedStore(client),
     verifier,
     sender,
-    resolveSender: buildSenderResolver(sender),
-    managedProviderSecrets: providerRootKms ? tenant => new ManagedProviderSecrets(client,tenant,providerRootKms) : undefined,
+    resolveSender: managedProviderSecrets ? buildManagedSenderResolver(externalSender,managedProviderSecrets) : externalSender,
+    managedProviderSecrets,
+    resolveExternalSender: externalSender,
     tracking: readTrackingConfig(),
     migrations: emailsSelfHostedMigrations(),
     version,

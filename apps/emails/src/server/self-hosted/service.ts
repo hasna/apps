@@ -1,3 +1,4 @@
+import { ManagedSenderUnavailableError } from "./managed-provider-sender.js";
 import type {ManagedProviderSecrets} from "./managed-provider-secrets.js";
 import {readProviderSecretStatus} from "./provider-secret-status.js";
 import { importSmtpMessage, smtpImportCapability, SmtpImportError, SMTP_IMPORT_JSON_BYTES } from "./smtp-import.js";
@@ -193,6 +194,8 @@ export interface SelfHostedServiceDeps {
   verifier: ApiKeyVerifier;
   sender: SelfHostedSender;
   resolveSender?: SenderResolver;
+  /** Metadata-only reference resolver; never decrypts managed envelopes. */
+  resolveExternalSender?: SenderResolver;
   ingestCloud?: IngestCloudFactory;
   realtimeSetupCloud?: RealtimeSetupCloudFactory;
   migrations: readonly Migration[];
@@ -1566,7 +1569,7 @@ export async function handleSelfHostedRequest(
         const provider = registry ? await auth.store.getResource(registry, requestedProviderId) : null;
         if (!provider) return json(404, { error: "provider not found in this tenant", reason: "provider_not_found" });
         if (provider.active === false) return json(409, { error: "provider is inactive", reason: "provider_inactive" });
-        const bound = deps.resolveSender?.(auth.ctx.tenantId, requestedProviderId);
+        const bound = await deps.resolveSender?.(auth.ctx.tenantId, requestedProviderId);
         if (!bound) return json(503, { error: "This provider has no server sender binding. Configure EMAILS_SENDER_BINDINGS for this tenant and provider using credential environment variable names.", reason: "provider_sender_unconfigured" });
         if (provider.type !== bound.provider) return json(409, { error: "The sender binding type does not match the provider registry.", reason: "provider_sender_type_mismatch" });
         sender = bound;
@@ -2787,7 +2790,7 @@ export async function handleSelfHostedRequest(
       if(method!=="GET") return json(405,{error:"method not allowed"});
       const auth=await authenticate(deps,req,url,read);if(!auth.ok)return auth.response;
       const denied=requireTenantOperator(auth,"reading provider credential status");if(denied)return denied;
-      return json(200,await readProviderSecretStatus(auth.store,auth.ctx.tenantId,deps.resolveSender,deps.sender,deps.managedProviderSecrets?.(auth.ctx.tenantId)));
+      return json(200,await readProviderSecretStatus(auth.store,auth.ctx.tenantId,deps.resolveExternalSender ?? (deps.managedProviderSecrets ? undefined : deps.resolveSender),deps.sender,deps.managedProviderSecrets?.(auth.ctx.tenantId)));
     }
 
     const providerHealth = path.match(/^\/v1\/providers\/([^/]+)\/health$/);
@@ -2911,6 +2914,7 @@ export async function handleSelfHostedRequest(
 
     return json(404, { error: "not found" });
   } catch (err) {
+    if (err instanceof ManagedSenderUnavailableError) return json(503, { error: err.message, reason: "provider_credentials_unavailable" });
     if (err instanceof RequestBodyTooLargeError) {
       return json(413, { error: "request body too large" });
     }

@@ -2,8 +2,13 @@
 
 This follow-up introduces PostgreSQL tenant roots, encrypted provider envelopes
 and resumable key lifecycle jobs (migration `0036_managed_provider_credentials`).
-It is a foundation: API credential installation, lifecycle mutation routes and
-sender consumption must be completed before management capabilities are enabled.
+API credential installation and lifecycle mutation routes must be completed
+before management capabilities are enabled. Sender resolution consumes existing
+managed envelopes asynchronously at each operation boundary, including sends,
+health probes, delivery sync and domain operations. An unreadable managed
+envelope fails closed without substituting an external identity. SES uses the
+region from the same tenant provider record. Status reads only redacted metadata
+and never decrypts or probes managed credentials.
 Externally injected credentials and workload roles continue operating as before.
 
 A deployment can configure `EMAILS_PROVIDER_KMS_KEY_ID` and

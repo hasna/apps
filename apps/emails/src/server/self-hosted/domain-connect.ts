@@ -199,7 +199,7 @@ export async function connectDomain(
   actor = "operator",
 ): Promise<DomainConnectResult> {
   const refs = await store.resolveDomainConnect(input);
-  const sender = resolveSender?.(tenant, refs.input.provider_id);
+  const sender = await resolveSender?.(tenant, refs.input.provider_id);
   if (
     !sender?.readDomainConnection ||
     (input.register_provider && !sender.registerDomain) ||

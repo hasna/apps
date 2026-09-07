@@ -2,6 +2,7 @@ import {beforeAll,afterAll,expect,test} from "bun:test";
 import {randomBytes} from "node:crypto";
 import {createPgPool,createQueryClient,MigrationLedger,type PoolQueryClient} from "../../storage-kit/index.js";
 import {emailsSelfHostedMigrations,DEFAULT_TENANT_ID} from "./migrations.js";
+import {buildManagedSenderResolver} from "./managed-provider-sender.js";
 import {ManagedProviderSecrets} from "./managed-provider-secrets.js";
 import {sealProviderBytes,openProviderBytes,type ProviderRootKms,type SealedBytes} from "./managed-provider-crypto.js";
 const url=process.env.EMAILS_TEST_POSTGRES_URL;let db:PoolQueryClient;
@@ -14,6 +15,9 @@ async function provider(id:string,tenant=DEFAULT_TENANT_ID){await db.execute("IN
 run("tenant/provider/revision-bound envelopes keep provider plaintext out of PostgreSQL",async()=>{
  const own=new ManagedProviderSecrets(db,DEFAULT_TENANT_ID,kms,0),foreign=new ManagedProviderSecrets(db,other,kms);await provider("managed-first");
  const credentials={type:"resend" as const,api_key:"synthetic-credential-"+crypto.randomUUID()};const saved=await own.install("managed-first",credentials,null,"fixture");expect(saved.revision).toBe(1);expect(await db.one("SELECT actor FROM provider_credential_audit WHERE provider_id='managed-first'")).toEqual({actor:"fixture"});expect((await own.metadata()).envelopes[0]).toMatchObject({provider_id:"managed-first",revision:1,root_id:saved.root_id});expect((await own.read("managed-first"))?.credentials).toEqual(credentials);
+ const captured:NodeJS.ProcessEnv[]=[];const resolve=buildManagedSenderResolver(()=>null,tenant=>new ManagedProviderSecrets(db,tenant,kms),config=>{captured.push(config);return{provider:"resend",send:async()=>"fixture-only"};});
+ expect((await resolve(DEFAULT_TENANT_ID,"managed-first"))?.credentialSource).toBe("managed_envelope");expect(captured[0]?.RESEND_API_KEY).toBe(credentials.api_key);expect(await resolve(other,"managed-first")).toBeNull();
+ failDecrypt=true;try{await expect(resolve(DEFAULT_TENANT_ID,"managed-first")).rejects.toThrow("Managed provider credentials could not be loaded");}finally{failDecrypt=false;}
  const dump=await db.one("SELECT row_to_json(e)::text AS value FROM provider_credential_envelopes e WHERE provider_id='managed-first'");expect(JSON.stringify(dump)).not.toContain(credentials.api_key);
  await db.execute("UPDATE tenants SET status='suspended' WHERE id=$1",[other]);try{await expect(foreign.metadata()).rejects.toThrow("not active");}finally{await db.execute("UPDATE tenants SET status='active' WHERE id=$1",[other]);}
  expect(await foreign.read("managed-first")).toBeNull();await expect(foreign.install("managed-first",credentials,null,"fixture")).rejects.toThrow("registered");await expect(own.install("managed-first",credentials,null,"fixture")).rejects.toThrow("revision changed");

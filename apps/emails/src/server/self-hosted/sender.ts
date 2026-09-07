@@ -21,7 +21,8 @@ export type SelfHostedSenderCredentialSource =
   | "environment"
   | "ambient_aws_env"
   | "deployment_role"
-  | "api_key";
+  | "api_key"
+  | "managed_envelope";
 
 export interface SelfHostedSender {
   readonly provider: SelfHostedSendProvider;
@@ -296,7 +297,7 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
 }
 
 /** Tenant/provider bindings contain secret environment names, never credential values. */
-export type SenderResolver = (tenantId: string, providerId: string) => SelfHostedSender | null;
+export type SenderResolver = (tenantId: string, providerId: string) => SelfHostedSender | null | Promise<SelfHostedSender | null>;
 
 export function buildSenderResolver(
   defaultSender: SelfHostedSender,
