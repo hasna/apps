@@ -522,10 +522,15 @@ describe("reconcileRegistry", () => {
 
     const previousHome = process.env.HOME;
     const previousSkillsDir = process.env.HASNA_SKILLS_DIR;
+    const previousHasnaHome = process.env.HASNA_HOME;
     const previousApiKey = process.env.SKILLS_API_KEY;
     const previousApiUrl = process.env.SKILLS_API_URL;
     process.env.HOME = home;
     delete process.env.HASNA_SKILLS_DIR;
+    // The preload blinds the ladder's disk tier by pointing HASNA_HOME at an
+    // empty baseline; this test exercises that tier THROUGH a real HOME, so it
+    // opts out of the override exactly as it opts out of the data-dir one.
+    delete process.env.HASNA_HOME;
     delete process.env.SKILLS_API_KEY;
     delete process.env.SKILLS_API_URL;
     try {
@@ -576,6 +581,8 @@ describe("reconcileRegistry", () => {
       process.env.HOME = previousHome;
       if (previousSkillsDir === undefined) delete process.env.HASNA_SKILLS_DIR;
       else process.env.HASNA_SKILLS_DIR = previousSkillsDir;
+      if (previousHasnaHome === undefined) delete process.env.HASNA_HOME;
+      else process.env.HASNA_HOME = previousHasnaHome;
       if (previousApiKey === undefined) delete process.env.SKILLS_API_KEY;
       else process.env.SKILLS_API_KEY = previousApiKey;
       if (previousApiUrl === undefined) delete process.env.SKILLS_API_URL;

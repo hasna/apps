@@ -180,6 +180,15 @@ export function withoutFleetCredentialEnv<T extends Record<string, string | unde
 
 for (const key of FLEET_CREDENTIAL_ENV_VARS) delete process.env[key];
 process.env["HASNA_STATION"] = NO_KEYCHAIN_ACCOUNT;
+// Blind the ladder's DISK tier too, not just the environment: contracts reads
+// `${HASNA_HOME ?? $HOME}/.hasna/skills/config/credentials` at call time, and
+// a developer machine with a working `skills` credential (the ordinary state of
+// this repo's own maintainers) would otherwise run half this suite in hosted
+// mode — the same ambient leak the env deletion above closes for the
+// environment. HASNA_HOME is pointed at the same stable, empty baseline the
+// data-dir override uses, so an in-process test that really wants the disk tier
+// passes its own HASNA_HOME (explicit-over-ambient, as everywhere else).
+process.env["HASNA_HOME"] = baseline;
 
 let current: string | null = null;
 

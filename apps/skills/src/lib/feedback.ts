@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { Database } from "bun:sqlite";
 import { resolveApiUrl } from "./api-url.js";
@@ -60,16 +60,10 @@ export function saveFeedback(input: FeedbackInput): FeedbackResult {
   if (!message) throw new Error("Feedback message is required");
 
   const category = input.category ?? "general";
-  // api mode (a Skills API URL + key is configured): never open a local database
-  // (hasna/apps#1613, #1632). Feedback is appended to a plain JSONL file the operator can
-  // forward; the SQLite store below is the OSS local mode only.
-  if (isApiMode()) {
-    const path = join(getDataDir(), "feedback.jsonl");
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    appendFileSync(path, JSON.stringify({ message, category, email: input.email ?? null, agent: input.agent ?? null, version: input.version ?? null, createdAt: new Date().toISOString() }) + "\n");
-    return { saved: true, category, path };
-  }
+  // Feedback records to ONE store in every transport: the on-box SQLite
+  // database (the legacy api-mode JSONL branch was a storage-mode leftover —
+  // the storage-mode axis is retired and feedback must behave the same whether
+  // or not a Skills credential resolves).
   const db = getFeedbackDb();
   try {
     db.run(
@@ -83,19 +77,18 @@ export function saveFeedback(input: FeedbackInput): FeedbackResult {
 }
 
 /**
- * True when this install talks to a Skills instance — i.e. a credential resolves
- * on the shared fleet ladder (lib/fleet-credentials.ts).
+ * True when this install talks to a Skills instance — i.e. a credential
+ * resolves on the shared fleet ladder (lib/fleet-credentials.ts).
  *
- * The check never throws: `skills feedback` must not crash because the ladder is
- * half-configured. A configured authority with no credential is treated as
- * api mode here on purpose — the operator meant to be hosted, so feedback goes
- * to the forwardable JSONL file rather than opening a local database that the
- * hosted install has no business creating.
+ * Kept as the read-only signal used by surfaces that report where feedback is
+ * recorded; the record itself no longer branches on it (the storage-mode axis
+ * is retired). The check never throws: a half-configured ladder is reported as
+ * false rather than crashing the command.
  */
 export function isApiMode(env: Record<string, string | undefined> = process.env): boolean {
   try {
     return Boolean(resolveApiUrl(env));
   } catch {
-    return true;
+    return false;
   }
 }

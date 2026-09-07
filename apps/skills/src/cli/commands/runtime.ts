@@ -3,7 +3,7 @@
  */
 
 import chalk from "chalk";
-import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "fs";
 import { basename, dirname, isAbsolute, join } from "path";
 import { createInterface } from "readline";
 import type { Command } from "commander";
@@ -75,13 +75,13 @@ export function registerRuntime(parent: Command) {
       ? handleRemoteRunsList(options) : handleRunsList(options));
 
   runs.command("logs").argument("<run-id>").option("--json", "Output as JSON", false)
-    .action((id: string, options: { json: boolean }) => executeRemote(options, client => client.getRunLogs(id)));
+    .action((id: string, options: { json: boolean }) => handleRunsLogs(id, options));
   runs.command("cancel").argument("<run-id>").option("--json", "Output as JSON", false)
-    .action((id: string, options: { json: boolean }) => executeRemote(options, client => client.cancelRun(id)));
+    .action((id: string, options: { json: boolean }) => handleRunsCancel(id, options));
   runs.command("resume").argument("<run-id>").option("--json", "Output as JSON", false)
-    .action((id: string, options: { json: boolean }) => executeRemote(options, client => client.resumeRun(id)));
+    .action((id: string, options: { json: boolean }) => handleRunsResume(id, options));
   runs.command("artifacts").argument("<run-id>").option("--json", "Output as JSON", false)
-    .action((id: string, options: { json: boolean }) => executeRemote(options, client => client.getRunArtifacts(id)));
+    .action((id: string, options: { json: boolean }) => handleRunsArtifacts(id, options));
 
   runs
     .command("show")
@@ -589,6 +589,24 @@ async function handleRun(name: string, args: string[], options: RunCommandOption
   process.exitCode = result.exitCode;
 }
 
+/**
+ * Resolve a run record's project-relative path against the current project.
+ */
+function projectResolved(projectRelative: string): string {
+  return join(process.cwd(), projectRelative.replace(/^\.\//, ""));
+}
+
+/** Yield every path under `root`, depth-first. */
+function* descendDirectory(root: string): Generator<string> {
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop()!;
+    yield current;
+    if (!statSync(current).isDirectory()) continue;
+    for (const entry of readdirSync(current).sort()) stack.push(join(current, entry));
+  }
+}
+
 function writeBlogArticleValidationError(errors: string[], json: boolean) {
   const payload = {
     error: "invalid blog article options",
@@ -662,6 +680,128 @@ function handleRunsShow(runId: string, options: { json: boolean }) {
     console.log(`${chalk.dim("Run dir:")} ${run.paths.runDir}`);
     console.log(`${chalk.dim("Exports:")} ${run.paths.exportDir}`);
   }
+}
+
+async function handleRunsLogs(runId: string, options: { json: boolean }) {
+  const localRun = findSkillRun(runId);
+  if (!localRun) return executeRemote(options, client => client.getRunLogs(runId));
+  const logsDir = projectResolved(localRun.paths.logsDir);
+  const stdoutPath = join(logsDir, "stdout.log");
+  const stderrPath = join(logsDir, "stderr.log");
+  const stdout = existsSync(stdoutPath) ? readFileSync(stdoutPath, "utf-8") : null;
+  const stderr = existsSync(stderrPath) ? readFileSync(stderrPath, "utf-8") : null;
+  if (stdout === null && stderr === null) {
+    const error = `Run '${runId}' has no captured logs`;
+    if (options.json) console.log(JSON.stringify({ runId, local: true, error }, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
+  }
+  if (options.json) {
+    console.log(JSON.stringify({ runId, local: true, skill: localRun.skill, status: localRun.status, stdout, stderr }, null, 2));
+    return;
+  }
+  console.log(chalk.bold(`\n${runId} (local, ${statusColor(localRun.status)})\n`));
+  if (stdout) process.stdout.write(stdout.endsWith("\n") ? stdout : stdout + "\n");
+  if (stderr) process.stderr.write(stderr.endsWith("\n") ? stderr : stderr + "\n");
+}
+
+async function handleRunsArtifacts(runId: string, options: { json: boolean }) {
+  const localRun = findSkillRun(runId);
+  if (!localRun) return executeRemote(options, client => client.getRunArtifacts(runId));
+  const exportDir = projectResolved(localRun.paths.exportDir);
+  const artifacts = existsSync(exportDir) && statSync(exportDir).isDirectory()
+    ? Array.from(descendDirectory(exportDir)).filter(entry => statSync(entry).isFile()).map((path) => ({
+        path,
+        fileName: basename(path),
+        sizeBytes: statSync(path).size,
+      }))
+    : [];
+  if (options.json) {
+    console.log(JSON.stringify({ runId, local: true, skill: localRun.skill, status: localRun.status, exportDir, artifacts }, null, 2));
+    return;
+  }
+  if (!artifacts.length) {
+    console.log(chalk.dim(`Run ${runId} produced no artifacts`));
+    return;
+  }
+  console.log(chalk.bold(`\n${runId} artifacts (${artifacts.length}):\n`));
+  for (const artifact of artifacts) {
+    console.log(`  ${chalk.cyan(artifact.fileName)}  ${chalk.dim(`${artifact.sizeBytes} bytes`)}  ${artifact.path}`);
+  }
+}
+
+async function handleRunsCancel(runId: string, options: { json: boolean }) {
+  const localRun = findSkillRun(runId);
+  if (!localRun) return executeRemote(options, client => client.cancelRun(runId));
+  // A local run with a linked remote id cancels the remote run it belongs to.
+  if (localRun.remoteRunId) {
+    const { skillsCredentialOrReason } = await import("../../lib/fleet-credentials.js");
+    const { apiKey, apiOrigin, reason } = await skillsCredentialOrReason();
+    if (!apiKey) {
+      const error = reason ?? "Remote run cancellation requires API access. Run: skills auth login";
+      if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
+      else console.error(chalk.red(error));
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
+      if (localRun.remoteApiOrigin && localRun.remoteApiOrigin !== apiOrigin) throw new Error("This run belongs to another Skills instance; select its credential profile");
+      const run = await new RemoteSkillsClient(apiKey, apiOrigin!).cancelRun(localRun.remoteRunId);
+      if (options.json) console.log(JSON.stringify(run, null, 2));
+      else console.log(chalk.green(`Cancellation requested for remote run ${localRun.remoteRunId}`));
+    } catch (err) {
+      const error = (err as Error).message;
+      if (options.json) console.log(JSON.stringify({ error }, null, 2));
+      else console.error(chalk.red(error));
+      process.exitCode = 1;
+    }
+    return;
+  }
+  // Local runs complete synchronously, so a record that exists is terminal by
+  // the time it can be inspected. Say so truthfully instead of dialling a
+  // server that has nothing to do with this run.
+  const error = `Run '${runId}' is a local run that already finished (${localRun.status}); there is nothing to cancel`;
+  if (options.json) console.log(JSON.stringify({ error, status: localRun.status }, null, 2));
+  else console.error(chalk.red(error));
+  process.exitCode = 1;
+}
+
+async function handleRunsResume(runId: string, options: { json: boolean }) {
+  const localRun = findSkillRun(runId);
+  if (!localRun) return executeRemote(options, client => client.resumeRun(runId));
+  // A local run linked to a remote run resumes the remote run.
+  if (localRun.remoteRunId) {
+    const { skillsCredentialOrReason } = await import("../../lib/fleet-credentials.js");
+    const { apiKey, apiOrigin, reason } = await skillsCredentialOrReason();
+    if (!apiKey) {
+      const error = reason ?? "Remote run resume requires API access. Run: skills auth login";
+      if (options.json) console.log(JSON.stringify({ contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION, error }, null, 2));
+      else console.error(chalk.red(error));
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
+      if (localRun.remoteApiOrigin && localRun.remoteApiOrigin !== apiOrigin) throw new Error("This run belongs to another Skills instance; select its credential profile");
+      const run = await new RemoteSkillsClient(apiKey, apiOrigin!).resumeRun(localRun.remoteRunId);
+      if (options.json) console.log(JSON.stringify(run, null, 2));
+      else console.log(chalk.green(`Resume requested for remote run ${localRun.remoteRunId}`));
+    } catch (err) {
+      const error = (err as Error).message;
+      if (options.json) console.log(JSON.stringify({ error }, null, 2));
+      else console.error(chalk.red(error));
+      process.exitCode = 1;
+    }
+    return;
+  }
+  // A finished local run has nothing to resume; the rerun surface is the run
+  // command itself.
+  const error = `Run '${runId}' is a local run that already finished (${localRun.status}); rerun it with: skills run ${localRun.skill}`;
+  if (options.json) console.log(JSON.stringify({ error, status: localRun.status }, null, 2));
+  else console.error(chalk.red(error));
+  process.exitCode = 1;
 }
 
 async function handleRunsStatus(runId: string, options: { json: boolean }) {
@@ -765,31 +905,44 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
     return;
   }
 
+  // A local run id that is linked to a remote run downloads that remote run's
+  // artifacts, mirroring `runs status`'s linked-id resolution.
+  const localRun = findSkillRun(runId);
+  const remoteRunId = localRun?.remoteRunId || runId;
+  if (localRun && !localRun.remoteRunId) {
+    const error = `Run '${runId}' is local and has no remote run id`;
+    if (options.json) console.log(JSON.stringify({ error }, null, 2));
+    else console.error(chalk.red(error));
+    process.exitCode = 1;
+    return;
+  }
+
   try {
     const { RemoteSkillsClient } = await import("../../lib/remote-client.js");
+    if (localRun?.remoteApiOrigin && localRun.remoteApiOrigin !== apiOrigin) throw new Error("This run belongs to another Skills instance; select its credential profile");
     const client = new RemoteSkillsClient(apiKey, apiOrigin!);
-    const remoteRun = await client.getRun(runId);
+    const remoteRun = await client.getRun(remoteRunId);
     if (!remoteRun) {
-      const error = `Remote run '${runId}' not found`;
+      const error = `Remote run '${remoteRunId}' not found`;
       if (options.json) console.log(JSON.stringify({ error }, null, 2));
       else console.error(chalk.red(error));
       process.exitCode = 1;
       return;
     }
 
-    const artifacts = await client.getRunArtifacts(runId);
+    const artifacts = await client.getRunArtifacts(remoteRunId);
     const canonicalSkill = typeof remoteRun.skill === "string" ? remoteRun.skill : "remote";
     const requestedSkill = typeof remoteRun.requestedSlug === "string" && remoteRun.requestedSlug.trim()
       ? remoteRun.requestedSlug
       : canonicalSkill;
-    const exportDir = getRunExportDir(runId, requestedSkill);
+    const exportDir = getRunExportDir(remoteRunId, requestedSkill);
     mkdirSync(exportDir, { recursive: true });
     const downloaded: Array<{ id: string; path: string; byteSize: number }> = [];
 
     for (const artifact of artifacts) {
       const artifactId = String(artifact.id || "");
       if (!artifactId) continue;
-      const verified = await client.getVerifiedRunArtifact(runId, artifactId);
+      const verified = await client.getVerifiedRunArtifact(remoteRunId, artifactId);
       const relativePath = safeArtifactRelativePath(
         typeof artifact.relativePath === "string" ? artifact.relativePath : artifact.fileName,
         String(artifact.fileName || artifactId),
@@ -801,7 +954,7 @@ async function handleExportsDownload(runId: string, options: { json: boolean }) 
     }
 
     const payload = {
-      runId,
+      runId: remoteRunId,
       skill: requestedSkill,
       ...(requestedSkill !== canonicalSkill ? { canonicalSkill } : {}),
       exportDir,

@@ -13,7 +13,7 @@
  * requirement; changing Postgres behaviour is not this module's job.
  */
 import { Database } from "bun:sqlite";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { hashApiKey, publicPrincipal } from "./auth.js";
@@ -22,6 +22,7 @@ import { resolveMigrationsDir } from "./migrations-dir.js";
 import { nowIso, normalizeLimit, rowToArtifact, rowToLog, rowToPin, rowToRun, rowToSkill, rowToSkillBundle,
   rowToSkillVersion, runId } from "./rows.js";
 import type {
+  ApiKeyRow,
   ApiPrincipal,
   ClaimRunInput,
   CreateRunInput,
@@ -229,6 +230,45 @@ export class SqliteSkillsStore implements SkillsProductStore {
       role: typeof row.role === "string" ? row.role : "member",
       scopes: parseScopes(row.scopes_json),
     };
+  }
+
+  async createApiKey(principal: ApiPrincipal, input: { name: string; scopes?: string[] }): Promise<{ key: string; id: string }> {
+    const key = `sk_${randomBytes(24).toString("hex")}`;
+    const id = `key_${randomBytes(12).toString("hex")}`;
+    const scopes = input.scopes?.length ? [...new Set(input.scopes)] : principal.scopes;
+    this.db.run(
+      `INSERT INTO api_keys (id, org_id, user_id, name, key_hash, scopes_json)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, principal.orgId, principal.userId, input.name, hashApiKey(key), JSON.stringify(scopes)],
+    );
+    return { key, id };
+  }
+
+  async listApiKeys(principal: ApiPrincipal): Promise<ApiKeyRow[]> {
+    const rows = this.all(
+      `SELECT id, org_id, user_id, name, scopes_json, created_at
+       FROM api_keys
+       WHERE org_id = ? AND user_id = ? AND revoked_at IS NULL
+       ORDER BY created_at ASC`,
+      [principal.orgId, principal.userId],
+    );
+    return rows.map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      orgId: String(row.org_id),
+      userId: String(row.user_id),
+      scopes: parseScopes(row.scopes_json),
+      createdAt: String(row.created_at),
+    }));
+  }
+
+  async revokeApiKey(principal: ApiPrincipal, keyId: string): Promise<boolean> {
+    const outcome = this.db.run(
+      `UPDATE api_keys SET revoked_at = ?
+       WHERE id = ? AND org_id = ? AND user_id = ? AND revoked_at IS NULL`,
+      [nowIso(), keyId, principal.orgId, principal.userId],
+    );
+    return outcome.changes > 0;
   }
 
   async createRun(input: CreateRunInput): Promise<ServerRunRecord> {

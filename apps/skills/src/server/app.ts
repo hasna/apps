@@ -1,3 +1,4 @@
+import { createHash, randomBytes, randomInt } from "node:crypto";
 import pkg from "../../package.json" with { type: "json" };
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 import { signBundleBytes } from "../lib/skill-bundles.js";
@@ -6,7 +7,7 @@ import { GOVERNANCE_ERROR_CODES, GovernanceError } from "../sdk/governance.js";
 import { createGovernanceStore, type GovernanceStore } from "../sdk/governance-store.js";
 import { ArtifactStorage } from "./artifact-storage.js";
 import { seedBundledCorpus } from "./seed-bundled.js";
-import { authenticateRequest, publicPrincipal } from "./auth.js";
+import { authenticateRequest, hashApiKey, publicPrincipal } from "./auth.js";
 import { resolveServerConfig, type SkillsServerConfig } from "./config.js";
 import { resolveDatabaseTarget } from "./database-url.js";
 import { executeRun } from "./handlers.js";
@@ -38,6 +39,39 @@ import {
 import { createStore, type MemorySkillsStore } from "./store.js";
 import { SkillRevisionConflictError, SkillVersionExistsError, StaleLeaseGenerationError, type ApiPrincipal, type ServerRunRecord, type SkillsProductStore } from "./types.js";
 
+/**
+ * Per-fetch-handler state for surfaces that manage short-lived secrets and
+ * per-process identity. Nothing here is durable: a restart drops in-flight
+ * login codes, device grants, display names, and uploaded input bytes, which is
+ * the honest behaviour for a deterministic server - the platform's durable
+ * account/billing store is a different deployment, not this one.
+ */
+export interface SkillsServerRuntimeState {
+  /** email -> one in-flight verification code (6 digits, 10 minute TTL). */
+  authCodes: Map<string, { code: string; expiresAt: number }>;
+  /** deviceCode -> the grant (10 minute TTL). */
+  deviceGrants: Map<string, { userCode: string; expiresAt: number }>;
+  /** `${orgId}:${userId}` -> display name, for PATCH /account/profile. */
+  displayNames: Map<string, string>;
+  /** orgId -> workspace display name, for PATCH /workspaces/current. */
+  workspaceNames: Map<string, string>;
+  /** `${runId}/${fileName}` -> accepted uploaded input bytes. */
+  inputUploads: Map<string, { bytes: Uint8Array; contentType: string; sha256: string }>;
+  /** upload targets opened by POST /runs/:id/uploads: `${runId}/${fileName}`. */
+  uploadTargets: Set<string>;
+}
+
+export function createSkillsServerState(): SkillsServerRuntimeState {
+  return {
+    authCodes: new Map(),
+    deviceGrants: new Map(),
+    displayNames: new Map(),
+    workspaceNames: new Map(),
+    inputUploads: new Map(),
+    uploadTargets: new Set(),
+  };
+}
+
 export interface SkillsServerOptions {
   /** Overrides the artifact storage (tests inject an in-memory S3 stand-in). */
   artifactStorage?: ArtifactStorage;
@@ -45,6 +79,8 @@ export interface SkillsServerOptions {
   store?: SkillsProductStore;
   /** Lifecycle ledger and ceiling reads for governance surfaces (cancellation). Defaults to the store's database. */
   governanceStore?: GovernanceStore;
+  /** Overrides the per-process auth/upload state (tests inject clean copies). */
+  runtimeState?: SkillsServerRuntimeState;
 }
 
 /**
@@ -98,6 +134,7 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
     bucket: config.artifactBucket,
     prefix: config.artifactPrefix,
   });
+  const runtimeState = options.runtimeState ?? createSkillsServerState();
   // Seed the registry from the bundled corpus once per package version (hasna/apps#1630).
   // Only on a real boot with a durable store and a bootstrap key: injected test stores skip it.
   if (!options.store && config.bootstrapApiKey && config.seedBundledCorpus) {
@@ -107,14 +144,19 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
 
   return async function fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const segments = pathSegments(url.pathname);
+    // The API is mounted at both the legacy `/api/v1` prefix and the fleet
+    // `/v1` dialect; both dispatch through the same table, so a deployment of
+    // this server answers clients speaking either spelling. The auth endpoints
+    // are aliased the same way (`/api/auth/*` and `/v1/auth/*`).
+    const pathname = normalizeApiPrefix(url.pathname);
+    const segments = pathSegments(pathname);
 
     try {
-      if (request.method === "GET" && url.pathname === "/health") {
+      if (request.method === "GET" && pathname === "/health") {
         return json({ ok: true, service: "skills", time: new Date().toISOString() });
       }
 
-      if (request.method === "GET" && url.pathname === "/ready") {
+      if (request.method === "GET" && pathname === "/ready") {
         return json({ ok: true, service: "skills" });
       }
 
@@ -122,20 +164,40 @@ export async function createSkillsFetchHandler(options: SkillsServerOptions = {}
       // live build by GET /version -> 200 with the service identity and the
       // package version. It previously fell through to the 404 handler, so the
       // gate could never pass at skills.hasna.xyz.
-      if (request.method === "GET" && url.pathname === "/version") {
+      if (request.method === "GET" && pathname === "/version") {
         return json({ ok: true, service: "skills", version: pkg.version });
       }
 
-      if (url.pathname.startsWith("/api/")) {
+      if (pathname.startsWith("/api/")) {
+        const authAction = segments[2];
+        const authDetail = segments[3];
+        const authActionPath = authDetail ? `${authAction}/${authDetail}` : authAction ?? "";
+        // The credential-acquisition routes are deliberately unauthenticated:
+        // requesting a code or starting a device grant is the first step of
+        // getting a credential, and every other /api/* route stays behind the
+        // auth wall (the principle the wall exists to enforce).
+        if (segments[1] === "auth" && UNAUTHENTICATED_AUTH_ROUTES.has(`${request.method} ${authActionPath}`)) {
+          return await handleUnauthenticatedAuth(store, request, authActionPath, config, runtimeState);
+        }
+        // The byte-bearing PUT half of the input-upload flow carries no
+        // credential by design (the upload target was only opened by an
+        // authenticated admission and is single-use): the URL is the
+        // capability, like a presigned upload URL.
+        if (request.method === "PUT" && segments[1] === "v1" && segments[2] === "runs" && segments[4] === "uploads" && segments[5] && !segments[6]) {
+          return await handleApiV1(store, governanceStore, publicPrincipal({ orgId: "org_dev" }), request, segments.slice(2), config, artifactStorage, runtimeState);
+        }
         const principal = await authenticateRequest(store, request);
         if (!principal) return json({ error: "authentication required", code: "AUTH_REQUIRED" }, { status: 401 });
 
-        if (request.method === "GET" && url.pathname === "/api/auth/whoami") {
+        if (segments[1] === "auth" && authAction === "keys") {
+          return await handleApiKeys(store, principal, request, authDetail, config);
+        }
+        if (segments[1] === "auth" && authAction === "whoami") {
           return json(identityPayload(principal));
         }
 
-        if (segments[0] === "api" && segments[1] === "v1") {
-          return await handleApiV1(store, governanceStore, principal, request, segments.slice(2), config, artifactStorage);
+        if (segments[1] === "v1") {
+          return await handleApiV1(store, governanceStore, principal, request, segments.slice(2), config, artifactStorage, runtimeState);
         }
       }
 
@@ -218,8 +280,9 @@ async function handleApiV1(
   parts: string[],
   config: SkillsServerConfig,
   artifactStorage: ArtifactStorage,
+  runtimeState: SkillsServerRuntimeState,
 ): Promise<Response> {
-  const [resource, id, subresource, childId] = parts;
+  const [resource, id, subresource, childId, grandchild] = parts;
 
   // Router boundary (defence in depth): no decoded path segment may carry a path
   // separator or `..`. pathSegments() decodes each segment AFTER splitting on '/', so an
@@ -230,7 +293,76 @@ async function handleApiV1(
     return json({ error: "invalid path segment", code: "INVALID_PATH" }, { status: 400 });
   }
 
+  if (resource === "capabilities") {
+    // The capability contract the client gates remote submission and uploads on.
+    // This server advertises exactly the surface it implements: bounded credit
+    // approval with a zero-credit deterministic price list, and input uploads.
+    if (request.method === "GET" && !id) {
+      return json({
+        product: "skills",
+        contractVersion: 1,
+        apiVersion: 1,
+        capabilities: ["runs.submit", "runs.uploads"],
+        billing: { unit: "credits", boundedRunApproval: true },
+      });
+    }
+  }
+
   if (resource === "skills") {
+    // The incremental updated-since feed (feed T9's sync reconciliation verb).
+    // The cursor is an opaque compound of the last page's final (updatedAt,
+    // slug) pair, so entries published within the same millisecond still page
+    // deterministically instead of vanishing behind a strict timestamp bound.
+    if (request.method === "GET" && id === "updated" && !subresource) {
+      const query = new URL(request.url).searchParams;
+      const since = query.get("since") ?? "";
+      if (!since || Number.isNaN(Date.parse(since))) {
+        return json({ error: "updated requires a valid ISO-8601 since parameter", code: "INVALID_SINCE" }, { status: 400 });
+      }
+      const cursor = parseFeedCursor(query.get("cursor"));
+      const limit = clampInt(query.get("limit"), 20, 100);
+      const updatedAtOf = (skill: unknown): string => {
+        const record = skill as { updatedAt?: unknown };
+        return typeof record.updatedAt === "string" ? record.updatedAt : "";
+      };
+      const slugOf = (skill: unknown): string => {
+        const record = skill as { slug?: unknown };
+        return typeof record.slug === "string" ? record.slug : "";
+      };
+      const merged = await listMergedSkills(store, principal);
+      const changed = merged
+        .filter((skill) => {
+          const stamp = updatedAtOf(skill);
+          if (stamp < since) return false;
+          if (!cursor) return true;
+          return stamp > cursor.updatedAt || (stamp === cursor.updatedAt && slugOf(skill) > cursor.slug);
+        })
+        .sort((a, b) => {
+          const ta = updatedAtOf(a);
+          const tb = updatedAtOf(b);
+          if (ta !== tb) return ta.localeCompare(tb);
+          return slugOf(a).localeCompare(slugOf(b));
+        });
+      const page = changed.slice(0, limit);
+      const last = page[page.length - 1];
+      const nextCursor = last && page.length === limit && changed.length > limit
+        ? `${updatedAtOf(last)}|${slugOf(last)}`
+        : null;
+      const payload: { skills: Array<{ slug: string; updatedAt: string }>; nextCursor?: string } = {
+        skills: page.map((skill) => {
+          const record = skill as { slug?: unknown; displayName?: unknown; version?: unknown };
+          return {
+            slug: typeof record.slug === "string" ? record.slug : "",
+            ...(typeof record.displayName === "string" && record.displayName ? { name: record.displayName } : {}),
+            ...(typeof record.version === "string" && record.version ? { version: record.version } : {}),
+            updatedAt: updatedAtOf(skill),
+          };
+        }),
+      };
+      if (nextCursor) payload.nextCursor = nextCursor;
+      return json(payload);
+    }
+
     if (request.method === "GET" && !id) {
       const tag = new URL(request.url).searchParams.get("tag");
       if (tag !== null && tag !== "") return json(await listMergedSkillsByTag(store, principal, tag));
@@ -328,6 +460,20 @@ async function handleApiV1(
       // Absent from this org's registry: the bundled corpus may still serve the slug.
       const skill = await getMergedSkill(store, artifactStorage, principal, id);
       return skill ? json(skill) : json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
+    }
+
+    // Quote before submission (the client's bounded-credit admission step). The
+    // deterministic server prices every skill at zero credits; a skill that does
+    // not exist is a hard 404, everything else is quotable.
+    if (request.method === "POST" && id && subresource === "quote" && !childId) {
+      const resolved = await resolvePublishedSkill(store, artifactStorage, principal, id);
+      const exists = resolved.kind === "published" || (await getMergedSkill(store, artifactStorage, principal, id)) !== null;
+      if (!exists) return json({ error: "skill not found", code: "SKILL_NOT_FOUND" }, { status: 404 });
+      return json({
+        skill: id,
+        availability: { status: "available" },
+        pricing: { costCredits: 0, costCents: 0 },
+      });
     }
 
     if ((request.method === "PUT" || request.method === "PATCH") && id && !subresource) {
@@ -432,7 +578,24 @@ async function handleApiV1(
       return json(artifacts.map(({ bodyText, ...artifact }) => artifact));
     }
 
-    if (request.method === "GET" && id && subresource === "artifacts" && childId) {
+    if (request.method === "GET" && id && subresource === "artifacts" && childId && !grandchild) {
+      const artifact = await store.getArtifact(principal, id, childId);
+      if (!artifact) return json({ error: "artifact not found", code: "ARTIFACT_NOT_FOUND" }, { status: 404 });
+      const body = await artifactStorage.readText(artifact);
+      if (body === null) {
+        return json({ error: "artifact storage backend unavailable", code: "ARTIFACT_BACKEND_UNAVAILABLE" }, { status: 503 });
+      }
+      return new Response(body, {
+        headers: {
+          "Content-Type": artifact.contentType,
+          "Content-Disposition": `attachment; filename="${artifact.fileName.replace(/"/g, "")}"`,
+        },
+      });
+    }
+
+    // The client dials the explicit /download suffix; older clients dial the raw
+    // artifact id. Both answer the same bytes.
+    if (request.method === "GET" && id && subresource === "artifacts" && childId && grandchild === "download") {
       const artifact = await store.getArtifact(principal, id, childId);
       if (!artifact) return json({ error: "artifact not found", code: "ARTIFACT_NOT_FOUND" }, { status: 404 });
       const body = await artifactStorage.readText(artifact);
@@ -473,6 +636,114 @@ async function handleApiV1(
         throw error;
       }
     }
+
+    if (request.method === "POST" && id && subresource === "resume" && !childId) {
+      const run = await store.getRun(principal, id);
+      if (!run) return json({ error: "run not found", code: "RUN_NOT_FOUND" }, { status: 404 });
+      if (run.status !== "queued") {
+        return json({ error: "run is not resumable from its current status", code: "RUN_NOT_RESUMABLE" }, { status: 409 });
+      }
+      if (config.inlineWorker) void executeRun(store, run, artifactStorage);
+      return json(runPayload(run), { status: 202 });
+    }
+
+    // Input-upload admission: opens one PUT target per declared file. The
+    // targets exist only after an authenticated admission, and the subsequent
+    // PUT carries no credential by design (the URL is the capability, like a
+    // signed upload URL on the platform's S3-backed deployment).
+    if (request.method === "POST" && id && subresource === "uploads" && !childId) {
+      const run = await store.getRun(principal, id);
+      if (!run) return json({ error: "run not found", code: "RUN_NOT_FOUND" }, { status: 404 });
+      if (run.status === "succeeded" || run.status === "failed" || run.status === "cancelled" || run.status === "expired") {
+        return json({ error: "run is not accepting uploads", code: "RUN_NOT_QUEUED" }, { status: 409 });
+      }
+      const body = await readJson(request, config.requestBodyLimitBytes);
+      const declared = Array.isArray(body.files) ? body.files : [];
+      const targets: Array<{ name: string; uploadUrl: string }> = [];
+      const seen = new Set<string>();
+      for (const entry of declared) {
+        const name = isRecord(entry) && typeof entry.name === "string" ? entry.name : "";
+        const sizeBytes = isRecord(entry) && typeof entry.sizeBytes === "number" ? entry.sizeBytes : NaN;
+        const sha = isRecord(entry) && typeof entry.sha256 === "string" ? entry.sha256 : "";
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(name) || name === "." || name === ".." || seen.has(name)) {
+          return json({ error: "invalid input file name", code: "INVALID_UPLOAD" }, { status: 400 });
+        }
+        seen.add(name);
+        if (!Number.isSafeInteger(sizeBytes) || sizeBytes <= 0 || sizeBytes > 20 * 1024 * 1024 || !/^[a-f0-9]{64}$/.test(sha)) {
+          return json({ error: "invalid input file descriptor", code: "INVALID_UPLOAD" }, { status: 400 });
+        }
+        runtimeState.uploadTargets.add(`${id}/${name}`);
+        const origin = new URL(request.url).origin;
+        targets.push({ name, uploadUrl: `${origin}/api/v1/runs/${encodeURIComponent(id)}/uploads/${encodeURIComponent(name)}` });
+      }
+      return json({ files: targets });
+    }
+
+    // The anonymous PUT half of the upload flow: only a target opened by the
+    // authenticated admission above is writable. The admission already proved
+    // the run existed and was accepting uploads, so the PUT itself only checks
+    // the opened-target marker — there is no credential to re-verify with.
+    if (request.method === "PUT" && id && subresource === "uploads" && childId && !grandchild) {
+      if (!runtimeState.uploadTargets.has(`${id}/${childId}`)) {
+        return json({ error: "unknown input upload target", code: "UPLOAD_TARGET_NOT_FOUND" }, { status: 404 });
+      }
+      const bytes = new Uint8Array(await request.arrayBuffer());
+      if (bytes.byteLength > 20 * 1024 * 1024) {
+        return json({ error: "input file exceeds the 20 MiB limit", code: "INVALID_UPLOAD" }, { status: 413 });
+      }
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      runtimeState.inputUploads.set(`${id}/${childId}`, { bytes, sha256, contentType: request.headers.get("content-type") ?? "application/octet-stream" });
+      return json({ uploaded: true, name: childId, sha256 });
+    }
+  }
+
+  if (resource === "account" && request.method === "PATCH" && id === "profile" && !subresource) {
+    const body = await readJson(request, config.requestBodyLimitBytes);
+    const displayName = body.displayName;
+    if (typeof displayName !== "string" || /[\p{Cc}\p{Cs}\u2028\u2029]/u.test(displayName) || !displayName.trim() || [...displayName.trim()].length > 100) {
+      return json({ error: "Use a name of 1-100 characters without control characters or newlines.", code: "INVALID_DISPLAY_NAME" }, { status: 400 });
+    }
+    const trimmed = displayName.trim();
+    runtimeState.displayNames.set(`${principal.orgId}:${principal.userId}`, trimmed);
+    return json({ user: { id: principal.userId, email: principal.email, displayName: trimmed, role: principal.role } });
+  }
+
+  if (resource === "workspaces" && request.method === "PATCH" && id === "current" && !subresource) {
+    const body = await readJson(request, config.requestBodyLimitBytes);
+    const name = body.name;
+    if (typeof name !== "string" || /[\p{Cc}\p{Cs}\u2028\u2029]/u.test(name) || !name.trim() || [...name.trim()].length > 100) {
+      return json({ error: "Use a name of 1-100 characters without control characters or newlines.", code: "INVALID_WORKSPACE_NAME" }, { status: 400 });
+    }
+    const trimmed = name.trim();
+    runtimeState.workspaceNames.set(principal.orgId, trimmed);
+    return json({ organization: { id: principal.orgId, slug: principal.orgSlug, name: trimmed } });
+  }
+
+  if (resource === "billing") {
+    // The deterministic server operates a zero-credit balance: status and packs
+    // answer truthfully, checkout/portal cannot be created and fail with the
+    // client-recognised capability code instead of inventing a payment link.
+    if (request.method === "GET" && id === "status" && !subresource) {
+      return json({ creditBalance: 0, plan: "oss", hasPaymentMethod: false });
+    }
+    if (request.method === "GET" && id === "usage" && !subresource) {
+      return json([]);
+    }
+    if (request.method === "GET" && id === "invoices" && !subresource) {
+      return json([]);
+    }
+    if (request.method === "POST" && id === "checkout" && !subresource) {
+      return json({ error: "Subscription checkout is unavailable on this server; use skills credits packs and skills billing portal.", code: "SUBSCRIPTION_CHECKOUT_UNAVAILABLE" }, { status: 503 });
+    }
+    if (request.method === "POST" && id === "portal" && !subresource) {
+      return json({ error: "The billing portal is unavailable on this server; manage account credits through the enabled surfaces.", code: "SUBSCRIPTION_CHECKOUT_UNAVAILABLE" }, { status: 503 });
+    }
+    if (request.method === "GET" && id === "credits" && !subresource) {
+      return json([]);
+    }
+    if (request.method === "POST" && id === "credits" && !subresource) {
+      return json({ error: "Credit purchases are unavailable on this server; the deterministic price list is zero credits.", code: "SUBSCRIPTION_CHECKOUT_UNAVAILABLE" }, { status: 503 });
+    }
   }
 
   return json({ error: "not found", code: "NOT_FOUND" }, { status: 404 });
@@ -483,6 +754,178 @@ function identityPayload(principal: ApiPrincipal): Record<string, unknown> {
     user: { id: principal.userId, email: principal.email, role: principal.role },
     organization: { id: principal.orgId, slug: principal.orgSlug, name: principal.orgName },
   };
+}
+
+/**
+ * Map the `/v1` fleet dialect onto the dispatch table's `/api/v1` spelling.
+ *
+ * The server answers both prefixes with the same handlers (the legacy `/api/v1`
+ * spelling is what the deployed fleet gateway and the published client dial);
+ * the `/v1` alias is the canonical fleet dialect (contracts toV1BaseUrl, every
+ * sibling serve app). `/v1/auth/*` likewise maps onto `/api/auth/*`.
+ */
+function normalizeApiPrefix(pathname: string): string {
+  if (pathname.startsWith("/v1/auth/")) return `/api/auth/${pathname.slice("/v1/auth/".length)}`;
+  if (pathname.startsWith("/v1/")) return `/api/v1/${pathname.slice("/v1/".length)}`;
+  return pathname;
+}
+
+/** Credential-acquisition routes that must work before any credential exists. */
+const UNAUTHENTICATED_AUTH_ROUTES = new Set([
+  "POST login",
+  "POST verify",
+  "POST device/start",
+  "POST device/token",
+]);
+
+const AUTH_CODE_TTL_MS = 10 * 60 * 1000;
+
+function newAuthCode(): string {
+  return String(randomInt(0, 1_000_000)).padStart(6, "0");
+}
+
+/**
+ * The account every credential resolves to on the deterministic server: the
+ * bootstrap key's org/identity, or null when the server was booted without one.
+ */
+async function accountPrincipal(store: SkillsProductStore, config: SkillsServerConfig): Promise<ApiPrincipal | null> {
+  if (!config.bootstrapApiKey) return null;
+  return store.authenticateApiKeyHash(hashApiKey(config.bootstrapApiKey));
+}
+
+async function handleUnauthenticatedAuth(
+  store: SkillsProductStore,
+  request: Request,
+  action: string,
+  config: SkillsServerConfig,
+  runtimeState: SkillsServerRuntimeState,
+): Promise<Response> {
+  const body = await readJson(request, config.requestBodyLimitBytes);
+
+  if (request.method === "POST" && action === "login") {
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return json({ error: "a valid email address is required", code: "INVALID_EMAIL" }, { status: 400 });
+    }
+    const code = newAuthCode();
+    runtimeState.authCodes.set(email, { code, expiresAt: Date.now() + AUTH_CODE_TTL_MS });
+    // The deterministic server has no mailer: the code is delivered to the
+    // server console and returned in the response envelope (the CLI prints it
+    // when present). A platform deployment with a real mailer never returns it.
+    console.log(`skills: login code for ${email}: ${code}`);
+    return json({ status: "code_sent", email, verificationCode: code });
+  }
+
+  if (request.method === "POST" && action === "verify") {
+    const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const code = typeof body.code === "string" ? body.code.trim() : "";
+    const pending = runtimeState.authCodes.get(email);
+    // A wrong attempt must not consume the pending code: the operator retries
+    // with the SAME delivered code. Only expiry or success clears it.
+    if (!email || !pending || pending.code !== code) {
+      return json({ error: "invalid or expired verification code", code: "INVALID_CODE" }, { status: 401 });
+    }
+    if (pending.expiresAt < Date.now()) {
+      runtimeState.authCodes.delete(email);
+      return json({ error: "invalid or expired verification code", code: "INVALID_CODE" }, { status: 401 });
+    }
+    runtimeState.authCodes.delete(email);
+    const account = await accountPrincipal(store, config);
+    if (!account) {
+      return json({ error: "sign-in is not configured on this server: boot it with a bootstrap API key", code: "SIGNIN_UNCONFIGURED" }, { status: 503 });
+    }
+    const key = await store.createApiKey?.(account, { name: "session" });
+    if (!key) {
+      return json({ error: "this server cannot mint sessions", code: "SIGNIN_UNCONFIGURED" }, { status: 503 });
+    }
+    return json(sessionPayload(key.key, account));
+  }
+
+  if (request.method === "POST" && action === "device/start") {
+    const deviceCode = newAuthCode();
+    const userCode = newAuthCode();
+    const expiresAt = Date.now() + AUTH_CODE_TTL_MS;
+    runtimeState.deviceGrants.set(deviceCode, { userCode, expiresAt });
+    const origin = new URL(request.url).origin;
+    return json({
+      deviceCode,
+      userCode,
+      verificationUri: `${origin}/v1/auth/device`,
+      verificationUriComplete: `${origin}/v1/auth/device?code=${userCode}`,
+      expiresIn: AUTH_CODE_TTL_MS / 1000,
+      interval: 5,
+    });
+  }
+
+  if (request.method === "POST" && action === "device/token") {
+    const deviceCode = typeof body.deviceCode === "string" ? body.deviceCode.trim() : "";
+    const grant = runtimeState.deviceGrants.get(deviceCode);
+    if (!grant || grant.expiresAt < Date.now()) {
+      runtimeState.deviceGrants.delete(deviceCode);
+      return json({ error: "invalid or expired device grant", code: "INVALID_DEVICE_GRANT" }, { status: 401 });
+    }
+    // The deterministic server has no browser surface, so the terminal polling
+    // for the token IS the operator: the first poll confirms the grant. A
+    // platform deployment answers authorization_pending until its browser flow
+    // confirms.
+    const account = await accountPrincipal(store, config);
+    if (!account) {
+      return json({ error: "sign-in is not configured on this server: boot it with a bootstrap API key", code: "SIGNIN_UNCONFIGURED" }, { status: 503 });
+    }
+    const key = await store.createApiKey?.(account, { name: "session" });
+    if (!key) {
+      return json({ error: "this server cannot mint sessions", code: "SIGNIN_UNCONFIGURED" }, { status: 503 });
+    }
+    runtimeState.deviceGrants.delete(deviceCode);
+    return json(sessionPayload(key.key, account));
+  }
+
+  return json({ error: "not found", code: "NOT_FOUND" }, { status: 404 });
+}
+
+function sessionPayload(token: string, account: ApiPrincipal): Record<string, unknown> {
+  return {
+    token,
+    firstLogin: true,
+    user: { id: account.userId, email: account.email, role: account.role },
+    organization: { id: account.orgId, slug: account.orgSlug, name: account.orgName },
+  };
+}
+
+async function handleApiKeys(
+  store: SkillsProductStore,
+  principal: ApiPrincipal,
+  request: Request,
+  keyId: string | undefined,
+  config: SkillsServerConfig,
+): Promise<Response> {
+  // Key management is only meaningful on a store that can persist keys.
+  if (!store.createApiKey || !store.listApiKeys || !store.revokeApiKey) {
+    return json({ error: "this server cannot manage API keys", code: "KEY_STORE_UNSUPPORTED" }, { status: 501 });
+  }
+  if (request.method === "GET" && !keyId) {
+    return json(await store.listApiKeys(principal));
+  }
+  if (request.method === "POST" && !keyId) {
+    const body = await readJson(request, config.requestBodyLimitBytes);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name || name.length > 100 || /[\p{Cc}\p{Cs}]/u.test(name)) {
+      return json({ error: "API key name must be 1-100 characters without control characters", code: "INVALID_KEY_NAME" }, { status: 400 });
+    }
+    const scopes = Array.isArray(body.scopes)
+      ? body.scopes.filter((scope): scope is string => typeof scope === "string" && /^[a-z][a-z0-9_:.-]*$/.test(scope))
+      : undefined;
+    const created = await store.createApiKey(principal, { name, scopes });
+    const rows = await store.listApiKeys(principal);
+    const row = rows.find((candidate) => candidate.id === created.id);
+    return json({ key: created.key, id: created.id, name, scopes: row?.scopes ?? scopes ?? principal.scopes, createdAt: row?.createdAt });
+  }
+  if (request.method === "DELETE" && keyId) {
+    const revoked = await store.revokeApiKey(principal, keyId);
+    if (!revoked) return json({ error: "api key not found", code: "KEY_NOT_FOUND" }, { status: 404 });
+    return json({ revoked: true, id: keyId });
+  }
+  return json({ error: "not found", code: "NOT_FOUND" }, { status: 404 });
 }
 
 function runPayload(run: ServerRunRecord): Record<string, unknown> {
@@ -571,6 +1014,17 @@ function json(payload: unknown, init: ResponseInit = {}): Response {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+/** The opaque updated-feed cursor: `<updatedAt ISO>|<slug>`. Invalid tokens are ignored. */
+function parseFeedCursor(token: string | null): { updatedAt: string; slug: string } | null {
+  if (!token) return null;
+  const separator = token.lastIndexOf("|");
+  if (separator < 1) return null;
+  const updatedAt = token.slice(0, separator);
+  const slug = token.slice(separator + 1);
+  if (!slug || Number.isNaN(Date.parse(updatedAt))) return null;
+  return { updatedAt, slug };
 }
 
 function stringField(value: unknown): string | undefined {

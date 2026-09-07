@@ -1,5 +1,6 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type {
+  ApiKeyRow,
   ApiPrincipal,
   ClaimRunInput,
   CreateRunInput,
@@ -122,6 +123,7 @@ function instantiateStore(target: DatabaseTarget, sqliteOptions?: SqliteStoreOpt
 export class MemorySkillsStore implements SkillsProductStore {
   readonly backend: StoreBackendInfo = { kind: "memory", durable: false, label: "memory (non-durable)" };
   private apiKeys = new Map<string, ApiPrincipal>();
+  private apiKeyRows = new Map<string, { row: ApiKeyRow; secret: string }>();
   private runs = new Map<string, ServerRunRecord>();
   private logs = new Map<string, ServerRunLog[]>();
   private artifacts = new Map<string, ServerArtifact[]>();
@@ -138,6 +140,14 @@ export class MemorySkillsStore implements SkillsProductStore {
   addApiKey(token: string, principal?: Partial<ApiPrincipal>): ApiPrincipal {
     const resolved = publicPrincipal(principal);
     this.apiKeys.set(hashApiKey(token), resolved);
+    // Keep the listing seam honest: the bootstrap key is a key row like any
+    // other, so listApiKeys() answers the same way on every backend.
+    if (!this.apiKeyRows.has(resolved.apiKeyId)) {
+      this.apiKeyRows.set(resolved.apiKeyId, {
+        row: { id: resolved.apiKeyId, name: "bootstrap", orgId: resolved.orgId, userId: resolved.userId, scopes: resolved.scopes, createdAt: nowIso() },
+        secret: token,
+      });
+    }
     return resolved;
   }
 
@@ -147,6 +157,31 @@ export class MemorySkillsStore implements SkillsProductStore {
 
   async authenticateApiKeyHash(hash: string): Promise<ApiPrincipal | null> {
     return this.apiKeys.get(hash) ?? null;
+  }
+
+  async createApiKey(principal: ApiPrincipal, input: { name: string; scopes?: string[] }): Promise<{ key: string; id: string }> {
+    const key = `sk_${randomBytes(24).toString("hex")}`;
+    const id = `key_${randomBytes(12).toString("hex")}`;
+    const scopes = input.scopes?.length ? [...new Set(input.scopes)] : principal.scopes;
+    const resolved = publicPrincipal({ ...principal, apiKeyId: id, scopes });
+    this.apiKeys.set(hashApiKey(key), resolved);
+    this.apiKeyRows.set(id, { row: { id, name: input.name, orgId: principal.orgId, userId: principal.userId, scopes, createdAt: nowIso() }, secret: key });
+    return { key, id };
+  }
+
+  async listApiKeys(principal: ApiPrincipal): Promise<ApiKeyRow[]> {
+    return Array.from(this.apiKeyRows.values())
+      .filter((entry) => entry.row.orgId === principal.orgId && entry.row.userId === principal.userId)
+      .map((entry) => entry.row)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  async revokeApiKey(principal: ApiPrincipal, keyId: string): Promise<boolean> {
+    const entry = this.apiKeyRows.get(keyId);
+    if (!entry || entry.row.orgId !== principal.orgId || entry.row.userId !== principal.userId) return false;
+    this.apiKeys.delete(hashApiKey(entry.secret));
+    this.apiKeyRows.delete(keyId);
+    return true;
   }
 
   async createRun(input: CreateRunInput): Promise<ServerRunRecord> {
@@ -653,6 +688,43 @@ export class PostgresSkillsStore implements SkillsProductStore {
       role: typeof row.role === "string" ? row.role : "member",
       scopes: parseJsonArray(row.scopes_json),
     };
+  }
+
+  async createApiKey(principal: ApiPrincipal, input: { name: string; scopes?: string[] }): Promise<{ key: string; id: string }> {
+    const key = `sk_${randomBytes(24).toString("hex")}`;
+    const id = `key_${randomBytes(12).toString("hex")}`;
+    const scopes = input.scopes?.length ? [...new Set(input.scopes)] : principal.scopes;
+    await this.sql`
+      INSERT INTO api_keys (id, org_id, user_id, name, key_hash, scopes_json)
+      VALUES (${id}, ${principal.orgId}, ${principal.userId}, ${input.name}, ${hashApiKey(key)}, ${JSON.stringify(scopes)}::jsonb)
+    `;
+    return { key, id };
+  }
+
+  async listApiKeys(principal: ApiPrincipal): Promise<ApiKeyRow[]> {
+    const rows = await this.sql`
+      SELECT id, org_id, user_id, name, scopes_json, created_at
+      FROM api_keys
+      WHERE org_id = ${principal.orgId} AND user_id = ${principal.userId} AND revoked_at IS NULL
+      ORDER BY created_at ASC
+    `;
+    return rows.map((row) => ({
+      id: String(row.id),
+      name: String(row.name),
+      orgId: String(row.org_id),
+      userId: String(row.user_id),
+      scopes: parseJsonArray(row.scopes_json),
+      createdAt: String(row.created_at),
+    }));
+  }
+
+  async revokeApiKey(principal: ApiPrincipal, keyId: string): Promise<boolean> {
+    const rows = await this.sql`
+      UPDATE api_keys SET revoked_at = now()
+      WHERE id = ${keyId} AND org_id = ${principal.orgId} AND user_id = ${principal.userId} AND revoked_at IS NULL
+      RETURNING id
+    `;
+    return rows.length > 0;
   }
 
   /**

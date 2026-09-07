@@ -344,8 +344,9 @@ skills tags --remote --json
 ```
 
 If the URL is an origin such as `https://your-server.example`, the CLI requests
-`/api/v1/skills`. If it already ends in `/api` or `/api/v1`, the CLI appends
-`/skills`.
+`/api/v1/skills`. If it already ends in `/api`, `/api/v1`, or the fleet `/v1`
+dialect, the CLI strips the base and appends `/skills` — every spelling of a
+base normalizes to the same routes.
 
 Authenticated registry listing and premium server-side execution use whichever
 credential the ladder resolves — most often the one saved by
@@ -471,8 +472,9 @@ skills --profile customer auth keys create automation --email you@example.com --
 skills --profile customer auth logout --json
 ```
 
-An origin, a full `/api/v1` base and a base with a path prefix normalize to the
-same routes. `HASNA_PROFILE=customer` selects the same profile as `--profile`.
+An origin, a full `/api/v1` base, a fleet `/v1` base and a base with a path
+prefix normalize to the same routes. `HASNA_PROFILE=customer` selects the same
+profile as `--profile`.
 `HASNA_SKILLS_API_URL` (or the compatible `SKILLS_API_URL`) is an explicit URL
 override, not permission to send a saved key to a different instance. Stored
 keys retain their original instance binding; sign in to a separate profile to

@@ -1,10 +1,13 @@
 /**
- * `skills feedback` on a keyed station never opens a local database (hasna/apps#1613,
- * #1632): with a Skills API URL configured the entry is appended to feedback.jsonl in the
- * data directory and no SQLite file appears.
+ * `skills feedback` records feedback to ONE on-box store in every transport.
+ *
+ * The storage-mode axis is retired (owner directive 2026-08-15): an entry is
+ * written to the SQLite feedback database whether or not a Skills credential
+ * resolves, and no separate "api mode" JSONL file exists. These tests pin the
+ * transport-agnostic behavior and refuse the legacy split if it ever returns.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveFeedback } from "./feedback.js";
@@ -12,13 +15,13 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
-const ENV_KEYS = ["HASNA_SKILLS_DIR", "SKILLS_API_URL", "HASNA_SKILLS_API_URL"] as const;
+const ENV_KEYS = ["HASNA_SKILLS_DIR", "HASNA_HOME", "SKILLS_API_URL", "HASNA_SKILLS_API_URL", "SKILLS_API_KEY", "HASNA_SKILLS_API_KEY"] as const;
 let saved: Record<string, string | undefined> = {};
 let dataDir = "";
 
 beforeEach(() => {
   saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
-  dataDir = mkdtempSync(join(tmpdir(), "skills-feedback-api-"));
+  dataDir = mkdtempSync(join(tmpdir(), "skills-feedback-"));
   process.env.HASNA_SKILLS_DIR = dataDir;
 });
 
@@ -30,46 +33,37 @@ afterEach(() => {
   rmSync(dataDir, { recursive: true, force: true });
 });
 
-describe("saveFeedback in api mode", () => {
-  test("appends JSONL and opens no SQLite database", () => {
-    process.env.SKILLS_API_URL = "https://skills.example.test";
-    delete process.env.HASNA_SKILLS_API_URL;
+describe("saveFeedback records to the SQLite store in every transport", () => {
+  test("unconfigured install records to the SQLite database", () => {
     const result = saveFeedback({ message: "  the pull command is great  ", category: "feature", agent: "station03" });
     expect(result.saved).toBe(true);
-    expect(result.path).toBe(join(dataDir, "feedback.jsonl"));
-    const lines = readFileSync(result.path, "utf-8").trim().split("\n");
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toMatchObject({ message: "the pull command is great", category: "feature", agent: "station03", email: null });
-    expect(readdirSync(dataDir).filter((name) => name.endsWith(".db"))).toEqual([]);
-    expect(existsSync(join(dataDir, "feedback.db"))).toBe(false);
+    expect(result.path).toBe(join(dataDir, "skills.db"));
+    expect(readdirSync(dataDir).filter((name) => name.endsWith(".db"))).toEqual(["skills.db"]);
   });
 
-  test("the HASNA_-prefixed URL alone selects api mode too", () => {
-    delete process.env.SKILLS_API_URL;
+  test("a configured hosted credential still records to the SQLite database", () => {
     process.env.HASNA_SKILLS_API_URL = "https://skills.example.test";
+    process.env.HASNA_SKILLS_API_KEY = "sk_feedback_test_only";
     saveFeedback({ message: "second" });
     saveFeedback({ message: "third" });
-    expect(readFileSync(join(dataDir, "feedback.jsonl"), "utf-8").trim().split("\n")).toHaveLength(2);
-    expect(readdirSync(dataDir).filter((name) => name.endsWith(".db"))).toEqual([]);
+    expect(readdirSync(dataDir).filter((name) => name.endsWith(".db"))).toEqual(["skills.db"]);
+    // The retired api-mode JSONL path must not reappear.
+    expect(readdirSync(dataDir).filter((name) => name.endsWith(".jsonl"))).toEqual([]);
   });
-});
 
-describe("saveFeedback api mode via the credentials file", () => {
-  test("a credential written by `skills auth login` selects api mode with no env var set", () => {
-    // The URL is not required: a resolved credential reaches the fleet gateway,
-    // and that is what makes this station hosted.
-    delete process.env.SKILLS_API_URL;
+  test("a credential written by `skills auth login` still records to the SQLite database", () => {
     delete process.env.HASNA_SKILLS_API_URL;
+    delete process.env.HASNA_SKILLS_API_KEY;
     const home = mkdtempSync(join(tmpdir(), "skills-feedback-home-"));
     const previousHome = process.env.HASNA_HOME;
     try {
       process.env.HASNA_HOME = home;
       mkdirSync(join(home, "skills", "config"), { recursive: true });
-      writeFileSync(join(home, "skills", "config", "credentials"), "HASNA_SKILLS_API_KEY=sk_feedback_test_only\n", { mode: 0o600 });
+      // Matches the auth-store writer's shape (URL + key).
+      writeFileSync(join(home, "skills", "config", "credentials"), "HASNA_SKILLS_API_URL=https://skills.example.test\nHASNA_SKILLS_API_KEY=sk_feedback_test_only\n", { mode: 0o600 });
       const result = saveFeedback({ message: "from a keyed station" });
-      expect(result.path).toBe(join(dataDir, "feedback.jsonl"));
-      expect(existsSync(join(dataDir, "feedback.jsonl"))).toBe(true);
-      expect(readdirSync(dataDir).filter((name) => name.endsWith(".db"))).toEqual([]);
+      expect(result.path).toBe(join(dataDir, "skills.db"));
+      expect(readdirSync(dataDir).filter((name) => name.endsWith(".db"))).toEqual(["skills.db"]);
     } finally {
       if (previousHome === undefined) delete process.env.HASNA_HOME;
       else process.env.HASNA_HOME = previousHome;

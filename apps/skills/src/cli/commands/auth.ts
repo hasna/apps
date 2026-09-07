@@ -237,6 +237,15 @@ async function doLogin(email: string, code?: string, json?: boolean) {
       return;
     }
 
+    // A deterministic server without a mailer delivers the verification code in
+    // the response envelope and on its own console; a platform deployment with
+    // real mail never returns one. Surface it when the server does, so a
+    // mailer-less sign-in can be completed. Written to stderr so stdout stays
+    // machine-readable for --json callers.
+    if (typeof sendRes.verificationCode === "string" && sendRes.verificationCode) {
+      console.error(chalk.dim(`Verification code: ${sendRes.verificationCode}`));
+    }
+
     if (!json) console.log(chalk.green("✓ Code sent to " + email));
 
     if (json || !isTTY) {

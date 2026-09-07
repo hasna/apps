@@ -18,6 +18,7 @@ import {
   MissingSkillsFleetError,
   SkillsFleetCredentialError,
   configuredSkillsApiUrl,
+  normalizeSkillsApiOrigin,
   noticeLocalSkillsMode,
   requireSkillsFleet,
   resetLocalSkillsModeNotice,
@@ -550,3 +551,66 @@ async function runSetupInfo(home: string, extra: Record<string, string>): Promis
   await proc.exited;
   return JSON.parse(stdout);
 }
+
+/**
+ * The URL the operator pastes may carry either dialect: the legacy `/api/v1`
+ * base, the fleet `/v1` base (contracts `toV1BaseUrl`), or the bare origin.
+ * All three must normalize to the same origin so the client never composes
+ * `/api/v1/api/v1` or `/v1/api/v1` (campaign: the API dialect property).
+ */
+describe("configured API URL dialect normalization", () => {
+  test("a bare origin, an /api/v1 base, and a /v1 base are the same origin", () => {
+    expect(normalizeSkillsApiOrigin("https://skills.example.test")).toBe("https://skills.example.test");
+    expect(normalizeSkillsApiOrigin("https://skills.example.test/api/v1")).toBe("https://skills.example.test");
+    expect(normalizeSkillsApiOrigin("https://skills.example.test/api/v1/")).toBe("https://skills.example.test");
+    expect(normalizeSkillsApiOrigin("https://skills.example.test/v1")).toBe("https://skills.example.test");
+    expect(normalizeSkillsApiOrigin("https://skills.example.test/v1/")).toBe("https://skills.example.test");
+    expect(normalizeSkillsApiOrigin("https://skills.example.test/api")).toBe("https://skills.example.test");
+  });
+
+  test("the fleet gateway path is preserved for every spelling of a sub-path base", () => {
+    for (const spelling of [
+      "https://api.hasna.com/skills",
+      "https://api.hasna.com/skills/api/v1",
+      "https://api.hasna.com/skills/v1",
+      "https://api.hasna.com/skills/api",
+    ]) {
+      expect(normalizeSkillsApiOrigin(spelling)).toBe("https://api.hasna.com/skills");
+    }
+  });
+
+  test("a loopback HTTP origin stays valid for local development servers", () => {
+    expect(normalizeSkillsApiOrigin("http://127.0.0.1:8790/v1")).toBe("http://127.0.0.1:8790");
+    expect(normalizeSkillsApiOrigin("http://localhost:8787/api/v1")).toBe("http://localhost:8787");
+  });
+
+  test("an operator URL that is not an API base keeps its own path", () => {
+    expect(normalizeSkillsApiOrigin("https://example.test/skills/portal")).toBe("https://example.test/skills/portal");
+  });
+});
+
+describe("the station credentials file is the disk tier's canonical shape", () => {
+  test("a 0600 URL+key file at ~/.hasna/skills/config/credentials resolves with no env configured", () => {
+    withTempDir((home) => {
+      const file = writeCredentialsFile(
+        home,
+        `${SKILLS_API_URL_ENV}=https://api.hasna.com/skills\n${SKILLS_API_KEY_ENV}=${KEY}\n`,
+      );
+      const fleet = resolveSkillsFleet({ HOME: home, USER: "test" });
+      expect(fleet.mode).toBe("hosted");
+      if (fleet.mode !== "hosted") return;
+      expect(fleet.apiOrigin).toBe("https://api.hasna.com/skills");
+      expect(fleet.apiKey).toBe(KEY);
+      expect(fleet.apiUrlSource).toBe(file);
+      expect(fleet.apiKeySource).toBe(file);
+    });
+  });
+
+  test("the same file keeps resolving through the async connection path", async () => {
+    await withTempDir(async (home) => {
+      writeCredentialsFile(home, `${SKILLS_API_URL_ENV}=https://skills.example.test/v1\n${SKILLS_API_KEY_ENV}=${KEY}\n`);
+      const connection = await resolveSkillsApiKey({ HOME: home, USER: "test" });
+      expect(connection).toBe(KEY);
+    });
+  });
+});

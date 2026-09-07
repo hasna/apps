@@ -99,6 +99,19 @@ export interface ApiPrincipal {
   scopes: string[];
 }
 
+/**
+ * A named API key row, minus the secret. The plaintext key is shown exactly
+ * once, at creation time, and only its hash is ever stored.
+ */
+export interface ApiKeyRow {
+  id: string;
+  name: string;
+  orgId: string;
+  userId: string;
+  scopes: string[];
+  createdAt: string;
+}
+
 export interface ServerRunRecord {
   id: string;
   orgId: string;
@@ -368,6 +381,15 @@ export interface SkillsProductStore {
   verifyConnectivity?(): Promise<void>;
   authenticateApiKeyHash(hash: string): Promise<ApiPrincipal | null>;
   ensureBootstrapApiKey?(token: string, principal?: Partial<ApiPrincipal>): Promise<void>;
+  /**
+   * Create a named API key for the org that owns `principal`. The plaintext key
+   * is returned exactly once; only its hash is stored.
+   */
+  createApiKey?(principal: ApiPrincipal, input: { name: string; scopes?: string[] }): Promise<{ key: string; id: string }>;
+  /** Every active (non-revoked) API key of the caller's org, secrets never included. */
+  listApiKeys?(principal: ApiPrincipal): Promise<ApiKeyRow[]>;
+  /** Revoke one key of the caller's org by id. False when no active key had that id. */
+  revokeApiKey?(principal: ApiPrincipal, keyId: string): Promise<boolean>;
   createRun(input: CreateRunInput): Promise<ServerRunRecord>;
   listRuns(principal: ApiPrincipal, limit: number): Promise<ServerRunRecord[]>;
   getRun(principal: ApiPrincipal, runId: string): Promise<ServerRunRecord | null>;

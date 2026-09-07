@@ -8,8 +8,9 @@ import { useDefaultTestTimeout } from "../test-preload.js";
 
 useDefaultTestTimeout();
 
-/** Public clients expose generic customer account requests. Hosted billing
- * machinery and provider integration remain outside the self-hosted server. */
+/** Public clients expose generic customer account requests. Billing is the
+ * deterministic zero-credit contract below; payment-provider machinery and
+ * provider integration remain outside the shipped server. */
 const BANNED_PATTERNS: Array<{ label: string; re: RegExp }> = [
   { label: "billing", re: /\bbilling\b/i },
   { label: "credits", re: /\bcredits\b/i },
@@ -22,6 +23,9 @@ const BANNED_PATTERNS: Array<{ label: string; re: RegExp }> = [
   { label: "subscription", re: /\bsubscription\b/i },
   { label: "pro plan", re: /\bpro plan\b/i },
 ];
+
+/** Provider machinery that must never reach the shipped server or CLI surface. */
+const PROVIDER_MACHINERY = /\b(?:stripe|webhook|provision|payment[-_ ]?intent|price[-_ ]?id|billing[-_ ]?portal[-_ ]?session)\b/i;
 
 function findBanned(surface: string): string[] {
   return BANNED_PATTERNS.filter(({ re }) => re.test(surface)).map(({ label }) => label);
@@ -100,11 +104,18 @@ describe("customer client and hosted billing boundary", () => {
     expect(surface).not.toMatch(/stripe[-_ ](?:secret|webhook|price)|provision_billing/i);
   });
 
-  test("server route table exposes no billing/payments vocabulary", () => {
+  test("the shipped server serves the deterministic billing contract without provider machinery", () => {
     const surface = serverRouteSurface();
     // Positive control: the router source was read and contains real routes.
     expect(surface).toContain("/api/");
     expect(surface).toContain("skills");
-    expect(findBanned(surface)).toEqual([]);
+    // The CLI's billing/credits commands must be answerable by a deployment of
+    // THIS server (campaign: every command works in any transport), so the
+    // deterministic zero-credit surface is present — with no payment provider
+    // behind it.
+    expect(surface).toContain("creditBalance");
+    expect(surface).toContain("SUBSCRIPTION_CHECKOUT_UNAVAILABLE");
+    expect(surface).toContain('capabilities: ["runs.submit", "runs.uploads"]');
+    expect(surface).not.toMatch(PROVIDER_MACHINERY);
   });
 });

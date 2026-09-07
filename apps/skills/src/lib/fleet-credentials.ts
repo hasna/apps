@@ -226,9 +226,12 @@ function asSkillsFleetCredentialError(error: unknown): SkillsFleetCredentialErro
 /**
  * Normalize a configured Skills authority to the origin the client dials.
  *
- * The Skills server serves its API under `/api/v1`, so the client composes
- * `<origin>/api/v1/...` itself. An operator who pasted the full API base — the
- * URL printed by every error message — must not end up with `/api/v1/api/v1`.
+ * The deployed fleet gateway serves the API under `/api/v1`, so the client
+ * composes `<origin>/api/v1/...` itself. An operator who pasted the full API
+ * base — the URL printed by every error message — must not end up with
+ * `/api/v1/api/v1` (or `/v1/api/v1`). The fleet `/v1` dialect (the spelling
+ * contracts' `toV1BaseUrl` produces for every other serve app) is accepted
+ * here too, so a base URL in either dialect normalizes to the same origin.
  */
 export function normalizeSkillsApiOrigin(apiUrl: string): string {
   const url = new URL(apiUrl);
@@ -237,12 +240,14 @@ export function normalizeSkillsApiOrigin(apiUrl: string): string {
     throw new SkillsFleetCredentialError("A Skills API URL must use HTTPS (or loopback HTTP), without credentials, query or fragment", "INVALID_API_URL");
   }
   const pathname = url.pathname.replace(/\/+$/, "");
-  if (pathname === "/api" || pathname === "/api/v1") {
+  if (pathname === "/api" || pathname === "/api/v1" || pathname === "/v1") {
     url.pathname = "/";
   } else if (pathname.endsWith("/api/v1")) {
     url.pathname = pathname.slice(0, -"/api/v1".length) || "/";
   } else if (pathname.endsWith("/api")) {
     url.pathname = pathname.slice(0, -"/api".length) || "/";
+  } else if (pathname.endsWith("/v1")) {
+    url.pathname = pathname.slice(0, -"/v1".length) || "/";
   }
   return url.toString().replace(/\/+$/, "");
 }
