@@ -15,6 +15,7 @@ import { registerServeCommand } from "./commands/serve.js";
 import { registerDbCommands } from "./commands/db.js";
 import { registerRoute53Commands } from "./commands/route53.js";
 import { registerReconcileExpiryCommand } from "./commands/reconcile-expiry.js";
+import { assertDomainsClientStorage } from "../lib/client-storage-policy.js";
 import { getPackageVersion } from "../lib/version.js";
 
 import { printLine, printErrorLine } from "../lib/stdout.js";
@@ -116,6 +117,8 @@ function registerOptionalHelp(program: Command): void {
 }
 
 const program = new Command();
+
+program.hook("preAction", () => assertDomainsClientStorage());
 
 program
   .name("domains")
