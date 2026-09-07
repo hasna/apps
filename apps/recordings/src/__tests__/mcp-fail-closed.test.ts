@@ -28,10 +28,7 @@ const AUTHORITY_KEYS = recordingsAuthorityEnvKeys();
 const AMBIENT_SELECTORS = [
   ...AUTHORITY_KEYS,
   ...LOCAL_OPT_IN_KEYS,
-  "HASNA_STATION",
-  "HASNA_HOME",
   "HASNA_CONFIG_HOME",
-  "NODE_ENV",
 ];
 
 const tempRoots: string[] = [];
@@ -48,12 +45,19 @@ function scratchHome(label: string): string {
 /**
  * The environment of a scrubbed station: the ambient process env with every
  * recordings selector removed (so a real disk credential or Keychain hint can
- * never leak in), a fresh HOME, and the caller's overrides.
+ * never leak in), a fresh HOME, a Keychain account that cannot exist, a
+ * scratch HASNA_HOME for the disk tier, and the caller's overrides.
  */
 function scrubbedStationEnv(home: string, extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
   for (const key of AMBIENT_SELECTORS) delete env[key];
-  return { ...env, HOME: home, ...extra };
+  return {
+    ...env,
+    HOME: home,
+    HASNA_STATION: "no-such-station",
+    HASNA_HOME: join(home, ".hasna"),
+    ...extra,
+  };
 }
 
 /** A newline-framed MCP `initialize` request, as an agent would send it. */
