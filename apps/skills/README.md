@@ -303,6 +303,11 @@ Stable command shapes:
   If history cannot be saved, the item reports `executionStatus` and
   `historyError`; inspect its effects before retrying. Other due items still run.
   No-due and `--dry-run` remain successful without consuming occurrences.
+  With `schedule run --json`, child stdout and stderr stream to stderr while
+  stdout contains only the command's JSON result. Human-mode child output is
+  unchanged. Programmatic `runSkill` callers can select `stdio: "stderr"` to
+  stream both child output channels to stderr without buffering; the existing
+  default/inherit and pipe modes retain their behavior.
 - Storage: `storage status --json` returns local `.skills` paths and optional
   repo-native remote readiness; `storage sync-plan --json` returns a no-network
   snapshot plan.

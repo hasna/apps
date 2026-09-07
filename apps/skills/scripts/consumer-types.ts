@@ -43,12 +43,19 @@ try {
   }, files: ["consumer.ts"] }));
   await writeFile(join(workspace, "consumer.ts"), `
 import { createRunService, runAdmissionSchema, runTerminalSchema, type SkillsProductStore, RemoteCapabilityUnavailableError, RemoteRequestError } from "@hasna/skills/sdk";
-import { RemoteSkillsClient, RemoteSkillsAuthClient, RemoteCapabilityUnavailableError as RootCapabilityError } from "@hasna/skills";
+import { RemoteSkillsClient, RemoteSkillsAuthClient, RemoteCapabilityUnavailableError as RootCapabilityError, runSkill } from "@hasna/skills";
 import { SKILLS_NATIVE_STORAGE_ENV, type SkillsNativeStorageConfig } from "@hasna/skills/storage";
 import { SkillsAdminSetUserRoleRequestSchema, SkillsAdminSuspendOrganizationRequestSchema,
   SkillsAdminResumeOrganizationRequestSchema, SkillsAdminListUsersResponseSchema,
   SkillsAdminShowOrganizationResponseSchema, SkillsAdminSetUserRoleResponseSchema } from "@hasna/skills/admin-contract";
 declare const store: SkillsProductStore;
+// Only compiled, never executed: preserve the existing modes and check the
+// additive streaming option through actual installed declarations.
+const streamOptions: Parameters<typeof runSkill>[2] = { stdio: "stderr" };
+const inheritedOptions: Parameters<typeof runSkill>[2] = { stdio: "inherit" };
+const capturedOptions: Parameters<typeof runSkill>[2] = { stdio: "pipe" };
+// @ts-expect-error A misspelled mode must not silently become any.
+const invalidStreamOptions: Parameters<typeof runSkill>[2] = { stdio: "stderr-buffered" };
 const service = createRunService({ store });
 const admission = runAdmissionSchema.parse({});
 const version: 1 = admission.contractVersion;
