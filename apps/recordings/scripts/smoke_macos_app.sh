@@ -9,7 +9,7 @@ if [ "$#" -ge 3 ]; then
       SMOKE_VARIANT="${4:-full}"
       ;;
     *)
-      echo "Usage: $0 <HasnaRecordings.app> <explicit absolute Bun executable path> [--variant full|bar]" >&2
+      echo "Usage: $0 <Hasna Recordings.app> <explicit absolute Bun executable path> [--variant full|bar]" >&2
       exit 2
       ;;
   esac
@@ -51,7 +51,7 @@ HOST_PLATFORM="$("$HOST_UNAME_EXECUTABLE" -s)"
 readonly HOST_PLATFORM
 
 if [ "$HOST_PLATFORM" != "Darwin" ] && [ "${RECORDINGS_TEST_SMOKE_ALLOW_NON_DARWIN:-0}" != "1" ]; then
-  echo "HasnaRecordings.app runtime smoke is only supported on macOS." >&2
+  echo "Hasna Recordings.app runtime smoke is only supported on macOS." >&2
   exit 1
 fi
 
@@ -123,12 +123,12 @@ HOME_DIRECTORY="${HOME:-}"
 case "$HOME_DIRECTORY" in
   /*) ;;
   *)
-    echo "HasnaRecordings.app runtime smoke requires an absolute HOME path." >&2
+    echo "Hasna Recordings.app runtime smoke requires an absolute HOME path." >&2
     exit 1
     ;;
 esac
 if [ ! -d "$HOME_DIRECTORY" ]; then
-  echo "HasnaRecordings.app runtime smoke HOME is not a directory: $HOME_DIRECTORY" >&2
+  echo "Hasna Recordings.app runtime smoke HOME is not a directory: $HOME_DIRECTORY" >&2
   exit 1
 fi
 
@@ -136,7 +136,7 @@ APP_PARENT="$(cd -P "$("$DIRNAME_EXECUTABLE" "$1")" && "$PWD_EXECUTABLE" -P)"
 APP_PATH="$APP_PARENT/$("$BASENAME_EXECUTABLE" "$1")"
 EXECUTABLE="$APP_PATH/Contents/MacOS/Recordings"
 if [ ! -x "$EXECUTABLE" ]; then
-  echo "HasnaRecordings.app runtime smoke executable is missing: $EXECUTABLE" >&2
+  echo "Hasna Recordings.app runtime smoke executable is missing: $EXECUTABLE" >&2
   exit 1
 fi
 
@@ -317,7 +317,7 @@ cleanup() {
     fi
     if [ -n "$SMOKE_APP_PID" ] && [ -n "$SMOKE_APP_PID_START_IDENTITY" ]; then
       terminate_verified_process \
-        "HasnaRecordings.app" \
+        "Hasna Recordings.app" \
         "$SMOKE_APP_PID" \
         "$EXECUTABLE" \
         "$SMOKE_APP_PID_START_IDENTITY" || true
@@ -377,7 +377,7 @@ run_smoke() {
   if ! SMOKE_APP_IDENTITIES_BEFORE_LAUNCH="$(
     process_records_for_exact_executable "$EXECUTABLE"
   )"; then
-    echo "HasnaRecordings.app runtime smoke ${mode} could not inventory exact app processes before launch." >&2
+    echo "Hasna Recordings.app runtime smoke ${mode} could not inventory exact app processes before launch." >&2
     return 1
   fi
 
@@ -399,24 +399,24 @@ run_smoke() {
       result_pid="$("$ENV_EXECUTABLE" -i HOME="$HOME_DIRECTORY" PATH="$SANITIZED_PATH" TMPDIR="$WORK_DIR" \
         "$BUN_EXECUTABLE" -e 'const value = await Bun.file(process.argv[1]).json(); console.log(value.processIdentifier)' "$output")"
       if ! [[ "$result_pid" =~ ^[1-9][0-9]*$ ]] || ! kill -0 "$result_pid" 2>/dev/null; then
-        echo "HasnaRecordings.app runtime smoke ${mode} reported a process that is not running." >&2
+        echo "Hasna Recordings.app runtime smoke ${mode} reported a process that is not running." >&2
         return 1
       fi
       if ! result_pid_start_identity="$(
         capture_process_start_identity "$result_pid" "$EXECUTABLE"
       )"; then
-        echo "HasnaRecordings.app runtime smoke ${mode} reported a process outside the exact app path." >&2
+        echo "Hasna Recordings.app runtime smoke ${mode} reported a process outside the exact app path." >&2
         return 1
       fi
       if process_identity_existed_before_launch "$result_pid" "$result_pid_start_identity"; then
-        echo "HasnaRecordings.app runtime smoke ${mode} reported an app process that predated this launch." >&2
+        echo "Hasna Recordings.app runtime smoke ${mode} reported an app process that predated this launch." >&2
         return 1
       fi
       if [ -n "$SMOKE_APP_PID" ] && {
         [ "$result_pid" != "$SMOKE_APP_PID" ] ||
           [ "$result_pid_start_identity" != "$SMOKE_APP_PID_START_IDENTITY" ];
       }; then
-        echo "HasnaRecordings.app runtime smoke ${mode} evidence did not match the exact launched app process." >&2
+        echo "Hasna Recordings.app runtime smoke ${mode} evidence did not match the exact launched app process." >&2
         return 1
       fi
       SMOKE_APP_PID="$result_pid"
@@ -429,19 +429,19 @@ run_smoke() {
       break
     fi
     if ! kill -0 "$SMOKE_PID" 2>/dev/null; then
-      echo "HasnaRecordings.app runtime smoke ${mode} exited without evidence." >&2
+      echo "Hasna Recordings.app runtime smoke ${mode} exited without evidence." >&2
       "$SED_EXECUTABLE" -n '1,120p' "$log" >&2
       return 1
     fi
     "$SLEEP_EXECUTABLE" 0.1
   done
   if [ ! -f "$output" ]; then
-    echo "HasnaRecordings.app runtime smoke ${mode} timed out." >&2
+    echo "Hasna Recordings.app runtime smoke ${mode} timed out." >&2
     "$SED_EXECUTABLE" -n '1,120p' "$log" >&2
     return 1
   fi
   if [ -z "$SMOKE_APP_PID" ]; then
-    echo "HasnaRecordings.app runtime smoke ${mode} did not bind evidence to the exact app process." >&2
+    echo "Hasna Recordings.app runtime smoke ${mode} did not bind evidence to the exact app process." >&2
     return 1
   fi
 
@@ -546,7 +546,7 @@ run_smoke() {
   ' "$output"
 
   if [ -e "$completion" ]; then
-    echo "HasnaRecordings.app runtime smoke ${mode} produced completion before the challenge." >&2
+    echo "Hasna Recordings.app runtime smoke ${mode} produced completion before the challenge." >&2
     return 1
   fi
   challenge="$("$ENV_EXECUTABLE" -i HOME="$HOME_DIRECTORY" PATH="$SANITIZED_PATH" TMPDIR="$WORK_DIR" \
@@ -554,7 +554,7 @@ run_smoke() {
   if ! rechecked_start_identity="$(
     capture_process_start_identity "$result_pid" "$EXECUTABLE"
   )" || [ "$rechecked_start_identity" != "$result_pid_start_identity" ]; then
-    echo "HasnaRecordings.app runtime smoke ${mode} process identity changed before completion challenge." >&2
+    echo "Hasna Recordings.app runtime smoke ${mode} process identity changed before completion challenge." >&2
     return 1
   fi
   write_atomic_text_file "$acknowledgement" "$challenge"
@@ -564,7 +564,7 @@ run_smoke() {
     "$SLEEP_EXECUTABLE" 0.1
   done
   if kill -0 "$SMOKE_PID" 2>/dev/null; then
-    echo "HasnaRecordings.app runtime smoke ${mode} completion handshake timed out." >&2
+    echo "Hasna Recordings.app runtime smoke ${mode} completion handshake timed out." >&2
     return 1
   fi
   if wait "$SMOKE_PID" 2>/dev/null; then
@@ -577,7 +577,7 @@ run_smoke() {
   SMOKE_APP_PID=""
   SMOKE_APP_PID_START_IDENTITY=""
   if [ "$wrapper_status" -ne 0 ]; then
-    echo "HasnaRecordings.app runtime smoke ${mode} open -W wrapper exited unsuccessfully (${wrapper_status})." >&2
+    echo "Hasna Recordings.app runtime smoke ${mode} open -W wrapper exited unsuccessfully (${wrapper_status})." >&2
     "$SED_EXECUTABLE" -n '1,120p' "$log" >&2
     return 1
   fi
@@ -602,7 +602,7 @@ run_smoke() {
         process.exit(1);
       }
     ' "$completion"; then
-    echo "HasnaRecordings.app runtime smoke ${mode} did not provide a valid completion response." >&2
+    echo "Hasna Recordings.app runtime smoke ${mode} did not provide a valid completion response." >&2
     return 1
   fi
 
@@ -613,7 +613,7 @@ run_smoke normal
 run_smoke permission-helper
 run_smoke resolver
 if [ "$SMOKE_VARIANT" = "bar" ]; then
-  echo "HasnaRecordings.app runtime smoke passed (bar variant): menu bar, windowless launch, helper isolation, and packaged resolver."
+  echo "Hasna Recordings.app runtime smoke passed (bar variant): menu bar, windowless launch, helper isolation, and packaged resolver."
 else
-  echo "HasnaRecordings.app runtime smoke passed: menu bar, retained window, helper isolation, and packaged resolver."
+  echo "Hasna Recordings.app runtime smoke passed: menu bar, retained window, helper isolation, and packaged resolver."
 fi

@@ -74,6 +74,7 @@ import { getPortableSkillPath, listPortableSkillMetas, type PortableSkillOptions
 import { pullSkills, writePullMarker, PULL_MARKER_FILE } from "./pull.js";
 import { RemoteSkillsClient, createRemoteSkillsClient, createRemoteSkillsClientReadOnly } from "./remote-client.js";
 import { packSkillBundle } from "./skill-bundle.js";
+import { isSkillsOwnershipMarker } from "./agent-sync.js";
 
 export type ReconcileConflictPolicy = "local" | "remote" | "skip";
 
@@ -211,7 +212,8 @@ function readBaseline(skillDir: string): Baseline | undefined {
   const markerPath = join(skillDir, PULL_MARKER_FILE);
   if (!existsSync(markerPath)) return undefined;
   try {
-    const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { contentHash?: string; version?: string };
+    const marker: unknown = JSON.parse(readFileSync(markerPath, "utf-8"));
+    if (!isSkillsOwnershipMarker(marker)) return undefined;
     return {
       ...(typeof marker.contentHash === "string" && marker.contentHash ? { contentHash: marker.contentHash } : {}),
       ...(typeof marker.version === "string" && marker.version ? { version: marker.version } : {}),

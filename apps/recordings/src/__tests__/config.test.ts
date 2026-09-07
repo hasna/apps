@@ -22,6 +22,7 @@ const savedEnv: Record<string, string | undefined> = {};
 const envKeys = [
   "OPENAI_API_KEY",
   "RECORDINGS_API_KEY",
+  "RECORDINGS_OPENAI_API_KEY",
   "RECORDINGS_ENHANCEMENT_KEY",
   "RECORDINGS_MODEL",
   "RECORDINGS_REALTIME_SESSION_MODEL",
@@ -113,6 +114,17 @@ describe("DEFAULT_CONFIG", () => {
 });
 
 describe("loadConfig", () => {
+  test("native provider override wins without supplying service authentication", () => {
+    const configPath = join(tempDir, "provider-config.json");
+    writeFileSync(configPath, JSON.stringify({ openai_api_key: "test-old-provider" }));
+    setEnv("RECORDINGS_OPENAI_API_KEY", "test-keychain-provider");
+    expect(loadConfig(configPath).openai_api_key).toBe("test-keychain-provider");
+    expect(() => getStore({
+      HASNA_RECORDINGS_API_URL: "https://api.example.test/recordings/v1",
+      RECORDINGS_OPENAI_API_KEY: "test-keychain-provider",
+    })).toThrow();
+  });
+
   test("returns defaults when no config file or env vars", () => {
     const config = loadConfig(join(tempDir, "nonexistent.json"));
     expect(config.transcription_model).toBe("gpt-4o-transcribe");

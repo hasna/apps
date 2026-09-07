@@ -11,6 +11,7 @@ export { createShortlinksHandler, serveShortlinks } from "./server.js";
 export { createCloudflarePlan, generateWorkerScript, writeWorkerFiles, upsertCloudflareDnsRecord } from "./cloudflare.js";
 export { createLocalSetupPlan, registerMachinesDns } from "./local.js";
 export { formatShortUrl, getConfigPath, getDataDir, getDatabasePath, loadConfig, normalizeHostname, saveConfig } from "./config.js";
+export type { ConfigEnv } from "./config.js";
 export { normalizeSlug, randomToken } from "./slug.js";
 export { createShortlinksApiClient, resolveShortlinksSdkTransport } from "./sdk/resolve.js";
 export type { ResolveShortlinksSdkTransportOptions, ShortlinksSdkTransport } from "./sdk/resolve.js";

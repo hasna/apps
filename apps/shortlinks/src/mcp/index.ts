@@ -6,19 +6,24 @@
  * Transports:
  *   shortlinks-mcp            stdio (default; for editor/agent clients)
  *   shortlinks-mcp --http     Streamable HTTP on 127.0.0.1:8851 (shared service)
+ *   shortlinks-mcp --version  print the package version and exit (also --help)
  *
- * Every tool routes through the shared client {@link Store}: the cloud ApiStore
- * (HTTPS `/v1` + bearer key) when the client flip is on; otherwise the tool
- * FAILS CLOSED naming the required env (SHORTLINKS_LOCAL=1 opts into the
- * on-box LocalStore SQLite — never a silent default). No DSN, no direct
- * sqlite/fetch — same seam the CLI uses.
+ * Every tool routes through the shared client {@link Store}: the hosted
+ * ApiStore (HTTPS `/v1` + bearer key) when the @hasna/contracts chain resolves
+ * a credential; the on-box LocalStore SQLite only under the explicit
+ * HASNA_SHORTLINKS_LOCAL=1 opt-in — never a silent default. With neither, the
+ * bin FAILS CLOSED AT STARTUP: it exits non-zero naming the credential chain
+ * before any transport starts. No DSN, no direct sqlite/fetch — same seam the
+ * CLI uses.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { withStore } from "../client-store.js";
+import { handleEarlyArgs, readPackageVersion } from "../early-args.js";
 import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
+import { assertMcpBackend, mcpUsage } from "./startup.js";
 
 const TOOLS = [
   {
@@ -188,7 +193,10 @@ async function dispatch(name: string, args: Record<string, any>): Promise<unknow
 }
 
 export function buildServer(): Server {
-  const server = new Server({ name: "shortlinks", version: "1.0.0" }, { capabilities: { tools: {} } });
+  const server = new Server(
+    { name: "shortlinks", version: readPackageVersion(import.meta.url) },
+    { capabilities: { tools: {} } },
+  );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 
@@ -207,6 +215,26 @@ export function buildServer(): Server {
 }
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  // --help / --version answer before any transport starts (hasna/apps#1720
+  // validation): both used to fall through to the stdio JSON-RPC loop.
+  const early = handleEarlyArgs(args);
+  if (early === "help") {
+    process.stdout.write(mcpUsage());
+    return;
+  }
+  if (early === "version") {
+    process.stdout.write(`${readPackageVersion(import.meta.url)}\n`);
+    return;
+  }
+  // Fail closed at startup: no credential and no local opt-in means there is
+  // no store to serve — exit non-zero naming the chain, never "stdio ready".
+  try {
+    assertMcpBackend(process.env);
+  } catch (error) {
+    console.error(`[shortlinks-mcp] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
   if (isHttpMode()) {
     await startMcpHttpServer(buildServer, { port: resolveMcpHttpPort() });
     await new Promise<void>((resolve) => {

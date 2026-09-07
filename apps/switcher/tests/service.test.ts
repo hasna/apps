@@ -101,7 +101,7 @@ for (const engine of ["sqlite","postgresql"] as const) {
   });
 }
 test("clients reject missing credentials, cleartext remote URLs and redirects",async()=>{
-  expect(()=>clientFromEnv({})).toThrow("no local database fallback");
+  expect(()=>clientFromEnv({})).toThrow("no API key could be resolved");
   expect(()=>new SwitcherClient({baseUrl:"http://example.com",apiKey:token})).toThrow();
   expect(()=>new SwitcherClient({baseUrl:"https://user:password@example.com",apiKey:token})).toThrow();
   let redirected=0;

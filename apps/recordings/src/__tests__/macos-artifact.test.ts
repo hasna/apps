@@ -47,7 +47,7 @@ const targetIdentitySha256 = Bun.CryptoHasher.hash(
 );
 const builderIdentitySha256 = "6".repeat(64);
 const strictAdHocDetails = [
-  "Executable=/tmp/HasnaRecordings.app/Contents/MacOS/Recordings",
+  "Executable=/tmp/Hasna Recordings.app/Contents/MacOS/Recordings",
   "Identifier=com.hasna.recordings",
   "CodeDirectory v=20400 size=123 flags=0x10000(runtime)",
   "Signature=adhoc",
@@ -112,7 +112,7 @@ function fixture(): {
       stapled: true,
       distribution_check: true,
     },
-    container: { type: "zip", install_locations: ["/Applications/HasnaRecordings.app"] },
+    container: { type: "zip", install_locations: ["/Applications/Hasna Recordings.app"] },
     nested_code_policy: {
       allowlist_sha256: "",
       items: [
@@ -174,7 +174,7 @@ function localFixture(
     stapled: false,
     distribution_check: false,
   };
-  manifest.container.install_locations = ["~/Applications/HasnaRecordings.app"];
+  manifest.container.install_locations = ["~/Applications/Hasna Recordings.app"];
   manifest.nested_code_policy.items = manifest.nested_code_policy.items.filter(
     (item) => item.path !== "Contents/Helpers/recordings-update-client",
   );
@@ -230,7 +230,7 @@ function requirementDigestFixture() {
   const root = mkdtempSync(join(tmpdir(), "recordings-requirement-digest-"));
   temporaryDirectories.push(root);
   const bin = join(root, "bin");
-  const app = join(root, "HasnaRecordings.app");
+  const app = join(root, "Hasna Recordings.app");
   mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(app, "Contents", "MacOS", "Recordings"), "fixture");
@@ -298,7 +298,7 @@ describe("macOS artifact manifest", () => {
   ])("rejects non-executable %s Mach-O code outside the allowlist", (_label, magic) => {
     const root = mkdtempSync(join(tmpdir(), "recordings-code-layout-"));
     temporaryDirectories.push(root);
-    const app = join(root, "HasnaRecordings.app");
+    const app = join(root, "Hasna Recordings.app");
     mkdirSync(join(app, "Contents", "MacOS"), { recursive: true });
     mkdirSync(join(app, "Contents", "Helpers"), { recursive: true });
     writeFileSync(join(app, "Contents", "MacOS", "Recordings"), "app");
@@ -320,18 +320,18 @@ describe("macOS artifact manifest", () => {
     const requirement = 'identifier "com.hasna.recordings" and anchor apple generic';
     expect(
       parseDesignatedRequirement(
-        `Executable=/tmp/build/HasnaRecordings.app\ndesignated => ${requirement}\n`,
+        `Executable=/tmp/build/Hasna Recordings.app\ndesignated => ${requirement}\n`,
       ),
     ).toBe(requirement);
     expect(
       parseDesignatedRequirement(
-        `Executable=/Users/example/Applications/HasnaRecordings.app\ndesignated => ${requirement}\n`,
+        `Executable=/Users/example/Applications/Hasna Recordings.app\ndesignated => ${requirement}\n`,
       ),
     ).toBe(requirement);
   });
 
   test("requires release designated requirements but records their absence for ad-hoc code", () => {
-    const missing = "Executable=/tmp/build/HasnaRecordings.app\n";
+    const missing = "Executable=/tmp/build/Hasna Recordings.app\n";
     expect(() => designatedRequirementForPolicy(missing, "release")).toThrow(
       "missing a designated requirement",
     );
@@ -386,7 +386,7 @@ describe("macOS artifact manifest", () => {
       "local_only",
       {
         SIGNING_DETAILS: [
-          "Executable=/tmp/HasnaRecordings.app/Contents/MacOS/Recordings",
+          "Executable=/tmp/Hasna Recordings.app/Contents/MacOS/Recordings",
           "Identifier=com.hasna.recordings",
           "CodeDirectory v=20400 size=123 flags=0x10000(runtime)",
           "Authority=Developer ID Application: Example Corp (EXAMPLE123)",
@@ -974,7 +974,7 @@ describe("macOS install journal compatibility", () => {
       "--app-parent",
       appParent,
       "--app-destination",
-      join(appParent, "HasnaRecordings.app"),
+      join(appParent, "Hasna Recordings.app"),
       "--data-dir",
       join(home, ".hasna", "recordings"),
       "--state-backup",
@@ -1056,7 +1056,7 @@ describe("macOS install journal compatibility", () => {
     temporaryDirectories.push(root);
     const home = join(root, "home");
     const appParent = join(home, "Applications");
-    const appDestination = join(appParent, "HasnaRecordings.app");
+    const appDestination = join(appParent, "Hasna Recordings.app");
     const dataDir = join(home, ".hasna", "recordings");
     const transaction = join(appParent, `.Recordings-transaction.schema-${schemaVersion}`);
     const stateBackup = join(transaction, "state.initial");
@@ -1188,7 +1188,7 @@ describe("macOS install journal compatibility", () => {
         phase: "committed",
         transaction_dir: transaction,
         app_parent: appParent,
-        app_destination: join(appParent, "HasnaRecordings.app"),
+        app_destination: join(appParent, "Hasna Recordings.app"),
         data_dir: join(home, ".hasna", "recordings"),
         state_backup: join(transaction, "state.initial"),
         state_backup_sha256: "1".repeat(64),
@@ -1236,7 +1236,7 @@ describe("macOS install journal compatibility", () => {
         phase: "committed",
         transaction_dir: transaction,
         app_parent: appParent,
-        app_destination: join(appParent, "HasnaRecordings.app"),
+        app_destination: join(appParent, "Hasna Recordings.app"),
         data_dir: join(home, ".hasna", "recordings"),
         state_backup: join(transaction, "state.initial"),
         state_backup_sha256: "1".repeat(64),
@@ -1279,7 +1279,7 @@ describe("macOS install journal compatibility", () => {
         phase: "committed",
         transaction_dir: transaction,
         app_parent: appParent,
-        app_destination: join(appParent, "HasnaRecordings.app"),
+        app_destination: join(appParent, "Hasna Recordings.app"),
         data_dir: join(home, ".hasna", "recordings"),
         state_backup: join(transaction, "state.initial"),
         state_backup_sha256: "1".repeat(64),

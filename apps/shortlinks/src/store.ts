@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { ShortlinksDatabase, makeId, now } from "./database.js";
-import { formatShortUrl, getClickSalt, loadConfig, normalizeHostname, updateConfig } from "./config.js";
+import { formatShortUrl, getClickSalt, loadConfig, normalizeHostname, updateConfig, type ConfigEnv } from "./config.js";
 import { getMachineId } from "./machine.js";
 import { DEFAULT_SLUG_LENGTH, normalizeSlug, randomToken } from "./slug.js";
 import type { AddDomainInput, Click, ClickInput, CreateLinkInput, Domain, Link, LinkStats } from "./types.js";
@@ -38,8 +38,8 @@ function domainFromRow(row: DomainRow): Domain {
   };
 }
 
-function linkFromRow(row: LinkRow): Link {
-  const config = loadConfig();
+function linkFromRow(row: LinkRow, env: ConfigEnv): Link {
+  const config = loadConfig(env);
   const publicBaseUrl = config.defaultDomain === row.hostname ? config.publicBaseUrl : undefined;
   return {
     ...row,
@@ -78,9 +78,12 @@ function isoOrNull(input: string | undefined): string | null {
 
 export class ShortlinksStore {
   readonly database: ShortlinksDatabase;
+  /** The env the store was built with: every app-home read (config, machine id, click salt) follows it. */
+  private readonly env: ConfigEnv;
 
-  constructor(dbPath?: string) {
-    this.database = new ShortlinksDatabase(dbPath);
+  constructor(dbPath?: string, env: ConfigEnv = process.env) {
+    this.env = env;
+    this.database = new ShortlinksDatabase(dbPath, env);
   }
 
   close(): void {
@@ -90,13 +93,13 @@ export class ShortlinksStore {
   addDomain(input: AddDomainInput): Domain {
     const hostname = normalizeHostname(input.hostname);
     const timestamp = now();
-    const machineId = getMachineId();
+    const machineId = getMachineId(this.env);
     const existing = this.getDomain(hostname);
     const id = existing?.id || makeId("dom");
 
     if (input.defaultDomain) {
       this.database.db.query("UPDATE domains SET default_domain = 0, updated_at = ?, synced_at = NULL").run(timestamp);
-      updateConfig({ defaultDomain: hostname, publicBaseUrl: `https://${hostname}` });
+      updateConfig({ defaultDomain: hostname, publicBaseUrl: `https://${hostname}` }, this.env);
     }
 
     this.database.db.query(`
@@ -159,15 +162,15 @@ export class ShortlinksStore {
     if (!domain) throw new Error("Domain not found.");
     // links + clicks cascade via ON DELETE CASCADE (foreign_keys pragma is ON).
     this.database.db.query("DELETE FROM domains WHERE id = ?").run(domain.id);
-    const config = loadConfig();
+    const config = loadConfig(this.env);
     if (config.defaultDomain && normalizeHostname(config.defaultDomain) === domain.hostname) {
-      updateConfig({ defaultDomain: undefined, publicBaseUrl: undefined });
+      updateConfig({ defaultDomain: undefined, publicBaseUrl: undefined }, this.env);
     }
     return domain;
   }
 
   getDefaultDomain(): Domain | null {
-    const config = loadConfig();
+    const config = loadConfig(this.env);
     if (config.defaultDomain) {
       const configured = this.getDomain(config.defaultDomain);
       if (configured) return configured;
@@ -185,7 +188,7 @@ export class ShortlinksStore {
     }
     const destinationUrl = validateDestinationUrl(input.destinationUrl);
     const timestamp = now();
-    const machineId = getMachineId();
+    const machineId = getMachineId(this.env);
     const expiresAt = isoOrNull(input.expiresAt);
     const slug = input.slug
       ? normalizeSlug(input.slug)
@@ -240,7 +243,7 @@ export class ShortlinksStore {
       ORDER BY l.created_at DESC
       LIMIT ?
     `).all(...params) as LinkRow[];
-    return rows.map(linkFromRow);
+    return rows.map((row) => linkFromRow(row, this.env));
   }
 
   getLink(domainOrSlug: string, maybeSlug?: string): Link | null {
@@ -259,7 +262,7 @@ export class ShortlinksStore {
       ORDER BY d.default_domain DESC, l.created_at ASC
       LIMIT 1
     `).get(...params) as LinkRow | null;
-    return row ? linkFromRow(row) : null;
+    return row ? linkFromRow(row, this.env) : null;
   }
 
   resolve(hostname: string, slug: string): Link | null {
@@ -272,7 +275,7 @@ export class ShortlinksStore {
       WHERE d.hostname = ? AND l.slug = ?
       LIMIT 1
     `).get(normalizedHost, normalizedSlug) as LinkRow | null;
-    if (row) return linkFromRow(row);
+    if (row) return linkFromRow(row, this.env);
 
     const fallback = this.getDefaultDomain();
     if (!fallback || fallback.hostname === normalizedHost) return null;
@@ -301,7 +304,7 @@ export class ShortlinksStore {
 
   recordClick(link: Link, input: ClickInput = {}): Click {
     const timestamp = now();
-    const machineId = getMachineId();
+    const machineId = getMachineId(this.env);
     const ipHash = input.ip ? this.hashIp(input.ip) : null;
     const id = makeId("clk");
     this.database.db.query(`
@@ -383,6 +386,6 @@ export class ShortlinksStore {
   }
 
   private hashIp(ip: string): string {
-    return createHash("sha256").update(`${getClickSalt()}:${ip}`).digest("hex");
+    return createHash("sha256").update(`${getClickSalt(this.env)}:${ip}`).digest("hex");
   }
 }

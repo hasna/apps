@@ -149,6 +149,14 @@ secrets status --json
 The status contract reports package version, redacted local data paths, env
 override names, and aggregate counts only. It does not include secret values,
 secret key names, raw env values, provider inventory, or private key material.
+For a hosted run it also names WHERE the transport was resolved from, under
+`transport` — `api_url_source`, `api_key_source` and `api_key_tier` — as names
+only (an env key name, a Keychain item reference such as
+`keychain:hasna.credentials.secrets.api-key@station03`, a credentials-file path
+with the home folded to `~`, or `default` for the fleet gateway); a local-vault
+run reports `transport: null`. Without a credential from any tier `status`
+fails closed exactly like every other verb: one actionable line on stderr and
+exit 1.
 
 ```ts
 import { getSecretReferenceStatus } from "@hasna/secrets/status";
@@ -726,12 +734,20 @@ MCP exposes the same flow through `storage_status`, `storage_push`,
 
 ## Data Directory
 
-The secrets data home resolves through the `@hasna/paths` resolver (XDG/macOS
-home layout). The legacy default is `~/.hasna/secrets`; once the resolver (XDG)
-data home is adopted (`HASNA_DATA_HOME` set, or the vault already migrated to
-`~/.local/share/hasna/secrets` on Linux / `~/Library/Application Support/Hasna/secrets`
-on macOS), the vault database, key material and the AWS sync state resolve
-there instead. Nothing moves on disk until the store is physically migrated.
+This section is about the **opt-in local vault** (`HASNA_SECRETS_LOCAL_VAULT=1`);
+a hosted run creates no file under any data home. The local data home resolves
+through the in-package data-home resolver (XDG/macOS home layout; the only
+`@hasna/paths` kind this package kept). The legacy default is `~/.hasna/secrets`;
+once the resolver (XDG) data home is adopted (`HASNA_DATA_HOME` set, or the vault
+already migrated to `~/.local/share/hasna/secrets` on Linux /
+`~/Library/Application Support/Hasna/secrets` on macOS), the vault database, key
+material and the AWS sync state resolve there instead. Nothing moves on disk
+until the store is physically migrated. `HASNA_HOME` is **not** consulted here:
+it replaces `~/.hasna` only for the `@hasna/contracts` credential file
+(`<HASNA_HOME>/secrets/config/credentials`), while the local vault stays at the
+home the test-isolation guard protects; move it with `HASNA_DATA_HOME` or the
+file-level overrides. No `~/.config/hasna` (or other XDG config/state/cache)
+location is composed by this package.
 The `~/.secrets` env-file bridge (import-env/export-env) is a separate legacy
 credential store and is unchanged. File-level overrides (`HASNA_SECRETS_DB_PATH`,
 `HASNA_SECRETS_KEY_DIR`, `HASNA_SECRETS_AWS_SYNC_STATE`) still win on top of
@@ -916,6 +932,22 @@ const input: SecretInput = {
 await client.putSecret(input);
 const secret = await client.getSecret({ key: input.key });
 ```
+
+The client's `baseUrl` is the service authority — an origin
+(`https://secrets.your-deployment.example`) or the gateway prefix
+(`https://api.hasna.com/secrets`); a trailing `/v1` is accepted and means the
+same thing. Data routes are sent under `<baseUrl>/v1/...` (`listSecrets()` →
+`https://api.hasna.com/secrets/v1/secrets`), and the public `health()` /
+`ready()` / `version()` probes at `<baseUrl>/health` etc., with no credential
+(the contract declares them public, and neither the serve nor the gateway
+answers them under `/v1`).
+
+An explicit `baseUrl` requires an explicit `apiKey`
+(`createSecretsClientFromEnv(env, { baseUrl, apiKey })`, or `new SecretsClient({ baseUrl, apiKey })`).
+The ambient fleet credential — the Keychain item, the credentials file,
+`HASNA_SECRETS_API_KEY` — is pinned to the authority it resolved with and is
+never attached to a caller-supplied one; naming an authority without a key
+throws before any resolver tier is consulted (hasna/apps#1794).
 
 Migrations live in [`migrations/`](migrations) (canonical checksummed set in
 `src/server/cloud-migrations.ts`). Container image: `Dockerfile.package`

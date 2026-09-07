@@ -66,7 +66,7 @@ test("actual CLI rejects reflected operator data without local fallback or malfo
   const cli=resolve(import.meta.dir,"../src/cli.ts");
   try {
     for (mode=0;mode<2;mode++) {
-      const child=Bun.spawn([process.execPath,cli,"providers","list"],{cwd:dir,env:{PATH:process.env.PATH,HOME:dir,HASNA_SWITCHER_HOME:join(dir,"must-not-create"),HASNA_SWITCHER_API_URL:server.url.origin,HASNA_SWITCHER_API_KEY:key},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
+      const child=Bun.spawn([process.execPath,cli,"providers","list"],{cwd:dir,env:{PATH:process.env.PATH,HOME:dir,HASNA_STATION:"switcher-sdk-fixture",HASNA_SWITCHER_HOME:join(dir,"must-not-create"),HASNA_SWITCHER_API_URL:server.url.origin,HASNA_SWITCHER_API_KEY:key},stdin:"ignore",stdout:"pipe",stderr:"pipe"});
       let timer:ReturnType<typeof setTimeout>|undefined;
       try {
         const result=await Promise.race([Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]),new Promise<never>((_,reject)=>{timer=setTimeout(()=>{child.kill("SIGKILL");reject(new Error("CLI fixture exceeded deadline"));},10000);})]);

@@ -50,9 +50,34 @@ function parseArg(name: string, fallback: string | undefined): string | undefine
   return fallback;
 }
 
+export const USAGE = `domains-serve — standalone HTTP API server for @hasna/domains (PostgreSQL backend)
+
+Usage: domains-serve [--port <n>] [--host <addr>]
+
+Options:
+  --port <n>       Port to listen on (default: $PORT or ${DEFAULT_PORT})
+  --host <addr>    Address to bind (default: $HOST or 0.0.0.0)
+  -h, --help       Print this help and exit
+  -V, --version    Print the package version and exit
+
+Environment:
+  HASNA_DOMAINS_DATABASE_URL     PostgreSQL DSN (falls back to DATABASE_URL)
+  HASNA_DOMAINS_API_SIGNING_KEY  HMAC signing secret for API keys
+                                 (falls back to API_KEY_SIGNING_SECRET)`;
+
+/** Informational flags are answered before any environment is inspected. */
+function earlyArgAnswer(argv: readonly string[]): string | undefined {
+  if (argv.includes("--help") || argv.includes("-h")) return USAGE;
+  if (argv.includes("--version") || argv.includes("-V")) return getPackageVersion();
+  return undefined;
+}
+
 async function main(): Promise<void> {
-  if (process.argv.includes("--version") || process.argv.includes("-V")) {
-    console.log(getPackageVersion());
+  // --help/-h and --version/-V answer before the signing secret or the
+  // database DSN is resolved: neither needs a configured environment.
+  const early = earlyArgAnswer(process.argv);
+  if (early !== undefined) {
+    console.log(early);
     return;
   }
 

@@ -327,6 +327,16 @@ export async function assertCloudSchemaReady(
             AND has_schema_privilege(current_user, schema_row.oid, 'CREATE')
        ) AS can_create_in_user_schema,
        has_schema_privilege(current_user, 'public', 'USAGE') AS can_use_public,
+       COALESCE((
+         SELECT has_column_privilege(table_row.relowner, table_row.oid, 'recording_id', 'SELECT') AND
+                has_column_privilege(table_row.relowner, table_row.oid, 'recording_id', 'UPDATE')
+           FROM pg_class table_row WHERE table_row.oid = 'public.recording_idempotency'::regclass
+       ), false) AS owner_can_tombstone_recording_idempotency,
+       COALESCE((
+         SELECT has_column_privilege(table_row.relowner, table_row.oid, 'recording_id', 'SELECT') AND
+                has_table_privilege(table_row.relowner, table_row.oid, 'DELETE')
+           FROM pg_class table_row WHERE table_row.oid = 'public.recording_tags'::regclass
+       ), false) AS owner_can_delete_recording_tags,
        EXISTS (
          SELECT 1
            FROM pg_class table_row
@@ -418,6 +428,14 @@ export async function assertCloudSchemaReady(
   const excessive = REQUIRED_CLOUD_TABLES.filter((table) => row?.[`has_extra_${table}_privileges`]);
   if (excessive.length > 0) {
     throw new Error(`cloud database role has surplus table privileges beyond runtime use: ${excessive.join(", ")}`);
+  }
+  // PostgreSQL runs referential actions as the affected table's owner. Owners
+  // can revoke their own DML grants, so the runtime posture alone is insufficient.
+  if (!row?.owner_can_tombstone_recording_idempotency) {
+    throw new Error("cloud database recording_idempotency owner lacks SELECT/UPDATE privileges required for recording deletion");
+  }
+  if (!row?.owner_can_delete_recording_tags) {
+    throw new Error("cloud database recording_tags owner lacks SELECT/DELETE privileges required for recording deletion");
   }
 }
 

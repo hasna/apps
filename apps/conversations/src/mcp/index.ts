@@ -11,7 +11,9 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { getStore } from "../lib/store/index.js";
+import { ConversationsStoreConfigError, assertUnambiguousStoreEnv, getStore } from "../lib/store/index.js";
+import { announceConversationsLocalMode, isConversationsLocalOptIn } from "../lib/contracts-env.js";
+import { getDbPath } from "../lib/db.js";
 
 import { registerMessagingTools } from "./tools/messaging.js";
 import { registerChannelTools } from "./tools/channels.js";
@@ -98,9 +100,56 @@ export function buildServer(forHttp = false): McpServer {
 
 export const server = buildServer();
 
-export async function startMcpServer() {
+/**
+ * FAIL CLOSED BEFORE SERVING (owner ruling 2026-09-04, hasna/apps#1720
+ * acceptance (c); the same gate @hasna/mementos received in #1868).
+ *
+ * Until now nothing evaluated the store selection before `server.connect`:
+ * every tool call resolved the store fresh and refused on its own, so a
+ * hosted station with no credential got an MCP server that answered
+ * `initialize`, advertised 40+ tools, and returned an `isError` result for
+ * each of them — fail-loud PER CALL, never fail-closed. A coding agent that
+ * registered `conversations-mcp` without a credential saw a healthy server
+ * and a wall of tool errors instead of one startup refusal naming the fix.
+ *
+ * So the store selection is decided HERE, once, before either transport is
+ * connected. The decision is the shared chain's (`assertUnambiguousStoreEnv`):
+ * the explicit local opt-in (`HASNA_CONVERSATIONS_DB_PATH` /
+ * `CONVERSATIONS_DB_PATH`) passes and is announced on stderr once, exactly as
+ * `getStore()` would announce it on the first call; anything the chain cannot
+ * resolve throws {@link ConversationsStoreConfigError}, whose message names
+ * every tier consulted and the opt-in — never a value. The tool-level
+ * refusals stay in place behind this gate (the chain is re-read per call by
+ * design, so a credential revoked mid-session still fails loud).
+ *
+ * Nothing is opened here: the opt-in path only reads the configured store
+ * path for the notice, and the hosted path only decides. The first SQLite
+ * open, if any, still happens inside the store on the first tool call.
+ *
+ * `env` defaults to the live `process.env` by identity, so the chain's
+ * ambient tiers (Keychain, credentials file) stay live (#1788); a test that
+ * hands in its own object gets a hermetic decision.
+ */
+export function assertMcpStoreConfigured(env: Record<string, string | undefined> = process.env): void {
+  assertUnambiguousStoreEnv(env);
+  if (isConversationsLocalOptIn(env)) {
+    announceConversationsLocalMode(getDbPath(env));
+  }
+}
+
+async function connectStdio(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+}
+
+/**
+ * Start the stdio server for the CLI's `conversations mcp` subcommand. The
+ * startup gate throws rather than exiting so the CLI's own error surface
+ * (and its `--json` error contract) reports the refusal.
+ */
+export async function startMcpServer() {
+  assertMcpStoreConfigured();
+  await connectStdio();
 }
 
 const isDirectRun =
@@ -128,8 +177,22 @@ Environment:
     console.log(pkg.version);
     return;
   }
+  // The startup gate runs BEFORE either transport exists, so a hosted run
+  // with no credential exits non-zero without ever answering `initialize`
+  // (stdio) or binding a port (HTTP). The refusal is the chain's own message
+  // on stderr — tier names and the local opt-in, never a value — and the
+  // exit code is 1, the same contract the CLI's error surface honours.
+  try {
+    assertMcpStoreConfigured();
+  } catch (error) {
+    if (error instanceof ConversationsStoreConfigError) {
+      console.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
   if (isStdioMode(args)) {
-    await startMcpServer();
+    await connectStdio();
     return;
   }
   // Default: shared Streamable HTTP server (one process per MCP, many agents).

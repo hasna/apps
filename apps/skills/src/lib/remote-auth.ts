@@ -1,4 +1,5 @@
 import { workspaceMembersQuery, type RemoteWorkspaceMembersOptions } from "./remote-workspace.js";
+import { workspaceMemberRoleInput, workspaceMemberRemovalInput, type SetRemoteWorkspaceMemberRole, type RemoveRemoteWorkspaceMember } from "./remote-workspace.js";
 import { RemoteSkillsClient } from "./remote-client.js";
 import { normalizeSkillsApiOrigin } from "./fleet-credentials.js";
 import { customerNamePatch, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
@@ -100,10 +101,11 @@ export class RemoteSkillsAuthClient {
   startDevice() { return this.request("/api/auth/device/start", { method: "POST", body: JSON.stringify({ client: "skills-sdk" }) }); }
   pollDevice(deviceCode: string) { return this.request("/api/auth/device/token", { method: "POST", body: JSON.stringify({ deviceCode }) }); }
   private async sessionClient(email: string, code: string): Promise<RemoteSkillsClient> {
+    const apiOrigin = this.apiOrigin;
     if (!email.includes("@") || !/^\d{6}$/.test(code)) throw new Error("Fresh email and six-digit verification code are required to manage this account");
     const login = await this.verifyCode(email, code);
     if (!login || typeof login.token !== "string" || !login.token) throw new Error("The server did not return an authorized account session");
-    return new RemoteSkillsClient(login.token, this.apiOrigin);
+    return new RemoteSkillsClient(login.token, apiOrigin);
   }
   async createApiKey(email: string, code: string, name: string, scopes?: string[]) {
     return (await this.sessionClient(email, code)).createApiKey(name, scopes);
@@ -123,6 +125,14 @@ export class RemoteSkillsAuthClient {
   async listWorkspaceMembers(email: string, code: string, options: RemoteWorkspaceMembersOptions = {}) {
     workspaceMembersQuery(options);
     return (await this.sessionClient(email, code)).listWorkspaceMembers(options);
+  }
+  async setWorkspaceMemberRole(email: string, code: string, membershipId: string, input: SetRemoteWorkspaceMemberRole) {
+    const captured = workspaceMemberRoleInput(membershipId, input);
+    return (await this.sessionClient(email, code)).setWorkspaceMemberRole(captured.membershipId, captured.body);
+  }
+  async removeWorkspaceMember(email: string, code: string, membershipId: string, input: RemoveRemoteWorkspaceMember) {
+    const captured = workspaceMemberRemovalInput(membershipId, input);
+    return (await this.sessionClient(email, code)).removeWorkspaceMember(captured.membershipId, captured.body);
   }
   /** Common auth transport used by CLI login, preserving the selected instance through awaits. */
   request(path: string, options?: RequestInit) {

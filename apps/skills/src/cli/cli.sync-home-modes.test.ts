@@ -73,6 +73,38 @@ for(const call of [()=>fetch("https://owned-sync.invalid"),()=>Bun.spawn(["/usr/
 });
 
 for (const json of [false, true]) {
+  test(`ordinary sync requires Skills ownership or explicit force (${json ? "JSON" : "human"})`, async () => {
+    for (const kind of ["foreign", "malformed", "unmarked", "owned"]) for (const mode of ["normal", "preview", "force"]) {
+      const f = fixture();
+      try {
+        f.skill("alpha", "codex", "Existing content belongs to this fixture");
+        put(join(f.target("alpha"), "old-resource.txt"), "Existing local resource\n");
+        if (kind === "malformed") put(join(f.target("alpha"), ".hasna-skills.json"), "{ invalid JSON\n");
+        else if (kind !== "unmarked") f.mark("alpha", "codex", kind === "owned" ? "@hasna/skills" : "another-tool");
+        const kept = [f.target("alpha", "claude"), f.target("beta"), join(f.home, "keep.txt")].map(path => [path, snapshot(path)] as const);
+        const authorized = kind === "owned" || mode === "force", writes = authorized && mode !== "preview";
+        const result = await f.cli(["sync", "alpha", "--for", "codex", "--source", f.source,
+          ...(mode === "preview" ? ["--dry-run"] : []), ...(mode === "force" ? ["--force"] : []), ...(json ? ["--json"] : [])], !writes);
+        expect(result.exitCode).toBe(0);
+        const action = authorized ? "update" : "skip";
+        if (json) {
+          const value = JSON.parse(result.stdout); expect(value.actions).toHaveLength(1);
+          expect(value).toMatchObject({ dryRun: mode === "preview", actions: [{ agent: "codex", skill: "alpha", action }] });
+          if (!authorized) expect(value.actions[0].reason).toContain("--force");
+        } else {
+          expect(result.stdout).toContain(`${action} alpha → codex`);
+          if (!authorized) expect(result.stdout).toContain("--force");
+        }
+        if (writes) {
+          expect(readFileSync(join(f.target("alpha"), "SKILL.md"), "utf8")).toBe(document("alpha"));
+          expect(existsSync(join(f.target("alpha"), "old-resource.txt"))).toBe(false);
+          expect(JSON.parse(readFileSync(join(f.target("alpha"), ".hasna-skills.json"), "utf8"))).toMatchObject({ managedBy: "@hasna/skills", skill: "alpha" });
+        }
+        for (const [path, before] of kept) expect(snapshot(path)).toEqual(before);
+      } finally { rmSync(f.root, { recursive: true, force: true }); }
+    }
+  });
+
   const flags = json ? ["--json"] : [];
   test(`adoption selects explicit/ambient corpus, names and agent without touching other ownership (${json ? "JSON" : "human"})`, async () => {
     const f = fixture();
@@ -121,7 +153,7 @@ for (const json of [false, true]) {
         expect(JSON.parse(dry.stdout).candidates).toHaveLength(1);
         expect(JSON.parse(dry.stdout)).toMatchObject({ dryRun: true, pruned: 0, candidates: [{ agent: "codex", skill: "stale", hash: sha(document("stale")) }] });
       }
-      else { expect(dry.stdout).toContain("Would prune 0 of 1 marked-and-stray dirs"); expect(dry.stdout).not.toContain("claude"); expect(dry.stdout).not.toContain("foreign"); }
+      else { expect(dry.stdout).toContain("Would prune 0 of 1 marked-and-stray dirs"); expect(dry.stdout).not.toContain("→ claude"); expect(dry.stdout).not.toContain("foreign →"); }
       const ambient = await f.cli(["render", "stale", "foreign", "source-only", "--prune", "--for", "codex", ...flags], true, { SKILLS_SOURCE: f.source });
       expect(ambient.exitCode).toBe(0); expect(ambient.stdout).toBe(dry.stdout);
       const apply = await f.cli([...selection, "--apply", ...flags], false); expect(apply.exitCode).toBe(0);
