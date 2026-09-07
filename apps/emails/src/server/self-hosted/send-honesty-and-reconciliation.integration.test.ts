@@ -649,3 +649,34 @@ describe.skipIf(!pgClient)("D: explicit tenant provider dispatch", () => {
     } finally { server.stop(true); }
   }, 20_000);
 });
+
+
+describe.skipIf(!pgClient)("domain lifecycle API policy", () => {
+  it("disables ready-address sending, verifies a bound provider, and restores outbound explicitly", async () => {
+    let sends = 0;
+    const sender: SelfHostedSender = { provider: "resend", send: async () => { sends++; return "accepted"; }, verifyDomain: async () => ({ dkim: "verified", spf: "verified", dmarc: "pending" }) };
+    const deps = makeDeps(sender);
+    const tenant = await makeTenant("domain-lifecycle-owner");
+    const outsider = await makeTenant("domain-lifecycle-other");
+    await registerSender(deps, tenant.token, "lifecycle.example", "sender@lifecycle.example");
+    const provider = await call(deps, "POST", "/v1/providers", { token: tenant.token, body: { name: "bound", type: "resend", active: true } });
+    deps.resolveSender = (tid, pid) => tid === tenant.tenantId && pid === provider.body.id ? sender : null;
+    const route = "/v1/domains/lifecycle.example/";
+    expect((await call(deps, "POST", route + "disable-outbound", { token: outsider.token, body: {} })).status).toBe(404);
+    for (const provider_id of ["", "  ", null]) expect((await call(deps, "POST", route + "verify", { token: tenant.token, body: { provider_id } })).status).toBe(400);
+    const disabled = await call(deps, "POST", route + "disable-outbound", { token: tenant.token, body: {} });
+    expect(disabled.status).toBe(200);
+    expect(disabled.body.domain.status).toBe("outbound_disabled");
+    const sendBody = { from: "sender@lifecycle.example", to: ["target@external.example"], subject: "fixture", idempotency_key: crypto.randomUUID() };
+    expect((await call(deps, "POST", "/v1/messages/send", { token: tenant.token, body: sendBody })).status).toBe(403);
+    expect(sends).toBe(0);
+    expect((await call(deps, "POST", route + "verify", { token: tenant.token, body: { provider_id: provider.body.id } })).body.domain.status).toBe("outbound_disabled");
+    const enabled = await call(deps, "POST", route + "enable-outbound", { token: tenant.token, body: {} });
+    expect(enabled.status).toBe(200);
+    expect(enabled.body.domain).toMatchObject({ status: "active", verified: true, provisioning_status: "verified" });
+    const sent = await call(deps, "POST", "/v1/messages/send", { token: tenant.token, body: { ...sendBody, idempotency_key: crypto.randomUUID() } });
+    expect(sent.status).toBe(202);
+    expect(sent.body.sent).toBe(true);
+    expect(sends).toBe(1);
+  });
+});

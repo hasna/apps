@@ -3414,6 +3414,38 @@ export const emailsSelfHostedOpenApi: EmailsOpenApiDocument = {
         responses: { "200": { content: { "application/json": { schema: deleteReceiptSchema } } } },
       },
     },
+    "/v1/domains/{id}/verify": {
+      post: {
+        operationId: "domainVerify",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { provider_id: { type: "string" } } } } } },
+        responses: { "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true, properties: { domain: { $ref: "#/components/schemas/Domain" } }, required: ["domain"] } } } }, "409": errorResponse("Domain readiness prerequisites are not satisfied"), "503": errorResponse("Provider binding or ingest configuration is missing") },
+      },
+    },
+    "/v1/domains/{id}/enable-outbound": {
+      post: {
+        operationId: "domainEnableOutbound",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { provider_id: { type: "string" } } } } } },
+        responses: { "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true, properties: { domain: { $ref: "#/components/schemas/Domain" } }, required: ["domain"] } } } }, "409": errorResponse("Domain readiness prerequisites are not satisfied"), "503": errorResponse("Provider binding or ingest configuration is missing") },
+      },
+    },
+    "/v1/domains/{id}/disable-outbound": {
+      post: {
+        operationId: "domainDisableOutbound",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { provider_id: { type: "string" } } } } } },
+        responses: { "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true, properties: { domain: { $ref: "#/components/schemas/Domain" } }, required: ["domain"] } } } }, "409": errorResponse("Domain readiness prerequisites are not satisfied"), "503": errorResponse("Provider binding or ingest configuration is missing") },
+      },
+    },
+    "/v1/domains/{id}/enable-inbound": {
+      post: {
+        operationId: "domainEnableInbound",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        requestBody: { content: { "application/json": { schema: { type: "object", properties: { provider_id: { type: "string" } } } } } },
+        responses: { "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true, properties: { domain: { $ref: "#/components/schemas/Domain" } }, required: ["domain"] } } } }, "409": errorResponse("Domain readiness prerequisites are not satisfied"), "503": errorResponse("Provider binding or ingest configuration is missing") },
+      },
+    },
     "/v1/messages": {
       get: {
         operationId: "listMessages",

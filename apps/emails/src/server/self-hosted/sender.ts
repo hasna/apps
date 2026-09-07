@@ -24,6 +24,9 @@ export type SelfHostedSenderCredentialSource =
 export interface SelfHostedSender {
   readonly provider: SelfHostedSendProvider;
   readonly credentialSource?: SelfHostedSenderCredentialSource;
+  readonly region?: string;
+  verifyDomain?(domain: string): Promise<{ verifiedForSending?: boolean; dkim: import("../../types/index.js").DnsStatus; spf: import("../../types/index.js").DnsStatus; dmarc: import("../../types/index.js").DnsStatus }>;
+  checkInboundDomain?(domain: string, bucket: string): Promise<{ ready: boolean; reason: string }>;
   send(input: SendEmailOptions): Promise<string>;
 }
 
@@ -195,6 +198,48 @@ export function buildSelfHostedSender(env: NodeJS.ProcessEnv = process.env): Sel
     credentialSource: raw === "ses"
       ? SES_CREDENTIAL_SOURCE_LABEL[resolveSesCredentials(provider).source]
       : "api_key",
+    region: provider.region ?? undefined,
+    verifyDomain: async (domain) => {
+      if (raw === "ses") {
+        const { SESv2Client, GetEmailIdentityCommand } = await import("@aws-sdk/client-sesv2");
+        const credentials = resolveSesCredentials(provider).credentials;
+        const client = new SESv2Client({ region: provider.region ?? undefined, ...(credentials ? { credentials } : {}) });
+        try {
+          const identity = await client.send(new GetEmailIdentityCommand({ EmailIdentity: domain }));
+          return { verifiedForSending: identity.VerifiedForSendingStatus === true && identity.DkimAttributes?.Status === "SUCCESS", dkim: identity.DkimAttributes?.Status === "SUCCESS" ? "verified" : "pending", spf: "pending", dmarc: "pending" };
+        } finally { client.destroy(); }
+      }
+      const { Resend } = await import("resend");
+      const client = new Resend(provider.api_key!);
+      const listed = await client.domains.list();
+      if (listed.error) throw new Error("Could not list Resend domains; check the server provider credentials.");
+      const found = listed.data?.data.find((entry) => entry.name.toLowerCase() === domain.toLowerCase());
+      if (!found) return { dkim: "pending", spf: "pending", dmarc: "pending" };
+      const verified = await client.domains.verify(found.id);
+      if (verified.error) throw new Error("Resend could not start domain verification.");
+      const detail = await client.domains.get(found.id);
+      if (detail.error) throw new Error("Could not read Resend domain verification.");
+      const status = detail.data?.status === "verified" ? "verified" : "pending";
+      return { dkim: status, spf: status, dmarc: "pending" };
+    },
+    ...(raw === "ses" ? { checkInboundDomain: async (domain: string, bucket: string) => {
+      const { SESClient, DescribeActiveReceiptRuleSetCommand } = await import("@aws-sdk/client-ses");
+      const credentials = resolveSesCredentials(provider).credentials;
+      const client = new SESClient({ region: provider.region ?? undefined, ...(credentials ? { credentials } : {}) });
+      try {
+        const rules = await client.send(new DescribeActiveReceiptRuleSetCommand({}));
+        for (const rule of rules.Rules ?? []) {
+          if (!rule.Enabled) continue;
+          const recipients = rule.Recipients ?? [];
+          if (recipients.length && !recipients.some((recipient) => recipient.toLowerCase() === domain.toLowerCase())) continue;
+          for (const action of rule.Actions ?? []) {
+            if (action.S3Action?.BucketName === bucket) return { ready: true, reason: "Active SES receipt rule delivers this domain to the configured ingest bucket." };
+            if (action.StopAction || action.BounceAction) return { ready: false, reason: "An earlier SES receipt action stops mail before the ingest bucket." };
+          }
+        }
+        return { ready: false, reason: "No active SES receipt rule routes this domain to the configured ingest bucket." };
+      } finally { client.destroy(); }
+    } } : {}),
     send: (input) => adapter.sendEmail(input),
   };
 }

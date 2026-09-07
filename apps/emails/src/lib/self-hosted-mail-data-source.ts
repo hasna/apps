@@ -2263,6 +2263,9 @@ export class SelfHostedMailDataSource implements MailDataSource {
   }
 
   async send(input: MailSendInput): Promise<MailSendResult> {
+    if (input.providerId !== undefined && (typeof input.providerId !== "string" || !input.providerId.trim())) {
+      throw new Error("providerId must be a non-empty provider identifier.");
+    }
     if (input.scheduledAt) {
       throw new Error("Scheduled send is not supported on the self-hosted emails serve.");
     }

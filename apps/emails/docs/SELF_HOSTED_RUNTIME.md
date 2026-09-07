@@ -270,3 +270,26 @@ provider adapters, which emit the List-Unsubscribe headers. The URL participates
 in idempotency checking. Clients check the advertised send API contract before
 using provider selection or unsubscribe URLs; an older API must be upgraded
 first so these options cannot be silently dropped.
+
+
+### Domain lifecycle commands
+
+`emails domain status` and `emails domains status [domain]` read the tenant's
+server registry. `domains verify`, `enable-outbound`, `disable-outbound`, and
+`enable-inbound` call authenticated operator-only domain lifecycle routes.
+Verification and enablement use the domain's tenant provider binding described
+above; they never read provider credentials from the CLI machine. An optional
+`--provider` selects and persists a verified tenant provider association.
+
+Disabling outbound immediately denies sends even for previously ready addresses.
+Verification alone does not undo that disable. Enabling outbound requires the
+bound provider to confirm identity/DKIM readiness. SES identity verification is
+reported separately from SPF/DMARC DNS observations; neither a missing DMARC
+observation nor a provider transport error is reported as successful DNS proof.
+
+Enabling inbound requires the server ingest bucket/queue configuration, regional
+SES MX, and an enabled SES receipt action delivering to that bucket. It does not
+modify DNS, receipt rules, or S3 notifications and does not prove end-to-end queue
+delivery. Existing outbound provisioning state is preserved; a fresh inbound-only
+state is recorded as `inbound_ready`. Full DNS provisioning/connect/setup remains
+separate from these readiness operations. Readiness checks cannot be forced off.

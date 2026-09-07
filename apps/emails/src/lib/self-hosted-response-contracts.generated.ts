@@ -7849,6 +7849,586 @@ export const SELF_HOSTED_RESPONSE_CONTRACTS: readonly SelfHostedResponseContract
     }
   },
   {
+    "method": "POST",
+    "operationId": "domainDisableOutbound",
+    "path": "/v1/domains/{id}/disable-outbound",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "domain": {
+          "$ref": "#/components/schemas/Domain"
+        }
+      },
+      "required": [
+        "domain"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainDisableOutbound",
+    "path": "/v1/domains/{id}/disable-outbound",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainDisableOutbound",
+    "path": "/v1/domains/{id}/disable-outbound",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainDisableOutbound",
+    "path": "/v1/domains/{id}/disable-outbound",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainDisableOutbound",
+    "path": "/v1/domains/{id}/disable-outbound",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainDisableOutbound",
+    "path": "/v1/domains/{id}/disable-outbound",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainDisableOutbound",
+    "path": "/v1/domains/{id}/disable-outbound",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainDisableOutbound",
+    "path": "/v1/domains/{id}/disable-outbound",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableInbound",
+    "path": "/v1/domains/{id}/enable-inbound",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "domain": {
+          "$ref": "#/components/schemas/Domain"
+        }
+      },
+      "required": [
+        "domain"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableInbound",
+    "path": "/v1/domains/{id}/enable-inbound",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableInbound",
+    "path": "/v1/domains/{id}/enable-inbound",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableInbound",
+    "path": "/v1/domains/{id}/enable-inbound",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableInbound",
+    "path": "/v1/domains/{id}/enable-inbound",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableInbound",
+    "path": "/v1/domains/{id}/enable-inbound",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableInbound",
+    "path": "/v1/domains/{id}/enable-inbound",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableInbound",
+    "path": "/v1/domains/{id}/enable-inbound",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableOutbound",
+    "path": "/v1/domains/{id}/enable-outbound",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "domain": {
+          "$ref": "#/components/schemas/Domain"
+        }
+      },
+      "required": [
+        "domain"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableOutbound",
+    "path": "/v1/domains/{id}/enable-outbound",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableOutbound",
+    "path": "/v1/domains/{id}/enable-outbound",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableOutbound",
+    "path": "/v1/domains/{id}/enable-outbound",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableOutbound",
+    "path": "/v1/domains/{id}/enable-outbound",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableOutbound",
+    "path": "/v1/domains/{id}/enable-outbound",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableOutbound",
+    "path": "/v1/domains/{id}/enable-outbound",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainEnableOutbound",
+    "path": "/v1/domains/{id}/enable-outbound",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainVerify",
+    "path": "/v1/domains/{id}/verify",
+    "status": 200,
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "domain": {
+          "$ref": "#/components/schemas/Domain"
+        }
+      },
+      "required": [
+        "domain"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainVerify",
+    "path": "/v1/domains/{id}/verify",
+    "status": 400,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainVerify",
+    "path": "/v1/domains/{id}/verify",
+    "status": 401,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainVerify",
+    "path": "/v1/domains/{id}/verify",
+    "status": 403,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "error",
+        "reason"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainVerify",
+    "path": "/v1/domains/{id}/verify",
+    "status": 409,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainVerify",
+    "path": "/v1/domains/{id}/verify",
+    "status": 413,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "request body too large"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainVerify",
+    "path": "/v1/domains/{id}/verify",
+    "status": 500,
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "enum": [
+            "internal error"
+          ]
+        }
+      },
+      "required": [
+        "error"
+      ]
+    }
+  },
+  {
+    "method": "POST",
+    "operationId": "domainVerify",
+    "path": "/v1/domains/{id}/verify",
+    "status": 503,
+    "schema": {
+      "$ref": "#/components/schemas/ErrorResponse"
+    }
+  },
+  {
     "method": "GET",
     "operationId": "listResourceEmailAgentRuns",
     "path": "/v1/email-agent-runs",

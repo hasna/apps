@@ -1,3 +1,4 @@
+import { runDomainOperation, DomainOperationError, type DomainOperation } from "./domain-operations.js";
 // HTTP request handler for the Emails self-hosted service.
 //
 // Surfaces operational probes (/health, /ready, /version)
@@ -2471,6 +2472,28 @@ export async function handleSelfHostedRequest(
         return response;
       }, limit);
       return json(200, result);
+    }
+
+    const domainOperation = path.match(/^\/v1\/domains\/([^/]+)\/(verify|enable-outbound|disable-outbound|enable-inbound)$/);
+    if (domainOperation) {
+      if (method !== "POST") return json(405, { error: "method not allowed" });
+      const auth = await authenticate(deps, req, url, write);
+      if (!auth.ok) return auth.response;
+      const denied = requireTenantOperator(auth, "domain lifecycle changes");
+      if (denied) return denied;
+      const body = await readJsonBody(req);
+      if (body.provider_id !== undefined && (typeof body.provider_id !== "string" || !body.provider_id.trim())) return json(400, { error: "provider_id must be a non-empty provider identifier" });
+      if (body.force === true) return json(400, { error: "Domain readiness checks cannot be bypassed." });
+      try {
+        return json(200, await runDomainOperation(auth.store, auth.ctx.tenantId, decodeURIComponent(domainOperation[1]!), domainOperation[2] as DomainOperation, {
+          providerId: typeof body.provider_id === "string" ? body.provider_id : undefined,
+          resolveSender: deps.resolveSender,
+          env: deps.env,
+        }));
+      } catch (error) {
+        if (error instanceof DomainOperationError) return json(error.status, { error: error.message, reason: "domain_not_ready" });
+        throw error;
+      }
     }
 
     // ---- generic resources (contacts/providers/templates/groups/…) --------

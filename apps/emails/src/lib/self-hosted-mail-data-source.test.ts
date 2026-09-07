@@ -2010,6 +2010,15 @@ describe("SelfHostedMailDataSource — /v1 resource mapping", () => {
     expect(result.warning).toBeUndefined();
   });
 
+  it("rejects explicit blank and null providers without contacting the API", async () => {
+    let calls = 0;
+    const ds = new SelfHostedMailDataSource({ baseUrl: "https://emails.example/v1", apiKey: "k", fetchImpl: async () => { calls++; throw new Error("must not request"); } });
+    for (const providerId of ["", "  ", null]) {
+      await expect(ds.send({ to: "x@example.com", from: "me@example.com", subject: "s", body: "b", providerId: providerId as string })).rejects.toThrow("provider");
+    }
+    expect(calls).toBe(0);
+  });
+
   for (const options of [{ providerId: "some-provider-id" }, { unsubscribeUrl: "https://example.com/unsubscribe" }]) {
     it(`refuses unsupported ${Object.keys(options)[0]} on an older server without sending`, async () => {
       const paths: string[] = [];

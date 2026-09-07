@@ -195,6 +195,16 @@ describe("domain CLI — self-hosted (self_hosted) /v1 routing", () => {
     expect(result.stderr).not.toContain("not available in the self-hosted client");
   });
 
+  it("singular status lists API metadata and lifecycle operations resolve domains before acting", async () => {
+    expect((await runDomainCommand(["domain", "status"])).data).toEqual([]);
+    for (const action of ["verify", "enable-inbound", "enable-outbound", "disable-outbound"]) {
+      const result = await runDomainCommandExpectingExit(["domains", action, "missing.example"]);
+      expect(result.error).toBe("process.exit:1");
+      expect(result.stderr).toContain("not found");
+      expect(result.stderr).not.toContain("not implemented");
+    }
+  });
+
   it("refuses unshipped domain subcommands without claiming a server implements them", async () => {
     // These do not ship in ANY configuration: the connect/setup orchestrations
     // were deleted, and the lifecycle-readiness ledger is reachable only from
@@ -203,14 +213,8 @@ describe("domain CLI — self-hosted (self_hosted) /v1 routing", () => {
     // server" was false in exactly this arm, where it sounded most credible.
     // Required options are supplied so commander reaches the action.
     const blocked = [
-      ["domain", "status"],
       ["domain", "connect", "ex.com", "--provider", "x"],
-      ["domain", "verify", "ex.com"],
       ["domains", "connect", "ex.com", "--provider", "x"],
-      ["domains", "verify", "ex.com"],
-      ["domains", "enable-inbound", "ex.com"],
-      ["domains", "enable-outbound", "ex.com"],
-      ["domains", "disable-outbound", "ex.com"],
     ];
     for (const args of blocked) {
       const result = await runDomainCommandExpectingExit(args);

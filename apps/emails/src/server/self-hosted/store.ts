@@ -4520,6 +4520,9 @@ export class TenantScopedStore {
     if (!address.verified) {
       return { allowed: false, code: "sender_unverified", message: "sender address is not verified", status: 403 };
     }
+    if (address.domain_status === "outbound_disabled") {
+      return { allowed: false, code: "sender_not_ready", message: "outbound sending is disabled for this domain", status: 403 };
+    }
     const addressReady = ["ready", "active", "verified"].includes(address.provisioning_status ?? "");
     const domainReady = address.domain_verified === true && ["active", "verified", "ready"].includes(address.domain_status ?? "");
     const domainProvisioned = ["ready", "active", "verified"].includes(address.domain_provisioning_status ?? "");

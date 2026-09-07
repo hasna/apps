@@ -219,9 +219,6 @@ describe("domains lifecycle commands", () => {
   it("fails loud on lifecycle mutations that do not ship, naming a real next step", async () => {
     for (const args of [
       ["domains", "connect", "owned.example.com", "--provider", "x"],
-      ["domains", "enable-inbound", "ready.example.com"],
-      ["domains", "enable-outbound", "ready.example.com"],
-      ["domains", "disable-outbound", "ready.example.com"],
     ]) {
       const result = await runDomainCommandExpectingExit(args);
       expect(result.error).toBe("process.exit:1");
@@ -266,16 +263,9 @@ describe("domain move-provider command", () => {
 });
 
 describe("domain status command", () => {
-  // The refusal that was reaching `next_actions` via the status payload. It now
-  // says what is missing (nothing is wired to the readiness ledger) and points at
-  // two commands that run, instead of at a server route that does not exist.
-  it("fails loud without blaming a mode, and names commands that run", async () => {
-    const result = await runDomainCommandExpectingExit(["domain", "status"]);
-    expect(result.error).toBe("process.exit:1");
-    expect(result.stderr).toContain("emails domain status is not implemented in this build");
-    expect(result.stderr).toContain("emails domains status [domain]");
-    expect(result.stderr).toContain("emails domain check <domain>");
-    expect(result.stderr).not.toContain("not available in the self-hosted client");
+  it("shows the server registry without a legacy refusal", async () => {
+    const result = await runDomainCommand(["domain", "status"]);
+    expect(result.data).toEqual([]);
   });
 });
 
@@ -368,9 +358,8 @@ describe("domain dns command", () => {
 
     const refusal = await runDomainCommandExpectingExit(["domain", "verify", "vfy.example.com"]);
     expect(refusal.error).toBe("process.exit:1");
-    expect(refusal.stderr).toContain("emails domain verify is not implemented in this build");
+    expect(refusal.stderr).not.toContain("is not implemented in this build");
     expect(refusal.stderr).not.toContain("needs no provider");
-    expect(refusal.stderr).toContain("resolving the domain's provider for DKIM when it has one");
 
     // And the claim is checked against the command itself, not just reworded: a
     // registered domain reports the provider it resolved.

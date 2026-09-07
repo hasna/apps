@@ -675,6 +675,38 @@ export class EmailsSelfHostClient {
       });
     }
 
+    async domainDisableOutbound(id: string, body: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": Domain }> {
+      return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/disable-outbound`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    async domainEnableInbound(id: string, body: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": Domain }> {
+      return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/enable-inbound`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    async domainEnableOutbound(id: string, body: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": Domain }> {
+      return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/enable-outbound`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
+    async domainVerify(id: string, body: { "provider_id"?: string }, init?: RequestInit): Promise<{ "domain": Domain }> {
+      return this.request("POST", `/v1/domains/${encodeURIComponent(String(id))}/verify`, {
+        body,
+        query: undefined,
+        init,
+      });
+    }
+
     /** List tenant-scoped email-agent-runs */
     async listResourceEmailAgentRuns(query?: { "limit"?: number; "offset"?: number; "agent_key"?: string | null; "inbound_email_id"?: string | null; "status"?: string | null }, init?: RequestInit): Promise<{ "items": Array<{ "agent_key": string | null; "inbound_email_id": string | null; "provider": string | null; "model": string | null; "status": string | null; "category": string | null; "labels_json": unknown; "priority": number; "confidence": number; "risk_score": number; "summary": string | null; "reasoning": string | null; "tool_calls_json": unknown; "output_json": unknown; "error": string | null; "started_at": string | null; "completed_at": string | null; "id": string; "tenant_id": string; "created_at": string; "updated_at": string }> }> {
       return this.request("GET", `/v1/email-agent-runs`, {
