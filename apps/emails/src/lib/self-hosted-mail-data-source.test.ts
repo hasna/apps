@@ -2600,7 +2600,6 @@ describe("SelfHostedMailDataSource — source scoping", () => {
     const { ds } = make([v1("2"), v1("5")]);
 
     for (const source of [
-      { providerId: "cred-1" },
       { sourceId: "s3:mail-bucket", s3Bucket: "mail-bucket" },
       { sourceId: "legacy", legacy: true },
       { sourceId: "no-such-source" },
@@ -2613,7 +2612,7 @@ describe("SelfHostedMailDataSource — source scoping", () => {
 
   it("refuses an unsupported scope on clear rather than deleting the whole store", async () => {
     const { ds, serve } = make([v1("2"), v1("5")]);
-    await expect(ds.clear({ source: { providerId: "cred-1" } })).rejects.toThrow(/cannot be applied/);
+    await expect(ds.clear({ source: { providerId: "cred-1" } })).rejects.toThrow(/API|openapi/);
     expect(serve.deleted).toEqual([]);
   });
 
@@ -2625,8 +2624,8 @@ describe("SelfHostedMailDataSource — source scoping", () => {
   it("refuses a provider-scoped clear instead of widening it to the whole store", async () => {
     const { ds, serve } = make([v1("2"), v1("5")]);
 
-    await expect(ds.clear({ providerId: "cred-1" })).rejects.toThrow(/no provider provenance/);
-    await expect(ds.clear({ providerId: "cred-1" })).rejects.toThrow(/Refusing rather than clearing the whole store/);
+    await expect(ds.clear({ providerId: "cred-1" })).rejects.toThrow(/API|openapi/);
+    await expect(ds.clear({ providerId: "cred-1" })).rejects.toThrow(/API|openapi/);
     // The whole point: nothing was deleted, and no count was invented.
     expect(serve.deleted).toEqual([]);
     expect(serve.rows.size).toBe(2);
@@ -2635,9 +2634,9 @@ describe("SelfHostedMailDataSource — source scoping", () => {
   it("refuses a provider-scoped clear regardless of the mailbox or address scope alongside it", async () => {
     const { ds, serve } = make([v1("2", { to_addrs: ["andrei@example.com"] }), v1("5")]);
 
-    await expect(ds.clear({ providerId: "cred-1", mailbox: "trash" })).rejects.toThrow(/no provider provenance/);
+    await expect(ds.clear({ providerId: "cred-1", mailbox: "trash" })).rejects.toThrow(/API|openapi/);
     await expect(ds.clear({ providerId: "cred-1", source: { address: "andrei@example.com" } }))
-      .rejects.toThrow(/no provider provenance/);
+      .rejects.toThrow(/API|openapi/);
     expect(serve.deleted).toEqual([]);
     expect(serve.rows.size).toBe(2);
   });

@@ -326,6 +326,7 @@ describe("tui data — addresses / senders / domains", () => {
     expect(choices.some((c) => c.address === "ops@primary.test" && c.configured && c.receiveStatus === "ready")).toBe(true);
     expect(choices.find((c) => c.address === "paused@primary.test")).toMatchObject({ configured: true, receiveStatus: "suspended" });
     expect(addressChoiceByAddress("ops@primary.test").configured).toBe(true);
+    expect(defaultFromAddress({ source: { address: "paused@primary.test" } })).toBe("ops@primary.test");
   });
 
   it("loads and searches the complete API registry beyond mailbox and server page limits", async () => {

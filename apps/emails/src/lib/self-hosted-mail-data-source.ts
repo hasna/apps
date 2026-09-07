@@ -47,7 +47,6 @@ import {
   type UnreadByAddressRow,
   mailboxLabel,
   renderMarkdown,
-  SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED,
 } from "./mail-types.js";
 import { normalizePriorityRuleInput, priorityRuleMatchesSender, prioritySenderRuleId, type PrioritySenderRule } from "./priority-senders.js";
 import type {
@@ -98,6 +97,7 @@ interface V1Message {
   status?: string | null;
   send_state?: string | null;
   provider_message_id?: string | null;
+  provider_id?: string | null;
   message_id?: string | null;
   in_reply_to?: string | null;
   received_at?: string | null;
@@ -403,7 +403,7 @@ function scopedCountWalkExhausted(scannedRows: number, requests: number): Error 
 // fields are already lower-cased by selfHostedScopeOf, and the separator cannot
 // occur in either, so distinct scopes cannot collide on one key.
 function scopedCountsKey(scope: SelfHostedScope): string {
-  return `a=${scope.address ?? ""} d=${scope.domain ?? ""}`;
+  return JSON.stringify([scope.address, scope.domain, scope.providerId]);
 }
 // Hard cap on rows walked while collecting one conversation. The candidate read
 // is already narrowed server-side by the subject filter, so this only bounds a
@@ -948,6 +948,7 @@ function folderMatch(m: V1Message, folder: Mailbox, rules: PrioritySenderRule[] 
  * `undefined` means "the whole shared store" (no narrowing).
  */
 interface SelfHostedScope {
+  providerId?: string;
   address?: string;
   domain?: string;
 }
@@ -955,9 +956,7 @@ interface SelfHostedScope {
 /** Scope selectors that describe LOCAL ingestion provenance the /v1 store does not record. */
 function unsupportedScopeSelectors(source: MailboxSource): string[] {
   const selectors: string[] = [];
-  const providerId = source.providerId?.trim();
   const s3Bucket = source.s3Bucket?.trim();
-  if (providerId) selectors.push(`--provider ${providerId}`);
   if (s3Bucket) selectors.push(`--source s3:${s3Bucket}`);
   if (source.legacy) selectors.push("--source legacy");
   return selectors;
@@ -980,6 +979,7 @@ function unsupportedScopeSelectors(source: MailboxSource): string[] {
  */
 function selfHostedScopeOf(source?: MailboxSource): SelfHostedScope | undefined {
   if (!source) return undefined;
+  const providerId = source.providerId?.trim() || undefined;
   const address = source.address?.trim().toLowerCase() || undefined;
   const domain = source.domain?.trim().toLowerCase() || undefined;
   const sourceId = source.sourceId?.trim() || undefined;
@@ -988,7 +988,7 @@ function selfHostedScopeOf(source?: MailboxSource): SelfHostedScope | undefined 
   const unsupported = unsupportedScopeSelectors(source);
   // An id that is neither a whole-store id nor a mailbox scope names an
   // ingestion source this store does not have.
-  if (!wholeStore && unsupported.length === 0 && !address && !domain) {
+  if (!wholeStore && unsupported.length === 0 && !address && !domain && !providerId) {
     unsupported.push(`--source ${sourceId}`);
   }
   if (source.unknown && unsupported.length === 0) unsupported.push(`--source ${sourceId ?? "<unknown>"}`);
@@ -1000,21 +1000,23 @@ function selfHostedScopeOf(source?: MailboxSource): SelfHostedScope | undefined 
       + "`emails inbox sources` lists the scopes this store supports.",
     );
   }
-  if (!address && !domain) return undefined;
-  return { ...(address ? { address } : {}), ...(domain ? { domain } : {}) };
+  if (!address && !domain && !providerId) return undefined;
+  return { ...(providerId ? { providerId } : {}), ...(address ? { address } : {}), ...(domain ? { domain } : {}) };
 }
 
 function scopeMatch(m: V1Message, scope?: SelfHostedScope): boolean {
   if (!scope) return true;
+  if (scope.providerId && m.provider_id !== scope.providerId) return false;
   const recipients = (m.to_addrs ?? []).map(bareEmail);
   if (scope.address) return recipients.includes(scope.address) || bareEmail(m.from_addr ?? "") === scope.address;
   if (scope.domain) return recipients.some((r) => r.endsWith(`@${scope.domain}`));
   return true;
 }
 
-function scopeServerFilterSets(scope: SelfHostedScope | undefined): Array<{ to?: string; from?: string }> {
-  if (scope?.address) return [{ to: scope.address }, { from: scope.address }];
-  return scope?.domain ? [{ to: scope.domain }] : [{}];
+function scopeServerFilterSets(scope: SelfHostedScope | undefined): Array<{ to?: string; from?: string; provider_id?: string }> {
+  const provider = scope?.providerId ? { provider_id: scope.providerId } : {};
+  if (scope?.address) return [{ ...provider, to: scope.address }, { ...provider, from: scope.address }];
+  return scope?.domain ? [{ ...provider, to: scope.domain }] : [provider];
 }
 
 function sanitizedAttachmentSearchText(m: V1Message): string {
@@ -1196,6 +1198,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     position: V1MessagePagePosition = {},
     opts: {
       direction?: "inbound" | "outbound";
+      provider_id?: string;
       since?: string;
       until?: string;
       to?: string;
@@ -1217,6 +1220,14 @@ export class SelfHostedMailDataSource implements MailDataSource {
     if (position.cursor) params.set("cursor", position.cursor);
     else if (position.offset !== undefined && position.offset > 0) params.set("offset", String(position.offset));
     if (opts.folder) params.set("folder", opts.folder);
+    if (opts.provider_id) {
+      const contract = await this.request("GET", "/openapi.json");
+      const document = contract.json as { paths?: Record<string, { get?: { parameters?: Array<{ name?: string; in?: string }> } }> };
+      if (contract.status !== 200 || !document?.paths?.["/v1/messages"]?.get?.parameters?.some((p) => p.name === "provider_id" && p.in === "query")) {
+        throw new Error("The Emails API needs an update before provider-scoped mail can be read or cleared.");
+      }
+      params.set("provider_id", opts.provider_id);
+    }
     if (opts.direction) params.set("direction", opts.direction);
     if (opts.since) params.set("since", opts.since);
     if (opts.until) params.set("until", opts.until);
@@ -1237,6 +1248,9 @@ export class SelfHostedMailDataSource implements MailDataSource {
     }
     const body = json as { messages?: unknown; next_cursor?: unknown } | null;
     const messages = Array.isArray(body?.messages) ? (body.messages as V1Message[]) : [];
+    if (opts.provider_id && messages.some((message) => message.provider_id !== opts.provider_id)) {
+      throw new Error("The Emails API returned mail outside the requested provider; no messages were changed.");
+    }
     const nextCursor = body?.next_cursor;
     if (nextCursor === undefined) return { messages, nextCursor };
     if (nextCursor !== null && !validServerCursor(nextCursor)) {
@@ -1249,6 +1263,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
     limit: number,
     opts: {
       direction?: "inbound" | "outbound";
+      provider_id?: string;
       since?: string;
       to?: string;
       from?: string;
@@ -1481,7 +1496,7 @@ export class SelfHostedMailDataSource implements MailDataSource {
       const filters = scopeServerFilterSets(scope);
       // Address scopes need a to/from union. A single unfiltered cursor walk
       // preserves global ordering and avoids duplicate rows across that union.
-      const sourceFilters = filters.length > 1 ? [{}] : filters;
+      const sourceFilters = filters.length > 1 ? [{ provider_id: scope?.providerId }] : filters;
       for (const filtersForRequest of sourceFilters) {
         for await (const page of budgeted(PAGE_LIMIT, {
           folder,
@@ -2330,18 +2345,10 @@ export class SelfHostedMailDataSource implements MailDataSource {
   }
 
   async clear(filter?: MailClearFilter): Promise<MailClearResult> {
-    // Resolve the scope before the scan so unsupported provenance selectors
-    // refuse rather than widening. The complete cursor walk is preflighted
-    // before the first destructive request.
-    //
-    // `providerId` is one of those selectors: a /v1 message row carries no
-    // provider dimension, so the scope is unexpressible here — and dropping it
-    // silently would turn "clear one provider" into "clear the whole tenant
-    // folder" while reporting a plausible count. The local backend honours the
-    // same argument, so a silent widening would also make the guarantee depend
-    // on configuration. Refuse instead.
-    if (filter?.providerId) throw new Error(SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED);
-    const scope = selfHostedScopeOf(filter?.source);
+    if (filter?.providerId && filter.source?.providerId && filter.providerId !== filter.source.providerId) {
+      throw new Error("Conflicting provider filters; no messages were changed.");
+    }
+    const scope = selfHostedScopeOf({ ...filter?.source, ...(filter?.providerId ? { providerId: filter.providerId } : {}) });
     const mailbox: Mailbox = filter?.mailbox ?? "inbox";
     const rules = await this.priorityRules();
     const targets = new Set<string>();

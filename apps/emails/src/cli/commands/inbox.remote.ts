@@ -474,7 +474,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .command("list")
     .description("List local mailbox mail")
     .option("-j, --json", "Print JSON output", false)
-    .option("--provider <id>", "Not supported in self_hosted mode: /v1 messages carry no provider provenance")
+    .option("--provider <id>", "Filter by registered provider ID")
     .option("--source <id>", "Ingestion source ID from `emails inbox sources` (self_hosted exposes exactly one: self_hosted)")
     .option("--folder <folder>", "Folder to list: inbox, unread, starred, sent, archived, spam, trash", "inbox")
     .option("--address <address>", "Mailbox scope: exact recipient/sender address")
@@ -593,7 +593,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .command("search <query>")
     .description("Search local mailbox mail")
     .option("-j, --json", "Print JSON output", false)
-    .option("--provider <id>", "Not supported in self_hosted mode: /v1 messages carry no provider provenance")
+    .option("--provider <id>", "Filter by registered provider ID")
     .option("--folder <folder>", "Folder to search: inbox, unread, starred, sent, archived, spam, trash", "inbox")
     .option("--address <address>", "Mailbox scope: exact recipient/sender address")
     .option("--domain <domain>", "Mailbox scope: recipient/sender domain")
@@ -653,7 +653,7 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .description("List folder counts for a mailbox scope or ingestion source")
     .option("-j, --json", "Print JSON output", false)
     .option("--source <id>", "Ingestion source ID from `emails inbox sources` (self_hosted exposes exactly one: self_hosted)")
-    .option("--provider <id>", "Not supported in self_hosted mode: /v1 messages carry no provider provenance")
+    .option("--provider <id>", "Filter by registered provider ID")
     .option("--address <address>", "Mailbox scope: exact recipient/sender address")
     .option("--domain <domain>", "Mailbox scope: recipient/sender domain")
     .action(async (opts: { source?: string; provider?: string; address?: string; domain?: string }) => {
@@ -1038,15 +1038,6 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
       try {
         const ds = resolveMailDataSource();
         const target = opts.provider ? `for provider ${opts.provider}` : "for all providers";
-        // Self-hosted deletes on the server: drains a bulk delete over the inbox
-        // folder. A provider-scoped clear is REFUSED there (a /v1 message carries
-        // no provider dimension) — surface that BEFORE the confirmation prompt, so
-        // the operator is not asked to confirm a destructive action that cannot run.
-        if (opts.provider) {
-          const { SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED } = await import("../../lib/mail-types.js");
-          const { getClientMode } = await import("../../lib/mode.js");
-          if (getClientMode() === "self_hosted") handleError(new Error(SELF_HOSTED_PROVIDER_CLEAR_UNSUPPORTED));
-        }
         await confirmDestructiveAction(`Clear inbox emails ${target}?`, opts.yes);
         const { cleared } = await ds.clear({ providerId: opts.provider });
         output(

@@ -19,6 +19,7 @@ import { createAddress, markVerified } from "../../db/addresses.js";
 import { createDomain } from "../../db/domains.js";
 import { storeInboundEmail } from "../../db/inbound.js";
 import { createProvider } from "../../db/providers.js";
+import * as mailboxData from "./data.js";
 import { toggleRead, type TuiMessage } from "./data.js";
 import { App } from "../tui-solid/App.js";
 import { resolveAddressChoice } from "../tui-solid/context/emails-state.js";
@@ -353,6 +354,24 @@ describe("Emails Solid TUI", () => {
     expect(await stub.list("priority-sender-rules")).toHaveLength(0);
     await key("escape");
     expect(frame()).not.toContain("Preferences");
+  });
+
+  it("preserves mailbox choices when opening or searching fails and recovers on retry", async () => {
+    await renderApp();
+    const list = spyOn(mailboxData, "listInboxAddresses").mockImplementation(() => { throw new Error("Mailbox connection unavailable"); });
+    try {
+      await clickText("All mailboxes ▾");
+      expect(frame()).toContain("Mailbox connection unavailable");
+      expect(frame()).toContain("ops@example.com");
+      await typeText("ops");
+      await Bun.sleep(200); await flush();
+      expect(frame()).toContain("Mailbox connection unavailable");
+      expect(frame()).toContain("ops@example.com");
+    } finally { list.mockRestore(); }
+    await typeText("@example.com");
+    await Bun.sleep(200); await flush();
+    expect(frame()).not.toContain("Mailbox connection unavailable");
+    expect(frame()).toContain("ops@example.com");
   });
 
   it("switches from the mailbox title, scopes messages, and returns from a reader to All mailboxes", async () => {

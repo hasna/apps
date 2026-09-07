@@ -683,7 +683,10 @@ export function providerIdForSender(address: string): string | null {
 
 /** Pick the best configured sender for a new TUI compose. */
 export function defaultFromAddress(opts?: { source?: MailboxSource; fallback?: string }): string {
-  if (opts?.source?.address) return opts.source.address;
+  if (opts?.source?.address) {
+    const registrations = findAddressesByEmail(opts.source.address);
+    if (registrations.some((address) => address.status !== "suspended")) return opts.source.address;
+  }
   if (opts?.fallback) return opts.fallback;
   try {
     const domain = opts?.source?.domain?.toLowerCase();

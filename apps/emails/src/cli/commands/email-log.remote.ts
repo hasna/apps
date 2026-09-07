@@ -91,16 +91,6 @@ function parseReplyPage(opts: ReplyPageOpts): { limit: number; offset: number } 
   };
 }
 
-function assertSupportedSelfHostedSentFilters(command: string, opts: SentLogPageOpts): void {
-  const unsupported = [
-    opts.provider ? "--provider" : null,
-  ].filter(Boolean);
-  if (unsupported.length === 0) return;
-  handleError(new Error(
-    `\`${command}\` is API-backed and does not support local sent-log filter(s): ${unsupported.join(", ")}. ` +
-      "Use `emails inbox search` for mailbox search, or retry without those filters.",
-  ));
-}
 
 function splitRecipients(value: string): string[] {
   return value.split(",").map((entry) => entry.trim()).filter(Boolean);
@@ -286,9 +276,9 @@ async function selfHostedSentList(
   ds: MailDataSource,
   opts: SentLogPageOpts,
   output: (data: unknown, formatted: string) => void,
-  command: string,
+  _command: string,
 ): Promise<void> {
-  assertSupportedSelfHostedSentFilters(command, opts);
+  const source = opts.provider ? { providerId: resolveId("providers", opts.provider) } : undefined;
   if (opts.status && !["sent", "delivered", "bounced", "complained", "failed", "queued", "blocked", "uncertain"].includes(opts.status)) {
     throw new Error(`Invalid email status: ${opts.status}`);
   }
@@ -302,7 +292,7 @@ async function selfHostedSentList(
     const seen = new Set<string>();
     let complete = false;
     for (let cursor = 0; cursor < 10000; cursor += 500) {
-      const page = await ds.listMailbox("sent", { limit: 500, offset: cursor, since: opts.since, from: wantedFrom });
+      const page = await ds.listMailbox("sent", { limit: 500, offset: cursor, since: opts.since, source, from: wantedFrom });
       for (const message of page) {
         if (seen.has(message.id)) throw new Error("Sent mail changed while paging; retry the filtered query");
         seen.add(message.id);
@@ -314,7 +304,7 @@ async function selfHostedSentList(
     if (!complete) throw new Error("Filtered sent-mail scan exceeded 10000 messages; narrow --since before retrying");
     rows = matches.slice(offset, offset + limit);
   } else {
-    rows = await ds.listMailbox("sent", { limit, offset, since: opts.since });
+    rows = await ds.listMailbox("sent", { limit, offset, since: opts.since, source });
   }
   const summaries = rows.map(toSelfHostedSummary);
   output(summaries, formatSelfHostedSummaries(summaries, "Sent mail"));

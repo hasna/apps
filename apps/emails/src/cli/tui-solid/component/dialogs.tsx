@@ -149,6 +149,7 @@ export function EmailsDialogs() {
       dialog.replace(() => (
         <SelectDialog
           title="Mailboxes"
+          footer={emails.state.lastError ? `${emails.state.lastError} · Type to retry` : "Choose a mailbox or All mailboxes"}
           placeholder="Search mailboxes"
           items={addressItems()}
           selectedId={emails.state.selectedAddressId}

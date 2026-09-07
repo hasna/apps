@@ -11,8 +11,9 @@ afterEach(() => { api?.stop(); api = undefined; if (testHome) rmSync(testHome, {
 
 function fixtureEnv(api: V1Stub): Record<string, string | undefined> {
   testHome = mkdtempSync(join(tmpdir(), "emails-stats-cli-"));
-  const env: Record<string, string | undefined> = { ...process.env, HOME: testHome, HASNA_HOME: testHome, EMAILS_HOME: testHome, HASNA_EMAILS_HOME: testHome, EMAILS_SESSION_TOKEN: api.apiKey, HASNA_EMAILS_API_URL: api.baseUrl, HASNA_EMAILS_API_KEY: api.apiKey, NO_COLOR: "1" };
-  for (const key of ["EMAILS_MODE", "HASNA_EMAILS_MODE", "EMAILS_DB_PATH", "HASNA_EMAILS_DB_PATH", "EMAILS_SELF_HOSTED_URL", "EMAILS_SELF_HOSTED_API_KEY", "EMAILS_IDP_TOKEN"]) delete env[key];
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith("EMAILS_") || key.startsWith("HASNA_EMAILS_")) delete env[key];
+  Object.assign(env, { HOME: testHome, HASNA_HOME: testHome, EMAILS_HOME: testHome, HASNA_EMAILS_HOME: testHome, EMAILS_SESSION_TOKEN: api.apiKey, HASNA_EMAILS_API_URL: api.baseUrl, HASNA_EMAILS_API_KEY: api.apiKey, NO_COLOR: "1" });
   return env;
 }
 

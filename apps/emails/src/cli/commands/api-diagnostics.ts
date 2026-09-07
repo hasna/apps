@@ -1,9 +1,5 @@
 import { enumerateSelfHostedRows } from "../../db/self-hosted-page.js";
-import {
-  diagnoseInboundDelivery,
-  diagnoseInboundDeliveryLive,
-  type DeliveryDoctorReport,
-} from "../../lib/delivery-doctor.js";
+import type { DeliveryDoctorReport } from "../../lib/delivery-doctor.js";
 import { canonicalSender } from "../../lib/email-address.js";
 import { resolveMailDataSource } from "../../lib/mail-data-source.js";
 
@@ -48,6 +44,7 @@ export async function apiDeliveryDiagnosis(
     ingestion?: ReturnType<typeof apiIngestionStatus>;
   } = {},
 ): Promise<DeliveryDoctorReport> {
+  const { diagnoseInboundDelivery, diagnoseInboundDeliveryLive } = await import("../../lib/delivery-doctor.js");
   const report = await (options.live
     ? diagnoseInboundDeliveryLive(address)
     : diagnoseInboundDelivery(address));
