@@ -1585,12 +1585,14 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
           workspace.root_id ? store.getRoot(workspace.root_id) : Promise.resolve(null),
           workspace.recipe_id ? store.getRecipe(workspace.recipe_id) : Promise.resolve(null),
         ]);
+        const pendingFixes: Promise<unknown>[] = [];
         const doctor = () => doctorWorkspace(workspace, {
           fix: Boolean(input.fix && approve),
           dryRun: !approve,
           transport: store.transport,
           locations,
           references: { root, recipe },
+          pendingFixes,
           fixLocation: (locationInput) => store.addLocation(workspace.id, {
             path: locationInput.path,
             label: locationInput.label ?? "main",
@@ -1600,9 +1602,18 @@ export function buildWorkspaceAgentTools(ctx: WorkspaceAgentToolContext) {
             command,
           }).then((result) => result.location),
         });
-        return projectPayload(input.fix && approve && store.transport === "local"
+        const result = input.fix && approve && store.transport === "local"
           ? withAgentWorkspaceLock(workspace, actorAgent.id, "project doctor fix", doctor)
-          : doctor());
+          : doctor();
+        // A hosted location repair is an async registry write (POST
+        // /v1/projects/:id/locations): await it so a failed write surfaces
+        // instead of claiming the location was added.
+        try {
+          await Promise.all(pendingFixes);
+        } catch (err) {
+          return { error: `Location fix failed: ${err instanceof Error ? err.message : String(err)}` };
+        }
+        return projectPayload(result);
       },
     }),
     projects_update: tool({

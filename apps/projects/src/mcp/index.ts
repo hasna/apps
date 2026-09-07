@@ -1933,18 +1933,20 @@ server.tool(
     // resources), and a missing-location fix lands on the active registry
     // through the Store rather than writing an on-box row the hosted project
     // does not own.
-    const doctorOptionsFor = async (project: Workspace): Promise<WorkspaceDoctorOptions> => {
+    const doctorOptionsFor = async (project: Workspace): Promise<{ options: WorkspaceDoctorOptions; pendingFixes: Promise<unknown>[] }> => {
       const [locations, root, recipe] = await Promise.all([
         store.getProjectLocations(project.id),
         project.root_id ? store.getRoot(project.root_id) : Promise.resolve(null),
         project.recipe_id ? store.getRecipe(project.recipe_id) : Promise.resolve(null),
       ]);
-      return {
+      const pendingFixes: Promise<unknown>[] = [];
+      const options: WorkspaceDoctorOptions = {
         fix: input.fix,
         dryRun: input.dry_run,
         transport: store.transport,
         locations,
         references: { root, recipe },
+        pendingFixes,
         fixLocation: (locationInput) => store.addLocation(project.id, {
           path: locationInput.path,
           label: locationInput.label ?? "main",
@@ -1954,15 +1956,20 @@ server.tool(
           command: "projects_doctor",
         }).then((result) => result.location),
       };
+      return { options, pendingFixes };
     };
     if (input.id) {
       const project = await findProjectTarget(input.id, store);
       if (!project) return errorText(`Project not found: ${input.id}`);
       const owner = mcpMutationAgent(store);
-      const options = await doctorOptionsFor(project);
+      const { options, pendingFixes } = await doctorOptionsFor(project);
       const result = input.fix && !input.dry_run
         ? await withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspace(project, options))
         : doctorWorkspace(project, options);
+      // A hosted location repair is an async registry write (POST
+      // /v1/projects/:id/locations): await it so a failed write surfaces
+      // instead of claiming the location was added.
+      await Promise.all(pendingFixes);
       return jsonText(!input.compact || input.verbose
         ? [projectDoctorPayload(result)]
         : {
@@ -1978,10 +1985,12 @@ server.tool(
     const limit = mcpLimit(input.limit, DEFAULT_MCP_LIST_LIMIT);
     const projects = await store.listProjects({ limit: input.compact && !input.verbose ? limit + 1 : input.limit ?? 500 });
     const results = await Promise.all(projects.map(async (project) => {
-      const options = await doctorOptionsFor(project);
-      return input.fix && !input.dry_run
-        ? withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspace(project, options))
-        : Promise.resolve(doctorWorkspace(project, options));
+      const { options, pendingFixes } = await doctorOptionsFor(project);
+      const result = input.fix && !input.dry_run
+        ? await withWorkspaceMutationLock(store, project, owner, "project doctor fix", () => doctorWorkspace(project, options))
+        : doctorWorkspace(project, options);
+      await Promise.all(pendingFixes);
+      return result;
     }));
     if (!input.compact || input.verbose) return jsonText(results.map(projectDoctorPayload));
     const visible = results.slice(0, limit);

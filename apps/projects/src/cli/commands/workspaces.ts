@@ -3966,12 +3966,14 @@ function registerProjectCommands(program: Command): void {
             root: project.root_id ? await store.getRoot(project.root_id) : null,
             recipe: project.recipe_id ? await store.getRecipe(project.recipe_id) : null,
           };
+          const pendingFixes: Promise<unknown>[] = [];
           const options: WorkspaceDoctorOptions = {
             fix: opts.fix,
             dryRun: opts.dryRun,
             transport: store.transport,
             locations,
             references,
+            pendingFixes,
             fixLocation: (input) => store.addLocation(project.id, {
               path: input.path,
               label: input.label ?? "main",
@@ -3981,9 +3983,14 @@ function registerProjectCommands(program: Command): void {
               command: process.argv.join(" "),
             }).then((result) => result.location),
           };
-          return opts.fix && !opts.dryRun
-            ? withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, options))
-            : Promise.resolve(doctorWorkspace(project, options));
+          const result = opts.fix && !opts.dryRun
+            ? await withWorkspaceLock(store, project, mutationAgentId(store), "project doctor fix", () => doctorWorkspace(project, options))
+            : doctorWorkspace(project, options);
+          // A hosted location repair is an async registry write (POST
+          // /v1/projects/:id/locations): await it so a failed write surfaces
+          // instead of claiming the location was added.
+          await Promise.all(pendingFixes);
+          return result;
         };
         const json = wantsJson(opts);
         const limit = json ? undefined : parseHumanLimit(opts.limit, DEFAULT_LIST_LIMIT);

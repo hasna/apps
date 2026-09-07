@@ -217,7 +217,7 @@ function reserveFreePort(): number {
   return port;
 }
 
-function cloudDoctorFixture() {
+function cloudDoctorFixture(options: { failLocationPost?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "projects-cloud-doctor-"));
   const dbPath = join(root, "projects.db");
   const projectPath = join(root, "monthly-filing");
@@ -271,6 +271,9 @@ function cloudDoctorFixture() {
         return Response.json({ locations: [] });
       }
       if (req.method === "POST" && url.pathname === `/v1/projects/${projectId}/locations`) {
+        if (options.failLocationPost) {
+          return Response.json({ error: "boom" }, { status: 500 });
+        }
         return Response.json({
           project,
           location: {
@@ -4190,6 +4193,26 @@ describe("project-first CLI surface", () => {
         { method: "GET", path: `/v1/projects/${fixture.projectId}/locations` },
         { method: "POST", path: `/v1/projects/${fixture.projectId}/locations` },
       ]);
+    } finally {
+      fixture.close();
+    }
+  }, 30_000);
+
+  test("doctor --fix fails loud when the hosted location write is rejected instead of claiming the location was added", async () => {
+    // Regression: the hosted location repair is an async registry write (POST
+    // /v1/projects/:id/locations) that doctorWorkspace cannot await, and the
+    // PR originally fired it with `void` — a rejected write was swallowed and
+    // doctor still reported "Added primary location ... changed: true" with
+    // exit 0. The fix collects the in-flight write and awaits it before any
+    // success payload is emitted.
+    const fixture = cloudDoctorFixture({ failLocationPost: true });
+    try {
+      const result = await fixture.runDoctor([]);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.length).toBeGreaterThan(0);
+      // Never claim a fix that did not land.
+      expect(result.stdout).not.toContain("FIX_WORKSPACE_LOCATION");
+      expect(result.stdout).not.toContain('"changed":true');
     } finally {
       fixture.close();
     }

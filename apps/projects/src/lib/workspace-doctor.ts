@@ -60,6 +60,17 @@ export interface WorkspaceDoctorOptions {
   fixLocation?: (
     input: { path: string; label?: string; isPrimary?: boolean },
   ) => WorkspaceLocation | Promise<WorkspaceLocation>;
+  /**
+   * Collector for a non-dry-run `fixLocation` write. A hosted location repair
+   * is an async registry write (POST /v1/projects/:id/locations), but
+   * `doctorWorkspace` is synchronous and cannot await it — so it appends the
+   * in-flight promise here. Callers MUST `await Promise.all(pendingFixes)` (and
+   * surface a rejection) before reporting success, otherwise a failed hosted
+   * write is silently swallowed and the doctor still claims the location was
+   * added. Passing `fixLocation` without `pendingFixes` for a real fix is
+   * rejected rather than fired-and-forgotten.
+   */
+  pendingFixes?: Promise<unknown>[];
 }
 
 function checkPath(workspace: Workspace): WorkspaceDoctorCheck {
@@ -218,7 +229,17 @@ export function doctorWorkspace(workspace: Workspace, options: WorkspaceDoctorOp
     const locationCheck = checks.find((check) => check.code === "WORKSPACE_LOCATIONS_MISSING" && check.fixable);
     if (locationCheck && workspace.primary_path) {
       if (options.fixLocation) {
-        if (!dryRun) void options.fixLocation({ path: workspace.primary_path, label: "main", isPrimary: true });
+        if (!dryRun) {
+          // Cannot await inside a synchronous doctor: record the in-flight write
+          // so the caller can await it before reporting success.
+          if (!options.pendingFixes) {
+            throw new Error(
+              "doctorWorkspace: fixLocation requires options.pendingFixes so the async registry write can be awaited (a fire-and-forget hosted location write would be silently lost)",
+            );
+          }
+          const fix = options.fixLocation({ path: workspace.primary_path, label: "main", isPrimary: true });
+          options.pendingFixes.push(Promise.resolve(fix));
+        }
         fixes.push({
           code: "FIX_WORKSPACE_LOCATION",
           message: `${dryRun ? "Would add" : "Added"} primary location ${workspace.primary_path} through the active registry`,
