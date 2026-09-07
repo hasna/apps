@@ -1,3 +1,4 @@
+import { loadAttachmentAction, saveAttachmentAction, type AttachmentAction } from "../../../lib/attachment-preferences.js";
 import { createContext, createEffect, createMemo, createResource, onCleanup, onMount, useContext, type ParentProps } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import {
@@ -90,7 +91,7 @@ export interface EmailsState {
   readerScroll: number;
   compose: ComposeState | null;
   settings: TuiSettings;
-  viewPreferences: { autoRefresh: boolean; expandCode: boolean; expandQuotes: boolean };
+  viewPreferences: { autoRefresh: boolean; expandCode: boolean; expandQuotes: boolean; attachmentAction: AttachmentAction };
   mailboxError: string | null;
   readerError: string | null;
   now: number;
@@ -158,7 +159,7 @@ function messageIndex(state: Pick<EmailsState, "messages" | "selectedMessageId">
 }
 
 function loadAddresses(search?: string): InboxAddressChoice[] {
-  return listInboxAddresses({ limit: 200, search: search || undefined });
+  return listInboxAddresses(search ? { search } : undefined);
 }
 
 function createEmailsStore(initialMailbox?: Mailbox) {
@@ -210,7 +211,7 @@ function createEmailsStore(initialMailbox?: Mailbox) {
     readerScroll: 0,
     compose: null,
     settings,
-    viewPreferences: { autoRefresh: true, expandCode: false, expandQuotes: false },
+    viewPreferences: { autoRefresh: true, expandCode: false, expandQuotes: false, attachmentAction: loadAttachmentAction() },
     mailboxError: null,
     readerError: null,
     now: Date.now(),
@@ -735,6 +736,10 @@ function createEmailsStore(initialMailbox?: Mailbox) {
       setState("settings", key, value);
     },
     setViewPreference<K extends keyof EmailsState["viewPreferences"]>(key: K, value: EmailsState["viewPreferences"][K]) {
+      if (key === "attachmentAction") {
+        try { saveAttachmentAction(value as AttachmentAction); }
+        catch { setState("lastError", "Could not save the attachment preference."); return; }
+      }
       setState("viewPreferences", key, value);
     },
     retryBody() {

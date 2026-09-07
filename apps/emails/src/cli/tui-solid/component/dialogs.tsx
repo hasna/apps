@@ -1,3 +1,4 @@
+import { attachmentLink, downloadTuiAttachment } from "../../../lib/tui-attachment-actions.js";
 import { For, Show, createEffect, createMemo, createSignal, untrack } from "solid-js";
 import { useKeyboard } from "@opentui/solid";
 import { useEmails, COMMON_LABELS } from "../context/emails-state.js";
@@ -96,6 +97,7 @@ export function EmailsDialogs() {
         filename: attachment.filename,
         content_type: attachment.content_type,
         size: attachment.size,
+        content_available: attachment.content_available,
       })),
       attachments.flatMap((attachment): AttachmentPathLike[] => {
         if (!attachment.location) return [];
@@ -637,79 +639,51 @@ function SaveFilterDialog(props: { close: () => void }) {
   );
 }
 
-function attachmentCopyTarget(attachment: AttachmentDetail): string {
-  return attachment.file_url ?? attachment.location ?? attachment.filename;
-}
-
 function AttachmentsDialog(props: { close: () => void; attachments: AttachmentDetail[]; items: SelectDialogItem[] }) {
   const theme = useTheme();
+  const emails = useEmails();
   const toast = useToast();
-  const copyAttachment = (attachment: AttachmentDetail) => {
-    const target = attachmentCopyTarget(attachment);
-    void copyTextToClipboardAsync(target).then((result) => {
-      toast.show({
-        title: result.ok ? "Attachment link copied" : "Copy failed",
-        message: result.ok ? target : result.error ?? "Clipboard unavailable",
-        tone: result.ok ? "success" : "error",
-      });
-    });
-    props.close();
+  const [query, setQuery] = createSignal("");
+  const [action, setAction] = createSignal(emails.state.viewPreferences.attachmentAction);
+  const [busy, setBusy] = createSignal(false);
+  const choose = async (index: number) => {
+    if (busy()) return;
+    const attachment = props.attachments[index];
+    const message = emails.selectedMessage();
+    if (!attachment || !message) return;
+    setBusy(true);
+    try {
+      if (action() === "copy-link") {
+        const target = attachmentLink(message.id, attachment);
+        if (!target) throw new Error("No attachment link is available. Try downloading the attachment.");
+        const result = await copyTextToClipboardAsync(target.url);
+        if (!result.ok) throw new Error(result.error ?? "Could not copy the attachment link.");
+        toast.show({ title: "Attachment link copied", message: target.requiresAuthentication ? "Requires authenticated API access; no credentials were copied." : attachment.filename, tone: "success" });
+      } else {
+        if (attachment.index === undefined || attachment.content_available === false) throw new Error("This attachment has no stored content to download.");
+        const result = await downloadTuiAttachment(message.id, attachment.index);
+        toast.show({ title: "Saved to Downloads", message: result.path, tone: "success" });
+      }
+    } catch (error) {
+      toast.show({ title: action() === "download" ? "Download failed" : "Copy failed", message: error instanceof Error ? error.message : "Attachment action failed.", tone: "error" });
+    } finally { setBusy(false); }
   };
-  const openable = () => props.attachments.find((attachment) => attachment.openable && attachment.location);
-
+  const items = () => props.items.map((item, index) => ({ ...item,
+    detail: `${props.attachments[index]?.content_type ?? ""} · ${formatAttachmentSize(props.attachments[index]?.size ?? 0)}${props.attachments[index]?.content_available === false ? " · No stored content" : ""}`,
+    disabled: busy(),
+  }));
   return (
     <box flexDirection="column" width="100%" rowGap={1}>
-      <SelectDialog
-        title="Attachments"
-        placeholder="Filter attachments"
-        items={props.items}
-        query=""
-        onQuery={() => undefined}
-        onSelect={(item) => {
-          const attachment = props.attachments[Number(item.id)];
-          if (attachment) copyAttachment(attachment);
-        }}
-        onClose={props.close}
-        footer="Select an attachment to copy its local file link or storage location."
-      />
-      <For each={props.attachments.filter((attachment) => attachment.file_url || attachment.location)}>
-        {(attachment) => (
-          <text fg={theme.textMuted} wrapMode="word" width="100%">
-            {attachment.filename}: {attachment.file_url ?? attachment.location}
-          </text>
-        )}
-      </For>
-      <Show when={openable()}>
-        {(attachment) => (
-          <Button
-            label="Open first local"
-            onPress={() => {
-              const target = attachment().location;
-              if (!target) return;
-              const result = openLocalTarget(target);
-              toast.show({
-                title: result.ok ? "Attachment opened" : "Open failed",
-                message: result.ok ? target : result.error ?? "Could not open attachment.",
-                tone: result.ok ? "success" : "error",
-              });
-              props.close();
-            }}
-          />
-        )}
+      <Show when={!busy()} fallback={<text fg={theme.text}>{action() === "download" ? "Downloading attachment…" : "Copying attachment link…"}</text>}>
+        <box flexDirection="row" columnGap={1}>
+          <Button label="Download to Downloads" active={action() === "download"} onPress={() => setAction("download")} />
+          <Button label="Copy link" active={action() === "copy-link"} onPress={() => setAction("copy-link")} />
+        </box>
       </Show>
-      <Button
-        label="Copy all attachment links"
-        onPress={() => {
-          const links = props.attachments.map(attachmentCopyTarget).join("\n");
-          void copyTextToClipboardAsync(links).then((result) => {
-            toast.show({ title: result.ok ? "Attachment links copied" : "Copy failed", message: `${props.attachments.length} attachment(s)`, tone: result.ok ? "success" : "error" });
-          });
-          props.close();
-        }}
-      />
-      <Show when={props.attachments.length === 0}>
-        <text fg={theme.textMuted}>No attachments on this message.</text>
-      </Show>
+      <SelectDialog title="Attachments" placeholder="Filter attachments" items={items()}
+        query={query()} onQuery={setQuery} onSelect={(item) => { void choose(Number(item.id)); }}
+        onClose={props.close} footer={action() === "download" ? "Select a file to save it in Downloads. Existing files are kept." : "Select a file to copy its link. Hosted links require authentication."} />
+      <Show when={props.attachments.length === 0}><text fg={theme.textMuted}>No attachments on this message.</text></Show>
     </box>
   );
 }

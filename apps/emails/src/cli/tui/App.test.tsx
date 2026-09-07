@@ -24,7 +24,7 @@ import { App } from "../tui-solid/App.js";
 import { resolveAddressChoice } from "../tui-solid/context/emails-state.js";
 import { startV1Stub, type V1Stub } from "../../test-support/v1-stub.js";
 import { resolveMailDataSource } from "../../lib/mail-data-source.js";
-import { TextRenderable, TextTableRenderable, type Renderable, type TextChunk } from "@opentui/core";
+import { RGBA, TextRenderable, TextTableRenderable, type Renderable, type TextChunk } from "@opentui/core";
 
 let INHERITED_PROCESS_ENV: NodeJS.ProcessEnv;
 function captureInheritedProcessEnv(): void {
@@ -315,6 +315,33 @@ describe("Emails Solid TUI", () => {
     } finally { body.mockRestore(); }
   });
 
+  it("keeps focused priority text readable in the light theme", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Appearance");
+    for (let attempt = 0; attempt < 3 && !frame().includes("Light ▾"); attempt++) await clickText("Color scheme");
+    await clickText("Priority Inbox");
+    await typeText("contrast@example.com");
+    const span = setup!.captureSpans().lines.flatMap((line) => line.spans).find((span) => span.text.includes("contrast@example.com"));
+    expect(span).toBeDefined();
+    expect(span!.fg.equals(RGBA.fromHex("#4c4f69"))).toBe(true);
+    expect(span!.fg.equals(span!.bg)).toBe(false);
+  });
+
+  it("saves the attachment default without a local mail database and restores it in a new app", async () => {
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Attachments");
+    expect(frame()).toContain("Download ▾");
+    await clickText("When selecting an attachment");
+    expect(frame()).toContain("Copy link ▾");
+    setup!.renderer.destroy(); setup = null;
+    await renderApp();
+    await clickText("Settings");
+    await clickText("Attachments");
+    expect(frame()).toContain("Copy link ▾");
+  });
+
   it("saves and removes priority rules through the settings page", async () => {
     await renderApp();
     await clickText("Settings");
@@ -584,7 +611,12 @@ describe("Emails Solid TUI", () => {
     expect(frame()).toContain("invoice.pdf");
     expect(frame()).toContain("application/pdf");
     expect(frame()).toContain("2 KB");
-    expect(frame()).toContain("Copy all attachment links");
+    expect(frame()).toContain("Download to Downloads");
+    expect(frame()).toContain("Copy link");
+    await clickText("Copy link");
+    await key("enter");
+    expect(frame()).toContain("Attachment link copied");
+    expect(frame()).toContain("Requires authenticated API access");
   });
 
   // NOTE: the former "renders AI summaries below the email body" test was removed.
