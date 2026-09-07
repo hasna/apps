@@ -811,7 +811,7 @@ export interface ListInboxAddressOptions {
 export function listInboxAddresses(opts?: ListInboxAddressOptions): InboxAddressChoice[] {
   const limit = opts?.limit === undefined ? undefined : positiveInt(opts.limit, 200);
   const q = opts?.search?.trim().toLowerCase();
-  const choices = listAddresses()
+  const rows = listAddresses()
     .map((item): InboxAddressChoice | null => {
       const address = extractEmail(item.email);
       if (!address) return null;
@@ -827,7 +827,16 @@ export function listInboxAddresses(opts?: ListInboxAddressOptions): InboxAddress
         observed: false,
       };
     })
-    .filter((item): item is InboxAddressChoice => item !== null)
+    .filter((item): item is InboxAddressChoice => item !== null);
+  // A mailbox is selected by address, even when several provider records bind it.
+  // Keep one choice per selection id and prefer an available binding for its label.
+  const mailboxes = new Map<string, InboxAddressChoice>();
+  const rank = (choice: InboxAddressChoice) => choice.receiveStatus === "ready" ? 2 : choice.receiveStatus === "pending" ? 1 : 0;
+  for (const choice of rows) {
+    const current = mailboxes.get(choice.id);
+    if (!current || rank(choice) > rank(current)) mailboxes.set(choice.id, choice);
+  }
+  const choices = [...mailboxes.values()]
     .filter((item) => !q || [item.address, item.label, item.domain].some((value) => String(value ?? "").toLowerCase().includes(q)))
     .slice(0, limit);
   return opts?.search?.trim() ? choices : [ALL_ADDRESSES, ...choices];

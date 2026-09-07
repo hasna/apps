@@ -329,6 +329,21 @@ describe("tui data — addresses / senders / domains", () => {
     expect(defaultFromAddress({ source: { address: "paused@primary.test" } })).toBe("ops@primary.test");
   });
 
+  it("shows a mailbox once across provider registrations and prefers its ready binding", async () => {
+    await stub.seed({ addresses: [
+      { id: "first", email: "shared@example.test", provider_id: "one", status: "suspended", verified: false },
+      { id: "second", email: "shared@example.test", provider_id: "two", status: "active", verified: true },
+      { id: "third", email: "other@example.test", provider_id: "one", status: "active", verified: false },
+    ] });
+    const choices = listInboxAddresses();
+    expect(choices).toHaveLength(3);
+    expect(choices.filter(choice => choice.address === "shared@example.test")).toEqual([
+      expect.objectContaining({ id: "a:shared@example.test", receiveStatus: "ready", providerId: "two" }),
+    ]);
+    expect(listInboxAddresses({ search: "shared" })).toHaveLength(1);
+    expect(listInboxAddresses({ limit: 2 })).toHaveLength(3);
+  });
+
   it("loads and searches the complete API registry beyond mailbox and server page limits", async () => {
     const addresses = Array.from({ length: 1105 }, (_, index) => ({
       id: `address-${String(index).padStart(4, "0")}`,
