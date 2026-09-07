@@ -421,7 +421,7 @@ includes `config_warnings` if a model is placed in the wrong slot.
 recordings-mcp
 ```
 
-## HTTP mode
+## HTTP transport
 
 ```bash
 recordings-mcp --http              # default port 8873
@@ -461,12 +461,12 @@ cloud credential directories, `~/.config/hasna` or `$XDG_CONFIG_HOME`, and no
 `*_MODE` / `*_STORAGE_MODE` / `*_CLIENT_STORE` switch exists (the old
 `HASNA_RECORDINGS_CLIENT_STORE` variable selects nothing any more).
 
-**Fail closed.** Hosted mode with no credential exits non-zero with one
-`REMOTE_API_*` line naming every tier that was consulted; there is no SQLite
-fallback and no local-fallback event. The on-box file is reachable ONLY
-through the explicit opt-in above, and an opted-in run reads neither the
-Keychain nor any credential file. `RECORDINGS_API_KEY` remains the OpenAI
-transcription-key override only — it is carved out of the resolver
+**Fail closed.** With no local opt-in and no credential, the CLI and MCP exit
+non-zero with one `REMOTE_API_*` line naming every tier that was consulted;
+there is no SQLite fallback and no local-fallback event. The on-box file is
+reachable ONLY through the explicit opt-in above, and an opted-in run reads
+neither the Keychain nor any credential file. `RECORDINGS_API_KEY` remains the
+OpenAI transcription-key override only — it is carved out of the resolver
 environment and never selects or fails client transport.
 
 ```bash
@@ -544,7 +544,8 @@ An explicit `baseUrl` pins the authority: with no `apiKey` beside it the
 client sends NO credential at all (the ambient chain is never consulted), and
 with one it sends exactly that key, every request. The unhosted local
 `recordings-serve` (`http://localhost:8874`) is reachable only under
-`HASNA_RECORDINGS_LOCAL=1` and prints one "LOCAL mode" line on stderr; every
+`HASNA_RECORDINGS_LOCAL=1` and prints one line on stderr naming the local
+transport; every
 other refusal throws `RECORDINGS_CREDENTIAL_MISSING`. The raw generated
 constructor `new RecordingsV1Client({ baseUrl, apiKey })` still works for
 explicit configurations.

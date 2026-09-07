@@ -18,7 +18,7 @@ import { currentMachineId } from "../lib/machine.js";
 
 // ── Initialize ──────────────────────────────────────────────────────────────
 // Config is loaded eagerly for the transcription/enhancement tools. Storage is
-// resolved lazily per call via `getStore()` so cloud mode never opens SQLite.
+// resolved lazily per call via `getStore()` so the hosted transport never opens SQLite.
 
 const config = loadConfig();
 ensureDataDir(config);
