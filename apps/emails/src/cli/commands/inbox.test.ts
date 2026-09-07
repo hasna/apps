@@ -1751,19 +1751,8 @@ describe("server-only ingestion/diagnostic subcommands", () => {
   }
 });
 
-// ─── inbox source lifecycle (previously refused; client-side registry) ────────
-//
-// `inbox source list/add-s3/retire` used to refuse in this mode while
-// `inbox sources` — one word apart — worked, an intra-file contradiction. The
-// registry is client config: src/lib/s3-sync.ts implements all three functions as
-// ONE collapsed implementation (this used to name a second copy inside the now-
-// reduced src/lib/s3-sync.remote.ts), and src/cli/tui/data.remote.ts already READS the same registry to
-// resolve a `--source` ref. Only the INGESTION half (`sync-s3`) is server-owned,
-// and it still refuses (asserted above).
-//
-// Every test here runs under a temporary HOME so the registry writes land in a
-// throwaway config file, never the operator's.
-describe("inbox source lifecycle is a client-side registry", () => {
+// Source registry persists through the authenticated API.
+describe("inbox source lifecycle uses the API registry", () => {
   let sourceHome: string;
   let priorSourceHome: string | undefined;
 
@@ -1795,7 +1784,7 @@ describe("inbox source lifecycle is a client-side registry", () => {
       "--name", "Primary inbound",
     ]);
     expect(added.data).toMatchObject({
-      id: "s3-inbound-mail-raw-",
+      id: expect.any(String),
       type: "s3",
       bucket: "inbound-mail",
       prefix: "raw/",
@@ -1805,13 +1794,13 @@ describe("inbox source lifecycle is a client-side registry", () => {
     });
     // No capability claim: this client performs no ingestion, so the message says
     // what it actually did (recorded provenance) and where ingestion is configured.
-    expect(added.out).toContain("Recorded S3 source s3-inbound-mail-raw-");
+    expect(added.out).toContain("Registered S3 source");
     expect(added.out).not.toContain("live sync enabled");
-    expect(added.out).toContain("performs no S3 ingestion");
+    expect(added.out).toContain("server ingest binding");
 
     const listed = await runInboxCommand(["inbox", "source", "list"]);
     expect(listed.data as Array<{ id: string; bucket: string }>).toEqual([
-      expect.objectContaining({ id: "s3-inbound-mail-raw-", bucket: "inbound-mail" }),
+      expect.objectContaining({ id: expect.any(String), bucket: "inbound-mail" }),
     ]);
     expect(listed.out).toContain("s3://inbound-mail/raw/ eu-west-1");
   });
@@ -1850,15 +1839,23 @@ describe("inbox source lifecycle is a client-side registry", () => {
   it("retires a registered source and keeps it listed as retired", async () => {
     await runInboxCommand(["inbox", "source", "add-s3", "--bucket", "retire-me"]);
 
-    const retired = await runInboxCommand(["inbox", "source", "retire", "s3-retire-me"]);
-    expect(retired.data).toMatchObject({ id: "s3-retire-me", status: "retired", live_sync_enabled: false });
-    expect(retired.out).toContain("Retired S3 source s3-retire-me");
+    const retired = await runInboxCommand(["inbox", "source", "retire", "retire-me"]);
+    expect(retired.data).toMatchObject({ id: expect.any(String), status: "retired", live_sync_enabled: false });
+    expect(retired.out).toContain("Retired S3 source");
 
     const listed = await runInboxCommand(["inbox", "source", "list"]);
     expect(listed.data as Array<{ status: string }>).toEqual([
       expect.objectContaining({ status: "retired" }),
     ]);
     expect(listed.out).toContain("retired");
+  });
+
+  it("rejects ambiguous bucket retirement and blank provider selectors", async () => {
+    for (const prefix of ["one/", "two/"]) await runInboxCommand(["inbox", "source", "add-s3", "--bucket", "shared-bucket", "--prefix", prefix]);
+    const ambiguous = await runInboxCommandExpectingExit(["inbox", "source", "retire", "shared-bucket"]);
+    expect(ambiguous.stderr).toContain("Ambiguous S3 source");
+    const blank = await runInboxCommandExpectingExit(["inbox", "source", "add-s3", "--bucket", "valid-bucket", "--provider", " "]);
+    expect(blank.stderr).toContain("Provider ID must not be blank");
   });
 
   it("fails retire for an unknown source rather than reporting success", async () => {

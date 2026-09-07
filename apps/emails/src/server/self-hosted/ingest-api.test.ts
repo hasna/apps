@@ -71,6 +71,12 @@ describe("tenant-bound inbox ingestion", () => {
     const f = fixture(); f.cloud.list = async () => { throw new Error("private credentials error"); };
     const report = await f.run("sync-s3"); expect(report.ok).toBe(false); expect(JSON.stringify(report)).not.toContain("private"); expect(f.updates()).toBe(0);
   });
+  it("honors a disabled live-sync preference without polling the queue", async () => {
+    const f = fixture(); f.scoped.getResource = async () => ({ type: "ses_s3", status: "active", settings_json: { live_sync_enabled: false } });
+    await expect(f.run("watch")).rejects.toThrow("Live sync is disabled");
+    expect(f.signals).toHaveLength(0);
+    expect((await f.run("sync-s3")).ok).toBe(true);
+  });
   it("validates configuration selectors before any cloud call", async () => {
     for (const input of [{ bucket: "another-mail" }, { region: "eu-west-1" }, { provider_id: "foreign" }, { profile: "local" }, { prefix: "elsewhere/" }, { source_id: "foreign" }]) {
       const f = fixture(); await expect(f.run("sync-s3", input)).rejects.toThrow(); expect(f.signals).toHaveLength(0);

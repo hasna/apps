@@ -769,8 +769,8 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("-j, --json", "Print JSON output", false)
     .action(async () => {
       try {
-        const { listS3Sources } = await import("../../lib/s3-sync.js");
-        const sources = listS3Sources();
+        const { listRegisteredS3Sources } = await import("../../lib/inbox-source-registry.js");
+        const sources = listRegisteredS3Sources();
         output(sources, formatSourceList(sources));
       } catch (e) {
         handleError(e);
@@ -790,17 +790,11 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("--no-live-sync", "Register source but disable live sync")
     .action(async (opts: { bucket: string; prefix?: string; region?: string; provider?: string; name?: string; status?: string; liveSync?: boolean }) => {
       try {
-        // `addInboundBucket` is NOT called in this arm. It writes the
-        // `inbound_s3_buckets` config that drives LOCAL ingestion, and this client
-        // performs none: `inbox sync-s3` and `inbox watch` both refuse here, and
-        // `emails status` deliberately reports `inbox.inbound_buckets` as
-        // unavailable because "an empty list here would falsely claim no bucket is
-        // configured". Writing to that key from a client that cannot ingest turned a
-        // declared gap into a half-truth.
-        const { registerS3Source } = await import("../../lib/s3-sync.js");
+        const { registerApiS3Source } = await import("../../lib/inbox-source-registry.js");
         const status = parseSourceStatus(opts.status);
+        if (opts.provider !== undefined && !opts.provider.trim()) throw new Error("Provider ID must not be blank.");
         const providerId = opts.provider ? resolveId("providers", opts.provider) : undefined;
-        const source = registerS3Source({
+        const source = registerApiS3Source({
           bucket: opts.bucket,
           prefix: opts.prefix,
           region: opts.region,
@@ -809,16 +803,9 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
           status,
           liveSyncEnabled: opts.liveSync !== false && status === "live",
         });
-        // Do NOT say "live sync enabled". The `live_sync_enabled` column is recorded
-        // faithfully, but nothing in THIS client acts on it — ingestion runs on the
-        // operator's server — so echoing it as an enabled capability claimed an
-        // effect that cannot occur here. Say what actually happened: a registry entry
-        // was written, and where the ingestion it describes has to be configured.
         output(source, [
-          chalk.green(`✓ Recorded S3 source ${source.id} (status ${source.status}) in this machine's source registry.`),
-          chalk.dim("  This registry is client-side provenance only. This client performs no S3 ingestion:"),
-          chalk.dim("  `emails inbox sync-s3` and `emails inbox watch` run on the self-hosted server, which"),
-          chalk.dim("  owns the SES -> S3 -> mailbox pipeline and must be configured there."),
+          chalk.green(`✓ Registered S3 source ${source.id} (status ${source.status}) in the API registry.`),
+          chalk.dim("  Configure the server ingest binding with this source ID before syncing or watching."),
         ].join("\n"));
       } catch (e) {
         handleError(e);
@@ -831,8 +818,8 @@ export function registerInboxCommands(program: Command, output: (data: unknown, 
     .option("-j, --json", "Print JSON output", false)
     .action(async (sourceRef: string) => {
       try {
-        const { retireS3Source } = await import("../../lib/s3-sync.js");
-        const retired = retireS3Source(sourceRef);
+        const { retireApiS3Source } = await import("../../lib/inbox-source-registry.js");
+        const retired = retireApiS3Source(sourceRef);
         output(retired, chalk.green(`✓ Retired S3 source ${retired.id}`));
       } catch (e) {
         handleError(e);

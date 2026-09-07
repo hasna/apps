@@ -818,3 +818,37 @@ describe.skipIf(!pgClient)("tenant-bound inbox ingestion API", () => {
     expect(await pgClient!.many("SELECT id FROM messages WHERE tenant_id = $1", [other.tenantId])).toHaveLength(0);
   });
 });
+
+describe.skipIf(!pgClient)("shared API source registry CLI", () => {
+  it("persists between fresh clients and isolates tenants while preserving lifecycle options", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const deps = makeDeps({ provider: "ses", send: async () => { throw new Error("never send"); } });
+    const owner = await makeTenant("source-cli-owner"), other = await makeTenant("source-cli-other");
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async req => await handleSelfHostedRequest(deps, req) ?? new Response("missing", { status: 404 }) });
+    async function cli(token: string, ...args: string[]) {
+      const home = mkdtempSync(join(tmpdir(), "emails-source-fresh-"));
+      const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("EMAILS_") && !name.startsWith("HASNA_EMAILS_")));
+      Object.assign(env, { HOME: home, HASNA_HOME: home, EMAILS_HOME: home, HASNA_EMAILS_HOME: home, HASNA_EMAILS_API_URL: server.url.origin, EMAILS_SESSION_TOKEN: token, HASNA_EMAILS_API_KEY: token, NO_COLOR: "1" });
+      const child = Bun.spawn({ cmd: [process.execPath, "run", "src/cli/index.tsx", "inbox", "source", ...args, "--json"], env, stdout: "pipe", stderr: "pipe" });
+      try {
+        const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+        return { code, data: stdout.trim() ? JSON.parse(stdout) : null, stderr };
+      } finally { child.kill(); rmSync(home, { recursive: true, force: true }); }
+    }
+    try {
+      const added = await cli(owner.token, "add-s3", "--bucket", "shared-source-bucket", "--prefix", "inbound/", "--region", "eu-west-1", "--no-live-sync");
+      expect(added.code).toBe(0); expect(added.stderr).toBe(""); expect(added.data).toMatchObject({ bucket: "shared-source-bucket", prefix: "inbound/", region: "eu-west-1", live_sync_enabled: false });
+      const listed = await cli(owner.token, "list"); expect(listed.data).toHaveLength(1); expect(listed.data[0].id).toBe(added.data.id);
+      expect((await cli(other.token, "list")).data).toEqual([]);
+      expect((await cli(other.token, "retire", added.data.id)).code).toBe(1);
+      const updated = await cli(owner.token, "add-s3", "--bucket", "shared-source-bucket", "--prefix", "inbound/", "--status", "import");
+      expect(updated.data).toMatchObject({ id: added.data.id, status: "import", live_sync_enabled: false });
+      expect((await cli(owner.token, "list")).data).toHaveLength(1);
+      const retired = await cli(owner.token, "retire", added.data.id); expect(retired.data).toMatchObject({ status: "retired", live_sync_enabled: false });
+      expect((await cli(owner.token, "status")).data[0].status).toBe("retired");
+      expect(await pgClient!.get("SELECT status, settings_json->>'live_sync_enabled' AS live FROM mailbox_sources WHERE tenant_id=$1 AND id=$2", [owner.tenantId, added.data.id])).toMatchObject({ status: "retired", live: "false" });
+    } finally { server.stop(true); }
+  }, 30000);
+});

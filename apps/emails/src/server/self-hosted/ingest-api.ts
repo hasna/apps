@@ -73,6 +73,7 @@ export async function executeIngestBatch(store: EmailsSelfHostedStore, scoped: T
     if (!source) throw new IngestApiError("The bound source is not registered in this tenant.", 404);
     if (!["s3", "ses_s3"].includes(String(source.type))) throw new IngestApiError("The bound source must be an S3 source.");
     if (source.status !== "active" && !input.force) throw new IngestApiError("The source is disabled or retired. Use --force only to perform an intentional historical recovery.", 409);
+    if (operation === "watch" && source.settings_json && typeof source.settings_json === "object" && (source.settings_json as Record<string, unknown>).live_sync_enabled === false) throw new IngestApiError("Live sync is disabled for this source. Enable it in the API source registry before watching.", 409);
     if (operation === "watch" && !binding.queue_url) throw new IngestApiError("Configure a dedicated queue_url in this server ingest binding before watching.", 503);
     if (binding.provider_id && !(await scoped.getResource(resourceSpecForPath("providers")!, binding.provider_id))) throw new IngestApiError("The ingest provider is not registered in this tenant.", 503);
   }

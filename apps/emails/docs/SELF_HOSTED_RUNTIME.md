@@ -362,8 +362,11 @@ available, the check time and the S3 continuation cursor. Queue counts are
 approximate. A partial S3 page retains its starting cursor (or reports
 `retry_from_start`) so a retry does not skip failed objects.
 
-The service operator must register a tenant-owned `/v1/sources` row with `type`
-`s3` or `ses_s3`, `status: active` and a `mailbox_id`, then configure
+Use `emails inbox source add-s3 --bucket inbound-mail-bucket --prefix inbound/example.com/`
+to register the tenant-owned API source. `inbox source list` (alias `status`)
+reads the same registry from every authenticated client. Registration records
+metadata and returns the source ID; it does not create cloud infrastructure.
+The service operator must then configure
 `EMAILS_INGEST_BINDINGS` on the API service. This configuration contains resource
 identifiers, not AWS secrets. Example with placeholder IDs:
 
@@ -402,6 +405,11 @@ objects and queue batches contain at most ten notifications per source.
 SES receipt rules, SNS/SQS delivery permissions, dedicated queues, domain routing
 and IAM credentials must be provisioned before these operations can run.
 `setup-realtime` and a network SMTP listener still require separate infrastructure
-work; these commands do not create that infrastructure. The historical local
-`inbox source` registry is not yet the API source registry: bind the registered
-API source ID, not a machine-local configuration entry.
+work; these commands do not create that infrastructure. Historical machine-local
+source entries are not imported automatically; register their bucket/prefix through
+`inbox source add-s3` and bind the returned API source ID. Repeating registration
+for a unique bucket/prefix updates that source without replacing its ID.
+`--status import` permits manual sync without queue watch; `--no-live-sync` also
+disables watch while retaining manual recovery. `inbox source retire ID` retires
+the API source and preserves its metadata and mail. Registry lifecycle settings
+are distinct from worker health or verified cloud configuration.
