@@ -1,6 +1,6 @@
 // End-to-end truthfulness contract for surfaces this build does NOT implement.
-// These spawn the REAL CLI (bun src/cli/index.tsx) in local mode against a
-// throwaway HOME + in-memory DB, because the failures they guard against were
+// These spawn the REAL CLI against an isolated authenticated API fixture and
+// throwaway HOME, because the failures they guard against were
 // all "the source looks fine, the shipped binary lies" bugs:
 //
 //   * `emails daemon status` printed "Start provisioner: emails provision
@@ -16,33 +16,38 @@
 //     is no server route behind any of them, so it named a cause that does not
 //     exist. That is the class the CONTRACT below generalises: a refusal may
 //     never name a deployment mode, because the mode is never the reason.
-import { afterAll, describe, expect, it } from "bun:test";
+import { beforeAll, afterAll, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { startV1Stub, type V1Stub } from "../test-support/v1-stub.js";
 import { scanCliRefusals } from "../test-support/cli-refusals.js";
 import { isCommandAvailableInMode } from "../lib/status-commands.js";
 
 const tempDirs: string[] = [];
+let stub: V1Stub;
+beforeAll(async () => { stub = await startV1Stub({ openapi: true }); });
 
-function localCliEnv(): NodeJS.ProcessEnv {
+function apiCliEnv(): NodeJS.ProcessEnv {
   const dir = mkdtempSync(join(tmpdir(), "emails-unshipped-"));
   tempDirs.push(dir);
   const homePath = join(dir, "home");
   mkdirSync(homePath, { recursive: true });
-  return {
-    ...process.env,
-    EMAILS_DB_PATH: join(dir, "emails.db"),
-    HOME: homePath,
-    NO_COLOR: "1",
-  };
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("EMAILS_") || key.startsWith("HASNA_EMAILS_") || key === "HASNA_HOME" || key === "HASNA_CONFIG_HOME") delete env[key];
+  }
+  return { ...env, HOME: homePath, EMAILS_HOME: homePath, HASNA_EMAILS_HOME: homePath,
+    HASNA_STATION: `unshipped-${crypto.randomUUID()}`, HASNA_EMAILS_API_URL: stub.baseUrl,
+    HASNA_EMAILS_API_KEY: stub.apiKey, EMAILS_CLIENT_ENV_LOADED: "1", NO_COLOR: "1" };
+
 }
 
 function runCli(args: string[]) {
   const result = Bun.spawnSync({
     cmd: ["bun", "src/cli/index.tsx", ...args],
     cwd: process.cwd(),
-    env: localCliEnv(),
+    env: apiCliEnv(),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -57,6 +62,7 @@ function runCli(args: string[]) {
 interface CliError { error: { message: string; code: string; fix_commands: string[] } }
 
 afterAll(() => {
+  stub?.stop();
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -67,28 +73,16 @@ describe("unshipped CLI surfaces tell the truth (live)", () => {
     expect(JSON.parse(result.stdout)).toEqual([]);
   });
 
-  it("emails daemon status advertises only commands that exist", () => {
-    const result = runCli(["--json", "daemon", "status"]);
-    expect(result.exitCode).toBe(0);
-    const payload = JSON.parse(result.stdout) as {
-      queue: { drainable: boolean };
-      start_commands: Record<string, string>;
-    };
-
-    // Nothing drains the provisioning queue in this build; say so, do not point
-    // at `emails provision daemon`.
-    expect(payload.queue.drainable).toBe(false);
-    const advertised = Object.values(payload.start_commands);
-    expect(advertised.length).toBeGreaterThan(0);
-    for (const command of advertised) expect(command).not.toContain("emails provision");
-
-    // Every advertised command must be a real, registered subcommand.
-    for (const command of advertised) {
-      const words = command.split(" ").filter((word) => !word.startsWith("-") && !word.startsWith("<"));
-      expect(words[0]).toBe("emails");
-      const help = runCli([...words.slice(1), "--help"]);
-      expect(help.exitCode, `${command}: ${help.stderr}`).toBe(0);
-      expect(help.stderr).not.toContain("unknown command");
+  it("emails daemon exposes the implemented worker commands", () => {
+    // Worker observation and real process restart are covered by daemon.test.ts
+    // and worker-supervisor.integration.test.ts. This checks the shipped parser.
+    const help = runCli(["daemon", "--help"]);
+    expect(help.exitCode, help.stderr).toBe(0);
+    for (const command of ["status", "start", "restart"]) {
+      expect(help.stdout).toContain(command);
+      const subcommand = runCli(["daemon", command, "--help"]);
+      expect(subcommand.exitCode, subcommand.stderr).toBe(0);
+      expect(subcommand.stderr).not.toContain("unknown command");
     }
   });
 
