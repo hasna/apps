@@ -22,7 +22,7 @@ installation guidance for every adapter. If a harness is installed outside
 
 | Harness | Executable and verified version | Install target | Official instructions |
 | --- | --- | --- | --- |
-| Claude Code | `claude`, >=2.1.242 | Claude Code official distribution | [Quickstart](https://code.claude.com/docs/en/quickstart) |
+| Claude Code | `claude`, >=2.1.257 | Claude Code official distribution | [Quickstart](https://code.claude.com/docs/en/quickstart) |
 | Codex CLI | `codex`, >=0.153.0 | OpenAI Codex official distribution | [Project](https://github.com/openai/codex) |
 | Grok Build | `grok`, >=1.0.13 | xAI Grok Build official project | [Project](https://github.com/xai-org/grok-build) |
 | OpenCode (legacy) | `opencode`, >=1.18.0 | `opencode-ai` | [CLI guide](https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/cli.mdx) |
@@ -50,6 +50,9 @@ switcher doctor
 ## Direct launch
 
 The direct launch flow is available from 0.1.1. The additional OMP, DeepSeek Harness, Cline, Hermes, Prime Agent, legacy OpenCode, Kilo, Gemini CLI and Aider adapters are introduced in 0.1.2. Version 0.1.0 requires explicit API/provider/profile setup.
+
+Version 0.1.3 automatically injects model guidance and enforces allowed model IDs through a per-launch gateway. Native child and utility models default to your selected provider model. Use `--role-model ROLE=ID` or `--model-policy-file FILE` for explicit assignments, aliases and fallbacks. The full catalog stays visible; using another catalog entry requires an allowed assignment or a new launch. See [model policy](docs/MODEL-POLICY.md) for native role support, routing traces and enforcement scope.
+
 
 Supply the provider key through environment injection (`DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY`, or an explicit `SWITCHER_PROVIDER_*` reference), or configure a local credential binding below. Switcher never saves the value.
 
@@ -244,7 +247,7 @@ Discovery allows at most two retries per page for network failures and HTTP 408,
 
 | Harness | Required wire protocol | Native catalog |
 | --- | --- | --- |
-| Claude Code ≥2.1.242 | Anthropic Messages | Per-launch `modelPicker` on compatible Claude versions |
+| Claude Code ≥2.1.257 | Anthropic Messages | Per-launch `modelPicker` on compatible Claude versions |
 | Codex ≥0.153.0 | OpenAI Responses | Startup `model_catalog_json` |
 | Grok Build ≥1.0.13 | Chat Completions, Responses or Messages | Authenticated loopback remote catalog with upstream model IDs |
 | OpenCode 2 (tested beta-19157) | Chat Completions, Responses or Messages | Version 2 provider/model configuration and standalone server |

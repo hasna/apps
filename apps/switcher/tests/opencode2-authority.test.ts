@@ -34,7 +34,7 @@ test("OpenCode 2 isolates provider configuration while retaining data, ordered p
     expect(JSON.stringify(config)).not.toContain("outside");expect(JSON.stringify(config)).not.toContain("x-leak");
     expect(config.permissions).toEqual([{action:"read",resource:"*",effect:"ask"},{action:"read",resource:"proof.txt",effect:"deny"}]);
     expect(config.agents.build.system).toBe("PROJECT_AGENT_RULE");expect(config.agents.build.permissions).toEqual([{action:"shell",resource:"*",effect:"deny"}]);
-    expect(config.agents.build.request).toBeUndefined();expect(config.agents.build.model).toBeUndefined();
+    expect(config.agents.build.request).toBeUndefined();expect(config.agents.build.model).toBe(`${Object.keys(config.providers)[0]}/vendor/model`);
     expect(await readFile(join(prepared.env.XDG_CONFIG_HOME,"opencode","AGENTS.md"),"utf8")).toContain("PROJECT_RULE");
   }finally{await prepared.cleanup?.();}
 }));

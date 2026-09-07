@@ -1,7 +1,10 @@
 import { z } from "zod";
+import { modelPolicySchema, routingEventsSchema, type ModelPolicy, type RoutingEvent } from "./model-policy-schema";
+export { modelPolicySchema, routingEventSchema, routingEventsSchema } from "./model-policy-schema";
+export type { ModelPolicy, RoutingEvent } from "./model-policy-schema";
 export type { AuthStyle } from "./auth";
 
-export const VERSION = "0.1.2";
+export const VERSION = "0.1.3";
 export const harnessSchema = z.enum(["claude", "codex", "grok", "opencode", "opencode2", "pi", "omp", "dsh", "cline", "hermes", "prime-agent", "gemini", "aider", "kilo"]);
 export const protocolSchema = z.enum(["anthropic-messages", "openai-responses", "openai-chat", "gemini-generate-content"]);
 export const idSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
@@ -54,21 +57,23 @@ export const providerPresetSchema = z.object({
 export type ProviderPreset = z.infer<typeof providerPresetSchema>;
 export const profileInputSchema = z.object({
   id: idSchema, name: label, providerId: idSchema, harness: harnessSchema,
-  model: z.string().min(1).max(300),
+  model: z.string().min(1).max(300), modelPolicy: modelPolicySchema.optional(),
 }).strict();
 export const runInputSchema = z.object({
-  profileId: idSchema, harness: harnessSchema, model: z.string().min(1).max(300), planToken:z.string().regex(/^[a-f0-9]{64}$/),
+  modelPolicyVersion:z.literal(1),
+  profileId: idSchema, harness: harnessSchema, model: z.string().min(1).max(300), modelPolicy: modelPolicySchema.optional(), planToken:z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 export const runUpdateSchema = z.object({
   status: z.enum(["exited", "failed", "interrupted"]),
   exitCode: z.number().int().min(0).max(255),
+  routingEvents: routingEventsSchema.optional(), routingEventsDropped: z.number().int().min(0).max(1000000).optional(),
 }).strict();
 export type ProviderInput = z.input<typeof providerInputSchema>;
 export type Provider = z.output<typeof providerInputSchema> & {version: number; updatedAt: string};
 export type ProfileInput = z.infer<typeof profileInputSchema>;
 export type Profile = ProfileInput & {version: number; updatedAt: string};
 export type Model = z.infer<typeof modelSchema>;
-export type Run = z.infer<typeof runInputSchema> & {providerId:string;providerVersion:number;profileVersion:number;id: string; status: "running"|"exited"|"failed"|"interrupted"; startedAt: string; endedAt?: string; exitCode?: number; version: number; updatedAt: string};
+export type Run = Omit<z.infer<typeof runInputSchema>,"modelPolicyVersion"> & {modelPolicyVersion?:1;providerId:string;providerVersion:number;profileVersion:number;id: string; status: "running"|"exited"|"failed"|"interrupted"; startedAt: string; endedAt?: string; exitCode?: number; routingEvents?:RoutingEvent[];routingEventsDropped?:number;version: number; updatedAt: string};
 export type Catalog = {models: Model[]; refreshedAt: string; source: "remote"|"manual"};
 export type LaunchPlan = {planToken:string; profile: Profile; provider: Provider; catalog: Catalog; warnings: string[]};
 export class Fault extends Error {

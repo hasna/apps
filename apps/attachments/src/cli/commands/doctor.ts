@@ -1,10 +1,8 @@
 import { Command } from "commander";
-import { serviceDiagnostic } from "./service-diagnostic";
+import { serviceDiagnostic, writeDiagnosticReport } from "./service-diagnostic";
 
 export function registerDoctor(program: Command): void {
   program.command("doctor").description("Verify authenticated HTTPS service access").action(async () => {
-    const result = await serviceDiagnostic();
-    process.stdout.write(result.lines.join("\n") + "\n");
-    if (!result.ok) process.exitCode = 1;
+    writeDiagnosticReport(await serviceDiagnostic());
   });
 }

@@ -1,3 +1,4 @@
+import { parseWorkspaceMembersPage, workspaceMembersQuery, type RemoteWorkspaceMembersOptions, type RemoteWorkspaceMembersPage } from "./remote-workspace.js";
 import { getApiUrl } from "./auth-store.js";
 import { normalizeSkillsApiOrigin, resolveSkillsConnection } from "./fleet-credentials.js";
 import { normalizeRemoteSkillRunContract, type RemoteSkillRunContract } from "./remote-run-contract.js";
@@ -255,6 +256,17 @@ export class RemoteSkillsClient {
   async updateCurrentWorkspace(input: UpdateRemoteWorkspace) {
     const body = customerNamePatch(input, "name");
     return parseUpdatedWorkspace(await (await this.requestNewRoute("/api/v1/workspaces/current", { method: "PATCH", body: JSON.stringify(body) })).json());
+  }
+  /** Current owner/admin customer session only; the server refuses API keys and impersonation. */
+  async listWorkspaceMembers(options: RemoteWorkspaceMembersOptions = {}): Promise<RemoteWorkspaceMembersPage> {
+    const query = workspaceMembersQuery(options);
+    const requestedCursor = options.cursor;
+    const response = await this.requestNewRoute(`/api/v1/workspace/members${query}`);
+    let value: unknown;
+    try { value = await response.json(); } catch { throw new Error("The server returned an invalid workspace roster."); }
+    const page = parseWorkspaceMembersPage(value);
+    if (requestedCursor !== undefined && page.nextCursor === requestedCursor) throw new Error("The server returned an invalid workspace roster.");
+    return page;
   }
   async listApiKeys(): Promise<Record<string, unknown>[]> { return this.arrayResponse("/api/auth/keys"); }
   async createApiKey(name: string, scopes?: string[]): Promise<{ key: string; [field: string]: unknown }> {

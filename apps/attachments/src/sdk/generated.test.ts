@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AttachmentsApiClient, ApiError } from "./index";
+import { AttachmentsApiClient, ApiError } from "./generated";
 const baseUrl = "https://attachments.example.test";
 const actions: Array<[string, string, (c: AttachmentsApiClient) => Promise<unknown>]> = [
   ["GET", "/health", c => c.getHealth()],

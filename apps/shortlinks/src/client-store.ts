@@ -114,8 +114,13 @@ export class LocalStore implements Store {
   readonly kind = "local" as const;
   private readonly inner: ShortlinksStore;
 
-  constructor(dbPath?: string) {
-    this.inner = new ShortlinksStore(dbPath);
+  /**
+   * `env` is the environment the store was resolved from: the database path
+   * and every app-home read follow IT, never a silent `process.env` read on a
+   * caller-built env (hasna/apps#1720 validation).
+   */
+  constructor(dbPath?: string, env: Env = process.env) {
+    this.inner = new ShortlinksStore(dbPath, env);
   }
 
   async addDomain(input: AddDomainInput): Promise<Domain> {
@@ -225,7 +230,7 @@ export function resolveStore(
       ? `--db ${options.dbPath}`
       : `${LOCAL_OPT_IN_ENV_KEY}=1`;
     announceLocalMode(reason, options.notice);
-    return new LocalStore(options.dbPath);
+    return new LocalStore(options.dbPath, env);
   }
   throw new Error(missingBackendMessage());
 }

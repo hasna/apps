@@ -1,3 +1,4 @@
+import { workspaceMembersQuery, type RemoteWorkspaceMembersOptions } from "./remote-workspace.js";
 import { RemoteSkillsClient } from "./remote-client.js";
 import { normalizeSkillsApiOrigin } from "./fleet-credentials.js";
 import { customerNamePatch, type UpdateRemoteProfile, type UpdateRemoteWorkspace } from "./remote-profile.js";
@@ -117,6 +118,11 @@ export class RemoteSkillsAuthClient {
   async updateCurrentWorkspace(email: string, code: string, input: UpdateRemoteWorkspace) {
     customerNamePatch(input, "name");
     return (await this.sessionClient(email, code)).updateCurrentWorkspace(input);
+  }
+  /** Fresh owner/admin session; no saved credential or profile is replaced. */
+  async listWorkspaceMembers(email: string, code: string, options: RemoteWorkspaceMembersOptions = {}) {
+    workspaceMembersQuery(options);
+    return (await this.sessionClient(email, code)).listWorkspaceMembers(options);
   }
   /** Common auth transport used by CLI login, preserving the selected instance through awaits. */
   request(path: string, options?: RequestInit) {

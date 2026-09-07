@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveAttachmentsV1 } from "./cloud-v1";
-import { AttachmentsApiClient } from "../../sdk/src/generated";
+import { AttachmentsApiClient } from "../sdk/generated";
 
 describe("live credential lifecycle", () => {
   test("revalidates the pair before every operation, including binary downloads", async () => {
